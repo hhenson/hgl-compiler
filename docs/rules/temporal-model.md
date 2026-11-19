@@ -155,7 +155,7 @@ transpiler: partial
 - The endpoint operations are the input's own properties: `valid` of a struct is hgraph's `valid`, true once any child is, and `all_valid` hgraph's `all_valid`
 - Where a list, fixed or unsized, is in the value, `valid` and `all_valid` are the provider's (`_core.valid_of`, `_core.all_valid_of`): hgraph's `TSL` stays valid once every position has lost its value or a size alone has grown it, where the language's list is not; a handler's and a lifted helper's admission of such an input is too
 - `is_scheduled_now` stays true for the rest of a wake after `un_schedule` or `reset` in it (CAP-4)
-- A window's `valid` and `all_valid` are the `TSW`'s, for a window of ticks whose minimum is one
+- A window's `valid` and `all_valid` are the `TSW`'s, of ticks and of a duration (TYPE-11)
 - Left: `scheduled()` in `start` and `stop`, where no wake is due and the rule does not say what it is
 - Left, reported: `all_valid` of a value with an optional child beside another, which hgraph's `all_valid` asks and TIME-9 does not
 

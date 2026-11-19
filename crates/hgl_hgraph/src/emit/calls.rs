@@ -492,6 +492,32 @@ impl<'a> Emitter<'a> {
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let python = name(&parameter.name);
             match bound.get(index).and_then(Option::as_ref) {
+                // FN-12: "A window is passed only where it is `all_valid`:
+                // its value is not read before (TYPE-11)", and TYPE-11:
+                // "That value ... given to a lifted helper (FN-12), is a
+                // `list<V>` of the values held, oldest first". Core's
+                // lifting table: a window that is not all valid is "No
+                // invocation". The node requires it valid, as hgraph's
+                // `valid=` does, and invokes the helper where it is all
+                // valid. FN-11 binds a parameter's default or null where
+                // its input is not valid, and does not say what a window
+                // that is valid and not all valid binds: that is
+                // reported.
+                Some(Bound::Input(ty)) if matches!(ty, Type::RollingWindow { .. }) => {
+                    inputs += 1;
+                    let annotation = self.annotation_or_object(ty, true, at);
+                    parameters.push(format!("{python}: {annotation}"));
+                    if parameter.has_default || matches!(parameter.ty, Type::Nullable(_)) {
+                        self.unsupported(
+                            at,
+                            "a window given to a lifted helper's parameter that has a default (FN-11)",
+                        );
+                    }
+                    let read = self.window_value(&python);
+                    passed.push(format!("{python}={read}"));
+                    admitted.push(format!("{python}.all_valid"));
+                    required.push(python);
+                }
                 Some(Bound::Input(ty)) => {
                     inputs += 1;
                     let annotation = self.annotation_or_object(ty, true, at);
@@ -622,17 +648,6 @@ impl<'a> Emitter<'a> {
                 self.unsupported(argument.value.at, "an argument of a pack in a lifted call");
                 continue;
             };
-            // FN-12: "A window is passed only where it is `all_valid`",
-            // as the `list<V>` it holds (TYPE-11): not written yet.
-            if input(self, &argument.value)
-                .is_some_and(|ty| matches!(ty.omission_removed(), Type::RollingWindow { .. }))
-            {
-                self.unsupported(
-                    argument.value.at,
-                    "a window given to a lifted helper (FN-12)",
-                );
-                continue;
-            }
             let taken = match input(self, &argument.value) {
                 // TIME-10: "Ordinary followers observe the selected
                 // target": a lifted function given a `ref` result takes

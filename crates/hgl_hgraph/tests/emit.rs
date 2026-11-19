@@ -3728,9 +3728,10 @@ fn a_window_is_hgraphs_tsw() {
         format!("_output: _hg.TSW_OUT[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]] = None) -> {ticks}:"),
         "    if ((not _output.valid) and ".to_string(),
         "    _output.value = price.value\n".to_string(),
+        // TYPE-11: "a minimum of `0s` being read as Max".
         concat!(
         "-> _hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], ",
-        "_hg.WindowSize[_dt.timedelta(microseconds=0)]]:"
+        "_hg.WindowSize[_dt.timedelta(microseconds=5000000)]]:"
         )
         .to_string(),
         "-> _hg.TSW[_py.float, _hg.WindowSize[1]]:".to_string(),
@@ -3772,15 +3773,12 @@ fn a_window_is_hgraphs_tsw() {
     ]);
 }
 
-/// What this target does not write of a window is reported. Core's END-9
-/// gives a window's readiness, which this target writes only for a
-/// window of ticks whose minimum is one, ready at its first value: an
-/// input or `out` read otherwise, and an eval's record of such a window,
-/// are reported. So are the invalidation of a window, which hgraph's
-/// `TSW` survives with what it holds, and a window of a value that is no
-/// scalar or enum, and a window given to a lifted helper as a `list<V>`
-/// (FN-12). A window whose minimum is one is read in a hook as the
-/// `list<V>` it holds, oldest first (TYPE-11).
+/// What this target does not write of a window is reported: the
+/// invalidation of a window, which hgraph's `TSW` survives with what it
+/// holds, and a window of a value that is no scalar or enum. Core's END-9
+/// gives every window's readiness, of ticks and of a duration, which is
+/// written: an input or `out` read at any minimum, a window given to a
+/// lifted helper as a `list<V>` (FN-12), and an eval's record of a window.
 #[test]
 fn a_window_form_not_written_yet_is_reported() {
     let emitted = emit(&[fixture!(
@@ -3795,32 +3793,19 @@ fn a_window_form_not_written_yet_is_reported() {
     assert_eq!(
         reported,
         [
-            "m.hgl:3:9 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
-            "m.hgl:6:10 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 5s, 0s>` yet",
-            "m.hgl:15:12 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
             "m.hgl:21:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
             "m.hgl:23:4 target.unsupported: the hgraph target does not write the type `rolling_window<Quote, 3, 1>` yet",
             "m.hgl:26:4 target.unsupported: the hgraph target does not write the type `rolling_window<f64?, 3, 1>` yet",
-            "m.hgl:39:39 target.unsupported: the hgraph target does not write a window given to a lifted helper (FN-12) yet",
         ]
     );
-    // The record of `recent`'s window is core's, which reads it.
-    let blocked = emitted.blocked("recorded").expect("the test is blocked");
-    assert!(
-        blocked.ends_with(
-            "the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 5s>` yet"
-        ),
-        "{blocked}"
-    );
+    // The record of `recent`'s window is core's, which is written.
+    assert_eq!(emitted.blocked("recorded"), None);
 }
 
 /// TYPE-9: a window inside a struct, a tuple, a list or a dictionary is
-/// a child of its own, and a value that holds one is read as the window
-/// is (`windows_in`). A node reads it only where each window it holds
-/// has a minimum of one tick (FN-12, `readable_window`): an input's or
-/// `out`'s readiness is reported otherwise. What a window holds is not
-/// read, whole or as a part of the value that holds it, and `out` that
-/// holds one is not invalidated.
+/// a child of its own, read as its `list<V>` where it is admitted
+/// (TYPE-11, TIME-1). A value that holds one is not read whole, and `out`
+/// that holds one is not invalidated.
 #[test]
 fn a_window_within_a_value_is_reported_where_it_is_read() {
     let emitted = emit(&[fixture!(
@@ -3830,19 +3815,11 @@ fn a_window_within_a_value_is_reported_where_it_is_read() {
     assert_eq!(
         emitted.reported,
         [
-            // The readiness of a field's window, of a list's element of
-            // a duration, of a dictionary's value, and of `out`'s field.
-            "m.hgl:10:9 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
-            "m.hgl:13:10 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 5s, 0s>` yet",
-            "m.hgl:16:10 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
-            "m.hgl:22:12 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
-            // A struct read whole, bound whole, its window field, a
-            // dictionary of windows bound whole, a tuple's window.
+            // A struct read whole, bound whole, and a dictionary of
+            // windows bound whole.
             "m.hgl:27:19 target.unsupported: the hgraph target does not write a window's value inside another value yet",
             "m.hgl:31:20 target.unsupported: the hgraph target does not write a window's value inside another value yet",
-            "m.hgl:37:22 target.unsupported: the hgraph target does not write a window's value inside another value yet",
             "m.hgl:43:19 target.unsupported: the hgraph target does not write a window's value inside another value yet",
-            "m.hgl:49:22 target.unsupported: the hgraph target does not write a window's value inside another value yet",
             // `out` that holds a window, invalidated.
             "m.hgl:55:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
         ]
@@ -3874,6 +3851,93 @@ fn a_window_a_target_cannot_carry_is_reported() {
             "m.hgl:38:9 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
             "m.hgl:45:34 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
             "m.hgl:50:12 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
+        ]
+    );
+}
+
+/// TYPE-11 and core's END-9: a window is valid "once it holds a value,
+/// fewer than its minimum included", and all valid "where it holds at
+/// least its minimum": hgraph's `TSW`'s own `valid` and `all_valid`, of
+/// ticks and of a duration's span, "a minimum of `0s` being read as Max".
+/// Its value, "read in a hook or given to a lifted helper (FN-12), is a
+/// `list<V>` of the values held, oldest first, and the read before
+/// `all_valid` fails with `value.unset_read`" (`_core.window_values`): an
+/// input's, `out`'s, a child's read where it is admitted and one checked
+/// when it runs (TIME-1), and in `stop`. FN-12: "A window is passed only
+/// where it is `all_valid`": a lifted helper is invoked only there. The
+/// fixture's tests run on hgraph with the others.
+#[test]
+fn a_windows_readiness_and_its_list_are_written() {
+    let emitted = emit_clean(&[fixture!("demo.windows_wave3.hgl")]);
+    let python = emitted.module("demo.windows_wave3");
+    let ticks = "_hg.TSW[_py.int, _hg.WindowSize[3], _hg.WindowSize[2]]";
+    let seconds = |count: i64| {
+        format!(
+            "_hg.WindowSize[_dt.timedelta(microseconds={})]",
+            count * 1_000_000
+        )
+    };
+    python.assert_writes(&[
+        format!("def readings(reading: _hg.TS[_py.int]) -> {ticks}:"),
+        "    return _py.tuple([held.valid, held.all_valid])\n".to_string(),
+        // A read whole, under ordinary validity and under `all_valid`.
+        "    return _core.list_replaced(_output, _core.window_values(held))\n".to_string(),
+        "    if held.all_valid:\n        return _core.list_replaced(_output, _core.window_values(held))\n"
+            .to_string(),
+        "        for value in _core.window_values(held):\n".to_string(),
+        "_core.eq__T_T(lhs=_core.window_values(held), rhs=[1, 2])".to_string(),
+        "_core.item(_core.window_values(held), 0)".to_string(),
+        // FN-12: lifted where it is all valid, one window and two.
+        format!(
+            "(values: {ticks}) -> _hg.TS[_py.int]:\n    if not (values.all_valid):\n        return\n    return total(values=_core.window_values(values))\n"
+        ),
+        "    if not (first.all_valid and second.all_valid):\n        return\n    return longer(first=_core.window_values(first), second=_core.window_values(second))\n"
+            .to_string(),
+        // `out`, `stop`, and a child: a field, a position, and one read
+        // when it runs.
+        "total(values=_core.window_values(_output))".to_string(),
+        "    if held.valid:\n        _state.last = total(values=_core.window_values(held))\n".to_string(),
+        "_core.window_values(book[\"prices\"])".to_string(),
+        "_core.window_values(_core.position_of(both, 0))".to_string(),
+        "_core.checked_child(_core.position_of(both, at.value), lambda _port: _core.window_values(_port))"
+            .to_string(),
+        "_core.window_values(_core.entry_port(prices, \"a\"))".to_string(),
+        "_core.checked_child(_core.entry_port(prices, key.value), lambda _port: _core.window_values(_port))"
+            .to_string(),
+        "_core.checked_child(_core.position_of(rows, at.value)[\"prices\"], lambda _port: _core.window_values(_port))"
+            .to_string(),
+        // A duration, and a minimum of `0s` written as the maximum.
+        format!("-> _hg.TSW[_py.float, {}, {}]:", seconds(3), seconds(2)),
+        format!(
+            "def collect_from_zero(price: _hg.TS[_py.float]) -> _hg.TSW[_py.float, {}, {}]:",
+            seconds(3),
+            seconds(3)
+        ),
+        format!(
+            "def collect_whole(price: _hg.TS[_py.float]) -> _hg.TSW[_py.float, {}]:",
+            seconds(3)
+        ),
+    ]);
+}
+
+/// Where the pinned rules do not say what a window's read gives, it is
+/// reported. FN-11 binds a lifted parameter's default where its input is
+/// not valid, and FN-12 passes a window only where it is all valid: what
+/// a window that is valid and not all valid binds to a parameter with a
+/// default is not said. ERR-14 gives `err` for a child that is not valid
+/// where the place takes a `result`, and not for a window child that is
+/// valid and not all valid.
+#[test]
+fn a_window_read_the_rules_do_not_settle_is_reported() {
+    let emitted = emit(&[fixture!(
+        "a_window_read_the_rules_do_not_settle_is_reported",
+        "m.hgl"
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:10:38 target.unsupported: the hgraph target does not write a window given to a lifted helper's parameter that has a default (FN-11) yet",
+            "m.hgl:15:19 target.unsupported: the hgraph target does not write a window's value read where its place takes a `result` (ERR-14) yet",
         ]
     );
 }
