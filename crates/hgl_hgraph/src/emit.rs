@@ -190,7 +190,7 @@ enum Lifts<'a> {
 
 /// How a whole value of a type is given to hgraph, part by part, as
 /// the provider's `bundled` reads it (`Emitter::whole_shape`).
-struct Shape {
+pub(super) struct Shape {
     /// The provider's text for it: `None`, a `dict`, a tuple or `[None]`.
     text: String,
     /// True for a part that publishes whole, as it is.
@@ -6606,7 +6606,12 @@ impl<'a> Emitter<'a> {
     /// and the hook or the source goes on after it, so a copy where
     /// something else holds the value (`copied`), given as `bundled`
     /// gives it, and a null as hgraph's `Null` (`publishes_null`).
-    fn kept_publication(&mut self, function: &Function, value: &Expr, written: String) -> String {
+    pub(super) fn kept_publication(
+        &mut self,
+        function: &Function,
+        value: &Expr,
+        written: String,
+    ) -> String {
         let written = self.copied(function, value, written);
         let written = self.bundled(function, value, written);
         if function.publishes_null(value) {
@@ -6621,7 +6626,7 @@ impl<'a> Emitter<'a> {
     /// fields, as hgraph's bundle takes it (TYPE-9), and anything else,
     /// a struct's delta among them, as it is. A struct with a field
     /// that is a temporal struct too is not written whole yet.
-    fn bundled(&mut self, function: &Function, value: &Expr, written: String) -> String {
+    pub(super) fn bundled(&mut self, function: &Function, value: &Expr, written: String) -> String {
         let result = function
             .signature
             .and_then(|signature| signature.result.as_ref());
@@ -6691,7 +6696,12 @@ impl<'a> Emitter<'a> {
     /// which a constant's one publication takes whole: it has no earlier
     /// members or keys, and a null entry is hgraph's `Null`. A dictionary
     /// of composites is reported.
-    fn constant_connection(&mut self, ty: &Type, at: Location, written: String) -> String {
+    pub(super) fn constant_connection(
+        &mut self,
+        ty: &Type,
+        at: Location,
+        written: String,
+    ) -> String {
         let composite = matches!(
             ty,
             Type::Named {
@@ -6738,7 +6748,7 @@ impl<'a> Emitter<'a> {
     /// inherits from is expected". hgraph binds a bundle to the schema it
     /// was made with alone, and the abstract struct's bundle has its own
     /// fields (`struct_annotation`).
-    fn narrowed(
+    pub(super) fn narrowed(
         &mut self,
         function: &Function,
         ty: &Type,
@@ -6806,7 +6816,7 @@ impl<'a> Emitter<'a> {
     /// `delta<T>`, which the analyser rejects; a lifted function's
     /// result is a value. `at` is where what is not written yet is
     /// reported.
-    fn published_to(&mut self, ty: &Type, at: Location, written: String) -> String {
+    pub(super) fn published_to(&mut self, ty: &Type, at: Location, written: String) -> String {
         if publishes_whole_null(ty) {
             return self.published(written);
         }
@@ -6816,7 +6826,7 @@ impl<'a> Emitter<'a> {
     /// `written`, a whole value of `ty`, as a temporal value of `ty`
     /// publishes it: a struct's fields as hgraph's bundle takes them
     /// (TYPE-9), and any other value as it is.
-    fn bundle_of(&mut self, ty: &Type, at: Location, written: String) -> String {
+    pub(super) fn bundle_of(&mut self, ty: &Type, at: Location, written: String) -> String {
         // A struct with no field is a `TS` of its class: what it publishes
         // is its one value, made by the provider of whatever is published,
         // a whole value or a delta, which has no property.
@@ -6883,7 +6893,7 @@ impl<'a> Emitter<'a> {
     /// take its keys' changes, and not remove a key the value has not,
     /// and a fixed list with an element that is null or composite is
     /// not written whole yet.
-    fn whole_shape(&mut self, ty: &Type, at: Location) -> Option<Shape> {
+    pub(super) fn whole_shape(&mut self, ty: &Type, at: Location) -> Option<Shape> {
         match ty {
             Type::Named {
                 kind: NamedKind::Struct,
@@ -6963,7 +6973,7 @@ impl<'a> Emitter<'a> {
     /// delta, null where it did not change (`positions`, `delta_shape`).
     /// An unsized list ticks whole here (`list_annotation`), and does not
     /// say which positions changed: its delta is reported.
-    fn language_delta(&mut self, ty: &Type, delta: String, at: Location) -> String {
+    pub(super) fn language_delta(&mut self, ty: &Type, delta: String, at: Location) -> String {
         if growing_list(ty) {
             self.unsupported(at, "the delta of an unsized list");
             return "None".to_string();
@@ -8402,7 +8412,7 @@ impl<'a> Emitter<'a> {
     /// `None` publishes nothing, and one that returns `Null` publishes
     /// a value that is unset (TIME-7: "`return null` for an `i64?`
     /// result [publishes] a null").
-    fn published(&mut self, value: String) -> String {
+    pub(super) fn published(&mut self, value: String) -> String {
         self.natives = true;
         format!("_core.published({value})")
     }
@@ -8538,7 +8548,7 @@ fn owns(program: &Program, function: &Function, local: usize) -> bool {
 }
 
 /// True where `statements` return a value of `ty` itself, at any depth.
-fn returns_whole(statements: &[Stmt], ty: &Type) -> bool {
+pub(super) fn returns_whole(statements: &[Stmt], ty: &Type) -> bool {
     let mut found = false;
     hgl_analyser::hir::walk_statement_nodes(statements, &mut |node| {
         if let hgl_analyser::hir::Node::Statement(Stmt::Return {
