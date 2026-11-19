@@ -1,0 +1,338 @@
+module demo.list_delta
+
+# TYPE-10: "`list<T>` denotes a growing shape", and TYPE-16 its delta,
+# on hgraph 0.9.5's unbounded `TSL`. A fixed list's delta beside it.
+
+const fn digits(values: list<i64>) -> i64 {
+    var code: i64 = 0
+    for value in values { code = code * 10 + value }
+    return code
+}
+
+# Each change a growing list's producer may publish, by a command.
+fn edited(command: i64) -> list<i64> {
+    when {
+        if command == 0 { return [1, 2, 3] }
+        # Grow by an entry at the position after the last.
+        if command == 1 { return delta<list<i64>>(updated: [3: 4]) }
+        # Shrink by the size alone.
+        if command == 2 { return delta<list<i64>>(size_modified: 2) }
+        # A negative size reduces by that count.
+        if command == 3 { return delta<list<i64>>(size_modified: -1) }
+        # Past empty: no failure.
+        if command == 4 { return delta<list<i64>>(size_modified: -9) }
+        # A position made not valid, the size kept.
+        if command == 5 { return delta<list<i64>>(removed: [1]) }
+        # A gap: the positions between are not valid.
+        if command == 6 { return delta<list<i64>>(updated: [5: 6]) }
+        if command == 7 { return delta<list<i64>>(updated: [1: 7]) }
+        # Every position made not valid.
+        if command == 8 { return delta<list<i64>>(removed: [0, 1, 2]) }
+        # Growth by the size alone.
+        if command == 9 { return delta<list<i64>>(size_modified: 2) }
+        if command == 10 { return delta<list<i64>>(updated: [1: 99]) }
+        if command == 11 { return delta<list<i64>>(updated: [3: 99]) }
+        return []
+    }
+}
+
+fn digits_of(command: i64) -> i64 => digits(edited(command))
+
+test a_growing_list_grows_and_shrinks {
+    assert eval(digits_of(command: [0, 1])) == [123, 1234]
+    assert eval(digits_of(command: [0, 2])) == [123, 12]
+    assert eval(digits_of(command: [0, 3, 3])) == [123, 12, 1]
+    assert eval(digits_of(command: [0, 4, 0])) == [123, 0, 123]
+    assert eval(digits_of(command: [99, 0])) == [0, 123]
+}
+
+# FN-12: a lifted helper is given the whole list. A position that is not
+# valid leaves no whole value (hhenson/hgl_spec#126 so far).
+test a_whole_read_of_a_list_with_a_position_not_valid_fails {
+    assert raises("value.unset_read") { eval(digits_of(command: [0, 5])) }
+    assert raises("value.unset_read") { eval(digits_of(command: [0, 6])) }
+}
+
+# END-3: the delta read, tick by tick.
+fn relayed(values: list<i64>) -> list<i64> {
+    when { return delta_value(values) }
+}
+
+fn relay_of(command: i64) -> list<i64> => relayed(edited(command))
+
+test the_delta_read_says_what_changed {
+    assert eval(relay_of(command: [0, 1, 2, 3, 4])) == [
+        delta<list<i64>>(updated: [0: 1, 1: 2, 2: 3], size_modified: 3),
+        delta<list<i64>>(updated: [3: 4], size_modified: 4),
+        delta<list<i64>>(removed: [2, 3], size_modified: 2),
+        delta<list<i64>>(removed: [1], size_modified: 1),
+        delta<list<i64>>(removed: [0], size_modified: 0),
+    ]
+    assert eval(relay_of(command: [0, 5, 6, 7])) == [
+        delta<list<i64>>(updated: [0: 1, 1: 2, 2: 3], size_modified: 3),
+        delta<list<i64>>(removed: [1]),
+        delta<list<i64>>(updated: [5: 6], size_modified: 6),
+        delta<list<i64>>(updated: [1: 7]),
+    ]
+    # The empty list published first, and again.
+    assert eval(relay_of(command: [99, 99])) == [delta<list<i64>>(), delta<list<i64>>()]
+}
+
+# TIME-9: a list's validity and its positions'.
+fn list_state(probe: bool, values: list<i64>) -> list<bool, 3> {
+    when modified(probe) && valid([]) {
+        return [valid(values), all_valid(values), valid(values[1])]
+    }
+}
+
+fn state_of(probe: bool, command: i64) -> list<bool, 3> => list_state(probe, edited(command))
+
+fn list_validity(probe: bool, values: list<i64>) -> list<bool, 2> {
+    when modified(probe) && valid([]) { return [valid(values), all_valid(values)] }
+}
+
+fn validity_of(probe: bool, command: i64) -> list<bool, 2> =>
+    list_validity(probe, edited(command))
+
+test a_position_that_is_not_valid_is_its_own {
+    assert eval(state_of(probe: [true, true, true, true], command: [0, 5, 6, 7])) == [
+        [true, true, true],
+        [true, false, false],
+        [true, false, false],
+        [true, false, true],
+    ]
+    # A list whose every position is not valid is not valid; nor is one
+    # grown by its size alone, and a published empty list is.
+    assert eval(validity_of(probe: [true, true, true, true], command: [0, 8, 4, 9])) == [
+        [true, true],
+        [false, false],
+        [true, true],
+        [false, false],
+    ]
+}
+
+# END-6: a list that is not valid has no time it was last modified, and
+# END-4: is not modified.
+fn list_stamp(probe: bool, values: list<i64>) -> list<bool, 2> {
+    when modified(probe) && valid([]) {
+        return [last_modified(values) == null, modified(values)]
+    }
+}
+
+fn stamp_of(probe: bool, command: i64) -> list<bool, 2> => list_stamp(probe, edited(command))
+
+test a_list_with_no_valid_position_has_no_modification_time {
+    assert eval(stamp_of(probe: [true, true, true], command: [0, 8, 7])) == [
+        [false, true],
+        [true, false],
+        [false, true],
+    ]
+}
+
+# A node that requires the list valid is not run where it is not.
+test a_list_with_no_valid_position_admits_no_node {
+    assert eval(relay_of(command: [0, 8, 7])) == [
+        delta<list<i64>>(updated: [0: 1, 1: 2, 2: 3], size_modified: 3),
+        _,
+        delta<list<i64>>(updated: [1: 7]),
+    ]
+}
+
+# TYPE-16, TIME-7: a replay publishes each cell, a whole list replacing
+# what the input held, and a record records each delta.
+test a_trace_replays_whole_lists_and_deltas {
+    assert eval(relayed(values: [[1, 2, 3], [4], delta<list<i64>>(size_modified: -1), [5, 6]])) == [
+        delta<list<i64>>(updated: [0: 1, 1: 2, 2: 3], size_modified: 3),
+        delta<list<i64>>(updated: [0: 4], removed: [1, 2], size_modified: 1),
+        delta<list<i64>>(removed: [0], size_modified: 0),
+        delta<list<i64>>(updated: [0: 5, 1: 6], size_modified: 2),
+    ]
+    assert eval(relayed(values: [[1, 2], delta<list<i64>>(updated: [3: 4])])) == [
+        [1, 2],
+        delta<list<i64>>(updated: [3: 4], size_modified: 4),
+    ]
+    assert eval(digits(values: [[], [1, 2], delta<list<i64>>(size_modified: -1)])) == [0, 12, 1]
+}
+
+# TIME-7: `out` assigned by position and by two deltas in one
+# evaluation (END-5: the last write is what is published).
+fn written(command: i64) -> list<i64> {
+    inject out
+    when {
+        if command == 0 { return [1, 2, 3] }
+        if command == 1 { out[1] = 9 }
+        if command == 2 {
+            out = delta<list<i64>>(size_modified: -1)
+            out = delta<list<i64>>(size_modified: -1)
+        }
+    }
+}
+
+fn written_digits(command: i64) -> i64 => digits(written(command))
+
+fn written_relay(command: i64) -> list<i64> => relayed(written(command))
+
+test out_is_assigned_by_position_and_by_delta {
+    assert eval(written_digits(command: [0, 1, 2])) == [123, 193, 1]
+    assert eval(written_relay(command: [0, 2])) == [
+        delta<list<i64>>(updated: [0: 1, 1: 2, 2: 3], size_modified: 3),
+        delta<list<i64>>(removed: [1, 2], size_modified: 1),
+    ]
+}
+
+# A source yields wholes and deltas, applied as each is due.
+fn sourced() -> list<i64> {
+    yield 0us: []
+    yield 1us: [1, 2]
+    yield 1us: delta<list<i64>>(size_modified: -1)
+    yield 1us: delta<list<i64>>(updated: [1: 5])
+}
+
+fn sourced_digits() -> i64 => digits(sourced())
+
+test a_source_publishes_a_growing_list {
+    assert eval(sourced_digits()) == [0, 12, 1, 15]
+}
+
+# An empty list from a lifted helper and from a branch's constant.
+const fn cleared(values: list<i64>) -> list<i64> => []
+
+fn cleared_digits(command: i64) -> i64 => digits(cleared(edited(command)))
+
+const fn no_values() -> list<i64> => []
+
+fn chosen(flag: bool, values: list<i64>) -> list<i64> {
+    if flag { return no_values() }
+    return values
+}
+
+fn chosen_digits(flag: bool, command: i64) -> i64 => digits(chosen(flag, edited(command)))
+
+test an_empty_list_ticks_wherever_it_is_published {
+    assert eval(cleared_digits(command: [0, 1])) == [0, 0]
+    assert eval(chosen_digits(flag: [true, false], command: [0, _])) == [0, 123]
+}
+
+# TYPE-9: a growing list as a struct's field.
+struct Basket {
+    owner: str
+    items: list<i64>
+}
+
+fn basket(owner: str, command: i64) -> Basket {
+    when {
+        if command == 0 { return Basket(owner: owner, items: []) }
+        if command == 1 { return Basket(owner: owner, items: [4, 5]) }
+        return Basket(owner: owner, items: [6])
+    }
+}
+
+fn basket_digits(owner: str, command: i64) -> i64 => digits(basket(owner, command).items)
+
+fn refilled(owner: str, command: i64) -> Basket {
+    inject out
+    when {
+        if !valid(out) { return Basket(owner: owner, items: [1]) }
+        if command == 0 { out.items = [] }
+        if command == 1 { out.items[0] = 8 }
+    }
+}
+
+fn refilled_digits(owner: str, command: i64) -> i64 => digits(refilled(owner, command).items)
+
+fn item_count(held: Basket) -> i64? {
+    when all_valid(held) { return delta_value(held.items).size_modified }
+}
+
+fn counted(owner: str, command: i64) -> i64? => item_count(basket(owner, command))
+
+# END-4, END-6: a list child is modified, and has a time, only where it
+# is valid by the language's `valid`.
+fn items_ticked(probe: bool, held: Basket) -> list<bool, 2> {
+    when modified(probe) && valid([]) {
+        return [modified(held.items), last_modified(held.items) != null]
+    }
+}
+
+fn ticked(probe: bool, owner: str, command: i64) -> list<bool, 2> =>
+    items_ticked(probe, basket(owner, command))
+
+test a_growing_list_is_a_structs_field {
+    assert eval(basket_digits(owner: ["a", _, _], command: [0, 1, 2])) == [0, 45, 6]
+    assert eval(refilled_digits(owner: ["a", _, _], command: [5, 1, 0])) == [1, 8, 0]
+    assert eval(counted(owner: ["a", _, _], command: [1, 2, 2])) == [2, 1, null]
+    assert eval(ticked(probe: [true, true], owner: ["a", _], command: [0, _])) ==
+        [[true, true], [false, true]]
+}
+
+# CTRL-15: a graph's `for` over a growing list has a child for each
+# position, stopped where a shrink drops it and started where it grows.
+fn watched(item: i64) {
+    when {
+        let known: dict<i64, i64> = [0: 0]
+        # ERR-6: a strict read of a key that is absent fails.
+        if item == 99 { let found = known[item] }
+    }
+}
+
+fn each_item(command: i64) -> i64 {
+    for item in edited(command) { watched(item) }
+    return command
+}
+
+test a_graph_loop_has_a_child_for_each_position {
+    assert eval(each_item(command: [0, 1, 2, 5, 6, 7, 3, 4, 0])) == [0, 1, 2, 5, 6, 7, 3, 4, 0]
+    assert raises("value.missing_key") { eval(each_item(command: [0, 10])) }
+    assert raises("value.missing_key") { eval(each_item(command: [0, 2, 11])) }
+}
+
+# TYPE-16: a fixed list's `removed`, written and read, and its size.
+fn pair_edited(command: i64) -> list<i64, 2> {
+    when {
+        if command == 0 { return [3, 8] }
+        if command == 1 { return delta<list<i64, 2>>(removed: [1]) }
+        if command == 2 { return delta<list<i64, 2>>(removed: [0]) }
+        if command == 3 { return delta<list<i64, 2>>(updated: [1: 5], size_modified: 2) }
+        return delta<list<i64, 2>>(size_modified: -1)
+    }
+}
+
+fn pair_state(probe: bool, pair: list<i64, 2>) -> list<bool, 3> {
+    when modified(probe) && valid([]) { return [valid(pair), all_valid(pair), valid(pair[1])] }
+}
+
+fn pair_state_of(probe: bool, command: i64) -> list<bool, 3> => pair_state(probe, pair_edited(command))
+
+fn first_removed(pair: list<i64, 2>) -> i64 {
+    when {
+        for position in delta_value(pair).removed { return position }
+        return -1
+    }
+}
+
+fn removed_of(command: i64) -> i64 => first_removed(pair_edited(command))
+
+fn failure_seen(failure: error) -> bool {
+    when { return true }
+}
+
+fn moved_size(command: i64) -> bool {
+    let boundary = capture(pair_edited, command)
+    return failure_seen(boundary.error)
+}
+
+test a_fixed_list_position_is_made_not_valid {
+    assert eval(pair_state_of(probe: [true, true, true, true], command: [0, 1, 3, 2])) == [
+        [true, true, true],
+        [true, false, false],
+        [true, true, true],
+        [true, false, true],
+    ]
+    assert eval(pair_state_of(probe: [true, true, true], command: [0, 1, 2])) == [
+        [true, true, true],
+        [true, false, false],
+        [false, false, false],
+    ]
+    assert eval(removed_of(command: [0, 1, 3])) == [-1, 1, -1]
+    assert eval(moved_size(command: [0, 4])) == [_, true]
+}

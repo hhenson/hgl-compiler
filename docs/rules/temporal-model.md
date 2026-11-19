@@ -16,7 +16,7 @@ transpiler: done
 
 - hgraph: an input's `valid`, `modified`, `value` and `delta_value`
 - Silence runs no node; an equal publication is a tick; `valid` reads an invalid input in `when valid([])`
-- A child is hgraph's own child of the input (`_core.position_of`, `quote["bid"]`, `_core.entry_port`, one not valid where the key is absent); a read checked when it runs fails with `value.unset_read` where the child is not valid (`_core.checked_child`); an unsized list's element is valid with the list, a whole tuple here
+- A child is hgraph's own child of the input (`_core.position_of`, `quote["bid"]`, `_core.entry_port`, one not valid where the key is absent); a read checked when it runs fails with `value.unset_read` where the child is not valid (`_core.checked_child`); an unsized list's position is its own, valid or not (hgraph 0.9.5's unbounded `TSL`)
 
 ## TIME-2
 
@@ -105,7 +105,9 @@ transpiler: partial
 - A `stop` is given the output too, and reads it under `valid(out)`
 - A part of `out` is assigned through its own port, a struct's field, a tuple's position and a fixed list's position, each by a whole value of its type (EXPR-3 has a part take no `delta<T>`), and a dictionary's entry as that key's change; a place inside a part that publishes whole gives the part a new value, published whole; `out` read after holds it, and a required part of it that is not valid fails the read with `value.unset_read`
 - A whole dictionary published removes each key it has not (`_core.dict_replaced`)
-- Left: a place inside an entry of a dictionary `out`
+- An unsized list's `out`, hgraph 0.9.5's unbounded `TSL`: a whole value replaces what it held, a delta's size is counted from what it holds, `out[i] = v` is `_core.list_child(_output, i)`, which fails past the list, and two writes in one evaluation publish their sum (END-5); a publication that changes nothing hgraph sees, an empty list first among them, still ticks
+- A part of `out` read is its own port, a fixed list's and an unsized list's position among them
+- Left: a place inside an entry of a dictionary `out`; an empty unsized list inside a value a source yields or an entry of `out` holds, which hgraph does not tick for and which has no port there, fails as the graph runs
 
 ## TIME-8
 
@@ -140,7 +142,8 @@ transpiler: partial
 - hgraph: `scheduled()` in a header is `_scheduler.is_scheduled_now` in a node that injects a scheduler, one `if` over the handler, true whether or not an input ticked
 - In one that injects an alarm it is that and that no input ticked, `not (a.modified or a.invalidated)`: hgraph's scheduler is asked too, since hgraph evaluates a node at a wake that was since withdrawn
 - Under a negation, in a disjunction and in a handler's body `scheduled()` is that bool, read once where the node is entered (`_timer_woke`): a handler that asks again under the tag that is due leaves it true, and `scheduler.is_scheduled_now` with it (CAP-4)
-- The endpoint operations are the input's own properties: `valid` of a list or a struct is hgraph's `valid`, true once any child is, and `all_valid` hgraph's `all_valid`; an unsized list ticks whole, so its `all_valid` is its `valid`
+- The endpoint operations are the input's own properties: `valid` of a struct is hgraph's `valid`, true once any child is, and `all_valid` hgraph's `all_valid`
+- Where a list, fixed or unsized, is in the value, `valid` and `all_valid` are the provider's (`_core.valid_of`, `_core.all_valid_of`): hgraph's `TSL` stays valid once every position has lost its value or a size alone has grown it, where the language's list is not; a handler's and a lifted helper's admission of such an input is too
 - Left: `scheduled()` in `start` and `stop`, where no wake is due and the rule does not say what it is
 
 ## TIME-10

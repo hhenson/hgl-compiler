@@ -1,0 +1,15 @@
+module m
+struct Basket { items: list<i64> }
+fn trimmed(count: i64) -> Basket {
+    when { return delta<Basket>(items: delta<list<i64>>(size_modified: -count)) }
+}
+fn nested(count: i64) -> list<list<i64>> {
+    when { return delta<list<list<i64>>>(updated: [0: delta<list<i64>>(size_modified: count)]) }
+}
+fn keyed(key: str) -> dict<str, list<i64>> {
+    when { return delta<dict<str, list<i64>>>(updated: [key: delta<list<i64>>(updated: [0: 1])]) }
+}
+fn listed(value: i64) -> list<i64> {
+    when { return [value] }
+}
+fn second(value: i64) -> i64 => listed(value)[1]

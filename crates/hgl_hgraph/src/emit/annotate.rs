@@ -199,10 +199,7 @@ impl Emitter<'_> {
     }
 
     /// The temporal annotation of `child`, a field, a position or a
-    /// keyed child of the temporal composite `ty` (TYPE-9). An unsized
-    /// list ticks whole here (`list_annotation`), and its parent's
-    /// update would give it a position's change, so as a child it is
-    /// reported.
+    /// keyed child of the temporal composite `ty` (TYPE-9).
     pub(super) fn child_annotation(
         &mut self,
         ty: &Type,
@@ -216,11 +213,7 @@ impl Emitter<'_> {
         // would give it a struct's delta, which it does not take.
         let under = child.omission_removed();
         let omittable = matches!(child, Type::Nullable(_)) && !matches!(under, Type::Nullable(_));
-        if growing_list(child)
-            || matches!(under, Type::Ref(_))
-            || omittable
-            || empty_struct(self.program, child)
-        {
+        if matches!(under, Type::Ref(_)) || omittable || empty_struct(self.program, child) {
             self.unsupported(at, &format!("the type `{ty}`"));
             return None;
         }
@@ -235,11 +228,11 @@ impl Emitter<'_> {
     /// in turn, whose tick is a `dict` of each position that changed:
     /// TYPE-16's `dict<i64, delta<V>>`.
     ///
-    /// TYPE-10: "`list<T>` denotes a growing shape", and hgraph has no
-    /// `TSL` that grows. Such a list is a `TS` of a whole tuple of its
-    /// elements, each a value that publishes whole, so a tick is the
-    /// complete list. Its delta, a position's own validity and a child
-    /// of it are not written: they are reported where they are met.
+    /// TYPE-10: "`list<T>` denotes a growing shape": hgraph's unbounded
+    /// `TSL`, `Size[-1]` (hgraph 0.9.5), a child for each position it
+    /// holds, each temporalized in turn, valid on its own, whose tick is
+    /// a `TSLDelta` of each position that changed, those that lost their
+    /// value and the new size where it moved: TYPE-16's list delta.
     pub(super) fn list_annotation(
         &mut self,
         ty: &Type,
@@ -260,12 +253,10 @@ impl Emitter<'_> {
                 self.hgraph = true;
                 Some(format!("_hg.TSL[{child}, _hg.Size[{count}]]"))
             }
-            // A whole tuple of hgraph's holds no `None`: a nullable
-            // element (TYPE-14) has no place in it.
-            None if whole_scalar(element) => {
-                let element = self.annotation(element, false, at)?;
+            None => {
+                let child = self.child_annotation(ty, element, at)?;
                 self.hgraph = true;
-                Some(format!("_hg.TS[_py.tuple[{element}, ...]]"))
+                Some(format!("_hg.TSL[{child}, _hg.Size[-1]]"))
             }
             _ => {
                 self.unsupported(at, &format!("the type `{ty}`"));
@@ -596,6 +587,24 @@ impl Emitter<'_> {
             );
         }
     }
+}
+
+/// The annotation of a node's own output, `_output`, whose result is
+/// annotated `result`. hgraph names the output's type after its
+/// input's: `TS_OUT[int]` for `TS[int]`, `TSS_OUT[int]` for a set,
+/// `TSB_OUT[...]` for a struct's bundle, `TSD_OUT` for a dictionary's
+/// and `TSW_OUT` for a window's. Only the outermost is renamed: a child
+/// stays as it is. hgraph has no `TSL_OUT`: a list's is its `TSL` given
+/// to `TS_OUT`, which takes a time-series type as it is.
+pub(super) fn output_annotation(result: &str) -> String {
+    if result.starts_with("_hg.TSL[") {
+        return format!("_hg.TS_OUT[{result}]");
+    }
+    let kind = ["TSS", "TSB", "TSD", "TSW"]
+        .into_iter()
+        .find(|kind| result.starts_with(&format!("_hg.{kind}[")))
+        .unwrap_or("TS");
+    result.replacen(&format!("{kind}["), &format!("{kind}_OUT["), 1)
 }
 
 /// The Python type of a scalar this target writes, `int` for `i64`,

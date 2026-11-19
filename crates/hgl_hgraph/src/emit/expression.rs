@@ -116,16 +116,13 @@ impl Emitter<'_> {
                 match operation {
                     // TIME-9, END-7: "`valid` of a collection is true where any
                     // element, field or entry is valid", as hgraph's
-                    // `valid` of a `TSL`, a `TSB` and a `TSD` is.
-                    EndpointOperation::Valid => format!("{input}.valid"),
+                    // `valid` of a `TSL`, a `TSB` and a `TSD` is but where
+                    // a list is in the value (`valid_test`).
+                    EndpointOperation::Valid => self.valid_test(&endpoint.ty, &input),
                     // TIME-9: "`all_valid` is true where every one is, by
                     // its own `valid`, one level deep": hgraph's
-                    // `all_valid`. An unsized list ticks whole here
-                    // (`list_annotation`): it is valid with each element.
-                    EndpointOperation::AllValid if growing_list(&endpoint.ty) => {
-                        format!("{input}.valid")
-                    }
-                    EndpointOperation::AllValid => format!("{input}.all_valid"),
+                    // `all_valid`, but where a part holds a list.
+                    EndpointOperation::AllValid => self.all_valid_test(&endpoint.ty, &input),
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta." hgraph's own
                     // `modified` of an input in the cycle it is
@@ -133,7 +130,8 @@ impl Emitter<'_> {
                     // something, so it is held to the input being
                     // valid.
                     EndpointOperation::Modified => {
-                        format!("({input}.modified and {input}.valid)")
+                        let valid = self.valid_test(&endpoint.ty, &input);
+                        format!("({input}.modified and {valid})")
                     }
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta."
@@ -152,7 +150,8 @@ impl Emitter<'_> {
                     // END-6: an invalid endpoint has no timestamp, even
                     // if it held a value before being invalidated.
                     EndpointOperation::LastModified => {
-                        format!("({input}.last_modified_time if {input}.valid else None)")
+                        let valid = self.valid_test(&endpoint.ty, &input);
+                        format!("({input}.last_modified_time if {valid} else None)")
                     }
                     other => {
                         self.unsupported(value.at, &format!("`{}`", other.name()));
@@ -454,24 +453,15 @@ impl Emitter<'_> {
                 // `removed`, read through the provider from hgraph's
                 // `dict` of both (see `delta`).
                 // TYPE-16: a list's delta has `updated`, `removed` and
-                // `size_modified` (see `list_delta`). hgraph's bounded
-                // `TSL` does not report a position that became invalid,
-                // so a fixed list's `removed` is not read; its size
-                // does not move, so its `size_modified` is null.
-                if let Some(DeltaOf::List { fixed }) = delta {
-                    let read = match (*member, fixed) {
-                        (0, _) => "updated",
-                        (1, false) => "removed",
-                        (2, false) => "size_modified",
-                        (2, true) => return "None".to_string(),
-                        _ => {
-                            self.unsupported(
-                                value.at,
-                                "the `removed` of a fixed list's delta: hgraph's bounded `TSL` \
-                                 does not report a position that became invalid",
-                            );
-                            return "None".to_string();
-                        }
+                // `size_modified` (see `list_delta`), for `list<V>` and
+                // `list<V, N>` alike: hgraph 0.9.5's `TSL`, bounded or
+                // not, reports a position that lost its value as
+                // `REMOVE`, and a fixed list's delta read has no size.
+                if let Some(DeltaOf::List) = delta {
+                    let read = match *member {
+                        0 => "updated",
+                        1 => "removed",
+                        _ => "size_modified",
                     };
                     self.natives = true;
                     let base = self.expression(function, base);
@@ -549,6 +539,18 @@ impl Emitter<'_> {
                 // connection: a key that ticks selects another child.
                 if matches!(base.ty, Type::List { .. }) && self.connects(function, index) {
                     self.unsupported(value.at, "a list's element at a position that ticks");
+                    return "None".to_string();
+                }
+                // TIME-1: "A child of a collection ... is an endpoint
+                // whether or not it is valid". hgraph's `getitem_` of an
+                // unbounded `TSL` fails the run where the list no longer
+                // holds the position, where the child is not valid.
+                if growing_list(&base.ty) {
+                    self.unsupported(
+                        value.at,
+                        "an element of an unsized list's connection in a graph: hgraph 0.9.5's \
+                         `getitem_` fails where the list does not hold it",
+                    );
                     return "None".to_string();
                 }
                 // ERR-6: a dictionary's brackets "are strict
@@ -950,12 +952,12 @@ impl Emitter<'_> {
     /// `parts[1]` as `_core.position_of(parts, 1)`, `quote.bid` as
     /// `quote["bid"]`, and a dictionary's entry as `_core.entry_port`,
     /// one that is not valid where the key is absent, named or read
-    /// alike. `None` where hgraph has no child for it: an element of an
-    /// unsized list, which is a whole tuple here.
+    /// alike. A list's position is hgraph's child of its `TSL`, fixed or
+    /// unbounded. `None` where hgraph has no child for it.
     fn child_port(&mut self, function: &Function, child: &Expr) -> Option<String> {
         match &child.kind {
-            ExprKind::Local(local) if function.is_input(*local) => {
-                Some(name(&function.locals[*local].name))
+            ExprKind::Local(local) if function.is_input(*local) || function.is_out(*local) => {
+                Some(endpoint_name(&function.locals[*local]))
             }
             ExprKind::Field { base, member } => {
                 let field = field_of(self.program, &base.ty, *member)?;
@@ -971,7 +973,7 @@ impl Emitter<'_> {
             }
             ExprKind::Index { base, index } => {
                 let of = match &base.ty {
-                    Type::List { size: Some(_), .. } => "position_of",
+                    Type::List { .. } => "position_of",
                     // An absent key's entry is a child that is not valid
                     // (TIME-1), read or named alike.
                     Type::Dict { .. } => "entry_port",
@@ -986,17 +988,19 @@ impl Emitter<'_> {
         }
     }
 
-    /// True where `value` reads a child of a temporal input of the node,
-    /// an element of a fixed list, a field, a tuple's position or a
+    /// True where `value` reads a child of a temporal input of the node or
+    /// of its `out`, an element of a list, a field, a tuple's position or a
     /// dictionary's entry, at any depth, each step one hgraph has a child
-    /// for (`child_port`): an unsized list's element is no such step.
+    /// for (`child_port`).
     fn reads_child(&self, function: &Function, value: &Expr) -> bool {
         fn within(emitter: &Emitter<'_>, function: &Function, value: &Expr) -> bool {
             match &value.kind {
-                // The input is a collection (TIME-9): an `atomic<V>`, a `T?`
-                // and a `ref<T>` have no child, as the analyser has it.
+                // The input, or `out`, is a collection (TIME-9): an
+                // `atomic<V>`, a `T?` and a `ref<T>` have no child, as the
+                // analyser has it. TIME-7: `out` read holds what it
+                // published, each part by its own port.
                 ExprKind::Local(local) => {
-                    function.is_input(*local)
+                    (function.is_input(*local) || function.is_out(*local))
                         && matches!(
                             function.locals[*local].ty,
                             Type::List { .. }
@@ -1023,7 +1027,7 @@ impl Emitter<'_> {
                 ExprKind::Index { base, .. } => {
                     matches!(
                         base.ty,
-                        Type::List { size: Some(_), .. } | Type::Tuple(_) | Type::Dict { .. }
+                        Type::List { .. } | Type::Tuple(_) | Type::Dict { .. }
                     ) && within(emitter, function, base)
                 }
                 _ => false,
@@ -1031,6 +1035,67 @@ impl Emitter<'_> {
         }
         matches!(value.kind, ExprKind::Field { .. } | ExprKind::Index { .. })
             && within(self, function, value)
+    }
+
+    /// TIME-9's `valid` of the endpoint `port`, of a temporal value of
+    /// `ty`, where it is not hgraph's own: `_core.valid_of`, where a list
+    /// is in the value (`validity_shape`). `None` where hgraph's `valid`
+    /// is the language's.
+    pub(super) fn precise_valid(&mut self, ty: &Type, port: &str) -> Option<String> {
+        let shape = validity_shape(self.program, ty)?;
+        self.natives = true;
+        Some(format!("_core.valid_of({port}, {shape})"))
+    }
+
+    /// TIME-9's `valid` of the endpoint `port`, of a temporal value of
+    /// `ty`: "true where any element, field or entry is valid, and for a
+    /// published empty list or dictionary" (END-7). hgraph's `valid`, but
+    /// where a list is in the value (`precise_valid`).
+    pub(super) fn valid_test(&mut self, ty: &Type, port: &str) -> String {
+        self.precise_valid(ty, port)
+            .unwrap_or_else(|| format!("{port}.valid"))
+    }
+
+    /// TIME-9's `all_valid` of the endpoint `port`, of a temporal value of
+    /// `ty`: "true where every one is, by its own `valid`, one level
+    /// deep". hgraph's `all_valid` counts each part by hgraph's `valid`,
+    /// which is the language's where the part holds no list
+    /// (`valid_test`); where one does, the provider counts it.
+    pub(super) fn all_valid_test(&mut self, ty: &Type, port: &str) -> String {
+        let parts_hold_lists = match ty {
+            Type::List { element, .. } => validity_shape(self.program, element).is_some(),
+            other => validity_shape(self.program, other).is_some(),
+        };
+        match validity_shape(self.program, ty) {
+            Some(shape) if parts_hold_lists => {
+                self.natives = true;
+                format!("_core.all_valid_of({port}, {shape})")
+            }
+            _ => format!("{port}.all_valid"),
+        }
+    }
+
+    /// The argument a provider's function of a child's endpoint is given
+    /// after the port where a list is in the child, its `validity_shape`,
+    /// `, ("list", None)`: what its `valid` is read by. Empty where
+    /// hgraph's `valid` is the language's.
+    fn child_shape(&self, ty: &Type) -> String {
+        validity_shape(self.program, ty).map_or(String::new(), |shape| format!(", {shape}"))
+    }
+
+    /// Reports `argument`, a property of a delta of a struct, a list or
+    /// a dictionary that the program makes, where its value holds an
+    /// unsized list's delta (TYPE-16): hgraph applies such a nested
+    /// `TSLDelta` as it is, and fails the run for a negative size, which
+    /// the provider counts only for the list at the node's own output
+    /// (`list_applied`).
+    fn nested_list_delta(&mut self, argument: &Argument) {
+        if holds_growing_list(self.program, &argument.value.ty) {
+            self.unsupported(
+                argument.value.at,
+                "an unsized list's delta inside the delta of a struct, a list or a dictionary",
+            );
+        }
     }
 
     /// `operation` of the child `child` names, an endpoint whether or not
@@ -1059,23 +1124,31 @@ impl Emitter<'_> {
             return "None".to_string();
         }
         let Some(port) = self.child_port(function, child) else {
-            self.unsupported(
-                at,
-                "an endpoint of an unsized list's element, a whole tuple here",
-            );
+            self.unsupported(at, "an endpoint of this child");
             return "None".to_string();
         };
         self.natives = true;
         match operation {
-            EndpointOperation::Valid => format!("{port}.valid"),
-            EndpointOperation::AllValid => format!("{port}.all_valid"),
-            EndpointOperation::Modified => format!("_core.child_modified({port})"),
+            EndpointOperation::Valid => self.valid_test(&child.ty, &port),
+            EndpointOperation::AllValid => self.all_valid_test(&child.ty, &port),
+            // END-4, END-6: a child that is not valid is not modified and
+            // has no time it was last modified, nor a delta to read, by
+            // `valid` as the language has it where a list is in the child
+            // (`validity_shape`), whose shape the provider is given.
+            EndpointOperation::Modified => {
+                let shape = self.child_shape(&child.ty);
+                format!("_core.child_modified({port}{shape})")
+            }
             // END-8: a child's delta is read as a direct input's of its
             // type is (`language_delta`).
             EndpointOperation::DeltaValue => {
-                self.language_delta(&child.ty, format!("_core.child_delta({port})"), at)
+                let shape = self.child_shape(&child.ty);
+                self.language_delta(&child.ty, format!("_core.child_delta({port}{shape})"), at)
             }
-            EndpointOperation::LastModified => format!("_core.child_last_modified({port})"),
+            EndpointOperation::LastModified => {
+                let shape = self.child_shape(&child.ty);
+                format!("_core.child_last_modified({port}{shape})")
+            }
             other => {
                 self.unsupported(at, &format!("`{}` of a child", other.name()));
                 "None".to_string()
@@ -1095,22 +1168,6 @@ impl Emitter<'_> {
         at: Location,
     ) -> String {
         self.natives = true;
-        // An unsized list is a whole tuple here: its elements are valid
-        // with it.
-        if let ExprKind::Index { base, index } = &read.kind
-            && growing_list(&base.ty)
-            && let ExprKind::Local(local) = base.kind
-            && function.is_input(local)
-        {
-            let port = name(&function.locals[local].name);
-            let index = self.expression(function, index);
-            let of = if result {
-                "whole_item_result"
-            } else {
-                "whole_item"
-            };
-            return format!("_core.{of}({port}, {index})");
-        }
         let Some(port) = self.child_port(function, read) else {
             self.unsupported(at, "this read of a child");
             return "None".to_string();
@@ -1183,12 +1240,16 @@ impl Emitter<'_> {
                 self.unsupported(at, "what a window holds, which no core operation reads,");
                 return "None".to_string();
             }
-            // TYPE-9: "lists to child positions". An unsized list is a
-            // whole tuple (`list_annotation`), and a list of the
-            // program is a Python `list`, made of it.
-            Type::List { size: None, .. } => return format!("_py.list({port}.value)"),
-            // A fixed list's value is each child's, in order: hgraph's
-            // own tuple of them where each child publishes whole.
+            // TYPE-9: "lists to child positions". A list's value is each
+            // child's, in order: hgraph's own tuple of them, fixed or
+            // unbounded, where each child publishes whole, made a Python
+            // `list`. A required element that is not valid, one removed or
+            // past a gap, leaves no whole value (`list_value`); an optional
+            // one is null.
+            Type::List { element, .. } if whole_scalar(element) => {
+                self.natives = true;
+                return format!("_core.list_value({port})");
+            }
             Type::List { element, .. } if publishes_whole(element) => {
                 return format!("_py.list({port}.value)");
             }
@@ -1286,22 +1347,19 @@ impl Emitter<'_> {
     /// `part_value` of a port read inside `depth` comprehensions.
     fn part_value_at(&mut self, ty: &Type, port: &str, depth: usize, at: Location) -> String {
         let read = self.port_value_at(ty, port, depth, at);
-        // A fixed list of required elements that publish whole is read
-        // whole from its `TSL`, so it is held to each of them. One of
-        // composites reads each element as a part, whose own optional
-        // parts may be invalid.
-        let ready = match ty {
-            Type::List {
-                element,
-                size: Some(_),
-            } if whole_scalar(element) => "all_valid",
-            _ => "valid",
-        };
+        // A list of required elements that publish whole is read whole
+        // from its `TSL` where each of them is valid, and fails otherwise
+        // (`list_value`). One of composites reads each element as a part,
+        // whose own optional parts may be invalid.
+        if matches!(ty, Type::List { element, .. } if whole_scalar(element)) {
+            return read;
+        }
+        let ready = self.valid_test(ty, port);
         if publishes_whole_null(ty) {
-            return format!("({read} if {port}.{ready} else None)");
+            return format!("({read} if {ready} else None)");
         }
         self.natives = true;
-        format!("({read} if {port}.{ready} else _core.unset_read())")
+        format!("({read} if {ready} else _core.unset_read())")
     }
 
     /// The name of the field of the tuple position that `index` names
@@ -1374,17 +1432,16 @@ impl Emitter<'_> {
     }
 
     /// True when `value`, written in a graph, is an element of a
-    /// connection of a fixed list or of a dictionary (TYPE-9: "lists to
-    /// child positions, dictionaries to keyed children"): hgraph gives
-    /// the child's port. An unsized list is a whole tuple here, which
-    /// has no child.
+    /// connection of a list or of a dictionary (TYPE-9: "lists to child
+    /// positions, dictionaries to keyed children"): hgraph gives the
+    /// child's port, and an unsized list's is reported where it is read.
     fn connected_element(&self, function: &Function, value: &Expr) -> bool {
         let ExprKind::Index { base, .. } = &value.kind else {
             return false;
         };
         matches!(
             base.ty,
-            Type::List { size: Some(_), .. } | Type::Dict { .. } | Type::Tuple(_)
+            Type::List { .. } | Type::Dict { .. } | Type::Tuple(_)
         ) && self.connects(function, base)
     }
 
@@ -1471,6 +1528,7 @@ impl Emitter<'_> {
             let program = self.program;
             let mut written = Vec::new();
             for argument in arguments {
+                self.nested_list_delta(argument);
                 let given = self.expression(function, &argument.value);
                 if let Some(field) = argument
                     .parameter
@@ -1492,6 +1550,7 @@ impl Emitter<'_> {
             const PROPERTIES: [&str; 2] = ["updated", "removed"];
             let mut written = Vec::new();
             for argument in arguments {
+                self.nested_list_delta(argument);
                 let given = self.expression(function, &argument.value);
                 if let Some(property) = argument.parameter.and_then(|index| PROPERTIES.get(index)) {
                     written.push(format!("{property}={given}"));
@@ -1503,28 +1562,19 @@ impl Emitter<'_> {
         // TYPE-16: a list's delta has "`updated`, each changed position
         // with its delta; `removed`, the positions that lost their
         // value ... and `size_modified`". The provider makes it as
-        // hgraph's delta of a `TSL`, a `dict` of each position updated,
-        // which holds the other two (see `list_delta`). hgraph's bounded
-        // `TSL` takes no removed position and no size.
-        if let Some(DeltaOf::List { fixed }) = delta {
+        // hgraph's delta of a `TSL`, its `TSLDelta`, a `dict` of each
+        // position updated and removed, which holds the size too (see
+        // `list_delta`).
+        if let Some(DeltaOf::List) = delta {
             const PROPERTIES: [&str; 3] = ["updated", "removed", "size_modified"];
             let mut written = Vec::new();
             for argument in arguments {
+                self.nested_list_delta(argument);
                 let given = self.expression(function, &argument.value);
                 let Some(index) = argument.parameter.filter(|index| *index < PROPERTIES.len())
                 else {
                     continue;
                 };
-                if fixed && index > 0 {
-                    self.unsupported(
-                        argument.value.at,
-                        &format!(
-                            "the `{}` of a fixed list's delta: hgraph's bounded `TSL` takes no \
-                             removed position and no size",
-                            PROPERTIES[index]
-                        ),
-                    );
-                }
                 written.push(format!("{}={given}", PROPERTIES[index]));
             }
             self.natives = true;

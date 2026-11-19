@@ -1362,51 +1362,35 @@ fn a_module_has_its_types_before_it_imports_another() {
 }
 
 /// Each instance is a piece of its module. Where one has a form the
-/// target does not write, a type here, that is reported where the
-/// declaration is written, and a test that reaches that instance is
-/// not run. A test that reaches another instance of the declaration
-/// is.
+/// target does not write, a whole list of lists published here, that is
+/// reported where the declaration is written, and a test that reaches
+/// that instance is not run. A test that reaches another instance of
+/// the declaration is.
 #[test]
 fn an_instance_that_is_not_written_is_reported() {
     let emitted = emit(&[fixture!(
         "an_instance_that_is_not_written_is_reported",
         "demo.held.hgl"
     )]);
-    // The type of the input, at the parameter, and of the result, at
-    // the function's name: once each for the one instance that has it,
-    // of the node and of the graph that calls it. Then in core, where
-    // the `replay` the eval's run is wired with for that type is
-    // declared.
+    // Once, for the one instance that has it, of the node.
     assert_eq!(
-        emitted.reported[..4],
+        emitted.reported,
         [
-            "demo.held.hgl:2:12 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
-            "demo.held.hgl:2:4 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
-            "demo.held.hgl:5:13 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
-            "demo.held.hgl:5:4 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
+            "demo.held.hgl:3:32 target.unsupported: the hgraph target does not write a whole list published where an element is temporal composite or nullable yet",
         ]
-    );
-    let [in_core] = &emitted.reported[4..] else {
-        panic!("one more is reported: {:?}", emitted.reported);
-    };
-    assert!(
-        in_core.starts_with("<core>/core/core.hgl:")
-            && in_core.ends_with(
-                " target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet"
-            ),
-        "{in_core}"
     );
     assert_eq!(emitted.blocked("whole"), None);
     let blocked = emitted.blocked("listed").expect("the test is not run");
     assert!(
-        blocked.ends_with("the hgraph target does not write the type `list<list<i64>>` yet"),
+        blocked.ends_with(
+            "the hgraph target does not write a whole list published where an element is temporal composite or nullable yet"
+        ),
         "{blocked}"
     );
     let python = emitted.module("demo.held");
     assert!(python.contains("def _inst_held__i64("), "{python}");
     assert!(python.contains("def _inst_again__i64("), "{python}");
     assert!(!python.contains("def _inst_held__list"), "{python}");
-    assert!(!python.contains("def _inst_again__list"), "{python}");
 }
 
 /// GEN-4: an `impl const fn` is a value candidate of its operator. One
@@ -4762,9 +4746,10 @@ fn an_ordinary_list_of_structs_branch_of_a_graph_is_not_written_yet() {
 const TEMPORAL_COLLECTIONS: (&str, &str) = fixture!("demo.collections.hgl");
 
 /// A fixed list is hgraph's `TSL`, a dictionary its `TSD`, and an
-/// unsized list a `TS` of a whole tuple. An element is the child's port
-/// in a graph; a whole value is read in a hook and given to a lifted
-/// helper as a Python list or dict.
+/// unsized list hgraph's unbounded `TSL`, `Size[-1]`. An element is the
+/// child's port in a graph and in a hook; a whole value is read in a
+/// hook and given to a lifted helper as a Python list or dict, a list's
+/// once each of its positions is valid (`list_value`).
 #[test]
 fn a_temporal_list_or_dictionary_is_written_by_its_children() {
     let emitted = emit_clean(&[TEMPORAL_COLLECTIONS]);
@@ -4772,10 +4757,10 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
     let pair = "_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]";
     let prices = "_hg.TSD[_py.str, _hg.TS[_py.int]]";
     python.assert_writes(&[
-        "-> _hg.TS[_py.tuple[_py.int, ...]]:".to_string(),
-        "        return _py.tuple([])".to_string(),
-        "    return _core.item(_py.list(values.value), 1)".to_string(),
-        "    return _py.tuple(doubled(values=_py.list(values.value)))".to_string(),
+        "-> _hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]:".to_string(),
+        "        return _core.list_replaced(_output, [])".to_string(),
+        "        return (_core.position_of(values, 1).value if _core.position_of(values, 1).valid else _core.unset_read())".to_string(),
+        "    return _core.list_replaced(_output, doubled(values=_core.list_value(values)))".to_string(),
         format!("-> {pair}:"),
         "    return _core.list_within(_core.list_delta(updated={slot.value: reading.value}), 2)".to_string(),
         "    return _py.tuple([low.value, _core.add__i64_i64(lhs=low.value, rhs=1)])".to_string(),
@@ -4796,12 +4781,11 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
 }
 
 /// What this target does not write of a temporal list or dictionary
-/// is reported: a removed position written to a fixed list (hgraph's
-/// bounded `TSL` takes none), an unsized list's delta read (it ticks
-/// whole here), an unsized list of composite elements, a whole
-/// dictionary of composites published, a nullable element of a fixed list published
-/// whole, a list's element at a position that ticks, and an unsized
-/// list as the child of a temporal composite.
+/// is reported: a whole dictionary of composites published, a nullable
+/// element of a fixed list published whole, and a list's element at a
+/// position that ticks. A removed position written to a fixed list, an
+/// unsized list's delta read, an unsized list of composite elements and
+/// one as the child of a dictionary are written (hgraph 0.9.5's `TSL`).
 #[test]
 fn a_temporal_collection_form_not_written_yet_is_reported() {
     let emitted = emit(&[fixture!(
@@ -4811,13 +4795,9 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:5:45 target.unsupported: the hgraph target does not write the `removed` of a fixed list's delta: hgraph's bounded `TSL` takes no removed position and no size yet",
-            "m.hgl:9:23 target.unsupported: the hgraph target does not write the delta of an unsized list yet",
-            "m.hgl:11:11 target.unsupported: the hgraph target does not write the type `list<Quote>` yet",
             "m.hgl:15:19 target.unsupported: the hgraph target does not write a whole dictionary of composites yet",
             "m.hgl:18:19 target.unsupported: the hgraph target does not write a whole list published where an element is temporal composite or nullable yet",
             "m.hgl:23:44 target.unsupported: the hgraph target does not write a list's element at a position that ticks yet",
-            "m.hgl:24:4 target.unsupported: the hgraph target does not write the type `dict<str, list<i64>>` yet",
         ]
     );
 }
@@ -4912,28 +4892,27 @@ fn the_run_provider_checks_a_zone() {
 
 /// TIME-9: "`valid` of a collection is true where any element, field or
 /// entry is valid ... `all_valid` is true where every one is", hgraph's
-/// `valid` and `all_valid`. TYPE-16: "A delta written with a smaller
-/// `size_modified` and no `removed` shrinks the list": an unsized list
-/// applies it to what it last published; a source, which has no
-/// `_output` here, does not yet. A fixed list's `removed` is not read: hgraph's bounded `TSL` does not report it.
+/// `valid` and `all_valid`, the language's `valid` of a list where
+/// hgraph's `TSL` stays valid once every position has lost its value
+/// (`valid_of`). TYPE-16: "A delta written with a smaller
+/// `size_modified` and no `removed` shrinks the list": an unsized list,
+/// hgraph's unbounded `TSL`, counts its size from what its `_output`
+/// holds, and a source's node applies what it yields as it is due. A
+/// fixed list's `removed` is read: hgraph 0.9.5's bounded `TSL` reports
+/// it.
 #[test]
 fn collection_validity_and_a_lists_delta_are_written() {
-    let emitted = emit(&[fixture!(
+    let emitted = emit_clean(&[fixture!(
         "collection_validity_and_a_lists_delta_are_written",
         "m.hgl"
     )]);
-    assert_eq!(
-        emitted.reported,
-        [
-            "m.hgl:9:15 target.unsupported: the hgraph target does not write a delta of an unsized list yielded by a source yet",
-            "m.hgl:12:19 target.unsupported: the hgraph target does not write the `removed` of a fixed list's delta: hgraph's bounded `TSL` does not report a position that became invalid yet"
-        ]
-    );
     let python = emitted.module("m");
     python.assert_writes(&[
-        "pair.valid and pair.all_valid",
-        "_output: _hg.TS_OUT[_py.tuple[_py.int, ...]] = None",
+        "(_core.valid_of(pair, (\"list\", None)) and pair.all_valid)",
+        "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]] = None",
         "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
+        "        return _core.list_published(_output, _published[0])",
+        "        return _core.removed(pair.delta_value)",
     ]);
 }
 
@@ -4954,6 +4933,163 @@ fn a_negative_list_size_reduces_the_list_as_the_graph_runs() {
     let ran = hgraph.run(&emitted, &tests);
     assert!(matches!(ran[0], Ran::Passed), "{:?}", ran[0]);
     assert!(matches!(ran[1], Ran::Passed), "{:?}", ran[1]);
+}
+
+/// TYPE-10: "`list<T>` denotes a growing shape", TYPE-16 its delta and
+/// END-3 the delta read, on hgraph 0.9.5's unbounded `TSL`.
+const LIST_DELTA: (&str, &str) = fixture!("demo.list_delta.hgl");
+
+/// A growing list is hgraph's unbounded `TSL`, `Size[-1]`, as an input,
+/// an output, `out`, a struct's field and a connection. A node counts a
+/// delta's size from what its `_output` holds (`list_applied`), makes an
+/// empty list tick (`list_replaced`), and a source applies what it
+/// yields as it is due (`list_published`). TIME-9: `valid` of a list is
+/// the language's (`valid_of`), as a node's admission and a lifted
+/// helper's are (FN-12). CTRL-15: a graph's loop over one is hgraph's
+/// `map_` over the `TSL`. A fixed list's `removed` is written and read.
+#[test]
+fn a_growing_list_is_an_unbounded_tsl() {
+    let emitted = emit_clean(&[LIST_DELTA]);
+    let python = emitted.module("demo.list_delta");
+    let list = "_hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]";
+    let basket = "_hg.TSB[_core.schema(Basket, {\"owner\": _hg.TS[_py.str], \"items\": _hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]})]";
+    python.assert_writes(&[
+        format!("def edited(command: _hg.TS[_py.int], _output: _hg.TS_OUT[{list}] = None) -> {list}:"),
+        "        return _core.list_replaced(_output, [1, 2, 3])\n".to_string(),
+        "        return _core.list_applied(_output, _core.list_delta(size_modified=_core.neg__i64(value=1)))\n".to_string(),
+        "        return _core.list_applied(_output, _core.list_delta(removed=_py.frozenset((1,))))\n".to_string(),
+        // FN-12: a lifted helper is admitted by `valid` of the list.
+        concat!(
+            "    if not (_core.valid_of(values, (\"list\", None))):\n",
+            "        return\n",
+            "    return digits(values=_core.list_value(values))\n",
+        )
+        .to_string(),
+        // END-3: the delta read is hgraph's `TSLDelta`.
+        "        return _core.list_applied(_output, values.delta_value)\n".to_string(),
+        "_core.valid_of(values, (\"list\", None)), values.all_valid, _core.position_of(values, 1).valid".to_string(),
+        // TIME-7: `out` by position and by delta.
+        "        _core.list_child(_output, 1).value = 9\n".to_string(),
+        "        _output.value = _core.list_applied(_output, _core.list_delta(size_modified=_core.neg__i64(value=1)))\n".to_string(),
+        // SOURCE-1: what a source yields is applied as it is due.
+        "        return _core.list_published(_output, _published[0])\n".to_string(),
+        // FN-3: a branch's constant is the provider's node.
+        format!("        return _core.constant_of({list})(_hg.const(True), given=_core.Held((_core.copied(no_values()), \"list\")))\n"),
+        // A lifted helper's empty result ticks through its `_output`.
+        format!("def _lift_3_cleared(values: {list}, _output: _hg.TS_OUT[{list}] = None) -> {list}:"),
+        // TYPE-9: a struct's field.
+        format!("def basket(owner: _hg.TS[_py.str], command: _hg.TS[_py.int], _output: _hg.TSB_OUT[_core.schema(Basket, {{\"owner\": _hg.TS[_py.str], \"items\": {list}}})] = None) -> {basket}:"),
+        "        return _core.bundled(Basket(owner=owner.value, items=[]), {\"owner\": None, \"items\": \"list\"}, _output)\n".to_string(),
+        "        _output[\"items\"].value = _core.list_replaced(_output[\"items\"], [])\n".to_string(),
+        "        _core.list_child(_output[\"items\"], 0).value = 8\n".to_string(),
+        "    return _lift_6_digits(values=basket(owner=owner, command=command)[\"items\"])\n".to_string(),
+        "_core.all_valid_of(held, (\"fields\", {\"owner\": None, \"items\": (\"list\", None)}))".to_string(),
+        "        return _core.published(_core.size_modified(_core.child_delta(held[\"items\"], (\"list\", None))))\n".to_string(),
+        // END-4, END-6: a list child's own `valid`, by its shape.
+        "_core.child_modified(held[\"items\"], (\"list\", None))".to_string(),
+        "_core.child_last_modified(held[\"items\"], (\"list\", None))".to_string(),
+        // CTRL-15: a loop over the `TSL`.
+        "    _core.discarded(_hg.map_(_each_0, item=edited(command=command), __key_arg__=\"\"))\n".to_string(),
+        // A fixed list's `removed`, written and read.
+        "        return _core.list_within(_core.list_delta(removed=_py.frozenset((1,))), 2)\n".to_string(),
+        "        for position in _core.removed(pair.delta_value):\n".to_string(),
+    ]);
+}
+
+/// TYPE-16, END-3 and TIME-9 as hgraph runs them: a growing list grows
+/// by an entry after its last and past a gap, shrinks by its size alone
+/// and by a negative one, to empty at most; a position of a growing and
+/// of a fixed list made not valid; the delta read tick by tick; an empty
+/// list that ticks first and again; `out` by position and two deltas in
+/// one evaluation (END-5); a struct's field; a graph's loop with a child
+/// for each position (CTRL-7); and a trace replayed and recorded by
+/// core's `replay` and `record`, through `eval`. `the_generated_tests_pass_on_hgraph`
+/// runs them too, beside the other fixtures.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_growing_lists_delta_runs_on_hgraph() {
+    let hgraph = on_hgraph("hgraph_list_delta");
+    let emitted = emit_clean(&[LIST_DELTA]);
+    let ran = hgraph.run_all(&emitted);
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let described = outcomes(&emitted, &all, &ran);
+    assert!(
+        described.iter().all(|outcome| outcome.ends_with(" passed")),
+        "{described:#?}"
+    );
+}
+
+/// What the language does not settle of a growing list fails as the
+/// graph runs, named as not written: an entry at or past a size written
+/// with it, which hgraph fails the run for, and a removed position the
+/// list never held, which hgraph drops (TYPE-16). So does an index of
+/// `out` past the list (EXPR-3: "An index outside a list fails where it
+/// is evaluated"), which hgraph would grow the list to, and an empty
+/// list inside a value a source yields, which hgraph 0.9.5's `TSL` does
+/// not tick for and which a source's statements make with no port of
+/// the output (TIME-9).
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_list_form_not_written_fails_as_the_graph_runs() {
+    let hgraph = on_hgraph("hgraph_list_unwritten");
+    let emitted = emit_clean(&[fixture!(
+        "a_list_form_not_written_fails_as_the_graph_runs",
+        "unwritten.hgl"
+    )]);
+    let ran = hgraph.run_all(&emitted);
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let described = outcomes(&emitted, &all, &ran);
+    let expected = [
+        (
+            "an_entry_past_the_size_written_with_it failed unwritten.hgl:25:9",
+            "NotImplementedError: the hgraph target does not write an updated position at or past the size a list's delta gives it yet",
+        ),
+        (
+            "a_removed_position_never_held failed unwritten.hgl:29:9",
+            "NotImplementedError: the hgraph target does not write a removed position past an unsized list's end yet",
+        ),
+        (
+            "a_position_of_out_past_the_list failed unwritten.hgl:33:9",
+            "HglError: the index 5 is outside a sequence of 3",
+        ),
+        (
+            "an_empty_list_yielded_inside_a_struct failed unwritten.hgl:50:9",
+            "NotImplementedError: the hgraph target does not write an empty unsized list inside a value a source yields or a dictionary's entry holds yet",
+        ),
+    ];
+    assert_eq!(described.len(), expected.len(), "{described:#?}");
+    for (outcome, (start, what)) in described.iter().zip(expected) {
+        assert!(
+            outcome.starts_with(start) && outcome.contains(what),
+            "{outcome}"
+        );
+    }
+}
+
+/// What hgraph 0.9.5 takes of a growing list in no way the language
+/// has is reported: an unsized list's delta inside a struct's, a list's
+/// or a dictionary's delta the program makes, which hgraph applies with
+/// no negative size and which the provider counts only at the node's own
+/// output (TYPE-16); and an element of an unsized list's connection in a
+/// graph, where hgraph's `getitem_` fails the run once the list no
+/// longer holds the position, which the language has a child that is not
+/// valid (TIME-1, EXPR-7).
+#[test]
+fn a_growing_list_form_hgraph_does_not_take_is_reported() {
+    let emitted = emit(&[fixture!(
+        "a_growing_list_form_hgraph_does_not_take_is_reported",
+        "m.hgl"
+    )]);
+    let nested = "the hgraph target does not write an unsized list's delta inside the delta of a struct, a list or a dictionary yet";
+    assert_eq!(
+        emitted.reported,
+        [
+            format!("m.hgl:4:40 target.unsupported: {nested}"),
+            format!("m.hgl:7:51 target.unsupported: {nested}"),
+            format!("m.hgl:10:56 target.unsupported: {nested}"),
+            "m.hgl:15:33 target.unsupported: the hgraph target does not write an element of an unsized list's connection in a graph: hgraph 0.9.5's `getitem_` fails where the list does not hold it yet".to_string(),
+        ]
+    );
 }
 
 /// CTRL-2, CTRL-3 and CTRL-7 to CTRL-15: a graph's `for`, `while` and
@@ -4991,8 +5127,10 @@ fn a_graph_for_is_a_python_loop_or_a_child_for_each_member() {
             "        counted(name=name, price=value)\n",
             "    _hg.map_(_each_0, value=priced(key=key, price=price), __key_arg__=\"name\")\n",
         ),
-        // A list: its positions as a `TSD`, and no key.
-        "    _hg.map_(_each_1, item=_hg.convert[_hg.TSD[_py.int, _hg.TS[_py.int]]](readings(reading=reading)), __key_arg__=\"\")\n",
+        // A list: its unbounded `TSL`, and no key. Each child gives a
+        // constant, which `discarded` keeps in the graph.
+        "    def _each_1(item: _hg.TS[_py.int]) -> _hg.TS[_py.bool]:\n",
+        "    _core.discarded(_hg.map_(_each_1, item=readings(reading=reading), __key_arg__=\"\"))\n",
         // A set: its members are the keys.
         "    _hg.map_(_each_2, __keys__=members(member=member), __key_arg__=\"each\")\n",
         // A connection from outside is given whole; one named as a
@@ -5033,9 +5171,10 @@ fn a_graph_for_is_a_python_loop_or_a_child_for_each_member() {
 /// key read where hgraph has no value for it, as an operand and as a
 /// `const` argument (`map_` gives a child its key as a port); a
 /// `return` under a branch selected at runtime in an unrolled loop,
-/// whose other path is the passes after it; a loop over a growing list
-/// of nullables; and a `return` in an `if` over a connection that gives
-/// a `let` its value where a branch has none.
+/// whose other path is the passes after it; and a `return` in an `if`
+/// over a connection that gives a `let` its value where a branch has
+/// none. A loop over a growing list of nullables is written: each
+/// child is given its position's port of hgraph's unbounded `TSL`.
 #[test]
 fn a_graph_loop_form_not_written_yet_is_reported() {
     let emitted = emit(&[fixture!(
@@ -5048,9 +5187,6 @@ fn a_graph_loop_form_not_written_yet_is_reported() {
             "m.hgl:6:12 target.unsupported: the hgraph target does not write a loop's key or member read other than as the argument of a temporal parameter yet",
             "m.hgl:11:25 target.unsupported: the hgraph target does not write a loop's key or member read other than as the argument of a temporal parameter yet",
             "m.hgl:16:9 target.unsupported: the hgraph target does not write a `return` under a branch selected at runtime in a loop unrolled where the graph is built yet",
-            // A nullable element of an unsized list (TYPE-14).
-            "m.hgl:21:10 target.unsupported: the hgraph target does not write the type `list<i64?>` yet",
-            "m.hgl:22:5 target.unsupported: the hgraph target does not write a loop over `list<i64?>` yet",
             "m.hgl:25:23 target.unsupported: the hgraph target does not write a `return` in an `if` over a connection that gives a `let` or a `var` its value, with a branch that has no value yet",
         ]
     );
@@ -5446,7 +5582,7 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
         "        return _core.child_delta(_core.position_of(parts, 1))\n".to_string(),
         "    return _core.entry_port(prices, \"B\").valid\n".to_string(),
         "    return _core.list_within(_core.list_delta(updated={slot.value: reading.value}), 2)\n".to_string(),
-        "_hold=lambda _port: (_py.list(_port.value) if _port.all_valid else _core.unset_read())), [_harness.whole([1, 2], fixed=True), _harness.whole([5, 6], fixed=True)]".to_string(),
+        "_hold=lambda _port: _core.list_value(_port)), [_harness.whole([1, 2], fixed=True), _harness.whole([5, 6], fixed=True)]".to_string(),
         "    return _core.dict_replaced(_output, _py.dict(book.value))\n".to_string(),
         format!("def pair_once(value: _hg.TS[_py.int], _output: _hg.TS_OUT[{pair}] = None) -> {pair}:"),
         "    _output.value = {key.value: value.value}\n".to_string(),
@@ -5455,13 +5591,12 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
 }
 
 /// What this target does not write of a collection is reported: an
-/// unsized list of a nullable, whose whole tuple holds no `None`
-/// (TYPE-14); a fixed list of no position, which hgraph 0.9.3's `TSL`
-/// cannot publish (TYPE-10, TIME-9); an endpoint of an unsized list's
-/// element, a whole tuple here (TIME-1); an assignment inside a child of
-/// a node's `out` (TIME-7); and a trace cell written whole whose parts
-/// are composites, or a list's that are nullable, or of a struct below
-/// the cell's (TST-5, TST-9).
+/// unsized list of a nullable published whole (TYPE-14, TIME-7); a
+/// fixed list of no position, which hgraph 0.9.3's `TSL` cannot publish
+/// (TYPE-10, TIME-9); an assignment inside a child of a node's `out`
+/// (TIME-7); and a trace cell written whole whose parts are composites,
+/// or a list's that are nullable, or of a struct below the cell's (TST-5,
+/// TST-9).
 #[test]
 fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
     let emitted = emit(&[fixture!(
@@ -5471,9 +5606,8 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:2:4 target.unsupported: the hgraph target does not write the type `list<i64?>` yet",
+            "m.hgl:3:19 target.unsupported: the hgraph target does not write a whole list published where an element is temporal composite or nullable yet",
             "m.hgl:5:4 target.unsupported: the hgraph target does not write the type `list<i64, 0>` yet",
-            "m.hgl:9:19 target.unsupported: the hgraph target does not write an endpoint of an unsized list's element, a whole tuple here yet",
             "m.hgl:13:12 target.unsupported: the hgraph target does not write an assignment inside an entry of `out` yet",
             "m.hgl:21:31 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
             "m.hgl:21:70 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",

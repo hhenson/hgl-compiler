@@ -126,6 +126,12 @@ def _shown(value, core):
         # A set's delta: what the publication added and what it removed.
         added, removed = _shown(set(value.added), core), _shown(set(value.removed), core)
         return f"delta(added: {added}, removed: {removed})"
+    if isinstance(value, dict) and hasattr(value, "size_modified"):
+        # A list's delta (TYPE-16): the positions updated, those that lost
+        # their value, and the new size where it moved.
+        updated, removed = _shown(core.updated(value), core), _shown(set(core.removed(value)), core)
+        size = _shown(value.size_modified, core)
+        return f"delta(updated: {updated}, removed: {removed}, size_modified: {size})"
     if isinstance(value, tuple):
         return "(" + ", ".join(_shown(part, core) for part in value) + ")"
     if isinstance(value, list):

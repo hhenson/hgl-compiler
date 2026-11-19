@@ -119,10 +119,14 @@ test a_dictionary_has_a_child_for_each_key {
 }
 
 # A list of `[1, reading]`, or of `[1]` where the reading is negative.
+# After the first, each is a delta, which ticks only the positions it
+# names: a whole list publishes each of them (END-2).
 fn readings(reading: i64) -> list<i64> {
+    inject out
     when {
-        if reading < 0 { return [1] }
-        return [1, reading]
+        if reading < 0 { return delta<list<i64>>(size_modified: 1) }
+        if !valid(out) { return [1, reading] }
+        return delta<list<i64>>(updated: [1: reading])
     }
 }
 
