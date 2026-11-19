@@ -1391,6 +1391,18 @@ fn binary(
     if !equality && (nullable(&left) || nullable(&right)) {
         return Ok(Typed::unevaluated(None));
     }
+    // EXPR-6: "The operands of `&&`, `||`, and `!` are bools."
+    let boolean = Type::Scalar(Scalar::Bool);
+    let other = |read: &Typed| {
+        read.ty
+            .as_ref()
+            .is_some_and(|ty| !unknown(ty) && *ty != boolean)
+    };
+    if matches!(operator, BinaryOperator::And | BinaryOperator::Or)
+        && (other(&left) || other(&right))
+    {
+        return Ok(Typed::unevaluated(None));
+    }
     if equality {
         // TYPE-7: an implied member is of the enum its place expects:
         // `Mode.fast == .slow` compares two of `Mode`, as core's `==`
@@ -1647,6 +1659,14 @@ pub(crate) fn combined(
             V::List(values) | V::Tuple(values) => values.iter().any(symbolic),
             _ => false,
         }
+    }
+    // EXPR-6: "Boolean connectives short-circuit left to right": the
+    // right operand of `false &&` and of `true ||` is not needed, and
+    // need not be worked out (`binary` holds it to a `bool`).
+    match (operator, left) {
+        (Op::And, V::Bool(false)) => return V::Bool(false),
+        (Op::Or, V::Bool(true)) => return V::Bool(true),
+        _ => {}
     }
     if matches!(left, V::Unknown) || matches!(right, V::Unknown) {
         return V::Unknown;

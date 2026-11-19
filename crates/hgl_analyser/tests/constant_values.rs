@@ -1014,6 +1014,36 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
     );
 }
 
+/// EXPR-6: "Boolean connectives short-circuit left to right": the
+/// right operand of `false &&` and of `true ||` need not be worked out.
+/// "The operands of `&&`, `||`, and `!` are bools", that one too.
+#[test]
+fn a_boolean_connective_short_circuits() {
+    let shared = "struct Flag<const X: bool> { v: i64 }\n";
+    expect(
+        &format!(
+            "{shared}const fn a(x: Flag<(false && (1 // 0 == 0))>) -> Flag<false> => x\n\
+             const fn b(x: Flag<(true || (1 // 0 == 0))>) -> Flag<true> => x\n\
+             const fn c<const N: bool>(x: Flag<(false && N)>) -> Flag<false> => x\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(x: Flag<(true && (1 // 0 == 0))>) -> i64 => 1\n\
+             const fn b(x: Flag<(false && 1)>) -> i64 => 1\n\
+             const fn c(x: Flag<(false && (1 // 0))>) -> i64 => 1\n\
+             const fn d(x: Flag<(true || \"a\")>) -> i64 => 1\n"
+        ),
+        &[
+            "3 generic.argument_constant",
+            "4 generic.argument_constant",
+            "5 generic.argument_constant",
+            "6 generic.argument_constant",
+        ],
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");
