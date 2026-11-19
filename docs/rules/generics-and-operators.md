@@ -33,10 +33,10 @@ transpiler: partial
 
 analyser: partial
 
-- A parameter compared in a constraint is a const option or is rejected
+- A parameter compared in a constraint is a const option or is rejected, and each constant it is compared with is a value of the option's type (`type.mismatch`, `member.unknown`, `enum.context_type`, at the declaration)
 - At a named operator call in a value function, a candidate's `T in {types}` and `T == type` are checked against what `T` stands for, and a named operator requirement is tested with the call's types (GEN-16)
-- A call of a function, a construction of a struct, and a type written that applies one, whose `requires` does not hold with its generic arguments, is `requires.unmet`: a membership or an equality of a type, a generic value parameter compared with constants, however its value is written (GEN-8), after the callee's name or by name, or left to its default, and a named operator requirement
-- Left: every other form `requires` admits; binding equalities solved to a fixed point; a membership of a generic parameter of the declaration a call is written in, which is not told (GEN-7); a function with a type pack or a pack parameter; a generic value that is an expression of constants other than integer or duration arithmetic, a `!` or a comparison, which is not folded
+- A call of a function, a construction of a struct, and a type written that applies one, whose `requires` does not hold with its generic arguments, is `requires.unmet`: a membership or an equality of a type, and a generic value parameter compared with constants by the one comparison (`ConstantValue::same`), its value read as one of the parameter's type however it is written, after the callee's name, by name, in a type, or left to its default; one whose value is not known is not judged
+- Left: every other form `requires` admits; binding equalities solved to a fixed point; a membership of a generic parameter of the declaration a call is written in, which is not told (GEN-7); a function with a type pack or a pack parameter
 
 ## GEN-4
 
@@ -88,10 +88,10 @@ parser: done
 
 analyser: partial
 
-- A call's generic arguments, all or the first of them, for a value function and for the output requested of an operator's candidates; a call that leaves a parameter unresolved rejected; a function's or a candidate's generic value parameter given by name, held to the parameter's type, and one given no compile-time constant rejected
-- An enum member a call gives one, or a default names, is recorded as the member it comes to, however it is written (TYPE-7)
+- A call's generic arguments, all or the first of them, for a value function and for the output requested of an operator's candidates; a call that leaves a parameter unresolved rejected
+- A generic value parameter given by name or after the callee's name, and one a type gives, read as a value of the parameter's type (EXPR-5, `type.mismatch`): a literal, an enum member however it is written (TYPE-7), a constant, a generic value parameter in scope, and a constant expression of those, of numbers, durations, tenors, strings, bools, lists and tuples (`constant`); one that is no compile-time constant, and one whose value this compiler does not work out, is `generic.argument_constant`
 - An operator's generics are resolved from what the call writes, then its place, then its arguments, then a default, and the output so requested is matched as far as it is known
-- Left: an operator's own generic value parameter given by name; `instantiate`; packs; what an operator's generic arguments say of its operands; temporal bodies
+- Left: an operator's own generic value parameter given by name; `instantiate`; packs; what an operator's generic arguments say of its operands; temporal bodies; an operation the reader does not work out, a symbol given configuration and a date moved by a tenor
 
 ## GEN-9
 

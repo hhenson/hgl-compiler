@@ -29,7 +29,7 @@ use hgl_lexer::literal::decode_integer;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
-use crate::constant::fold;
+use crate::constant::{Constants, Fault, Scope, Typed};
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Program, Role,
 };
@@ -44,6 +44,9 @@ use crate::{codes, error};
 /// Reads the types of every module, filling in [`Module::details`] and
 /// [`Module::written`].
 pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
+    // TYPE-7: an enum's members, each with its number, are read first:
+    // a constant written in a type may name one, `Tagged<Mode(1)>`.
+    crate::declared::number_enums(program, diagnostics);
     // A generic argument is read for the parameter it is given to, so
     // the kind of every struct's parameters is settled first (GEN-13).
     let kinds = struct_kinds(program);
@@ -56,8 +59,13 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
             continue;
         };
         let mut details = Vec::with_capacity(module.declarations.len());
-        for declaration in &module.declarations {
-            details.push(reader.declaration(declaration));
+        for (position, declaration) in module.declarations.iter().enumerate() {
+            let detail = reader.declaration(declaration);
+            // An enum's members have been read already.
+            details.push(match module.details.get(position) {
+                Some(numbered @ Detail::Enum(_)) => numbered.clone(),
+                _ => detail,
+            });
         }
         for test in &module.tests {
             reader.enter(module.files[test.file].file);
@@ -343,9 +351,13 @@ struct Reader<'a> {
     /// The generic arguments of every call read in the module so far
     /// (GEN-8).
     calls: Vec<CallArguments>,
+    /// What each name of the program resolved to, by the file and
+    /// offset of its use: a constant a type names may be declared in
+    /// another module, and is read there (UNIT-13).
+    everywhere: HashMap<(FileId, u32), &'a Binding>,
     /// The values of the constants the module's types have named
     /// (UNIT-13).
-    constant_values: ConstantValues,
+    constants: Constants,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -386,7 +398,13 @@ impl<'a> Reader<'a> {
             read: HashMap::new(),
             written: Vec::new(),
             calls: Vec::new(),
-            constant_values: ConstantValues::default(),
+            everywhere: program
+                .modules
+                .iter()
+                .flat_map(|module| &module.uses)
+                .map(|used| ((used.at.file, used.at.span.start), &used.binding))
+                .collect(),
+            constants: Constants::default(),
             diagnostics,
         })
     }
@@ -427,128 +445,6 @@ fn names_before_colon(node: &SyntaxNode) -> Vec<SyntaxToken> {
         .take_while(|token| token.kind() != SyntaxKind::Colon)
         .filter(|token| token.kind() == SyntaxKind::Ident)
         .collect()
-}
-
-/// What a name in a constant expression stands for, `bound` being what
-/// the resolver bound it to (UNIT-10): a generic value parameter of the
-/// declaration it is written in; a constant of a module, followed to
-/// its value (UNIT-13); anything else [`ConstantValue::Unevaluated`].
-/// It is the `name` that [`fold`] is given wherever a constant is
-/// folded with its names.
-pub(crate) fn named_constant(
-    program: &Program,
-    values: &ConstantValues,
-    name: &SyntaxToken,
-    bound: Option<&Binding>,
-) -> ConstantValue {
-    match bound {
-        Some(Binding::Local {
-            at,
-            kind: LocalKind::GenericParameter,
-        }) => ConstantValue::Parameter {
-            name: name.text().to_string(),
-            at: *at,
-        },
-        Some(Binding::Declarations {
-            module,
-            declarations,
-        }) if declarations.len() == 1 => constant_value(program, *module, declarations[0], values),
-        _ => ConstantValue::Unevaluated,
-    }
-}
-
-/// How many constants a constant's value is followed through. One that
-/// names more, each through the last, is left unevaluated.
-const CONSTANT_DEPTH: usize = 32;
-
-/// What following constants to their values keeps, for one module's
-/// types (UNIT-13).
-#[derive(Default)]
-pub(crate) struct ConstantValues {
-    /// The constants being followed, so that one whose value depends on
-    /// itself, which is reported as that, ends here.
-    following: std::cell::RefCell<Vec<(usize, usize)>>,
-    /// The values worked out, by module and declaration. A constant many
-    /// others name is folded once: `c1 = c0 + c0`, `c2 = c1 + c1` and so
-    /// on would otherwise be folded twice as often at each step.
-    known: std::cell::RefCell<HashMap<(usize, usize), ConstantValue>>,
-    /// Set when a constant was left unevaluated because of where it was
-    /// reached from: inside its own value, or too many constants deep.
-    /// What was worked out through it is then not kept as its value:
-    /// reached another way it may come to one.
-    cut: std::cell::Cell<bool>,
-}
-
-/// What the constant `declaration` of module `module` comes to, as far
-/// as it needs no types (UNIT-13): "a compile-time constant where a
-/// generic value argument (GEN-8) or a `switch` label (CTRL-12) requires
-/// one". Its expression is folded as a size is, and a constant it names
-/// is followed in turn.
-///
-/// A constant of a type other than `i64` and `duration` is left
-/// unevaluated: only those are folded with no types.
-pub(crate) fn constant_value(
-    program: &Program,
-    module: usize,
-    declaration: usize,
-    values: &ConstantValues,
-) -> ConstantValue {
-    let key = (module, declaration);
-    if let Some(known) = values.known.borrow().get(&key) {
-        return known.clone();
-    }
-    let unit = &program.modules[module];
-    let declared = &unit.declarations[declaration];
-    if declared.kind != DeclarationKind::Constant {
-        return ConstantValue::Unevaluated;
-    }
-    if values.following.borrow().contains(&key) || values.following.borrow().len() >= CONSTANT_DEPTH
-    {
-        values.cut.set(true);
-        return ConstantValue::Unevaluated;
-    }
-    let ty = type_child(&declared.syntax);
-    let folded = ty
-        .as_ref()
-        .is_some_and(|ty| matches!(text_of(ty).as_str(), "i64" | "duration"));
-    let written = declared
-        .syntax
-        .children()
-        .find(|child| Some(child) != ty.as_ref())
-        .filter(|_| folded);
-    let Some(written) = written else {
-        values
-            .known
-            .borrow_mut()
-            .insert(key, ConstantValue::Unevaluated);
-        return ConstantValue::Unevaluated;
-    };
-    let file = unit.files[declared.file].file;
-    // What a name of the expression stands for: another constant, of
-    // this module or one it imports from.
-    let name = |used: &SyntaxNode| {
-        let Some(name) = name_token(used) else {
-            return ConstantValue::Unevaluated;
-        };
-        let binding = unit
-            .uses
-            .iter()
-            .find(|found| found.at.file == file && found.at.span.start == name.span().start)
-            .map(|found| &found.binding);
-        named_constant(program, values, &name, binding)
-    };
-    // Whether anything under this constant was cut is asked of this
-    // constant alone, and then added to what its caller is asking.
-    let cut_before = values.cut.replace(false);
-    values.following.borrow_mut().push(key);
-    let value = fold(&written, &name);
-    values.following.borrow_mut().pop();
-    let cut = values.cut.get();
-    if !cut {
-        values.known.borrow_mut().insert(key, value.clone());
-    }
-    values.cut.set(cut_before || cut);
-    value
 }
 
 /// The default of a parameter or struct member: its first child node
@@ -685,33 +581,6 @@ fn cardinality(node: Option<SyntaxNode>) -> (u64, Option<u64>) {
         ([minimum, maximum], _) => (*minimum, Some(*maximum)),
         _ => (0, None),
     }
-}
-
-/// The default of every generic parameter of a declaration, as the
-/// arguments of an application that supplies none: `Some` only where it
-/// has generic parameters and each is a value with a default (GEN-2).
-///
-/// A default is written in its declaration's file, which may not be the
-/// one being read, so no name in it is looked up here: it is folded as
-/// far as it holds none.
-fn defaults_of(declaration: &Declaration) -> Option<Vec<Argument>> {
-    let forms = generic_forms(&declaration.syntax);
-    if forms.is_empty() {
-        return None;
-    }
-    forms
-        .iter()
-        .map(|(parameter, _, form)| {
-            let default = match form {
-                Form::Value => default_of(parameter)?,
-                Form::Plain | Form::Pack(..) => return None,
-            };
-            Some(Argument::Constant(Constant {
-                text: text_of(&default),
-                value: fold(&default, &|_| ConstantValue::Unevaluated),
-            }))
-        })
-        .collect()
 }
 
 /// The generic parameters of a declaration, as written.
@@ -985,7 +854,7 @@ impl Reader<'_> {
                     // arguments are checked against is for the pass that
                     // selects them.
                     if let Some(list) = child(&node, SyntaxKind::GenericArgs) {
-                        self.arguments(&list, Position::OPEN, None);
+                        self.arguments(&list, Position::OPEN, None, None);
                     }
                 }
                 _ => {}
@@ -1484,26 +1353,17 @@ impl Reader<'_> {
                 value: ConstantValue::Unbounded,
             };
         }
-        let size = self.constant(node);
-        let problem = match &size.value {
-            ConstantValue::Int(count) if *count < 0 => {
-                Some("a list's size is not negative".to_string())
-            }
-            ConstantValue::Duration(_) => {
-                Some("a list's size is a count, and this is a duration".to_string())
-            }
-            ConstantValue::Other(what) => {
-                Some(format!("a list's size is a count, and this is {what}"))
-            }
-            ConstantValue::Parameter { name, at } => match self.value_type(*at) {
-                Some(Type::Scalar(Scalar::I64) | Type::Parameter { .. } | Type::Unknown) | None => {
-                    None
-                }
-                Some(other) => Some(format!(
-                    "a list's size is a count, and `{name}` is a constant of type `{other}`"
-                )),
-            },
-            _ => None,
+        let count = Type::Scalar(Scalar::I64);
+        let read = self.typed_constant(node, Some(&count));
+        let problem = match &read {
+            Ok(Typed {
+                value: ConstantValue::Int(count),
+                ..
+            }) if *count < 0 => Some("a list's size is not negative".to_string()),
+            Ok(read) => self
+                .other_kind(node, read, &[Scalar::I64])
+                .map(|wrong| format!("a list's size is a count, and {wrong}")),
+            Err(_) => None,
         };
         if let Some(problem) = problem {
             self.diagnostics.emit(error(
@@ -1514,7 +1374,46 @@ impl Reader<'_> {
                 "TYPE-10",
             ));
         }
-        size
+        // A size reported, or one whose reading was, says nothing more
+        // (ERR-9).
+        let value = match read {
+            Ok(read) => crate::constant::fit(read, Some(&count), self.program)
+                .unwrap_or(ConstantValue::Unknown),
+            Err(Fault::NotConstant) => ConstantValue::Unevaluated,
+            Err(_) => ConstantValue::Unknown,
+        };
+        self.note_values_in(node);
+        Constant {
+            text: text_of(node),
+            value,
+        }
+    }
+
+    /// What a constant read as `read` is, where its type is none of
+    /// `kinds`: `` `F` is a constant of type `f64` `` for a name, and
+    /// `this is a float` for any other. `None` where it is of one of
+    /// them, or its type is not known.
+    fn other_kind(&self, node: &SyntaxNode, read: &Typed, kinds: &[Scalar]) -> Option<String> {
+        if matches!(read.value, ConstantValue::Null) {
+            return Some("this is null".to_string());
+        }
+        let ty = read.ty()?;
+        match ty {
+            Type::Scalar(scalar) if kinds.contains(scalar) => return None,
+            Type::Unknown | Type::Parameter { .. } => return None,
+            _ => {}
+        }
+        // A lone name: a generic value parameter, or a constant of a
+        // module (UNIT-13).
+        if matches!(node.kind(), SyntaxKind::NameExpr | SyntaxKind::NamedType)
+            && let Some(name) = name_token(node)
+        {
+            return Some(format!("`{}` is a constant of type `{ty}`", name.text()));
+        }
+        Some(format!(
+            "this is {}",
+            crate::constant::kind_of(&read.value, ty)
+        ))
     }
 
     /// `dict<K, V>`: `dict_type = "dict", "<", value_type, ",", type, ">"`.
@@ -1565,13 +1464,28 @@ impl Reader<'_> {
             return Type::Unknown;
         };
         let minimum_node = sizes.next();
-        let maximum = self.constant(&maximum_node);
-        let minimum = minimum_node.as_ref().map(|node| self.constant(node));
+        // A size is a tick count or a duration: either is read as it is.
+        let maximum_read = self.typed_constant(&maximum_node, None);
+        let minimum_read = minimum_node
+            .as_ref()
+            .map(|node| self.typed_constant(node, None));
+        let maximum = self.held(&maximum_node, maximum_read.clone(), None, None);
+        let minimum = minimum_node
+            .as_ref()
+            .zip(minimum_read.clone())
+            .map(|(node, read)| self.held(node, read, None, None));
+        // GEN-13: a generic parameter named in a size is used as a value.
+        for node in std::iter::once(&maximum_node).chain(minimum_node.as_ref()) {
+            self.note_values_in(node);
+        }
         // `zip` pairs the two when both are there.
         self.window_sizes(
-            &maximum_node,
-            &maximum,
-            minimum_node.as_ref().zip(minimum.as_ref()),
+            (&maximum_node, &maximum, &maximum_read),
+            minimum_node
+                .as_ref()
+                .zip(minimum.as_ref())
+                .zip(minimum_read.as_ref())
+                .map(|((node, size), read)| (node, size, read)),
         );
         // "Omitted minimum equals maximum": a minimum written as the
         // maximum is the same window as one with none.
@@ -1589,15 +1503,15 @@ impl Reader<'_> {
     /// zero ... Minimum cannot exceed maximum."
     fn window_sizes(
         &mut self,
-        maximum_node: &SyntaxNode,
-        maximum: &Constant,
-        minimum: Option<(&SyntaxNode, &Constant)>,
+        (maximum_node, maximum, maximum_read): (&SyntaxNode, &Constant, &Result<Typed, Fault>),
+        minimum: Option<(&SyntaxNode, &Constant, &Result<Typed, Fault>)>,
     ) {
-        let maximum_kind = self.size_kind(maximum_node, maximum);
+        let maximum_kind = self.size_kind(maximum_node, maximum_read);
         let minimum_kind = match minimum {
-            Some((node, size)) => self.size_kind(node, size),
+            Some((node, _, read)) => self.size_kind(node, read),
             None => Some(SizeKind::Unknown),
         };
+        let minimum = minimum.map(|(node, size, _)| (node, size));
         // A size of the wrong kind has been reported; its bounds mean
         // nothing.
         let (Some(maximum_kind), Some(minimum_kind)) = (maximum_kind, minimum_kind) else {
@@ -1670,25 +1584,20 @@ impl Reader<'_> {
 
     /// The kind of one size of a window; `None`, with a report, when it
     /// is neither a tick count nor a duration.
-    fn size_kind(&mut self, node: &SyntaxNode, size: &Constant) -> Option<SizeKind> {
-        let wrong = match &size.value {
-            ConstantValue::Int(_) => return Some(SizeKind::Ticks),
-            ConstantValue::Duration(_) => return Some(SizeKind::Time),
-            ConstantValue::Unevaluated => match self.constant_of_another_type(node) {
-                Some(wrong) => wrong,
-                None => return Some(SizeKind::Unknown),
+    fn size_kind(&mut self, node: &SyntaxNode, read: &Result<Typed, Fault>) -> Option<SizeKind> {
+        let Ok(read) = read else {
+            return Some(SizeKind::Unknown);
+        };
+        let wrong = match read.ty() {
+            Some(Type::Scalar(Scalar::I64)) => return Some(SizeKind::Ticks),
+            Some(Type::Scalar(Scalar::Duration)) => return Some(SizeKind::Time),
+            _ => match &read.value {
+                ConstantValue::Unbounded => "this is `unbounded`".to_string(),
+                _ => match self.other_kind(node, read, &[Scalar::I64, Scalar::Duration]) {
+                    Some(wrong) => wrong,
+                    None => return Some(SizeKind::Unknown),
+                },
             },
-            ConstantValue::Parameter { name, at } => match self.value_type(*at) {
-                Some(Type::Scalar(Scalar::I64)) => return Some(SizeKind::Ticks),
-                Some(Type::Scalar(Scalar::Duration)) => return Some(SizeKind::Time),
-                Some(Type::Parameter { .. } | Type::Unknown) | None => {
-                    return Some(SizeKind::Unknown);
-                }
-                Some(other) => format!("`{name}` is a constant of type `{other}`"),
-            },
-            ConstantValue::Unbounded => "this is `unbounded`".to_string(),
-            ConstantValue::Member(_) => "this is a member of an enum".to_string(),
-            ConstantValue::Other(what) => format!("this is {what}"),
         };
         self.diagnostics.emit(error(
             Category::Type,
@@ -1698,38 +1607,6 @@ impl Reader<'_> {
             "TYPE-11",
         ));
         None
-    }
-
-    /// What is wrong with the size `node`, of a window, where it names
-    /// a constant of a module (UNIT-13) whose type is neither `i64` nor
-    /// `duration`: `F` of `const F: f64 = 1.5`. `None` for anything
-    /// else, a constant of either type among them, whose value another
-    /// pass may find.
-    fn constant_of_another_type(&self, node: &SyntaxNode) -> Option<String> {
-        if node.kind() != SyntaxKind::NameExpr {
-            return None;
-        }
-        let name = name_token(node)?;
-        let Some(Binding::Declarations {
-            module,
-            declarations,
-        }) = self.bindings.get(&(self.file, name.span().start))
-        else {
-            return None;
-        };
-        // A slice pattern: exactly one declaration.
-        let [declaration] = declarations[..] else {
-            return None;
-        };
-        let declared = &self.program.modules[*module].declarations[declaration];
-        if declared.kind != DeclarationKind::Constant {
-            return None;
-        }
-        // A type of the program's own is a struct or an enum, and
-        // neither is `i64` or `duration`, so the type's text says.
-        let ty = text_of(&type_child(&declared.syntax)?);
-        (!matches!(ty.as_str(), "i64" | "duration"))
-            .then(|| format!("`{}` is a constant of type `{ty}`", name.text()))
     }
 
     // ---- Named types ----
@@ -1777,6 +1654,7 @@ impl Reader<'_> {
                     ..Position::ARGUMENT
                 },
                 target,
+                None,
             )
         });
         // No binding: the name is left for the prelude, or the resolver
@@ -1830,7 +1708,7 @@ impl Reader<'_> {
                 // its default". A type position infers nothing, so a
                 // type named bare is the type with every default, where
                 // every parameter has one.
-                let arguments = match (&list, defaults_of(declaration)) {
+                let arguments = match (&list, self.defaults_of((*module, index))) {
                     (None, Some(defaults)) if !position.bare => defaults,
                     _ => {
                         self.argument_count(&name, declaration, list.as_ref(), position);
@@ -2100,11 +1978,17 @@ impl Reader<'_> {
     /// before them is one. Each argument is then read for the parameter
     /// it is given to (GEN-14): "Check each argument against the
     /// corresponding parameter kind."
+    ///
+    /// `values_of` is the declaration whose generic value parameters the
+    /// constants among them are read for, where that is not `target`: a
+    /// function or an operator the arguments are written after, which is
+    /// no type (GEN-8).
     fn arguments(
         &mut self,
         list: &SyntaxNode,
         position: Position,
         target: Option<Id>,
+        values_of: Option<Id>,
     ) -> Vec<Argument> {
         // The name and kind of each generic parameter of the target.
         let (target_name, parameters): (String, Vec<(String, Kind)>) = match target {
@@ -2127,6 +2011,18 @@ impl Reader<'_> {
             None => (String::new(), Vec::new()),
         };
 
+        // The type of each value parameter of what the arguments are
+        // given to, and where each of its parameters is declared, with
+        // its name: a value parameter's type may be a type parameter's,
+        // given by an argument before it.
+        let (types, places, values_name) = match target.or(values_of) {
+            Some(of) => (
+                self.parameter_types(of),
+                self.parameter_places(of),
+                self.program.modules[of.0].declarations[of.1].name.clone(),
+            ),
+            None => (Vec::new(), Vec::new(), String::new()),
+        };
         let mut arguments = Vec::new();
         // The parameter the next argument is given to. A pack takes
         // every argument from its place on. An argument that passes a
@@ -2159,6 +2055,33 @@ impl Reader<'_> {
                 None
             };
             let want = parameter.map_or(Kind::Unknown, |(_, kind)| *kind);
+            // What a value given to this parameter is a value of
+            // (EXPR-5), with what an earlier argument gave a type
+            // parameter in place: the `T` of `S<T, const v: T>`.
+            let at = (placed && at_least > 0).then_some(next);
+            let expected =
+                at.and_then(|at| types.get(at).cloned().flatten())
+                    .and_then(|ty| match ty {
+                        Type::Parameter { at, .. } => places
+                            .iter()
+                            .position(|place| *place == at)
+                            .and_then(|index| match arguments.get(index) {
+                                Some(Argument::Type(given)) => Some(given.clone()),
+                                _ => None,
+                            }),
+                        ty => Some(ty),
+                    });
+            let place = at
+                .and_then(|at| places.get(at))
+                .and_then(|declared| {
+                    let of = target.or(values_of)?;
+                    let declaration = &self.program.modules[of.0].declarations[of.1];
+                    generic_forms(&declaration.syntax)
+                        .into_iter()
+                        .find(|(_, name, _)| name.span() == declared.span)
+                        .map(|(_, name, _)| name.text().to_string())
+                })
+                .map(|name| format!("`{name}` of `{values_name}`"));
             // A pack of several types fills as many places as it holds
             // at least. Each after the first is a type given to that
             // parameter too, and a value parameter among them takes
@@ -2213,8 +2136,14 @@ impl Reader<'_> {
                 if matches!(want, Kind::Type | Kind::Pack) {
                     self.argument_kind(&argument, mismatch("a type", "a value"));
                 }
-                arguments.push(Argument::Constant(self.constant(&argument)));
-            } else if let Some(constant) = self.value_name(&argument, want) {
+                arguments.push(Argument::Constant(self.constant(
+                    &argument,
+                    expected.as_ref(),
+                    place.as_deref(),
+                )));
+            } else if let Some(constant) =
+                self.value_name(&argument, want, expected.as_ref(), place.as_deref())
+            {
                 // The parser reads a lone name as a type. One that names
                 // a value is a constant.
                 arguments.push(Argument::Constant(constant));
@@ -2289,7 +2218,13 @@ impl Reader<'_> {
     ///
     /// `want` is the kind of the parameter the name is given to. Where
     /// a type goes, a name is read as a type.
-    fn value_name(&mut self, node: &SyntaxNode, want: Kind) -> Option<Constant> {
+    fn value_name(
+        &mut self,
+        node: &SyntaxNode,
+        want: Kind,
+        expected: Option<&Type>,
+        place: Option<&str>,
+    ) -> Option<Constant> {
         if matches!(want, Kind::Type | Kind::Pack)
             || node.kind() != SyntaxKind::NamedType
             || child(node, SyntaxKind::GenericArgs).is_some()
@@ -2298,7 +2233,7 @@ impl Reader<'_> {
         }
         let name = name_token(node)?;
         let &binding = self.bindings.get(&(self.file, name.span().start))?;
-        let value = match binding {
+        match binding {
             Binding::Local {
                 at,
                 kind: LocalKind::GenericParameter,
@@ -2318,12 +2253,8 @@ impl Reader<'_> {
                     }
                     _ => return None,
                 }
-                ConstantValue::Parameter {
-                    name: name.text().to_string(),
-                    at: *at,
-                }
             }
-            Binding::Local { .. } => ConstantValue::Unevaluated,
+            Binding::Local { .. } => {}
             // UNIT-13: a constant of a module is "a compile-time
             // constant where a generic value argument (GEN-8) ...
             // requires one".
@@ -2333,13 +2264,12 @@ impl Reader<'_> {
             } => match declarations.as_slice() {
                 &[declaration]
                     if self.program.modules[*module].declarations[declaration].kind
-                        == DeclarationKind::Constant =>
-                {
-                    constant_value(self.program, *module, declaration, &self.constant_values)
-                }
+                        == DeclarationKind::Constant => {}
                 _ => return None,
             },
-        };
+        }
+        let read = self.typed_constant(node, expected);
+        let value = self.held(node, read, expected, place).value;
         Some(Constant {
             text: name.text().to_string(),
             value,
@@ -2360,24 +2290,191 @@ impl Reader<'_> {
 
     // ---- Constants ----
 
-    /// The constant expression `node`, folded as far as it needs no
-    /// types.
-    fn constant(&mut self, node: &SyntaxNode) -> Constant {
-        // A closure: a function written in place, which may use what is
-        // in scope around it; here, `self`.
-        let name = |used: &SyntaxNode| {
-            let Some(name) = name_token(used) else {
-                return ConstantValue::Unevaluated;
-            };
-            let bound = self.bindings.get(&(self.file, name.span().start)).copied();
-            named_constant(self.program, &self.constant_values, &name, bound)
-        };
-        let constant = Constant {
-            text: text_of(node),
-            value: fold(node, &name),
-        };
+    /// The constant expression `node`, read as a value of `expected`,
+    /// the type its place expects (EXPR-5); `None` where that is not
+    /// known. `place` names the place for a report: `` `X` of `Box` ``.
+    fn constant(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        place: Option<&str>,
+    ) -> Constant {
+        let read = self.typed_constant(node, expected);
+        let constant = self.held(node, read, expected, place);
         self.note_values_in(node);
         constant
+    }
+
+    /// What the constant expression `node` reads as, nothing yet held
+    /// to its place's type (`crate::constant`).
+    fn typed_constant(&self, node: &SyntaxNode, expected: Option<&Type>) -> Result<Typed, Fault> {
+        // A closure: a function written in place, which may use what is
+        // in scope around it; here, `self`.
+        let binding = |file: FileId, offset: u32| self.everywhere.get(&(file, offset)).copied();
+        let parameter = |at: Location| self.value_type(at).cloned();
+        let scope = Scope {
+            program: self.program,
+            file: self.file,
+            binding: &binding,
+            parameter: &parameter,
+            constants: &self.constants,
+        };
+        crate::constant::typed(node, expected, &scope)
+    }
+
+    /// The constant `node` is, read as `read`, held as a value of
+    /// `expected`. Where `place` names its place, a value of another
+    /// type is reported (`type.mismatch`, EXPR-5), and so is a member
+    /// its enum does not have (`member.unknown`, TYPE-7) and `.member`
+    /// where no enum is expected (`enum.context_type`, TYPE-7).
+    fn held(
+        &mut self,
+        node: &SyntaxNode,
+        read: Result<Typed, Fault>,
+        expected: Option<&Type>,
+        place: Option<&str>,
+    ) -> Constant {
+        let value = read.and_then(|read| crate::constant::fit(read, expected, self.program));
+        let value = match value {
+            // GEN-8: a generic value argument is "a compile-time
+            // constant ... Any other rejects." One whose value this pass
+            // does not work out cannot be told from another, and is
+            // rejected as that.
+            Ok(value) if place.is_some() && !crate::constant::worked_out(&value) => {
+                if let Some(place) = place {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::GENERIC_ARGUMENT_CONSTANT,
+                        self.at(node.span()),
+                        format!(
+                            "{place} is a generic value parameter, and this is no compile-time \
+                             constant: this compiler does not work out its value"
+                        ),
+                        "GEN-8",
+                    ));
+                }
+                ConstantValue::Unknown
+            }
+            Ok(value) => value,
+            Err(Fault::NotConstant) if place.is_some() => {
+                if let Some(place) = place {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::GENERIC_ARGUMENT_CONSTANT,
+                        self.at(node.span()),
+                        format!(
+                            "{place} is a generic value parameter, and this is no compile-time \
+                             constant: it is known only when the program runs"
+                        ),
+                        "GEN-8",
+                    ));
+                }
+                ConstantValue::Unknown
+            }
+            Err(fault) => {
+                if let (Some(place), Some(expected)) = (place, expected) {
+                    let at = self.at(node.span());
+                    if let Some(report) = fault.report(at, place, expected) {
+                        self.diagnostics.emit(report);
+                    }
+                }
+                match fault {
+                    // What is no constant is the same as nothing.
+                    Fault::NotConstant => ConstantValue::Unevaluated,
+                    // What has been reported says nothing more (ERR-9).
+                    _ => ConstantValue::Unknown,
+                }
+            }
+        };
+        Constant {
+            text: text_of(node),
+            value,
+        }
+    }
+
+    /// The default of every generic parameter of `declaration` of
+    /// `module`, as the arguments of an application that supplies none:
+    /// `Some` only where it has generic parameters and each is a value
+    /// with a default (GEN-2). Each is read as a value of its
+    /// parameter's type, in the file the declaration is written in.
+    fn defaults_of(&self, (module, index): Id) -> Option<Vec<Argument>> {
+        let declaration = &self.program.modules[module].declarations[index];
+        let forms = generic_forms(&declaration.syntax);
+        if forms.is_empty() {
+            return None;
+        }
+        let file = self.program.modules[module].files[declaration.file].file;
+        let types = self.parameter_types((module, index));
+        let mut arguments = Vec::new();
+        for (position, (parameter, _, form)) in forms.iter().enumerate() {
+            let default = match form {
+                Form::Value => default_of(parameter)?,
+                Form::Plain | Form::Pack(..) => return None,
+            };
+            let expected = types
+                .get(position)
+                .cloned()
+                .flatten()
+                .filter(|ty| !matches!(ty, Type::Parameter { .. }));
+            let read = {
+                let binding =
+                    |file: FileId, offset: u32| self.everywhere.get(&(file, offset)).copied();
+                let scope = Scope {
+                    program: self.program,
+                    file,
+                    binding: &binding,
+                    parameter: &|_| None,
+                    constants: &self.constants,
+                };
+                crate::constant::read(&default, expected.as_ref(), &scope)
+            };
+            arguments.push(Argument::Constant(Constant {
+                text: text_of(&default),
+                // What is wrong with a default is reported where it is
+                // written (`signatures`), and says nothing more (ERR-9).
+                value: match read {
+                    Ok(value) => value,
+                    Err(Fault::NotConstant) => ConstantValue::Unevaluated,
+                    Err(_) => ConstantValue::Unknown,
+                },
+            }));
+        }
+        Some(arguments)
+    }
+
+    /// The type each generic parameter of `target` is declared with, as
+    /// far as it is read before the program's types are
+    /// ([`crate::constant::written_type`]): `None` for a type parameter
+    /// and a pack, and for a value parameter of a type not read so.
+    fn parameter_types(&self, (module, index): Id) -> Vec<Option<Type>> {
+        let declaration = &self.program.modules[module].declarations[index];
+        let file = self.program.modules[module].files[declaration.file].file;
+        let binding = |file: FileId, offset: u32| self.everywhere.get(&(file, offset)).copied();
+        generic_forms(&declaration.syntax)
+            .iter()
+            .map(|(parameter, _, form)| match form {
+                Form::Value => type_child(parameter).and_then(|written| {
+                    crate::constant::written_type(
+                        &written,
+                        self.program,
+                        file,
+                        &binding,
+                        &self.constants,
+                    )
+                }),
+                Form::Plain | Form::Pack(..) => None,
+            })
+            .collect()
+    }
+
+    /// The generic parameters of `target`, by where each is declared.
+    fn parameter_places(&self, (module, index): Id) -> Vec<Location> {
+        let declaration = &self.program.modules[module].declarations[index];
+        let file = self.program.modules[module].files[declaration.file].file;
+        generic_forms(&declaration.syntax)
+            .iter()
+            .map(|(_, name, _)| Location::new(file, name.span()))
+            .collect()
     }
 
     /// GEN-13: a generic parameter named in an expression of the
@@ -2578,7 +2675,8 @@ impl Reader<'_> {
                 .filter(|argument| argument.kind() != SyntaxKind::Error)
                 .map(|argument| self.at(argument.span()))
                 .collect();
-            let arguments = self.arguments(&list, Position::ARGUMENT, None);
+            let callee = self.callable_named(node);
+            let arguments = self.arguments(&list, Position::ARGUMENT, None, callee);
             self.read.insert(span.start, Type::Unknown);
             self.calls.push(CallArguments {
                 at: self.at(span),
@@ -2588,6 +2686,31 @@ impl Reader<'_> {
         }
         let ty = self.named(node, Position::PLAIN);
         self.record(span, ty);
+    }
+
+    /// The function or operator the name `node` uses is bound to: the
+    /// first of a pair (FN-4), whose generic parameters are the other's.
+    fn callable_named(&self, node: &SyntaxNode) -> Option<Id> {
+        let name = name_token(node)?;
+        let Some(Binding::Declarations {
+            module,
+            declarations,
+        }) = self.bindings.get(&(self.file, name.span().start)).copied()
+        else {
+            return None;
+        };
+        declarations
+            .iter()
+            .copied()
+            .find(|&index| {
+                matches!(
+                    self.program.modules[*module].declarations[index].kind,
+                    DeclarationKind::Function(_)
+                        | DeclarationKind::NativeFunction(_)
+                        | DeclarationKind::Operator
+                )
+            })
+            .map(|index| (*module, index))
     }
 
     /// True when the name `node` uses is bound to a function or an

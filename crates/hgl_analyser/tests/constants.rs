@@ -265,8 +265,9 @@ fn a_constant_many_others_name_is_folded_once() {
         checked.report
     );
 
-    // A chain longer than is followed is left unevaluated from its far
-    // end, and a constant near its start still has its value.
+    // A chain of constants is followed however long it is: each is
+    // worked out once, the ones it names first (UNIT-13). `d40` and
+    // `d3` are each 2, so a list of one is given to neither.
     let mut chain = String::from("module m\nconst d0: i64 = 2\n");
     for index in 1..=40 {
         chain.push_str(&format!("const d{index}: i64 = d{}\n", index - 1));
@@ -277,7 +278,10 @@ fn a_constant_many_others_name_is_folded_once() {
     let checked = check(&[("m.hgl", &chain)]);
     assert_eq!(
         checked.summary(),
-        ["m.hgl:45:43 type/type.mismatch TYPE-10"],
+        [
+            "m.hgl:45:31 type/type.mismatch TYPE-10",
+            "m.hgl:45:43 type/type.mismatch TYPE-10",
+        ],
         "{}",
         checked.report
     );
