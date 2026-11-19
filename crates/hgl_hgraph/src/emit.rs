@@ -6939,9 +6939,14 @@ impl Emitter<'_> {
             let taken = match input(self, &argument.value) {
                 // TIME-10: "Ordinary followers observe the selected
                 // target": a reference given to a lifted function is
-                // followed by an ordinary input of what it designates.
-                Some(Type::Ref(target)) => Bound::Input(*target),
-                Some(ty) => Bound::Input(ty),
+                // followed by an ordinary input of what it designates,
+                // through every reference it is of (GEN-11).
+                Some(mut ty) => {
+                    while let Type::Ref(target) = ty {
+                        ty = *target;
+                    }
+                    Bound::Input(ty)
+                }
                 None => Bound::Configuration(argument.value.ty.clone()),
             };
             let value = self.expression(function, &argument.value);
