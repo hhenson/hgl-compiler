@@ -3030,42 +3030,18 @@ impl<'a> Typer<'a> {
         if !matches!(**of, Type::Set(_) | Type::Dict { .. } | Type::List { .. }) {
             return;
         }
-        // The constant a member, a key or a position is, by its value:
-        // `-1` is the integer it negates, `.buy` the enum's member, and
-        // an `i64` widened where an `f64` is expected the same number
-        // as the `f64` written (EXPR-5), so `1` and `1.0` of an `f64`
-        // key are one key.
-        #[derive(PartialEq)]
-        enum Key<'v> {
-            Int(i64),
-            Float(f64),
-            Member(usize, usize, usize),
-            Other(&'v Value),
-        }
-        fn literal(entry: &Expr) -> Option<Key<'_>> {
-            if let Index::Known(value) = constant_index(entry, &|_, _| Index::Unevaluated) {
-                return Some(Key::Int(value));
-            }
-            match &entry.kind {
-                ExprKind::Literal(Value::Float(value)) => Some(Key::Float(*value)),
-                ExprKind::Literal(value) => Some(Key::Other(value)),
-                ExprKind::EnumMember {
-                    module,
-                    declaration,
-                    member,
-                } => Some(Key::Member(*module, *declaration, *member)),
-                ExprKind::Widen(inner) => match literal(inner)? {
-                    // An `i64` is widened to the `f64` of the same
-                    // number (NUM-1).
-                    Key::Int(value) => Some(Key::Float(value as f64)),
-                    other => Some(other),
-                },
-                _ => match negated(entry).map(literal)? {
-                    Some(Key::Float(value)) => Some(Key::Float(-value)),
-                    _ => None,
-                },
-            }
-        }
+        // The constant a member, a key or a position is, by its value
+        // (`constant_key`).
+        let constant = |module: usize, declaration: usize| match crate::read::constant_value(
+            self.program,
+            module,
+            declaration,
+            &self.constant_values,
+        ) {
+            ConstantValue::Int(value) => Index::Known(value),
+            _ => Index::Unevaluated,
+        };
+        let literal = |entry: &Expr| constant_key(entry, &constant);
         // Each entry of the property at `index`: a set's members, or a
         // dictionary's keys.
         let entries = |index: usize| -> Vec<&Expr> {
@@ -14927,6 +14903,51 @@ fn whole(ty: &Type) -> bool {
         | Type::Signal
         | Type::Error
         | Type::ErrorContext => true,
+    }
+}
+
+/// The value of a constant that names a member, a key or a position
+/// (`constant_key`).
+#[derive(Debug, Clone, PartialEq)]
+enum ConstantKey {
+    /// An integer.
+    Int(i64),
+    /// A float.
+    Float(f64),
+    /// A member of an enum: its module, its declaration and its position
+    /// among the members.
+    Member(usize, usize, usize),
+    /// A literal of another kind.
+    Other(Value),
+}
+
+/// The value `entry` is where it is a constant: `-1` is the integer it
+/// negates, `.buy` the enum's member, an `i64` widened where an `f64` is
+/// expected the `f64` of the same number (EXPR-5, NUM-1), so `1` and
+/// `1.0` of an `f64` key are one key, and integers joined by arithmetic
+/// or a constant of a module as `constant_index` reads them. One reading
+/// for a delta's entries (`delta.overlap`) and a child's key (TIME-1).
+fn constant_key(entry: &Expr, constant: &dyn Fn(usize, usize) -> Index) -> Option<ConstantKey> {
+    if let Index::Known(value) = constant_index(entry, constant) {
+        return Some(ConstantKey::Int(value));
+    }
+    match &entry.kind {
+        ExprKind::Literal(Value::Null) => None,
+        ExprKind::Literal(Value::Float(value)) => Some(ConstantKey::Float(*value)),
+        ExprKind::Literal(value) => Some(ConstantKey::Other(value.clone())),
+        ExprKind::EnumMember {
+            module,
+            declaration,
+            member,
+        } => Some(ConstantKey::Member(*module, *declaration, *member)),
+        ExprKind::Widen(inner) => match constant_key(inner, constant)? {
+            ConstantKey::Int(value) => Some(ConstantKey::Float(value as f64)),
+            other => Some(other),
+        },
+        _ => match negated(entry).map(|operand| constant_key(operand, constant))? {
+            Some(ConstantKey::Float(value)) => Some(ConstantKey::Float(-value)),
+            _ => None,
+        },
     }
 }
 

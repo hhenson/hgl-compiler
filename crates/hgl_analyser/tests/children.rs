@@ -383,3 +383,26 @@ fn grouping_never_changes_an_endpoint_argument() {
     ));
     assert_eq!(checked.summary(), NONE);
 }
+
+/// TIME-1: a child named by a constant key is the one its value names:
+/// an `i64` widened to an `f64` key is the `f64` of the same number
+/// (EXPR-5, NUM-1), so `book[1]` and `book[1.0]` are one child, and an
+/// unguarded `book[1]` is named when compiled.
+#[test]
+fn a_widened_key_names_the_child_its_value_does() {
+    let checked = module(concat!(
+        "fn guarded(book: dict<f64, i64>) -> i64 {\n",
+        "    when {\n",
+        "        if valid(book[1]) { return book[1.0] }\n",
+        "        return 0\n",
+        "    }\n",
+        "}\n",
+        "fn unguarded(book: dict<f64, i64>) -> i64 {\n",
+        "    when { return book[1] }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:9:19 phase/payload.unguarded TIME-1"]
+    );
+}

@@ -22,7 +22,7 @@ use hgl_parser::{SyntaxKind, SyntaxNode};
 
 use hgl_lexer::literal::{decode_float, decode_string};
 
-use super::{BOOL, Fact, Index, Typer, constant_index, not_null, nullable, tokens};
+use super::{BOOL, ConstantKey, Fact, Index, Typer, constant_key, not_null, nullable, tokens};
 use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LocalId, Value};
 use crate::types::{ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
@@ -187,25 +187,28 @@ impl Typer<'_> {
             ConstantValue::Int(value) => Index::Known(value),
             _ => Index::Unevaluated,
         };
-        if let Index::Known(value) = constant_index(index, &constant) {
-            return Some(Step::Position(value));
-        }
+        let key = constant_key(index, &constant);
         if !matches!(of, Type::Dict { .. }) {
-            return None;
+            return match key? {
+                ConstantKey::Int(value) => Some(Step::Position(value)),
+                _ => None,
+            };
         }
-        match &index.kind {
-            ExprKind::Literal(Value::Null) => None,
-            ExprKind::Literal(value) => Some(Step::Key(value.clone())),
-            ExprKind::EnumMember {
-                module,
-                declaration,
-                member,
-            } => Some(Step::Member(*module, *declaration, *member)),
-            ExprKind::Constant {
-                module,
-                declaration,
-            } => Some(self.constant_key(*module, declaration)),
-            _ => None,
+        match (key, &index.kind) {
+            (Some(ConstantKey::Int(value)), _) => Some(Step::Position(value)),
+            (Some(ConstantKey::Float(value)), _) => Some(Step::Key(Value::Float(value))),
+            (Some(ConstantKey::Other(value)), _) => Some(Step::Key(value)),
+            (Some(ConstantKey::Member(module, declaration, member)), _) => {
+                Some(Step::Member(module, declaration, member))
+            }
+            (
+                None,
+                ExprKind::Constant {
+                    module,
+                    declaration,
+                },
+            ) => Some(self.module_constant_key(*module, declaration)),
+            (None, _) => None,
         }
     }
 
@@ -213,7 +216,7 @@ impl Typer<'_> {
     /// written as, a `str`, a `bool` or an `f64`, so that `book[KEY]` and
     /// `book["bid"]` are one child where `KEY` is `"bid"`; and the
     /// constant itself where it is written otherwise.
-    fn constant_key(&self, module: usize, declaration: &usize) -> Step {
+    fn module_constant_key(&self, module: usize, declaration: &usize) -> Step {
         let declared = &self.program.modules[module].declarations[*declaration];
         let ty = crate::read::type_child(&declared.syntax);
         let written = declared
