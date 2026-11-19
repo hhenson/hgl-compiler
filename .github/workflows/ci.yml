@@ -79,15 +79,13 @@ jobs:
       # no entry for this key yet. Pull requests restore what main saved
       # and save nothing, so the repository's 10 GB of cache holds one
       # entry for each system and Cargo.lock in use.
-      # TEMPORARY: this pull request's first run saves too, so that its
-      # second run measures a warm cache.
       #
       # Leaves the workspace's own crates out of the cache: every run
       # rebuilds them.
-      - if: (github.event_name == 'push' || github.head_ref == 'codex/ci-build-cache') && steps.cache.outputs.cache-hit != 'true'
+      - if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
         run: cargo clean --workspace
       # Saves the downloaded crates and the built dependencies.
-      - if: (github.event_name == 'push' || github.head_ref == 'codex/ci-build-cache') && steps.cache.outputs.cache-hit != 'true'
+      - if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: *cache-paths
