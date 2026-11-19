@@ -1,7 +1,7 @@
 //! The `hgl` command.
 //!
 //! Each subcommand runs a prefix of the compiler pipeline and reports what
-//! came out. Three stages exist so far:
+//! came out. Four stages exist so far:
 //!
 //! ```text
 //! hgl tokens <file>     source text --[lex]--> tokens, printed one per line
@@ -702,9 +702,10 @@ fn parse_program_with(
 ///
 /// An application is counted apart: `in 2 modules and 1 application`.
 ///
-/// The analyser reads modules, declarations and imports, resolves names
-/// and reads the types written so far. What an expression is, phases and
-/// constants are not checked yet, and the output says so.
+/// The analyser reads modules, declarations and imports, resolves names,
+/// reads the types written, and types the bodies of value functions,
+/// nodes, sources, graphs and tests. The output says what is checked,
+/// and that no test is run.
 fn check(arguments: &CheckArgs) -> ExitCode {
     let Parsed {
         sources,
@@ -831,9 +832,9 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
 /// the host's stop: the run ends as it does at its end, and what it
 /// recorded up to then is printed.
 ///
-/// RUN-2's replacement of an argument or of a field of the
-/// configuration by what starts the application is not written: the
-/// application runs as it is written.
+/// RUN-2: `--arg` and `--config` replace an argument of the entry and
+/// a field of the configuration; `replace` writes each into the run
+/// statement and the program is checked again.
 fn run(arguments: &RunArgs) -> ExitCode {
     let limits = arguments.limits.limits();
     let Parsed {
