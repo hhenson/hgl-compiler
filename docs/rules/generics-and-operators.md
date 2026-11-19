@@ -126,6 +126,7 @@ transpiler: planned
 analyser: partial
 
 - In a graph, a connection given to a function's parameter binds its generic parameters from the connection's type, at a `ref` parameter as at any other, and a `ref` result is a connection of its type (FN-16): no type holds a reference, and inference removes none
+- A window given to a value function's parameter binds as the `list<V>` it holds (TYPE-11, FN-1)
 - Left: an operator's call; a requested output's nested variables
 
 ## GEN-12

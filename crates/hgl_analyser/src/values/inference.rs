@@ -478,7 +478,7 @@ impl<'a> Typer<'a> {
                 if self.may_reread() {
                     let mark = self.mark();
                     let value = as_given(self.expression(node, Some(read_as)));
-                    let says = self.inferred_from(pattern, listed, &value, takes);
+                    let says = self.inferred_from(listed, &value, takes);
                     learn(self, &says, &mut found);
                     self.take_back(mark, false);
                 }
@@ -486,7 +486,7 @@ impl<'a> Typer<'a> {
             }
             let reported = self.diagnostics.len();
             let value = as_given(self.expression(node, Some(read_as)));
-            let says = self.inferred_from(pattern, listed, &value, takes);
+            let says = self.inferred_from(listed, &value, takes);
             learn(self, &says, &mut found);
             // A value with no whole type while nothing is known of its
             // place, `[1, "x"]`, has not been judged. Neither has one
