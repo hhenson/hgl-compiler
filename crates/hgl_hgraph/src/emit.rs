@@ -26,11 +26,14 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
-use crate::copies::{self, Copies};
+use crate::copies::{
+    self, Copies, built_anew, by_value, changed_in_place, may_hold, struct_in_place,
+};
 use crate::instances::Instances;
 use crate::{codes, provides, python_module, test_function};
 
 mod types;
+pub(crate) use types::inherited;
 use types::*;
 
 /// What writing a module gave.
@@ -9506,188 +9509,6 @@ fn owns(program: &Program, function: &Function, local: usize) -> bool {
         LocalKind::Var | LocalKind::State | LocalKind::Cache
     ) && changed_in_place(program, &declared.ty, 0)
         && declared.category != ValueCategory::Connection
-}
-
-/// True for a type whose value may be, or may hold, one that a place
-/// changes where it is: a list, a dictionary and a struct that is no
-/// value ([`by_value`]), and a nullable, a tuple, a set, a result or a
-/// struct with one inside it. A generic parameter and `any` may hold
-/// anything. A scalar, an enum and a struct that is a value are copied,
-/// and nothing in them is changed where it is.
-pub(crate) fn changed_in_place(program: &Program, ty: &Type, depth: usize) -> bool {
-    // A struct may hold itself inside a list, which is changed in place.
-    if depth > 8 {
-        return true;
-    }
-    let any = |types: &[&Type]| {
-        types
-            .iter()
-            .any(|ty| changed_in_place(program, ty, depth + 1))
-    };
-    match ty {
-        Type::List { .. } | Type::Dict { .. } => true,
-        Type::Scalar(scalar) => *scalar == Scalar::Any,
-        Type::Named {
-            kind: NamedKind::Enum | NamedKind::Native,
-            ..
-        }
-        | Type::Error
-        | Type::ErrorContext => false,
-        Type::Named {
-            module,
-            declaration,
-            kind: NamedKind::Struct,
-            ..
-        } => !by_value(program, *module, *declaration),
-        Type::Nullable(inner) | Type::Set(inner) => any(&[inner]),
-        Type::Tuple(elements) => elements
-            .iter()
-            .any(|element| changed_in_place(program, element, depth + 1)),
-        Type::Result { value, error } => any(&[value, error]),
-        _ => true,
-    }
-}
-
-/// True for the struct `declaration` of `module` where it is a value:
-/// copied where it is given or kept, and given a new value where a
-/// field of it is assigned. The owner's rule (the compiler's issue
-/// 151): "The copy by value exception is for trivial structures (think
-/// sizeof(i64))", built as at most two fields, each a scalar other than
-/// a `str`, a `bytes` or an `any`, or an enum. A struct with generic
-/// parameters is not one, nor is a struct that another inherits from: a
-/// value of the other may stand for it. Any other struct a `var`, a
-/// `state` or a `cache` holds is changed where it is, as a list is.
-///
-/// The provider's class says it too (`_core.struct(..., by_value=True)`),
-/// so that what changes a field where it is never changes a value of
-/// such a struct that a parent's type stands for.
-pub(crate) fn by_value(program: &Program, module: usize, declaration: usize) -> bool {
-    let Some(Detail::Struct(read)) = program.modules[module].details.get(declaration) else {
-        return false;
-    };
-    read.generics.is_empty()
-        && !inherited(program, module, declaration)
-        && read.members.len() <= 2
-        && read.members.iter().all(|member| match &member.ty {
-            Type::Scalar(scalar) => !matches!(scalar, Scalar::Str | Scalar::Bytes | Scalar::Any),
-            Type::Named {
-                kind: NamedKind::Enum,
-                ..
-            } => true,
-            _ => false,
-        })
-}
-
-/// True for a struct whose value `port_value` makes anew from its
-/// bundle, every part of it: each field is of a type nothing changes
-/// where it is, or such a struct itself. Any other type is not.
-pub(crate) fn built_anew(program: &Program, ty: &Type, depth: usize) -> bool {
-    let Type::Named {
-        module,
-        declaration,
-        kind: NamedKind::Struct,
-        ..
-    } = ty
-    else {
-        return false;
-    };
-    let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
-        return false;
-    };
-    depth < 8
-        && read.generics.is_empty()
-        && !inherited(program, *module, *declaration)
-        && read.members.iter().all(|member| {
-            !changed_in_place(program, &member.ty, 0) || built_anew(program, &member.ty, depth + 1)
-        })
-}
-
-/// True for a type that is a struct changed where it is: one that is
-/// no value ([`by_value`]).
-pub(crate) fn struct_in_place(program: &Program, ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Named { module, declaration, kind: NamedKind::Struct, .. }
-            if !by_value(program, *module, *declaration)
-    )
-}
-
-/// The types of what a value of `ty` holds directly: a list's element,
-/// a dictionary's key and value, a tuple's and a struct's parts. `None`
-/// for a type that does not say: a generic parameter, `any`, a native
-/// type, a struct with generic parameters or one that another inherits
-/// from.
-fn held_types<'a>(program: &'a Program, ty: &'a Type) -> Option<Vec<&'a Type>> {
-    match ty {
-        Type::Scalar(scalar) => (*scalar != Scalar::Any).then(Vec::new),
-        Type::Named {
-            kind: NamedKind::Enum,
-            ..
-        }
-        | Type::Error
-        | Type::ErrorContext => Some(Vec::new()),
-        Type::Named {
-            module,
-            declaration,
-            kind: NamedKind::Struct,
-            ..
-        } => match program.modules[*module].details.get(*declaration) {
-            Some(Detail::Struct(read))
-                if read.generics.is_empty() && !inherited(program, *module, *declaration) =>
-            {
-                Some(read.members.iter().map(|member| &member.ty).collect())
-            }
-            _ => None,
-        },
-        Type::Nullable(inner) | Type::Set(inner) => Some(vec![inner]),
-        Type::List { element, .. } => Some(vec![element]),
-        Type::Dict { key, value } => Some(vec![key, value]),
-        Type::Tuple(elements) => Some(elements.iter().collect()),
-        Type::Result { value, error } => Some(vec![value, error]),
-        _ => None,
-    }
-}
-
-/// True where a value of type `holder` may come to hold a value of type
-/// `given`, or a part of one, that is changed where it is
-/// ([`changed_in_place`]): a `list<list<i64>>` may hold a `list<i64>`,
-/// and a `list<i64>` holds
-/// nothing of another `list<i64>` but its numbers. What a native
-/// function puts into the place it is given is copied only where this
-/// holds: `append(rows, row)` keeps `row`, and `extend(values, more)`
-/// keeps the numbers `more` holds.
-pub(crate) fn may_hold(program: &Program, holder: &Type, given: &Type) -> bool {
-    // Every type inside `ty`, itself left out; `None` where a part of
-    // it does not say what it holds. A struct may hold itself inside a
-    // list: a type this deep is not followed further.
-    fn inside<'a>(
-        program: &'a Program,
-        ty: &'a Type,
-        depth: usize,
-        into: &mut Vec<&'a Type>,
-    ) -> Option<()> {
-        if depth > 8 {
-            return None;
-        }
-        for part in held_types(program, ty)? {
-            if !into.contains(&part) {
-                into.push(part);
-                inside(program, part, depth + 1, into)?;
-            }
-        }
-        Some(())
-    }
-    let mut holds = Vec::new();
-    if inside(program, holder, 0, &mut holds).is_none() {
-        return true;
-    }
-    let mut parts = vec![given];
-    if inside(program, given, 0, &mut parts).is_none() {
-        return true;
-    }
-    parts
-        .iter()
-        .any(|part| changed_in_place(program, part, 0) && holds.contains(part))
 }
 
 /// An endpoint of a node, an input or its `inject out`, as the node's
