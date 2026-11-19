@@ -1,0 +1,17 @@
+module demo.joined
+
+use demo.joins::{join_, plain}
+
+fn both(a: i64, b: i64) -> i64 => join_(a, b)
+fn flagged(a: i64, b: bool) -> i64 => join_(a, b)
+fn valued(a: i64, b: i64) -> i64 => plain(a, b)
+fn texts(a: str, b: str) -> str => join_(a, b)
+
+test candidates_are_called {
+    # The node: its sum, and what its state counts from 100.
+    assert eval(both(a: [1, 2], b: [10])) == [112, 114]
+    assert eval(flagged(a: [1, 2], b: [true])) == [103, 106]
+    # A value function selects the value candidate.
+    assert eval(valued(a: [1, 2], b: [10])) == [-9, -8]
+    assert eval(texts(a: ["a"], b: ["b"])) == ["ab"]
+}

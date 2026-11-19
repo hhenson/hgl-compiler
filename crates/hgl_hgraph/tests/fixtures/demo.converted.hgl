@@ -1,0 +1,78 @@
+module demo.converted
+const fn as_float(value: i64) -> f64 => convert<f64>(value)
+const fn as_flag(value: f64) -> bool => convert<bool>(value)
+# OPS-8: `invalid: .fail` gives the plain type.
+const fn as_whole(value: f64) -> i64 => convert<i64>(value, invalid: .fail)
+const fn rounded(value: f64, how: Rounding) -> i64 =>
+    convert<i64>(value, rounding: how, invalid: .fail)
+# And `.error`, the default, a `result`.
+const fn checked(value: f64) -> result<i64, error> => convert<i64>(value)
+const fn flag(text: str) -> result<bool, error> => convert<bool>(text)
+const fn whole_of(value: f64) -> i64 {
+    let outcome = convert<i64>(value)
+    if is_ok(outcome) { return outcome.value }
+    return -1
+}
+# OPS-8: "a failure is an Err carrying error code `convert.invalid`".
+const fn invalid(value: f64) -> bool {
+    let outcome = convert<i64>(value)
+    if is_err(outcome) {
+        let code = outcome.error.code
+        if code != null { return code == "convert.invalid" }
+    }
+    return false
+}
+const fn flag_of(text: str) -> bool {
+    let outcome = convert<bool>(text)
+    if is_ok(outcome) { return outcome.value }
+    return false
+}
+const fn round_trip(text: str) -> str =>
+    convert<str>(convert<bytes>(text), invalid: .fail)
+# FN-6: a conversion given a connection is lifted over it.
+fn floats(value: i64) -> f64 => convert<f64>(value)
+fn wholes(value: f64) -> i64 => convert<i64>(value, rounding: .half_even, invalid: .fail)
+test conversions {
+    # OPS-8: the value of an `ok` a conversion gives, and the code of
+    # an `err`.
+    assert whole_of(2.9) == 2
+    assert whole_of(-9223372036854775808.0) == -9223372036854775807 - 1
+    assert invalid(0.0 /{zero: .nan} 0.0) && !invalid(1.0)
+    assert flag_of("true") && is_ok(flag("false")) && !flag_of("false")
+    assert eval(floats(value: [1, 2])) == [1.0, 2.0]
+    assert eval(wholes(value: [0.5, 1.5, 2.5])) == [0, 2, 2]
+}
+# OPS-6: a number as text. An `i64` is its decimal digits after a
+# `-`; an `f64` the shortest text that reads back, with a `.` or an
+# exponent, the exponent from 1e16 up and below 1e-4.
+const fn again(text: str) -> str => convert<str>(convert<f64>(text, invalid: .fail))
+# `text` written twice over, `times` times: text of many digits.
+const fn repeated(text: str, times: i64) -> str {
+    var written: str = text
+    var left: i64 = times
+    while left > 0 {
+        written = written + written
+        left -= 1
+    }
+    return written
+}
+fn shown(value: f64) -> str => convert<str>(value)
+test numbers_as_text {
+    assert eval(shown(value: [2.5, 1e21])) == ["2.5", "1e21"]
+}
+# OPS-6: text as a number, a literal of the type after one `-`;
+# OPS-7: any other text fails.
+test text_as_numbers {
+    assert convert<i64>("010", invalid: .fail) == 10
+    assert is_err(convert<i64>("0X1F")) && is_err(convert<i64>("1_"))
+    assert is_err(convert<f64>("5.")) && is_err(convert<f64>("-nan"))
+    # Text of 8192 digits: zeros before a number change nothing, and a
+    # number of that many digits is outside `i64` and rounds to an
+    # infinity. Neither is more than the conversion's own failure.
+    assert convert<i64>(repeated("0", 13) + "3", invalid: .fail) == 3
+    assert convert<f64>(repeated("0", 13) + "3", invalid: .fail) == 3.0
+    assert is_err(convert<i64>(repeated("9", 13)))
+    assert is_err(convert<f64>(repeated("9", 13)))
+    assert is_err(convert<f64>(repeated("9", 13) + ".5"))
+    assert convert<f64>("0." + repeated("0", 13) + "1", invalid: .fail) == 0.0
+}

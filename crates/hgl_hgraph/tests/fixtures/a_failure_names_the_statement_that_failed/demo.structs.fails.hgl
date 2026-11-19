@@ -1,0 +1,12 @@
+module demo.structs.fails
+const fn broken() -> i64 => 1 // 0
+const fn next(value: i64) -> i64 => value + 1
+struct Ratio { value: i64 = broken() }
+struct Pair {
+    first: i64
+    second: i64
+}
+test given { assert Ratio(value: 2).value == 2 }
+test omitted { assert Ratio().value == 1 }
+test in_order { assert Pair(second: next(9223372036854775807), first: broken()).first == 1 }
+test unequal { assert Ratio(value: 2) == Ratio(value: 3) }

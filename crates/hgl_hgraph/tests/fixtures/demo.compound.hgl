@@ -1,0 +1,33 @@
+module demo.compound
+# Each call gives the next number, from 0.
+const fn next_slot(store: GlobalState) -> i64 {
+    if has(store, "lookups") {
+        let previous: i64 = get(store, "lookups")
+        put(store, "lookups", previous + 1)
+        return previous
+    }
+    put(store, "lookups", 1)
+    return 0
+}
+fn compound(trigger: i64) -> i64 {
+    inject global_state
+    when {
+        var items: list<i64> = [10, 50]
+        items[next_slot(global_state)] += 1
+        return items[0]
+    }
+}
+# Two indices, each evaluated once and in the order written: the
+# row 0 and then its element 1.
+fn nested(trigger: i64) -> i64 {
+    inject global_state
+    when {
+        var rows: list<list<i64>> = [[1, 2], [30, 40]]
+        rows[next_slot(global_state)][next_slot(global_state)] += 5
+        return rows[0][1]
+    }
+}
+test a_compound_assignment_looks_up_once {
+    assert eval(compound(trigger: [1])) == [11]
+    assert eval(nested(trigger: [1])) == [7]
+}

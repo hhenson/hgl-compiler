@@ -1,0 +1,118 @@
+module demo.loops
+
+enum Side { buy, sell, hold }
+
+const fn total(items: list<i64>) -> i64 {
+    var sum = 0
+    for item in items { sum += item }
+    return sum
+}
+
+const fn largest(items: set<i64>) -> i64? {
+    var best: i64?
+    for item in items {
+        if best == null { best = item }
+    }
+    return best
+}
+
+const fn weighted(weights: dict<str, f64>) -> f64 {
+    var sum = 0.0
+    for name, weight in weights {
+        if name != "skip" { sum += weight }
+    }
+    return sum
+}
+
+const fn halvings(first: i64) -> i64 {
+    var value = first
+    var count = 0
+    while value > 1 {
+        value = value // 2
+        count += 1
+    }
+    return count
+}
+
+const fn sign(side: Side) -> i64 {
+    switch side {
+        case .buy: return 1
+        case Side.sell: return -1
+        case .hold: return 0
+    }
+}
+
+const fn named(number: i64) -> str {
+    var text: str
+    switch number {
+        case 0: text = "zero"
+        case 1:
+            let one = "one"
+            text = one
+        default: text = "many"
+    }
+    return text
+}
+
+const fn strict(text: str) -> i64 {
+    switch text {
+        case "a": return 1
+        case "b": return 2
+    }
+    return 0
+}
+
+const fn nested(flag: bool, number: i64) -> i64 {
+    switch flag {
+        case true:
+            switch number {
+                case 1: return 10
+                default: return 11
+            }
+        default: return 20
+    }
+}
+
+const fn only(number: i64) -> i64 {
+    switch number {
+        default: return number + 1
+    }
+}
+
+fn running(value: i64) -> i64 {
+    state seen: i64 = 0
+    when {
+        var steps = 0
+        while steps < value {
+            steps += 1
+            seen += 1
+        }
+        switch value {
+            case 0: return 0
+            default: return seen
+        }
+    }
+}
+
+test loops {
+    assert total([1, 2, 3]) == 6
+    assert total([]) == 0
+    assert weighted(["a": 1.5, "skip": 9.0, "b": 2.0]) == 3.5
+    assert halvings(16) == 4
+    assert halvings(1) == 0
+}
+
+test switches {
+    assert sign(.buy) == 1
+    assert sign(.sell) == -1
+    assert sign(.hold) == 0
+    assert named(0) == "zero"
+    assert named(1) == "one"
+    assert named(7) == "many"
+    assert strict("b") == 2
+    assert nested(true, 1) == 10
+    assert nested(true, 5) == 11
+    assert nested(false, 1) == 20
+    assert only(4) == 5
+    assert eval(running(value: [2, 0, 3])) == [2, 0, 5]
+}

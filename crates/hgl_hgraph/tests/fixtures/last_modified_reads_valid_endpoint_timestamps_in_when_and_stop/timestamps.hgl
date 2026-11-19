@@ -1,0 +1,12 @@
+module timestamps
+fn sample(value: i64?) -> datetime? {
+    inject out
+    when valid([]) {
+        let previous = last_modified(out)
+        return last_modified(value)
+    }
+    stop {
+        let final_input = last_modified(value)
+        let final_output = last_modified(out)
+    }
+}

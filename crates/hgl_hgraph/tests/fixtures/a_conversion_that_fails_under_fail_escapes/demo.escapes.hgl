@@ -1,0 +1,6 @@
+module demo.escapes
+const fn whole(value: f64) -> i64 => convert<i64>(value, invalid: .fail)
+test fits { assert whole(2.5) == 2 }
+test too_large { assert whole(1e19) == 0 }
+test no_number { assert whole(0.0 /{zero: .nan} 0.0) == 0 }
+test no_flag { assert convert<bool>("yes", invalid: .fail) }

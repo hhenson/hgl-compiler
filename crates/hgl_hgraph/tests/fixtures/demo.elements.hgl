@@ -1,0 +1,93 @@
+module demo.elements
+
+struct Book {
+    levels: list<f64>
+    sizes: dict<str, i64> = []
+}
+
+const fn second(items: list<i64>) -> i64 => items[1]
+const fn last(pair: tuple<i64, str>) -> str => pair[1]
+const fn size(sizes: dict<str, i64>, name: str) -> i64 => sizes[name]
+const fn known(sizes: dict<str, i64>, name: str) -> i64? => get(sizes, name)
+const fn known_or(sizes: dict<str, i64>, name: str, fallback: i64) -> i64 {
+    let found = get(sizes, name)
+    if found == null { return fallback }
+    return found
+}
+
+const fn doubled(items: list<i64>) -> list<i64> {
+    var next = items
+    next[0] = next[0] * 2
+    next[1] += 1
+    return next
+}
+
+const fn renamed(pair: tuple<i64, str>) -> tuple<i64, str> {
+    var next = pair
+    next[1] = "b"
+    return next
+}
+
+const fn counted(names: list<str>) -> dict<str, i64> {
+    var seen: dict<str, i64> = []
+    for name in names {
+        let before = get(seen, name)
+        if before == null {
+            seen[name] = 1
+        } else {
+            seen[name] = before + 1
+        }
+    }
+    return seen
+}
+
+const fn lifted(book: Book, by: f64) -> Book {
+    var next = book
+    next.levels[0] += by
+    next.sizes["top"] = 1
+    return next
+}
+
+const fn grid() -> list<list<i64>> {
+    var rows = [[1, 2], [3, 4]]
+    rows[1][0] = 9
+    return rows
+}
+
+fn tallied(name: str) -> i64 {
+    state seen: dict<str, i64> = []
+    when {
+        let before = get(seen, name)
+        if before == null {
+            seen[name] = 1
+        } else {
+            seen[name] = before + 1
+        }
+        return seen[name]
+    }
+}
+
+test reads {
+    assert second([4, 5, 6]) == 5
+    assert last((1, "a")) == "a"
+    assert size(["a": 1, "b": 2], "b") == 2
+    assert known(["a": 1], "a") != null
+    assert known(["a": 1], "z") == null
+    assert known_or(["a": 1], "a", 7) == 1
+    assert known_or(["a": 1], "z", 7) == 7
+}
+
+test writes {
+    let items = [1, 2, 3]
+    assert doubled(items) == [2, 3, 3]
+    assert items == [1, 2, 3]
+    assert renamed((1, "a")) == (1, "b")
+    assert counted(["a", "b", "a"]) == ["a": 2, "b": 1]
+    let book = Book(levels: [1.0, 2.0])
+    let moved = lifted(book, 0.5)
+    assert moved.levels == [1.5, 2.0]
+    assert moved.sizes == ["top": 1]
+    assert book.levels == [1.0, 2.0]
+    assert grid() == [[1, 2], [9, 4]]
+    assert eval(tallied(name: ["a", "b", "a"])) == [1, 1, 2]
+}
