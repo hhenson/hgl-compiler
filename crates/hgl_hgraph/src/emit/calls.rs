@@ -434,9 +434,7 @@ impl<'a> Emitter<'a> {
             match bound.get(index).and_then(Option::as_ref) {
                 Some(Bound::Input(ty)) => {
                     inputs += 1;
-                    let annotation = self
-                        .annotation(ty, true, at)
-                        .unwrap_or_else(|| "_py.object".to_string());
+                    let annotation = self.annotation_or_object(ty, true, at);
                     parameters.push(format!("{python}: {annotation}"));
                     // What the input holds, a struct's value made
                     // from its bundle's fields (TYPE-9).
@@ -454,9 +452,7 @@ impl<'a> Emitter<'a> {
                     }
                 }
                 Some(Bound::Configuration(ty)) => {
-                    let annotation = self
-                        .annotation(ty, false, at)
-                        .unwrap_or_else(|| "_py.object".to_string());
+                    let annotation = self.annotation_or_object(ty, false, at);
                     parameters.push(format!("{python}: {annotation}"));
                     // Configuration the node keeps comes inside an
                     // object hgraph keeps as it is.
