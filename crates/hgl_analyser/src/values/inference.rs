@@ -6,12 +6,13 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
 
+use super::Typer;
 use super::arguments::{Slot, Takes};
 use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
 use super::evals::{holds_trace, publications};
+use super::expressions::{holds_block, takes_its_type};
 use super::fit::whole;
-use super::{Typer, holds_block, takes_its_type};
 use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
 use crate::hir::{self, Expr};

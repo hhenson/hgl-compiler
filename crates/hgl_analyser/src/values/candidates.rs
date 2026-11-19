@@ -6,12 +6,13 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
+use super::Typer;
 use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
+use super::expressions::takes_its_type;
 use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, not_null, whole};
 use super::inference::{bare_parameter, infer, placed};
 use super::requirements::{Condition, holds};
-use super::{Typer, takes_its_type};
 use crate::constant::Fault;
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
