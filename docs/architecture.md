@@ -633,6 +633,8 @@ What is rejected there:
 | A second input given to any operation but the selectors `valid` and `modified` | `argument.unexpected` | TIME-9 |
 | `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
 | A temporal function called in a hook | `call.role` | FN-3 |
+| `scheduled()` in a node that injects neither `scheduler` nor `alarm`: in a hook, a `state`'s or a `cache`'s initialiser, or a source's body | `inject.no_scheduler` | TIME-9, SOURCE-1 |
+| `scheduled()` in a value function, a graph or a test, which is no node | local `scheduled.outside_node` | FN-9 |
 | A capability retained: the value of a `state` or a `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published: `(clock, value)`, `return clock` | `capability.as_value` | TIME-8 |
 | `alarm` and `scheduler` injected in one node | `inject.alarm_and_scheduler` | TIME-8 |
 | The run's own key, `"run.output"`, written out as the key of a `get`, `has` or `put` on the global store. `Typer::store_keys` judges it where the call is finished; a key that is a `const` parameter is known when the graph is built, and is not judged | `store.reserved_key` | TIME-8 |
@@ -1419,7 +1421,8 @@ the limit is the compiler's, not the language's. The analyser's codes
 are catalogued (`hgl_analyser::codes`), one of them a warning, but for
 the local ones in `codes::local`, for rejections the catalogue has no
 row for: `cache.input_read` (TIME-1), `doc.unknown_key` (SDOC-3),
-`source.return_value` and `yield.in_value` (SOURCE-4). Its tests check each diagnostic's category and code against
+`source.return_value` and `yield.in_value` (SOURCE-4), and
+`scheduled.outside_node` (FN-9). Its tests check each diagnostic's category and code against
 the catalogue, or that list.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of

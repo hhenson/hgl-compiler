@@ -132,11 +132,12 @@ analyser: partial
 - In a node's hooks the endpoint operations are read as the forms they are, whether core declares them or nothing does yet: `valid`, `all_valid`, `modified` and `scheduled` are bools, `delta_value` the `delta<T>` of the input's type (TYPE-16), `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`), and `valid`, `all_valid`, `modified`, `delta_value` and `last_modified` a child of one, `parts[1]`, `quote.bid`, `parts[i]`, alone (END-8); an `atomic<V>`'s field is no child; a selector may stand with no argument or with several inputs, and `valid` and `modified` with `[]`
 - An `endpoint<T>` parameter of a native value function is given an input by its name, a child of one, or `out`, in a hook, and its payload is not read; anything else, and any argument in a graph or a value function, is `endpoint.argument`
 - Core declares the endpoint operations, including `delta_value` (UNIT-12)
-- `scheduled()` in a node that injects neither `scheduler` nor `alarm` is `inject.no_scheduler`
+- `scheduled()` in a node that injects neither `scheduler` nor `alarm` is `inject.no_scheduler`: in a hook, a `state`'s or a `cache`'s initialiser, and a source's body (SOURCE-1)
+- `scheduled()` in a value function, a graph or a test, which is no node, is local `scheduled.outside_node` (FN-9): the catalogue has no row for it
 - `is_active`, `activate` and `passivate` take only a direct temporal input, and `all_valid` only a list, tuple, struct or dictionary (`endpoint.argument`); a test of `all_valid` guards as one of `valid` does
 - The core function `is_active` resolves by its declaration and returns a `bool` in a handler or in stop
 - In a guard it sets neither subscription nor validity
-- Left: which place a selector stands in; an operator's candidate with an `endpoint<T>` parameter; that an endpoint is not retained
+- Left: which place a selector stands in; an operator's candidate with an `endpoint<T>` parameter; that an endpoint is not retained; `scheduled()` in `start` and `stop` (`scheduled.lifecycle`), and in the initialiser of a node that injects one, which the rule does not place
 
 transpiler: partial
 

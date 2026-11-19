@@ -11,12 +11,102 @@ use super::calls::arguments_of;
 use super::fit::{not_null, nullable, whole};
 use super::{BOOL, Fact, Typer, children};
 use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LocalId};
-use crate::program::LocalKind;
-use crate::syntax::ungrouped;
+use crate::program::{DeclarationKind, Role};
+use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{Argument, CallArguments, NamedKind, Scalar, Type};
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 impl<'a> Typer<'a> {
+    /// True when the node being read injects its scheduler or its
+    /// alarm, which `scheduled()` asks (TIME-9). Its declarations are
+    /// read from its body, so that one written after the initialiser
+    /// being read counts.
+    fn injects_a_wake(&self) -> bool {
+        let Some(body) = child(&self.declaration.syntax, SyntaxKind::Block) else {
+            return false;
+        };
+        body.children()
+            .filter(|statement| statement.kind() == SyntaxKind::InjectDecl)
+            .flat_map(|statement| tokens(&statement).collect::<Vec<_>>())
+            .any(|name| {
+                name.kind() == SyntaxKind::Ident && matches!(name.text(), "scheduler" | "alarm")
+            })
+    }
+
+    /// Reports `scheduled()`, at `selector`, in a node that injects
+    /// neither its scheduler nor its alarm (TIME-9: "A node that injects
+    /// neither rejects it (`inject.no_scheduler`)").
+    fn no_scheduler(&mut self, selector: Location) {
+        let note = if crate::phases::is_source(self.declaration) {
+            "a source injects neither: its `yield time: value` sets its next evaluation"
+        } else {
+            "`inject scheduler` or `inject alarm` gives the node one"
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Injectable,
+                codes::INJECT_NO_SCHEDULER,
+                selector,
+                "`scheduled()` asks the node's scheduler or its alarm, and this node injects \
+                 neither"
+                    .to_string(),
+                "TIME-9",
+            )
+            .with_note(note),
+        );
+    }
+
+    /// `scheduled()`, at `selector`, where no hook of a node stands.
+    ///
+    /// TIME-9: "`scheduled()` is the handler selector for a wake by the
+    /// node's scheduler or alarm ... A node that injects neither rejects
+    /// it (`inject.no_scheduler`)". A source is a node that injects
+    /// neither (SOURCE-1: "not `out`, `scheduler`, or `alarm`"), and a
+    /// node's `state` and `cache` initialisers are the node's own. FN-9:
+    /// "A value function injects none", and TIME-9: it "has no output or
+    /// schedule of its own"; nor has a graph, whose "Constructed nodes
+    /// own their own output and scheduler", or a test. The catalogue has
+    /// no row for those, and the code is local. In the initialiser of a
+    /// node that injects one the rule does not place the selector, and
+    /// it is left as it is.
+    pub(super) fn scheduled_outside_hooks(&mut self, selector: Location) {
+        let what = if self.testing {
+            "a test"
+        } else if self.graph {
+            "a graph"
+        } else if matches!(
+            self.declaration.kind,
+            DeclarationKind::Function(Role::Temporal)
+                | DeclarationKind::Implementation(Role::Temporal, _)
+        ) {
+            // A node or a source, outside its hooks.
+            if !self.injects_a_wake() {
+                self.no_scheduler(selector);
+            }
+            return;
+        } else if self.declaration.kind == DeclarationKind::Constant {
+            "a constant"
+        } else {
+            "a value function"
+        };
+        self.diagnostics.emit(
+            local_error(
+                Category::Phase,
+                codes::local::SCHEDULED_OUTSIDE_NODE,
+                selector,
+                format!(
+                    "`scheduled()` asks a node's scheduler or alarm, and {what} is no node: it has \
+                     no schedule of its own"
+                ),
+                "FN-9",
+            )
+            .with_note(
+                "a node that injects `scheduler` or `alarm` asks it in a hook: `when scheduled() \
+                 { ... }`",
+            ),
+        );
+    }
+
     /// An operation on an endpoint (TIME-9): "Elsewhere each takes a
     /// temporal input of the enclosing function by its name, or `out`".
     /// `valid` and `modified` are also the selectors of a `when` header
@@ -94,27 +184,10 @@ impl<'a> Typer<'a> {
         // rejects it". With a scheduler it is the scheduler's
         // `is_scheduled_now`, and with an alarm it holds where no
         // temporal input has ticked: with neither it asks nothing.
-        if operation == EndpointOperation::Scheduled {
-            let wakes = self.locals.iter().any(|local| {
-                local.kind == LocalKind::Inject
-                    && (local.name == "scheduler" || local.name == "alarm")
-            });
-            if !wakes {
-                // The selector: `scheduled()`, its name to its `)`.
-                let selector = list.parent().map_or(at, |call| self.at(&call));
-                self.diagnostics.emit(
-                    error(
-                        Category::Injectable,
-                        codes::INJECT_NO_SCHEDULER,
-                        selector,
-                        "`scheduled()` asks the node's scheduler or its alarm, and this node \
-                         injects neither"
-                            .to_string(),
-                        "TIME-9",
-                    )
-                    .with_note("`inject scheduler` or `inject alarm` gives the node one"),
-                );
-            }
+        if operation == EndpointOperation::Scheduled && !self.injects_a_wake() {
+            // The selector: `scheduled()`, its name to its `)`.
+            let selector = list.parent().map_or(at, |call| self.at(&call));
+            self.no_scheduler(selector);
         }
         // TIME-9, END-8: "A child of a collection is an endpoint whether
         // or not it is valid: `valid`, `modified`, `delta_value` and

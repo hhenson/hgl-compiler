@@ -95,6 +95,20 @@ impl<'a> Typer<'a> {
             {
                 return self.endpoint(operation, &name, &list);
             }
+            // TIME-9: "`scheduled()` is the handler selector for a wake by
+            // the node's scheduler or alarm". Core declares no function
+            // of the name: where no hook stands it is judged as the
+            // selector it is.
+            if self.hook.is_none()
+                && callee.kind() == SyntaxKind::NameExpr
+                && let Some(name) = name_token(&callee)
+                && !self.bindings.contains_key(&(self.file, name.span().start))
+                && EndpointOperation::language_form(name.text())
+                    == Some(EndpointOperation::Scheduled)
+            {
+                self.scheduled_outside_hooks(self.at(node));
+                return self.unread_call(&list);
+            }
             // The callee is an expression like any other, and is read
             // where it is written, for what it reads (FN-14: "An
             // anonymous function's scope is the scope around it plus its
