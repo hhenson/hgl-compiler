@@ -8430,8 +8430,10 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
     }
 }
 
-/// TIME-10 and GEN-11: a lifted helper given a reference to a reference
-/// follows it through both, to an ordinary input of what it designates.
+/// TIME-10 and GEN-11: a lifted helper given a reference to a reference,
+/// or a reference that may be left out (TYPE-14), follows it to an
+/// ordinary input of what it designates: `Type::followed`, which the
+/// analyser admits it by.
 #[test]
 fn a_lifted_input_follows_every_reference_it_is_given() {
     let emitted = emit(&[(
@@ -8440,13 +8442,16 @@ fn a_lifted_input_follows_every_reference_it_is_given() {
             "module m\n",
             "const fn doubled(value: i64) -> i64 => value * 2\n",
             "fn twice(left: ref<ref<i64>>) -> i64 => doubled(left)\n",
+            "fn optional(left: ref<i64>?) -> i64 => doubled(left)\n",
         ),
     )]);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_m/__init__.py");
+    assert!(!python.contains("value: _hg.REF"), "{python}");
     for expected in [
         "def _lift_0_doubled(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:",
         "def twice(left: _hg.REF[_hg.REF[_hg.TS[_py.int]]]) -> _hg.TS[_py.int]:",
+        "def optional(left: _hg.REF[_hg.TS[_py.int]]) -> _hg.TS[_py.int]:",
     ] {
         assert!(
             python.contains(expected),

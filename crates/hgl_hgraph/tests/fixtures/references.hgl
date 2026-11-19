@@ -162,6 +162,10 @@ fn widened_ask(bid: i64) -> i64 => widened(bid).ask
 fn whole_asks(bid: i64, ask: i64) -> i64 => whole_ask(snapshot(bid, ask))
 fn bids(value: i64, bid: i64, ask: i64) -> i64 => bid_or(value, snapshot(bid, ask))
 fn bids_left_out(value: i64) -> i64 => bid_or(value)
+# A lifted helper given a reference that may be left out follows it:
+# the analyser and the target take it as one type (`Type::followed`).
+fn twice(left: ref<i64>?) -> i64 => doubled(left)
+fn twice_of(use_left: bool, left: i64, right: i64) -> i64 => twice(pick(use_left, left, right))
 fn optional(target: ref<i64>?) -> i64 => target
 fn optional_of(use_left: bool, left: i64, right: i64) -> i64 => optional(pick(use_left, left, right))
 fn snapshots(bid: i64, ask: i64) -> i64 => counted(snapshot(bid, ask))
@@ -187,6 +191,7 @@ test a_reference_ticks_on_a_changed_designation {
         [1, _, 2, _]
     assert eval(requested_ticks(left: [1, 2, 3])) == [1, _, _]
     assert eval(optional_of(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _])) == [1, 2, 10]
+    assert eval(twice_of(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _])) == [2, 4, 20]
 }
 
 test a_signal_wakes_its_node {

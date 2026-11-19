@@ -9,8 +9,8 @@
 mod common;
 
 use common::{Checked, check};
-use hgl_analyser::Argument;
 use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, walk_statements};
+use hgl_analyser::{Argument, Scalar, Type};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -292,4 +292,31 @@ fn a_hook_reads_an_atomic_input_as_its_whole_value() {
         "fn reshaped(bid: i64) -> Quote => snapshot(bid)\n",
     ));
     assert_eq!(checked.summary(), ["m.hgl:22:35 type/type.mismatch EXPR-5"]);
+}
+
+/// TYPE-14: the `?` of a type that is no ordinary value marks omission,
+/// and TIME-10 and GEN-11: a follower observes the type with every
+/// reference removed. The analyser admits a follower by
+/// `Type::followed`, and a target writes its input by the same method.
+#[test]
+fn a_follower_observes_the_type_under_its_references_and_omission() {
+    let integer = Type::Scalar(Scalar::I64);
+    let reference = |ty: Type| Type::Ref(Box::new(ty));
+    let optional = |ty: Type| Type::Nullable(Box::new(ty));
+    assert_eq!(optional(reference(integer.clone())).followed(), integer);
+    assert_eq!(reference(reference(integer.clone())).followed(), integer);
+    assert_eq!(
+        optional(reference(optional(integer.clone()))).followed(),
+        optional(integer.clone())
+    );
+    assert_eq!(
+        optional(integer.clone()).followed(),
+        optional(integer.clone())
+    );
+    assert_eq!(Type::Signal.omission_removed(), &Type::Signal);
+    assert_eq!(optional(Type::Signal).omission_removed(), &Type::Signal);
+    assert_eq!(
+        optional(integer.clone()).omission_removed(),
+        &optional(integer)
+    );
 }

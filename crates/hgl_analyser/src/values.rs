@@ -854,7 +854,7 @@ impl<'a> Typer<'a> {
                 let place = format!("the parameter `{}`", parameter.name);
                 // TYPE-12: "A `signal` input takes no default but
                 // `null`": it has no payload a constant could supply.
-                let signal = matches!(not_null(Some(&parameter.ty)), Some(Type::Signal));
+                let signal = matches!(parameter.ty.omission_removed(), Type::Signal);
                 if signal && !matches!(value.kind, ExprKind::Literal(Value::Null)) {
                     self.diagnostics.emit(error(
                         Category::Type,
@@ -11448,7 +11448,7 @@ impl<'a> Typer<'a> {
     /// `modified(tick)`, and read nowhere. A read in `start` is
     /// `input.lifecycle`, reported once.
     fn signal_read(&mut self, local: LocalId, at: Location) {
-        let signal = matches!(not_null(Some(&self.locals[local].ty)), Some(Type::Signal));
+        let signal = matches!(self.locals[local].ty.omission_removed(), Type::Signal);
         let hook = matches!(self.hook, Some(Hook::When | Hook::Stop));
         if !signal || !self.is_temporal_input(local) || !hook {
             return;

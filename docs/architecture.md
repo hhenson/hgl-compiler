@@ -723,7 +723,11 @@ may cross a reference (`references`): a `T` is given to a `ref<T>`
 input, which designates it (TYPE-12), and a `ref<T>` to an input of
 `T`, which follows it (TIME-10); any connection is given to a `signal`.
 A generic parameter is inferred from such a connection with its
-references removed, but where the pattern is `ref<T>` (GEN-11).
+references removed, but where the pattern is `ref<T>` (GEN-11). What a
+follower observes is `Type::followed`: the type with every reference
+and a `?` that marks omission removed (TYPE-14, `Type::omission_removed`).
+The hgraph target writes a follower's input by the same two methods, so
+the stages cannot disagree on it.
 
 An `if` in a graph is read as a value function's is, and then told
 apart by what its condition is (CTRL-1, CTRL-13; owner's decisions of

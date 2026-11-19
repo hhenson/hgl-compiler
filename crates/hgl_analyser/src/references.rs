@@ -16,19 +16,15 @@ use crate::types::{Argument, Type};
 /// True when a connection of `given` is taken by a temporal place of
 /// `expected` across a reference boundary or by a `signal`. `admits`
 /// says whether a value of the second type is one of the first, as
-/// `values` judges any place.
+/// `values` judges any place. A `?` that marks an input that may be
+/// left out is no part of either (`Type::omission_removed`).
 pub(crate) fn crosses(
     expected: &Type,
     given: &Type,
     admits: &dyn Fn(&Type, &Type) -> bool,
 ) -> bool {
-    let given = omittable(given);
+    let (expected, given) = (expected.omission_removed(), given.omission_removed());
     match (expected, given) {
-        // TYPE-14: on a type that is no ordinary value the `?` marks an
-        // input that may be left out; what is given is the type under it.
-        (Type::Nullable(inner), _) if matches!(**inner, Type::Signal | Type::Ref(_)) => {
-            crosses(inner, given, admits)
-        }
         // TYPE-12: a `signal` constrains an input to tick, and reads no
         // payload: any connection is one.
         (Type::Signal, _) => !matches!(given, Type::Unknown),
@@ -40,10 +36,9 @@ pub(crate) fn crosses(
             admits(target, given)
         }
         // TIME-10: an ordinary input follows what the reference
-        // designates. GEN-11: such an input "observes values", with
-        // each reference boundary removed, at any depth.
+        // designates (`Type::followed`).
         (expected, given) if !holds_ref(expected) && holds_ref(given) => {
-            admits(expected, &dereferenced(given))
+            admits(expected, &given.followed())
         }
         _ => false,
     }
@@ -55,35 +50,50 @@ pub(crate) fn crosses(
 /// "Argument inference removes reference boundaries recursively from an
 /// otherwise unbound generic; such an input observes values. An explicit
 /// ref pattern binds its underlying type." So `value: T` given a
-/// `ref<i64>` finds `T` an `i64`, and `value: ref<T>` given an `i64`, or
-/// a `ref<i64>`, finds it an `i64` too. A pattern that holds a `ref`
-/// below its top is matched against `given` as it is.
+/// `ref<i64>` finds `T` an `i64` (`Type::followed`), and `value: ref<T>`
+/// given an `i64`, or a `ref<i64>`, finds it an `i64` too. A pattern
+/// that holds a `ref` below its top is matched against `given` as it is.
 pub(crate) fn inferred_from(pattern: &Type, given: &Type) -> Type {
-    let pattern = match pattern {
-        Type::Nullable(inner) => inner,
-        other => other,
-    };
-    let given = omittable(given);
+    let (pattern, given) = (pattern.omission_removed(), given.omission_removed());
     match (pattern, given) {
         (Type::Ref(_), Type::Ref(_)) => given.clone(),
         (Type::Ref(_), given) => Type::Ref(Box::new(given.clone())),
-        (pattern, given) if !holds_ref(pattern) => dereferenced(given),
+        (pattern, given) if !holds_ref(pattern) => given.followed(),
         _ => given.clone(),
     }
 }
 
-/// `ty` without the `?` that marks a connection that may be left out.
-/// TYPE-14: on `ref<f64>`, `atomic<Quote>` and `signal`, which are no
-/// ordinary value types, the `?` "just means the value can be omitted":
-/// what is given, where it is given, is the type under it.
-fn omittable(ty: &Type) -> &Type {
-    match ty {
-        Type::Nullable(inner)
-            if matches!(**inner, Type::Ref(_) | Type::Signal | Type::Atomic(_)) =>
-        {
-            inner
+impl Type {
+    /// The type under a `?` that marks a temporal input or a field
+    /// that may be left out; any other type as it is. TYPE-14: on a
+    /// type that is no ordinary value, `rolling_window<f64, 5>?`,
+    /// `atomic<Quote>?`, `ref<f64>?`, `signal?`, the `?` "just means
+    /// the value can be omitted", and is no part of what is given or
+    /// published. The analyser and a target both ask this here, so
+    /// that they agree.
+    pub fn omission_removed(&self) -> &Type {
+        match self {
+            Type::Nullable(inner)
+                if matches!(
+                    **inner,
+                    Type::Ref(_) | Type::Signal | Type::Atomic(_) | Type::RollingWindow { .. }
+                ) =>
+            {
+                inner
+            }
+            other => other,
         }
-        other => other,
+    }
+
+    /// What an ordinary input given a connection of this type observes:
+    /// the type with the `?` that marks omission removed
+    /// (`Type::omission_removed`) and every reference boundary removed,
+    /// at any depth. TIME-10: "Ordinary followers observe the selected
+    /// target"; GEN-11: such an input "observes values". A type that
+    /// holds no reference is itself. The analyser admits a follower by
+    /// this, and a target writes the follower's input as it says.
+    pub fn followed(&self) -> Type {
+        dereferenced(self.omission_removed())
     }
 }
 
@@ -119,7 +129,7 @@ pub(crate) fn holds_ref(ty: &Type) -> bool {
 /// `ref<list<ref<i64>, 2>>` is `list<i64, 2>`. A generic struct's
 /// arguments are kept as they are: a reference there is part of the
 /// struct's identity.
-pub(crate) fn dereferenced(ty: &Type) -> Type {
+fn dereferenced(ty: &Type) -> Type {
     let part = |inner: &Type| Box::new(dereferenced(inner));
     match ty {
         Type::Ref(inner) => dereferenced(inner),

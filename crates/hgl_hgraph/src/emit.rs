@@ -1769,12 +1769,15 @@ impl Emitter<'_> {
         // where the type under `TS[...]` is `T | None`, and a tick of
         // it may be the unset one: a published null.
         if let Type::Nullable(inner) = ty {
-            // TYPE-14: on a `ref`, a `signal` or an `atomic` the `?`
+            // TYPE-14: on a type that is no ordinary value the `?`
             // marks an input that may be left out, and is no part of
-            // what is published: the input is the type under it, and
-            // one left out is never valid (UNIT-8).
-            if temporal && matches!(**inner, Type::Ref(_) | Type::Signal | Type::Atomic(_)) {
-                return self.annotation(inner, true, at);
+            // what is published (`Type::omission_removed`): the input
+            // is the type under it, and one left out is never valid
+            // (UNIT-8). A window that may be left out is not written
+            // yet.
+            let under = ty.omission_removed();
+            if temporal && !matches!(under, Type::Nullable(_) | Type::RollingWindow { .. }) {
+                return self.annotation(under, true, at);
             }
             // As a temporal value only a scalar or an enum may be
             // unset this way: it publishes whole. A set publishes its
@@ -1896,16 +1899,12 @@ impl Emitter<'_> {
     /// update would give it a position's change, so as a child it is
     /// reported.
     fn child_annotation(&mut self, ty: &Type, child: &Type, at: Location) -> Option<String> {
-        // A reference as a child, and an atomic field that may be left
-        // out (TYPE-14), are not written yet.
-        let under = match child {
-            Type::Nullable(inner) => inner,
-            other => other,
-        };
-        if growing_list(child)
-            || matches!(under, Type::Ref(_))
-            || matches!(child, Type::Nullable(inner) if matches!(**inner, Type::Atomic(_)))
-        {
+        // A reference as a child, and a field that may be left out
+        // because its type is no ordinary value (TYPE-14), are not
+        // written yet.
+        let under = child.omission_removed();
+        let omittable = matches!(child, Type::Nullable(_)) && !matches!(under, Type::Nullable(_));
+        if growing_list(child) || matches!(under, Type::Ref(_)) || omittable {
             self.unsupported(at, &format!("the type `{ty}`"));
             return None;
         }
@@ -6512,10 +6511,8 @@ impl Emitter<'_> {
     /// output of the input's type that never ticks. A `signal` is bound
     /// to one of a `bool`, as it may be bound to any output.
     fn never_valid(&mut self, ty: &Type, at: Location) -> String {
-        let annotation = match ty {
-            Type::Nullable(inner) if matches!(**inner, Type::Signal) => {
-                Some("_hg.TS[_py.bool]".to_string())
-            }
+        let annotation = match ty.omission_removed() {
+            Type::Signal => Some("_hg.TS[_py.bool]".to_string()),
             _ => self.annotation(ty, true, at),
         };
         let Some(annotation) = annotation else {
@@ -6779,14 +6776,13 @@ impl Emitter<'_> {
                 // in a hook as that value (TYPE-9), and has no port of
                 // a field. The `?` of `atomic<V>?` marks an input that
                 // may be left out (TYPE-14): its port is the atomic's.
-                if let ExprKind::Local(local) = base.kind {
-                    let declared = match &function.locals[local].ty {
-                        Type::Nullable(inner) => &**inner,
-                        other => other,
-                    };
-                    if matches!(declared, Type::Atomic(_)) {
-                        return None;
-                    }
+                if let ExprKind::Local(local) = base.kind
+                    && matches!(
+                        function.locals[local].ty.omission_removed(),
+                        Type::Atomic(_)
+                    )
+                {
+                    return None;
                 }
                 let field = field_of(self.program, &base.ty, *member)?;
                 let base = self.input_port(function, base)?;
@@ -7137,15 +7133,11 @@ impl Emitter<'_> {
             };
             let taken = match input(self, &argument.value) {
                 // TIME-10: "Ordinary followers observe the selected
-                // target": a reference given to a lifted function is
-                // followed by an ordinary input of what it designates,
-                // through every reference it is of (GEN-11).
-                Some(mut ty) => {
-                    while let Type::Ref(target) = ty {
-                        ty = *target;
-                    }
-                    Bound::Input(ty)
-                }
+                // target": a lifted function given a reference takes an
+                // ordinary input of what it designates, as the analyser
+                // admitted it (`Type::followed`): every reference and a
+                // `?` that marks omission removed.
+                Some(ty) => Bound::Input(ty.followed()),
                 None => Bound::Configuration(argument.value.ty.clone()),
             };
             let value = self.expression(function, &argument.value);
