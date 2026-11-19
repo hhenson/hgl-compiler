@@ -1319,7 +1319,38 @@ pub fn walk_statement_nodes<'a>(statements: &'a [Stmt], visit: &mut dyn FnMut(No
     }
 }
 
+impl Expr {
+    /// The root of a place: the expression its fields and indices are
+    /// of, `book` of `book.orders[0]`. An expression that is no field
+    /// and no index is its own root.
+    pub fn place_root(&self) -> &Expr {
+        let mut root = self;
+        while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
+            root = base;
+        }
+        root
+    }
+}
+
 impl ExprKind {
+    /// The values a block or an `if` may come to (CTRL-10): a block's
+    /// value, which it may not have, and each branch of an `if`, its
+    /// `then` first; `None` for any other expression. A branch is
+    /// itself a block, or the `if` of an `else if`.
+    pub fn branch_values(&self) -> Option<Vec<&Expr>> {
+        match self {
+            ExprKind::Block { value, .. } => Some(value.as_deref().into_iter().collect()),
+            ExprKind::If {
+                then, otherwise, ..
+            } => Some(
+                std::iter::once(&**then)
+                    .chain(otherwise.as_deref())
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
     /// The operator and operands of a symbol between two operands,
     /// however it is recorded: an [`ExprKind::Binary`], or the call the
     /// symbol stands for.

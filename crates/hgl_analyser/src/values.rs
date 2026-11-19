@@ -3407,12 +3407,10 @@ impl<'a> Typer<'a> {
             // from the function gives the `if` no value and takes no
             // part in its type (CTRL-5)", and so none in what it is. An
             // `if` no branch of which gives a value has none itself.
-            ExprKind::If {
-                condition,
-                then,
-                otherwise,
-            } => {
-                let mut branches = [Some(then), otherwise.as_ref()]
+            ExprKind::If { condition, .. } => {
+                let mut branches = value
+                    .kind
+                    .branch_values()
                     .into_iter()
                     .flatten()
                     .filter(|branch| gives_a_value(branch))
@@ -3672,17 +3670,11 @@ impl<'a> Typer<'a> {
     fn capability_of(&self, value: &Expr) -> Option<LocalId> {
         match &value.kind {
             ExprKind::Local(local) => self.capability(*local),
-            ExprKind::Block {
-                value: Some(value), ..
-            } => self.capability_of(value),
-            ExprKind::If {
-                then, otherwise, ..
-            } => self.capability_of(then).or_else(|| {
-                otherwise
-                    .as_ref()
-                    .and_then(|otherwise| self.capability_of(otherwise))
-            }),
-            _ => None,
+            // The value of a block, or of a branch of an `if`.
+            kind => kind
+                .branch_values()?
+                .into_iter()
+                .find_map(|value| self.capability_of(value)),
         }
     }
 
@@ -5421,10 +5413,7 @@ impl<'a> Typer<'a> {
                 continue;
             }
             // The root of the place: `book` of `book.orders[0]`.
-            let mut root = &argument.value;
-            while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
-                root = base;
-            }
+            let root = argument.value.place_root();
             let takes = format!("the `var` parameter `{}` of `{callee}`", parameter.name);
             // "that holds an ordinary value of the parameter's type":
             // the call gives the place what the parameter holds, so
@@ -12379,12 +12368,9 @@ fn bound_by_loop(over: ValueCategory, ty: &Type, names: usize) -> (Vec<ValueCate
 /// the one it ends in (CTRL-10), and none when it ends in a `return` or
 /// any other statement; an `if` gives one where a branch does.
 fn gives_a_value(value: &Expr) -> bool {
-    match &value.kind {
-        ExprKind::Block { value, .. } => value.as_deref().is_some_and(gives_a_value),
-        ExprKind::If {
-            then, otherwise, ..
-        } => gives_a_value(then) || otherwise.as_deref().is_some_and(gives_a_value),
-        _ => true,
+    match value.kind.branch_values() {
+        Some(values) => values.into_iter().any(gives_a_value),
+        None => true,
     }
 }
 
@@ -13750,17 +13736,10 @@ fn widens_an_entry(value: &Expr) -> bool {
             .iter()
             .any(|(key, value)| widens_an_entry(key) || widens_an_entry(value)),
         // The value of a block, and of each branch of an `if`.
-        ExprKind::Block {
-            value: Some(value), ..
-        } => widens_an_entry(value),
-        ExprKind::If {
-            then, otherwise, ..
-        } => {
-            widens_an_entry(then)
-                || otherwise
-                    .as_ref()
-                    .is_some_and(|otherwise| widens_an_entry(otherwise))
-        }
+        ExprKind::Block { .. } | ExprKind::If { .. } => value
+            .kind
+            .branch_values()
+            .is_some_and(|values| values.into_iter().any(widens_an_entry)),
         // A symbol among the entries is read with the entry's type as
         // its place, so that core's own arithmetic over literals may
         // widen them: the `1` of `[-1]`, the `1` and `2` of `[1 + 2]`,
@@ -15396,12 +15375,20 @@ fn is_integer_literal(value: &Expr) -> bool {
 /// known to this pass. An option that is a generic value parameter is
 /// no argument: it selects the candidate, a division's `zero` say, and
 /// what that computes is core's.
-fn is_plain(callee: &Callee, arguments: &[hir::Argument], operands: usize) -> bool {
-    match callee {
-        Callee::Candidate {
-            operator, module, ..
+///
+/// A symbol recorded as it is written, an [`ExprKind::Unary`] or an
+/// [`ExprKind::Binary`], is core's own.
+fn is_plain(kind: &ExprKind, operands: usize) -> bool {
+    match kind {
+        ExprKind::Call {
+            callee: Callee::Candidate {
+                operator, module, ..
+            },
+            arguments,
+            ..
         } => operator.0 == *module && arguments.len() == operands,
-        _ => false,
+        ExprKind::Call { .. } => false,
+        _ => true,
     }
 }
 
@@ -15409,16 +15396,8 @@ fn is_plain(callee: &Callee, arguments: &[hir::Argument], operands: usize) -> bo
 /// written, or the plain call of `neg_` it stands for (see
 /// [`is_plain`]).
 fn negated(value: &Expr) -> Option<&Expr> {
-    match &value.kind {
-        ExprKind::Unary {
-            operator: UnaryOperator::Negate,
-            operand,
-        } => Some(operand),
-        ExprKind::Call {
-            callee,
-            arguments,
-            form: Form::Unary(UnaryOperator::Negate),
-        } if is_plain(callee, arguments, 1) => Some(&arguments[0].value),
+    match value.kind.unary() {
+        Some((UnaryOperator::Negate, operand)) if is_plain(&value.kind, 1) => Some(operand),
         _ => None,
     }
 }
@@ -15427,21 +15406,7 @@ fn negated(value: &Expr) -> Option<&Expr> {
 /// arithmetic: as it is written, or the plain call it stands for (see
 /// [`is_plain`]).
 fn arithmetic(value: &Expr) -> Option<(BinaryOperator, &Expr, &Expr)> {
-    match &value.kind {
-        ExprKind::Binary {
-            operator,
-            left,
-            right,
-        } => Some((*operator, left, right)),
-        ExprKind::Call {
-            callee,
-            arguments,
-            form: Form::Binary(operator),
-        } if is_plain(callee, arguments, 2) => {
-            Some((*operator, &arguments[0].value, &arguments[1].value))
-        }
-        _ => None,
-    }
+    value.kind.binary().filter(|_| is_plain(&value.kind, 2))
 }
 
 /// True when an expression is `.member`, in parentheses or not.
