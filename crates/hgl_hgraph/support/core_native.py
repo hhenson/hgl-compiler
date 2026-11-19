@@ -214,6 +214,13 @@ class Error:
         return f"error(message: {self.message!r}, code: {self.code!r})"
 
 
+def _raise(error):
+    """Fails with `error`, an `Error`: the HGL error it is, with its
+    message, its code and its provenance (ERR-8: a failure "keeps its
+    first provenance")."""
+    raise HglError(error.message, code=error.code, context=error.context)
+
+
 class ErrorContext:
     """The provenance of an error a graph failure gave (ERR-4): "`.node:
     str`, `.phase: str`, one of `"evaluate"`, `"start"`, and `"stop"`,
@@ -331,7 +338,7 @@ def _escapes(failure: _TS[_NodeError], _clock: _EvaluationClock = None):
     out again: each boundary lets it out."""
     error = error_of(failure.value, _clock.evaluation_time)
     if error.context.phase != "evaluate":
-        raise HglError(error.message, code=error.code, context=error.context)
+        _raise(error)
 
 
 def captured(attempt):
@@ -388,7 +395,7 @@ def succeeded(result):
     the node with the error it holds (ERR-5)."""
     if type(result) is Ok:
         return result.value
-    raise HglError(result.error.message, code=result.error.code, context=result.error.context)
+    _raise(result.error)
 
 
 @_compute_node
@@ -1570,9 +1577,12 @@ def unmatched(selected):
     raise HglError(f"no case of the `switch` has the value {selected!r}")
 
 
-def _i64(value):
+def _i64(value, what="an i64 result"):
+    """`value`, where it is in the range of an `i64`. NUM-2: "an `i64`
+    result outside the signed 64-bit range is an HGL error with code
+    `numeric.out_of_range`"; `what` says what it is."""
     if not _I64_MIN <= value <= _I64_MAX:
-        raise HglError("an i64 result is outside the signed 64-bit range", code="numeric.out_of_range")
+        raise HglError(f"{what} is outside the signed 64-bit range", code="numeric.out_of_range")
     return value
 
 
@@ -1620,20 +1630,29 @@ def mul__i64_f64(lhs, rhs):
     return float(lhs) * rhs
 
 
+def _by_zero():
+    """The error of a zero divisor: NUM-3, "The `fail` policy makes a zero
+    divisor an HGL error with code `numeric.division_by_zero`", and NUM-9,
+    under `error` "`err(...)` carrying error code
+    `numeric.division_by_zero`"."""
+    return Error("a division by zero", code="numeric.division_by_zero")
+
+
 def _zero_divisor(lhs, rhs, zero):
     """What a division by the zero `rhs` gives, when it gives a number.
 
     NUM-3: under `ieee`, "a finite nonzero numerator divided by signed
     zero produces signed infinity; zero divided by zero produces NaN.
     The infinity sign combines both operand signs." Under `nan` every
-    zero divisor gives NaN, and under `fail` it is an error.
+    zero divisor gives NaN, and under `fail` it is an error. The
+    candidates of core that come here require one of the three:
+    `error` is `_divide`'s.
     """
     if zero == "fail":
-        raise HglError("a division by zero", code="numeric.division_by_zero")
+        _raise(_by_zero())
     if zero == "nan" or lhs == 0 or lhs != lhs:
         return _NAN
-    if zero != "ieee":
-        raise HglError(f"the zero policy `{zero}` is not provided")
+    # `ieee`.
     sign = _math.copysign(1.0, lhs) * _math.copysign(1.0, rhs)
     return _math.copysign(_INFINITY, sign)
 
@@ -1670,12 +1689,12 @@ def _floordiv(lhs, rhs, zero):
 
 
 def _mod(lhs, rhs, zero):
-    """`%` with an `f64` operand: NaN for a zero divisor under `ieee`."""
+    """`%` with an `f64` operand: NaN for a zero divisor under `ieee`
+    and `nan`, the other two its candidates require (`error` is
+    `_divide`'s)."""
     if rhs == 0:
         if zero == "fail":
-            raise HglError("a division by zero", code="numeric.division_by_zero")
-        if zero not in ("ieee", "nan"):
-            raise HglError(f"the zero policy `{zero}` is not provided")
+            _raise(_by_zero())
         return _NAN
     # NUM-1: there `%` is "what IEEE `fmod` gives: a remainder by an
     # infinity is the numerator as it is, whatever its sign". Of an
@@ -1688,27 +1707,21 @@ def _mod(lhs, rhs, zero):
     return float(lhs % rhs)
 
 
-def _whole(zero):
-    """A division of two `i64` gives an `i64`, which holds no NaN or
-    infinity: NUM-12 admits `fail` there, and `error`."""
-    if zero != "fail":
-        raise HglError(f"the zero policy `{zero}` is not provided")
-    raise HglError("a division by zero", code="numeric.division_by_zero")
-
-
 def _floordiv_i64(lhs, rhs, zero):
     # NUM-1: "Integer floor division rounds toward negative infinity",
-    # as Python's does.
+    # as Python's does. A division of two `i64` gives an `i64`, which
+    # holds no NaN or infinity: NUM-12 admits `fail` there, and `error`,
+    # which is `_divide`'s.
     if rhs == 0:
-        _whole(zero)
+        _raise(_by_zero())
     return _i64(lhs // rhs)
 
 
 def _mod_i64(lhs, rhs, zero):
     # NUM-1: "modulo has the divisor's sign when nonzero", as Python's
-    # does.
+    # does. `fail`, as `_floordiv_i64`'s.
     if rhs == 0:
-        _whole(zero)
+        _raise(_by_zero())
     return lhs % rhs
 
 
@@ -1722,7 +1735,7 @@ def _divide(ordinary, lhs, rhs, zero):
     if zero != "error":
         return ordinary(lhs, rhs, zero)
     if rhs == 0:
-        return Err(Error("a division by zero", code="numeric.division_by_zero"))
+        return Err(_by_zero())
     # The divisor is not zero, so no policy is consulted.
     return Ok(ordinary(lhs, rhs, "fail"))
 
@@ -1834,7 +1847,7 @@ def _div_duration(lhs, rhs, zero):
     and these candidates admit `fail`, and `error` through `_divide`.
     """
     if rhs == 0:
-        _whole(zero)
+        _raise(_by_zero())
     if isinstance(rhs, float) and not _math.isfinite(rhs):
         raise HglError(
             "a duration divided by an infinity or a NaN", code="numeric.out_of_range"
@@ -1928,9 +1941,8 @@ def _unconverted(message, invalid):
     """
     if invalid == "error":
         return Err(Error(message, code="convert.invalid"))
-    if invalid == "fail":
-        raise HglError(message, code="convert.invalid")
-    raise HglError(f"the invalid policy `{invalid}` is not provided")
+    # `fail`, the other of core's `InvalidPolicy`.
+    raise HglError(message, code="convert.invalid")
 
 
 def _converted(value, invalid):
@@ -1965,10 +1977,8 @@ def _rounded(value, rounding):
     if rounding == "half_up":
         # "a tie away from zero"
         return away if left >= 0.5 else whole
-    if rounding == "half_down":
-        # "a tie toward zero"
-        return away if left > 0.5 else whole
-    raise HglError(f"the rounding `{rounding}` is not provided")
+    # `half_down`, the last of core's `Rounding`: "a tie toward zero".
+    return away if left > 0.5 else whole
 
 
 def convert_f64_Rounding_i64__to_i64(value, rounding, nan, invalid):
@@ -2343,9 +2353,7 @@ class Tenor:
 def _tenor_count(value):
     """TEN-2: "A count outside the i64 range is an HGL error with code
     `numeric.out_of_range`"."""
-    if not _I64_MIN <= value <= _I64_MAX:
-        raise HglError("a count of a tenor is outside the signed 64-bit range", code="numeric.out_of_range")
-    return value
+    return _i64(value, "a count of a tenor")
 
 
 def _same_form(lhs, rhs):
