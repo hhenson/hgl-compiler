@@ -717,6 +717,24 @@ def removed(delta):
     return frozenset(key for key, change in delta.items() if _removes(change))
 
 
+def only_value(published, struct):
+    """What a temporal struct with no field, `struct`, publishes: its
+    one value. A whole value of it and its delta, which has no property
+    (the language's TYPE-16), publish it alike, so that a publication
+    ticks, and the struct is valid once one has (TIME-9: "A published
+    empty list or dictionary has no element and is valid")."""
+    return published if isinstance(published, struct) else struct()
+
+
+def unset_read():
+    """The read of a part of a temporal struct or tuple that has not
+    published, where a value of it is needed: it fails, with the code
+    the language catalogues, `value.unset_read` ("Executed operation
+    requires an unset ordinary payload"), and no value is made up. The
+    compiler reads an optional part that has not published as null."""
+    raise HglError("a part that has not published is read", code="value.unset_read")
+
+
 def bundled(value, shape=None):
     """What a temporal struct or tuple publishes for a whole value of it
     (TYPE-9: "Temporalization recursively maps tuples/structs to child

@@ -1,0 +1,203 @@
+module demo.struct_review
+
+struct Quote {
+    bid: i64
+    ask: i64
+}
+
+struct Level {
+    price: i64?
+    count: i64
+}
+
+struct Empty {}
+
+# Only some parts of each ever publish.
+fn bid_only(bid: i64) -> Quote {
+    when { return delta<Quote>(bid: bid) }
+}
+
+fn count_only(count: i64) -> Level {
+    when { return delta<Level>(count: count) }
+}
+
+fn first_only(a: i64) -> tuple<i64, str> {
+    inject out
+    when { out[0] = a }
+}
+
+# hhenson/hgl_spec#126, an interim reading: a read of a struct or a tuple
+# whole, or of one part, needs each part of a required type valid, and
+# one that is not fails with `value.unset_read`; an optional part that is
+# not valid is null. No value is made up.
+fn snapshot(quote: Quote) -> atomic<Quote> {
+    when { return quote }
+}
+
+fn relayed(quote: Quote) -> Quote {
+    when { return quote }
+}
+
+fn ask_of(quote: Quote) -> i64 {
+    when { return quote.ask + 1 }
+}
+
+fn second_of(pair: tuple<i64, str>) -> str {
+    when { return pair[1] }
+}
+
+fn whole_first(pair: tuple<i64, str>) -> i64 {
+    when {
+        let held = pair
+        return held[0]
+    }
+}
+
+const fn spread(quote: Quote) -> i64 => quote.ask - quote.bid
+
+fn price_or(level: Level) -> i64 {
+    when {
+        let price = level.price
+        if price == null { return -1 }
+        return price
+    }
+}
+
+fn whole_price_or(level: Level) -> i64 {
+    when {
+        let held = level
+        let price = held.price
+        if price == null { return -1 }
+        return price
+    }
+}
+
+fn relayed_level(level: Level) -> Level {
+    when { return level }
+}
+
+fn snapshot_of(bid: i64) -> atomic<Quote> => snapshot(bid_only(bid))
+fn relayed_of(bid: i64) -> Quote => relayed(bid_only(bid))
+fn ask_of_bid(bid: i64) -> i64 => ask_of(bid_only(bid))
+fn second_of_first(a: i64) -> str => second_of(first_only(a))
+fn whole_first_of(a: i64) -> i64 => whole_first(first_only(a))
+fn spread_of(bid: i64) -> i64 => spread(bid_only(bid))
+fn price_of_count(count: i64) -> i64 => price_or(count_only(count))
+fn whole_price_of_count(count: i64) -> i64 => whole_price_or(count_only(count))
+fn relayed_level_of(count: i64) -> Level => relayed_level(count_only(count))
+fn spread_of_whole(bid: i64) -> i64 => spread(quoted(bid))
+fn snapshot_of_whole(bid: i64) -> atomic<Quote> => snapshot(quoted(bid))
+fn ask_of_whole(bid: i64) -> i64 => ask_of(quoted(bid))
+
+test a_required_part_not_published_fails_its_read {
+    assert raises("value.unset_read") { eval(snapshot_of(bid: [1])) }
+    assert raises("value.unset_read") { eval(relayed_of(bid: [1])) }
+    assert raises("value.unset_read") { eval(ask_of_bid(bid: [1])) }
+    assert raises("value.unset_read") { eval(second_of_first(a: [1])) }
+    assert raises("value.unset_read") { eval(whole_first_of(a: [1])) }
+    assert raises("value.unset_read") { eval(spread_of(bid: [1])) }
+}
+
+test an_optional_part_not_published_is_null {
+    assert eval(price_of_count(count: [1, 2])) == [-1, -1]
+    assert eval(whole_price_of_count(count: [1, 2])) == [-1, -1]
+    assert eval(relayed_level_of(count: [1])) == [delta<Level>(price: delta<i64?>(), count: 1)]
+}
+
+test a_read_once_each_part_published {
+    assert eval(spread_of_whole(bid: [1, 4])) == [1, 1]
+    assert eval(snapshot_of_whole(bid: [1, 4])) == [Quote(bid: 1, ask: 2), Quote(bid: 4, ask: 5)]
+    assert eval(ask_of_whole(bid: [1, 4])) == [3, 6]
+}
+
+# CTRL-13, FN-3: an ordinary tuple, list, struct or set in a branch of a
+# graph's `if` is a constant of its time-series type.
+fn paired(a: i64, b: str) -> tuple<i64, str> {
+    when { return (a, b) }
+}
+
+fn listed(a: i64) -> list<i64, 2> {
+    when { return [a, a] }
+}
+
+fn quoted(bid: i64) -> Quote {
+    when { return Quote(bid: bid, ask: bid + 1) }
+}
+
+fn tagged(tag: i64) -> set<i64> {
+    when { return [tag] }
+}
+
+fn first(pair: tuple<i64, str>) -> i64 {
+    when { return pair[0] }
+}
+
+fn first_listed(values: list<i64, 2>) -> i64 {
+    when { return values[0] }
+}
+
+const fn fixed_pair() -> tuple<i64, str> => (7, "x")
+const fn fixed_list() -> list<i64, 2> => [7, 8]
+const fn fixed_quote() -> Quote => Quote(bid: 7, ask: 9)
+const fn fixed_tags() -> set<i64> => [7]
+
+fn chosen_pair(take: bool, a: i64, b: str) -> tuple<i64, str> {
+    if take { return paired(a, b) }
+    return fixed_pair()
+}
+
+fn chosen_list(take: bool, a: i64) -> list<i64, 2> {
+    if take { return listed(a) }
+    return fixed_list()
+}
+
+fn chosen_quote(take: bool, bid: i64) -> Quote {
+    if take { return quoted(bid) }
+    return fixed_quote()
+}
+
+fn chosen_tags(take: bool, tag: i64) -> set<i64> {
+    if take { return tagged(tag) }
+    return fixed_tags()
+}
+
+fn chosen_pair_first(take: bool, a: i64, b: str) -> i64 => first(chosen_pair(take, a, b))
+fn chosen_list_first(take: bool, a: i64) -> i64 => first_listed(chosen_list(take, a))
+fn chosen_ask(take: bool, bid: i64) -> i64 => ask_of(chosen_quote(take, bid))
+
+test an_ordinary_composite_branch_is_a_constant_of_its_type {
+    assert eval(chosen_pair_first(take: [true, false], a: [1, 2], b: ["p", "q"])) == [1, 7]
+    assert eval(chosen_list_first(take: [true, false], a: [1, 2])) == [1, 7]
+    assert eval(chosen_ask(take: [true, false], bid: [1, 2])) == [3, 10]
+    assert eval(chosen_tags(take: [true, false], tag: [1, 2])) == [
+        delta<set<i64>>(added: [1]),
+        delta<set<i64>>(added: [7], removed: [1]),
+    ]
+}
+
+# TIME-9: "A published empty list or dictionary has no element and is
+# valid", and a struct with no field is a collection with no field: its
+# publication ticks, and it is then valid and all valid.
+fn emptied(a: i64) -> Empty {
+    when { return Empty() }
+}
+
+fn emptied_by_delta(a: i64) -> Empty {
+    inject out
+    when { out = delta<Empty>() }
+}
+
+fn seen(probe: bool, e: Empty) -> list<bool, 3> {
+    when modified(probe) && valid([]) { return [valid(e), all_valid(e), modified(e)] }
+}
+
+fn seen_of(probe: bool, a: i64) -> list<bool, 3> => seen(probe, emptied(a))
+fn seen_by_delta(probe: bool, a: i64) -> list<bool, 3> => seen(probe, emptied_by_delta(a))
+
+test an_empty_struct_ticks {
+    assert eval(seen_of(probe: [true, true, true], a: [_, 1, _])) ==
+        [[false, false, false], [true, true, true], [true, true, false]]
+    assert eval(seen_by_delta(probe: [true, true], a: [_, 1])) ==
+        [[false, false, false], [true, true, true]]
+    assert eval(emptied(a: [1, _, 2])) == [delta<Empty>(), _, delta<Empty>()]
+}
