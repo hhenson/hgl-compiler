@@ -8283,6 +8283,8 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
         "    held = quote.value\n".to_string(),
         "    return quote.delta_value.ask".to_string(),
         "    whole = _output.value\n".to_string(),
+        "def bid_or(value: _hg.TS[_py.int], quote: _hg.TS[Quote]) -> _hg.TS[_py.int]:".to_string(),
+        "            return quote.value.bid\n".to_string(),
     ] {
         assert!(
             python.contains(&expected),

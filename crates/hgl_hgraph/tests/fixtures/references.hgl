@@ -112,6 +112,16 @@ fn widened(bid: i64) -> atomic<Quote> {
     }
 }
 
+# An atomic input that may be left out (TYPE-14) is the atomic's port.
+fn bid_or(value: i64, quote: atomic<Quote>?) -> i64 {
+    when valid(value) {
+        if valid(quote) {
+            if quote != null { return quote.bid }
+        }
+        return -value
+    }
+}
+
 # TYPE-16: an atomic's delta is the whole value, the field that did not
 # change among it.
 fn whole_ask(quote: atomic<Quote>) -> i64 {
@@ -150,6 +160,10 @@ fn width_of(bid: i64, ask: i64) -> i64 => snapshot_width(snapshot(bid, ask))
 fn raised_bid(bid: i64, ask: i64) -> i64 => raised(snapshot(bid, ask)).bid
 fn widened_ask(bid: i64) -> i64 => widened(bid).ask
 fn whole_asks(bid: i64, ask: i64) -> i64 => whole_ask(snapshot(bid, ask))
+fn bids(value: i64, bid: i64, ask: i64) -> i64 => bid_or(value, snapshot(bid, ask))
+fn bids_left_out(value: i64) -> i64 => bid_or(value)
+fn optional(target: ref<i64>?) -> i64 => target
+fn optional_of(use_left: bool, left: i64, right: i64) -> i64 => optional(pick(use_left, left, right))
 fn snapshots(bid: i64, ask: i64) -> i64 => counted(snapshot(bid, ask))
 
 test a_reference_ticks_on_a_changed_designation {
@@ -172,6 +186,7 @@ test a_reference_ticks_on_a_changed_designation {
     assert eval(generic_designates(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
         [1, _, 2, _]
     assert eval(requested_ticks(left: [1, 2, 3])) == [1, _, _]
+    assert eval(optional_of(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _])) == [1, 2, 10]
 }
 
 test a_signal_wakes_its_node {
@@ -190,5 +205,7 @@ test an_atomic_struct_ticks_once_with_its_whole_value {
     assert eval(raised_bid(bid: [1, 2], ask: [5, _])) == [2, 3]
     assert eval(widened_ask(bid: [1, 2])) == [5, 6]
     assert eval(whole_asks(bid: [1, 2, _], ask: [5, _, 6])) == [5, 5, 6]
+    assert eval(bids(value: [1, 2], bid: [5, _], ask: [6, _])) == [5, 5]
+    assert eval(bids_left_out(value: [1, 2])) == [-1, -2]
     assert eval(snapshots(bid: [1, 2, 3], ask: [5, 6, _])) == [1, 2, 3]
 }

@@ -22,6 +22,7 @@ pub(crate) fn crosses(
     given: &Type,
     admits: &dyn Fn(&Type, &Type) -> bool,
 ) -> bool {
+    let given = omittable(given);
     match (expected, given) {
         // TYPE-14: on a type that is no ordinary value the `?` marks an
         // input that may be left out; what is given is the type under it.
@@ -31,6 +32,9 @@ pub(crate) fn crosses(
         // TYPE-12: a `signal` constrains an input to tick, and reads no
         // payload: any connection is one.
         (Type::Signal, _) => !matches!(given, Type::Unknown),
+        // A connection that may have been left out, given where one that
+        // may not is expected.
+        (expected, given) if admits(expected, given) => true,
         // TYPE-12: the input designates the endpoint it is given.
         (Type::Ref(target), given) if !matches!(given, Type::Ref(_) | Type::Signal) => {
             admits(target, given)
@@ -59,11 +63,27 @@ pub(crate) fn inferred_from(pattern: &Type, given: &Type) -> Type {
         Type::Nullable(inner) => inner,
         other => other,
     };
+    let given = omittable(given);
     match (pattern, given) {
         (Type::Ref(_), Type::Ref(_)) => given.clone(),
         (Type::Ref(_), given) => Type::Ref(Box::new(given.clone())),
         (pattern, given) if !holds_ref(pattern) => dereferenced(given),
         _ => given.clone(),
+    }
+}
+
+/// `ty` without the `?` that marks a connection that may be left out.
+/// TYPE-14: on `ref<f64>`, `atomic<Quote>` and `signal`, which are no
+/// ordinary value types, the `?` "just means the value can be omitted":
+/// what is given, where it is given, is the type under it.
+fn omittable(ty: &Type) -> &Type {
+    match ty {
+        Type::Nullable(inner)
+            if matches!(**inner, Type::Ref(_) | Type::Signal | Type::Atomic(_)) =>
+        {
+            inner
+        }
+        other => other,
     }
 }
 

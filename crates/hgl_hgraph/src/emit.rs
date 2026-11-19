@@ -6651,11 +6651,16 @@ impl Emitter<'_> {
             ExprKind::Field { base, member } => {
                 // An atomic input is one port of the whole value, read
                 // in a hook as that value (TYPE-9), and has no port of
-                // a field.
-                if let ExprKind::Local(local) = base.kind
-                    && matches!(function.locals[local].ty, Type::Atomic(_))
-                {
-                    return None;
+                // a field. The `?` of `atomic<V>?` marks an input that
+                // may be left out (TYPE-14): its port is the atomic's.
+                if let ExprKind::Local(local) = base.kind {
+                    let declared = match &function.locals[local].ty {
+                        Type::Nullable(inner) => &**inner,
+                        other => other,
+                    };
+                    if matches!(declared, Type::Atomic(_)) {
+                        return None;
+                    }
                 }
                 let field = field_of(self.program, &base.ty, *member)?;
                 let base = self.input_port(function, base)?;
