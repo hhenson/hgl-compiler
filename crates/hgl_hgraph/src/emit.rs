@@ -8330,6 +8330,30 @@ impl Emitter<'_> {
         format!("_harness.evaluate({})", given.join(", "))
     }
 
+    /// True where each part of a whole value of `ty`, an element, a
+    /// field or an entry, publishes whole: a scalar, an enum or a
+    /// nullable one.
+    fn parts_publish_whole(&self, ty: &Type) -> bool {
+        match ty {
+            Type::List { element, .. } => publishes_whole(element),
+            Type::Set(_) => true,
+            Type::Dict { value, .. } => publishes_whole(value),
+            Type::Named {
+                module,
+                declaration,
+                kind: NamedKind::Struct,
+                ..
+            } => match self.program.modules[*module].details.get(*declaration) {
+                Some(Detail::Struct(read)) => read
+                    .members
+                    .iter()
+                    .all(|member| publishes_whole(&member.ty)),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
     /// What the harness reads, for a result of `ty`, as the value the
     /// result holds once a cycle has published: TST-5 has "An
     /// expectation's cell written as a `delta<T>` ... compared with the
@@ -8577,6 +8601,14 @@ impl Emitter<'_> {
                 // an expectation's is compared with the value the result
                 // holds once its cycle has published.
                 Some(value) if whole_cell(ty, &value.ty) => {
+                    // A whole value of composites, a struct with a struct
+                    // field or a dictionary of dictionaries, would replace
+                    // each part it holds in turn, which the harness does
+                    // not follow yet.
+                    if !self.parts_publish_whole(&value.ty) {
+                        self.unsupported(value.at, "a whole trace cell of composites");
+                        return "None".to_string();
+                    }
                     let value = self.expression(function, value);
                     self.harness = true;
                     format!("_harness.whole({value})")
