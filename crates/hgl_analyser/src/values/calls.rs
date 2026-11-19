@@ -142,9 +142,10 @@ impl<'a> Typer<'a> {
         // is read as the form it is, a selector or a guard among them,
         // whether core has declared the function or not: the call is of
         // core's own, and what it gives is the same.
+        // So is one named through an alias of core, `c::valid(a)`: it is
+        // core's `valid` however it is named.
         if self.hook.is_some()
             && Some(module) == self.program.core()
-            && child(&callee, SyntaxKind::QualifiedName).is_none()
             && let Some(operation) = EndpointOperation::language_form(name.text())
         {
             return self.endpoint(operation, &name, &list);

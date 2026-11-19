@@ -36,6 +36,7 @@ analyser: partial
 - A `when` inside another block is rejected
 - A `when` whose header has no `valid` selector alone or as a top-level conjunct runs with every temporal input valid; one that has admits those its selectors name: `valid(a, b)` each input it names, `valid([])` none
 - A header that is `scheduled()` alone, in parentheses or not, admits none, and one that is `modified([])` alone every input
+- What a header admits is its record's (`hir::Header`), which the target reads, and by which the header's and the body's reads are judged: core's `valid` named through an alias, `c::valid(a)`, is the selector; under a configured `&&{...}`, the call of a candidate its configuration selects, nothing is a top-level conjunct and the default stands, which TIME-3 does not say in words
 - `modified(a, b)` names the inputs it subscribes to, each by its name, and `modified([])` none: where the node injects neither `scheduler` nor `alarm`, or its `start` does not use the one it injects, the selector is warned of (`node.no_activation`) and the source accepted; any use in `start` counts, and `@suppress_warning("node.no_activation")` before the function acknowledges it
 - `modified([])` is that selector alone or as a top-level conjunct of its header; as a bool, in a body or under a negation or a disjunction, it leaves the default subscription, and is not warned of
 - A sequence that names inputs is no selector's form (`endpoint.argument`)
@@ -130,7 +131,7 @@ transpiler: done
 
 analyser: partial
 
-- In a node's hooks the endpoint operations are read as the forms they are, whether core declares them or nothing does yet: `valid`, `all_valid`, `modified` and `scheduled` are bools, `delta_value` the `delta<T>` of the input's type (TYPE-16), `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`), and `valid`, `all_valid`, `modified`, `delta_value` and `last_modified` a child of one, `parts[1]`, `quote.bid`, `parts[i]`, alone (END-8); an `atomic<V>`'s field is no child; a selector may stand with no argument or with several inputs, and `valid` and `modified` with `[]`
+- In a node's hooks the endpoint operations are read as the forms they are, by their name or through an alias of core, `c::valid(a)`, whether core declares them or nothing does yet: `valid`, `all_valid`, `modified` and `scheduled` are bools, `delta_value` the `delta<T>` of the input's type (TYPE-16), `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`), and `valid`, `all_valid`, `modified`, `delta_value` and `last_modified` a child of one, `parts[1]`, `quote.bid`, `parts[i]`, alone (END-8); an `atomic<V>`'s field is no child; a selector may stand with no argument or with several inputs, and `valid` and `modified` with `[]`
 - An `endpoint<T>` parameter of a native value function is given an input by its name, a child of one, or `out`, in a hook, and its payload is not read; anything else, and any argument in a graph or a value function, is `endpoint.argument`
 - Core declares the endpoint operations, including `delta_value` (UNIT-12)
 - `scheduled()` in a node that injects neither `scheduler` nor `alarm` is `inject.no_scheduler`: in a hook, a `state`'s or a `cache`'s initialiser, and a source's body (SOURCE-1)

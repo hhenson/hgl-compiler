@@ -81,9 +81,9 @@ impl<'a> Typer<'a> {
                 let generics = self.calls.get(&(self.file, start)).copied();
                 // TIME-9: an endpoint operation written with its generic
                 // argument, `delta_value<i64>(out)`, is the form it is
-                // without one, and is held to the same rules.
+                // without one, and is held to the same rules; so is one
+                // named through an alias of core, `c::valid<i64>(a)`.
                 if self.hook.is_some()
-                    && child(node, SyntaxKind::QualifiedName).is_none()
                     && let Some(operation) = EndpointOperation::language_form(name.text())
                     && self.is_the_languages(&name)
                 {

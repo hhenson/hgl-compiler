@@ -675,10 +675,14 @@ the handler, what it requires valid (the inputs it admits, and `out`
 where `valid(out)` names it), whether a wake of the scheduler or alarm
 runs it, and which conjuncts of its condition are checked when it runs.
 A transpiler reads it and works none of it out again. The analyser
-judges the handler's reads by the inputs it reads as admitted from the
-header before it is typed; the two agree but for a header the typed
-condition does not take apart as the syntax does (`valid(a) &&{cfg} b`,
-`c::valid(a)`).
+judges the handler's reads, the header's own among them, by the same
+record: the condition is read once to learn it, that reading is taken
+back, and the condition is read again under what the record admits.
+Core's `valid` is the selector however it is named, `c::valid(a)` with
+`use core as c` (TIME-9). A configured `valid(a) &&{cfg} b` is the call
+of the candidate of `and_` its configuration selects, which is not read
+yet: nothing under it is a top-level conjunct, and the default stands
+(TIME-3 does not say in words whether such a `&&` is a conjunct).
 
 A `state`'s initializer reads no temporal input (TIME-5): one that does
 is `state.input_read`.
