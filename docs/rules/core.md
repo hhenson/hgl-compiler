@@ -130,7 +130,8 @@ transpiler: partial
 - hgraph: `+` and `-` of two durations, `-x` of one, and a duration times an `i64` or an `f64`; a `datetime` or a `civil_datetime` with a duration added or taken away, and one less another; a `date` less a `date`; a `date` and a `time`; a `date` with a duration added or taken away, a `civil_datetime`; `+` of two strings
 - A duration divided by an `i64` or an `f64`, and by a duration with `/` and `//`
 - A `zoned_datetime` with a duration added or taken away: its instant moved, its zone kept
-- Left: a string times an `i64`
+- A string times an `i64`, in either order: the text that many times
+- Left, reported where it is met: a string times a count below zero, which the contract does not settle
 
 ## OPS-2
 
@@ -138,13 +139,14 @@ analyser: partial
 
 - In a value function, ordering between two of one ordered type and equality between two values of one type, by symbol and by name through core's candidates
 - An operand that is a generic parameter is compared as its declaration's requirements state (GEN-7)
-- Left: a comparison with a nullable operand; temporal bodies
+- Two zoned datetimes, in a value function, a hook and a graph: `==` and `!=` select core's candidates for them, `utc` a `bool` they alone declare; no order of a zoned type; in a graph `utc` is no connection (EXPR-14)
+- Left: a comparison with a nullable operand; other types in temporal bodies
 
 transpiler: partial
 
 - hgraph: `==` and `!=` of two structs compare the class, which is one for each application of a generic struct, and then every field; of two lists, tuples and dictionaries, part by part; a value that holds a NaN is not equal to itself
-- Left: the order of the temporal scalars
-- Left, reported: the candidates of `eq_` and `ne_` for two zoned datetimes, with `utc`
+- `<`, `<=`, `>`, `>=` and `<=>` of two `date`s, `time`s, `datetime`s, `civil_datetime`s or `duration`s, in time order
+- Two zoned datetimes by core's candidates of `eq_` and `ne_`, with `utc` given as a value, a parameter, a generic value or an input of a node, as configuration of a lifted node, and to a lifted call by name as an input that is false while invalid
 
 ## OPS-3
 

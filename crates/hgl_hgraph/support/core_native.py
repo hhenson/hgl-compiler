@@ -241,6 +241,18 @@ def add__str_str(lhs, rhs):
     return lhs + rhs
 
 
+def mul__str_i64(lhs, rhs):
+    """OPS-1: a `str` times an `i64` is a `str`, core's string
+    repetition: the text `rhs` times, none for zero. The contract says
+    nothing of a count below zero, which Python would take as zero, so
+    that is not written."""
+    if rhs < 0:
+        raise NotImplementedError(
+            "the hgraph target does not write a string times a count below zero yet"
+        )
+    return lhs * rhs
+
+
 def sub__i64_i64(lhs, rhs):
     return _i64(lhs - rhs)
 
@@ -1088,6 +1100,20 @@ def add__zoned_datetime_duration(lhs, rhs):
 
 def sub__zoned_datetime_duration(lhs, rhs):
     return ZonedDatetime(_shifted(lhs.instant, -rhs), lhs.zone)
+
+
+def eq__zoned_datetime_zoned_datetime_bool(lhs, rhs, utc=False):
+    """OPS-2: "Two `zoned_datetime` values are equal when their instants
+    and their zone names both are; compared as UTC, they are equal when
+    their instants are". The dataclass compares both fields; `utc`
+    compares the instants alone, each a `datetime` in UTC."""
+    if utc:
+        return lhs.instant == rhs.instant
+    return lhs == rhs
+
+
+def ne__zoned_datetime_zoned_datetime_bool(lhs, rhs, utc=False):
+    return not eq__zoned_datetime_zoned_datetime_bool(lhs, rhs, utc)
 
 
 @_dataclasses.dataclass(frozen=True, repr=False)
