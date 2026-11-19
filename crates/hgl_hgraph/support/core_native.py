@@ -479,7 +479,8 @@ def list_applied(output, delta):
         if not _removes(change):
             if not 0 <= position < size:
                 raise HglError(f"the position {position} is outside a list of {size}")
-            made[position] = change
+            # A whole tuple holds a null as `None`, not hgraph's `Null`.
+            made[position] = unpublished(change)
     return tuple(made)
 
 
