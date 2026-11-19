@@ -292,14 +292,18 @@ impl<'a> Emitter<'a> {
             .instance_signature(callee, generics)
             .and_then(|signature| signature.parameters.get(index))
             .map_or(&parameter.ty, |parameter| &parameter.ty);
-        Some(self.never_valid(ty, parameter.at))
+        Some(self.never_valid(ty, parameter.reference, parameter.at))
     }
 
     /// What a temporal input of `ty` left out is bound to (UNIT-8: "an
     /// omitted temporal input is never valid"): hgraph's `nothing`, an
     /// output of the input's type that never ticks. A `signal` is bound
-    /// to one of a `bool`, as it may be bound to any output.
-    fn never_valid(&mut self, ty: &Type, at: Location) -> String {
+    /// to one of a `bool`, as it may be bound to any output. A `ref`
+    /// parameter, where `reference`, is bound to a reference output that
+    /// never ticks, which designates nothing: its `REF` is never valid,
+    /// where one bound to an output of the type would hold a reference
+    /// to it.
+    fn never_valid(&mut self, ty: &Type, reference: bool, at: Location) -> String {
         let annotation = match ty.omission_removed() {
             Type::Signal => Some("_hg.TS[_py.bool]".to_string()),
             _ => self.annotation(ty, true, at),
@@ -308,6 +312,9 @@ impl<'a> Emitter<'a> {
             return "None".to_string();
         };
         self.hgraph = true;
+        if reference {
+            return format!("_hg.nothing(tp={})", designating(&annotation));
+        }
         format!("_hg.nothing(tp={annotation})")
     }
 

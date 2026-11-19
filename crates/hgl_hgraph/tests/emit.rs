@@ -5543,7 +5543,8 @@ const REFS_WAVE3: (&str, &str) = fixture!("demo.refs_wave3.hgl");
 /// whole node's, so a re-binding to an endpoint that is not valid is
 /// followed too: each handler asks its own. What an evaluation writes is
 /// published as it ends, an invalidation among it. A constant given to a
-/// `ref` parameter is a constant connection.
+/// `ref` parameter is a constant connection, and one left out designates
+/// nothing.
 #[test]
 fn a_designation_follows_a_re_binding_upstream() {
     let emitted = emit_clean(&[REFS_WAVE3]);
@@ -5582,6 +5583,10 @@ fn a_designation_follows_a_re_binding_upstream() {
         // constant connection of its type, which it designates.
         "    return designations(target=_hg.const(5))\n".to_string(),
         "    return nullable_designations(target=_hg.const(_core.published(None), _hg.TS[_py.int | None]))\n"
+            .to_string(),
+        // UNIT-8: "an omitted temporal input is never valid": a `ref`
+        // parameter left out is bound to a reference that never ticks.
+        "    return optional_valid(probe=probe, x=_hg.nothing(tp=_hg.REF[_hg.TS[_py.int | None]]))\n"
             .to_string(),
     ]);
 }

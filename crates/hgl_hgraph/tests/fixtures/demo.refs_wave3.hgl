@@ -261,3 +261,39 @@ test a_ref_parameter_given_a_constant_designates_its_connection {
     assert eval(of_struct(probe: [1, 2])) == [1, _]
     assert eval(constant_followed(once: [true, true])) == [7, _]
 }
+
+# UNIT-8: "A parameter whose type is written `T?` needs no default to be
+# omitted ... an omitted temporal input is never valid." A `ref`
+# parameter left out designates nothing, and is never modified.
+fn optional_valid(probe: bool, ref x: i64?) -> bool {
+    when modified(probe) && valid(probe) { return valid(x) }
+}
+
+fn optional_modified(probe: bool, ref x: i64?) -> bool {
+    when modified(probe) && valid(probe) { return modified(x) }
+}
+
+fn pass_optional(once: bool, ref x: i64?) -> ref i64? {
+    when modified(once) && valid(once) { return x }
+}
+
+fn checked_optional(ref target: i64?) -> bool {
+    when valid([]) { return valid(target) }
+}
+
+fn left_out_valid(probe: bool) -> bool => optional_valid(probe)
+fn left_out_modified(probe: bool) -> bool => optional_modified(probe)
+fn left_out_any_valid(probe: bool) -> bool => optional_valid_any<f64>(probe)
+fn left_out_passed(once: bool) -> bool => checked_optional(pass_optional(once))
+
+fn optional_valid_any<T>(probe: bool, ref x: T?) -> bool {
+    when modified(probe) && valid(probe) { return valid(x) }
+}
+
+test a_ref_parameter_left_out_is_never_valid {
+    assert eval(left_out_valid(probe: [true, true])) == [false, false]
+    assert eval(left_out_modified(probe: [true, true])) == [false, false]
+    assert eval(left_out_any_valid(probe: [true, true])) == [false, false]
+    # The result designates nothing: there is no designation to publish.
+    assert eval(left_out_passed(once: [true, true])) == [_, _]
+}
