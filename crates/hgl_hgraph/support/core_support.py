@@ -1526,14 +1526,15 @@ class Wake:
         return getattr(self._scheduler, name)
 
 
-def wake_delay(at, starting):
+def _wake_delay(at, starting):
     """`at`, the duration a wake is asked of the scheduler or the alarm
     with, where the program runs (TIME-8): "A wake asked for with a
     `duration` takes one more than zero, but in `start`, which takes zero
     too ... A duration that is not admitted, a negative one in `start`
     included, ... elsewhere fails the call as the program runs." Core's
     CAP-5 holds the alarm to the same. `starting` is true where the call
-    is written in `start`.
+    is written in `start`. The scheduler's and the alarm's `schedule`
+    ask it once every argument of the call is evaluated (EXPR-2).
 
     hgraph 0.9.5 fails none of them: a zero or negative duration asked
     for in an evaluation, and a negative one in `start`, is a wake at a

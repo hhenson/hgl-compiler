@@ -133,7 +133,7 @@ transpiler: partial
 - `inject scheduler` and `inject alarm` are both hgraph's `SCHEDULER`: it has one for a node, and no cheaper one; given to a function or bound to a `let` it is passed as it is
 - A source injects neither (SOURCE-1)
 - A zero duration asked of the scheduler or the alarm in `start` wakes the node's first evaluation, and a wake asked for at a `datetime` before the evaluation time is dropped, with no failure
-- A wake's duration that the target does not work out, an input, a local or a `const` parameter, is checked as the program runs (`_core.wake_delay`): one not more than zero fails the call with `schedule.non_positive_duration`, but a zero in `start`; hgraph 0.9.5 drops such a wake with no failure
+- A wake's duration that the target does not work out, an input, a local or a `const` parameter, is checked as the program runs, by the provider's `schedule` once every argument is evaluated (`_starting=`): one not more than zero fails the call with `schedule.non_positive_duration`, but a zero in `start`; hgraph 0.9.5 drops such a wake with no failure
 - Left, reported: a wake asked for in a value function with a duration that may be zero, anything but one the target works out to be more than zero, a literal, a constant or core's `+`, `-` and `*` by an `i64` of those, since the rule does not say whether a call there is in `start`
 
 ## TIME-9

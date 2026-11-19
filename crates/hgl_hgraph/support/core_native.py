@@ -65,6 +65,7 @@ from _hgl._core_support import (
     _removes,
     _shifted,
     _tag,
+    _wake_delay,
 )
 
 # ==== Core's natives, each named after its candidate ====
@@ -129,7 +130,7 @@ def Scheduler_is_scheduled_now(scheduler):
     return scheduler.is_scheduled_now
 
 
-def schedule_Scheduler_duration_str__bool(capability, at, tag, on_wall_clock):
+def schedule_Scheduler_duration_str__bool(capability, at, tag, on_wall_clock, _starting=None):
     """CAP-4: "With a `duration`, a wake that long after the current
     evaluation time". hgraph counts a `timedelta` from then, and "a wake
     asked for under a tag replaces the pending wake of that tag".
@@ -137,7 +138,13 @@ def schedule_Scheduler_duration_str__bool(capability, at, tag, on_wall_clock):
     A wake at a time no cycle can still run at, the current evaluation
     time or before (core's CRUN-3: each cycle's time "is later than the
     one before"), is kept by no scheduler of hgraph's: it is not
-    delivered, as an alarm's is not (`_alarm`)."""
+    delivered, as an alarm's is not (`_alarm`).
+
+    `_starting` is given where the compiler did not see the duration:
+    it is checked then (`_wake_delay`, TIME-8), once every argument of
+    the call is evaluated, true where the call is written in `start`."""
+    if _starting is not None:
+        _wake_delay(at, _starting)
     capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
 
 
@@ -160,7 +167,12 @@ def fn_reset(scheduler):
     scheduler.reset()
 
 
-def schedule_Alarm_duration(capability, at):
+def schedule_Alarm_duration(capability, at, _starting=None):
+    """CAP-5: "`schedule(alarm, at)` asks for a wake" (`_alarm`). What may
+    be asked of it is what may be asked of the scheduler: a duration is
+    checked as the scheduler's is (`schedule_Scheduler_duration_str__bool`)."""
+    if _starting is not None:
+        _wake_delay(at, _starting)
     _alarm(capability, at)
 
 

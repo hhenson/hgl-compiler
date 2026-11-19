@@ -3580,9 +3580,9 @@ fn a_timer_wakes_its_own_handlers() {
         // The scheduler's operations and properties are the
         // provider's. TIME-8: a duration that is a `const` parameter is
         // checked as the program runs, in `start` and in a `when`.
-        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(every, starting=True), tag=None, on_wall_clock=False)",
-        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(every, starting=False), tag=None, on_wall_clock=False)",
-        "_core.schedule_Alarm_duration(capability=_scheduler, at=_core.wake_delay(every, starting=True))",
+        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=every, tag=None, on_wall_clock=False, _starting=True)",
+        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=every, tag=None, on_wall_clock=False, _starting=False)",
+        "_core.schedule_Alarm_duration(capability=_scheduler, at=every, _starting=True)",
         "_core.fn_un_schedule(scheduler=_scheduler, tag=None)",
         "_core.Scheduler_is_scheduled(_scheduler)",
         // hgraph takes no node without an input: one with none is
@@ -3657,10 +3657,11 @@ const TIMERS_WAVE3: (&str, &str) = fixture!("demo.timers_wave3.hgl");
 /// that no input is modified as `modified(input)` asks it, so that an
 /// invalidation is none, and a `ref` parameter is modified where its
 /// designation changed; `True` in a node with no input. TIME-8: a
-/// duration whose value the target does not work out is given through
-/// `_core.wake_delay`, which fails the call where it is not more than
-/// zero, but for a zero in `start`; one worked out and admitted, a
-/// literal or a constant expression, is given as it is.
+/// duration whose value the target does not work out is checked by the
+/// provider's function, `_starting=`, once every argument is evaluated
+/// (EXPR-2): the call fails where it is not more than zero, but for a
+/// zero in `start`. One worked out and admitted, a literal or a
+/// constant expression, is given as it is.
 #[test]
 fn the_empty_selection_as_a_bool_and_a_wakes_duration_are_written() {
     let emitted = emit_clean(&[TIMERS_WAVE3]);
@@ -3680,20 +3681,20 @@ fn the_empty_selection_as_a_bool_and_a_wakes_duration_are_written() {
         "        return (not (target.modified))\n",
         // A literal, which the analyser has judged.
         "at=_dt.timedelta(microseconds=1000000), tag=\"with input\"",
-        "at=_core.wake_delay(delay.value, starting=False), tag=\"next\"",
-        "_core.schedule_Alarm_duration(capability=_scheduler, at=_core.wake_delay(delay.value, starting=False))",
-        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(every, starting=True), tag=None",
-        "_core.schedule_Alarm_duration(capability=_scheduler, at=_core.wake_delay(every, starting=True))",
+        "at=delay.value, tag=\"next\", on_wall_clock=False, _starting=False)",
+        "_core.schedule_Alarm_duration(capability=_scheduler, at=delay.value, _starting=False)",
+        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=every, tag=None, on_wall_clock=False, _starting=True)",
+        "_core.schedule_Alarm_duration(capability=_scheduler, at=every, _starting=True)",
         concat!(
             "def _stop_asked_in_stop(every: _dt.timedelta, value: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None):\n",
-            "    _core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(every, starting=False)",
+            "    _core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=every, tag=None, on_wall_clock=False, _starting=False)",
         ),
         // A constant expression worked out to be more than zero.
         "_core.schedule_Alarm_duration(capability=_scheduler, at=_core.add__duration_duration(lhs=_core.sub__duration_duration(lhs=_core.mul__duration_i64(lhs=STEP(), rhs=2), ",
         // An instance's literal, which the analyser did not see: one
         // more than zero is given as it is, and zero is checked.
         "at=_dt.timedelta(microseconds=1000000), tag=None",
-        "def _inst_generic_after__0us(value: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.bool]:\n    _scheduler = _core.Wake(_scheduler)\n    if value.modified:\n        _core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(_dt.timedelta(microseconds=0), starting=False)",
+        "def _inst_generic_after__0us(value: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.bool]:\n    _scheduler = _core.Wake(_scheduler)\n    if value.modified:\n        _core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_dt.timedelta(microseconds=0), tag=None, on_wall_clock=False, _starting=False)",
     ]);
     let support = emitted.text("_hgl/_core_support.py");
     assert!(support.contains("code=\"schedule.non_positive_duration\""));

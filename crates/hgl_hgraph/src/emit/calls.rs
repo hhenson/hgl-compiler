@@ -15,9 +15,10 @@ impl<'a> Emitter<'a> {
         (Some(module) == self.program.core() && provides(&python)).then_some(python)
     }
 
-    /// The parameter, by its position, of a wake's duration that is
-    /// checked as the program runs: a call of core's `schedule` (CAP-4,
-    /// CAP-5) given a duration. TIME-8: "A wake asked for with a
+    /// The argument that has a call of core's `schedule` (CAP-4, CAP-5)
+    /// check the duration it is given as the program runs, `_starting=`
+    /// and whether the call is written in `start`; `None` where it checks
+    /// none. TIME-8: "A wake asked for with a
     /// `duration` takes one more than zero, but in `start`, which takes
     /// zero too ... A duration that is not admitted, a negative one in
     /// `start` included, rejects where the compiler sees its value, a
@@ -26,8 +27,9 @@ impl<'a> Emitter<'a> {
     ///
     /// In a hook a duration whose value this target works out
     /// (`known_duration`) and that is admitted there is given as it is;
-    /// any other is given through the provider's `wake_delay`, which
-    /// fails the call where it is not admitted. One that is worked out
+    /// for any other the provider's function checks it (`_wake_delay`),
+    /// once every argument of the call is evaluated (EXPR-2), and fails
+    /// the call where it is not admitted. One that is worked out
     /// and not admitted is what an instance gives a generic value
     /// parameter, which the analyser did not see. A value function is
     /// given the capability by a parameter, and whether a zero there is
@@ -39,24 +41,24 @@ impl<'a> Emitter<'a> {
         callee: (usize, usize),
         signature: &Signature,
         arguments: &[Argument],
-    ) -> Option<usize> {
+    ) -> Option<String> {
         let program = self.program;
         if Some(callee.0) != program.core()
             || program.modules[callee.0].declarations[callee.1].name != "schedule"
         {
             return None;
         }
-        let (index, given) = arguments.iter().find_map(|argument| {
-            let index = argument.parameter?;
-            let parameter = signature.parameters.get(index)?;
-            (parameter.ty == Type::Scalar(Scalar::Duration)).then_some((index, &argument.value))
+        let given = arguments.iter().find_map(|argument| {
+            let parameter = signature.parameters.get(argument.parameter?)?;
+            (parameter.ty == Type::Scalar(Scalar::Duration)).then_some(&argument.value)
         })?;
         let known = self.known_duration(given);
         match function.mode {
             Mode::Node | Mode::Stop | Mode::Lifecycle => {
                 let starting = function.mode == Mode::Lifecycle;
                 let admitted = known.is_some_and(|micros| micros > 0 || (micros == 0 && starting));
-                (!admitted).then_some(index)
+                let starting = if starting { "True" } else { "False" };
+                (!admitted).then(|| format!("_starting={starting}"))
             }
             _ => {
                 if !known.is_some_and(|micros| micros > 0) {
@@ -247,19 +249,6 @@ impl<'a> Emitter<'a> {
                         written
                     }
                 };
-                // TIME-8: a wake's duration known only as the program
-                // runs, checked then (`wake_duration`).
-                let value = if checked_delay == Some(index) {
-                    self.natives = true;
-                    let starting = if function.mode == Mode::Lifecycle {
-                        "True"
-                    } else {
-                        "False"
-                    };
-                    format!("_core.wake_delay({value}, starting={starting})")
-                } else {
-                    value
-                };
                 let value = self.held_value(kept[index], value);
                 Some(format!("{}={value}", name(&parameter.name)))
             })
@@ -276,6 +265,10 @@ impl<'a> Emitter<'a> {
                 written.push(format!("{}={value}", name(&parameter.name)));
             }
         }
+        // TIME-8: the wake's duration checked as the program runs, by
+        // the provider's function once each argument is evaluated
+        // (`wake_duration`).
+        written.extend(checked_delay);
         written.join(", ")
     }
 
