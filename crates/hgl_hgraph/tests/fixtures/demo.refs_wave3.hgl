@@ -342,3 +342,27 @@ test a_designated_position_follows_a_re_binding_upstream {
     assert eval(routed_designations(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
         [1, _, 2, _]
 }
+
+# FN-16, proposed: "`out` of a `ref` result is as a `ref` parameter is:
+# the endpoint operations take it", and TIME-10, proposed: "`valid(low)`
+# is true where it designates something ... `last_modified(low)` is when
+# its designation last changed". Read after a write in the evaluation,
+# they ask of what the result designates then, against what it held
+# before.
+fn stamped(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        let before = valid(out)
+        out = a
+        if valid(out) && modified(out) && last_modified(out) != null && !before { out = b }
+        if before && modified(out) { out = b }
+    }
+}
+
+fn stamped_follow(flag: bool, a: i64, b: i64) -> i64 => follow(stamped(flag, a, b))
+fn stamped_designations(flag: bool, a: i64, b: i64) -> i64 => designations(stamped(flag, a, b))
+
+test out_of_a_ref_result_is_read_as_it_designates {
+    assert eval(stamped_follow(flag: [true, true, _], a: [1, _, 3], b: [10, _, 11])) == [10, _, 11]
+    assert eval(stamped_designations(flag: [true, true, _], a: [1, _, 3], b: [10, _, 11])) == [1, _, _]
+}
