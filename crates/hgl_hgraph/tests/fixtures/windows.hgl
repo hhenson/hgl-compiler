@@ -1,0 +1,99 @@
+module demo.windows
+
+enum Side { buy, sell }
+
+# TYPE-11: a window of ticks, of three at most and ready at one. TYPE-16:
+# its delta is "V: the value that arrived", so a node publishes one value
+# to it, and its trace is each value that arrived.
+fn collect(price: f64) -> rolling_window<f64, 3, 1> {
+    when { return price }
+}
+
+# The same through `out` (TIME-7), which reads its own validity.
+fn gathered(price: f64) -> rolling_window<f64, 3, 1> {
+    inject out
+    when {
+        if !valid(out) && price < 0.0 { return }
+        out = price
+    }
+}
+
+# TYPE-11: a window of a duration, of five seconds at most and a minimum
+# of none. Core gives no readiness for it, so nothing here reads it.
+fn recent(price: f64) -> rolling_window<f64, 5s, 0s> {
+    when { return price }
+}
+
+# TYPE-11: "Omitted minimum equals maximum": a window of one tick.
+fn latest(price: f64) -> rolling_window<f64, 1> {
+    when { return price }
+}
+
+# TYPE-16: what a window input published in this cycle is the value that
+# arrived (END-3).
+fn arrived(prices: rolling_window<f64, 3, 1>) -> f64 {
+    when { return delta_value(prices) }
+}
+
+# TIME-1: a window is invalid until a value arrives, and ready at its
+# minimum of one tick; a probe wakes the node in each cycle.
+fn ready(prices: rolling_window<f64, 3, 1>, probe: bool) -> bool {
+    when valid([]) { return valid(prices) }
+}
+
+# END-2: a window is modified in the cycle a value arrives in, and only
+# then; END-6: its time is that arrival's.
+fn arriving(prices: rolling_window<i64, 2, 1>, probe: bool) -> bool {
+    when valid([]) { return modified(prices) }
+}
+
+fn arrived_at(prices: rolling_window<i64, 2, 1>, probe: bool) -> datetime? {
+    when valid([]) { return last_modified(prices) }
+}
+
+# A window of an enum, and one made by a generic function: its value's
+# type and its size are the call's.
+fn sides(side: Side) -> rolling_window<Side, 2, 1> {
+    when { return side }
+}
+
+fn last_side(chosen: rolling_window<Side, 2, 1>) -> Side {
+    when { return delta_value(chosen) }
+}
+
+fn windowed<T, const N: i64>(value: T) -> rolling_window<T, N, 1> {
+    when { return value }
+}
+
+fn newest<T, const N: i64>(values: rolling_window<T, N, 1>) -> T {
+    when { return delta_value(values) }
+}
+
+# A graph wires a window from the node that publishes it to one that reads
+# it, of one type.
+fn relayed(price: f64) -> f64 => arrived(collect(price))
+fn relayed_side(side: Side) -> Side => last_side(sides(side))
+fn relayed_generic(value: i64) -> i64 => newest(windowed<i64, 4>(value))
+fn kept(price: f64) -> rolling_window<f64, 3, 1> => gathered(price)
+
+test a_window_publishes_each_value_that_arrives {
+    # Four values arrive at a window of three at most: the fourth is
+    # published as the others are.
+    assert eval(collect(price: [1.0, 2.0, _, 3.0, 4.0])) == [1.0, 2.0, _, 3.0, 4.0]
+    assert eval(kept(price: [-1.0, 2.0, -3.0])) == [_, 2.0, -3.0]
+    assert eval(arrived(prices: [1.0, 2.0, _, 3.0, 4.0])) == [1.0, 2.0, _, 3.0, 4.0]
+    assert eval(relayed(price: [1.0, _, 2.0, 3.0, 4.0])) == [1.0, _, 2.0, 3.0, 4.0]
+    assert eval(relayed_side(side: [.buy, .sell, .sell])) == [.buy, .sell, .sell]
+    assert eval(relayed_generic(value: [1, 2, 3, 4, 5])) == [1, 2, 3, 4, 5]
+    assert eval(latest(price: [1.0, 2.0])) == [1.0, 2.0]
+}
+
+test a_window_of_one_tick_is_ready_at_its_first_value {
+    let t = earliest_start
+    assert eval(ready(prices: [_, 1.0, _, 2.0], probe: [true, true, true, true])) ==
+        [false, true, true, true]
+    assert eval(arriving(prices: [_, 1, _, 2], probe: [true, true, true, true])) ==
+        [false, true, false, true]
+    assert eval(arrived_at(prices: [_, 1, _, 2], probe: [true, true, true, true])) ==
+        [null, t + 1us, t + 1us, t + 3us]
+}

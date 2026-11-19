@@ -147,12 +147,29 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
         .iter()
         .filter_map(|argument| {
             let parameter = signature.parameters.get(argument.parameter?)?;
-            Some((parameter.name.clone(), trace_payload(&argument.value.ty)?))
+            let payload = trace_payload(&argument.value.ty)?;
+            // TYPE-16: a window's delta is "V: the value that arrived",
+            // so a trace of one is a trace of V: the window is the
+            // parameter's, and the call's own type for the result.
+            let windowed = matches!(parameter.ty, Type::RollingWindow { .. });
+            Some((
+                parameter.name.clone(),
+                if windowed {
+                    parameter.ty.clone()
+                } else {
+                    payload
+                },
+            ))
         })
         .collect();
+    let windowed = matches!(call.ty, Type::RollingWindow { .. });
     Some(Wiring {
         inputs,
-        result: trace_payload(eval),
+        result: if windowed {
+            Some(call.ty.clone())
+        } else {
+            trace_payload(eval)
+        },
     })
 }
 
