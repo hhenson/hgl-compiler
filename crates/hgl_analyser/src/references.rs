@@ -86,9 +86,12 @@ pub(crate) fn holds_ref(ty: &Type) -> bool {
         | Type::RollingWindow { value: inner, .. } => holds_ref(inner),
         Type::Dict { key, value } => holds_ref(key) || holds_ref(value),
         Type::Result { value, error } => holds_ref(value) || holds_ref(error),
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
-            false
-        }
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => false,
     }
 }
 
