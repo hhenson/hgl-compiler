@@ -1104,6 +1104,54 @@ fn an_enum_construction_takes_an_integer_or_a_string() {
     expect(&format!("{shared}enum E {{ a = B, b = 2 }}\n"), &[]);
 }
 
+// ---- The review of #218 ----
+
+/// UNIT-13: "a failure in evaluating it is a required-constant failure
+/// (ERR-9)", and ERR-9: "Required constant failures reject where
+/// specified": a constant whose `i64` arithmetic leaves the `i64`s
+/// (NUM-2) or divides by zero under `.fail` (NUM-12) is rejected where
+/// it is declared, and its uses say nothing more. A constant this
+/// compiler does not work out is not taken as known where a generic
+/// value argument needs it (GEN-8), as the same expression written in
+/// place is not. A sum of any length the parser builds a tree for is
+/// worked out.
+#[test]
+fn a_constant_that_fails_is_rejected_where_it_is_declared() {
+    let shared = concat!(
+        "struct IBox<const X: i64> { v: i64 }\n",
+        "struct FBox<const X: f64> { v: i64 }\n",
+    );
+    let forty = vec!["1"; 40].join(" + ");
+    let four_hundred = vec!["1"; 400].join(" + ");
+    expect(
+        &format!(
+            "{shared}const FORTY: i64 = {forty}\n\
+             const fn b(t: IBox<FORTY>) -> IBox<40> => t\n\
+             const fn c(t: list<i64, FORTY>) -> list<i64, 40> => t\n\
+             const MANY: i64 = {four_hundred}\n\
+             const fn d(t: IBox<MANY>) -> IBox<400> => t\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const BIG: i64 = 9223372036854775807 + 1\n\
+             const DIV: i64 = 1 // 0\n\
+             const fn a(t: IBox<BIG>) -> IBox<BIG> => t\n\
+             const fn b(t: IBox<DIV>) -> i64 => 1\n"
+        ),
+        &["4 constant.failure", "5 constant.failure"],
+    );
+    expect(
+        &format!(
+            "{shared}const LATER: datetime = @2024-01-01T00:00Z + 1s\n\
+             struct TBox<const X: datetime> {{ v: i64 }}\n\
+             const fn a(t: TBox<LATER>) -> i64 => 1\n"
+        ),
+        &["6 generic.argument_constant"],
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");

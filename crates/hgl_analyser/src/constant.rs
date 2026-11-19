@@ -61,11 +61,6 @@ use crate::program::{Binding, DeclarationKind, LocalKind, Program};
 use crate::syntax::{name_token, tokens};
 use crate::types::{ConstantValue, Detail, EnumOf, MemberOf, NamedKind, Scalar, Type};
 
-/// How deep one expression is read. A constant nested deeper is not
-/// valued, so that reading keeps little on the call stack whatever it
-/// is given.
-const DEPTH: u32 = 32;
-
 // ---- What a reading is given ----
 
 /// What the reader asks of the place a constant is written in.
@@ -121,6 +116,10 @@ pub(crate) enum Fault {
     /// Something in it has been reported already: a name nothing binds,
     /// a literal the lexer rejected, a constant in a cycle (ERR-9).
     Reported,
+    /// It is a module's constant whose evaluation fails ([`fails`]),
+    /// which is reported where it is declared (`constant.failure`) and
+    /// says nothing more where it is read (ERR-9).
+    Failed,
 }
 
 /// A constant as it was read, before it is held to its place's type.
@@ -135,6 +134,10 @@ pub(crate) struct Typed {
     /// Of a list or a tuple read with no type expected of its elements:
     /// each element as it was read, for its place to give a type later.
     parts: Vec<Typed>,
+    /// True where its evaluation fails ([`fails`]): it has no value, and
+    /// a constant a module declares with it is a required-constant
+    /// failure (UNIT-13).
+    failed: bool,
 }
 
 /// How a constant read with no type expected may still take its
@@ -162,6 +165,7 @@ impl Typed {
             ty,
             open: Open::No,
             parts: Vec::new(),
+            failed: false,
         }
     }
 
@@ -210,7 +214,7 @@ impl Fault {
                 ),
                 "TYPE-7",
             ),
-            Fault::NotConstant | Fault::Reported => return None,
+            Fault::NotConstant | Fault::Reported | Fault::Failed => return None,
         })
     }
 }
@@ -305,7 +309,7 @@ pub(crate) fn typed(
     scope: &Scope,
 ) -> Result<Typed, Fault> {
     let expected = expected.filter(|expected| !unknown(expected));
-    value(node, expected, scope, 0)
+    value(node, expected, scope)
 }
 
 /// `read` as a value of `expected`, the type its place expects
@@ -522,15 +526,16 @@ fn enum_place(ty: &Type) -> Option<(usize, usize)> {
     }
 }
 
-fn value(
-    node: &SyntaxNode,
-    expected: Option<&Type>,
-    scope: &Scope,
-    depth: u32,
-) -> Result<Typed, Fault> {
-    if depth > DEPTH {
-        return Ok(Typed::unevaluated(None));
-    }
+/// What `node` comes to as a value of `expected`, read as it is written
+/// (see [`read`]).
+///
+/// Reading calls itself once for each level of the tree under `node`,
+/// and no more: the parser builds no tree deeper than its limit
+/// (`hgl_parser::Limits::tree_depth`, a chain such as `1 + 1 + 1`
+/// counted link by link), and the analyser is given a stack for that
+/// depth (`crate::stack_size`). A constant a module declares is read
+/// from the top of its own expression ([`module_constant`]).
+fn value(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Typed, Fault> {
     // TYPE-14: a value of a `T?` other than `null` is a T, and is read
     // as one: `[1]` where a `list<f64>?` is expected is a list of
     // `f64`. `null` is held to the whole type by `fit`.
@@ -539,7 +544,7 @@ fn value(
         SyntaxKind::Literal => literal_constant(node, expected),
         // EXPR-1: "Parentheses select grouping": `(2.0)` is `2.0`.
         SyntaxKind::ParenExpr => match node.children().next() {
-            Some(inner) => value(&inner, expected, scope, depth + 1),
+            Some(inner) => value(&inner, expected, scope),
             None => Err(Fault::Reported),
         },
         SyntaxKind::NameExpr | SyntaxKind::NamedType => name(node, scope),
@@ -556,24 +561,25 @@ fn value(
                 )),
                 None if expected.is_some_and(|expected| !unknown(expected)) => Err(Fault::NoEnum),
                 None => Ok(Typed {
-                    value: ConstantValue::Member(MemberOf {
-                        of: None,
-                        name: member.text().to_string(),
-                    }),
-                    ty: None,
                     open: Open::Member,
-                    parts: Vec::new(),
+                    ..Typed::of(
+                        ConstantValue::Member(MemberOf {
+                            of: None,
+                            name: member.text().to_string(),
+                        }),
+                        None,
+                    )
                 }),
             }
         }
         SyntaxKind::MemberExpr => qualified_member(node, scope),
-        SyntaxKind::CallExpr => constructed_member(node, scope, depth),
-        SyntaxKind::UnaryExpr => unary(node, expected, scope, depth),
-        SyntaxKind::BinaryExpr => binary(node, expected, scope, depth),
-        SyntaxKind::SequenceExpr => sequence(node, expected, scope, depth),
+        SyntaxKind::CallExpr => constructed_member(node, scope),
+        SyntaxKind::UnaryExpr => unary(node, expected, scope),
+        SyntaxKind::BinaryExpr => binary(node, expected, scope),
+        SyntaxKind::SequenceExpr => sequence(node, expected, scope),
         // TYPE-10: "`unbounded` is the size sentinel."
         SyntaxKind::UnboundedSize => Ok(Typed::of(ConstantValue::Unbounded, None)),
-        SyntaxKind::TupleExpr => tuple(node, expected, scope, depth),
+        SyntaxKind::TupleExpr => tuple(node, expected, scope),
         _ => Err(Fault::NotConstant),
     }
 }
@@ -700,10 +706,8 @@ fn literal_constant(node: &SyntaxNode, expected: Option<&Type>) -> Result<Typed,
             Scalar::F64,
         )),
         Value::Int(value) => Ok(Typed {
-            value: ConstantValue::Int(value),
-            ty: Some(Type::Scalar(Scalar::I64)),
             open: Open::Integer,
-            parts: Vec::new(),
+            ..Typed::scalar(ConstantValue::Int(value), Scalar::I64)
         }),
         value => Ok(Typed::scalar(value.into(), scalar)),
     }
@@ -817,6 +821,12 @@ fn module_constant(scope: &Scope, key: (usize, usize)) -> Result<Typed, Fault> {
         .unwrap_or(Err(Fault::Reported))
 }
 
+/// True where evaluating the constant `key` fails ([`fails`]): UNIT-13,
+/// "a failure in evaluating it is a required-constant failure (ERR-9)".
+pub(crate) fn fails_to_evaluate(scope: &Scope, key: (usize, usize)) -> bool {
+    matches!(module_constant(scope, key), Err(Fault::Failed))
+}
+
 /// The constants of modules the constant `key` names, in its type or
 /// its expression, at any depth inside them.
 fn names_constants(scope: &Scope, (module, declaration): (usize, usize)) -> Vec<(usize, usize)> {
@@ -868,7 +878,7 @@ fn constant_expression(
             written_type(written, program, file, scope.binding, scope.constants)
         }),
     };
-    // What is not worked out here is held as the constant it is: the
+    // A call of a value function is held as the constant it is: the
     // same as itself, and not known beside any other.
     let named = Typed::of(
         ConstantValue::Named {
@@ -888,18 +898,27 @@ fn constant_expression(
         parameter: &|_| None,
         constants: scope.constants,
     };
-    match &expression {
-        // Its own expression is read from its top.
-        Some(expression) => match value(expression, ty.as_ref(), &inner, 0)
-            .and_then(|read| fit(read, ty.as_ref(), program))
-        {
-            Ok(ConstantValue::Unevaluated) | Err(Fault::NotConstant) => Ok(named),
+    let Some(expression) = &expression else {
+        return Err(Fault::Reported);
+    };
+    // Its own expression is read from its top.
+    match value(expression, ty.as_ref(), &inner) {
+        // UNIT-13: "a failure in evaluating it is a required-constant
+        // failure (ERR-9)", reported where it is declared.
+        Ok(read) if read.failed => Err(Fault::Failed),
+        Ok(read) => match fit(read, ty.as_ref(), program) {
+            // One this reader does not work out is not taken as known:
+            // it is no value a generic value argument may be given
+            // (GEN-8), as the same expression written in place is not.
+            Ok(ConstantValue::Unevaluated) => Ok(Typed::unevaluated(ty)),
             Ok(value) => Ok(Typed::of(value, ty)),
+            Err(Fault::NotConstant) => Ok(named),
             // What is wrong with a constant's own value is reported
             // where it is declared.
             Err(_) => Err(Fault::Reported),
         },
-        None => Err(Fault::Reported),
+        Err(Fault::NotConstant) => Ok(named),
+        Err(_) => Err(Fault::Reported),
     }
 }
 
@@ -1093,7 +1112,7 @@ fn qualified_member(node: &SyntaxNode, scope: &Scope) -> Result<Typed, Fault> {
 /// `Side("buy")` the member of that exact name. Construction is
 /// checked: a constant that is no member's number or name rejects." A
 /// call of anything else is no constant.
-fn constructed_member(node: &SyntaxNode, scope: &Scope, depth: u32) -> Result<Typed, Fault> {
+fn constructed_member(node: &SyntaxNode, scope: &Scope) -> Result<Typed, Fault> {
     let callee = node.children().next().ok_or(Fault::Reported)?;
     // A name nothing binds has been reported, or is left for the
     // prelude (UNIT-11).
@@ -1123,7 +1142,7 @@ fn constructed_member(node: &SyntaxNode, scope: &Scope, depth: u32) -> Result<Ty
         return Err(Fault::Reported);
     };
     let given = argument.children().next().ok_or(Fault::Reported)?;
-    let given = value(&given, None, scope, depth + 1)?;
+    let given = value(&given, None, scope)?;
     // "that is an `i64` or a `str`": one known to be of another type, a
     // `const A: i64? = 0` among them (TYPE-14), constructs no member
     // here.
@@ -1182,12 +1201,7 @@ fn constructed_member(node: &SyntaxNode, scope: &Scope, depth: u32) -> Result<Ty
 }
 
 /// `[a, b]`: a list of constants.
-fn sequence(
-    node: &SyntaxNode,
-    expected: Option<&Type>,
-    scope: &Scope,
-    depth: u32,
-) -> Result<Typed, Fault> {
+fn sequence(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Typed, Fault> {
     let element = match expected {
         Some(Type::List { element, .. }) => Some(&**element),
         // A set's or a dictionary's constant is not read: its entries
@@ -1198,11 +1212,13 @@ fn sequence(
     let mut values = Vec::new();
     let mut types = Vec::new();
     let mut parts = Vec::new();
+    let mut failed = false;
     for entry in node.children() {
         if entry.kind() == SyntaxKind::SequencePair {
             return Ok(Typed::unevaluated(None));
         }
-        let read = value(&entry, element, scope, depth + 1)?;
+        let read = value(&entry, element, scope)?;
+        failed |= read.failed;
         types.push(read.ty.clone());
         values.push(match element {
             Some(element) => fit(read, Some(element), scope.program)?,
@@ -1223,6 +1239,7 @@ fn sequence(
     });
     Ok(Typed {
         parts,
+        failed,
         ..Typed::of(
             ConstantValue::List(values),
             Some(Type::List {
@@ -1234,12 +1251,7 @@ fn sequence(
 }
 
 /// `(a, b)`: a tuple of constants.
-fn tuple(
-    node: &SyntaxNode,
-    expected: Option<&Type>,
-    scope: &Scope,
-    depth: u32,
-) -> Result<Typed, Fault> {
+fn tuple(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Typed, Fault> {
     let entries: Vec<SyntaxNode> = node.children().collect();
     let elements = match expected {
         Some(Type::Tuple(elements)) if elements.len() == entries.len() => Some(elements),
@@ -1248,9 +1260,11 @@ fn tuple(
     let mut values = Vec::new();
     let mut types = Vec::new();
     let mut parts = Vec::new();
+    let mut failed = false;
     for (index, entry) in entries.iter().enumerate() {
         let element = elements.map(|elements| &elements[index]);
-        let read = value(entry, element, scope, depth + 1)?;
+        let read = value(entry, element, scope)?;
+        failed |= read.failed;
         types.push(read.ty.clone());
         if element.is_none() {
             parts.push(read.clone());
@@ -1269,6 +1283,7 @@ fn tuple(
     };
     Ok(Typed {
         parts,
+        failed,
         ..Typed::of(ConstantValue::Tuple(values), Some(ty))
     })
 }
@@ -1304,12 +1319,7 @@ fn configured_value(node: &SyntaxNode, scope: &Scope, ty: Option<Type>) -> Resul
 }
 
 /// `-x` or `!x`.
-fn unary(
-    node: &SyntaxNode,
-    expected: Option<&Type>,
-    scope: &Scope,
-    depth: u32,
-) -> Result<Typed, Fault> {
+fn unary(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Typed, Fault> {
     let operator = match tokens(node).next().map(|token| token.kind()) {
         Some(SyntaxKind::Minus) => UnaryOperator::Negate,
         Some(SyntaxKind::Bang) => UnaryOperator::Not,
@@ -1325,14 +1335,12 @@ fn unary(
         return Ok(match expected.filter(|expected| is_float(expected)) {
             Some(_) => Typed::scalar(ConstantValue::Float(i64::MIN as f64), Scalar::F64),
             None => Typed {
-                value: ConstantValue::Int(i64::MIN),
-                ty: Some(Type::Scalar(Scalar::I64)),
                 open: Open::Integer,
-                parts: Vec::new(),
+                ..Typed::scalar(ConstantValue::Int(i64::MIN), Scalar::I64)
             },
         });
     }
-    let read = value(&operand, numeric_hint(expected), scope, depth + 1)?;
+    let read = value(&operand, numeric_hint(expected), scope)?;
     if configured(node) {
         return configured_value(node, scope, read.ty);
     }
@@ -1342,6 +1350,14 @@ fn unary(
         return Ok(Typed::unevaluated(None));
     }
     let value = negated_or_not(operator, &read.value);
+    // NUM-2: the negation of the least `i64` is no `i64`; OPS-10 and
+    // TEN-2 say the same of a duration and a tenor counts.
+    let fails = operator == UnaryOperator::Negate
+        && matches!(value, ConstantValue::Unevaluated)
+        && matches!(
+            read.value,
+            ConstantValue::Int(_) | ConstantValue::Duration(_) | ConstantValue::Tenor(_)
+        );
     Ok(Typed {
         value,
         ty: read.ty,
@@ -1350,6 +1366,7 @@ fn unary(
             _ => Open::No,
         },
         parts: Vec::new(),
+        failed: read.failed || fails,
     })
 }
 
@@ -1374,13 +1391,40 @@ fn numeric_hint(expected: Option<&Type>) -> Option<&Type> {
     expected.filter(|expected| is_float(expected))
 }
 
-/// `left op right`.
-fn binary(
-    node: &SyntaxNode,
-    expected: Option<&Type>,
-    scope: &Scope,
-    depth: u32,
-) -> Result<Typed, Fault> {
+/// `left op right`, and a chain of them, `a + b + c`, which is
+/// `(a + b) + c`.
+///
+/// A chain is read in a loop, from its innermost left operand out, and
+/// not by reading calls nested as deep as it is long: the parser nests
+/// a chain's links in the tree, though not in the source, and a chain
+/// may be as long as the tree is deep (`hgl_parser::Limits`). An
+/// operand that is itself nested, `(a + b)`, is read by a call, as deep
+/// as the source nests.
+fn binary(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Typed, Fault> {
+    // Each link, outermost first, with the type expected of it.
+    let mut links: Vec<(SyntaxNode, Option<Type>)> = Vec::new();
+    let mut link = node.clone();
+    let mut expected = expected.cloned();
+    let innermost = loop {
+        let (left, _, operator) = operands(&link)?;
+        let hint = operand_hint(operator, expected.as_ref()).cloned();
+        links.push((link, expected));
+        if left.kind() != SyntaxKind::BinaryExpr {
+            break value(&left, hint.as_ref(), scope)?;
+        }
+        link = left;
+        expected = hint;
+    };
+    let mut read = innermost;
+    for (link, expected) in links.iter().rev() {
+        read = joined(link, read, expected.as_ref(), scope)?;
+    }
+    Ok(read)
+}
+
+/// The left and the right operand of the binary expression `node`, and
+/// its operator.
+fn operands(node: &SyntaxNode) -> Result<(SyntaxNode, SyntaxNode, BinaryOperator), Fault> {
     // The configuration, when the operator has some, stands between
     // the operands.
     let mut operands = node
@@ -1392,21 +1436,39 @@ fn binary(
     let operator = tokens(node)
         .find_map(|token| binary_operator(token.kind()))
         .ok_or(Fault::NotConstant)?;
-    // GEN-5: "where a candidate that gives the requested output takes
-    // every integer literal as an `i64`, none is widened". `+`, `-`,
-    // `*`, `//` and `%` of two `i64` give an `i64`, so where an `f64` is
-    // requested their literals are widened; `/` of two gives an `f64`
-    // already (NUM-1), and its literals are not.
-    let hint = match operator {
+    Ok((left, right, operator))
+}
+
+/// The type expected of each operand of `operator` where `expected` is
+/// expected of the whole.
+///
+/// GEN-5: "where a candidate that gives the requested output takes
+/// every integer literal as an `i64`, none is widened". `+`, `-`, `*`,
+/// `//` and `%` of two `i64` give an `i64`, so where an `f64` is
+/// requested their literals are widened; `/` of two gives an `f64`
+/// already (NUM-1), and its literals are not.
+fn operand_hint(operator: BinaryOperator, expected: Option<&Type>) -> Option<&Type> {
+    match operator {
         BinaryOperator::Add
         | BinaryOperator::Subtract
         | BinaryOperator::Multiply
         | BinaryOperator::FloorDivide
         | BinaryOperator::Modulo => numeric_hint(expected),
         _ => None,
-    };
-    let mut left = value(&left, hint, scope, depth + 1)?;
-    let mut right = value(&right, hint, scope, depth + 1)?;
+    }
+}
+
+/// `left op right` of the binary expression `node`, its left operand
+/// read as `left`.
+fn joined(
+    node: &SyntaxNode,
+    left: Typed,
+    expected: Option<&Type>,
+    scope: &Scope,
+) -> Result<Typed, Fault> {
+    let (_, right, operator) = operands(node)?;
+    let mut left = left;
+    let mut right = value(&right, operand_hint(operator, expected), scope)?;
     if configured(node) {
         return configured_value(node, scope, None);
     }
@@ -1500,12 +1562,41 @@ fn binary(
         ) if exact(&left.value) && exact(&right.value) && exact(&value) => Open::Integer,
         _ => Open::No,
     };
+    let failed = left.failed
+        || right.failed
+        || (matches!(value, ConstantValue::Unevaluated)
+            && fails(operator, &left.value, &right.value));
     Ok(Typed {
         value,
         ty,
         open,
         parts: Vec::new(),
+        failed,
     })
+}
+
+/// True where `left op right` of these values has no value because it
+/// fails when it is evaluated, and not because this reader does not
+/// work it out: an `i64` result outside the `i64`s (NUM-2: "An
+/// unrepresentable i64 result produces an HGL error"), a zero divisor
+/// of two `i64` under the default `.fail` (NUM-12), a duration outside
+/// its range (OPS-10), and a tenor sum of two forms (TEN-2).
+fn fails(operator: BinaryOperator, left: &ConstantValue, right: &ConstantValue) -> bool {
+    use BinaryOperator as Op;
+    use ConstantValue as V;
+    matches!(
+        (operator, left, right),
+        (
+            Op::Add | Op::Subtract | Op::Multiply | Op::FloorDivide | Op::Modulo,
+            V::Int(_),
+            V::Int(_)
+        ) | (Op::Add | Op::Subtract, V::Duration(_), V::Duration(_))
+            | (Op::Multiply, V::Duration(_), V::Int(_))
+            | (Op::Multiply, V::Int(_), V::Duration(_))
+            | (Op::Add | Op::Subtract, V::Tenor(_), V::Tenor(_))
+            | (Op::Multiply, V::Tenor(_), V::Int(_))
+            | (Op::Multiply, V::Int(_), V::Tenor(_))
+    )
 }
 
 /// `read`, which holds an implied member, as a value of the type

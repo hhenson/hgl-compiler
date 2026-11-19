@@ -491,14 +491,21 @@ pub mod codes {
         /// A `switch` label that is no compile-time constant (CTRL-12,
         /// UNIT-13). Local: the catalogue has no row for it.
         pub const SWITCH_LABEL_CONSTANT: &str = "switch.label_constant";
+        /// A module's constant whose evaluation fails: an `i64` out of
+        /// range, a division by zero (UNIT-13: "a failure in evaluating
+        /// it is a required-constant failure (ERR-9)"; ERR-9: "Required
+        /// constant failures reject"). Local: the catalogue has no row
+        /// for it.
+        pub const CONSTANT_FAILURE: &str = "constant.failure";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 5] = [
+        pub const ALL: [&str; 6] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
             YIELD_IN_VALUE,
             SWITCH_LABEL_CONSTANT,
+            CONSTANT_FAILURE,
         ];
     }
 }

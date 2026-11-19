@@ -109,7 +109,8 @@ transpiler: done
 analyser: partial
 
 - A type that is not known is reported once, and nothing is reported of its uses
-- Left: required constant failures
+- A module constant whose evaluation fails is rejected where it is declared (local `constant.failure`, UNIT-13), and nothing is reported of its uses
+- Left: other required constant failures, a generic value argument's or a default's written in place, which is `generic.argument_constant`
 
 optimiser: planned
 
