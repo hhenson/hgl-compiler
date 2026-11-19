@@ -132,6 +132,8 @@ def _equal(lhs, rhs):
     if isinstance(lhs, dict):
         return (
             isinstance(rhs, dict)
+            # A list's delta also holds its `size_modified` (see `ListDelta`).
+            and size_modified(lhs) == size_modified(rhs)
             and lhs.keys() == rhs.keys()
             and all(_equal(value, rhs[key]) for key, value in lhs.items())
         )
@@ -429,6 +431,20 @@ class ListDelta(dict):
     place for."""
 
     size_modified = None
+
+    def __eq__(self, other):
+        # Two list deltas are one where their positions and their
+        # `size_modified` are; a plain `dict`'s is null.
+        return (
+            isinstance(other, dict)
+            and size_modified(self) == size_modified(other)
+            and dict.__eq__(self, other)
+        )
+
+    def __ne__(self, other):
+        return not self == other
+
+    __hash__ = None
 
 
 def list_delta(updated=None, removed=(), size_modified=None):
