@@ -1,0 +1,17 @@
+module m
+struct Quote { bid: i64 }
+struct Routed {
+    target: ref<i64>
+}
+struct Maybe {
+    quote: atomic<Quote>?
+}
+fn routed(value: Routed) -> i64 {
+    when { return 1 }
+}
+fn maybe(value: Maybe) -> i64 {
+    when { return 1 }
+}
+fn pair(values: list<ref<i64>, 2>) -> i64 {
+    when { return 1 }
+}

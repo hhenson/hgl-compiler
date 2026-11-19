@@ -1,0 +1,2 @@
+module demo.left
+export const fn pick() -> i64 => 1

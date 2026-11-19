@@ -1,0 +1,3 @@
+application demo.ticks.silent
+use demo.ticks::{quiet}
+eval(quiet(upto: 2))

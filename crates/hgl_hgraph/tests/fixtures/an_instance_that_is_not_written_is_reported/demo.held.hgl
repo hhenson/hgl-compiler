@@ -1,0 +1,11 @@
+module demo.held
+fn held<T>(value: T) -> T {
+    when valid(value) { return value }
+}
+fn again<T>(value: T) -> T => held(value)
+test whole {
+    assert eval(again(value: [1])) == [1]
+}
+test listed {
+    let seen = eval(again(value: [[[1]]]))
+}

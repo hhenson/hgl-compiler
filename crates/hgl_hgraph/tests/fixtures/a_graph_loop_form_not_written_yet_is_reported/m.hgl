@@ -1,0 +1,27 @@
+module m
+fn sink(value: i64) { when { } }
+fn labelled(value: i64, const label: str) { when { } }
+fn keyed(prices: dict<str, i64>) {
+    for name, price in prices {
+        if name == "a" { sink(price) }
+    }
+}
+fn configured(prices: dict<str, i64>) {
+    for name, price in prices {
+        labelled(price, name)
+    }
+}
+fn looped(flag: bool, price: i64, const factors: list<i64>) -> i64 {
+    for factor in factors {
+        if flag { return price }
+    }
+    return price
+}
+fn nsink(value: i64?) { when { } }
+fn maybe(values: list<i64?>) {
+    for value in values { nsink(value) }
+}
+fn absent(flag: bool, price: i64) -> i64? {
+    let taken: i64? = if flag { return price }
+    return taken
+}

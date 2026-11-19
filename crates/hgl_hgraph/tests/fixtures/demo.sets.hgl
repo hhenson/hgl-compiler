@@ -1,0 +1,57 @@
+module demo.sets
+
+fn members(command: i64) -> set<i64> {
+    when {
+        if command == 1 { return delta<set<i64>>(added: [1, 2]) }
+        if command == 2 { return delta<set<i64>>(added: [3], removed: [1]) }
+        if command == 3 { return delta<set<i64>>(removed: [2]) }
+    }
+}
+
+fn twice(command: i64) -> set<i64> {
+    inject out
+    when {
+        if command == 1 { return delta<set<i64>>(added: [1]) }
+        out = delta<set<i64>>(added: [2, 3])
+        out = delta<set<i64>>(removed: [1, 2])
+    }
+}
+
+fn changes(input: set<i64>) -> set<i64> {
+    when { return delta_value(input) }
+}
+
+fn seen(command: i64) -> set<i64> => changes(twice(command))
+
+const fn swapped(left: i64, joined: i64) -> delta<set<i64>> =>
+    delta<set<i64>>(removed: [left], added: [joined])
+
+fn relayed(enabled: bool, input: set<i64>) -> set<i64> {
+    when {
+        if enabled && modified(input) { return delta_value(input) }
+    }
+}
+
+test sets {
+    assert eval(members(command: [1, _, 2, 3])) == [
+        delta<set<i64>>(added: [1, 2]),
+        _,
+        delta<set<i64>>(added: [3], removed: [1]),
+        delta<set<i64>>(removed: [2])
+    ]
+    assert eval(members(command: [0])) == []
+    # What a delta adds is a set: its order is not part of it.
+    assert eval(members(command: [1])) == [delta<set<i64>>(added: [2, 1])]
+    # A delta that removes an element is not one that adds it.
+    assert eval(members(command: [1, 3])) != [
+        delta<set<i64>>(added: [1, 2]),
+        delta<set<i64>>(added: [2])
+    ]
+    # Two writes in one cycle are one delta.
+    assert eval(seen(command: [1, 2])) == [
+        delta<set<i64>>(added: [1]),
+        delta<set<i64>>(added: [3], removed: [1])
+    ]
+    assert eval(relayed(enabled: [true, _, true], input: [_, delta<set<i64>>(added: [1])]))
+        == [_, delta<set<i64>>(added: [1])]
+}

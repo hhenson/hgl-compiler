@@ -1,0 +1,2 @@
+module demo.util
+export const fn one() -> i64 => 1

@@ -1,0 +1,30 @@
+module m
+fn maybe(value: i64) -> list<i64?> {
+    when { return [value] }
+}
+fn none(value: i64) -> list<i64, 0> {
+    when { return [] }
+}
+fn second(values: list<i64>) -> bool {
+    when { return valid(values[1]) }
+}
+fn nested(key: str, value: i64) -> dict<str, list<i64, 2>> {
+    inject out
+    when { out[key][0] = value }
+}
+struct Inner { value: i64 }
+struct Outer { inner: Inner }
+fn relay(outer: Outer, book: dict<str, dict<str, i64>>, nulls: list<i64?, 2>) -> i64 {
+    when { return 1 }
+}
+test nested_cells {
+    assert eval(relay(outer: [Outer(inner: Inner(value: 7))], book: [["a": ["b": 1]]], nulls: [[null, 3]])) == [1]
+}
+abstract struct Shape { id: i64 }
+struct Circle : Shape { radius: i64 }
+fn identified(shape: Shape) -> i64 {
+    when { return 1 }
+}
+test below_cells {
+    assert eval(identified(shape: [Circle(id: 1, radius: 2)])) == [1]
+}

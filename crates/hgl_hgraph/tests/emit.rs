@@ -1,9 +1,17 @@
 //! The hgraph target against small programs: the Python it writes,
 //! what it reports for a form it does not write yet, and which tests
 //! can then still be run.
+//!
+//! The programs are files under `tests/fixtures`, each named after its
+//! module: `demo.div` is `demo.div.hgl`. Those directly in `fixtures` are
+//! written whole and their tests pass, and
+//! `the_generated_tests_pass_on_hgraph` runs every one of them. A
+//! directory in `fixtures` holds the programs of the one test it is named
+//! after, or of the tests that name them by the constant it is named
+//! after.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hgl_analyser::{ParsedFile, analyse};
 use hgl_diagnostics::{Diagnostics, Location, render};
@@ -14,13 +22,32 @@ use hgl_lexer::{lex, literal};
 use hgl_parser::{Entry, Limits, parse};
 use hgl_source::SourceMap;
 
+/// A program of `tests/fixtures`, as `emit` takes it: the name of its
+/// file and its text. `fixture!("demo.div.hgl")` is a file directly in
+/// `fixtures`, and `fixture!("reach", "reach.far.hgl")` one in a
+/// directory of it.
+// A macro, so that `include_str!` is given the file's path as a literal,
+// and the program is part of the test program's build.
+macro_rules! fixture {
+    ($file:literal) => {
+        ($file, include_str!(concat!("fixtures/", $file)))
+    };
+    ($directory:literal, $file:literal) => {
+        (
+            $file,
+            include_str!(concat!("fixtures/", $directory, "/", $file)),
+        )
+    };
+}
+
 /// What the target makes of a program.
 struct Emitted {
     /// The program's files, to say where a place is.
     sources: SourceMap,
     /// The files written, and the program's tests.
     output: Output,
-    /// What the target reported, each as `file:line:column code`.
+    /// What the target reported, each as `file:line:column code:
+    /// message`.
     reported: Vec<String>,
 }
 
@@ -34,6 +61,13 @@ impl Emitted {
             .find(|file| file.path == path)
             .unwrap_or_else(|| panic!("no file `{path}` was written"))
             .text
+    }
+
+    /// The text of the file the module `name` is written to: that of
+    /// `demo.scaling` is `_hgl/_m_demo/_m_scaling/__init__.py`.
+    fn module(&self, name: &str) -> &str {
+        let parts: Vec<String> = name.split('.').map(|part| format!("_m_{part}")).collect();
+        self.text(&format!("_hgl/{}/__init__.py", parts.join("/")))
     }
 
     /// The test named `name`, and its position among the tests.
@@ -112,10 +146,11 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
             assert_eq!(diagnostic.category.as_str(), "build");
             assert!(hgl_hgraph::codes::ALL.contains(&diagnostic.code.as_str()));
             format!(
-                "{}:{} {}",
+                "{}:{} {}: {}",
                 source.name(),
                 source.line_col(diagnostic.primary.span.start),
-                diagnostic.code.as_str()
+                diagnostic.code.as_str(),
+                diagnostic.message
             )
         })
         .collect();
@@ -126,39 +161,39 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
     }
 }
 
+/// [`emit`], for a program the target writes all of: nothing is
+/// reported.
+fn emit_clean(files: &[(&str, &str)]) -> Emitted {
+    let emitted = emit(files);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    emitted
+}
+
+/// A check of the text of a file the target wrote.
+trait Writes {
+    /// Asserts that the text has each of `expected` in it.
+    // `S: AsRef<str>` takes a list of `&str` and a list of `String` alike.
+    fn assert_writes<S: AsRef<str>>(&self, expected: &[S]);
+}
+
+// A trait, so that the check is written `python.assert_writes(&[...])`:
+// the text first, and the list as long as it needs.
+impl Writes for str {
+    fn assert_writes<S: AsRef<str>>(&self, expected: &[S]) {
+        for expected in expected {
+            let expected = expected.as_ref();
+            assert!(
+                self.contains(expected),
+                "the module has:\n{expected}\nin:\n{self}"
+            );
+        }
+    }
+}
+
 /// A module with each form the target writes: a value function, a node
 /// with a `state` and a `const` parameter, a graph, a node with no
 /// result, and a test that binds, compares and runs an eval.
-const DEMO: &str = concat!(
-    "module demo.scaling\n",
-    "\n",
-    "const fn doubled(value: i64) -> i64 => value * 2\n",
-    "\n",
-    "fn scaled(value: i64, const factor: i64) -> i64 {\n",
-    "    state seen: i64 = 0\n",
-    "    when {\n",
-    "        seen += 1\n",
-    "        if seen > 1 {\n",
-    "            return doubled(value) * factor\n",
-    "        } else {\n",
-    "            return value\n",
-    "        }\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn wired(value: i64) -> i64 => scaled(value, 3)\n",
-    "\n",
-    "fn sink(value: bool) {\n",
-    "    when { }\n",
-    "}\n",
-    "\n",
-    "test scales {\n",
-    "    let seen = eval(wired(value: [1, _, 2]))\n",
-    "    assert seen == [1, _, 12]\n",
-    "    assert eval(scaled(value: [5], factor: 2)) != []\n",
-    "    eval(sink(value: [true]))\n",
-    "}\n",
-);
+const DEMO: (&str, &str) = fixture!("demo.scaling.hgl");
 
 /// What the target writes for [`DEMO`].
 const DEMO_PYTHON: &str = concat!(
@@ -209,8 +244,7 @@ const DEMO_PYTHON: &str = concat!(
 
 #[test]
 fn a_module_is_written_as_python() {
-    let emitted = emit(&[("demo.hgl", DEMO)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&[DEMO]);
     let paths: Vec<&str> = emitted
         .output
         .files
@@ -229,26 +263,19 @@ fn a_module_is_written_as_python() {
             "_hgl/_harness.py"
         ]
     );
-    assert_eq!(
-        emitted.text("_hgl/_m_demo/_m_scaling/__init__.py"),
-        DEMO_PYTHON
-    );
+    assert_eq!(emitted.module("demo.scaling"), DEMO_PYTHON);
 }
 
 /// The target fixture for temporal scalar inputs, state and dense traces.
-const SCALAR_TRACES: (&str, &str) = (
-    "scalar_traces.hgl",
-    include_str!("fixtures/scalar_traces.hgl"),
-);
+const SCALAR_TRACES: (&str, &str) = fixture!("demo.scalar_traces.hgl");
 
 /// A bare `when` (TIME-3), state initialization and updates (TIME-6),
 /// a guarded scalar delta (END-3, FN-7) and dense traces (TST-6).
 #[test]
 fn dense_scalar_traces_are_written_as_hgraph_tests() {
-    let emitted = emit(&[SCALAR_TRACES]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_scalar_traces/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[SCALAR_TRACES]);
+    let python = emitted.module("demo.scalar_traces");
+    python.assert_writes(&[
         "def pass_i64(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n    return value.delta_value\n",
         "    if (a.valid and (a.modified and a.valid)):\n        return a.delta_value\n",
         "    _state.count = _core.add__i64_i64(lhs=_state.count, rhs=1)\n",
@@ -257,9 +284,7 @@ fn dense_scalar_traces_are_written_as_hgraph_tests() {
         "        raise _py.AssertionError()\n",
         "    if not (_harness.same(_harness.evaluate(pass_str, {\"value\": _hgl_4core._inst_replay__str}, _hgl_4core._inst_record__str, value=[\"\", None, \"\", \"a\"]), [\"\", None, \"\", \"a\"])):\n",
         "        raise _py.AssertionError()\n",
-    ] {
-        assert!(python.contains(expected), "the module has:\n{expected}");
-    }
+    ]);
     assert_eq!(
         python.matches("\ndef test_").count(),
         emitted.output.tests.len(),
@@ -270,93 +295,7 @@ fn dense_scalar_traces_are_written_as_hgraph_tests() {
 /// Core's scalar endpoint cases that publish no null, and a node with
 /// two handlers: `when` headers with selectors, and the node's own
 /// output.
-const ENDPOINTS: &str = concat!(
-    "module demo.endpoints\n",
-    "\n",
-    "fn watched_valid(watched: i64, probe: bool) -> bool {\n",
-    "    when valid([]) {\n",
-    "        return valid(watched)\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn watched_modified(watched: i64, probe: bool) -> bool {\n",
-    "    when modified() && valid([]) {\n",
-    "        return modified(watched)\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn sample_on_probe(watched: i64, probe: bool) -> i64 {\n",
-    "    when modified(probe) && valid() {\n",
-    "        return watched\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "test silence_preserves_validity {\n",
-    "    assert eval(watched_valid(\n",
-    "                watched: [_, 7, _, _],\n",
-    "                probe: [true, true, true, true])) == [false, true, true, true]\n",
-    "}\n",
-    "\n",
-    "test equal_publication_is_modified_and_idle_is_not {\n",
-    "    assert eval(watched_modified(\n",
-    "                watched: [_, 7, _, 7],\n",
-    "                probe: [true, true, true, _])) == [false, true, false, true]\n",
-    "}\n",
-    "\n",
-    "test retained_value_is_read_without_a_new_tick {\n",
-    "    assert eval(sample_on_probe(\n",
-    "                watched: [_, 7, _, _, 9, _],\n",
-    "                probe: [true, _, true, true, _, true])) == [_, _, 7, 7, _, 9]\n",
-    "}\n",
-    "\n",
-    "fn produce(command: i64) -> i64 {\n",
-    "    inject out\n",
-    "    when {\n",
-    "        if command != 0 { return command }\n",
-    "        invalidate(out)\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn watch(input: i64) -> bool {\n",
-    "    when valid([]) { return valid(input) }\n",
-    "}\n",
-    "\n",
-    "fn observe(command: i64) -> bool => watch(produce(command))\n",
-    "\n",
-    "test publish_invalidate_recover {\n",
-    "    assert eval(observe(command: [7, 0, 0, 7])) == [true, false, _, true]\n",
-    "}\n",
-    "\n",
-    "fn publish_value(value: i64) -> i64 {\n",
-    "    when { return value }\n",
-    "}\n",
-    "\n",
-    "fn read_modified(watched: i64, probe: bool) -> bool {\n",
-    "    when modified(probe) && valid([]) { return modified(watched) }\n",
-    "}\n",
-    "\n",
-    "fn observe_modified(value: i64, probe: bool) -> bool =>\n",
-    "    read_modified(publish_value(value), probe)\n",
-    "\n",
-    "test equal_publications_are_modified {\n",
-    "    assert eval(observe_modified(\n",
-    "                value: [_, 7, _, 7],\n",
-    "                probe: [true, true, true, true])) == [false, true, false, true]\n",
-    "}\n",
-    "\n",
-    "fn two_handlers(a: i64, b: i64) -> i64 {\n",
-    "    when modified(a) && a > 5 {\n",
-    "        return a\n",
-    "    }\n",
-    "    when modified(b) && valid(b) {\n",
-    "        return b\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "test handlers_in_order {\n",
-    "    assert eval(two_handlers(a: [1, 9, _, 9], b: [_, _, 3, 4])) == [_, _, 3, 9]\n",
-    "}\n",
-);
+const ENDPOINTS: (&str, &str) = fixture!("demo.endpoints.hgl");
 
 /// TIME-3: a modification selector subscribes its node and guards its handler.
 /// A validity selector says which inputs the handler requires valid. TIME-4: "Aggregate subscriptions cover
@@ -365,10 +304,9 @@ const ENDPOINTS: &str = concat!(
 /// END-4: `inject out` is the node's output, which `invalidate` clears.
 #[test]
 fn a_when_header_says_what_wakes_and_admits_a_node() {
-    let emitted = emit(&[("endpoints.hgl", ENDPOINTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_endpoints/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[ENDPOINTS]);
+    let python = emitted.module("demo.endpoints");
+    python.assert_writes(&[
         // `valid([])`: no input need be valid.
         "@_hg.compute_node(valid=())\ndef watched_valid(watched: _hg.TS[_py.int], probe: _hg.TS[_py.bool]) -> _hg.TS[_py.bool]:\n    return watched.valid\n",
         // `modified(probe) && valid()`: only `probe` wakes it.
@@ -392,38 +330,19 @@ fn a_when_header_says_what_wakes_and_admits_a_node() {
             "    if b.modified:\n",
             "        return b.value\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// END-6 and TIME-7: both an input and the node's own output keep a
 /// timestamp only while valid. The stop hook receives the output it reads.
 #[test]
 fn last_modified_reads_valid_endpoint_timestamps_in_when_and_stop() {
-    let emitted = emit(&[(
-        "timestamps.hgl",
-        concat!(
-            "module timestamps\n",
-            "fn sample(value: i64?) -> datetime? {\n",
-            "    inject out\n",
-            "    when valid([]) {\n",
-            "        let previous = last_modified(out)\n",
-            "        return last_modified(value)\n",
-            "    }\n",
-            "    stop {\n",
-            "        let final_input = last_modified(value)\n",
-            "        let final_output = last_modified(out)\n",
-            "    }\n",
-            "}\n",
-        ),
+    let emitted = emit_clean(&[fixture!(
+        "last_modified_reads_valid_endpoint_timestamps_in_when_and_stop",
+        "timestamps.hgl"
     )]);
-    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
-    let python = emitted.text("_hgl/_m_timestamps/__init__.py");
-    for expected in [
+    let python = emitted.module("timestamps");
+    python.assert_writes(&[
         "    previous = (_output.last_modified_time if _output.valid else None)\n",
         "    return _core.published((value.last_modified_time if value.valid else None))\n",
         concat!(
@@ -432,58 +351,16 @@ fn last_modified_reads_valid_endpoint_timestamps_in_when_and_stop() {
             "    final_input = (value.last_modified_time if value.valid else None)\n",
             "    final_output = (_output.last_modified_time if _output.valid else None)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "expected:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Three modules: two that each export a `pick`, and one that has a
 /// `pick` of its own, calls both, leaves a nullable argument out, and
 /// gives a `state` its first value from a `const` parameter.
 const MODULES: [(&str, &str); 3] = [
-    (
-        "left.hgl",
-        concat!("module demo.left\n", "export const fn pick() -> i64 => 1\n",),
-    ),
-    (
-        "right.hgl",
-        concat!(
-            "module demo.right\n",
-            "export const fn pick() -> i64 => 2\n",
-        ),
-    ),
-    (
-        "configured.hgl",
-        concat!(
-            "module demo.configured\n",
-            "use demo.left as l\n",
-            "use demo.right as r\n",
-            "\n",
-            "const fn pick() -> i64 => 100\n",
-            "\n",
-            "const fn chosen(fallback: i64?) -> i64 {\n",
-            "    if fallback == null { return l::pick() }\n",
-            "    return r::pick() + pick()\n",
-            "}\n",
-            "\n",
-            "fn kept(value: i64, const first: i64) -> i64 {\n",
-            "    state last: i64 = first\n",
-            "    when {\n",
-            "        let before = last\n",
-            "        last = value\n",
-            "        return before + chosen()\n",
-            "    }\n",
-            "}\n",
-            "\n",
-            "test keeps {\n",
-            "    assert eval(kept(value: [5, 6], first: 9)) == [10, 6]\n",
-            "    assert chosen(1) == 102\n",
-            "}\n",
-        ),
-    ),
+    fixture!("demo.left.hgl"),
+    fixture!("demo.right.hgl"),
+    fixture!("demo.configured.hgl"),
 ];
 
 /// A function of another module is named through its module, so that
@@ -493,10 +370,9 @@ const MODULES: [(&str, &str); 3] = [
 /// `T?` may be left out, and is then null.
 #[test]
 fn names_configuration_and_omitted_arguments_are_kept() {
-    let emitted = emit(&MODULES);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_configured/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&MODULES);
+    let python = emitted.module("demo.configured");
+    python.assert_writes(&[
         "import _hgl._m_demo._m_left as _hgl_4demo_4left\nimport _hgl._m_demo._m_right as _hgl_4demo_5right\n",
         concat!(
             "def chosen(fallback):\n",
@@ -510,40 +386,12 @@ fn names_configuration_and_omitted_arguments_are_kept() {
             "    _state.last = first\n",
         ),
         "    return _core.add__i64_i64(lhs=before, rhs=chosen(fallback=None))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Headers whose selectors add up, repeat an input, or name the node's
 /// own output.
-const SELECTORS: &str = concat!(
-    "module demo.selectors\n",
-    "\n",
-    "fn both_valid(a: i64, b: i64, c: i64) -> i64 {\n",
-    "    when valid(a) && valid(b) { return a + b }\n",
-    "}\n",
-    "\n",
-    "fn repeated(a: i64, b: i64) -> i64 {\n",
-    "    when modified(a, a) { return a }\n",
-    "    when modified(b) { return b }\n",
-    "}\n",
-    "\n",
-    "fn recovering(command: i64) -> i64 {\n",
-    "    inject out\n",
-    "    when valid(out) && valid(command) && command > 0 { return command }\n",
-    "    when { return 1 }\n",
-    "}\n",
-    "\n",
-    "test selectors {\n",
-    "    assert eval(both_valid(a: [1, _], b: [_, 2], c: [])) == [_, 3]\n",
-    "    assert eval(repeated(a: [1, _, 3], b: [_, 2, _])) == [_, 2, 3]\n",
-    "    assert eval(recovering(command: [0, 5])) == [1, 5]\n",
-    "}\n",
-);
+const SELECTORS: (&str, &str) = fixture!("demo.selectors.hgl");
 
 /// TIME-3: every selector among a header's conjuncts adds what it
 /// names, so `valid(a) && valid(b)` requires both. A subscription is a
@@ -551,10 +399,9 @@ const SELECTORS: &str = concat!(
 /// header is hgraph's `_output`.
 #[test]
 fn a_headers_selectors_add_up() {
-    let emitted = emit(&[("selectors.hgl", SELECTORS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_selectors/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[SELECTORS]);
+    let python = emitted.module("demo.selectors");
+    python.assert_writes(&[
         "@_hg.compute_node(valid=(\"a\", \"b\"))\ndef both_valid(",
         concat!(
             "@_hg.compute_node\n",
@@ -565,47 +412,21 @@ fn a_headers_selectors_add_up() {
             "        return command.value\n",
             "    return 1\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Defaults: of a value function's parameter, where it calls another
 /// function, and of a node's `const` parameter.
-const DEFAULTS: &str = concat!(
-    "module demo.defaults\n",
-    "\n",
-    "const fn base() -> i64 => 2\n",
-    "\n",
-    "const fn scale(value: i64, factor: i64 = base()) -> i64 => value * factor\n",
-    "\n",
-    "fn offset(value: i64, const by: i64 = 10) -> i64 {\n",
-    "    when { return value + by }\n",
-    "}\n",
-    "\n",
-    "fn wired(value: i64) -> i64 => offset(value)\n",
-    "\n",
-    "test defaults {\n",
-    "    assert scale(3) == 6\n",
-    "    assert scale(3, 5) == 15\n",
-    "    assert eval(offset(value: [1])) == [11]\n",
-    "    assert eval(offset(value: [1], by: 1)) == [2]\n",
-    "    assert eval(wired(value: [5])) == [15]\n",
-    "}\n",
-);
+const DEFAULTS: (&str, &str) = fixture!("demo.defaults.hgl");
 
 /// UNIT-8: a parameter with a default may be left out. The call is
 /// written with the default in its place, which the analysed program
 /// holds as a typed value.
 #[test]
 fn a_default_is_written_where_a_call_leaves_it_out() {
-    let emitted = emit(&[("defaults.hgl", DEFAULTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_defaults/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[DEFAULTS]);
+    let python = emitted.module("demo.defaults");
+    python.assert_writes(&[
         // The function is always given the parameter.
         "def scale(value, factor):\n",
         "lhs=scale(value=3, factor=base()), rhs=6",
@@ -617,41 +438,13 @@ fn a_default_is_written_where_a_call_leaves_it_out() {
         "        raise _py.AssertionError()\n",
         "    if not (_harness.same(_harness.evaluate(offset, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1], by=1), [2])):\n",
         "        raise _py.AssertionError()\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A default written in one module and left out by a call in another,
 /// whose caller has a parameter named as a function the default calls;
 /// and a parameter written `T?` before one with a default.
-const DEFAULT_MODULES: [(&str, &str); 2] = [
-    (
-        "lib.hgl",
-        concat!(
-            "module demo.lib\n",
-            "const fn base() -> i64 => 2\n",
-            "export const fn scale(value: i64, factor: i64 = base()) -> i64 => value * factor\n",
-            "export const fn pick(first: i64?, second: i64 = 1) -> i64 => second\n",
-        ),
-    ),
-    (
-        "caller.hgl",
-        concat!(
-            "module demo.caller\n",
-            "use demo.lib::{scale, pick}\n",
-            "const fn caller(base: i64) -> i64 => scale(3) + base\n",
-            "test callers {\n",
-            "    assert caller(10) == 16\n",
-            "    assert pick() == 1\n",
-            "    assert pick(7, 5) == 5\n",
-            "}\n",
-        ),
-    ),
-];
+const DEFAULT_MODULES: [(&str, &str); 2] = [fixture!("demo.lib.hgl"), fixture!("demo.caller.hgl")];
 
 /// A default means what it means where it is declared (UNIT-7): written
 /// in a caller of another module, a function it calls is named through
@@ -661,100 +454,34 @@ const DEFAULT_MODULES: [(&str, &str); 2] = [
 /// so Python has no default to put in order.
 #[test]
 fn a_default_keeps_its_meaning_in_another_module() {
-    let emitted = emit(&DEFAULT_MODULES);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_caller/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&DEFAULT_MODULES);
+    let python = emitted.module("demo.caller");
+    python.assert_writes(&[
         "def caller(base):\n",
         "_hgl_4demo_3lib.scale(value=3, factor=_hgl_4demo_3lib.base())",
         "_hgl_4demo_3lib.pick(first=None, second=1)",
         "_hgl_4demo_3lib.pick(first=7, second=5)",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
-    let library = emitted.text("_hgl/_m_demo/_m_lib/__init__.py");
+    ]);
+    let library = emitted.module("demo.lib");
     assert!(library.contains("def pick(first, second):\n"));
 }
 
 /// Two modules: constants, and their reads in another module.
-const CONSTANTS: [(&str, &str); 2] = [
-    (
-        "constants.hgl",
-        concat!(
-            "module demo.constants\n",
-            "export enum Side { buy, sell }\n",
-            "export const scale: i64 = 2\n",
-            // A constant written after the one that reads it.
-            "const first: i64 = 3 * late + 1\n",
-            "const late: i64 = scale\n",
-            "export const side: Side = .sell\n",
-            "const fn seed() -> i64 => first\n",
-            "export const fn choose(base: i64, value: i64 = seed()) -> i64 => base + value\n",
-            "test constants_are_read {\n",
-            "    assert first == 7\n",
-            "    assert choose(1) == 8\n",
-            "    assert side == Side.sell\n",
-            "}\n",
-        ),
-    ),
-    (
-        "reads.hgl",
-        concat!(
-            "module demo.reads\n",
-            "use demo.constants::{scale, choose}\n",
-            "const twice: i64 = scale * 2\n",
-            "fn scaled(value: i64, const factor: i64) -> i64 {\n",
-            "    when { return value * factor }\n",
-            "}\n",
-            "fn wired(value: i64) -> i64 => scaled(value, scale)\n",
-            "test constants_are_imported {\n",
-            "    assert twice == 4\n",
-            "    assert choose(twice) == 11\n",
-            "    assert eval(wired(value: [1, 2])) == [2, 4]\n",
-            "}\n",
-        ),
-    ),
-];
+const CONSTANTS: [(&str, &str); 2] = [fixture!("demo.constants.hgl"), fixture!("demo.reads.hgl")];
 
 /// TYPE-2: "elapsed `duration` ... Instants/durations use signed 64-bit
 /// microseconds". On this target a `duration` is a `timedelta`, a count
 /// of whole microseconds, as a value and as what a connection ticks.
-const DURATIONS: &str = concat!(
-    "module demo.durations\n",
-    "const pause: duration = 1h30m\n",
-    "const fn total(first: duration, second: duration) -> duration => first + second\n",
-    "const fn less(first: duration, second: duration) -> duration => first - second\n",
-    "const fn times(length: duration, count: i64) -> duration => length * count\n",
-    "const fn scaled(length: duration, by: f64) -> duration => length * by\n",
-    "fn sum(lhs: duration, rhs: duration) -> duration => lhs + rhs\n",
-    "test durations_are_values_and_ticks {\n",
-    "    assert total(1s, 250ms) == 1250ms\n",
-    "    assert less(1s, 250ms) == 750ms\n",
-    "    assert -less(250ms, 1s) == 750ms\n",
-    "    assert times(pause, 2) == 3h\n",
-    // Core writes a count times a duration as the duration times it.
-    "    assert 2 * pause == 3h\n",
-    // OPS-10: half a microsecond is a tie, and goes to the even one.
-    "    assert scaled(1us, 0.5) == 0us\n",
-    "    assert scaled(3us, 0.5) == 2us\n",
-    // OPS-10: a duration times an infinity is out of range.
-    "    assert raises(\"numeric.out_of_range\") { scaled(1s, 1.0 / 0.0) }\n",
-    "    assert eval(sum(lhs: [1s, _, 5m], rhs: [2s, 3s])) == [3s, 4s, 5m3s]\n",
-    "}\n",
-);
+const DURATIONS: (&str, &str) = fixture!("demo.durations.hgl");
 
 /// A `duration` is written as a `timedelta`: its literal by its count of
 /// microseconds (LEX-13), its type in an annotation, and its operators
 /// as the provider's functions (OPS-1).
 #[test]
 fn a_duration_is_a_timedelta() {
-    let emitted = emit(&[("durations.hgl", DURATIONS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_durations/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[DURATIONS]);
+    let python = emitted.module("demo.durations");
+    python.assert_writes(&[
         "import datetime as _dt\n",
         "@_core.constant\ndef pause():\n    return _dt.timedelta(microseconds=5400000000)\n",
         "return _core.add__duration_duration(lhs=first, rhs=second)",
@@ -762,130 +489,49 @@ fn a_duration_is_a_timedelta() {
         "return _core.mul__duration_i64(lhs=length, rhs=count)",
         "return _core.mul__duration_f64(lhs=length, rhs=by)",
         "_hg.TS[_dt.timedelta]",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // A module that names no duration does not import the library.
-    let plain = emit(&[("demo.hgl", DEMO)]);
-    assert!(
-        !plain
-            .text("_hgl/_m_demo/_m_scaling/__init__.py")
-            .contains("import datetime")
-    );
+    let plain = emit(&[DEMO]);
+    assert!(!plain.module("demo.scaling").contains("import datetime"));
 }
 
 /// OPS-1: a duration by an `i64` or an `f64` is a duration, by a duration
 /// an `f64`, and `//` of two an `i64`. OPS-10: a duration result is "the
 /// exact result rounded to the nearest duration the type holds, a tie to
-/// the even one". NUM-12: each division takes its zero policy.
-const DIVIDED: &str = concat!(
-    "module demo.durations.divided\n",
-    "const fn shared(length: duration, among: i64) -> duration => length / among\n",
-    "const fn scaled(length: duration, by: f64) -> duration => length / by\n",
-    "const fn ratio(first: duration, second: duration) -> f64 => first / second\n",
-    "const fn whole(first: duration, second: duration) -> i64 => first // second\n",
-    "const fn checked(length: duration, among: i64) -> result<duration, error> =>\n",
-    "    length /{zero: .error} among\n",
-    "const fn steps(first: duration, second: duration) -> result<i64, error> =>\n",
-    "    first //{zero: .error} second\n",
-    "test a_duration_is_divided {\n",
-    // Core's own examples (its OPS-10).
-    "    assert shared(5m, 3) == 100s\n",
-    "    assert shared(1us, 3) == 0us\n",
-    "    assert shared(2us, 3) == 1us\n",
-    // A tie goes to the even count.
-    "    assert scaled(3us, 2.0) == 2us\n",
-    "    assert scaled(1us, 2.0) == 0us\n",
-    "    assert ratio(90m, 1h) == 1.5\n",
-    // NUM-1: `//` rounds toward negative infinity.
-    "    assert whole(7s, 2s) == 3\n",
-    "    assert whole(-7s, 2s) == -4\n",
-    // NUM-9: under `error` a zero divisor is an `err`, and any other
-    // an `ok`.
-    "    assert is_ok(checked(1s, 2)) && is_err(checked(1s, 0))\n",
-    "    assert is_ok(steps(1s, 1ms)) && is_err(steps(1s, 0s))\n",
-    // NUM-3: and under `fail`, which these take by default, an error.
-    "    assert raises(\"numeric.division_by_zero\") { shared(1s, 0) }\n",
-    "    assert raises(\"numeric.division_by_zero\") { scaled(1s, 0.0) }\n",
-    "    assert raises(\"numeric.division_by_zero\") { whole(1s, 0s) }\n",
-    // OPS-10: a result outside the range a duration has, and a
-    // duration divided by an infinity.
-    "    assert raises(\"numeric.out_of_range\") { scaled(106751991d, 0.5) }\n",
-    "    assert raises(\"numeric.out_of_range\") { scaled(1s, 1.0 / 0.0) }\n",
-    "}\n",
-);
+/// the even one". NUM-12: each division takes its zero policy. NUM-1:
+/// `//` rounds toward negative infinity.
+const DIVIDED: (&str, &str) = fixture!("demo.durations.divided.hgl");
 
 /// A division of durations is the provider's function, given its zero
 /// policy by name as a division of numbers is.
 #[test]
 fn a_duration_divided_takes_its_zero_policy() {
-    let emitted = emit(&[("divided.hgl", DIVIDED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_durations/_m_divided/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[DIVIDED]);
+    let python = emitted.module("demo.durations.divided");
+    python.assert_writes(&[
         "return _core.div__duration_i64(lhs=length, rhs=among, zero=\"fail\")",
         "return _core.div__duration_f64(lhs=length, rhs=by, zero=\"fail\")",
         "return _core.div__duration_duration(lhs=first, rhs=second, zero=\"ieee\")",
         "return _core.floordiv__duration_duration(lhs=first, rhs=second, zero=\"fail\")",
         "return _core.div__duration_i64(lhs=length, rhs=among, zero=\"error\")",
         "return _core.floordiv__duration_duration(lhs=first, rhs=second, zero=\"error\")",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TYPE-2: a `date`, a `time`, a `datetime` and a `civil_datetime` are
 /// Python's own, and an instant is a `datetime` in UTC that names no zone,
 /// as hgraph has them. OPS-1: an instant and a duration, two instants, a
-/// date and a time, and a date and a duration.
-const INSTANTS: &str = concat!(
-    "module demo.instants\n",
-    "const opened: datetime = @2026-09-03T09:30:00Z\n",
-    "const fn later(at: datetime, by: duration) -> datetime => at + by\n",
-    "const fn earlier(at: datetime, by: duration) -> datetime => at - by\n",
-    "const fn between(first: datetime, second: datetime) -> duration => second - first\n",
-    "const fn on(day: date, at: time) -> civil_datetime => day + at\n",
-    "const fn days(first: date, second: date) -> duration => second - first\n",
-    "const fn after(day: date, by: duration) -> civil_datetime => day + by\n",
-    "const fn before(day: date, by: duration) -> civil_datetime => day - by\n",
-    "fn shifted(at: datetime, by: duration) -> datetime => at + by\n",
-    "test instants_are_values_and_ticks {\n",
-    "    assert later(opened, 30m) == @2026-09-03T10:00:00Z\n",
-    "    assert earlier(opened, 1d) == @2026-09-02T09:30:00Z\n",
-    "    assert between(opened, @2026-09-03T10:00:00Z) == 30m\n",
-    // LEX-11: an instant written east of UTC is that far before what
-    // its date and time say.
-    "    assert @2026-09-03T10:30:00+01:00 == opened\n",
-    "    assert on(@2026-09-03, @09:30) == @2026-09-03T09:30\n",
-    "    assert days(@2026-09-01, @2026-09-03) == 2d\n",
-    // OPS-10: a date and a duration give the civil datetime that far
-    // from the start of the date, in either order.
-    "    assert after(@2026-09-03, 2d) == @2026-09-05T00:00\n",
-    "    assert after(@2026-09-03, 36h) == @2026-09-04T12:00\n",
-    "    assert 36h + @2026-09-03 == @2026-09-04T12:00\n",
-    "    assert before(@2026-09-03, 1h) == @2026-09-02T23:00\n",
-    "    assert raises(\"numeric.out_of_range\") { after(@9999-12-31, 1d) }\n",
-    // Core's named times (its CRUN-3) are constants of these types.
-    "    assert earliest_start == never + smallest_step\n",
-    "    assert latest_end == forever - smallest_step\n",
-    "    assert eval(shifted(at: [opened], by: [1h])) == [@2026-09-03T10:30:00Z]\n",
-    "}\n",
-);
+/// date and a time, and a date and a duration. Core's named times (its
+/// CRUN-3) are constants of these types.
+const INSTANTS: (&str, &str) = fixture!("demo.instants.hgl");
 
 /// A temporal literal is written by its parts (LEX-11), and its type as
 /// Python's (TYPE-2).
 #[test]
 fn a_date_a_time_and_an_instant_are_pythons_own() {
-    let emitted = emit(&[("instants.hgl", INSTANTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_instants/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[INSTANTS]);
+    let python = emitted.module("demo.instants");
+    python.assert_writes(&[
         "import datetime as _dt\n",
         "@_core.constant\ndef opened():\n    return _dt.datetime(2026, 9, 3, 9, 30, 0, 0)\n",
         "return _core.add__datetime_duration(lhs=at, rhs=by)",
@@ -900,77 +546,27 @@ fn a_date_a_time_and_an_instant_are_pythons_own() {
         "_dt.date(2026, 9, 3)",
         "_dt.time(9, 30, 0, 0)",
         "_hg.TS[_dt.datetime]",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TST-10: "`assert raises(\"code\")` ... Run its block once. A matching
 /// escaping error passes ...; then continue after the assertion."
-const RAISES: &str = concat!(
-    "module demo.raises\n",
-    "const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b\n",
-    "const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: .error} b\n",
-    "fn ratios(a: f64, b: f64) -> f64 {\n",
-    "    when { return checked(a, b)? }\n",
-    "}\n",
-    "test a_failure_is_expected {\n",
-    "    assert raises(\"numeric.division_by_zero\") { strict(1.0, 0.0) }\n",
-    // A node's failure, which comes out of an eval.
-    "    assert raises(\"numeric.division_by_zero\") {\n",
-    "        eval(ratios(a: [6.0], b: [0.0]))\n",
-    "    }\n",
-    // The test goes on after the assertion.
-    "    assert strict(6.0, 2.0) == 3.0\n",
-    "}\n",
-);
+const RAISES: (&str, &str) = fixture!("demo.raises.hgl");
 
 /// TST-10: "Normal completion, a different code ... fails the test."
 /// TST-11: "A failed nested assertion cannot satisfy an enclosing
 /// raises."
-const RAISES_FAILS: &str = concat!(
-    "module demo.raises.fails\n",
-    "const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b\n",
-    "const fn next(value: i64) -> i64 => value + 1\n",
-    "const fn size(sizes: dict<str, i64>, name: str) -> i64 => sizes[name]\n",
-    "test nothing_raised {\n",
-    "    assert raises(\"numeric.division_by_zero\") { strict(6.0, 2.0) }\n",
-    "}\n",
-    "test another_code {\n",
-    "    assert raises(\"numeric.division_by_zero\") { next(9223372036854775807) }\n",
-    "}\n",
-    "test nested_assertion {\n",
-    "    assert raises(\"numeric.division_by_zero\") {\n",
-    "        assert strict(6.0, 2.0) == 4.0\n",
-    "    }\n",
-    "}\n",
-    // The inner assertion fails: it expects another code. What it lets
-    // out has the code the outer one expects, and does not satisfy it.
-    "test nested_raises {\n",
-    "    assert raises(\"numeric.division_by_zero\") {\n",
-    "        assert raises(\"value.missing_key\") { strict(1.0, 0.0) }\n",
-    "    }\n",
-    "}\n",
-    // And one whose inner assertion holds goes on, and then fails as the
-    // outer one expects.
-    "test nested_then_raised {\n",
-    "    assert raises(\"numeric.division_by_zero\") {\n",
-    "        assert raises(\"value.missing_key\") { size([\"a\": 1], \"z\") }\n",
-    "        strict(1.0, 0.0)\n",
-    "    }\n",
-    "}\n",
+const RAISES_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.raises.fails.hgl"
 );
 
 /// An `assert raises` is a `try` whose handler asks the harness whether
 /// what escaped has the code, and whose `else` fails the test.
 #[test]
 fn an_assert_raises_is_a_try_the_harness_judges() {
-    let emitted = emit(&[("raises.hgl", RAISES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_raises/__init__.py");
+    let emitted = emit_clean(&[RAISES]);
+    let python = emitted.module("demo.raises");
     let expected = concat!(
         "    try:\n",
         "        strict(a=1.0, b=0.0)\n",
@@ -993,32 +589,21 @@ fn an_assert_raises_is_a_try_the_harness_judges() {
 /// another module.
 #[test]
 fn a_constant_is_a_function_run_once_and_a_read_calls_it() {
-    let emitted = emit(&CONSTANTS);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_constants/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&CONSTANTS);
+    let python = emitted.module("demo.constants");
+    python.assert_writes(&[
         "@_core.constant\ndef scale():\n    return 2\n",
         "@_core.constant\ndef first():\n    return _core.add__i64_i64(lhs=_core.mul__i64_i64(lhs=3, rhs=late()), rhs=1)\n",
         "@_core.constant\ndef late():\n    return scale()\n",
         "@_core.constant\ndef side():\n    return Side[\"sell\"]\n",
         "def seed():\n    return first()\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
-    let reads = emitted.text("_hgl/_m_demo/_m_reads/__init__.py");
-    for expected in [
+    ]);
+    let reads = emitted.module("demo.reads");
+    reads.assert_writes(&[
         "@_core.constant\ndef twice():\n    return _core.mul__i64_i64(lhs=_hgl_4demo_9constants.scale(), rhs=2)\n",
         // In a graph a constant is a value known where it is built.
         "return scaled(value=value, factor=_hgl_4demo_9constants.scale())",
-    ] {
-        assert!(
-            reads.contains(expected),
-            "the module has:\n{expected}\nin:\n{reads}"
-        );
-    }
+    ]);
     // The provider has the function that runs one once. Its text is a
     // file of this repository, whose line ends are the checkout's.
     assert!(
@@ -1032,58 +617,26 @@ fn a_constant_is_a_function_run_once_and_a_read_calls_it() {
 /// would be written inside itself without end: it is reported.
 #[test]
 fn a_default_is_not_written_inside_itself() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "const fn again(value: i64 = if true { 1 } else { again() }) -> i64 => value\n",
-            "const fn uses() -> i64 => again()\n",
-        ),
-    )]);
-    assert_eq!(emitted.reported, ["m.hgl:2:29 target.unsupported"]);
+    let emitted = emit(&[fixture!("a_default_is_not_written_inside_itself", "m.hgl")]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:2:29 target.unsupported: the hgraph target does not write a default that leaves itself out yet"
+        ]
+    );
 }
 
 /// Names that Python, hgraph or the target would take: each is given a
 /// Python name of its own. FN-4: "Composition and eval choose the
 /// temporal definition if one exists; runtime/value evaluation chooses
 /// the value definition", so a pair of one name is two functions.
-const NAMES: &str = concat!(
-    "module demo.names\n",
-    "\n",
-    "const fn lambda() -> i64 => 1\n",
-    "const fn lambda_() -> i64 => 2\n",
-    "const fn graph() -> i64 => 3\n",
-    "const fn _kept() -> i64 => 4\n",
-    "const fn test_me() -> i64 => 5\n",
-    "const fn float() -> i64 => 6\n",
-    "const fn sized(frozenset: i64, int: i64) -> set<i64> => [frozenset, int]\n",
-    "\n",
-    "const fn doubled(value: i64) -> i64 => value * 2\n",
-    "fn doubled(value: i64) -> i64 {\n",
-    "    when { return doubled(value) + 1 }\n",
-    "}\n",
-    "\n",
-    "const fn eight() -> i64 => doubled(4)\n",
-    "\n",
-    "fn pass(target: i64) -> i64 {\n",
-    "    when { return target }\n",
-    "}\n",
-    "\n",
-    "test names {\n",
-    "    assert lambda() + lambda_() + graph() + _kept() + test_me() + float() == 21\n",
-    "    assert eight() == 8\n",
-    "    assert sized(1, 2) == sized(2, 1)\n",
-    "    assert eval(doubled(value: [4])) == [9]\n",
-    "    assert eval(pass(target: [1])) == [1]\n",
-    "}\n",
-);
+const NAMES: (&str, &str) = fixture!("demo.names.hgl");
 
 #[test]
 fn no_two_names_are_one_python_name() {
-    let emitted = emit(&[("names.hgl", NAMES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_names/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[NAMES]);
+    let python = emitted.module("demo.names");
+    python.assert_writes(&[
         // Python's words, and one that is a word with a `_` after it.
         "def lambda_():\n    return 1\n",
         "def lambda__():\n    return 2\n",
@@ -1110,60 +663,22 @@ fn no_two_names_are_one_python_name() {
         // An input named as the harness's own parameter is.
         "    if not (_harness.same(_harness.evaluate(pass_, {\"target\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, target=[1]), [1])):\n",
         "        raise _py.AssertionError()\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A module whose path begins another's, with a `var` written `T?`
 /// that is given no value and a `start` with nothing in it.
-const NESTED: [(&str, &str); 2] = [
-    (
-        "outer.hgl",
-        concat!(
-            "module demo\n",
-            "use demo.util as u\n",
-            "const fn kept() -> i64? {\n",
-            "    var held: i64?\n",
-            "    return held\n",
-            "}\n",
-            "fn idle(value: i64) -> i64 {\n",
-            "    start { }\n",
-            "    when { return u::one() }\n",
-            "}\n",
-            "test nested {\n",
-            "    assert kept() == null\n",
-            "    assert eval(idle(value: [7])) == [1]\n",
-            "}\n",
-        ),
-    ),
-    (
-        "inner.hgl",
-        "module demo.util\nexport const fn one() -> i64 => 1\n",
-    ),
-];
+const NESTED: [(&str, &str); 2] = [fixture!("demo.hgl"), fixture!("demo.util.hgl")];
 
 /// A module named as hgraph's own package is.
-const SHADOW: &str = concat!(
-    "module hgraph\n",
-    "fn pass(value: i64) -> i64 {\n",
-    "    when { return value }\n",
-    "}\n",
-    "test shadows {\n",
-    "    assert eval(pass(value: [1])) == [1]\n",
-    "}\n",
-);
+const SHADOW: (&str, &str) = fixture!("hgraph.hgl");
 
 /// Every file is under the package `_hgl`, so a module named as hgraph
 /// is, or as a module of Python's library is, takes no other's place.
 #[test]
 fn a_module_takes_no_other_packages_name() {
-    let emitted = emit(&[("shadow.hgl", SHADOW)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_hgraph/__init__.py");
+    let emitted = emit_clean(&[SHADOW]);
+    let python = emitted.module("hgraph");
     assert!(python.contains("import hgraph as _hg\n"));
     // The module calls no function of the provider's, and its test
     // calls the harness, which imports the provider: both are written.
@@ -1190,53 +705,23 @@ fn a_module_takes_no_other_packages_name() {
 /// that declares a name a module under it has: each stays its own. A
 /// sequence that is a set is one in Python too (EXPR-9).
 const PATHS: [(&str, &str); 4] = [
-    (
-        "one.hgl",
-        "module a_.b\nexport const fn pick() -> i64 => 1\n",
-    ),
-    (
-        "two.hgl",
-        "module a._b\nexport const fn pick() -> i64 => 2\n",
-    ),
-    (
-        "child.hgl",
-        "module paths.util\nexport const fn pick() -> i64 => 4\n",
-    ),
-    (
-        "parent.hgl",
-        concat!(
-            "module paths\n",
-            "use a_.b as one\n",
-            "use a._b as two\n",
-            "use paths.util as child\n",
-            "const fn util() -> i64 => 8\n",
-            "const fn members() -> set<i64> => [1, 2, 1]\n",
-            "const fn pair() -> set<i64> => [1, 2]\n",
-            "test paths {\n",
-            "    assert one::pick() + two::pick() + child::pick() + util() == 15\n",
-            "    assert members() == pair()\n",
-            "}\n",
-        ),
-    ),
+    fixture!("a_.b.hgl"),
+    fixture!("a._b.hgl"),
+    fixture!("paths.util.hgl"),
+    fixture!("paths.hgl"),
 ];
 
 #[test]
 fn paths_and_declarations_stay_apart() {
-    let emitted = emit(&PATHS);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_paths/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&PATHS);
+    let python = emitted.module("paths");
+    python.assert_writes(&[
         "import _hgl._m_a_._m_b as _hgl_2a__1b\n",
         "import _hgl._m_a._m__b as _hgl_1a_2_b\n",
         "import _hgl._m_paths._m_util as _hgl_5paths_4util\n",
         "def util():\n    return 8\n",
         "def members():\n    return _py.frozenset((1, 2, 1))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Each module is a package, so one module's path may begin another's.
@@ -1244,8 +729,7 @@ fn paths_and_declarations_stay_apart() {
 /// nothing in it is still a function.
 #[test]
 fn modules_nest_and_empty_forms_have_a_body() {
-    let emitted = emit(&NESTED);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&NESTED);
     let paths: Vec<&str> = emitted
         .output
         .files
@@ -1266,19 +750,14 @@ fn modules_nest_and_empty_forms_have_a_body() {
             "_hgl/_harness.py"
         ]
     );
-    let python = emitted.text("_hgl/_m_demo/__init__.py");
-    for expected in [
+    let python = emitted.module("demo");
+    python.assert_writes(&[
         "import _hgl._m_demo._m_util as _hgl_4demo_4util\n",
         "def kept():\n    held = None\n    return held\n",
         "@idle.start\ndef _start_idle():\n    pass\n",
         "    if not ((kept() is None)):\n",
         "        raise _py.AssertionError()\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A form the target does not write yet is reported where it is
@@ -1291,37 +770,16 @@ fn modules_nest_and_empty_forms_have_a_body() {
 #[test]
 fn a_run_in_real_time_and_an_application_are_written() {
     let emitted = emit(&[
-        (
-            "m.hgl",
-            concat!(
-                "module m\n",
-                "export fn pass(value: i64) -> i64 {\n",
-                "    when { return value }\n",
-                "}\n",
-                "export fn one() -> i64 => 1\n",
-                "test bounded {\n",
-                "    assert eval(pass(value: [7]), RunConfig()) == [7]\n",
-                "}\n",
-                // TST-17: a run in real time.
-                "integration_test live {\n",
-                "    assert run(pass(value: [7])) == [7]\n",
-                "}\n",
-            ),
-        ),
-        (
-            "live.hgl",
-            concat!(
-                "application m.live\n",
-                "use m::{one}\n",
-                "const fn twice(value: i64) -> i64 => value * 2\n",
-                "run(one())\n",
-            ),
+        fixture!("a_run_in_real_time_and_an_application_are_written", "m.hgl"),
+        fixture!(
+            "a_run_in_real_time_and_an_application_are_written",
+            "m.live.hgl"
         ),
     ]);
     // The eval's configuration is written (RUN-1), and so are the run
     // in real time and the application.
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let module = emitted.text("_hgl/_m_m/__init__.py");
+    let module = emitted.module("m");
     assert!(
         module.contains(concat!(
             "def test_live():\n",
@@ -1347,11 +805,11 @@ fn a_run_in_real_time_and_an_application_are_written() {
         .collect();
     assert_eq!(limits, [("bounded", false, None), ("live", true, Some(60))]);
     // One that writes `@timeout(...)` has that limit.
-    let written = emit(&[("live.hgl", INTEGRATION)]);
+    let written = emit(&[INTEGRATION]);
     let (_, brief) = written.test("brief");
     assert_eq!(brief.limit(), Some(std::time::Duration::from_millis(500)));
     assert_eq!(
-        emitted.text("_hgl/_m_m/_m_live/__init__.py"),
+        emitted.module("m.live"),
         concat!(
             "# Generated by the hgl compiler for hgraph, from application `m.live`. Do not edit.\n",
             "import builtins as _py\n",
@@ -1377,108 +835,13 @@ fn a_run_in_real_time_and_an_application_are_written() {
 /// entry ... giving the entry's const arguments, and the configuration
 /// is a value of core's `RunConfig`".
 const APPLICATIONS: [(&str, &str); 7] = [
-    (
-        "ticks.hgl",
-        concat!(
-            "module demo.ticks\n",
-            // A source: an entry, with no temporal parameter.
-            "export fn counted(const upto: i64, const every: duration = 1s) -> i64 {\n",
-            "    cache count: i64 = 0\n",
-            "    while count < upto {\n",
-            "        count += 1\n",
-            "        yield every: count\n",
-            "    }\n",
-            "}\n",
-            // A graph over it, an entry too.
-            "export fn doubled(const upto: i64) -> i64 {\n",
-            "    return counted(upto) * 2\n",
-            "}\n",
-            // An entry with no result.
-            "fn kept(value: i64) {\n",
-            "    inject global_state\n",
-            "    when { put(global_state, \"last\", value) }\n",
-            "}\n",
-            "export fn quiet(const upto: i64) {\n",
-            "    kept(counted(upto))\n",
-            "}\n",
-            // An entry that reads a key of the run's store.
-            "export fn limited(const every: duration = 1s) -> i64 {\n",
-            "    inject global_state\n",
-            "    cache count: i64 = 0\n",
-            "    while count < get<i64>(global_state, \"limit\") {\n",
-            "        count += 1\n",
-            "        yield every: count\n",
-            "    }\n",
-            "}\n",
-            // An entry whose run fails.
-            "fn inverse(value: i64) -> i64 {\n",
-            "    when { return 6 // (value - 2) }\n",
-            "}\n",
-            "export fn failing() -> i64 {\n",
-            "    return inverse(counted(3))\n",
-            "}\n",
-        ),
-    ),
-    (
-        "backtest.hgl",
-        concat!(
-            "application demo.ticks.backtest\n",
-            "use demo.ticks::{doubled}\n",
-            "const rounds: i64 = 3\n",
-            // RUN-3: `eval` is a simulation.
-            "eval(doubled(upto: rounds), RunConfig(length: 10s))\n",
-        ),
-    ),
-    (
-        "live.hgl",
-        concat!(
-            "application demo.ticks.live\n",
-            "use demo.ticks::{counted}\n",
-            // RUN-3: `run` is in real time, here for a fifth of a
-            // second.
-            "run(counted(upto: 100, every: 50ms), RunConfig(length: 220ms))\n",
-        ),
-    ),
-    (
-        "seeded.hgl",
-        concat!(
-            "application demo.ticks.seeded\n",
-            "use demo.ticks::{limited}\n",
-            "const base: i64 = 2\n",
-            // A value function written for each call of it (GEN-2).
-            "const fn sum<T>(a: T, b: T) -> T requires add_(T, T) -> T => a + b\n",
-            // UNIT-14: what sets the run's store, before the run. The
-            // store is `put`'s first parameter, wherever it is written.
-            "inject global_state\n",
-            "put(key: \"limit\", store: global_state, value: sum(base, 1))\n",
-            "eval(limited())\n",
-        ),
-    ),
-    (
-        "endless.hgl",
-        concat!(
-            "application demo.ticks.endless\n",
-            "use demo.ticks::{counted}\n",
-            // No end: it runs until its host stops it.
-            "run(counted(upto: 1000000, every: 20ms))\n",
-        ),
-    ),
-    (
-        "silent.hgl",
-        concat!(
-            "application demo.ticks.silent\n",
-            "use demo.ticks::{quiet}\n",
-            "eval(quiet(upto: 2))\n",
-        ),
-    ),
-    (
-        "broken.hgl",
-        concat!(
-            "application demo.ticks.broken\n",
-            "use demo.ticks::{failing}\n",
-            "eval(failing())\n",
-        ),
-    ),
+    fixture!("applications", "demo.ticks.hgl"),
+    fixture!("applications", "demo.ticks.backtest.hgl"),
+    fixture!("applications", "demo.ticks.live.hgl"),
+    fixture!("applications", "demo.ticks.seeded.hgl"),
+    fixture!("applications", "demo.ticks.endless.hgl"),
+    fixture!("applications", "demo.ticks.silent.hgl"),
+    fixture!("applications", "demo.ticks.broken.hgl"),
 ];
 
 /// An application's run statement is a function that runs its entry
@@ -1487,8 +850,7 @@ const APPLICATIONS: [(&str, &str); 7] = [
 /// arguments by name, and the configuration.
 #[test]
 fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
-    let emitted = emit(&APPLICATIONS);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&APPLICATIONS);
     let listed: Vec<(&str, bool, bool)> = emitted
         .output
         .applications
@@ -1512,7 +874,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
             ("demo.ticks.silent", false, false),
         ]
     );
-    let backtest = emitted.text("_hgl/_m_demo/_m_ticks/_m_backtest/__init__.py");
+    let backtest = emitted.module("demo.ticks.backtest");
     assert!(
         backtest.ends_with(concat!(
             "def _application():\n",
@@ -1524,7 +886,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
         "{backtest}"
     );
     // An argument left out takes its default, and `run` is real time.
-    let live = emitted.text("_hgl/_m_demo/_m_ticks/_m_live/__init__.py");
+    let live = emitted.module("demo.ticks.live");
     assert!(
         live.contains(concat!(
             "_harness.run(_hgl_4demo_5ticks.counted, _hgl_4core._inst_record__i64, True, ",
@@ -1536,7 +898,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
     // given to the run, which calls it before it builds the graph.
     // The instance of `sum` its value calls is written, as one a body
     // calls is (GEN-2).
-    let seeded = emitted.text("_hgl/_m_demo/_m_ticks/_m_seeded/__init__.py");
+    let seeded = emitted.module("demo.ticks.seeded");
     assert!(seeded.contains("def _inst_sum__i64(a, b):\n"), "{seeded}");
     assert!(
         seeded.ends_with(concat!(
@@ -1552,7 +914,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
     );
     // An entry with no result is given no `record`, and a statement
     // with no configuration writes none.
-    let silent = emitted.text("_hgl/_m_demo/_m_ticks/_m_silent/__init__.py");
+    let silent = emitted.module("demo.ticks.silent");
     assert!(
         silent.ends_with("    return _harness.run(_hgl_4demo_5ticks.quiet, None, False, upto=2)\n"),
         "{silent}"
@@ -1564,229 +926,75 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
 #[test]
 fn an_application_that_needs_what_is_not_written_is_blocked() {
     let emitted = emit(&[
-        (
-            "m.hgl",
-            concat!(
-                "module m\n",
-                "fn one() -> i64 {\n",
-                "    yield 1s: 1\n",
-                "}\n",
-                // An `if` over a connection whose branches assign two
-                // `var`s is not written yet.
-                "export fn waits() -> i64 {\n",
-                "    var first = one()\n",
-                "    var second = one()\n",
-                "    if one() > 0 {\n",
-                "        first = one()\n",
-                "        second = one()\n",
-                "    }\n",
-                "    return first + second\n",
-                "}\n",
-            ),
+        fixture!(
+            "an_application_that_needs_what_is_not_written_is_blocked",
+            "m.hgl"
         ),
-        (
-            "app.hgl",
-            concat!("application m.app\n", "use m::{waits}\n", "eval(waits())\n"),
+        fixture!(
+            "an_application_that_needs_what_is_not_written_is_blocked",
+            "m.app.hgl"
         ),
     ]);
     let [application] = emitted.output.applications.as_slice() else {
         panic!("one application is written");
     };
     let blocked = application.blocked.as_ref().expect("it is blocked");
-    assert_eq!(emitted.place(blocked.primary), "m.hgl:8:5");
+    assert_eq!(emitted.place(blocked.primary), "m.hgl:10:5");
 }
 
 /// Core's CRUN-2: "`start` is inclusive and `end` exclusive: no cycle
 /// runs before `start`, and none at or after `end` ... `length` gives
 /// the end counted from the start the run has, given or not".
-const BOUNDED: &str = concat!(
-    "module demo.bounded\n",
-    "fn pass(value: i64) -> i64 {\n",
-    "    when { return delta_value(value) }\n",
-    "}\n",
-    "const fn first(seen: list<tuple<datetime, i64>>) -> datetime => seen[0][0]\n",
-    "const later: datetime = earliest_start + 10us\n",
-    "test a_run_is_bounded {\n",
-    "    assert eval(pass(value: [1, 2, 3, 4, 5]), RunConfig(length: 2us)) == [1, 2]\n",
-    "    assert eval(pass(value: [1, 2, 3, 4, 5]), RunConfig(end: earliest_start + 3us)) == [1, 2, 3]\n",
-    "    assert eval(pass(value: [1, 2, 3]), RunConfig()) == [1, 2, 3]\n",
-    // A run that ends where it starts has no cycle.
-    "    assert eval(pass(value: [1, 2, 3]), RunConfig(length: 0us)) == []\n",
-    // TST-6: the first cell of a trace is at the run's start.
-    "    assert first(eval(pass(value: [7]), RunConfig(start: later))) == later\n",
-    "    assert first(eval(pass(value: [7]))) == earliest_start\n",
-    "    assert eval(pass(value: [1, 2, 3]), RunConfig(start: later, length: 2us)) == [1, 2]\n",
-    // The cells of a run with a later start are counted from that start.
-    "    let day: datetime = @2026-09-03T09:30:00Z\n",
-    "    assert eval(pass(value: [1, _, 3]), RunConfig(start: day)) == [1, _, 3]\n",
-    "    assert first(eval(pass(value: [7]), RunConfig(start: day))) == day\n",
-    // A trace that is only given to a `const fn` is not written dense:
-    // a publication a second after the start is a million cells on.
-    "    assert first(eval(slow())) == earliest_start + 1s\n",
-    "}\n",
-    "fn slow() -> i64 {\n",
-    "    yield 1s: 1\n",
-    "}\n",
-);
+const BOUNDED: (&str, &str) = fixture!("demo.bounded.hgl");
 
 /// Core's CRUN-2: "A `RunConfig` with both an `end` and a `length` is
 /// refused before the run's graph is built, an HGL error with code
 /// `run.end_and_length`." And a dense trace too long to give: one has a
 /// cell for each smallest step, and this source publishes a second
 /// after its run starts.
-const BOUNDED_FAILS: &str = concat!(
-    "module demo.bounded.fails\n",
-    "fn pass(value: i64) -> i64 {\n",
-    "    when { return delta_value(value) }\n",
-    "}\n",
-    "fn slow() -> i64 {\n",
-    "    yield 1s: 1\n",
-    "}\n",
-    "test both_ends {\n",
-    "    eval(pass(value: [1]), RunConfig(end: earliest_start + 1us, length: 1us))\n",
-    "}\n",
-    "test too_dense {\n",
-    "    assert eval(slow()) == [1]\n",
-    "}\n",
+const BOUNDED_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.bounded.fails.hgl"
 );
 
 /// An eval's configuration is given to the harness last, as `_config`:
 /// after the call's arguments, as EXPR-13 evaluates them.
 #[test]
 fn an_evals_configuration_is_given_to_the_harness() {
-    let emitted = emit(&[("bounded.hgl", BOUNDED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_bounded/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[BOUNDED]);
+    let python = emitted.module("demo.bounded");
+    python.assert_writes(&[
         "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1, 2, 3, 4, 5], _config=",
         "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7])",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 #[test]
 fn a_form_not_written_yet_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "struct Quote {\n",
-            "    bid: f64\n",
-            "}\n",
-            "fn gated(value: i64, gate: bool) -> i64 {\n",
-            "    inject scheduler\n",
-            "    when { return value }\n",
-            "}\n",
-            "fn maybe(value: i64?) -> i64 {\n",
-            "    when { return 1 }\n",
-            "}\n",
-            "fn pass(value: i64) -> i64 {\n",
-            "    when { return value }\n",
-            "}\n",
-            "fn summed(left: i64, right: i64) -> i64 => left + right\n",
-            "fn stopped(value: i64) -> i64 {\n",
-            "    inject out\n",
-            "    when { return value }\n",
-            "    stop { let last = out }\n",
-            "}\n",
-            "fn defaulted(value: i64 = 2) -> i64 {\n    when { return value }\n}\n",
-            "const fn packed(rest: ...i64) -> i64 => 1\n",
-            "const fn lone(value: i64) -> i64 => value\n",
-            "test timed {\n",
-            "    assert eval(pass(value: [0s: 7])) == [0s: 7]\n",
-            "    let wired = pass(7)\n",
-            "    assert eval(lone(value: [1])) == [1]\n",
-            "}\n",
-            "fn chosen(flag: bool, value: i64) -> i64 {\n",
-            "    if flag {\n",
-            "        return pass(value)\n",
-            "    }\n",
-            "    return value\n",
-            "}\n",
-            // A struct as a temporal input, which is written (TYPE-9),
-            // and one made in a graph, which is not.
-            "fn quoted(quote: Quote) -> f64 {\n",
-            "    when all_valid(quote) { return quote.bid }\n",
-            "}\n",
-            "fn fixed(value: f64) -> f64 => quoted(Quote(bid: 1.0))\n",
-            // A generic struct made where its arguments are the
-            // function's own generic parameters.
-            "struct Held<T> { value: T }\n",
-            "const fn wrap<T>(value: T) -> Held<T> => Held(value: value)\n",
-            // An atomic tuple as a temporal input (TYPE-9).
-            "fn paired(pair: atomic<tuple<f64, f64>>) -> f64 {\n",
-            "    when { return 1.0 }\n",
-            "}\n",
-        ),
-    )]);
+    let emitted = emit(&[fixture!("a_form_not_written_yet_is_reported", "m.hgl")]);
     assert_eq!(
         emitted.reported,
         [
             // `gated`, which injects a scheduler, and `stopped`, whose
             // `stop` reads `out`, are written (TIME-9, TIME-7).
-            "m.hgl:21:14 target.unsupported",
-            "m.hgl:24:17 target.unsupported",
+            "m.hgl:21:14 target.unsupported: the hgraph target does not write a default of a temporal input yet",
+            "m.hgl:24:17 target.unsupported: the hgraph target does not write a pack parameter yet",
             // `chosen`, a graph with an `if` over a connection, is
             // written (CTRL-13). The two of a struct, an atomic
             // tuple's, then what the test holds.
-            "m.hgl:40:39 target.unsupported",
-            "m.hgl:42:42 target.unsupported",
-            "m.hgl:43:11 target.unsupported",
+            "m.hgl:42:39 target.unsupported: the hgraph target does not write this expression in a graph yet",
+            "m.hgl:46:42 target.unsupported: the hgraph target does not write a generic struct made where its arguments are not known yet",
+            "m.hgl:48:11 target.unsupported: the hgraph target does not write the type `atomic<tuple<f64, f64>>` yet",
             // A node called in a test, outside an eval. The timed
             // traces of the line before it are written.
-            "m.hgl:28:17 target.unsupported",
+            "m.hgl:28:17 target.unsupported: the hgraph target does not write a call of a temporal function in a test, outside an eval yet",
         ]
     );
 }
 
 /// Value functions and symbols given connections in graphs, and a
 /// value function an eval names.
-const LIFTS: &str = concat!(
-    "module demo.lift\n",
-    "\n",
-    "const fn scale(value: f64, factor: f64 = 2.0) -> f64 => value * factor\n",
-    "const fn doubled(value: i64) -> i64 => value * 2\n",
-    "\n",
-    "fn relay(value: i64) -> i64 {\n",
-    "    when { return value }\n",
-    "}\n",
-    "\n",
-    "fn summed(left: i64, right: i64) -> i64 => left + right\n",
-    "fn scaled(price: f64, factor: f64) -> f64 => scale(price, factor)\n",
-    "fn half_configured(price: f64) -> f64 => scale(price, 3.0)\n",
-    "fn defaulted(price: f64) -> f64 => scale(price)\n",
-    "fn nested(left: i64, right: i64) -> i64 => doubled(relay(left) + right) + 1\n",
-    "fn twice(left: i64, right: i64) -> i64 => (left + right) + (left + right)\n",
-    "fn positive(price: f64) -> bool => price > 0.0\n",
-    "fn fixed(value: i64, const factor: i64) -> i64 => relay(value) + doubled(factor)\n",
-    "const fn label(value: i64, text: str = \"{NAME}\") -> str => text\n",
-    "fn labelled(value: i64) -> str => label(value)\n",
-    "const fn note(value: i64) {}\n",
-    "fn watched(value: i64) -> i64 {\n",
-    "    note(value)\n",
-    "    return value\n",
-    "}\n",
-    "\n",
-    "test lifts {\n",
-    "    assert eval(doubled(value: [1, _, 3])) == [2, _, 6]\n",
-    "    assert eval(summed(left: [1, _, 3], right: [_, 10])) == [_, 11, 13]\n",
-    "    assert eval(scaled(price: [1.0, _, 3.0, 3.0], factor: [_, 4.0])) ==\n",
-    "        [2.0, 4.0, 12.0, 12.0]\n",
-    "    assert eval(half_configured(price: [1.0, 2.0])) == [3.0, 6.0]\n",
-    "    assert eval(defaulted(price: [1.5])) == [3.0]\n",
-    "    assert eval(nested(left: [1, 2], right: [10])) == [23, 25]\n",
-    "    assert eval(twice(left: [1, 2], right: [10])) == [22, 24]\n",
-    "    assert eval(positive(price: [1.0, -1.0])) == [true, false]\n",
-    "    assert eval(fixed(value: [1, 2], factor: 5)) == [11, 12]\n",
-    "    assert eval(scale(value: [1.0, _, 3.0], factor: [_, 4.0])) == [2.0, 4.0, 12.0]\n",
-    "    assert eval(watched(value: [1, 2])) == [1, 2]\n",
-    "    assert eval(labelled(value: [1])) == [\"{NAME}\"]\n",
-    "}\n",
-);
+const LIFTS: (&str, &str) = fixture!("demo.lift.hgl");
 
 /// FN-6: "A selected value helper, a `const fn` or a value candidate of
 /// an operator, with temporal arguments in composition is lifted:
@@ -1800,10 +1008,9 @@ const LIFTS: &str = concat!(
 /// TST-8: "A selected value helper uses ordinary lifting."
 #[test]
 fn a_value_function_given_a_connection_is_lifted() {
-    let emitted = emit(&[("lift.hgl", LIFTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_lift/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[LIFTS]);
+    let python = emitted.module("demo.lift");
+    python.assert_writes(&[
         // A symbol: the candidate selected for it, lifted.
         concat!(
             "@_hg.compute_node\n",
@@ -1867,93 +1074,20 @@ fn a_value_function_given_a_connection_is_lifted() {
             "    if not (_harness.same(_harness.evaluate(_lift_12_doubled, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1, None, 3]), [2, None, 6])):\n",
             "        raise _py.AssertionError()\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     assert_eq!(python.matches("def _lift_7_add__i64_i64(").count(), 1);
 }
 
 /// An operator of a program with two candidates, and arithmetic that
 /// selects candidates core has an HGL body for.
-const CANDIDATES: &str = concat!(
-    "module demo.mixed\n",
-    "\n",
-    "operator blend_<L, R, O>(lhs: L, rhs: R) -> O\n",
-    "\n",
-    "impl const fn blend_(lhs: i64, rhs: i64) -> i64 => lhs * 10 + rhs\n",
-    "impl const fn blend_(lhs: f64, rhs: i64) -> f64 => lhs * 10 + rhs\n",
-    "\n",
-    "fn mixed(count: i64, price: f64) -> f64 => count * price + 1\n",
-    "fn blended(left: i64, right: i64) -> i64 => blend_(left, right)\n",
-    "\n",
-    "test mixes {\n",
-    "    assert 1.5 + 1 == 2.5\n",
-    "    assert 2.0 == 2\n",
-    "    assert 2.5 != 2\n",
-    "    assert blend_(1, 2) == 12\n",
-    "    assert blend_(1.5, 2) == 17.0\n",
-    "    assert eval(mixed(count: [2], price: [1.5])) == [4.0]\n",
-    "    assert eval(blended(left: [1, 2], right: [3])) == [13, 23]\n",
-    "}\n",
-);
+const CANDIDATES: (&str, &str) = fixture!("demo.mixed.hgl");
 
 /// GEN-4: "An `impl fn` is a temporal candidate of the operator it
 /// names and an `impl const fn` a value candidate." GEN-5: "A call in
 /// composition selects among all of them ... There, a temporal
 /// candidate outranks a value candidate of the same parameter types".
-const TEMPORAL_CANDIDATES: [(&str, &str); 2] = [
-    (
-        "joins.hgl",
-        concat!(
-            "module demo.joins\n",
-            "\n",
-            "operator join_<L, R, O>(lhs: L, rhs: R) -> O\n",
-            "\n",
-            // A node, with state and a start.
-            "impl fn join_(lhs: i64, rhs: i64) -> i64 {\n",
-            "    state seen: i64 = 0\n",
-            "    start { seen = 100 }\n",
-            "    when valid(lhs, rhs) {\n",
-            "        seen = seen + 1\n",
-            "        return lhs + rhs + seen\n",
-            "    }\n",
-            "}\n",
-            // A value candidate of the same parameter types.
-            "impl const fn join_(lhs: i64, rhs: i64) -> i64 => lhs - rhs\n",
-            // A graph, of the node.
-            "impl fn join_(lhs: i64, rhs: bool) -> i64 => join_(lhs, lhs)\n",
-            // A value candidate alone: lifted in a graph.
-            "impl const fn join_(lhs: str, rhs: str) -> str => lhs + rhs\n",
-            "\n",
-            "export const fn plain(a: i64, b: i64) -> i64 => join_(a, b)\n",
-        ),
-    ),
-    (
-        "joined.hgl",
-        concat!(
-            "module demo.joined\n",
-            "\n",
-            "use demo.joins::{join_, plain}\n",
-            "\n",
-            "fn both(a: i64, b: i64) -> i64 => join_(a, b)\n",
-            "fn flagged(a: i64, b: bool) -> i64 => join_(a, b)\n",
-            "fn valued(a: i64, b: i64) -> i64 => plain(a, b)\n",
-            "fn texts(a: str, b: str) -> str => join_(a, b)\n",
-            "\n",
-            "test candidates_are_called {\n",
-            // The node: its sum, and what its state counts from 100.
-            "    assert eval(both(a: [1, 2], b: [10])) == [112, 114]\n",
-            "    assert eval(flagged(a: [1, 2], b: [true])) == [103, 106]\n",
-            // A value function selects the value candidate.
-            "    assert eval(valued(a: [1, 2], b: [10])) == [-9, -8]\n",
-            "    assert eval(texts(a: [\"a\"], b: [\"b\"])) == [\"ab\"]\n",
-            "}\n",
-        ),
-    ),
-];
+const TEMPORAL_CANDIDATES: [(&str, &str); 2] =
+    [fixture!("demo.joins.hgl"), fixture!("demo.joined.hgl")];
 
 /// GEN-4: a temporal candidate with a body is a node or a graph as a
 /// temporal function is, named as a value candidate is, by the
@@ -1964,10 +1098,9 @@ const TEMPORAL_CANDIDATES: [(&str, &str); 2] = [
 /// `_value_name` (FN-4).
 #[test]
 fn a_temporal_candidate_is_a_node_or_a_graph() {
-    let emitted = emit(&TEMPORAL_CANDIDATES);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let joins = emitted.text("_hgl/_m_demo/_m_joins/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&TEMPORAL_CANDIDATES);
+    let joins = emitted.module("demo.joins");
+    joins.assert_writes(&[
         concat!(
             "@_hg.compute_node\n",
             "def _impl_join__i64_i64(lhs: _hg.TS[_py.int], rhs: _hg.TS[_py.int], ",
@@ -1992,25 +1125,15 @@ fn a_temporal_candidate_is_a_node_or_a_graph() {
             "def plain(a, b):\n",
             "    return _value_impl_join__i64_i64(lhs=a, rhs=b)\n",
         ),
-    ] {
-        assert!(
-            joins.contains(expected),
-            "the module has:\n{expected}\nin:\n{joins}"
-        );
-    }
-    let joined = emitted.text("_hgl/_m_demo/_m_joined/__init__.py");
-    for expected in [
+    ]);
+    let joined = emitted.module("demo.joined");
+    joined.assert_writes(&[
         // The candidate of another module, through that module.
         "    return _hgl_4demo_5joins._impl_join__i64_i64(lhs=a, rhs=b)\n",
         "    return _hgl_4demo_5joins._impl_join__i64_bool(lhs=a, rhs=b)\n",
         // A value candidate is lifted, and a temporal one is not.
         "    return _hgl_4demo_5joins._impl_join__str_str(lhs=lhs.value, rhs=rhs.value)\n",
-    ] {
-        assert!(
-            joined.contains(expected),
-            "the module has:\n{expected}\nin:\n{joined}"
-        );
-    }
+    ]);
     assert_eq!(joined.matches("def _lift_").count(), 2, "{joined}");
 }
 
@@ -2018,62 +1141,7 @@ fn a_temporal_candidate_is_a_node_or_a_graph() {
 /// output, or solvable equality." A temporal function with generic
 /// parameters, and core's temporal candidates of `+` and `-` under
 /// `{invalid: .identity}` (OPS-9), each called with more than one type.
-const GENERICS: &str = concat!(
-    "module demo.generics\n",
-    "\n",
-    // Graphs of core's generic temporal candidates.
-    "fn identity_sum<T>(lhs: T, rhs: T) -> T\n",
-    "    requires add_(T, T) -> T => lhs +{invalid: .identity} rhs\n",
-    "fn identity_difference<T>(lhs: T, rhs: T) -> T\n",
-    "    requires sub_(T, T) -> T && neg_(T) -> T => lhs -{invalid: .identity} rhs\n",
-    // A node, with an operation it requires in its hook.
-    "fn doubled<T>(value: T) -> T requires add_(T, T) -> T {\n",
-    "    when valid(value) { return add_(value, value) }\n",
-    "}\n",
-    // A graph of that node, twice.
-    "fn quadrupled<T>(value: T) -> T requires add_(T, T) -> T => doubled(doubled(value))\n",
-    // An operation a graph requires: the value candidate, lifted.
-    "fn summed<T>(a: T, b: T) -> T requires add_(T, T) -> T {\n",
-    "    let both = add_(a, b)\n",
-    "    return both + both\n",
-    "}\n",
-    // A generic value, read in a hook.
-    "fn scaled<const by: i64>(value: i64) -> i64 {\n",
-    "    when valid(value) { return value * by }\n",
-    "}\n",
-    // State of the generic type, and configuration of it.
-    "fn latest<T>(value: T, const fallback: T) -> T {\n",
-    "    state held: T = fallback\n",
-    "    when valid(value) {\n",
-    "        let before = held\n",
-    "        held = value\n",
-    "        return before\n",
-    "    }\n",
-    "}\n",
-    // A call from a graph with no generic parameter.
-    "fn wired(a: i64, b: i64) -> i64 => identity_sum(a, b)\n",
-    "fn tripled(value: i64) -> i64 => scaled<3>(value)\n",
-    // One no call gives its types to.
-    "fn unused<T>(value: T) -> T {\n",
-    "    when valid(value) { return value }\n",
-    "}\n",
-    "\n",
-    "test generics_are_instances {\n",
-    "    assert eval(identity_sum(lhs: [_, 1.5], rhs: [0.5])) == [0.5, 2.0]\n",
-    "    assert eval(identity_difference(lhs: [_, 1.5], rhs: [0.5])) == [-0.5, 1.0]\n",
-    "    assert eval(identity_sum(lhs: [_, 5m], rhs: [2m])) == [2m, 7m]\n",
-    "    assert eval(identity_sum(lhs: [\"\", _, \"a\"], rhs: [_, \"b\"])) == [\"\", \"b\", \"ab\"]\n",
-    "    assert eval(wired(a: [1, 2], b: [10])) == [11, 12]\n",
-    "    assert eval(doubled(value: [1, 2])) == [2, 4]\n",
-    "    assert eval(doubled(value: [\"a\"])) == [\"aa\"]\n",
-    "    assert eval(quadrupled(value: [1.5])) == [6.0]\n",
-    "    assert eval(summed(a: [1, 2], b: [10])) == [22, 24]\n",
-    "    assert eval(tripled(value: [2, 3])) == [6, 9]\n",
-    "    assert eval(scaled<4>(value: [2])) == [8]\n",
-    "    assert eval(latest(value: [1, 2], fallback: 0)) == [0, 1]\n",
-    "    assert eval(latest(value: [\"a\", \"b\"], fallback: \"\")) == [\"\", \"a\"]\n",
-    "}\n",
-);
+const GENERICS: (&str, &str) = fixture!("demo.generics.hgl");
 
 /// GEN-2: hgraph's nodes and graphs are written with their inputs'
 /// types, so a temporal function with generic parameters is written
@@ -2085,11 +1153,10 @@ const GENERICS: &str = concat!(
 /// call gives.
 #[test]
 fn a_generic_temporal_function_is_written_for_each_call() {
-    let emitted = emit(&[("generics.hgl", GENERICS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&[GENERICS]);
     assert_eq!(emitted.blocked("generics_are_instances"), None);
-    let python = emitted.text("_hgl/_m_demo/_m_generics/__init__.py");
-    for expected in [
+    let python = emitted.module("demo.generics");
+    python.assert_writes(&[
         // A graph for each type, of core's candidate for that type.
         concat!(
             "@_hg.graph\n",
@@ -2126,17 +1193,12 @@ fn a_generic_temporal_function_is_written_for_each_call() {
         "    return _inst_identity_sum__i64(lhs=a, rhs=b)\n",
         "    return _inst_scaled__3(value=value)\n",
         "_harness.evaluate(_inst_scaled__4, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[2])",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // Nothing calls `unused`, and nothing is written for it.
     assert!(!python.contains("unused"), "{python}");
     // Core's candidate is written in core's file, once for each type.
-    let core = emitted.text("_hgl/_m_core/__init__.py");
-    for expected in [
+    let core = emitted.module("core");
+    core.assert_writes(&[
         concat!(
             "@_hg.compute_node(valid=())\n",
             "def _inst__impl_add__T_T__f64__identity(lhs: _hg.TS[_py.float], ",
@@ -2147,12 +1209,7 @@ fn a_generic_temporal_function_is_written_for_each_call() {
         ),
         "        return _core.add__duration_duration(lhs=lhs.value, rhs=rhs.value)\n",
         "        return _core.neg__f64(value=rhs.value)\n",
-    ] {
-        assert!(
-            core.contains(expected),
-            "core has:\n{expected}\nin:\n{core}"
-        );
-    }
+    ]);
     assert_eq!(
         core.matches("def _inst__impl_add__T_T__").count(),
         4,
@@ -2162,51 +1219,7 @@ fn a_generic_temporal_function_is_written_for_each_call() {
 
 /// GEN-16: a value function with generic parameters that calls an
 /// operation it requires, or hands a requirement on to what it calls.
-const VALUE_GENERICS: &str = concat!(
-    "module demo.vals\n",
-    "\n",
-    "operator join<L, R, O>(lhs: L, rhs: R) -> O\n",
-    "impl const fn join(lhs: i64, rhs: i64) -> i64 => lhs * 10 + rhs\n",
-    "impl const fn join(lhs: str, rhs: str) -> str => lhs + rhs\n",
-    // A candidate that states a requirement of its own.
-    "impl const fn join<T>(lhs: list<T>, rhs: list<T>) -> list<T>\n",
-    "    requires join(T, T) -> T => [join(lhs[0], rhs[0])]\n",
-    "\n",
-    // A required operation, by name and by symbol.
-    "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
-    "const fn sum<T>(a: T, b: T) -> T requires add_(T, T) -> T => a + b\n",
-    // One that hands its requirement on.
-    "const fn outer<U>(value: U) -> U requires join(U, U) -> U => twice(twice(value))\n",
-    // One with no requirement.
-    "const fn same<T>(value: T) -> T => value\n",
-    // One with no requirement of its own, which is written once, and
-    // calls one that requires with whole arguments: nothing else asks
-    // for `sum` of two `str`.
-    "const fn paired<T>(value: T) -> str => sum(\"a\", \"b\")\n",
-    "\n",
-    "const hundred: i64 = sum(40, 60)\n",
-    "\n",
-    // In a node's hook, and lifted in a graph.
-    "fn joined(value: i64) -> i64 {\n",
-    "    when valid(value) { return twice(value) }\n",
-    "}\n",
-    "fn graphed(value: f64) -> f64 => sum(value, value)\n",
-    "\n",
-    "test values_are_instances {\n",
-    "    assert twice(1) == 11\n",
-    "    assert twice(\"a\") == \"aa\"\n",
-    "    assert sum(1.5, 2.0) == 3.5\n",
-    "    assert outer(1) == 121\n",
-    "    assert same(\"x\") == \"x\"\n",
-    "    assert paired(1) == \"ab\"\n",
-    "    assert hundred == 100\n",
-    "    assert twice([2]) == [22]\n",
-    "    assert eval(joined(value: [1, 2])) == [11, 22]\n",
-    "    assert eval(graphed(value: [1.5])) == [3.0]\n",
-    // TST-8: a value function an eval names is lifted.
-    "    assert eval(twice(value: [3])) == [33]\n",
-    "}\n",
-);
+const VALUE_GENERICS: (&str, &str) = fixture!("demo.vals.hgl");
 
 /// GEN-16: which candidate a required operation calls depends on the
 /// types, so a value function that calls one, or hands a requirement
@@ -2217,11 +1230,10 @@ const VALUE_GENERICS: &str = concat!(
 /// hook, a constant, and the node that lifts it in a graph or an eval.
 #[test]
 fn a_value_function_that_requires_is_written_for_each_call() {
-    let emitted = emit(&[("vals.hgl", VALUE_GENERICS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&[VALUE_GENERICS]);
     assert_eq!(emitted.blocked("values_are_instances"), None);
-    let python = emitted.text("_hgl/_m_demo/_m_vals/__init__.py");
-    for expected in [
+    let python = emitted.module("demo.vals");
+    python.assert_writes(&[
         concat!(
             "def _inst_twice__i64(value):\n",
             "    return _impl_join_i64_i64(lhs=value, rhs=value)\n",
@@ -2266,12 +1278,7 @@ fn a_value_function_that_requires_is_written_for_each_call() {
         "    return _inst_twice__i64(value=value.value)\n",
         "    return _inst_sum__f64(a=a.value, b=b.value)\n",
         "lhs=_inst_twice__i64(value=1), rhs=11,",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     assert!(!python.contains("def twice("), "{python}");
 }
 
@@ -2280,26 +1287,7 @@ fn a_value_function_that_requires_is_written_for_each_call() {
 /// caller then states no requirement and hands none on, and still
 /// calls a function that is written by instance, with its own generic
 /// parameter.
-const THROUGH: &str = concat!(
-    "module demo.through\n",
-    "\n",
-    "operator pick<L, R, O>(lhs: L, rhs: R) -> O\n",
-    "impl const fn pick<T>(lhs: T, rhs: T) -> T => lhs\n",
-    "\n",
-    "const fn first<T>(value: T) -> T requires pick(T, T) -> T => pick(value, value)\n",
-    "const fn wrapper<U>(value: U) -> U => first(value)\n",
-    "const fn outermost<V>(value: V) -> V => wrapper(value)\n",
-    // GEN-13: a generic value read as a value, and handed on.
-    "const fn width<const N: i64>() -> i64 => N\n",
-    "const fn wider<const M: i64>() -> i64 => width<M>() + 1\n",
-    "\n",
-    "test a_caller_is_an_instance_too {\n",
-    "    assert wrapper(1) == 1\n",
-    "    assert outermost(\"a\") == \"a\"\n",
-    "    assert width<3>() == 3\n",
-    "    assert wider<4>() == 5\n",
-    "}\n",
-);
+const THROUGH: (&str, &str) = fixture!("demo.through.hgl");
 
 /// GEN-2: which instance such a caller calls is known only where its
 /// own generic parameter is. So it is written by instance too, and so
@@ -2308,11 +1296,10 @@ const THROUGH: &str = concat!(
 /// written for each constant it is given.
 #[test]
 fn a_caller_of_an_instance_with_its_own_parameter_is_an_instance() {
-    let emitted = emit(&[("through.hgl", THROUGH)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&[THROUGH]);
     assert_eq!(emitted.blocked("a_caller_is_an_instance_too"), None);
-    let python = emitted.text("_hgl/_m_demo/_m_through/__init__.py");
-    for expected in [
+    let python = emitted.module("demo.through");
+    python.assert_writes(&[
         // The candidate for any one type is written once.
         "def _impl_pick_T_T(lhs, rhs):\n",
         concat!(
@@ -2337,40 +1324,14 @@ fn a_caller_of_an_instance_with_its_own_parameter_is_an_instance() {
             "def _inst_wider__4():\n",
             "    return _core.add__i64_i64(lhs=_inst_width__4(), rhs=1)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     assert!(!python.contains("def wrapper("), "{python}");
 }
 
 /// GEN-2: an instance is written in its declaration's module, with the
 /// types of the module that calls it: here an enum of a module that
 /// imports the declaration's.
-const CALLERS_TYPE: [(&str, &str); 2] = [
-    (
-        "kept.hgl",
-        concat!(
-            "module demo.kept\n",
-            "export fn held<T>(value: T) -> T {\n",
-            "    when valid(value) { return value }\n",
-            "}\n",
-        ),
-    ),
-    (
-        "sides.hgl",
-        concat!(
-            "module demo.sides\n",
-            "use demo.kept::{held}\n",
-            "enum Side { buy, sell }\n",
-            "test an_instance_of_a_callers_type {\n",
-            "    assert eval(held(value: [Side.buy, Side.sell])) == [Side.buy, Side.sell]\n",
-            "}\n",
-        ),
-    ),
-];
+const CALLERS_TYPE: [(&str, &str); 2] = [fixture!("demo.kept.hgl"), fixture!("demo.sides.hgl")];
 
 /// The two modules then import one another in Python, though they do
 /// not in the source. A function's annotations are read where it is
@@ -2379,22 +1340,16 @@ const CALLERS_TYPE: [(&str, &str); 2] = [
 /// there when the instance that names it is defined.
 #[test]
 fn a_module_has_its_types_before_it_imports_another() {
-    let emitted = emit(&CALLERS_TYPE);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let kept = emitted.text("_hgl/_m_demo/_m_kept/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&CALLERS_TYPE);
+    let kept = emitted.module("demo.kept");
+    kept.assert_writes(&[
         "import _hgl._m_demo._m_sides as _hgl_4demo_5sides\n",
         concat!(
             "def _inst_held__demo_sides__Side(value: _hg.TS[_hgl_4demo_5sides.Side]) ",
             "-> _hg.TS[_hgl_4demo_5sides.Side]:\n",
         ),
-    ] {
-        assert!(
-            kept.contains(expected),
-            "the module has:\n{expected}\nin:\n{kept}"
-        );
-    }
-    let sides = emitted.text("_hgl/_m_demo/_m_sides/__init__.py");
+    ]);
+    let sides = emitted.module("demo.sides");
     let defined = sides
         .find("Side = _enum.Enum(")
         .expect("the enum is written");
@@ -2411,21 +1366,9 @@ fn a_module_has_its_types_before_it_imports_another() {
 /// is.
 #[test]
 fn an_instance_that_is_not_written_is_reported() {
-    let emitted = emit(&[(
-        "held.hgl",
-        concat!(
-            "module demo.held\n",
-            "fn held<T>(value: T) -> T {\n",
-            "    when valid(value) { return value }\n",
-            "}\n",
-            "fn again<T>(value: T) -> T => held(value)\n",
-            "test whole {\n",
-            "    assert eval(again(value: [1])) == [1]\n",
-            "}\n",
-            "test listed {\n",
-            "    let seen = eval(again(value: [[[1]]]))\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "an_instance_that_is_not_written_is_reported",
+        "demo.held.hgl"
     )]);
     // The type of the input, at the parameter, and of the result, at
     // the function's name: once each for the one instance that has it,
@@ -2435,17 +1378,20 @@ fn an_instance_that_is_not_written_is_reported() {
     assert_eq!(
         emitted.reported[..4],
         [
-            "held.hgl:2:12 target.unsupported",
-            "held.hgl:2:4 target.unsupported",
-            "held.hgl:5:13 target.unsupported",
-            "held.hgl:5:4 target.unsupported",
+            "demo.held.hgl:2:12 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
+            "demo.held.hgl:2:4 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
+            "demo.held.hgl:5:13 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
+            "demo.held.hgl:5:4 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
         ]
     );
     let [in_core] = &emitted.reported[4..] else {
         panic!("one more is reported: {:?}", emitted.reported);
     };
     assert!(
-        in_core.starts_with("<core>/core/core.hgl:") && in_core.ends_with(" target.unsupported"),
+        in_core.starts_with("<core>/core/core.hgl:")
+            && in_core.ends_with(
+                " target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet"
+            ),
         "{in_core}"
     );
     assert_eq!(emitted.blocked("whole"), None);
@@ -2454,7 +1400,7 @@ fn an_instance_that_is_not_written_is_reported() {
         blocked.ends_with("the hgraph target does not write the type `list<list<i64>>` yet"),
         "{blocked}"
     );
-    let python = emitted.text("_hgl/_m_demo/_m_held/__init__.py");
+    let python = emitted.module("demo.held");
     assert!(python.contains("def _inst_held__i64("), "{python}");
     assert!(python.contains("def _inst_again__i64("), "{python}");
     assert!(!python.contains("def _inst_held__list"), "{python}");
@@ -2472,10 +1418,9 @@ fn an_instance_that_is_not_written_is_reported() {
 /// native ones are the provider's.
 #[test]
 fn a_candidate_with_a_body_is_a_function() {
-    let emitted = emit(&[("mixed.hgl", CANDIDATES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_mixed/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[CANDIDATES]);
+    let python = emitted.module("demo.mixed");
+    python.assert_writes(&[
         "import _hgl._m_core as _hgl_4core\n",
         concat!(
             "def _impl_blend__i64_i64(lhs, rhs):\n",
@@ -2494,14 +1439,9 @@ fn a_candidate_with_a_body_is_a_function() {
         ),
         "    return _lift_2_blend_(lhs=left, rhs=right)\n",
         "    if not (_hgl_4core._impl_eq__f64_i64_f64_f64(lhs=2.0, rhs=2, abs=0.0, rel=0.0)):\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
-    let core = emitted.text("_hgl/_m_core/__init__.py");
-    for expected in [
+    ]);
+    let core = emitted.module("core");
+    core.assert_writes(&[
         "# Generated by the hgl compiler for hgraph, from module `core`. Do not edit.\n",
         concat!(
             "def _impl_add__f64_i64(lhs, rhs):\n",
@@ -2511,24 +1451,13 @@ fn a_candidate_with_a_body_is_a_function() {
             "def _impl_eq__f64_i64_f64_f64(lhs, rhs, abs, rel):\n",
             "    return _core.eq__i64_f64_f64_f64(lhs=rhs, rhs=lhs, abs=abs, rel=rel)\n",
         ),
-    ] {
-        assert!(
-            core.contains(expected),
-            "core has:\n{expected}\nin:\n{core}"
-        );
-    }
+    ]);
 
     // A program that uses nothing core writes in HGL has no file of
     // core's: an eval would, for its `replay` and `record`.
-    let emitted = emit(&[(
-        "plain.hgl",
-        concat!(
-            "module demo.plain\n",
-            "const fn doubled(value: i64) -> i64 => value * 2\n",
-            "test plain {\n",
-            "    assert doubled(2) == 4\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_candidate_with_a_body_is_a_function",
+        "demo.plain.hgl"
     )]);
     assert!(
         emitted
@@ -2545,21 +1474,16 @@ fn a_candidate_with_a_body_is_a_function() {
 /// The report is core's own, at core's source.
 #[test]
 fn what_core_lacks_is_reported_where_a_program_reaches_it() {
-    let emitted = emit(&[(
-        "repeats.hgl",
-        concat!(
-            "module demo.repeats\n",
-            // Core writes `i64 * str` in HGL, as `str * i64` turned
-            // round, and the provider has no function for that one.
-            "const fn twice(text: str) -> str => 2 * text\n",
-            "const fn fine(value: i64) -> i64 => value + 1\n",
-            "test doubles { assert fine(1) == 2 }\n",
-            "test repeats { assert twice(\"ab\") == \"abab\" }\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "what_core_lacks_is_reported_where_a_program_reaches_it",
+        "demo.repeats.hgl"
     )]);
     assert_eq!(emitted.reported.len(), 1, "{:?}", emitted.reported);
     assert!(
-        emitted.reported[0].starts_with("<core>/core/core.hgl:"),
+        emitted.reported[0].starts_with("<core>/core/core.hgl:")
+            && emitted.reported[0].ends_with(
+                " target.unsupported: the hgraph target does not write the candidate `mul_(str, i64)` yet"
+            ),
         "{:?}",
         emitted.reported
     );
@@ -2574,82 +1498,14 @@ fn what_core_lacks_is_reported_where_a_program_reaches_it() {
 }
 
 /// Divisions, each with the zero policy it is given or takes by
-/// default.
-const DIVISION: &str = concat!(
-    "module demo.div\n",
-    "\n",
-    "const fn ratio(a: f64, b: f64) -> f64 => a / b\n",
-    "const fn nans(a: f64, b: f64) -> f64 => a /{zero: .nan} b\n",
-    "const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b\n",
-    "const fn named(a: f64, b: f64) -> f64 => div_(a, b, zero: ZeroPolicy.nan)\n",
-    "const fn grouped(a: f64, b: f64) -> f64 => div_(a, b, zero: (ZeroPolicy.nan))\n",
-    "const fn built(a: f64, b: f64) -> f64 => div_(a, b, zero: ZeroPolicy(\"nan\"))\n",
-    "const fn floors(a: i64, b: i64) -> i64 => a // b\n",
-    "const fn rest(a: i64, b: i64) -> i64 => a % b\n",
-    "\n",
-    "fn ratios(a: f64, b: f64) -> f64 => a / b\n",
-    "fn halves(a: i64) -> f64 => a / 2\n",
-    "\n",
-    "test divides {\n",
-    "    assert ratio(6.0, 4.0) == 1.5\n",
-    "    assert 7 / 2 == 3.5\n",
-    "    assert 7.0 / 2 == 3.5\n",
-    "    assert 7 / 2.0 == 3.5\n",
-    // NUM-3: a signed infinity, whose sign combines both operands'.
-    "    assert ratio(1.0, 0.0) > 1.0e308\n",
-    "    assert ratio(-1.0, 0.0) < -1.0e308\n",
-    "    assert ratio(1.0, -0.0) < -1.0e308\n",
-    // NaN is equal to nothing, itself included (NUM-5).
-    "    assert ratio(0.0, 0.0) != ratio(0.0, 0.0)\n",
-    "    assert nans(1.0, 0.0) != nans(1.0, 0.0)\n",
-    "    assert nans(6.0, 4.0) == 1.5\n",
-    "    assert named(1.0, 0.0) != named(1.0, 0.0)\n",
-    "    assert grouped(1.0, 0.0) != grouped(1.0, 0.0)\n",
-    "    assert built(1.0, 0.0) != built(1.0, 0.0)\n",
-    "    assert strict(6.0, 4.0) == 1.5\n",
-    // NUM-1: floor division rounds toward negative infinity, and a
-    // modulo has the divisor's sign.
-    "    assert floors(7, 2) == 3\n",
-    "    assert floors(-7, 2) == -4\n",
-    "    assert rest(7, 2) == 1\n",
-    "    assert rest(-7, 2) == 1\n",
-    "    assert rest(7, -2) == -1\n",
-    "    assert 7.5 // 2 == 3.0\n",
-    "    assert 7.5 % 2 == 1.5\n",
-    "    assert -7.5 % 2 == 0.5\n",
-    // NUM-12: what IEEE arithmetic makes of the zero divisor.
-    "    assert 1.0 // 0.0 > 1.0e308\n",
-    "    assert 1.0 % 0.0 != 1.0 % 0.0\n",
-    // NUM-1: "Where an f64 operand is an infinity or NaN and the
-    // divisor is not zero, `//` is the floor of the IEEE quotient and
-    // `%` what IEEE `fmod` gives". An infinite quotient stays one, with
-    // the sign of both operands, and has no remainder.
-    "    assert (1.0 / 0.0) // 2.0 > 1.0e308\n",
-    "    assert (1.0 / 0.0) // -2.0 < -1.0e308\n",
-    "    assert (-1.0 / 0.0) // 2.0 < -1.0e308\n",
-    "    assert (1.0 / 0.0) // (1.0 / 0.0) != (1.0 / 0.0) // (1.0 / 0.0)\n",
-    "    assert (1.0 / 0.0) % 2.0 != (1.0 / 0.0) % 2.0\n",
-    // A finite numerator over an infinity: a zero with the quotient's
-    // sign, which a division by it shows, and "a remainder by an
-    // infinity is the numerator as it is, whatever its sign".
-    "    assert 1.0 // (1.0 / 0.0) == 0.0\n",
-    "    assert 1.0 / (1.0 // (1.0 / 0.0)) > 1.0e308\n",
-    "    assert 1.0 / (-1.0 // (1.0 / 0.0)) < -1.0e308\n",
-    "    assert 1.0 % (1.0 / 0.0) == 1.0\n",
-    "    assert -1.0 % (1.0 / 0.0) == -1.0\n",
-    "    assert 1.0 % (-1.0 / 0.0) == 1.0\n",
-    "    assert eval(ratios(a: [6.0, 1.0], b: [4.0])) == [1.5, 0.25]\n",
-    "    assert eval(halves(a: [3])) == [1.5]\n",
-    "}\n",
-);
+/// default. NUM-1: floor division rounds toward negative infinity, and
+/// with an infinity or a NaN is the floor of the IEEE quotient.
+const DIVISION: (&str, &str) = fixture!("demo.div.hgl");
 
 /// Divisions by zero under `fail`, given or taken by default.
-const DIVISION_FAILS: &str = concat!(
-    "module demo.div.fails\n",
-    "const fn floors(a: i64, b: i64) -> i64 => a // b\n",
-    "const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b\n",
-    "test whole_by_zero { assert floors(1, 0) == 0 }\n",
-    "test strict_by_zero { assert strict(1.0, 0.0) == 0.0 }\n",
+const DIVISION_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.div.fails.hgl"
 );
 
 /// NUM-12: "Every division takes `zero`: `/`, `//`, and `%`". NUM-9:
@@ -2661,10 +1517,9 @@ const DIVISION_FAILS: &str = concat!(
 /// takes `.fail`).
 #[test]
 fn a_division_takes_its_zero_policy() {
-    let emitted = emit(&[("div.hgl", DIVISION)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_div/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[DIVISION]);
+    let python = emitted.module("demo.div");
+    python.assert_writes(&[
         "def ratio(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"ieee\")\n",
         "def nans(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")\n",
         "def strict(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"fail\")\n",
@@ -2679,93 +1534,16 @@ fn a_division_takes_its_zero_policy() {
             "def _lift_1_div__i64_i64(lhs: _hg.TS[_py.int], rhs: _py.int) -> _hg.TS[_py.float]:\n",
             "    return _core.div__i64_i64(lhs=lhs.value, rhs=rhs, zero=\"ieee\")\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Results and errors in value functions, and a `?` in a `when`.
-const RESULTS: &str = concat!(
-    "module demo.results\n",
-    "\n",
-    "const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: .error} b\n",
-    "\n",
-    "const fn halved(a: f64, b: f64) -> result<f64, error> {\n",
-    "    let ratio = checked(a, b)?\n",
-    "    return ok(ratio / 2)\n",
-    "}\n",
-    "\n",
-    "const fn described(a: f64, b: f64) -> str {\n",
-    "    let outcome = checked(a, b)\n",
-    "    if is_ok(outcome) { return \"fine\" }\n",
-    "    return outcome.error.message\n",
-    "}\n",
-    "\n",
-    "const fn code_of(a: f64, b: f64) -> str? {\n",
-    "    let outcome = checked(a, b)\n",
-    "    if is_err(outcome) { return outcome.error.code }\n",
-    "    return null\n",
-    "}\n",
-    "\n",
-    "const fn value_or(a: f64, b: f64, fallback: f64) -> f64 {\n",
-    "    let outcome = checked(a, b)\n",
-    "    if is_ok(outcome) { return outcome.value }\n",
-    "    return fallback\n",
-    "}\n",
-    "\n",
-    "const fn failing(reason: str) -> result<i64, error> =>\n",
-    "    err(error(message: reason, code: \"demo.failed\"))\n",
-    "\n",
-    "const fn plain(reason: str) -> error => error(message: reason)\n",
-    "\n",
-    "const fn fail(text: str) -> result<str, str> => err(text)\n",
-    "const fn ordered() -> result<error, str> =>\n",
-    "    ok(error(code: fail(\"code\")?, message: fail(\"message\")?))\n",
-    "const fn met() -> str {\n",
-    "    let outcome = ordered()\n",
-    "    if is_err(outcome) { return outcome.error }\n",
-    "    return \"none\"\n",
-    "}\n",
-    "\n",
-    "fn ratios(a: f64, b: f64) -> f64 {\n",
-    "    when { return checked(a, b)? }\n",
-    "}\n",
-    "\n",
-    "test results {\n",
-    "    assert value_or(6.0, 4.0, 0.0) == 1.5\n",
-    // NUM-9: a zero divisor gives an `err`, and no other does.
-    "    assert value_or(6.0, 0.0, -1.0) == -1.0\n",
-    "    assert described(6.0, 4.0) == \"fine\"\n",
-    "    assert described(6.0, 0.0) == \"a division by zero\"\n",
-    "    assert code_of(6.0, 0.0) != null\n",
-    "    assert code_of(6.0, 4.0) == null\n",
-    "    assert plain(\"no\").code == null\n",
-    // ERR-5: a failure leaves the function as the same error.
-    "    assert is_ok(halved(6.0, 4.0))\n",
-    "    assert is_err(halved(6.0, 0.0))\n",
-    "    assert halved(6.0, 0.0) == checked(1.0, 0.0)\n",
-    // ERR-2: equality compares the tag, then the payload.
-    "    assert halved(6.0, 4.0) == halved(3.0, 2.0)\n",
-    "    assert failing(\"no\") != failing(\"yes\")\n",
-    "    assert failing(\"no\") == failing(\"no\")\n",
-    "    assert plain(\"no\") == plain(\"no\")\n",
-    // EXPR-2: the failure met first is the one written first.
-    "    assert met() == \"code\"\n",
-    "    assert eval(ratios(a: [6.0], b: [4.0])) == [1.5]\n",
-    "}\n",
-);
+const RESULTS: (&str, &str) = fixture!("demo.results.hgl");
 
 /// A node whose `?` meets a failure.
-const RESULT_FAILS: &str = concat!(
-    "module demo.results.fails\n",
-    "const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: .error} b\n",
-    "fn ratios(a: f64, b: f64) -> f64 {\n",
-    "    when { return checked(a, b)? }\n",
-    "}\n",
-    "test node_fails { eval(ratios(a: [6.0], b: [0.0])) }\n",
+const RESULT_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.results.fails.hgl"
 );
 
 /// ERR-2: "`ok(value)` constructs a success and `err(value)` a
@@ -2783,10 +1561,9 @@ const RESULT_FAILS: &str = concat!(
 /// implicitly fails a node nor requires an exception."
 #[test]
 fn a_result_is_a_value_and_a_failure_leaves_through_a_question_mark() {
-    let emitted = emit(&[("results.hgl", RESULTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_results/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[RESULTS]);
+    let python = emitted.module("demo.results");
+    python.assert_writes(&[
         "def checked(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"error\")\n",
         // A `?` is inside an expression, where Python has no `return`:
         // the function returns what the provider raises.
@@ -2817,67 +1594,19 @@ fn a_result_is_a_value_and_a_failure_leaves_through_a_question_mark() {
         ),
         // In a `when` a failure fails the node.
         "    return _core.succeeded(checked(a=a.value, b=b.value))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // A function with no `?` catches nothing.
     assert_eq!(python.matches("except _core.Propagated").count(), 2);
 }
 
 /// Numeric equality within a tolerance: core's observations for
-/// NUM-4 and NUM-5.
-const CLOSE: &str = concat!(
-    "module demo.close\n",
-    "\n",
-    "const fn close(a: f64, b: f64, tolerance: f64) -> bool => a =={abs: tolerance} b\n",
-    "const fn near(a: f64, b: f64, share: f64) -> bool => a =={rel: share} b\n",
-    "const fn apart(a: f64, b: f64, tolerance: f64) -> bool => a !={abs: tolerance} b\n",
-    "const fn whole(a: i64, b: i64, tolerance: f64) -> bool => a =={abs: tolerance} b\n",
-    "const fn mixed(a: i64, b: f64, tolerance: f64) -> bool => a =={abs: tolerance} b\n",
-    "\n",
-    "fn closes(a: f64, b: f64) -> bool => a =={abs: 0.5} b\n",
-    "\n",
-    "test closeness {\n",
-    "    assert !(1.0 == 1.005)\n",
-    "    assert 1.0 =={abs: 0.01} 1.005\n",
-    "    assert close(1.0, 1.005, 0.01)\n",
-    "    assert !close(1.0, 1.005, 0.001)\n",
-    // "Configured `!=` is the complement under the same options."
-    "    assert apart(1.0, 1.005, 0.001)\n",
-    "    assert !apart(1.0, 1.005, 0.01)\n",
-    // NUM-2: an `i64` is not rounded to an `f64` to be compared.
-    "    assert !(9007199254740993 == 9007199254740992.0)\n",
-    // A relative tolerance under one never reaches zero.
-    "    assert !near(1.0, 0.0, 0.5)\n",
-    // NUM-5: the difference, and the tolerance scaled, are no `f64`.
-    "    assert !near(1.0e308, -1.0e308, 1.9)\n",
-    "    assert near(1.0e308, -1.0e308, 2.0)\n",
-    // NUM-7: closeness is not transitive.
-    "    assert close(0.0, 0.75, 1.0)\n",
-    "    assert close(0.75, 1.5, 1.0)\n",
-    "    assert !close(0.0, 1.5, 1.0)\n",
-    // NUM-5: an infinity is close to itself alone, NaN to nothing,
-    // and the two zeros are equal.
-    "    assert close(1.0 / 0.0, 1.0 / 0.0, 1.0)\n",
-    "    assert !close(1.0 / 0.0, -1.0 / 0.0, 1.0)\n",
-    "    assert !close(0.0 / 0.0, 0.0 / 0.0, 1.0)\n",
-    "    assert close(0.0, -0.0, 0.0)\n",
-    "    assert whole(7, 9, 2.0)\n",
-    "    assert !whole(7, 10, 2.0)\n",
-    "    assert mixed(9007199254740993, 9007199254740992.0, 1.0)\n",
-    "    assert !mixed(9007199254740993, 9007199254740992.0, 0.5)\n",
-    "    assert eval(closes(a: [1.0, 2.0], b: [1.4])) == [true, false]\n",
-    "}\n",
-);
+/// NUM-4 and NUM-5. NUM-7: closeness is not transitive.
+const CLOSE: (&str, &str) = fixture!("demo.close.hgl");
 
 /// A tolerance that is no tolerance.
-const CLOSE_FAILS: &str = concat!(
-    "module demo.close.fails\n",
-    "const fn close(a: f64, b: f64, tolerance: f64) -> bool => a =={abs: tolerance} b\n",
-    "test negative_tolerance { assert close(1.0, 1.0, -1.0) }\n",
+const CLOSE_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.close.fails.hgl"
 );
 
 /// NUM-4: "Configured `==` accepts absolute (`abs`) and relative
@@ -2895,10 +1624,9 @@ const CLOSE_FAILS: &str = concat!(
 /// configuration, and no input.
 #[test]
 fn a_tolerance_is_an_argument_written_where_the_source_has_it() {
-    let emitted = emit(&[("close.hgl", CLOSE)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_close/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[CLOSE]);
+    let python = emitted.module("demo.close");
+    python.assert_writes(&[
         concat!(
             "def close(a, b, tolerance):\n",
             "    return _core.eq__f64_f64_f64_f64(lhs=a, abs=tolerance, rhs=b, rel=0.0)\n",
@@ -2917,74 +1645,18 @@ fn a_tolerance_is_an_argument_written_where_the_source_has_it() {
             "    return _core.eq__f64_f64_f64_f64(lhs=lhs.value, rhs=rhs.value, abs=abs, rel=0.0)\n",
         ),
         "    return _lift_0_eq__f64_f64_f64_f64(lhs=a, abs=0.5, rhs=b)\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Enums: members, constructions, and an enum as the type of an
 /// input, an output and a configuration. `Side` is declared after the
 /// function that first names it.
-const ENUMS: &str = concat!(
-    "module demo.enums\n",
-    "\n",
-    "const fn opposite(side: Side) -> Side {\n",
-    "    if side == .buy { return .sell }\n",
-    "    if side == Side.sell { return .buy }\n",
-    "    return side\n",
-    "}\n",
-    "\n",
-    "fn flipped(side: Side) -> Side => opposite(side)\n",
-    "\n",
-    "enum Side { buy, sell = 5, hold }\n",
-    "enum Odd { mro, _x_, class, hgl_mro, name }\n",
-    "\n",
-    "const fn numbered(number: i64) -> Side => Side(number)\n",
-    "const fn named(text: str) -> Side => Side(text)\n",
-    "const fn odd(text: str) -> Odd => Odd(text)\n",
-    "\n",
-    "fn chosen(value: i64, const other: Side) -> Side {\n",
-    "    when {\n",
-    "        if value == 0 { return Side.buy }\n",
-    "        return other\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn fixed(side: Side) -> bool => side == .hold\n",
-    "\n",
-    "test enums {\n",
-    "    assert opposite(.buy) == .sell\n",
-    "    assert opposite(Side.sell) == Side.buy\n",
-    "    assert opposite(.hold) == .hold\n",
-    // A member by its number, and by its exact name.
-    "    assert Side(5) == .sell\n",
-    "    assert Side(\"hold\") == Side(6)\n",
-    "    assert numbered(0) == .buy\n",
-    "    assert named(\"sell\") == .sell\n",
-    // Names Python's `Enum` keeps for itself, and a keyword.
-    "    assert odd(\"mro\") == .mro\n",
-    "    assert odd(\"_x_\") == Odd._x_\n",
-    "    assert odd(\"class\") == .class\n",
-    "    assert odd(\"hgl_mro\") == .hgl_mro\n",
-    "    assert odd(\"mro\") != odd(\"hgl_mro\")\n",
-    "    assert odd(\"name\") == .name\n",
-    "    assert eval(flipped(side: [.buy, _, .sell, .hold])) == [.sell, _, .buy, .hold]\n",
-    "    assert eval(chosen(value: [0, 7], other: .hold)) == [.buy, .hold]\n",
-    "    assert eval(fixed(side: [.buy, .hold])) == [false, true]\n",
-    "}\n",
-);
+const ENUMS: (&str, &str) = fixture!("demo.enums.hgl");
 
 /// Constructions of a member from a value that is none of the enum's.
-const ENUM_FAILS: &str = concat!(
-    "module demo.enums.fails\n",
-    "enum Side { buy, sell = 5, hold }\n",
-    "const fn numbered(number: i64) -> Side => Side(number)\n",
-    "const fn named(text: str) -> Side => Side(text)\n",
-    "test no_number { assert numbered(9) == .buy }\n",
-    "test no_name { assert named(\"none\") == .buy }\n",
+const ENUM_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.enums.fails.hgl"
 );
 
 /// TYPE-7: "Enum members are distinct typed constants with distinct
@@ -2999,10 +1671,9 @@ const ENUM_FAILS: &str = concat!(
 /// it where they are defined.
 #[test]
 fn an_enum_is_a_python_enum_and_a_scalar() {
-    let emitted = emit(&[("enums.hgl", ENUMS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_enums/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[ENUMS]);
+    let python = emitted.module("demo.enums");
+    python.assert_writes(&[
         "import enum as _enum\n",
         "Side = _enum.Enum(\"demo.enums::Side\", [(\"buy\", 0), (\"sell\", 5), (\"hold\", 6)])\n",
         // A name that `Enum` keeps has `hgl_` before it, and so has one
@@ -3032,12 +1703,7 @@ fn an_enum_is_a_python_enum_and_a_scalar() {
             "_harness.same(_harness.evaluate(flipped, {\"side\": _hgl_4core._inst_replay__demo_enums__Side}, _hgl_4core._inst_record__demo_enums__Side, side=[Side[\"buy\"], None, Side[\"sell\"], ",
             "Side[\"hold\"]]), [Side[\"sell\"], None, Side[\"buy\"], Side[\"hold\"]])",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // The enums come before the function that is declared before them.
     let at = |text: &str| python.find(text).expect("it is written");
     assert!(at("Side = _enum.Enum(") < at("def opposite("));
@@ -3051,180 +1717,15 @@ fn an_enum_is_a_python_enum_and_a_scalar() {
 /// state. The structs are declared after the functions that name them,
 /// and a second module takes a default from the first.
 const STRUCTS: [(&str, &str); 2] = [
-    (
-        "structs.hgl",
-        concat!(
-            "module demo.structs\n",
-            "\n",
-            "export const fn origin() -> Point => Point(x: 0.0)\n",
-            "\n",
-            "const fn moved(point: Point, by: f64) -> Point {\n",
-            "    var next = point\n",
-            "    next.x = next.x + by\n",
-            "    next.y += by\n",
-            "    return next\n",
-            "}\n",
-            "\n",
-            "const fn stretched(line: Line, by: f64) -> Line {\n",
-            "    var next = line\n",
-            "    next.end.x += by\n",
-            "    next.class = 4\n",
-            "    return next\n",
-            "}\n",
-            "\n",
-            "const fn held(base: Base<str>) -> str => base.held\n",
-            "const fn order() -> Order => Order(held: \"a\")\n",
-            "const fn boxed(value: i64) -> Box<i64> => Box(value: value)\n",
-            "\n",
-            "impl const fn add_(lhs: Point, rhs: Point) -> Point => Point(x: lhs.x + rhs.x, y: lhs.y + rhs.y)\n",
-            "\n",
-            "enum Side { buy, sell }\n",
-            "\n",
-            "abstract struct Base<T> {\n",
-            "    id: i64 = 1\n",
-            "    held: T\n",
-            "    rate: f64 = 2\n",
-            "}\n",
-            "\n",
-            "struct Order : Base<str> {\n",
-            "    id = 7\n",
-            "    side: Side = .buy\n",
-            "    note: str? = null\n",
-            "}\n",
-            "\n",
-            "export struct Point {\n",
-            "    x: f64\n",
-            "    y: f64 = 0.0\n",
-            "}\n",
-            "\n",
-            "struct Line {\n",
-            "    start: Point\n",
-            "    end: Point = Point(x: 1.0)\n",
-            "    class: i64 = 3\n",
-            "}\n",
-            "\n",
-            "struct Box<T> {\n",
-            "    value: T\n",
-            "    count: i64 = 0\n",
-            "}\n",
-            "\n",
-            "struct Empty {}\n",
-            "\n",
-            "abstract struct Shape {}\n",
-            "struct Tagged<T> : Shape { tag: T }\n",
-            "struct Plain : Shape {}\n",
-            "const fn same(lhs: Shape, rhs: Shape) -> bool => lhs == rhs\n",
-            "\n",
-            "fn travelled(step: f64) -> f64 {\n",
-            "    state at: Point = Point(x: 0.0)\n",
-            "    state seen: Box<i64> = boxed(0)\n",
-            "    when {\n",
-            "        at.x += step\n",
-            "        at.y = at.x * 2.0\n",
-            "        seen.count += 1\n",
-            "        return at.x + at.y\n",
-            "    }\n",
-            "}\n",
-            "\n",
-            "test points {\n",
-            "    let point = Point(y: 2.0, x: 1.0)\n",
-            "    assert point.x == 1.0\n",
-            "    assert point.y == 2.0\n",
-            "    assert origin() == Point(x: 0.0, y: 0.0)\n",
-            "    assert moved(point, 1.5) == Point(x: 2.5, y: 3.5)\n",
-            "    assert point == Point(x: 1.0, y: 2.0)\n",
-            "    assert point != origin()\n",
-            "    assert point + Point(x: 3.0) == Point(x: 4.0, y: 2.0)\n",
-            "}\n",
-            "\n",
-            "test lines {\n",
-            "    let line = Line(start: origin())\n",
-            "    assert line.end == Point(x: 1.0, y: 0.0)\n",
-            "    assert line.class == 3\n",
-            "    let longer = stretched(line, 2.0)\n",
-            "    assert longer.end.x == 3.0\n",
-            "    assert longer.class == 4\n",
-            "    assert line.end.x == 1.0\n",
-            "    assert longer.start == line.start\n",
-            "}\n",
-            "\n",
-            "test orders {\n",
-            "    let made = order()\n",
-            "    assert made.id == 7\n",
-            "    assert made.held == \"a\"\n",
-            "    assert made.rate == 2.0\n",
-            "    assert made.side == Side.buy\n",
-            "    assert made.note == null\n",
-            "    assert held(made) == \"a\"\n",
-            "    assert Order(held: \"b\", note: \"n\", id: 9).id == 9\n",
-            "    assert Order(held: \"b\", note: \"n\").note != null\n",
-            "}\n",
-            "\n",
-            "test generic {\n",
-            "    assert boxed(3) == Box(value: 3, count: 0)\n",
-            "    assert boxed(3).count == 0\n",
-            "    assert Empty() == Empty()\n",
-            "}\n",
-            "\n",
-            "test identity {\n",
-            "    assert same(Tagged(tag: 1), Tagged(tag: 1))\n",
-            "    assert !same(Tagged(tag: 1), Tagged(tag: 1.0))\n",
-            "    assert !same(Tagged(tag: 1), Plain())\n",
-            "    let odd = Point(x: 0.0 / 0.0)\n",
-            "    assert odd != odd\n",
-            "    assert !(odd == odd)\n",
-            "    assert Tagged(tag: [odd.x]) != Tagged(tag: [odd.x])\n",
-            "}\n",
-            "\n",
-            "test walks {\n",
-            "    assert eval(travelled(step: [1.0, _, 2.0])) == [3.0, _, 9.0]\n",
-            "}\n",
-        ),
-    ),
-    (
-        "structs_user.hgl",
-        concat!(
-            "module demo.structs.user\n",
-            "\n",
-            "use demo.structs::{Point}\n",
-            "use demo.structs as shapes\n",
-            "\n",
-            "const fn base() -> f64 => 5.0\n",
-            "\n",
-            "struct Marker {\n",
-            "    at: Point = shapes::origin()\n",
-            "    size: f64 = base()\n",
-            "    label: str\n",
-            "}\n",
-            "\n",
-            "const fn marker(label: str) -> Marker => Marker(label: label)\n",
-            "\n",
-            "test markers {\n",
-            "    let made = Marker(label: \"a\")\n",
-            "    assert made.size == 5.0\n",
-            "    assert made.at == shapes::origin()\n",
-            "    assert made == marker(\"a\")\n",
-            "    assert marker(\"b\").label == \"b\"\n",
-            "}\n",
-        ),
-    ),
+    fixture!("demo.structs.hgl"),
+    fixture!("demo.structs.user.hgl"),
 ];
 
 /// A default that fails where a construction leaves its field out, and
 /// two arguments that each fail.
-const STRUCT_FAILS: &str = concat!(
-    "module demo.structs.fails\n",
-    "const fn broken() -> i64 => 1 // 0\n",
-    "const fn next(value: i64) -> i64 => value + 1\n",
-    "struct Ratio { value: i64 = broken() }\n",
-    "struct Pair {\n",
-    "    first: i64\n",
-    "    second: i64\n",
-    "}\n",
-    "test given { assert Ratio(value: 2).value == 2 }\n",
-    "test omitted { assert Ratio().value == 1 }\n",
-    "test in_order { assert Pair(second: next(9223372036854775807), first: broken()).first == 1 }\n",
-    "test unequal { assert Ratio(value: 2) == Ratio(value: 3) }\n",
+const STRUCT_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.structs.fails.hgl"
 );
 
 /// TYPE-3: "Structs are nominal, with public ordered fields and no
@@ -3252,10 +1753,9 @@ const STRUCT_FAILS: &str = concat!(
 /// dictionary that holds a NaN is not equal to itself."
 #[test]
 fn a_struct_is_a_class_and_a_value_of_two_scalars_is_never_changed() {
-    let emitted = emit(&STRUCTS);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_structs/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&STRUCTS);
+    let python = emitted.module("demo.structs");
+    python.assert_writes(&[
         "import _hgl._core_native as _core\n",
         // Every field the struct has, a parent's first; a Python word
         // has a `_` after it.
@@ -3309,12 +1809,7 @@ fn a_struct_is_a_class_and_a_value_of_two_scalars_is_never_changed() {
             "    _state.seen = _core.set_field(_state.seen, \"count\", ",
             "_core.add__i64_i64(lhs=_state.seen.count, rhs=1))\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // The structs come before the function that is declared before
     // them.
     let at = |text: &str| python.find(text).expect("it is written");
@@ -3324,152 +1819,21 @@ fn a_struct_is_a_class_and_a_value_of_two_scalars_is_never_changed() {
     // UNIT-7: "Imported defaults retain their defining closure,
     // including private references": a default is written where the
     // construction is, and names what it names through its module.
-    let user = emitted.text("_hgl/_m_demo/_m_structs/_m_user/__init__.py");
-    for expected in [
+    let user = emitted.module("demo.structs.user");
+    user.assert_writes(&[
         "Marker = _core.struct(\"Marker\", (\"at\", \"size\", \"label\"))\n",
         "    return Marker(label=label, at=_hgl_4demo_7structs.origin(), size=base())\n",
-    ] {
-        assert!(
-            user.contains(expected),
-            "the module has:\n{expected}\nin:\n{user}"
-        );
-    }
+    ]);
 }
 
 /// Loops and `switch` in value functions and in a node's `when`, and
 /// a dictionary written out.
-const LOOPS: &str = concat!(
-    "module demo.loops\n",
-    "\n",
-    "enum Side { buy, sell, hold }\n",
-    "\n",
-    "const fn total(items: list<i64>) -> i64 {\n",
-    "    var sum = 0\n",
-    "    for item in items { sum += item }\n",
-    "    return sum\n",
-    "}\n",
-    "\n",
-    "const fn largest(items: set<i64>) -> i64? {\n",
-    "    var best: i64?\n",
-    "    for item in items {\n",
-    "        if best == null { best = item }\n",
-    "    }\n",
-    "    return best\n",
-    "}\n",
-    "\n",
-    "const fn weighted(weights: dict<str, f64>) -> f64 {\n",
-    "    var sum = 0.0\n",
-    "    for name, weight in weights {\n",
-    "        if name != \"skip\" { sum += weight }\n",
-    "    }\n",
-    "    return sum\n",
-    "}\n",
-    "\n",
-    "const fn halvings(first: i64) -> i64 {\n",
-    "    var value = first\n",
-    "    var count = 0\n",
-    "    while value > 1 {\n",
-    "        value = value // 2\n",
-    "        count += 1\n",
-    "    }\n",
-    "    return count\n",
-    "}\n",
-    "\n",
-    "const fn sign(side: Side) -> i64 {\n",
-    "    switch side {\n",
-    "        case .buy: return 1\n",
-    "        case Side.sell: return -1\n",
-    "        case .hold: return 0\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "const fn named(number: i64) -> str {\n",
-    "    var text: str\n",
-    "    switch number {\n",
-    "        case 0: text = \"zero\"\n",
-    "        case 1:\n",
-    "            let one = \"one\"\n",
-    "            text = one\n",
-    "        default: text = \"many\"\n",
-    "    }\n",
-    "    return text\n",
-    "}\n",
-    "\n",
-    "const fn strict(text: str) -> i64 {\n",
-    "    switch text {\n",
-    "        case \"a\": return 1\n",
-    "        case \"b\": return 2\n",
-    "    }\n",
-    "    return 0\n",
-    "}\n",
-    "\n",
-    "const fn nested(flag: bool, number: i64) -> i64 {\n",
-    "    switch flag {\n",
-    "        case true:\n",
-    "            switch number {\n",
-    "                case 1: return 10\n",
-    "                default: return 11\n",
-    "            }\n",
-    "        default: return 20\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "const fn only(number: i64) -> i64 {\n",
-    "    switch number {\n",
-    "        default: return number + 1\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn running(value: i64) -> i64 {\n",
-    "    state seen: i64 = 0\n",
-    "    when {\n",
-    "        var steps = 0\n",
-    "        while steps < value {\n",
-    "            steps += 1\n",
-    "            seen += 1\n",
-    "        }\n",
-    "        switch value {\n",
-    "            case 0: return 0\n",
-    "            default: return seen\n",
-    "        }\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "test loops {\n",
-    "    assert total([1, 2, 3]) == 6\n",
-    "    assert total([]) == 0\n",
-    "    assert weighted([\"a\": 1.5, \"skip\": 9.0, \"b\": 2.0]) == 3.5\n",
-    "    assert halvings(16) == 4\n",
-    "    assert halvings(1) == 0\n",
-    "}\n",
-    "\n",
-    "test switches {\n",
-    "    assert sign(.buy) == 1\n",
-    "    assert sign(.sell) == -1\n",
-    "    assert sign(.hold) == 0\n",
-    "    assert named(0) == \"zero\"\n",
-    "    assert named(1) == \"one\"\n",
-    "    assert named(7) == \"many\"\n",
-    "    assert strict(\"b\") == 2\n",
-    "    assert nested(true, 1) == 10\n",
-    "    assert nested(true, 5) == 11\n",
-    "    assert nested(false, 1) == 20\n",
-    "    assert only(4) == 5\n",
-    "    assert eval(running(value: [2, 0, 3])) == [2, 0, 5]\n",
-    "}\n",
-);
+const LOOPS: (&str, &str) = fixture!("demo.loops.hgl");
 
 /// A `switch` with no `default` that no case matches.
-const LOOP_FAILS: &str = concat!(
-    "module demo.loops.fails\n",
-    "const fn strict(text: str) -> i64 {\n",
-    "    switch text {\n",
-    "        case \"a\": return 1\n",
-    "        case \"b\": return 2\n",
-    "    }\n",
-    "    return 0\n",
-    "}\n",
-    "test unmatched { assert strict(\"z\") == 0 }\n",
+const LOOP_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.loops.fails.hgl"
 );
 
 /// CTRL-12: "In a value function, `for item in items` runs its body
@@ -3481,10 +1845,9 @@ const LOOP_FAILS: &str = concat!(
 /// uses default or fails." EXPR-9: a sequence of pairs is a dictionary.
 #[test]
 fn a_loop_and_a_switch_run_as_they_are_written() {
-    let emitted = emit(&[("loops.hgl", LOOPS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_loops/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[LOOPS]);
+    let python = emitted.module("demo.loops");
+    python.assert_writes(&[
         concat!(
             "    for item in items:\n",
             "        sum = _core.add__i64_i64(lhs=sum, rhs=item)\n",
@@ -3520,47 +1883,15 @@ fn a_loop_and_a_switch_run_as_they_are_written() {
         ),
         // A dictionary written out.
         "weighted(weights={\"a\": 1.5, \"skip\": 9.0, \"b\": 2.0})",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Two modules that each declare an enum `Side`, with other members,
 /// and core's `CmpResult`, which has the name of an enum of hgraph's
 /// own, each as the type of a node's input and output.
 const SAME_NAMES: [(&str, &str); 2] = [
-    (
-        "left.hgl",
-        concat!(
-            "module demo.sides.left\n",
-            "enum Side { buy, sell }\n",
-            "fn kept(side: Side) -> Side {\n",
-            "    when { return side }\n",
-            "}\n",
-            "test left_sides { assert eval(kept(side: [.buy, .sell])) == [.buy, .sell] }\n",
-        ),
-    ),
-    (
-        "right.hgl",
-        concat!(
-            "module demo.sides.right\n",
-            "enum Side { up = 5, down }\n",
-            "fn kept(side: Side) -> Side {\n",
-            "    when { return side }\n",
-            "}\n",
-            "fn outcome(value: CmpResult) -> CmpResult {\n",
-            "    when { return value }\n",
-            "}\n",
-            "test right_sides {\n",
-            "    assert eval(kept(side: [.up, .down])) == [.up, .down]\n",
-            "    assert eval(outcome(value: [.less, .greater, .unordered])) == \
-             [.less, .greater, .unordered]\n",
-            "}\n",
-        ),
-    ),
+    fixture!("demo.sides.left.hgl"),
+    fixture!("demo.sides.right.hgl"),
 ];
 
 /// UNIT-4: a type is known by where it is declared, so two modules'
@@ -3569,8 +1900,7 @@ const SAME_NAMES: [(&str, &str); 2] = [
 /// two `Side`s stay two, and core's `CmpResult` is not hgraph's.
 #[test]
 fn an_enums_class_is_named_with_its_module() {
-    let emitted = emit(&SAME_NAMES);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&SAME_NAMES);
     for (path, expected) in [
         (
             "_hgl/_m_demo/_m_sides/_m_left/__init__.py",
@@ -3596,117 +1926,13 @@ fn an_enums_class_is_named_with_its_module() {
 /// Elements: a list's, a tuple's and a dictionary's read in brackets
 /// and assigned, at depth and inside a struct; core's `get`; and a
 /// node that keeps a dictionary in its state.
-const ELEMENTS: &str = concat!(
-    "module demo.elements\n",
-    "\n",
-    "struct Book {\n",
-    "    levels: list<f64>\n",
-    "    sizes: dict<str, i64> = []\n",
-    "}\n",
-    "\n",
-    "const fn second(items: list<i64>) -> i64 => items[1]\n",
-    "const fn last(pair: tuple<i64, str>) -> str => pair[1]\n",
-    "const fn size(sizes: dict<str, i64>, name: str) -> i64 => sizes[name]\n",
-    "const fn known(sizes: dict<str, i64>, name: str) -> i64? => get(sizes, name)\n",
-    "const fn known_or(sizes: dict<str, i64>, name: str, fallback: i64) -> i64 {\n",
-    "    let found = get(sizes, name)\n",
-    "    if found == null { return fallback }\n",
-    "    return found\n",
-    "}\n",
-    "\n",
-    "const fn doubled(items: list<i64>) -> list<i64> {\n",
-    "    var next = items\n",
-    "    next[0] = next[0] * 2\n",
-    "    next[1] += 1\n",
-    "    return next\n",
-    "}\n",
-    "\n",
-    "const fn renamed(pair: tuple<i64, str>) -> tuple<i64, str> {\n",
-    "    var next = pair\n",
-    "    next[1] = \"b\"\n",
-    "    return next\n",
-    "}\n",
-    "\n",
-    "const fn counted(names: list<str>) -> dict<str, i64> {\n",
-    "    var seen: dict<str, i64> = []\n",
-    "    for name in names {\n",
-    "        let before = get(seen, name)\n",
-    "        if before == null {\n",
-    "            seen[name] = 1\n",
-    "        } else {\n",
-    "            seen[name] = before + 1\n",
-    "        }\n",
-    "    }\n",
-    "    return seen\n",
-    "}\n",
-    "\n",
-    "const fn lifted(book: Book, by: f64) -> Book {\n",
-    "    var next = book\n",
-    "    next.levels[0] += by\n",
-    "    next.sizes[\"top\"] = 1\n",
-    "    return next\n",
-    "}\n",
-    "\n",
-    "const fn grid() -> list<list<i64>> {\n",
-    "    var rows = [[1, 2], [3, 4]]\n",
-    "    rows[1][0] = 9\n",
-    "    return rows\n",
-    "}\n",
-    "\n",
-    "fn tallied(name: str) -> i64 {\n",
-    "    state seen: dict<str, i64> = []\n",
-    "    when {\n",
-    "        let before = get(seen, name)\n",
-    "        if before == null {\n",
-    "            seen[name] = 1\n",
-    "        } else {\n",
-    "            seen[name] = before + 1\n",
-    "        }\n",
-    "        return seen[name]\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "test reads {\n",
-    "    assert second([4, 5, 6]) == 5\n",
-    "    assert last((1, \"a\")) == \"a\"\n",
-    "    assert size([\"a\": 1, \"b\": 2], \"b\") == 2\n",
-    "    assert known([\"a\": 1], \"a\") != null\n",
-    "    assert known([\"a\": 1], \"z\") == null\n",
-    "    assert known_or([\"a\": 1], \"a\", 7) == 1\n",
-    "    assert known_or([\"a\": 1], \"z\", 7) == 7\n",
-    "}\n",
-    "\n",
-    "test writes {\n",
-    "    let items = [1, 2, 3]\n",
-    "    assert doubled(items) == [2, 3, 3]\n",
-    "    assert items == [1, 2, 3]\n",
-    "    assert renamed((1, \"a\")) == (1, \"b\")\n",
-    "    assert counted([\"a\", \"b\", \"a\"]) == [\"a\": 2, \"b\": 1]\n",
-    "    let book = Book(levels: [1.0, 2.0])\n",
-    "    let moved = lifted(book, 0.5)\n",
-    "    assert moved.levels == [1.5, 2.0]\n",
-    "    assert moved.sizes == [\"top\": 1]\n",
-    "    assert book.levels == [1.0, 2.0]\n",
-    "    assert grid() == [[1, 2], [9, 4]]\n",
-    "    assert eval(tallied(name: [\"a\", \"b\", \"a\"])) == [1, 1, 2]\n",
-    "}\n",
-);
+const ELEMENTS: (&str, &str) = fixture!("demo.elements.hgl");
 
 /// Reads and an assignment outside a list, and a key a dictionary has
 /// not.
-const ELEMENT_FAILS: &str = concat!(
-    "module demo.elements.fails\n",
-    "const fn at(items: list<i64>, index: i64) -> i64 => items[index]\n",
-    "const fn size(sizes: dict<str, i64>, name: str) -> i64 => sizes[name]\n",
-    "const fn placed(items: list<i64>, index: i64) -> list<i64> {\n",
-    "    var next = items\n",
-    "    next[index] = 0\n",
-    "    return next\n",
-    "}\n",
-    "test beyond { assert at([1, 2], 2) == 0 }\n",
-    "test before { assert at([1, 2], -1) == 2 }\n",
-    "test absent { assert size([\"a\": 1], \"z\") == 0 }\n",
-    "test outside { assert placed([1, 2], 5) == [1, 2] }\n",
+const ELEMENT_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.elements.fails.hgl"
 );
 
 /// EXPR-7: "Brackets read an element of a list or a tuple by an `i64`
@@ -3724,10 +1950,9 @@ const ELEMENT_FAILS: &str = concat!(
 /// does.
 #[test]
 fn an_element_is_read_and_assigned_through_the_provider() {
-    let emitted = emit(&[("elements.hgl", ELEMENTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_elements/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[ELEMENTS]);
+    let python = emitted.module("demo.elements");
+    python.assert_writes(&[
         "def second(items):\n    return _core.item(items, 1)\n",
         "def last(pair):\n    return _core.item(pair, 1)\n",
         "def size(sizes, name):\n    return _core.entry(sizes, name)\n",
@@ -3751,44 +1976,12 @@ fn an_element_is_read_and_assigned_through_the_provider() {
         "        _state.seen = _core.set_entry(_state.seen, name.value, 1)\n",
         // `[]` where a dictionary is expected.
         "    seen = {}\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// `<=>` on numbers, strings and in a graph, and the Boolean operators
 /// called by name.
-const COMPARE: &str = concat!(
-    "module demo.compare\n",
-    "\n",
-    "const fn ordered(lhs: f64, rhs: f64) -> CmpResult => lhs <=> rhs\n",
-    "const fn mixed(lhs: i64, rhs: f64) -> CmpResult => lhs <=> rhs\n",
-    "const fn words(lhs: str, rhs: str) -> CmpResult => lhs <=> rhs\n",
-    "const fn both(lhs: bool, rhs: bool) -> bool => and_(lhs, rhs)\n",
-    "const fn either(lhs: bool, rhs: bool) -> bool => or_(lhs, rhs)\n",
-    "const fn neither(value: bool) -> bool => not_(value)\n",
-    "\n",
-    "fn outcome(lhs: f64, rhs: f64) -> CmpResult => lhs <=> rhs\n",
-    "\n",
-    "test outcomes {\n",
-    "    assert ordered(1.0, 2.0) == .less\n",
-    "    assert ordered(2.0, 1.0) == .greater\n",
-    "    assert ordered(0.0, -0.0) == .equivalent\n",
-    "    assert ordered(0.0 / 0.0, 1.0) == .unordered\n",
-    "    assert ordered(0.0 / 0.0, 0.0 / 0.0) == CmpResult.unordered\n",
-    "    assert mixed(9007199254740993, 9007199254740992.0) == .greater\n",
-    "    assert mixed(1, 1.0) == .equivalent\n",
-    "    assert words(\"a\", \"b\") == .less\n",
-    "    assert (2 <=> 1) == .greater\n",
-    "    assert both(true, false) == false\n",
-    "    assert either(true, false)\n",
-    "    assert neither(false)\n",
-    "    assert eval(outcome(lhs: [1.0, 2.0, 3.0], rhs: [2.0, 2.0, 2.0])) == [.less, .equivalent, .greater]\n",
-    "}\n",
-);
+const COMPARE: (&str, &str) = fixture!("demo.compare.hgl");
 
 /// NUM-6: "The numeric full-comparison operator `compare_`, selected
 /// by `<=>`, returns an ordinary comparison outcome, a `CmpResult`:
@@ -3802,10 +1995,9 @@ const COMPARE: &str = concat!(
 /// `CmpResult`, through core's module.
 #[test]
 fn a_full_comparison_gives_a_member_of_cores_enum() {
-    let emitted = emit(&[("compare.hgl", COMPARE)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_compare/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[COMPARE]);
+    let python = emitted.module("demo.compare");
+    python.assert_writes(&[
         "import _hgl._m_core as _hgl_4core\n",
         concat!(
             "def ordered(lhs, rhs):\n",
@@ -3824,84 +2016,26 @@ fn a_full_comparison_gives_a_member_of_cores_enum() {
         "    return _core.and__bool_bool(lhs=lhs, rhs=rhs)\n",
         "    return _core.or__bool_bool(lhs=lhs, rhs=rhs)\n",
         "    return _core.not__bool(value=value)\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A node whose `stop` reads an input under its guard, and one whose
 /// `stop` would fail where the guard holds, given an input that never
 /// is valid.
-const STOPS: &str = concat!(
-    "module demo.stops\n",
-    "\n",
-    "fn last_seen(value: i64, const scale: i64) -> i64 {\n",
-    "    state last: i64 = 0\n",
-    "    state ended: i64 = 0\n",
-    "    when {\n",
-    "        last = value\n",
-    "        return value * scale\n",
-    "    }\n",
-    "    stop {\n",
-    "        if valid(value) { ended = value * scale }\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn ends_badly(value: i64) -> i64 {\n",
-    "    state ended: i64 = 0\n",
-    "    when { return value }\n",
-    "    stop {\n",
-    "        if valid(value) { ended = value // 0 }\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "test stops {\n",
-    "    assert eval(last_seen(value: [1, 2, 3], scale: 2)) == [2, 4, 6]\n",
-    "    assert eval(last_seen(value: [_, _], scale: 2)) == []\n",
-    // The input is never valid: the guard does not hold, and the
-    // division is not made.
-    "    assert eval(ends_badly(value: [_, _])) == []\n",
-    "}\n",
-);
+const STOPS: (&str, &str) = fixture!("demo.stops.hgl");
 
 /// TIME-7: "`out` is read in a `when` and in `stop`". A node whose
 /// `stop` reads what it last published, under `valid(out)`: the run
 /// ends well only where that is `expected`, since the division is by
 /// zero where it is not.
-const OUT_IN_STOP: &str = concat!(
-    "module demo.ended\n",
-    "fn totalled(value: i64, const expected: i64) -> i64 {\n",
-    "    inject out\n",
-    "    state sum: i64 = 0\n",
-    "    state ended: i64 = 0\n",
-    "    when {\n",
-    "        sum += value\n",
-    "        out = sum\n",
-    "    }\n",
-    "    stop {\n",
-    "        if valid(out) { ended = 1 // (if out == expected { 1 } else { 0 }) }\n",
-    "    }\n",
-    "}\n",
-    "test reads_what_was_published {\n",
-    "    assert eval(totalled(value: [1, 2, 3], expected: 6)) == [1, 3, 6]\n",
-    // Nothing was published: `out` is not valid, and is not read.
-    "    assert eval(totalled(value: [_, _], expected: 6)) == []\n",
-    "}\n",
-    "test reads_no_other {\n",
-    "    assert eval(totalled(value: [1, 2, 3], expected: 7)) == [1, 3, 6]\n",
-    "}\n",
-);
+const OUT_IN_STOP: (&str, &str) = fixture!("out_in_stop", "demo.ended.hgl");
 
 /// TIME-7: hgraph gives a node's `stop` the node's output where it
 /// names it, as it gives the node: `out` is `_output` there too.
 #[test]
 fn a_stop_is_given_the_nodes_output() {
-    let emitted = emit(&[("ended.hgl", OUT_IN_STOP)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_ended/__init__.py");
+    let emitted = emit_clean(&[OUT_IN_STOP]);
+    let python = emitted.module("demo.ended");
     let expected = concat!(
         "@totalled.stop\n",
         "def _stop_totalled(expected: _py.int, value: _hg.TS[_py.int], ",
@@ -3921,67 +2055,12 @@ fn a_stop_is_given_the_nodes_output() {
 /// TIME-6: a `cache`. TIME-8, core's CAP-1 to CAP-3 and CAP-6: a node
 /// injects `logger`, `clock` and `global_state`, reads a capability's
 /// properties, gives one to a function, and reads and writes the store.
-const CAPABILITIES: &str = concat!(
-    "module demo.caps\n",
-    "\n",
-    "fn counted(value: i64) -> i64 {\n",
-    "    cache seen: i64 = 0\n",
-    "    inject logger\n",
-    "    when {\n",
-    "        seen += 1\n",
-    // A `%` in a message is text.
-    "        log_info(logger, \"seen 100% of it\")\n",
-    "        return seen\n",
-    "    }\n",
-    "    stop { if seen > 1 { log(logger, .debug, \"more than one\") } }\n",
-    "}\n",
-    "\n",
-    "fn stamped(value: i64) -> datetime {\n",
-    "    inject clock\n",
-    "    when { return clock.evaluation_time }\n",
-    "}\n",
-    "\n",
-    "fn next_step(value: i64) -> duration {\n",
-    "    inject clock\n",
-    "    when { return clock.next_cycle_evaluation_time - clock.evaluation_time }\n",
-    "}\n",
-    "\n",
-    "fn remembered(value: i64) -> i64 {\n",
-    "    inject global_state\n",
-    "    when {\n",
-    "        let before: i64 =\n",
-    "            if has(global_state, \"last\") { get<i64>(global_state, \"last\") } else { 0 }\n",
-    "        put(global_state, \"last\", value)\n",
-    "        return before\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn levelled(value: i64) -> bool {\n",
-    "    inject logger\n",
-    "    when { return logger.level == .debug || logger.level != .debug }\n",
-    "}\n",
-    "\n",
-    "test capabilities {\n",
-    "    assert eval(counted(value: [7, _, 7])) == [1, _, 2]\n",
-    "    assert eval(stamped(value: [1, _, 3])) == [earliest_start, _, earliest_start + 2us]\n",
-    "    assert eval(next_step(value: [1])) == [1us]\n",
-    // CRUN-7: a run's store is empty when its graph is built.
-    "    assert eval(remembered(value: [5, 6, _, 7])) == [0, 5, _, 6]\n",
-    "    assert eval(remembered(value: [8])) == [0]\n",
-    "    assert eval(levelled(value: [1])) == [true]\n",
-    "}\n",
-);
+const CAPABILITIES: (&str, &str) = fixture!("demo.caps.hgl");
 
 /// A node that reads a key the store has not.
-const CAPABILITIES_FAIL: &str = concat!(
-    "module demo.caps.fails\n",
-    "fn absent(value: i64) -> i64 {\n",
-    "    inject global_state\n",
-    "    when { return get<i64>(global_state, \"nothing\") }\n",
-    "}\n",
-    "test an_absent_key_fails_the_node {\n",
-    "    let seen = eval(absent(value: [1]))\n",
-    "}\n",
+const CAPABILITIES_FAIL: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.caps.fails.hgl"
 );
 
 /// TIME-6: "Cache is reconstructible node-local value data, initialized
@@ -3993,10 +2072,9 @@ const CAPABILITIES_FAIL: &str = concat!(
 /// the store.
 #[test]
 fn a_cache_and_a_capability_are_the_nodes_own() {
-    let emitted = emit(&[("caps.hgl", CAPABILITIES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_caps/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[CAPABILITIES]);
+    let python = emitted.module("demo.caps");
+    python.assert_writes(&[
         concat!(
             "@_hg.compute_node\n",
             "def counted(value: _hg.TS[_py.int], _state: _hg.STATE = None, ",
@@ -4028,15 +2106,10 @@ fn a_cache_and_a_capability_are_the_nodes_own() {
         "_core.has_GlobalState_str(store=_store, key=\"last\")",
         "    _core.put_GlobalState_str_V(store=_store, key=\"last\", value=value.value)\n",
         "_core.member(_hgl_4core.LogLevel, _core.Logger_level(_logger))",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // Core's `log_info` is a function of core's module, which calls
     // the provider's `log`.
-    let core = emitted.text("_hgl/_m_core/__init__.py");
+    let core = emitted.module("core");
     assert!(
         core.contains(concat!(
             "def log_info(logger, message):\n",
@@ -4050,134 +2123,7 @@ fn a_cache_and_a_capability_are_the_nodes_own() {
 /// one with both hooks and its yields in a block; one that keeps a
 /// `cache` from one `yield` to the next; targets that are durations and
 /// instants; and a source wired into a graph.
-const SOURCES: &str = concat!(
-    "module demo.sources\n",
-    "\n",
-    "fn two_values() -> i64 {\n",
-    "    yield 1us: 7\n",
-    "    yield 1us: 9\n",
-    "}\n",
-    "\n",
-    "fn greeting(const every: duration = 1us) -> str {\n",
-    "    inject logger\n",
-    "    start { log_info(logger, \"greeting starts\") }\n",
-    "    {\n",
-    "        yield every: \"hello\"\n",
-    "        yield every: \"world\"\n",
-    "    }\n",
-    "    stop { log_info(logger, \"greeting ends\") }\n",
-    "}\n",
-    "\n",
-    "fn counter(const every: duration = 1us, const limit: i64 = 3) -> i64 {\n",
-    "    inject logger\n",
-    "    cache count: i64 = 0\n",
-    "    while count < limit {\n",
-    "        count += 1\n",
-    "        yield every: count\n",
-    "    }\n",
-    "    stop { if count > 0 { log_info(logger, \"counted\") } }\n",
-    "}\n",
-    "\n",
-    // SOURCE-3: "a current target publishes now".
-    "fn at_once(const first: i64) -> i64 {\n",
-    "    yield 0us: first\n",
-    "    yield 2us: first + 1\n",
-    "}\n",
-    "\n",
-    // SOURCE-2: "A duration is relative to current evaluation time; a
-    // datetime is absolute." The clock is read where the source is
-    // resumed.
-    "fn absolute() -> i64 {\n",
-    "    inject clock\n",
-    "    {\n",
-    "        yield clock.evaluation_time + 3us: 1\n",
-    "        yield earliest_start + 5us: 2\n",
-    "        yield clock.evaluation_time + 1us: 3\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    // SOURCE-3: "A past absolute target is skipped".
-    "fn late() -> i64 {\n",
-    "    yield earliest_start + 1us: 1\n",
-    "    yield earliest_start + 4us: 2\n",
-    "}\n",
-    "\n",
-    // SOURCE-4: "A bare return ... finishes the source", and an
-    // unbounded `while`.
-    "fn ended(const limit: i64) -> i64 {\n",
-    "    cache count: i64 = 0\n",
-    "    while {\n",
-    "        if count == limit { return }\n",
-    "        count += 1\n",
-    "        yield 1us: count\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    // A block that ends with an expression: a call after its yields,
-    // and an `if` that holds them.
-    "fn trailed(const first: i64) -> i64 {\n",
-    "    inject logger\n",
-    "    {\n",
-    "        yield 1us: first\n",
-    "        log_info(logger, \"done\")\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn guarded(const wanted: bool) -> i64 {\n",
-    "    {\n",
-    "        if wanted { yield 1us: 1 }\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    // A `start` that returns early still leaves a source to resume.
-    "fn started(const quiet: bool) -> i64 {\n",
-    "    inject logger\n",
-    "    start {\n",
-    "        if quiet { return }\n",
-    "        log_info(logger, \"started\")\n",
-    "    }\n",
-    "    {\n",
-    "        yield 1us: 4\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn doubled(value: i64) -> i64 {\n",
-    "    when { return value * 2 }\n",
-    "}\n",
-    "\n",
-    "fn wired() -> i64 => doubled(two_values())\n",
-    "\n",
-    "fn backwards() -> i64 {\n",
-    "    yield 2us: 1\n",
-    "    yield earliest_start + 1us: 2\n",
-    "}\n",
-    "\n",
-    "fn negative() -> i64 {\n",
-    "    yield -1us: 1\n",
-    "}\n",
-    "\n",
-    "test sources {\n",
-    "    assert eval(two_values()) == [_, 7, 9]\n",
-    "    assert eval(greeting()) == [_, \"hello\", \"world\"]\n",
-    "    assert eval(greeting(every: 2us)) == [_, _, \"hello\", _, \"world\"]\n",
-    "    assert eval(counter()) == [_, 1, 2, 3]\n",
-    "    assert eval(counter(limit: 0)) == []\n",
-    "    assert eval(at_once(first: 5)) == [5, _, 6]\n",
-    "    assert eval(absolute()) == [_, _, _, 1, _, 2, 3]\n",
-    "    assert eval(late(), RunConfig(start: earliest_start + 2us)) == [_, _, 2]\n",
-    "    assert eval(ended(limit: 2)) == [_, 1, 2]\n",
-    "    assert eval(wired()) == [_, 14, 18]\n",
-    "    assert eval(trailed(first: 6)) == [_, 6]\n",
-    "    assert eval(guarded(wanted: true)) == [_, 1]\n",
-    "    assert eval(guarded(wanted: false)) == []\n",
-    "    assert eval(started(quiet: true)) == [_, 4]\n",
-    "    assert eval(started(quiet: false)) == [_, 4]\n",
-    // CRUN-2: a run ends before its `end`, with the source suspended.
-    "    assert eval(counter(limit: 9), RunConfig(length: 3us)) == [_, 1, 2]\n",
-    "    assert raises(\"yield.non_increasing_time\") { eval(backwards()) }\n",
-    "    assert raises(\"yield.negative_duration\") { eval(negative()) }\n",
-    "}\n",
-);
+const SOURCES: (&str, &str) = fixture!("demo.sources.hgl");
 
 /// SOURCE-1: a source is a generator that holds its statements, a node
 /// that resumes it, with the source's `start` and `stop`, and a graph
@@ -4185,10 +2131,9 @@ const SOURCES: &str = concat!(
 /// value` gives the generator's caller the time, then the value.
 #[test]
 fn a_source_is_a_generator_a_node_resumes() {
-    let emitted = emit(&[("sources.hgl", SOURCES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_sources/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[SOURCES]);
+    let python = emitted.module("demo.sources");
+    python.assert_writes(&[
         concat!(
             "def _yields_two_values(_state):\n",
             "    yield (_dt.timedelta(microseconds=1), 7)\n",
@@ -4269,153 +2214,12 @@ fn a_source_is_a_generator_a_node_resumes() {
         ),
         // A graph wires a source as any function.
         "def wired() -> _hg.TS[_py.int]:\n    return doubled(value=two_values())\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// FN-15: a `var` parameter. A call gives it a place and assigns it:
 /// a `var`, a field or an element of one, a node's `state` and `cache`.
-const PLACES: &str = concat!(
-    "module demo.places\n",
-    "\n",
-    "struct Book {\n",
-    "    orders: list<i64>\n",
-    "    name: str\n",
-    "}\n",
-    "\n",
-    "const fn bump(var count: i64, by: i64) {\n",
-    "    count += by\n",
-    "}\n",
-    "const fn set_first(var items: list<i64>, value: i64) {\n",
-    "    items[0] = value\n",
-    "}\n",
-    // A `var` parameter is given on to another.
-    "const fn through(var count: i64) { bump(count, 1) }\n",
-    // A result beside the place.
-    "const fn take(var count: i64) -> i64 {\n",
-    "    let before = count\n",
-    "    count = 0\n",
-    "    return before\n",
-    "}\n",
-    "const fn both(var left: i64, var right: i64) {\n",
-    "    let held = left\n",
-    "    left = right\n",
-    "    right = held\n",
-    "}\n",
-    // Every way out gives the place what the parameter holds there.
-    "const fn early(var count: i64, halt: bool) -> i64 {\n",
-    "    if halt { return -1 }\n",
-    "    count += 1\n",
-    "    return count\n",
-    "}\n",
-    "\n",
-    "const fn total(values: list<i64>) -> i64 {\n",
-    "    var sum: i64 = 0\n",
-    "    for value in values {\n",
-    "        bump(sum, value)\n",
-    "    }\n",
-    "    return sum\n",
-    "}\n",
-    // "a value taken from the place before the call is as it was".
-    "const fn kept() -> bool {\n",
-    "    var entries: list<i64> = [1, 2]\n",
-    "    let before = entries\n",
-    "    set_first(entries, 9)\n",
-    "    return before == [1, 2] && entries == [9, 2]\n",
-    "}\n",
-    "const fn nested() -> i64 {\n",
-    "    var book: Book = Book(orders: [1, 2], name: \"a\")\n",
-    "    set_first(book.orders, 5)\n",
-    "    bump(book.orders[1], 3)\n",
-    "    return book.orders[0] + book.orders[1]\n",
-    "}\n",
-    "const fn taken() -> i64 {\n",
-    "    var held: i64 = 7\n",
-    "    let was = take(held)\n",
-    "    return was * 10 + held\n",
-    "}\n",
-    "const fn swapped() -> i64 {\n",
-    "    var a: i64 = 1\n",
-    "    var b: i64 = 2\n",
-    "    both(a, b)\n",
-    "    return a * 10 + b\n",
-    "}\n",
-    "const fn stepped() -> i64 {\n",
-    "    var n: i64 = 0\n",
-    "    through(n)\n",
-    "    let first = early(n, true)\n",
-    "    let second = early(n, false)\n",
-    "    return first * 100 + second * 10 + n\n",
-    "}\n",
-    "fn counted(value: i64) -> i64 {\n",
-    "    state seen: i64 = 0\n",
-    "    cache held: i64 = 0\n",
-    "    when {\n",
-    "        bump(seen, 1)\n",
-    "        bump(held, value)\n",
-    "        return seen * 100 + held\n",
-    "    }\n",
-    "}\n",
-    // The place is the one named when the call's arguments are
-    // evaluated: `items[i]` is `items[0]`, though the call moves `i`.
-    "const fn change(var index: i64, var item: i64) {\n",
-    "    index = 1\n",
-    "    item = 9\n",
-    "}\n",
-    // EXPR-2: the first argument fails first, though the second's
-    // index is held before the call.
-    "const fn apply(value: i64, var item: i64) { item = value }\n",
-    "const fn ordered(zero: i64, indices: dict<str, i64>) -> i64 {\n",
-    "    var items: list<i64> = [5, 6]\n",
-    "    apply(1 //{zero: .fail} zero, items[indices[\"missing\"]])\n",
-    "    return items[0]\n",
-    "}\n",
-    // What an index is of is read before the index is evaluated: a
-    // missing `key` fails before the division does.
-    "const fn deep(key: str, zero: i64) -> i64 {\n",
-    "    var rows: dict<str, list<i64>> = [\"a\": [5, 6]]\n",
-    "    bump(rows[key][1 //{zero: .fail} zero], 1)\n",
-    "    return rows[\"a\"][1]\n",
-    "}\n",
-    // Two places inside one root: each assignment reads the root as
-    // the one before it left it.
-    "const fn crossed(key: str, i: i64, j: i64) -> i64 {\n",
-    "    var rows: dict<str, list<i64>> = [\"a\": [5, 6]]\n",
-    "    both(rows[key][i], rows[key][j])\n",
-    "    return rows[\"a\"][0] * 10 + rows[\"a\"][1]\n",
-    "}\n",
-    "const fn moved() -> i64 {\n",
-    "    var i: i64 = 0\n",
-    "    var items: list<i64> = [5, 6]\n",
-    "    change(i, items[i])\n",
-    "    return items[0] * 100 + items[1] * 10 + i\n",
-    "}\n",
-    "\n",
-    "test places {\n",
-    "    assert total([1, 2, 3]) == 6\n",
-    "    assert kept()\n",
-    "    assert nested() == 10\n",
-    "    assert taken() == 70\n",
-    "    assert swapped() == 21\n",
-    "    assert stepped() == -100 + 20 + 2\n",
-    "    var count: i64 = 1\n",
-    "    bump(count, 4)\n",
-    "    assert count == 5\n",
-    "    assert moved() == 961\n",
-    "    assert raises(\"numeric.division_by_zero\") { ordered(0, [\"a\": 1]) }\n",
-    "    assert raises(\"value.missing_key\") { ordered(1, [\"a\": 1]) }\n",
-    "    assert ordered(1, [\"missing\": 1]) == 5\n",
-    "    assert raises(\"value.missing_key\") { deep(\"b\", 0) }\n",
-    "    assert raises(\"numeric.division_by_zero\") { deep(\"a\", 0) }\n",
-    "    assert deep(\"a\", 1) == 7\n",
-    "    assert crossed(\"a\", 0, 1) == 65\n",
-    "    assert eval(counted(value: [1, _, 2])) == [101, _, 203]\n",
-    "}\n",
-);
+const PLACES: (&str, &str) = fixture!("demo.places.hgl");
 
 /// FN-15: "what it holds when the function returns is what the place
 /// is given". Python has no place to give a value to: a function with
@@ -4424,10 +2228,9 @@ const PLACES: &str = concat!(
 /// the order of the parameters.
 #[test]
 fn a_call_assigns_the_places_its_var_parameters_are_given() {
-    let emitted = emit(&[("places.hgl", PLACES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_places/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[PLACES]);
+    let python = emitted.module("demo.places");
+    python.assert_writes(&[
         // FN-15: "A function that fails leaves the place holding what
         // its parameter held when it failed": what fails is given
         // back in the result's place, with what each parameter holds.
@@ -4522,12 +2325,7 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
             "    _given = bump(count=_state.seen, by=1)\n",
             "    _state.seen = _given[1]\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// FN-15: a call that assigns a place is written with its assignments
@@ -4535,25 +2333,15 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
 /// is reported.
 #[test]
 fn a_place_call_inside_an_expression_is_reported() {
-    let emitted = emit(&[(
-        "inside.hgl",
-        concat!(
-            "module demo.inside\n",
-            "const fn take(var count: i64) -> i64 {\n",
-            "    count = 0\n",
-            "    return 1\n",
-            "}\n",
-            "const fn twice() -> i64 {\n",
-            "    var held: i64 = 7\n",
-            "    return take(held) + take(held)\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_place_call_inside_an_expression_is_reported",
+        "demo.inside.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "inside.hgl:8:12 target.unsupported",
-            "inside.hgl:8:25 target.unsupported",
+            "demo.inside.hgl:8:12 target.unsupported: the hgraph target does not write a call that assigns a place, inside an expression yet",
+            "demo.inside.hgl:8:25 target.unsupported: the hgraph target does not write a call that assigns a place, inside an expression yet",
         ]
     );
 }
@@ -4561,83 +2349,7 @@ fn a_place_call_inside_an_expression_is_reported() {
 /// TYPE-14: a temporal `T?`. TIME-7: "`return null` for an `i64?`
 /// result [publishes] a null". TYPE-16: a nullable's delta "holds what
 /// was published, a null among them".
-const NULLABLE: &str = concat!(
-    "module demo.nullable\n",
-    "\n",
-    "fn publish_nullable(command: i64) -> i64? {\n",
-    "    when {\n",
-    "        if command == 0 { return null }\n",
-    "        return command\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn read_back(value: i64?) -> i64 {\n",
-    "    when {\n",
-    "        if value == null { return -1 }\n",
-    "        return value + 100\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn recorded(value: i64?) -> i64? {\n",
-    "    when valid(value) && modified(value) { return delta_value(value) }\n",
-    "}\n",
-    "\n",
-    "fn unwrapped(value: i64?) -> i64 {\n",
-    "    when {\n",
-    "        let change: delta<i64?> = delta_value(value)\n",
-    "        if change.value == null { return 0 }\n",
-    "        return 1\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn made(command: i64) -> i64? {\n",
-    "    when {\n",
-    "        if command == 0 { return delta<i64?>() }\n",
-    "        return delta<i64?>(value: command)\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn through_out(command: i64) -> i64? {\n",
-    "    inject out\n",
-    "    when {\n",
-    "        if command == 0 { out = null } else { out = command }\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn nothing_then_null() -> i64? {\n",
-    "    yield 1us: null\n",
-    "    yield 1us: 3\n",
-    "}\n",
-    "\n",
-    "const fn or_zero(value: i64?) -> i64 => if value == null { 0 } else { value }\n",
-    "const fn none_of(value: i64) -> i64? => if value == 0 { null } else { value }\n",
-    "fn lifted_in(value: i64?) -> i64 => or_zero(value)\n",
-    "fn lifted_out(value: i64) -> i64? => none_of(value)\n",
-    "fn wired(command: i64) -> i64 => read_back(publish_nullable(command))\n",
-    "\n",
-    "const fn nulls(seen: list<tuple<datetime, delta<i64?>>>) -> i64 {\n",
-    "    var count: i64 = 0\n",
-    "    for entry in seen {\n",
-    "        if entry[1].value == null { count += 1 }\n",
-    "    }\n",
-    "    return count\n",
-    "}\n",
-    "\n",
-    "test nullable {\n",
-    // A published null is a publication, and `_` is silence.
-    "    assert eval(publish_nullable(command: [7, 0, _, 0, 9])) == [7, null, _, null, 9]\n",
-    "    assert eval(read_back(value: [null, _, 7, null, _])) == [-1, _, 107, -1]\n",
-    "    assert eval(recorded(value: [null, _, 7, null, _])) == [null, _, 7, null]\n",
-    "    assert eval(unwrapped(value: [null, 7])) == [0, 1]\n",
-    "    assert eval(made(command: [0, 5])) == [null, 5]\n",
-    "    assert eval(through_out(command: [0, 5, 0])) == [null, 5, null]\n",
-    "    assert eval(nothing_then_null()) == [_, null, 3]\n",
-    "    assert eval(lifted_in(value: [null, 3])) == [0, 3]\n",
-    "    assert eval(lifted_out(value: [0, 3])) == [null, 3]\n",
-    "    assert eval(wired(command: [0, 4])) == [-1, 104]\n",
-    "    assert nulls(eval(publish_nullable(command: [7, 0, _, 0]))) == 2\n",
-    "}\n",
-);
+const NULLABLE: (&str, &str) = fixture!("demo.nullable.hgl");
 
 /// TYPE-14: a temporal `T?` is hgraph's value that holds one `T` or is
 /// unset, `TS[T | None]`. A null is `None` as a value, and hgraph's
@@ -4645,10 +2357,9 @@ const NULLABLE: &str = concat!(
 /// publishes nothing. TYPE-16: a nullable's delta is hgraph's own.
 #[test]
 fn a_nullable_is_a_value_that_may_be_unset() {
-    let emitted = emit(&[("nullable.hgl", NULLABLE)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_nullable/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[NULLABLE]);
+    let python = emitted.module("demo.nullable");
+    python.assert_writes(&[
         concat!(
             "@_hg.compute_node\n",
             "def publish_nullable(command: _hg.TS[_py.int]) -> _hg.TS[_py.int | None]:\n",
@@ -4676,84 +2387,13 @@ fn a_nullable_is_a_value_that_may_be_unset() {
             "value=[_hg.Null, None, 7, _hg.Null, None])",
         ),
         "[7, _hg.Null, None, _hg.Null, 9]",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// EXPR-3 on hgraph, for a dictionary and for an element of a list: a
 /// `var`, a `state` or a `cache` is changed where it is, and what took
 /// its value before is as it was (LIST-3's rule, for every collection).
-const ENTRIES: &str = concat!(
-    "module demo.entries\n",
-    "\n",
-    // A function whose result cannot be the dictionary: it is lent it.
-    "const fn count_of(counts: dict<str, i64>, name: str) -> i64 {\n",
-    "    let found = get(counts, name)\n",
-    "    if found != null { return found }\n",
-    "    return 0\n",
-    "}\n",
-    "\n",
-    // A dictionary built an entry at a time, each read and then assigned.
-    "const fn counted(names: list<str>) -> dict<str, i64> {\n",
-    "    var counts: dict<str, i64> = []\n",
-    "    for name in names {\n",
-    "        counts[name] = count_of(counts, name) + 1\n",
-    "    }\n",
-    "    return counts\n",
-    "}\n",
-    "\n",
-    "const fn same<T>(value: T) -> T { return value }\n",
-    "\n",
-    // A `var` parameter's element is assigned by making a new list:
-    // where the call fails the caller's list is as it was (FN-15).
-    "const fn replaced(var items: list<i64>, value: i64) { items[0] = value }\n",
-    "\n",
-    "const fn failing(var items: list<i64>, zero: i64) {\n",
-    "    items[0] = 9\n",
-    "    let quotient = 1 //{zero: .fail} zero\n",
-    "}\n",
-    "\n",
-    "test entries {\n",
-    // A `let` is the dictionary as it was, however the place changes.
-    "    var book: dict<str, i64> = [\"a\": 1]\n",
-    "    let before = book\n",
-    "    book[\"b\"] = 2\n",
-    "    assert before == [\"a\": 1]\n",
-    "    assert book == [\"a\": 1, \"b\": 2]\n",
-    "    assert count_of(book, \"b\") == 2\n",
-    "    let through = same(book)\n",
-    "    book[\"a\"] = 5\n",
-    "    assert through == [\"a\": 1, \"b\": 2]\n",
-    "    assert book == [\"a\": 5, \"b\": 2]\n",
-    "    assert counted([\"x\", \"y\", \"x\"]) == [\"x\": 2, \"y\": 1]\n",
-    // An element of a list.
-    "    var items: list<i64> = [1, 2, 3]\n",
-    "    let was = items\n",
-    "    items[1] = 9\n",
-    "    items[1] += 1\n",
-    "    assert was == [1, 2, 3]\n",
-    "    assert items == [1, 10, 3]\n",
-    "    replaced(items, 7)\n",
-    "    assert items == [7, 10, 3]\n",
-    // FN-15: "A function that fails leaves the place holding what its
-    // parameter held when it failed: no change it had made is undone."
-    "    assert raises(\"numeric.division_by_zero\") { failing(items, 0) }\n",
-    "    assert items == [9, 10, 3]\n",
-    // A collection inside another is given a new value, and what
-    // took it before is as it was.
-    "    var rows: dict<str, list<i64>> = [\"a\": [1]]\n",
-    "    let row = rows[\"a\"]\n",
-    "    rows[\"a\"][0] = 2\n",
-    "    rows[\"b\"] = items\n",
-    "    items[0] = 0\n",
-    "    assert row == [1]\n",
-    "    assert rows == [\"a\": [2], \"b\": [9, 10, 3]]\n",
-    "}\n",
-);
+const ENTRIES: (&str, &str) = fixture!("demo.entries.hgl");
 
 /// EXPR-3: "An assignment may name a place inside a value". An entry
 /// of the dictionary, and an element of the list, that a `var` of the
@@ -4764,10 +2404,9 @@ const ENTRIES: &str = concat!(
 /// it is.
 #[test]
 fn an_entry_and_an_element_are_assigned_where_the_collection_is() {
-    let emitted = emit(&[("entries.hgl", ENTRIES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_entries/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[ENTRIES]);
+    let python = emitted.module("demo.entries");
+    python.assert_writes(&[
         // Read by a function that gives an entry, and so is lent the
         // dictionary; then assigned where it is.
         "        counts = _core.set_entry(counts, name, _core.add__i64_i64(lhs=count_of(counts=counts, name=name), rhs=1))\n",
@@ -4792,151 +2431,14 @@ fn an_entry_and_an_element_are_assigned_where_the_collection_is() {
         "    rows = _core.set_at(rows, ((\"k\", \"a\"), (\"i\", 0),), lambda: 2)\n",
         // What a dictionary keeps of another place's list is a copy.
         "    rows = _core.set_entry(rows, \"b\", _core.copied(items))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// EXPR-3 and LIST-1 on hgraph for a collection inside another value: a
 /// struct's dictionary and list, a list in a dictionary, a list in a
 /// list. Each is changed where it is, and what took it before is as it
 /// was.
-const INSIDE: &str = concat!(
-    "module demo.inside\n",
-    "\n",
-    "struct Book {\n",
-    "    bids: dict<i64, i64>\n",
-    "    orders: list<i64>\n",
-    "    name: str\n",
-    "}\n",
-    "\n",
-    "const fn total(values: list<i64>) -> i64 {\n",
-    "    var sum: i64 = 0\n",
-    "    for value in values { sum += value }\n",
-    "    return sum\n",
-    "}\n",
-    "\n",
-    // A function whose result cannot be the struct: it is lent it, and
-    // marks the list it gives of it.
-    "const fn orders_of(book: Book) -> list<i64> => book.orders\n",
-    "\n",
-    // A struct's dictionary and its list, each changed a step at a time.
-    "const fn built(count: i64) -> Book {\n",
-    "    var book: Book = Book(bids: [], orders: [], name: \"a\")\n",
-    "    var i: i64 = 0\n",
-    "    while i < count {\n",
-    "        book.bids[i] = i * 2\n",
-    "        append(book.orders, i)\n",
-    "        i += 1\n",
-    "    }\n",
-    "    return book\n",
-    "}\n",
-    "\n",
-    // Lists in a dictionary, under a key that is an expression.
-    "const fn grouped(count: i64) -> dict<i64, list<i64>> {\n",
-    "    var groups: dict<i64, list<i64>> = [0: [], 1: []]\n",
-    "    var i: i64 = 0\n",
-    "    while i < count {\n",
-    "        append(groups[i % 2], i)\n",
-    "        i += 1\n",
-    "    }\n",
-    "    return groups\n",
-    "}\n",
-    "\n",
-    // A loop's name holds an entry that the list holds too.
-    "const fn copied(rows: list<list<i64>>) -> list<list<i64>> {\n",
-    "    var out: list<list<i64>> = []\n",
-    "    for row in rows { append(out, row) }\n",
-    "    return out\n",
-    "}\n",
-    "\n",
-    "const fn rows_kept() -> bool {\n",
-    "    var rows: list<list<i64>> = [[1], [2]]\n",
-    "    let copy = copied(rows)\n",
-    "    append(rows[0], 9)\n",
-    "    rows[1][0] = 7\n",
-    "    return copy == [[1], [2]] && rows == [[1, 9], [7]]\n",
-    "}\n",
-    "\n",
-    // EXPR-7: the way in is read before the value is evaluated: a key
-    // the dictionary has not fails first.
-    "const fn missing(zero: i64) -> i64 {\n",
-    "    var groups: dict<str, list<i64>> = [\"a\": [1]]\n",
-    "    groups[\"nope\"][0] = 1 //{zero: .fail} zero\n",
-    "    return 1\n",
-    "}\n",
-    "\n",
-    // What is put in holds a collection on the way in: the value the
-    // place had, and not the one it is given. Evaluating the argument
-    // marks `rows`, after the way in has been read and before anything
-    // is changed.
-    "const fn grafted() -> bool {\n",
-    "    var rows: list<list<any>> = [[1]]\n",
-    "    append(rows[0], 2)\n",
-    "    append(rows[0], rows)\n",
-    "    return rows == [[1, 2, [[1, 2]]]]\n",
-    "}\n",
-    "\n",
-    "const fn planted() -> bool {\n",
-    "    var rows: list<list<any>> = [[1]]\n",
-    "    append(rows[0], 2)\n",
-    "    rows[0][0] = rows\n",
-    "    return rows == [[[[1, 2]], 2]]\n",
-    "}\n",
-    "\n",
-    // A node's `state` that is a struct of collections.
-    "fn gathered(value: i64) -> i64 {\n",
-    "    state book: Book = Book(bids: [], orders: [], name: \"s\")\n",
-    "    when {\n",
-    "        append(book.orders, value)\n",
-    "        book.bids[value] = value * 2\n",
-    "        return total(book.orders) + book.bids[value]\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "test inside {\n",
-    // A `let` is the struct as it was, however what is inside the
-    // place changes.
-    "    var book: Book = Book(bids: [1: 10], orders: [1], name: \"a\")\n",
-    "    let before = book\n",
-    "    append(book.orders, 2)\n",
-    "    book.bids[2] = 20\n",
-    "    assert before == Book(bids: [1: 10], orders: [1], name: \"a\")\n",
-    "    assert book == Book(bids: [1: 10, 2: 20], orders: [1, 2], name: \"a\")\n",
-    // A collection taken out of a value is as it was.
-    "    let orders = book.orders\n",
-    "    append(book.orders, 3)\n",
-    "    assert orders == [1, 2]\n",
-    "    assert total(book.orders) == 6\n",
-    "    let taken = orders_of(book)\n",
-    "    append(book.orders, 4)\n",
-    "    assert taken == [1, 2, 3]\n",
-    // A field that is no collection: the struct, of three fields, is
-    // changed where it is, and its collections are still its own.
-    "    book.name = \"b\"\n",
-    "    append(book.orders, 5)\n",
-    "    assert book.orders == [1, 2, 3, 4, 5]\n",
-    "    assert before.orders == [1]\n",
-    "    var groups: dict<str, list<i64>> = [\"a\": [1]]\n",
-    "    let group = groups[\"a\"]\n",
-    "    append(groups[\"a\"], 2)\n",
-    "    groups[\"a\"][0] = 9\n",
-    "    groups[\"b\"] = group\n",
-    "    append(groups[\"b\"], 5)\n",
-    "    assert group == [1]\n",
-    "    assert groups == [\"a\": [9, 2], \"b\": [1, 5]]\n",
-    "    assert rows_kept()\n",
-    "    assert grafted()\n",
-    "    assert planted()\n",
-    "    assert raises(\"value.missing_key\") { missing(0) }\n",
-    "    assert built(3) == Book(bids: [0: 0, 1: 2, 2: 4], orders: [0, 1, 2], name: \"a\")\n",
-    "    assert grouped(5) == [0: [0, 2, 4], 1: [1, 3]]\n",
-    "    assert eval(gathered(value: [1, _, 2])) == [3, _, 7]\n",
-    "}\n",
-);
+const INSIDE: (&str, &str) = fixture!("demo.inside.hgl");
 
 /// EXPR-3: "An assignment may name a place inside a value, at any
 /// depth". Where the place is inside the value a `var` or a `state` of
@@ -4948,10 +2450,9 @@ const INSIDE: &str = concat!(
 /// a `let` of what then changes, and by a result.
 #[test]
 fn a_collection_inside_a_value_is_changed_where_it_is() {
-    let emitted = emit(&[("inside.hgl", INSIDE)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_inside/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[INSIDE]);
+    let python = emitted.module("demo.inside");
+    python.assert_writes(&[
         // A struct's dictionary and list: the way in, and the value as
         // it is asked for.
         "        book = _core.set_at(book, ((\"f\", \"bids\"), (\"k\", i),), lambda: _core.mul__i64_i64(lhs=i, rhs=2))\n",
@@ -4985,48 +2486,13 @@ fn a_collection_inside_a_value_is_changed_where_it_is() {
         // A field that is no collection, of a struct that is no value:
         // the struct is changed where it is.
         "    book = _core.set_field(book, \"name\", \"b\")\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// FN-15, GEN-6: an operator whose value candidates each take a place.
 /// The operator's declaration marks none; the candidate a call
 /// resolves to says which of its arguments are places.
-const PUSHES: &str = concat!(
-    "module demo.pushes\n",
-    "\n",
-    "operator push<C, V>(values: C, item: V)\n",
-    "\n",
-    "impl const fn push(var values: list<i64>, item: i64) {\n",
-    "    append(values, item)\n",
-    "}\n",
-    "\n",
-    "impl const fn push(var values: dict<str, i64>, item: str) {\n",
-    "    values[item] = 1\n",
-    "}\n",
-    "\n",
-    "struct Book {\n",
-    "    orders: list<i64>\n",
-    "}\n",
-    "\n",
-    "test pushes {\n",
-    "    var entries: list<i64> = [1]\n",
-    "    let before = entries\n",
-    "    push(entries, 2)\n",
-    "    assert before == [1]\n",
-    "    assert entries == [1, 2]\n",
-    "    var seen: dict<str, i64> = []\n",
-    "    push(seen, \"a\")\n",
-    "    assert seen == [\"a\": 1]\n",
-    "    var book: Book = Book(orders: [1])\n",
-    "    push(book.orders, 2)\n",
-    "    assert book == Book(orders: [1, 2])\n",
-    "}\n",
-);
+const PUSHES: (&str, &str) = fixture!("demo.pushes.hgl");
 
 /// FN-15: "So may a value candidate of an operator (GEN-6) ... a call of
 /// an operator is resolved as any other, and the candidate it resolves
@@ -5037,10 +2503,9 @@ const PUSHES: &str = concat!(
 /// stays where the call fails.
 #[test]
 fn a_candidate_that_takes_a_place_is_called_as_a_function_that_does() {
-    let emitted = emit(&[("pushes.hgl", PUSHES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_pushes/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[PUSHES]);
+    let python = emitted.module("demo.pushes");
+    python.assert_writes(&[
         concat!(
             "def _impl_push_list_i64__i64(values, item):\n",
             "    try:\n",
@@ -5065,60 +2530,14 @@ fn a_candidate_that_takes_a_place_is_called_as_a_function_that_does() {
             "    book = _core.set_field(book, \"orders\", _given[1])\n",
             "    _core.raise_if_failed(_given[0])\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A tenor on hgraph (core's TEN-1 to TEN-9): its literal, its own
 /// arithmetic, order and text, and a date moved by one, on a calendar
-/// and under a rolling rule.
-const MOVES: &str = concat!(
-    "module demo.moves\n",
-    "\n",
-    // A calendar of the program's own: one day closed, beside the weekend.
-    "struct Closed {\n",
-    "    day: date\n",
-    "}\n",
-    "\n",
-    "impl const fn business_day(calendar: Closed, day: date) -> bool =>\n",
-    "    day != calendar.day && business_day(Weekdays(), day)\n",
-    "\n",
-    // TEN-5, TEN-7: the options of `+`, each an argument of the candidate.
-    "const fn settles(trade: date, calendar: Closed) -> date => trade +{calendar: calendar} 2B\n",
-    "\n",
-    "const fn matures(spot: date) -> date => spot +{rolling_rule: Rolling.modified_following} 3M\n",
-    "\n",
-    "const fn summed(lhs: tenor, rhs: tenor) -> tenor => lhs + rhs\n",
-    "\n",
-    "test moves {\n",
-    // TEN-4: months first, to the last day of a shorter month.
-    "    assert @2026-01-31 + 1M == @2026-02-28\n",
-    "    assert @2026-01-31 - 2W == @2026-01-17\n",
-    // TEN-6: a count of business days starts from a business day. The
-    // 3rd is a Saturday: on to the Monday, or back to the Friday.
-    "    assert @2026-01-03 + 2B == @2026-01-07\n",
-    "    assert @2026-01-03 - 0B == @2026-01-02\n",
-    "    assert settles(@2026-01-02, Closed(day: @2026-01-05)) == @2026-01-07\n",
-    // TEN-8: `modified_following` gives the business day before where
-    // the one after is in another month.
-    "    assert matures(@2025-10-31) == @2026-01-30\n",
-    // TEN-2, TEN-3, TEN-9: a tenor's own arithmetic, order and text.
-    "    assert 6M + 6M == 1Y\n",
-    "    assert 2 * 1Y6M == 3Y\n",
-    "    assert -(1M2D) == -1 * 1M2D\n",
-    "    assert 1M < 2M\n",
-    "    assert !(1M < 45D)\n",
-    "    assert (1M <=> 45D) == CmpResult.unordered\n",
-    "    assert convert<str>(13D) == \"1W6D\"\n",
-    "    assert convert<str>(1M - 1D) == \"1M-1D\"\n",
-    "    assert raises(\"tenor.mixed_units\") { summed(2B, 1M) }\n",
-    "    assert raises(\"numeric.out_of_range\") { summed(9223372036854775807D, 1D) }\n",
-    "}\n",
-);
+/// and under a rolling rule. TEN-6: a count of business days starts from
+/// a business day.
+const MOVES: (&str, &str) = fixture!("demo.moves.hgl");
 
 /// TEN-1 to TEN-9 on hgraph. A tenor literal is the provider's `Tenor`
 /// by its counts (LEX-28, TYPE-17), and its own operators the
@@ -5127,10 +2546,9 @@ const MOVES: &str = concat!(
 /// candidate; core's functions ask the program's own `business_day`.
 #[test]
 fn a_tenor_moves_a_date_on_a_calendar_and_under_a_rule() {
-    let emitted = emit(&[("moves.hgl", MOVES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_moves/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[MOVES]);
+    let python = emitted.module("demo.moves");
+    python.assert_writes(&[
         // LEX-28: a year is twelve months, a week seven days, and
         // business days a count of their own.
         "_core.Tenor(1, 0)",
@@ -5149,15 +2567,10 @@ fn a_tenor_moves_a_date_on_a_calendar_and_under_a_rule() {
         "_hgl_4core._inst__impl_add__date_tenor_C__demo_moves__Closed(lhs=trade, calendar=calendar, rhs=_core.Tenor(business=2))",
         // TEN-7, TEN-8: and for the rolling rule.
         "_hgl_4core._inst__impl_add__date_tenor_R__core__Rolling(lhs=spot, rolling_rule=_hgl_4core.Rolling[\"modified_following\"], rhs=_core.Tenor(3, 0))",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // Core's own functions, written for the program's calendar, ask the
     // program's `business_day`.
-    let core = emitted.text("_hgl/_m_core/__init__.py");
+    let core = emitted.module("core");
     assert!(
         core.contains(
             "_hgl_4demo_5moves._impl_business_day_Closed_date(calendar=calendar, day=at)"
@@ -5172,27 +2585,15 @@ fn a_tenor_moves_a_date_on_a_calendar_and_under_a_rule() {
 /// reported where it is an input and where it is a result.
 #[test]
 fn a_nullable_set_is_not_written_as_a_temporal_type() {
-    let emitted = emit(&[(
-        "sets.hgl",
-        concat!(
-            "module demo.maybe\n",
-            "fn taken(members: set<i64>?) -> bool {\n",
-            "    when { return members == null }\n",
-            "}\n",
-            "fn given(command: i64) -> set<i64>? {\n",
-            "    when { return null }\n",
-            "}\n",
-            // A `const` one is an ordinary value.
-            "fn fixed(value: i64, const members: set<i64>?) -> bool {\n",
-            "    when { return members == null }\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_nullable_set_is_not_written_as_a_temporal_type",
+        "demo.maybe.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "sets.hgl:2:10 target.unsupported",
-            "sets.hgl:5:4 target.unsupported",
+            "demo.maybe.hgl:2:10 target.unsupported: the hgraph target does not write the type `set<i64>?` yet",
+            "demo.maybe.hgl:5:4 target.unsupported: the hgraph target does not write the type `set<i64>?` yet",
         ]
     );
 }
@@ -5200,46 +2601,16 @@ fn a_nullable_set_is_not_written_as_a_temporal_type() {
 /// Core's LIST-1 to LIST-3: `append` and `extend` give a list more
 /// entries. Each takes its list as a `var` parameter, so the call
 /// assigns the place, and a value taken from it before is as it was.
-const LISTS: &str = concat!(
-    "module demo.lists\n",
-    "\n",
-    "fn first_gathered(value: i64) -> i64 {\n",
-    "    cache seen: list<i64> = []\n",
-    "    when {\n",
-    "        append(seen, value)\n",
-    "        return seen[0]\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "const fn grown(first: list<i64>, more: list<i64>) -> list<i64> {\n",
-    "    var entries: list<i64> = first\n",
-    "    extend(entries, more)\n",
-    "    append(entries, 0)\n",
-    "    return entries\n",
-    "}\n",
-    "\n",
-    "test lists {\n",
-    "    var entries: list<i64> = [1, 2]\n",
-    "    let before = entries\n",
-    "    append(entries, 3)\n",
-    "    extend(entries, before)\n",
-    "    extend(entries, [])\n",
-    "    assert before == [1, 2]\n",
-    "    assert entries == [1, 2, 3, 1, 2]\n",
-    "    assert grown([7], [8, 9]) == [7, 8, 9, 0]\n",
-    "    assert eval(first_gathered(value: [7, _, 9])) == [7, _, 7]\n",
-    "}\n",
-);
+const LISTS: (&str, &str) = fixture!("demo.lists.hgl");
 
 /// LIST-1, LIST-2: `append` and `extend` are the provider's functions.
 /// LIST-3: each gives back the list its place is to hold, a new one,
 /// and the call assigns the place (FN-15).
 #[test]
 fn a_list_grows_through_cores_append_and_extend() {
-    let emitted = emit(&[("lists.hgl", LISTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_lists/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[LISTS]);
+    let python = emitted.module("demo.lists");
+    python.assert_writes(&[
         // A node's `cache` is the place.
         concat!(
             "    _given = _core.fn_append(values=_state.seen, item=value.value)\n",
@@ -5251,41 +2622,12 @@ fn a_list_grows_through_cores_append_and_extend() {
             "    _given = _core.fn_append(values=entries, item=0)\n",
             "    entries = _given[1]\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A generic node whose configuration is of its generic parameter:
 /// what `T` is at a call decides how the configuration is given.
-const KEPT: &str = concat!(
-    "module demo.tagged\n",
-    "\n",
-    "fn tagged<T>(value: i64, const tag: T) -> i64 {\n",
-    "    when { return value }\n",
-    "}\n",
-    "fn optional<T>(value: i64, const tag: T? = null) -> i64 {\n",
-    "    when { return value }\n",
-    "}\n",
-    "fn wired(value: i64, const tags: list<i64>) -> i64 {\n",
-    "    return tagged<list<i64>>(value, tags)\n",
-    "}\n",
-    "fn defaulted(value: i64) -> i64 {\n",
-    "    return optional<list<i64>>(value)\n",
-    "}\n",
-    "\n",
-    "test kept {\n",
-    "    assert eval(wired(value: [7, _, 9], tags: [1, 2])) == [7, _, 9]\n",
-    "    assert eval(defaulted(value: [7])) == [7]\n",
-    "    assert eval(tagged<list<i64>>(value: [7], tag: [1, 2])) == [7]\n",
-    "    assert eval(tagged<dict<str, i64>>(value: [7], tag: [\"a\": 1])) == [7]\n",
-    "    assert eval(tagged<i64>(value: [7], tag: 1)) == [7]\n",
-    "    assert eval(optional<tuple<i64, str>>(value: [7])) == [7]\n",
-    "}\n",
-);
+const KEPT: (&str, &str) = fixture!("demo.tagged.hgl");
 
 /// GEN-2: a generic temporal function is written once for each set of
 /// generic arguments, and its configuration is of the type the
@@ -5296,10 +2638,9 @@ const KEPT: &str = concat!(
 /// for an argument left out.
 #[test]
 fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
-    let emitted = emit(&[("tagged.hgl", KEPT)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_tagged/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[KEPT]);
+    let python = emitted.module("demo.tagged");
+    python.assert_writes(&[
         // A node keeps what a graph gives it: a copy of the graph's
         // parameter, which its caller may go on changing.
         "    return _inst_tagged__list_i64_(value=value, tag=_core.Held(_core.copied(tags)))\n",
@@ -5318,12 +2659,7 @@ fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
         "value=[7], tag=_core.Held({\"a\": 1}))",
         "_harness.evaluate(_inst_tagged__i64, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7], tag=1)",
         "_harness.evaluate(_inst_optional__tuple_i64__str_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7], tag=_core.Held(None))",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// LIST-3: "a value taken from the place before the call is as it
@@ -5331,121 +2667,7 @@ fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
 /// list is given the list itself; the place copies it before it grows
 /// where something else may hold it, and grows it where it is
 /// otherwise.
-const SHARED: &str = concat!(
-    "module demo.shared\n",
-    "\n",
-    "struct Holder {\n",
-    "    items: list<i64>\n",
-    "}\n",
-    "\n",
-    // A function that keeps nothing: its result is a scalar.
-    "const fn total(values: list<i64>) -> i64 {\n",
-    "    var sum: i64 = 0\n",
-    "    for value in values { sum += value }\n",
-    "    return sum\n",
-    "}\n",
-    // One that may keep what it is given: its result may hold it.
-    "const fn same<T>(value: T) -> T { return value }\n",
-    // One that does not know its place holds a list.
-    "const fn keep<T>(var slot: T, value: T) { slot = value }\n",
-    "const fn push(var items: list<i64>, item: i64) { append(items, item) }\n",
-    // FN-15: a function that fails leaves the place holding what it
-    // had made of it: the list it grew before it failed stays grown.
-    "const fn failing(var items: list<i64>, zero: i64) {\n",
-    "    append(items, 2)\n",
-    "    let quotient = 1 //{zero: .fail} zero\n",
-    "}\n",
-    // A function handed a run's store may keep there what it is given.
-    "const fn save(store: GlobalState, values: list<i64>) {\n",
-    "    put(store, \"saved\", [values])\n",
-    "}\n",
-    "fn saving(value: i64) -> i64 {\n",
-    "    cache seen: list<i64> = []\n",
-    "    inject global_state\n",
-    "    when {\n",
-    "        append(seen, value)\n",
-    "        save(global_state, seen)\n",
-    "        append(seen, value)\n",
-    "        let saved: list<list<i64>> = get(global_state, \"saved\")\n",
-    "        if saved[0] == [value] { return 1 }\n",
-    "        return 0\n",
-    "    }\n",
-    "}\n",
-    // A `var` of the function's own, written from what it was lent.
-    "const fn longer(values: list<i64>) -> i64 {\n",
-    "    var mine: list<i64> = values\n",
-    "    append(mine, 0)\n",
-    "    return total(mine)\n",
-    "}\n",
-    "const fn built(count: i64) -> list<i64> {\n",
-    "    var out: list<i64> = []\n",
-    "    var i: i64 = 0\n",
-    "    while i < count {\n",
-    "        append(out, i)\n",
-    "        i += 1\n",
-    "    }\n",
-    "    return out\n",
-    "}\n",
-    "const fn doubled() -> list<i64> {\n",
-    "    var values: list<i64> = [1, 2]\n",
-    "    for item in values { append(values, item) }\n",
-    "    return values\n",
-    "}\n",
-    "\n",
-    "test shared {\n",
-    // A `let` is the list as it was, however the place grows after.
-    "    var entries: list<i64> = [1, 2]\n",
-    "    let before = entries\n",
-    "    append(entries, 3)\n",
-    "    assert before == [1, 2]\n",
-    "    assert entries == [1, 2, 3]\n",
-    "    assert total(entries) == 6\n",
-    "    assert longer(entries) == 6\n",
-    "    assert entries == [1, 2, 3]\n",
-    // What a function gave back is as it was.
-    "    let through = same(entries)\n",
-    "    append(entries, 4)\n",
-    "    assert through == [1, 2, 3]\n",
-    // A `var` written from a `let` leaves the `let` as it was.
-    "    let source = [7, 8]\n",
-    "    var copy: list<i64> = source\n",
-    "    push(copy, 9)\n",
-    "    assert source == [7, 8]\n",
-    "    assert copy == [7, 8, 9]\n",
-    "    var slot: list<i64> = [0]\n",
-    "    keep(slot, source)\n",
-    "    append(slot, 1)\n",
-    "    assert source == [7, 8]\n",
-    "    assert slot == [7, 8, 1]\n",
-    // A list inside another value, and one a list or a struct keeps.
-    "    var rows: list<list<i64>> = [[1]]\n",
-    "    let row = rows[0]\n",
-    "    append(rows[0], 2)\n",
-    "    append(rows, entries)\n",
-    "    append(entries, 5)\n",
-    "    assert row == [1]\n",
-    "    assert rows == [[1, 2], [1, 2, 3, 4]]\n",
-    "    let held = Holder(items: entries)\n",
-    "    append(entries, 6)\n",
-    "    assert held.items == [1, 2, 3, 4, 5]\n",
-    "    assert doubled() == [1, 2, 1, 2]\n",
-    // A place given to `extend` as both of its lists.
-    "    var twice: list<i64> = [1, 2]\n",
-    "    extend(twice, twice)\n",
-    "    assert twice == [1, 2, 1, 2]\n",
-    "    var grown: list<i64> = built(2)\n",
-    "    append(grown, 9)\n",
-    "    assert grown == [0, 1, 9]\n",
-    "    assert built(4) == [0, 1, 2, 3]\n",
-    "    var kept: list<i64> = [0]\n",
-    "    append(kept, 1)\n",
-    "    assert raises(\"numeric.division_by_zero\") { failing(kept, 0) }\n",
-    "    assert kept == [0, 1, 2]\n",
-    "    failing(kept, 1)\n",
-    "    assert kept == [0, 1, 2, 2]\n",
-    "    assert eval(saving(value: [7])) == [1]\n",
-    "}\n",
-);
+const SHARED: (&str, &str) = fixture!("demo.shared.hgl");
 
 /// LIST-3 on hgraph, by the owner's rule (the compiler's issue 151):
 /// "all var mutations are mutations, not copies." A `var` changes its
@@ -5458,10 +2680,9 @@ const SHARED: &str = concat!(
 /// nowhere.
 #[test]
 fn a_list_is_changed_where_it_is_and_copied_where_it_is_kept() {
-    let emitted = emit(&[("shared.hgl", SHARED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_shared/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[SHARED]);
+    let python = emitted.module("demo.shared");
+    python.assert_writes(&[
         // A `let` of a list its `var` then grows takes a copy.
         concat!(
             "    before = _core.copied(entries)\n",
@@ -5508,12 +2729,7 @@ fn a_list_is_changed_where_it_is_and_copied_where_it_is_kept() {
             "        _given = failing(items=kept, zero=0)\n",
             "        kept = _given[1]\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // No mark is kept at run time, and nothing is put back.
     for gone in ["_core.shared", "_core.each", "_core.restored", "_was_"] {
         assert!(!python.contains(gone), "the module has `{gone}`:\n{python}");
@@ -5521,16 +2737,9 @@ fn a_list_is_changed_where_it_is_and_copied_where_it_is_kept() {
 }
 
 /// A `stop` that fails where its guard holds.
-const STOP_FAILS: &str = concat!(
-    "module demo.stops.fails\n",
-    "fn ends_badly(value: i64) -> i64 {\n",
-    "    state ended: i64 = 0\n",
-    "    when { return value }\n",
-    "    stop {\n",
-    "        if valid(value) { ended = value // 0 }\n",
-    "    }\n",
-    "}\n",
-    "test stop_fails { eval(ends_badly(value: [7])) }\n",
+const STOP_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.stops.fails.hgl"
 );
 
 /// TIME-5: "`stop` reads a temporal input under manual admission, as a
@@ -5542,10 +2751,9 @@ const STOP_FAILS: &str = concat!(
 /// as a `when` does. It gives a `start` none.
 #[test]
 fn a_stop_is_given_the_nodes_inputs() {
-    let emitted = emit(&[("stops.hgl", STOPS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_stops/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[STOPS]);
+    let python = emitted.module("demo.stops");
+    python.assert_writes(&[
         concat!(
             "@last_seen.start\n",
             "def _start_last_seen(scale: _py.int, _state: _hg.STATE = None):\n",
@@ -5557,95 +2765,16 @@ fn a_stop_is_given_the_nodes_inputs() {
             "    if value.valid:\n",
             "        _state.ended = _core.mul__i64_i64(lhs=value.value, rhs=scale)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Sets: a temporal `set<i64>` and its deltas.
-const SETS: &str = concat!(
-    "module demo.sets\n",
-    "\n",
-    "fn members(command: i64) -> set<i64> {\n",
-    "    when {\n",
-    "        if command == 1 { return delta<set<i64>>(added: [1, 2]) }\n",
-    "        if command == 2 { return delta<set<i64>>(added: [3], removed: [1]) }\n",
-    "        if command == 3 { return delta<set<i64>>(removed: [2]) }\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn twice(command: i64) -> set<i64> {\n",
-    "    inject out\n",
-    "    when {\n",
-    "        if command == 1 { return delta<set<i64>>(added: [1]) }\n",
-    "        out = delta<set<i64>>(added: [2, 3])\n",
-    "        out = delta<set<i64>>(removed: [1, 2])\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "fn changes(input: set<i64>) -> set<i64> {\n",
-    "    when { return delta_value(input) }\n",
-    "}\n",
-    "\n",
-    "fn seen(command: i64) -> set<i64> => changes(twice(command))\n",
-    "\n",
-    "const fn swapped(left: i64, joined: i64) -> delta<set<i64>> =>\n",
-    "    delta<set<i64>>(removed: [left], added: [joined])\n",
-    "\n",
-    "fn relayed(enabled: bool, input: set<i64>) -> set<i64> {\n",
-    "    when {\n",
-    "        if enabled && modified(input) { return delta_value(input) }\n",
-    "    }\n",
-    "}\n",
-    "\n",
-    "test sets {\n",
-    "    assert eval(members(command: [1, _, 2, 3])) == [\n",
-    "        delta<set<i64>>(added: [1, 2]),\n",
-    "        _,\n",
-    "        delta<set<i64>>(added: [3], removed: [1]),\n",
-    "        delta<set<i64>>(removed: [2])\n",
-    "    ]\n",
-    "    assert eval(members(command: [0])) == []\n",
-    // What a delta adds is a set: its order is not part of it.
-    "    assert eval(members(command: [1])) == [delta<set<i64>>(added: [2, 1])]\n",
-    // A delta that removes an element is not one that adds it.
-    "    assert eval(members(command: [1, 3])) != [\n",
-    "        delta<set<i64>>(added: [1, 2]),\n",
-    "        delta<set<i64>>(added: [2])\n",
-    "    ]\n",
-    // Two writes in one cycle are one delta.
-    "    assert eval(seen(command: [1, 2])) == [\n",
-    "        delta<set<i64>>(added: [1]),\n",
-    "        delta<set<i64>>(added: [3], removed: [1])\n",
-    "    ]\n",
-    "    assert eval(relayed(enabled: [true, _, true], input: [_, delta<set<i64>>(added: [1])]))\n",
-    "        == [_, delta<set<i64>>(added: [1])]\n",
-    "}\n",
-);
+const SETS: (&str, &str) = fixture!("demo.sets.hgl");
 
 /// Set deltas that are not what the target published.
-const SET_FAILS: &str = concat!(
-    "module demo.sets.fails\n",
-    "fn members(command: i64) -> set<i64> {\n",
-    "    when {\n",
-    "        if command == 1 { return delta<set<i64>>(added: [1]) }\n",
-    "        if command == 2 { return delta<set<i64>>(removed: [1]) }\n",
-    "    }\n",
-    "}\n",
-    "test removed_is_not_added {\n",
-    "    assert eval(members(command: [1, 2])) == [delta<set<i64>>(added: [1]), delta<set<i64>>(added: [1])]\n",
-    "}\n",
-    "test one_more {\n",
-    "    assert eval(members(command: [1])) == [delta<set<i64>>(added: [1]), delta<set<i64>>(removed: [1])]\n",
-    "}\n",
-    // The division is written first, and fails first: the addition
-    // after it would overflow.
-    "const fn swapped(divisor: i64, value: i64) -> delta<set<i64>> =>\n",
-    "    delta<set<i64>>(removed: [1 // divisor], added: [value + 1])\n",
-    "test removed_first { let change = swapped(0, 9223372036854775807) }\n",
+const SET_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.sets.fails.hgl"
 );
 
 /// TYPE-9, TYPE-16: a temporal `set<T>` is hgraph's `TSS[T]`, whose
@@ -5658,10 +2787,9 @@ const SET_FAILS: &str = concat!(
 /// for an added one.
 #[test]
 fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
-    let emitted = emit(&[("sets.hgl", SETS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_sets/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[SETS]);
+    let python = emitted.module("demo.sets");
+    python.assert_writes(&[
         "def members(command: _hg.TS[_py.int]) -> _hg.TSS[_py.int]:\n",
         concat!(
             "        return _hg.set_delta(added=_py.frozenset((3,)), ",
@@ -5689,59 +2817,16 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
         ),
         "    if not (_harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[0], _hold=lambda _port: (_py.frozenset(_port.value) if _port.valid else _core.unset_read())), [])):\n",
         "    if not (not _harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[1, 3], _hold=lambda _port: (_py.frozenset(_port.value) if _port.valid else _core.unset_read())), [",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A trace given to a `const fn`.
-const GIVEN: &str = concat!(
-    "module demo.given\n",
-    "\n",
-    "fn pass(value: i64) -> i64 {\n",
-    "    when { return delta_value(value) }\n",
-    "}\n",
-    "\n",
-    "const fn ticks(seen: list<tuple<datetime, i64>>) -> i64 {\n",
-    "    var count = 0\n",
-    "    for tick in seen { count += 1 }\n",
-    "    return count\n",
-    "}\n",
-    "\n",
-    "const fn total(seen: list<tuple<datetime, i64>>) -> i64 {\n",
-    "    var sum = 0\n",
-    "    for tick in seen { sum += tick[1] }\n",
-    "    return sum\n",
-    "}\n",
-    "\n",
-    // The instants are in time order, a smallest step for each
-    // position apart.
-    "const fn ordered(seen: list<tuple<datetime, i64>>) -> bool => seen[0][0] < seen[1][0]\n",
-    "\n",
-    "test given {\n",
-    "    assert ticks(eval(pass(value: [7, _, 7, 9]))) == 3\n",
-    "    let seen = eval(pass(value: [_, 1, _, 2]))\n",
-    "    assert total(seen) == 3\n",
-    "    assert ordered(seen)\n",
-    "    assert ticks(eval(pass(value: [_, _]))) == 0\n",
-    "}\n",
-);
+const GIVEN: (&str, &str) = fixture!("demo.given.hgl");
 
 /// A position with no publication gives a `const fn` no tuple.
-const GIVEN_FAILS: &str = concat!(
-    "module demo.given.fails\n",
-    "fn pass(value: i64) -> i64 {\n",
-    "    when { return delta_value(value) }\n",
-    "}\n",
-    "const fn ticks(seen: list<tuple<datetime, i64>>) -> i64 {\n",
-    "    var count = 0\n",
-    "    for tick in seen { count += 1 }\n",
-    "    return count\n",
-    "}\n",
-    "test silence_counted { assert ticks(eval(pass(value: [7, _, 7]))) == 3 }\n",
+const GIVEN_FAILS: (&str, &str) = fixture!(
+    "a_failure_names_the_statement_that_failed",
+    "demo.given.fails.hgl"
 );
 
 /// TST-16: "A trace given to a `const fn` is an ordinary value there:
@@ -5753,20 +2838,14 @@ const GIVEN_FAILS: &str = concat!(
 /// The harness makes the list of the dense trace an eval gives.
 #[test]
 fn a_trace_given_to_a_const_fn_is_its_publications() {
-    let emitted = emit(&[("given.hgl", GIVEN)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_given/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[GIVEN]);
+    let python = emitted.module("demo.given");
+    python.assert_writes(&[
         // `pass` is a word of Python's, and is written `pass_`.
         "ticks(seen=_harness.publications(_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7, None, 7, 9])))",
         "    seen = _harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[None, 1, None, 2])\n",
         "total(seen=_harness.publications(seen))",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TST-7 and CEVAL-2: accept offsets and instants, compare each actual
@@ -5774,9 +2853,11 @@ fn a_trace_given_to_a_const_fn_is_its_publications() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn timed_traces_replay_and_compare_at_the_runs_start() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_timed_traces");
-    let emitted = emit(&[("timed_keys.hgl", include_str!("fixtures/timed_traces.hgl"))]);
+    let hgraph = on_hgraph("hgraph_timed_traces");
+    let emitted = emit(&[fixture!(
+        "timed_traces_replay_and_compare_at_the_runs_start",
+        "demo.timed_keys.hgl"
+    )]);
     let cases = [
         ("written_publications_preserve_absolute_instants", None),
         (
@@ -5802,7 +2883,7 @@ fn timed_traces_replay_and_compare_at_the_runs_start() {
         ("invalid_expectation", Some("must strictly increase")),
     ];
     let tests: Vec<_> = cases.iter().map(|(name, _)| emitted.test(name).0).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
+    let ran = hgraph.run(&emitted, &tests);
     for ((name, error), outcome) in cases.iter().zip(&ran) {
         match error {
             None => assert_eq!(outcome, &Ran::Passed, "{name}"),
@@ -5819,68 +2900,9 @@ fn timed_traces_replay_and_compare_at_the_runs_start() {
 /// of its functions, and an instant outside the years 1 to 9999 in UTC
 /// in one of its tests.
 const REACH: [(&str, &str); 3] = [
-    (
-        "reach.hgl",
-        concat!(
-            "module reach\n",
-            "use reach.far as far\n",
-            "\n",
-            "const fn fine(value: i64) -> i64 => value + 1\n",
-            "const fn looped(limit: i64, rest: ...i64) -> i64 {\n",
-            "    var total = 0\n",
-            "    total = total + limit\n",
-            "    return total\n",
-            "}\n",
-            "const fn outer(limit: i64) -> i64 => looped(limit) + 1\n",
-            "const fn lone(value: i64) -> i64 => value\n",
-            "\n",
-            "test direct {\n",
-            "    assert fine(1) == 2\n",
-            "    assert fine(2) == 3\n",
-            "}\n",
-            "test reaches { assert outer(1) == 2 }\n",
-            "test own { let at = @9999-12-31T23:30:00-01:00 }\n",
-            "test across { assert far::relay(1) == 2 }\n",
-            "test wrong {\n",
-            "    assert fine(1) == 2\n",
-            "    assert fine(1) == 3\n",
-            "}\n",
-            "test overflows {\n",
-            "    let big = 9223372036854775807\n",
-            "    assert fine(big) == 0\n",
-            "}\n",
-            // OPS-10: a duration result outside its range. The longest
-            // duration is a little over 106751991 days.
-            "test too_long {\n",
-            "    let long = 106751991d\n",
-            "    assert long + 1d == 0s\n",
-            "}\n",
-            // OPS-10: an instant result outside its range, core's own
-            // example.
-            "test too_late {\n",
-            "    assert @9999-12-31T23:59:59Z + 1d == @9999-12-31T23:59:59Z\n",
-            "}\n",
-        ),
-    ),
-    (
-        "far.hgl",
-        concat!(
-            "module reach.far\n",
-            "use reach.deep as deep\n",
-            "export const fn relay(value: i64) -> i64 => deep::counted(value)\n",
-        ),
-    ),
-    (
-        "deep.hgl",
-        concat!(
-            "module reach.deep\n",
-            "export const fn counted(limit: i64, rest: ...i64) -> i64 {\n",
-            "    var total = 0\n",
-            "    total = total + limit\n",
-            "    return total\n",
-            "}\n",
-        ),
-    ),
+    fixture!("reach", "reach.hgl"),
+    fixture!("reach", "reach.far.hgl"),
+    fixture!("reach", "reach.deep.hgl"),
 ];
 
 /// A declaration or a test with a form that is not written is left out
@@ -5893,9 +2915,9 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     assert_eq!(
         emitted.reported,
         [
-            "reach.hgl:5:29 target.unsupported",
-            "reach.hgl:18:21 target.unsupported",
-            "deep.hgl:2:37 target.unsupported",
+            "reach.hgl:5:29 target.unsupported: the hgraph target does not write a pack parameter yet",
+            "reach.hgl:18:21 target.unsupported: the hgraph target does not write an instant outside the years 1 to 9999 yet",
+            "reach.deep.hgl:2:37 target.unsupported: the hgraph target does not write a pack parameter yet",
         ]
     );
     assert_eq!(emitted.blocked("direct"), None);
@@ -5908,7 +2930,7 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     );
     assert_eq!(
         emitted.blocked("across"),
-        Some(format!("deep.hgl:2:37 {pack}"))
+        Some(format!("reach.deep.hgl:2:37 {pack}"))
     );
     assert_eq!(
         emitted.blocked("own"),
@@ -5920,15 +2942,13 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     let (_, direct) = emitted.test("direct");
     assert_eq!(direct.identity(), "reach::direct");
 
-    let python = emitted.text("_hgl/_m_reach/__init__.py");
-    for written in [
+    let python = emitted.module("reach");
+    python.assert_writes(&[
         "def fine(",
         "def outer(",
         "def test_direct(",
         "def test_wrong(",
-    ] {
-        assert!(python.contains(written), "{written} is in:\n{python}");
-    }
+    ]);
     // What has such a form itself is left out. A test that only
     // reaches one is written, and is not run.
     for left_out in ["def looped(", "def test_own("] {
@@ -5987,103 +3007,107 @@ fn an_interpreter_that_does_not_start_runs_nothing() {
     assert!(directory.join("_hgl/_m_reach/__init__.py").is_file());
 }
 
-/// The Python interpreter the tests that need hgraph run on.
-fn python_with_hgraph() -> String {
-    std::env::var("HGL_HGRAPH_PYTHON")
-        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph")
+/// Where a test that needs hgraph runs what the target wrote.
+struct Hgraph {
+    /// The Python interpreter that has hgraph.
+    python: PathBuf,
+    /// An empty directory of the test's own, to write the program into.
+    directory: PathBuf,
 }
 
-/// Runs the tests the target writes for its fixtures on hgraph. It needs
+/// The interpreter the environment variable `HGL_HGRAPH_PYTHON` names,
+/// and the directory `name` under Cargo's scratch directory, emptied.
+fn on_hgraph(name: &str) -> Hgraph {
+    let python = std::env::var("HGL_HGRAPH_PYTHON")
+        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph");
+    // Cargo gives integration tests a scratch directory under `target/`.
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    // Left over from an earlier run, perhaps; `ok()` ignores "not there".
+    fs::remove_dir_all(&directory).ok();
+    Hgraph {
+        python: PathBuf::from(python),
+        directory,
+    }
+}
+
+impl Hgraph {
+    /// Runs the tests of `emitted` at the positions `tests`, and gives
+    /// what each did.
+    fn run(&self, emitted: &Emitted, tests: &[usize]) -> Vec<Ran> {
+        run(&self.python, &self.directory, &emitted.output, tests)
+    }
+
+    /// Runs every test of `emitted`, in order.
+    fn run_all(&self, emitted: &Emitted) -> Vec<Ran> {
+        let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+        self.run(emitted, &all)
+    }
+}
+
+/// What each test at the positions `tests` did, as `ran` has it, beside
+/// its name: `name passed`, `name failed at message`, `at` the place of
+/// the statement it failed at or `?`, or `name not run: reason`.
+fn outcomes(emitted: &Emitted, tests: &[usize], ran: &[Ran]) -> Vec<String> {
+    assert_eq!(ran.len(), tests.len(), "one outcome for each test run");
+    tests
+        .iter()
+        .zip(ran)
+        .map(|(&test, ran)| {
+            let name = &emitted.output.tests[test].name;
+            match ran {
+                Ran::Passed => format!("{name} passed"),
+                Ran::Failed { at, message } => format!(
+                    "{name} failed {} {message}",
+                    at.map_or("?".to_string(), |at| emitted.place(at))
+                ),
+                Ran::NotRun(reason) => format!("{name} not run: {reason}"),
+            }
+        })
+        .collect()
+}
+
+/// The place and the message of the one test `ran` holds, which failed.
+fn failed(emitted: &Emitted, ran: &[Ran]) -> (Option<String>, String) {
+    let [Ran::Failed { at, message }] = ran else {
+        panic!("the test failed: {ran:?}");
+    };
+    (at.map(|at| emitted.place(at)), message.clone())
+}
+
+/// Runs the tests the target writes for its fixtures on hgraph: every
+/// program directly in `tests/fixtures`, emitted together. It needs
 /// a Python that has hgraph, named by the environment variable `HGL_HGRAPH_PYTHON`,
 /// so it is not among the tests run by default:
 /// `cargo test -p hgl_hgraph -- --ignored` runs it.
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn the_generated_tests_pass_on_hgraph() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_generated");
-    fs::remove_dir_all(&directory).ok();
-    let mut files = vec![
-        SCALAR_TRACES,
-        ("demo.hgl", DEMO),
-        ("endpoints.hgl", ENDPOINTS),
-        ("selectors.hgl", SELECTORS),
-        ("names.hgl", NAMES),
-        ("defaults.hgl", DEFAULTS),
-        CONSTANTS[0],
-        CONSTANTS[1],
-        ("lift.hgl", LIFTS),
-        ("mixed.hgl", CANDIDATES),
-        ("div.hgl", DIVISION),
-        ("results.hgl", RESULTS),
-        ("close.hgl", CLOSE),
-        ("enums.hgl", ENUMS),
-        ("durations.hgl", DURATIONS),
-        ("raises.hgl", RAISES),
-        ("instants.hgl", INSTANTS),
-        ("divided.hgl", DIVIDED),
-        ("bounded.hgl", BOUNDED),
-        TEMPORAL_CANDIDATES[0],
-        TEMPORAL_CANDIDATES[1],
-        ("generics.hgl", GENERICS),
-        ("vals.hgl", VALUE_GENERICS),
-        ("through.hgl", THROUGH),
-        CALLERS_TYPE[0],
-        CALLERS_TYPE[1],
-    ];
-    files.extend(STRUCTS);
-    files.extend(SAME_NAMES);
-    files.push(("loops.hgl", LOOPS));
-    files.push(("elements.hgl", ELEMENTS));
-    files.push(("compare.hgl", COMPARE));
-    files.push(("stops.hgl", STOPS));
-    files.push(("caps.hgl", CAPABILITIES));
-    files.push(("sources.hgl", SOURCES));
-    files.push(("places.hgl", PLACES));
-    files.push(("nullable.hgl", NULLABLE));
-    files.push(("lists.hgl", LISTS));
-    files.push(("shared.hgl", SHARED));
-    files.push(("moves.hgl", MOVES));
-    files.push(("entries.hgl", ENTRIES));
-    files.push(("inside.hgl", INSIDE));
-    files.push(("pushes.hgl", PUSHES));
-    files.push(("tagged.hgl", KEPT));
-    files.push(("sets.hgl", SETS));
-    files.push(("given.hgl", GIVEN));
-    files.push(("notified.hgl", NOTIFIED));
-    files.push(("compound.hgl", COMPOUND));
-    files.push(("timed.hgl", TIMED));
-    files.push(("wrapped.hgl", WRAPPED));
-    files.push(("converted.hgl", CONVERSIONS));
-    files.push(("timers.hgl", TIMERS));
-    files.push(("timer_selectors.hgl", TIMER_SELECTORS));
-    files.push(("timer_fixes.hgl", TIMER_FIXES));
-    files.push(("copies.hgl", COPIES));
-    files.push(("copy_points.hgl", COPY_POINTS));
-    files.push(("temporal_structs.hgl", TEMPORAL_STRUCTS));
-    files.push(("temporal_collections.hgl", TEMPORAL_COLLECTIONS));
-    files.push(("conditionals.hgl", CONDITIONALS));
-    files.push(("graph_for.hgl", GRAPH_FOR));
-    files.push(("control_review.hgl", CONTROL_REVIEW));
-    files.push(("captures.hgl", CAPTURES));
-    files.push(("windows.hgl", WINDOWS));
-    files.push(("scalars.hgl", SCALARS));
-    files.push(("errors.hgl", ERRORS));
-    files.push(("references.hgl", REFERENCES));
-    files.push(("tuples.hgl", TUPLES));
-    files.push(("tuples_names.hgl", TUPLES_NAMES));
-    files.push(("struct_review.hgl", STRUCT_REVIEW));
-    files.push(("validity.hgl", VALIDITY));
-    files.extend(MODULES);
-    files.extend(NESTED);
-    files.push(("shadow.hgl", SHADOW));
-    files.extend(DEFAULT_MODULES);
-    files.extend(PATHS);
-    let emitted = emit(&files);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let hgraph = on_hgraph("hgraph_generated");
+    // Every program directly in `tests/fixtures`, in the order of the
+    // files' names.
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut programs: Vec<(String, String)> = fs::read_dir(&directory)
+        .expect("the fixtures are there")
+        .map(|entry| entry.expect("the directory is read").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "hgl"))
+        .map(|path| {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            (
+                name,
+                fs::read_to_string(&path).expect("the fixture is read"),
+            )
+        })
+        .collect();
+    programs.sort();
+    // `emit` takes each as two `&str`, borrowed from what `programs` owns.
+    let files: Vec<(&str, &str)> = programs
+        .iter()
+        .map(|(name, text)| (name.as_str(), text.as_str()))
+        .collect();
+    let emitted = emit_clean(&files);
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
     assert!(!all.is_empty(), "the fixtures contain named HGL tests");
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let ran = hgraph.run(&emitted, &all);
     let not_passed: Vec<String> = emitted
         .output
         .tests
@@ -6106,13 +3130,9 @@ fn the_generated_tests_pass_on_hgraph() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_test_that_calls_no_native_loads_its_harness() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_harness_alone");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[("shadow.hgl", SHADOW)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let hgraph = on_hgraph("hgraph_harness_alone");
+    let emitted = emit_clean(&[SHADOW]);
+    let ran = hgraph.run_all(&emitted);
     assert_eq!(ran, [Ran::Passed]);
 }
 
@@ -6131,11 +3151,8 @@ fn a_test_that_calls_no_native_loads_its_harness() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn an_application_runs_on_hgraph() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_applications");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&APPLICATIONS);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let hgraph = on_hgraph("hgraph_applications");
+    let emitted = emit_clean(&APPLICATIONS);
     let ran = |path: &str| {
         let application = emitted
             .output
@@ -6144,8 +3161,8 @@ fn an_application_runs_on_hgraph() {
             .position(|application| application.path == path)
             .unwrap_or_else(|| panic!("no application `{path}` was written"));
         run_application(
-            Path::new(&python),
-            &directory,
+            &hgraph.python,
+            &hgraph.directory,
             &emitted.output,
             application,
             &Stop::new(),
@@ -6218,11 +3235,11 @@ fn an_application_runs_on_hgraph() {
 
 /// END-4 and TIME-3: a transition to invalid wakes an active node, but no
 /// publication occurred. Explicit modification guards are checked at evaluation.
-const NOTIFIED: &str = include_str!("fixtures/notification_guards.hgl");
+const NOTIFIED: (&str, &str) = fixture!("demo.notified.hgl");
 
 /// The owner's rule for a `var`, where it copies and where it does
 /// not.
-const COPIES: &str = include_str!("fixtures/copies.hgl");
+const COPIES: (&str, &str) = fixture!("demo.copies.hgl");
 
 /// "all var mutations are mutations, not copies. The copies only occur
 /// when: 1. the value is passed to a function and the function also
@@ -6232,10 +3249,9 @@ const COPIES: &str = include_str!("fixtures/copies.hgl");
 /// a parameter or let is retained, then it needs to make the copy."
 #[test]
 fn a_copy_is_made_where_a_reference_is_kept_or_outlives_a_change() {
-    let emitted = emit(&[("copies.hgl", COPIES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_copies/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[COPIES]);
+    let python = emitted.module("demo.copies");
+    python.assert_writes(&[
         // A result: the function's own `var` and its own `let` as they
         // are, and a copy of what it was given, read through a name or
         // not.
@@ -6263,19 +3279,14 @@ fn a_copy_is_made_where_a_reference_is_kept_or_outlives_a_change() {
         // and given again.
         "    _given = push_all(items=rows, more=_core.copied(rows))\n",
         "    _given = both(left=twice, right=_core.copied(twice))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// The owner's rule for a struct, FN-15's failure, and FN-13's stable
 /// arguments and retained results: what no copy is made for, and what
 /// one is. The fixture's tests, run on hgraph, show that nothing that
 /// took a value sees a later change of it.
-const COPY_POINTS: &str = include_str!("fixtures/copy_points.hgl");
+const COPY_POINTS: (&str, &str) = fixture!("demo.copy_points.hgl");
 
 /// "The copy by value exception is for trivial structures (think
 /// sizeof(i64))": a struct of at most two scalar fields is a value,
@@ -6292,16 +3303,15 @@ const COPY_POINTS: &str = include_str!("fixtures/copy_points.hgl");
 /// changes."
 #[test]
 fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
-    let emitted = emit(&[("copy_points.hgl", COPY_POINTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_copy_points/__init__.py");
+    let emitted = emit_clean(&[COPY_POINTS]);
+    let python = emitted.module("demo.copy_points");
     let saved = format!(
         "            _state.saved = Ticket(id={}, size={}, price={})\n",
         part("current[\"id\"]"),
         part("current[\"size\"]"),
         part("current[\"price\"]")
     );
-    for expected in [
+    python.assert_writes(&[
         // A struct of two scalars is a value; one of three, one with a
         // `str`, one another inherits from, and one of structs are not.
         "Point = _core.struct(\"Point\", (\"x\", \"y\"), by_value=True)\n",
@@ -6399,12 +3409,7 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
         "    return summed(values=_core.Held(_core.copied(values)), tick=tick)\n",
         "    n = relayed(values=cfg, tick=tick)\n",
         "_core.Held(_core.copied(values)))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Every copy the target writes for `copy_points.hgl` is needed: with
@@ -6414,18 +3419,15 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn every_copy_the_copy_points_fixture_makes_is_needed() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_copy_points");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[("copy_points.hgl", COPY_POINTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let hgraph = on_hgraph("hgraph_copy_points");
+    let emitted = emit_clean(&[COPY_POINTS]);
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
     // A test that a copy taken out sends round a loop without end is
     // stopped: it has not passed.
     let limit = |_: &Test| Some(std::time::Duration::from_secs(30));
     let ran = run_within(
-        Path::new(&python),
-        &directory.join("whole"),
+        &hgraph.python,
+        &hgraph.directory.join("whole"),
         &emitted.output,
         &all,
         &limit,
@@ -6451,8 +3453,8 @@ fn every_copy_the_copy_points_fixture_makes_is_needed() {
             .expect("the module is written");
         file.text.replace_range(at..at + copy.len(), "");
         let ran = run_within(
-            Path::new(&python),
-            &directory.join(format!("without_{number}")),
+            &hgraph.python,
+            &hgraph.directory.join(format!("without_{number}")),
             &output,
             &all,
             &limit,
@@ -6470,7 +3472,7 @@ fn every_copy_the_copy_points_fixture_makes_is_needed() {
 
 /// TIME-9, core's CAP-4 and CAP-5: nodes that a scheduler or an alarm
 /// wakes, with inputs and with none.
-const TIMERS: &str = include_str!("fixtures/timers.hgl");
+const TIMERS: (&str, &str) = fixture!("demo.timers.hgl");
 
 /// TIME-9: `scheduled()` is the scheduler's `is_scheduled_now`, one
 /// `if` over its handler, since "a wake asked of the scheduler is due
@@ -6481,10 +3483,9 @@ const TIMERS: &str = include_str!("fixtures/timers.hgl");
 /// handler with no `modified` selector is run by an input's wake.
 #[test]
 fn a_timer_wakes_its_own_handlers() {
-    let emitted = emit(&[("timers.hgl", TIMERS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_timers/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[TIMERS]);
+    let python = emitted.module("demo.timers");
+    python.assert_writes(&[
         // A scheduler: the node requires no input valid, and each
         // handler is under its own guard.
         concat!(
@@ -6536,17 +3537,12 @@ fn a_timer_wakes_its_own_handlers() {
             "def beats(every: _dt.timedelta, times: _py.int) -> _hg.TS[_py.int]:\n",
             "    return _node_beats(_begin=_hg.const(True), every=every, times=times)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TIME-3 and TIME-9: `scheduled()` under a negation and in a
 /// disjunction, a dormant handler, and a dormant node.
-const TIMER_SELECTORS: &str = include_str!("fixtures/timer_selectors.hgl");
+const TIMER_SELECTORS: (&str, &str) = fixture!("demo.timer_selectors.hgl");
 
 /// TIME-3: "Selectors under negation or disjunction leave the default in
 /// place", so such a handler subscribes to every input and is run by an
@@ -6555,10 +3551,9 @@ const TIMER_SELECTORS: &str = include_str!("fixtures/timer_selectors.hgl");
 /// wakes it: the node is dormant".
 #[test]
 fn scheduled_is_a_bool_where_it_selects_nothing() {
-    let emitted = emit(&[("timer_selectors.hgl", TIMER_SELECTORS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_timer_selectors/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[TIMER_SELECTORS]);
+    let python = emitted.module("demo.timer_selectors");
+    python.assert_writes(&[
         // An input's wake, and no wake of the scheduler due.
         concat!(
             "    _timer_woke = _scheduler.is_scheduled_now\n",
@@ -6584,12 +3579,7 @@ fn scheduled_is_a_bool_where_it_selects_nothing() {
         "@_hg.sink_node(active=())\ndef null_sink(a: _hg.TS[_py.float]):\n    pass\n",
         "def half_dormant(a: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n    if a.modified:\n",
         "@_hg.compute_node(active=(), valid=())\ndef _node_idle(_begin: _hg.TS[_py.bool]) -> _hg.TS[_py.int]:\n    pass\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TIME-9 says what `scheduled()` is in an evaluation, and nothing of it
@@ -6597,35 +3587,16 @@ fn scheduled_is_a_bool_where_it_selects_nothing() {
 /// and not what it is as a bool. Each is reported.
 #[test]
 fn scheduled_in_a_lifecycle_hook_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "fn first(value: i64) -> bool {\n",
-            "    state seen: bool = false\n",
-            "    inject scheduler\n",
-            "    start { seen = scheduled() }\n",
-            "    when { return seen }\n",
-            "}\n",
-            "fn last(value: i64) -> bool {\n",
-            "    state seen: bool = false\n",
-            "    inject alarm\n",
-            "    when { return seen }\n",
-            "    stop { seen = scheduled() }\n",
-            "}\n",
-            "fn unwoken(value: i64) -> bool {\n",
-            "    inject scheduler\n",
-            "    start { schedule(scheduler, 1s) }\n",
-            "    when !modified([]) { return true }\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "scheduled_in_a_lifecycle_hook_is_reported",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:5:20 target.unsupported",
-            "m.hgl:12:19 target.unsupported",
-            "m.hgl:17:11 target.unsupported",
+            "m.hgl:5:20 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
+            "m.hgl:12:19 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
+            "m.hgl:17:11 target.unsupported: the hgraph target does not write this expression yet",
         ]
     );
 }
@@ -6633,7 +3604,7 @@ fn scheduled_in_a_lifecycle_hook_is_reported() {
 /// Core's CAP-4 and CAP-5: a wake not ahead of the current evaluation,
 /// the empty tag, the wake being delivered; and a node with no input,
 /// no handler and no timer.
-const TIMER_FIXES: &str = include_str!("fixtures/timer_fixes.hgl");
+const TIMER_FIXES: (&str, &str) = fixture!("demo.timer_fixes.hgl");
 
 /// hgraph takes no node without an input: every node with no temporal
 /// input is given one that never wakes it, one with only a `start`
@@ -6641,10 +3612,9 @@ const TIMER_FIXES: &str = include_str!("fixtures/timer_fixes.hgl");
 /// entered, and the empty tag is given a mark as every tag is.
 #[test]
 fn every_inputless_node_has_a_hidden_input() {
-    let emitted = emit(&[("timer_fixes.hgl", TIMER_FIXES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_timer_fixes/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[TIMER_FIXES]);
+    let python = emitted.module("demo.timer_fixes");
+    python.assert_writes(&[
         concat!(
             "@_hg.sink_node(active=(), valid=())\n",
             "def _node_started_only(_begin: _hg.TS[_py.bool], _store: _hg.GlobalState = None):\n",
@@ -6652,12 +3622,7 @@ fn every_inputless_node_has_a_hidden_input() {
         ),
         "    _node_started_only(_begin=_hg.const(True))\n",
         "    _scheduler = _core.Wake(_scheduler)\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     let native = emitted.text("_hgl/_core_native.py");
     assert!(native.contains("return None if tag is None else \"#\" + tag"));
 }
@@ -6667,28 +3632,21 @@ fn every_inputless_node_has_a_hidden_input() {
 /// is the spec's own illustration, and is written.
 #[test]
 fn an_empty_selection_beside_another_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "fn both(a: i64) -> i64 {\n",
-            "    inject scheduler\n",
-            "    start { schedule(scheduler, 1s) }\n",
-            "    when modified([]) && modified(a) { return a }\n",
-            "}\n",
-            "fn sampled(a: i64) -> i64 {\n",
-            "    inject scheduler\n",
-            "    start { schedule(scheduler, 1s) }\n",
-            "    when modified([]) && valid([]) { return 0 }\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "an_empty_selection_beside_another_is_reported",
+        "m.hgl"
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:5:10 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:5:10 target.unsupported: the hgraph target does not write `modified([])` beside another `modified` selector yet"
+        ]
+    );
 }
 
 /// TYPE-11: windows of ticks and of a duration, as inputs and results;
 /// TYPE-16: a window's delta is "V: the value that arrived".
-const WINDOWS: &str = include_str!("fixtures/windows.hgl");
+const WINDOWS: (&str, &str) = fixture!("demo.windows.hgl");
 
 /// TYPE-11: "`rolling_window<V, Max, Min>` is a rolling window of V ...
 /// Omitted minimum equals maximum". It is hgraph's `TSW`, of a count of
@@ -6699,18 +3657,17 @@ const WINDOWS: &str = include_str!("fixtures/windows.hgl");
 /// CEVAL-1), whose trace is each value that arrived (TST-5).
 #[test]
 fn a_window_is_hgraphs_tsw() {
-    let emitted = emit(&[("windows.hgl", WINDOWS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_windows/__init__.py");
+    let emitted = emit_clean(&[WINDOWS]);
+    let python = emitted.module("demo.windows");
     let ticks = "_hg.TSW[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]]";
-    for expected in [
+    python.assert_writes(&[
         format!("def collect(price: _hg.TS[_py.float]) -> {ticks}:\n    return price.value\n"),
         format!("_output: _hg.TSW_OUT[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]] = None) -> {ticks}:"),
         "    if ((not _output.valid) and ".to_string(),
         "    _output.value = price.value\n".to_string(),
         concat!(
-            "-> _hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], ",
-            "_hg.WindowSize[_dt.timedelta(microseconds=0)]]:"
+        "-> _hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], ",
+        "_hg.WindowSize[_dt.timedelta(microseconds=0)]]:"
         )
         .to_string(),
         "-> _hg.TSW[_py.float, _hg.WindowSize[1]]:".to_string(),
@@ -6720,25 +3677,20 @@ fn a_window_is_hgraphs_tsw() {
         "(prices.last_modified_time if prices.valid else None)".to_string(),
         "-> _hg.TSW[Side, _hg.WindowSize[2], _hg.WindowSize[1]]:".to_string(),
         "def _inst_newest__i64_4(values: _hg.TSW[_py.int, _hg.WindowSize[4], _hg.WindowSize[1]])"
-            .to_string(),
+        .to_string(),
         "    return arrived(prices=collect(price=price))\n".to_string(),
         "_harness.evaluate(collect, {\"price\": _hgl_4core._inst_replay__f64}, \
          _hgl_4core._inst_record__rolling_window_f64__3__1_, "
-            .to_string(),
+        .to_string(),
         "_harness.evaluate(arrived, {\"prices\": _hgl_4core._inst_replay__rolling_window_f64__3__1_}, \
          _hgl_4core._inst_record__f64, "
-            .to_string(),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+        .to_string(),
+    ]);
     // TYPE-9: a window within a struct, a fixed list, a dictionary and
     // a tuple is that one's child, read by its port, and wired from it
     // in a graph; a part that is no window is read in a hook.
     let small = "_hg.TSW[_py.float, _hg.WindowSize[2], _hg.WindowSize[1]]";
-    for expected in [
+    python.assert_writes(&[
         format!("_core.schema(Book, {{\"prices\": {ticks}, \"last\": _hg.TS[_py.float]}})"),
         format!("_hg.TSL[{small}, _hg.Size[2]]"),
         format!("_hg.TSD[_py.str, {small}]"),
@@ -6748,20 +3700,13 @@ fn a_window_is_hgraphs_tsw() {
         "_core.changed(book.delta_value, \"prices\")".to_string(),
         "    return arrived(prices=booked(price=price)[\"prices\"])\n".to_string(),
         "    return arrived_two(prices=slots(slot=slot, price=price)[1])\n".to_string(),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
     // Core's `replay` and `record` written for the window.
-    let core = emitted.text("_hgl/_m_core/__init__.py");
-    for expected in [
+    let core = emitted.module("core");
+    core.assert_writes(&[
         format!("def _inst_replay__rolling_window_f64__3__1_(items: _py.object) -> {ticks}:"),
         format!("def _inst_record__rolling_window_f64__3__1_(input: {ticks}, "),
-    ] {
-        assert!(core.contains(&expected), "missing {expected} in:\n{core}");
-    }
+    ]);
 }
 
 /// What this target does not write of a window is reported. FN-12:
@@ -6775,44 +3720,9 @@ fn a_window_is_hgraphs_tsw() {
 /// that is no scalar or enum.
 #[test]
 fn a_window_form_not_written_yet_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "struct Quote { bid: f64 }\n",
-            "fn full(prices: rolling_window<f64, 3>) -> f64 {\n",
-            "    when { return delta_value(prices) }\n",
-            "}\n",
-            "fn timed(prices: rolling_window<f64, 5s, 0s>) -> f64 {\n",
-            "    when { return delta_value(prices) }\n",
-            "}\n",
-            "fn whole(prices: rolling_window<f64, 3, 1>) -> rolling_window<f64, 3, 1> {\n",
-            "    when { return prices }\n",
-            "}\n",
-            "fn own(price: f64) -> rolling_window<f64, 3> {\n",
-            "    inject out\n",
-            "    when {\n",
-            "        if valid(out) { return }\n",
-            "        out = price\n",
-            "    }\n",
-            "}\n",
-            "fn cleared(price: f64) -> rolling_window<f64, 3, 1> {\n",
-            "    inject out\n",
-            "    when { invalidate(out) }\n",
-            "}\n",
-            "fn quotes(quote: Quote) -> rolling_window<Quote, 3, 1> {\n",
-            "    when { return quote }\n",
-            "}\n",
-            "fn maybe(price: f64?) -> rolling_window<f64?, 3, 1> {\n",
-            "    when { return price }\n",
-            "}\n",
-            "fn recent(price: f64) -> rolling_window<f64, 5s> {\n",
-            "    when { return price }\n",
-            "}\n",
-            "test recorded {\n",
-            "    assert eval(recent(price: [1.0])) == [1.0]\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_window_form_not_written_yet_is_reported",
+        "m.hgl"
     )]);
     let reported: Vec<&String> = emitted
         .reported
@@ -6822,13 +3732,13 @@ fn a_window_form_not_written_yet_is_reported() {
     assert_eq!(
         reported,
         [
-            "m.hgl:3:9 target.unsupported",
-            "m.hgl:6:10 target.unsupported",
-            "m.hgl:10:19 target.unsupported",
-            "m.hgl:15:12 target.unsupported",
-            "m.hgl:21:12 target.unsupported",
-            "m.hgl:23:4 target.unsupported",
-            "m.hgl:26:4 target.unsupported",
+            "m.hgl:3:9 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
+            "m.hgl:6:10 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 5s, 0s>`, which core leaves undefined, yet",
+            "m.hgl:10:19 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:15:12 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
+            "m.hgl:21:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
+            "m.hgl:23:4 target.unsupported: the hgraph target does not write the type `rolling_window<Quote, 3, 1>` yet",
+            "m.hgl:26:4 target.unsupported: the hgraph target does not write the type `rolling_window<f64?, 3, 1>` yet",
         ]
     );
     // The record of `recent`'s window is core's, which reads it.
@@ -6851,85 +3761,28 @@ fn a_window_form_not_written_yet_is_reported() {
 /// holds one is not invalidated.
 #[test]
 fn a_window_within_a_value_is_reported_where_it_is_read() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "struct Full {\n",
-            "    prices: rolling_window<f64, 3>\n",
-            "    last: f64\n",
-            "}\n",
-            "struct Book {\n",
-            "    prices: rolling_window<f64, 3, 1>\n",
-            "    last: f64\n",
-            "}\n",
-            "fn full(book: Full) -> f64 {\n",
-            "    when valid(book.last) { return book.last }\n",
-            "}\n",
-            "fn timed(slots: list<rolling_window<f64, 5s, 0s>, 2>) -> bool {\n",
-            "    when { return valid(slots) }\n",
-            "}\n",
-            "fn keyed(prices: dict<str, rolling_window<f64, 3>>) -> bool {\n",
-            "    when { return valid(prices) }\n",
-            "}\n",
-            "fn own(price: f64) -> Full {\n",
-            "    inject out\n",
-            "    when {\n",
-            "        if valid(out) { return }\n",
-            "        out = delta<Full>(last: price)\n",
-            "    }\n",
-            "}\n",
-            "fn whole(book: Book) -> Book {\n",
-            "    when { return book }\n",
-            "}\n",
-            "fn bound(book: Book) -> f64 {\n",
-            "    when {\n",
-            "        let copy = book\n",
-            "        return copy.last\n",
-            "    }\n",
-            "}\n",
-            "fn field(book: Book) -> bool {\n",
-            "    when valid(book.prices) {\n",
-            "        let prices = book.prices\n",
-            "        return true\n",
-            "    }\n",
-            "}\n",
-            "fn entries(prices: dict<str, rolling_window<f64, 3, 1>>) -> bool {\n",
-            "    when {\n",
-            "        let all = prices\n",
-            "        return true\n",
-            "    }\n",
-            "}\n",
-            "fn first(pair: tuple<rolling_window<f64, 3, 1>, f64>) -> bool {\n",
-            "    when valid(pair[0]) {\n",
-            "        let window = pair[0]\n",
-            "        return true\n",
-            "    }\n",
-            "}\n",
-            "fn cleared(price: f64) -> Book {\n",
-            "    inject out\n",
-            "    when { invalidate(out) }\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_window_within_a_value_is_reported_where_it_is_read",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
             // The readiness of a field's window, of a list's element of
             // a duration, of a dictionary's value, and of `out`'s field.
-            "m.hgl:10:9 target.unsupported",
-            "m.hgl:13:10 target.unsupported",
-            "m.hgl:16:10 target.unsupported",
-            "m.hgl:22:12 target.unsupported",
+            "m.hgl:10:9 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
+            "m.hgl:13:10 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 5s, 0s>`, which core leaves undefined, yet",
+            "m.hgl:16:10 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
+            "m.hgl:22:12 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
             // A struct read whole, bound whole, its window field, a
             // dictionary of windows bound whole, a tuple's window.
-            "m.hgl:27:19 target.unsupported",
-            "m.hgl:31:20 target.unsupported",
-            "m.hgl:37:22 target.unsupported",
-            "m.hgl:43:19 target.unsupported",
-            "m.hgl:49:22 target.unsupported",
+            "m.hgl:27:19 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:31:20 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:37:22 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:43:19 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:49:22 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
             // `out` that holds a window, invalidated.
-            "m.hgl:55:12 target.unsupported",
+            "m.hgl:55:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
         ]
     );
 }
@@ -6946,88 +3799,29 @@ fn a_window_within_a_value_is_reported_where_it_is_read() {
 /// returns alone are not.
 #[test]
 fn a_window_a_target_cannot_carry_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "struct Book {\n",
-            "    prices: rolling_window<f64, 3, 1>\n",
-            "    last: f64\n",
-            "}\n",
-            "fn collect(price: f64) -> rolling_window<f64, 3, 1> {\n",
-            "    when { return price }\n",
-            "}\n",
-            "fn arrived(prices: rolling_window<f64, 3, 1>) -> f64 {\n",
-            "    when { return delta_value(prices) }\n",
-            "}\n",
-            "fn booked(price: f64) -> Book {\n",
-            "    when { return delta<Book>(prices: price, last: price) }\n",
-            "}\n",
-            "fn last(book: Book) -> f64 {\n",
-            "    when valid(book.last) { return book.last }\n",
-            "}\n",
-            "fn routed(flag: bool, price: f64) -> f64 {\n",
-            "    let w = collect(price)\n",
-            "    if flag { return arrived(w) } else { return 0.0 }\n",
-            "}\n",
-            "fn routed_book(flag: bool, price: f64) -> f64 {\n",
-            "    let b = booked(price)\n",
-            "    if flag { return last(b) } else { return 0.0 }\n",
-            "}\n",
-            "fn keyed(key: str, price: f64) -> dict<str, rolling_window<f64, 3, 1>> {\n",
-            "    when { return delta<dict<str, rolling_window<f64, 3, 1>>>(updated: [key: price]) }\n",
-            "}\n",
-            "fn watched(prices: rolling_window<f64, 3, 1>) {\n",
-            "    when { let seen = delta_value(prices) }\n",
-            "}\n",
-            "fn each(key: str, price: f64) {\n",
-            "    for name, window in keyed(key, price) { watched(window) }\n",
-            "}\n",
-            "fn twice(price: f64) -> rolling_window<f64, 3, 1> {\n",
-            "    inject out\n",
-            "    when {\n",
-            "        out = price\n",
-            "        out = price + 1.0\n",
-            "    }\n",
-            "}\n",
-            "fn looped(price: f64) -> rolling_window<f64, 3, 1> {\n",
-            "    inject out\n",
-            "    when {\n",
-            "        for step in [1.0, 2.0] { out = price + step }\n",
-            "    }\n",
-            "}\n",
-            "fn then_returned(price: f64) -> Book {\n",
-            "    inject out\n",
-            "    when { out = delta<Book>(last: price) }\n",
-            "    when { return delta<Book>(prices: price) }\n",
-            "}\n",
-            "fn returns(price: f64) -> rolling_window<f64, 3, 1> {\n",
-            "    when {\n",
-            "        if price < 0.0 { return 0.0 }\n",
-            "        return price\n",
-            "    }\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_window_a_target_cannot_carry_is_reported",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:20:5 target.unsupported",
-            "m.hgl:24:5 target.unsupported",
-            "m.hgl:33:5 target.unsupported",
-            "m.hgl:38:9 target.unsupported",
-            "m.hgl:45:34 target.unsupported",
-            "m.hgl:50:12 target.unsupported",
+            "m.hgl:20:5 target.unsupported: the hgraph target does not write a window given to the graph of a branch or of a loop yet",
+            "m.hgl:24:5 target.unsupported: the hgraph target does not write a window given to the graph of a branch or of a loop yet",
+            "m.hgl:33:5 target.unsupported: the hgraph target does not write a window given to the graph of a branch or of a loop yet",
+            "m.hgl:38:9 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
+            "m.hgl:45:34 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
+            "m.hgl:50:12 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
         ]
     );
 }
 
 /// CTRL-13 to CTRL-15: a graph's `if` and `switch`, over a connection
 /// and over a `const` parameter.
-const CONDITIONALS: &str = include_str!("fixtures/conditionals.hgl");
+const CONDITIONALS: (&str, &str) = fixture!("demo.conditionals.hgl");
 
 /// ERR-7 and ERR-8: captures of a node and of a graph, nested.
-const CAPTURES: &str = include_str!("fixtures/captures.hgl");
+const CAPTURES: (&str, &str) = fixture!("demo.captures.hgl");
 
 /// ERR-7: "`capture(callable, args...)` creates a temporal error
 /// boundary", hgraph's `try_except`, whose `out` is `.value` and whose
@@ -7036,31 +3830,18 @@ const CAPTURES: &str = include_str!("fixtures/captures.hgl");
 /// provider's `captured` lets the failures of a `start` or a `stop` out.
 #[test]
 fn a_capture_is_a_try_except() {
-    let emitted = emit(&[
-        ("captures.hgl", CAPTURES),
-        (
-            "sink.hgl",
-            concat!(
-                "module demo.sink\n",
-                "fn drop(value: i64) { when { } }\n",
-                "fn watched(value: i64) -> error {\n",
-                "    let boundary = capture(drop, value)\n",
-                "    return boundary.error\n",
-                "}\n",
-            ),
-        ),
+    let emitted = emit_clean(&[
+        CAPTURES,
+        fixture!("a_capture_is_a_try_except", "demo.sink.hgl"),
     ]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_captures/__init__.py");
-    for expected in [
+    let python = emitted.module("demo.captures");
+    python.assert_writes(&[
         "    boundary = _core.captured(_hg.try_except(doubled, value=value))\n    return boundary.out\n",
         "    return is_negative(failure=_core.captured_error(boundary.exception))\n",
         "    outer = _core.captured(_hg.try_except(handled, value=value, repeat=repeat))\n",
         "def handled(value: _hg.TS[_py.int], repeat: _hg.TS[_py.bool]) -> _hg.TS[_core.Error]:\n",
-    ] {
-        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
-    }
-    let sink = emitted.text("_hgl/_m_demo/_m_sink/__init__.py");
+    ]);
+    let sink = emitted.module("demo.sink");
     let expected = concat!(
         "    @_hg.graph\n",
         "    def _capture_0(value: _hg.TS[_py.int]) -> None:\n",
@@ -7075,7 +3856,7 @@ fn a_capture_is_a_try_except() {
 /// captures of a graph given a wiring-time value and of a lifted value
 /// function, lifecycle failures that escape, a temporal `result`, and
 /// non-finite numbers as data.
-const ERRORS: &str = include_str!("fixtures/errors.hgl");
+const ERRORS: (&str, &str) = fixture!("demo.errors.hgl");
 
 /// hgraph's `try_except` does not take a graph with a scalar input,
 /// and makes one node of two calls of a node with the same inputs.
@@ -7087,10 +3868,9 @@ const ERRORS: &str = include_str!("fixtures/errors.hgl");
 /// call each held, and the defaults left out in the call of the child.
 #[test]
 fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
-    let emitted = emit(&[("errors.hgl", ERRORS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_errors/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[ERRORS]);
+    let python = emitted.module("demo.errors");
+    python.assert_writes(&[
         // A node is called in a graph of the capture's own, which no
         // call outside it shares.
         concat!(
@@ -7125,9 +3905,7 @@ fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
             "    boundary = _core.captured(_hg.try_except(_capture_9, value=value))\n",
         ),
         "    return _core.lifted_is_err(value)\n",
-    ] {
-        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
-    }
+    ]);
 }
 
 /// ERR-1: "Distinguish source rejection, execution failure, ordinary
@@ -7140,22 +3918,20 @@ fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_that_is_no_hgl_error_escapes_every_capture() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_no_hgl_error");
-    fs::remove_dir_all(&directory).ok();
-    fs::create_dir_all(&directory).unwrap();
+    let hgraph = on_hgraph("hgraph_no_hgl_error");
+    fs::create_dir_all(&hgraph.directory).unwrap();
     fs::write(
-        directory.join("_core_native.py"),
+        hgraph.directory.join("_core_native.py"),
         include_str!("../support/core_native.py"),
     )
     .unwrap();
-    let script = directory.join("escapes.py");
+    let script = hgraph.directory.join("escapes.py");
     fs::write(&script, include_str!("fixtures/escapes.py")).unwrap();
-    let ran = std::process::Command::new(&python)
+    let ran = std::process::Command::new(&hgraph.python)
         .arg("-I")
         .arg("-B")
         .arg(&script)
-        .arg(&directory)
+        .arg(&hgraph.directory)
         .output()
         .expect("the interpreter starts");
     assert!(
@@ -7175,35 +3951,14 @@ fn a_failure_that_is_no_hgl_error_escapes_every_capture() {
 /// test outside an eval (TST-3), as a temporal call there is.
 #[test]
 fn a_capture_outside_a_let_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "fn scaled(value: i64, const by: i64) -> i64 { return value * by }\n",
-            "fn watched(value: i64) -> i64 {\n",
-            "    return capture(scaled, value, 2).value\n",
-            "}\n",
-            "fn added(value: i64) -> i64 {\n",
-            "    let boundary = capture(add_, value, 1)\n",
-            "    return boundary.value\n",
-            "}\n",
-            "fn forward(value: i64) -> i64 { when { return value } }\n",
-            "fn inline(value: i64) -> i64 {\n",
-            "    return capture(forward, value).value\n",
-            "}\n",
-            "test outside_an_eval {\n",
-            "    let seen = capture(forward, 1)\n",
-            "    assert true\n",
-            "}\n",
-        ),
-    )]);
+    let emitted = emit(&[fixture!("a_capture_outside_a_let_is_reported", "m.hgl")]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:4:12 target.unsupported",
-            "m.hgl:7:20 target.unsupported",
-            "m.hgl:12:12 target.unsupported",
-            "m.hgl:15:16 target.unsupported",
+            "m.hgl:4:12 target.unsupported: the hgraph target does not write a capture of a node, of a lifted call or of a graph given a wiring-time value, other than as the value of a `let` yet",
+            "m.hgl:7:20 target.unsupported: the hgraph target does not write a capture of a lifted operator or native function yet",
+            "m.hgl:12:12 target.unsupported: the hgraph target does not write a capture of a node, of a lifted call or of a graph given a wiring-time value, other than as the value of a `let` yet",
+            "m.hgl:15:16 target.unsupported: the hgraph target does not write a capture in a test, outside an eval yet",
         ]
     );
 }
@@ -7219,10 +3974,9 @@ fn a_capture_outside_a_let_is_reported() {
 /// composed: Python's own `if`.
 #[test]
 fn a_graph_if_and_switch_are_child_graphs() {
-    let emitted = emit(&[("conditionals.hgl", CONDITIONALS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_conditionals/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[CONDITIONALS]);
+    let python = emitted.module("demo.conditionals");
+    python.assert_writes(&[
         // No `else`: the false branch is a graph that never ticks.
         concat!(
             "    @_hg.graph\n",
@@ -7289,20 +4043,14 @@ fn a_graph_if_and_switch_are_child_graphs() {
         ),
         // A read after the branch assigns the `var` is no input.
         "    return _hg.switch_(flag, {True: _case_17_0, False: _case_17_1}, left=left, right=right)\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 #[test]
 fn notification_and_publication_have_distinct_guards() {
-    let emitted = emit(&[("notified.hgl", NOTIFIED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_notified/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[NOTIFIED]);
+    let python = emitted.module("demo.notified");
+    python.assert_writes(&[
         "@_hg.compute_node(valid=())\ndef on_publication(",
         "@_hg.compute_node(valid=())\ndef on_notification(",
         "@_hg.compute_node(valid=())\ndef watch_both(",
@@ -7312,61 +4060,21 @@ fn notification_and_publication_have_distinct_guards() {
             "    if ((left.modified and left.valid) or (right.modified and right.valid)) ",
             "and (probe.modified and probe.valid):\n        return True"
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// EXPR-3: "A compound assignment reads the place first". EXPR-2: an
 /// expression written once is evaluated once: the index of a compound
 /// assignment's place is the index of its read and of its write.
-const COMPOUND: &str = concat!(
-    "module demo.compound\n",
-    // Each call gives the next number, from 0.
-    "const fn next_slot(store: GlobalState) -> i64 {\n",
-    "    if has(store, \"lookups\") {\n",
-    "        let previous: i64 = get(store, \"lookups\")\n",
-    "        put(store, \"lookups\", previous + 1)\n",
-    "        return previous\n",
-    "    }\n",
-    "    put(store, \"lookups\", 1)\n",
-    "    return 0\n",
-    "}\n",
-    "fn compound(trigger: i64) -> i64 {\n",
-    "    inject global_state\n",
-    "    when {\n",
-    "        var items: list<i64> = [10, 50]\n",
-    "        items[next_slot(global_state)] += 1\n",
-    "        return items[0]\n",
-    "    }\n",
-    "}\n",
-    // Two indices, each evaluated once and in the order written: the
-    // row 0 and then its element 1.
-    "fn nested(trigger: i64) -> i64 {\n",
-    "    inject global_state\n",
-    "    when {\n",
-    "        var rows: list<list<i64>> = [[1, 2], [30, 40]]\n",
-    "        rows[next_slot(global_state)][next_slot(global_state)] += 5\n",
-    "        return rows[0][1]\n",
-    "    }\n",
-    "}\n",
-    "test a_compound_assignment_looks_up_once {\n",
-    "    assert eval(compound(trigger: [1])) == [11]\n",
-    "    assert eval(nested(trigger: [1])) == [7]\n",
-    "}\n",
-);
+const COMPOUND: (&str, &str) = fixture!("demo.compound.hgl");
 
 /// A compound assignment's index that is more than a name is evaluated
 /// once, before the statement, and read and written through what it
 /// came to (EXPR-2, EXPR-3).
 #[test]
 fn a_compound_assignment_evaluates_its_place_once() {
-    let emitted = emit(&[("compound.hgl", COMPOUND)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_compound/__init__.py");
+    let emitted = emit_clean(&[COMPOUND]);
+    let python = emitted.module("demo.compound");
     assert!(
         python.contains(concat!(
             "    _at_1 = next_slot(store=_store)\n",
@@ -7389,48 +4097,15 @@ fn a_compound_assignment_evaluates_its_place_once() {
 /// order written, before any node of that graph starts". So a graph
 /// that wraps another sets the store for it, and a test evaluates the
 /// wrapper. RUN-4: each eval is a run with a store of its own.
-const WRAPPED: &str = concat!(
-    "module demo.wrapped\n",
-    "fn counted(const every: duration = 1s) -> i64 {\n",
-    "    inject global_state\n",
-    "    cache count: i64 = 0\n",
-    "    while count < get<i64>(global_state, \"limit\") {\n",
-    "        count += 1\n",
-    "        yield every: count\n",
-    "    }\n",
-    "}\n",
-    "fn scaled(value: i64, const factor: i64) -> i64 {\n",
-    "    when { return value * factor }\n",
-    "}\n",
-    "fn seeded(const limit: i64) -> i64 {\n",
-    "    inject global_state\n",
-    "    put(global_state, \"limit\", limit)\n",
-    "    return counted()\n",
-    "}\n",
-    // What the graph reads back is a value where it is built: a node's
-    // configuration.
-    "fn factored(value: i64, const first: i64) -> i64 {\n",
-    "    inject global_state\n",
-    "    put(global_state, \"factor\", first)\n",
-    "    let factor = get<i64>(global_state, \"factor\")\n",
-    "    return scaled(value, factor)\n",
-    "}\n",
-    "test the_store_is_set_where_the_graph_is_built {\n",
-    "    assert eval(seeded(limit: 2)) == [1s: 1, 2s: 2]\n",
-    // A run of its own: it reads 3, and nothing of the run before.
-    "    assert eval(seeded(limit: 3)) == [1s: 1, 2s: 2, 3s: 3]\n",
-    "    assert eval(factored(value: [1, 2], first: 10)) == [10, 20]\n",
-    "}\n",
-);
+const WRAPPED: (&str, &str) = fixture!("demo.wrapped.hgl");
 
 /// A graph's `inject global_state` is the run's store where the graph's
 /// function runs, and a call on it there is run then (FN-9).
 #[test]
 fn a_graph_sets_the_store_where_it_is_built() {
-    let emitted = emit(&[("wrapped.hgl", WRAPPED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_wrapped/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[WRAPPED]);
+    let python = emitted.module("demo.wrapped");
+    python.assert_writes(&[
         concat!(
             "@_hg.graph\n",
             "def seeded(limit: _py.int) -> _hg.TS[_py.int]:\n",
@@ -7444,171 +4119,15 @@ fn a_graph_sets_the_store_where_it_is_built() {
             "    factor = _core.get_GlobalState_str(store=_store, key=\"factor\")\n",
             "    return scaled(value=value, factor=factor)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// OPS-4: "`convert<T>(value)` converts a value to the type T." OPS-6
 /// says what each conversion yields, OPS-7 which can fail, and OPS-8
-/// their options.
-const CONVERSIONS: &str = concat!(
-    "module demo.converted\n",
-    "const fn as_float(value: i64) -> f64 => convert<f64>(value)\n",
-    "const fn as_flag(value: f64) -> bool => convert<bool>(value)\n",
-    // OPS-8: `invalid: .fail` gives the plain type.
-    "const fn as_whole(value: f64) -> i64 => convert<i64>(value, invalid: .fail)\n",
-    "const fn rounded(value: f64, how: Rounding) -> i64 =>\n",
-    "    convert<i64>(value, rounding: how, invalid: .fail)\n",
-    // And `.error`, the default, a `result`.
-    "const fn checked(value: f64) -> result<i64, error> => convert<i64>(value)\n",
-    "const fn flag(text: str) -> result<bool, error> => convert<bool>(text)\n",
-    "const fn whole_of(value: f64) -> i64 {\n",
-    "    let outcome = convert<i64>(value)\n",
-    "    if is_ok(outcome) { return outcome.value }\n",
-    "    return -1\n",
-    "}\n",
-    // OPS-8: "a failure is an Err carrying error code `convert.invalid`".
-    "const fn invalid(value: f64) -> bool {\n",
-    "    let outcome = convert<i64>(value)\n",
-    "    if is_err(outcome) {\n",
-    "        let code = outcome.error.code\n",
-    "        if code != null { return code == \"convert.invalid\" }\n",
-    "    }\n",
-    "    return false\n",
-    "}\n",
-    "const fn flag_of(text: str) -> bool {\n",
-    "    let outcome = convert<bool>(text)\n",
-    "    if is_ok(outcome) { return outcome.value }\n",
-    "    return false\n",
-    "}\n",
-    "const fn round_trip(text: str) -> str =>\n",
-    "    convert<str>(convert<bytes>(text), invalid: .fail)\n",
-    // FN-6: a conversion given a connection is lifted over it.
-    "fn floats(value: i64) -> f64 => convert<f64>(value)\n",
-    "fn wholes(value: f64) -> i64 => convert<i64>(value, rounding: .half_even, invalid: .fail)\n",
-    "test conversions {\n",
-    "    assert as_float(3) == 3.0\n",
-    // "False for zero, true otherwise; NaN is true".
-    "    assert as_flag(0.0) == false\n",
-    "    assert as_flag(0.5)\n",
-    "    assert as_flag(0.0 /{zero: .nan} 0.0)\n",
-    "    assert convert<bool>(7) && !convert<bool>(0)\n",
-    // "0 or 1".
-    "    assert convert<i64>(true) == 1 && convert<i64>(false) == 0\n",
-    "    assert convert<f64>(true) == 1.0\n",
-    "    assert convert<str>(false) == \"false\" && convert<str>(true) == \"true\"\n",
-    // OPS-8: each rounding. `.truncate`, the default, is toward zero.
-    "    assert as_whole(2.9) == 2 && as_whole(-2.9) == -2\n",
-    "    assert rounded(-2.5, .floor) == -3 && rounded(-2.5, .ceiling) == -2\n",
-    "    assert rounded(2.5, .half_even) == 2 && rounded(3.5, .half_even) == 4\n",
-    "    assert rounded(2.5, .half_up) == 3 && rounded(-2.5, .half_up) == -3\n",
-    "    assert rounded(2.5, .half_down) == 2 && rounded(-2.5, .half_down) == -2\n",
-    "    assert rounded(2.6, .half_down) == 3 && rounded(2.4, .half_up) == 2\n",
-    // OPS-7: "an `f64` that is NaN, an infinity, or outside `i64` once
-    // rounded" fails.
-    "    assert whole_of(2.9) == 2\n",
-    "    assert invalid(0.0 /{zero: .nan} 0.0) && !invalid(1.0)\n",
-    "    assert is_err(checked(1.0 / 0.0)) && is_err(checked(-1.0 / 0.0))\n",
-    "    assert is_err(checked(9223372036854775808.0))\n",
-    "    assert whole_of(-9223372036854775808.0) == -9223372036854775807 - 1\n",
-    // OPS-8: `nan` is "the value a NaN converts to".
-    "    assert convert<i64>(0.0 /{zero: .nan} 0.0, nan: -1, invalid: .fail) == -1\n",
-    // OPS-8: under `.fail` "a failure is an escaping HGL error with
-    // that code".
-    "    assert raises(\"convert.invalid\") { as_whole(1e19) }\n",
-    "    assert raises(\"convert.invalid\") { as_whole(0.0 /{zero: .nan} 0.0) }\n",
-    "    assert raises(\"convert.invalid\") { convert<bool>(\"yes\", invalid: .fail) }\n",
-    "    assert raises(\"convert.invalid\") { convert<i64>(\"three\", invalid: .fail) }\n",
-    "    assert raises(\"convert.invalid\") { convert<f64>(\"two\", invalid: .fail) }\n",
-    // "The value of the literal the text is", and a failure for "text
-    // that is no literal of the type asked for".
-    "    assert flag_of(\"true\") && is_ok(flag(\"false\")) && !flag_of(\"false\")\n",
-    "    assert is_err(flag(\"True\")) && is_err(flag(\"\"))\n",
-    // UTF-8, there and back.
-    "    assert round_trip(\"h\\u{e9}llo\") == \"h\\u{e9}llo\"\n",
-    // "The start of that date, in UTC", and "the date of the instant".
-    "    assert convert<datetime>(@2026-03-01) == @2026-03-01T00:00:00Z\n",
-    "    assert convert<date>(@2026-03-01T23:59:59Z) == @2026-03-01\n",
-    "    assert eval(floats(value: [1, 2])) == [1.0, 2.0]\n",
-    "    assert eval(wholes(value: [0.5, 1.5, 2.5])) == [0, 2, 2]\n",
-    "}\n",
-    // OPS-6: a number as text. An `i64` is its decimal digits after a
-    // `-`; an `f64` the shortest text that reads back, with a `.` or an
-    // exponent, the exponent from 1e16 up and below 1e-4.
-    "const fn again(text: str) -> str => convert<str>(convert<f64>(text, invalid: .fail))\n",
-    // `text` written twice over, `times` times: text of many digits.
-    "const fn repeated(text: str, times: i64) -> str {\n",
-    "    var written: str = text\n",
-    "    var left: i64 = times\n",
-    "    while left > 0 {\n",
-    "        written = written + written\n",
-    "        left -= 1\n",
-    "    }\n",
-    "    return written\n",
-    "}\n",
-    "fn shown(value: f64) -> str => convert<str>(value)\n",
-    "test numbers_as_text {\n",
-    "    assert convert<str>(42) == \"42\" && convert<str>(-3) == \"-3\"\n",
-    "    assert convert<str>(-9223372036854775807 - 1) == \"-9223372036854775808\"\n",
-    "    assert convert<str>(3.0) == \"3.0\" && convert<str>(-2.5) == \"-2.5\"\n",
-    "    assert convert<str>(0.1 + 0.2) == \"0.30000000000000004\"\n",
-    "    assert convert<str>(-0.0) == \"-0.0\"\n",
-    "    assert convert<str>(1000000000000000.0) == \"1000000000000000.0\"\n",
-    "    assert convert<str>(10000000000000000.0) == \"1e16\"\n",
-    "    assert convert<str>(1e21) == \"1e21\" && convert<str>(1.5e300) == \"1.5e300\"\n",
-    "    assert convert<str>(0.0001) == \"0.0001\" && convert<str>(0.00001) == \"1e-5\"\n",
-    "    assert convert<str>(1.5e-7) == \"1.5e-7\"\n",
-    "    assert convert<str>(0.0 /{zero: .nan} 0.0) == \"nan\"\n",
-    "    assert convert<str>(1.0 / 0.0) == \"inf\" && convert<str>(-1.0 / 0.0) == \"-inf\"\n",
-    "    assert eval(shown(value: [2.5, 1e21])) == [\"2.5\", \"1e21\"]\n",
-    "}\n",
-    // OPS-6: text as a number, a literal of the type after one `-`;
-    // OPS-7: any other text fails.
-    "test text_as_numbers {\n",
-    "    assert convert<i64>(\"42\", invalid: .fail) == 42\n",
-    "    assert convert<i64>(\"-3\", invalid: .fail) == -3\n",
-    "    assert convert<i64>(\"0x1F\", invalid: .fail) == 31\n",
-    "    assert convert<i64>(\"-0b101\", invalid: .fail) == -5\n",
-    "    assert convert<i64>(\"1_000\", invalid: .fail) == 1000\n",
-    "    assert convert<i64>(\"010\", invalid: .fail) == 10\n",
-    "    assert convert<i64>(\"-9223372036854775808\", invalid: .fail) == -9223372036854775807 - 1\n",
-    "    assert is_err(convert<i64>(\"9223372036854775808\"))\n",
-    "    assert is_err(convert<i64>(\"three\")) && is_err(convert<i64>(\"\"))\n",
-    "    assert is_err(convert<i64>(\" 3\")) && is_err(convert<i64>(\"3 \"))\n",
-    "    assert is_err(convert<i64>(\"+3\")) && is_err(convert<i64>(\"--3\"))\n",
-    "    assert is_err(convert<i64>(\"3.0\")) && is_err(convert<i64>(\"1__0\"))\n",
-    "    assert is_err(convert<i64>(\"0X1F\")) && is_err(convert<i64>(\"1_\"))\n",
-    "    assert convert<f64>(\"2.5\", invalid: .fail) == 2.5\n",
-    "    assert convert<f64>(\"-1e5\", invalid: .fail) == -100000.0\n",
-    "    assert convert<f64>(\"3\", invalid: .fail) == 3.0\n",
-    "    assert convert<f64>(\"1_0.5E1\", invalid: .fail) == 105.0\n",
-    "    assert convert<f64>(\"inf\", invalid: .fail) == 1.0 / 0.0\n",
-    "    assert convert<f64>(\"-inf\", invalid: .fail) == -1.0 / 0.0\n",
-    "    let nan = convert<f64>(\"nan\", invalid: .fail)\n",
-    "    assert nan != nan\n",
-    // "The text a number converts to converts back to that number".
-    "    assert again(\"0.30000000000000004\") == \"0.30000000000000004\"\n",
-    "    assert again(\"1e21\") == \"1e21\" && again(\"-0.0\") == \"-0.0\"\n",
-    "    assert again(\"nan\") == \"nan\" && again(\"-inf\") == \"-inf\"\n",
-    "    assert is_err(convert<f64>(\"1e999\")) && is_err(convert<f64>(\".5\"))\n",
-    "    assert is_err(convert<f64>(\"NaN\")) && is_err(convert<f64>(\"+inf\"))\n",
-    "    assert is_err(convert<f64>(\"2.5 \")) && is_err(convert<f64>(\"1e\"))\n",
-    "    assert is_err(convert<f64>(\"5.\")) && is_err(convert<f64>(\"-nan\"))\n",
-    // Text of 8192 digits: zeros before a number change nothing, and a
-    // number of that many digits is outside `i64` and rounds to an
-    // infinity. Neither is more than the conversion's own failure.
-    "    assert convert<i64>(repeated(\"0\", 13) + \"3\", invalid: .fail) == 3\n",
-    "    assert convert<f64>(repeated(\"0\", 13) + \"3\", invalid: .fail) == 3.0\n",
-    "    assert is_err(convert<i64>(repeated(\"9\", 13)))\n",
-    "    assert is_err(convert<f64>(repeated(\"9\", 13)))\n",
-    "    assert is_err(convert<f64>(repeated(\"9\", 13) + \".5\"))\n",
-    "    assert convert<f64>(\"0.\" + repeated(\"0\", 13) + \"1\", invalid: .fail) == 0.0\n",
-    "}\n",
-);
+/// their options. Its tests assert what core's own
+/// (`tests/implementation/conversions.hgl`, run by `check_core.py`)
+/// does not.
+const CONVERSIONS: (&str, &str) = fixture!("demo.converted.hgl");
 
 /// OPS-4: core's candidates of `convert` take one type and give
 /// different ones, so each is the provider's function named with what
@@ -7616,10 +4135,9 @@ const CONVERSIONS: &str = concat!(
 /// division's `zero` is (NUM-9), and `rounding` and `nan` as arguments.
 #[test]
 fn a_conversion_is_the_providers_function_for_what_it_gives() {
-    let emitted = emit(&[("converted.hgl", CONVERSIONS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_converted/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[CONVERSIONS]);
+    let python = emitted.module("demo.converted");
+    python.assert_writes(&[
         "def as_float(value):\n    return _core.convert_i64_to_f64(value=value)\n",
         "def as_flag(value):\n    return _core.convert_f64_to_bool(value=value)\n",
         concat!(
@@ -7645,56 +4163,22 @@ fn a_conversion_is_the_providers_function_for_what_it_gives() {
             "    return _core.convert_f64_to_str(",
             "value=_core.convert_str_to_f64(value=text, invalid=\"fail\"))\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TST-5: "A trace written out is dense, `[7, _, 9]`, or timed, `[0s: 7,
 /// 2s: 9]`." TST-7: "Timed entries use duration offsets from run start
 /// or absolute datetime keys ... Sparse expectations enumerate exactly
 /// the actual output ticks and times."
-const TIMED: &str = concat!(
-    "module demo.timed\n",
-    "fn pass(value: i64) -> i64 {\n",
-    "    when { return value }\n",
-    "}\n",
-    "fn beats(const every: duration) -> i64 {\n",
-    "    cache count: i64 = 0\n",
-    "    while {\n",
-    "        count += 1\n",
-    "        yield every: count\n",
-    "    }\n",
-    "}\n",
-    "const later: datetime = earliest_start + 5us\n",
-    "const fn first(seen: list<tuple<datetime, i64>>) -> datetime => seen[0][0]\n",
-    "test timed_traces {\n",
-    // A duration from the run's start: an input, and what is expected.
-    "    assert eval(pass(value: [0s: 1, 2s: 2])) == [0s: 1, 2s: 2]\n",
-    "    assert eval(pass(value: [0s: 1, 2s: 2])) != [0s: 1, 3s: 2]\n",
-    "    assert eval(pass(value: [0s: 1, 2s: 2])) != [0s: 1]\n",
-    // What a source publishes each second, for four seconds.
-    "    assert eval(beats(every: 1s), RunConfig(length: 4s)) == [1s: 1, 2s: 2, 3s: 3]\n",
-    // An instant: it is replayed then, wherever the run starts.
-    "    assert eval(pass(value: [later: 7])) == [later: 7]\n",
-    "    assert first(eval(pass(value: [later: 7]))) == later\n",
-    // A duration is counted from the start the run has.
-    "    assert eval(pass(value: [1us: 7]), RunConfig(start: later)) == [1us: 7]\n",
-    "    assert first(eval(pass(value: [1us: 7]), RunConfig(start: later))) == later + 1us\n",
-    "}\n",
-);
+const TIMED: (&str, &str) = fixture!("demo.timed.hgl");
 
 /// A timed trace is given to the harness as its entries, each a key and
 /// a publication, in the order written (TST-7).
 #[test]
 fn a_timed_trace_is_its_entries() {
-    let emitted = emit(&[("timed.hgl", TIMED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_timed/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[TIMED]);
+    let python = emitted.module("demo.timed");
+    python.assert_writes(&[
         concat!(
             "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, ",
             "_hgl_4core._inst_record__i64, ",
@@ -7704,65 +4188,13 @@ fn a_timed_trace_is_its_entries() {
             "(_dt.timedelta(microseconds=2000000), 2)]))",
         ),
         "_harness.timed([(later(), 7)])",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TST-17: "An integration test ... is a named test that may run in
 /// real time: beside `eval` it writes `run(call, config)` (RUN-3),
 /// whose value is the run's output as an eval's is."
-const INTEGRATION: &str = concat!(
-    "module demo.live\n",
-    "fn pass(value: i64) -> i64 {\n",
-    "    when { return value }\n",
-    "}\n",
-    "fn beats(const every: duration) -> i64 {\n",
-    "    cache count: i64 = 0\n",
-    "    while {\n",
-    "        count += 1\n",
-    "        yield every: count\n",
-    "    }\n",
-    "}\n",
-    "const fn ticks(seen: list<tuple<datetime, i64>>) -> i64 {\n",
-    "    var count = 0\n",
-    "    for item in seen {\n",
-    "        count += 1\n",
-    "    }\n",
-    "    return count\n",
-    "}\n",
-    // A simulation of four seconds, counted and not written dense.
-    "test bounded {\n",
-    "    assert ticks(eval(beats(every: 1s), RunConfig(length: 4s))) == 3\n",
-    "}\n",
-    // A third of a second of the host clock.
-    "integration_test beats_live {\n",
-    "    let seen = run(beats(every: 10ms), RunConfig(length: 300ms))\n",
-    "    assert ticks(seen) > 20\n",
-    "}\n",
-    // What is replayed is published in the cycle it is given in, in
-    // real time as in a simulation.
-    "integration_test passes_through {\n",
-    "    assert run(pass(value: [7, _, 9]), RunConfig(length: 100ms)) == [7, _, 9]\n",
-    "}\n",
-    // A run with no end goes on until its test's limit.
-    "integration_test endless {\n",
-    "    let seen = run(beats(every: 10ms))\n",
-    "    assert ticks(seen) > 0\n",
-    "}\n",
-    "integration_test after {\n",
-    "    assert run(pass(value: [1]), RunConfig(length: 50ms)) == [1]\n",
-    "}\n",
-    // TST-17: a limit of the test's own, on the line before it.
-    "@timeout(500ms)\n",
-    "integration_test brief {\n",
-    "    let seen = run(beats(every: 10ms))\n",
-    "    assert ticks(seen) > 0\n",
-    "}\n",
-);
+const INTEGRATION: (&str, &str) = fixture!("integration", "demo.live.hgl");
 
 /// TST-17: an integration test runs on hgraph, its `run` in real time.
 /// It is held to a time limit, the one `@timeout(...)` gives it or a
@@ -7772,18 +4204,15 @@ const INTEGRATION: &str = concat!(
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn an_integration_test_runs_in_real_time_within_its_limit() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_integration");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[("live.hgl", INTEGRATION)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let hgraph = on_hgraph("hgraph_integration");
+    let emitted = emit_clean(&[INTEGRATION]);
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
     // An integration test that writes no limit is given three seconds
     // here, where it has a minute: long enough for a slow host to run
     // the ones that end. One that writes its own keeps it.
     let ran = run_within(
-        Path::new(&python),
-        &directory,
+        &hgraph.python,
+        &hgraph.directory,
         &emitted.output,
         &all,
         &|test: &Test| {
@@ -7791,30 +4220,16 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
                 .then(|| test.timeout.unwrap_or(std::time::Duration::from_secs(3)))
         },
     );
-    let described: Vec<String> = emitted
-        .output
-        .tests
-        .iter()
-        .zip(&ran)
-        .map(|(test, ran)| match ran {
-            Ran::Passed => format!("{} passed", test.name),
-            Ran::Failed { at, message } => format!(
-                "{} failed {} {message}",
-                test.name,
-                at.map_or("?".to_string(), |at| emitted.place(at))
-            ),
-            Ran::NotRun(reason) => format!("{} not run: {reason}", test.name),
-        })
-        .collect();
+    let described = outcomes(&emitted, &all, &ran);
     assert_eq!(
         described,
         [
             "bounded passed",
             "beats_live passed",
             "passes_through passed",
-            "endless failed live.hgl:30:9 timed out: it was still running after its limit of 3s",
+            "endless failed demo.live.hgl:35:9 timed out: it was still running after its limit of 3s",
             "after passed",
-            "brief failed live.hgl:38:9 timed out: it was still running after its limit of 0.5s",
+            "brief failed demo.live.hgl:44:9 timed out: it was still running after its limit of 0.5s",
         ]
     );
 }
@@ -7826,13 +4241,9 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_stop_reads_what_the_node_published() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_out_in_stop");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[("ended.hgl", OUT_IN_STOP)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let hgraph = on_hgraph("hgraph_out_in_stop");
+    let emitted = emit_clean(&[OUT_IN_STOP]);
+    let ran = hgraph.run_all(&emitted);
     let described: Vec<String> = emitted
         .output
         .tests
@@ -7869,45 +4280,21 @@ fn a_stop_reads_what_the_node_published() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_conversion_that_fails_under_fail_escapes() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_escapes");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[(
-        "escapes.hgl",
-        concat!(
-            "module demo.escapes\n",
-            "const fn whole(value: f64) -> i64 => convert<i64>(value, invalid: .fail)\n",
-            "test fits { assert whole(2.5) == 2 }\n",
-            "test too_large { assert whole(1e19) == 0 }\n",
-            "test no_number { assert whole(0.0 /{zero: .nan} 0.0) == 0 }\n",
-            "test no_flag { assert convert<bool>(\"yes\", invalid: .fail) }\n",
-        ),
+    let hgraph = on_hgraph("hgraph_escapes");
+    let emitted = emit_clean(&[fixture!(
+        "a_conversion_that_fails_under_fail_escapes",
+        "demo.escapes.hgl"
     )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
-    let described: Vec<String> = emitted
-        .output
-        .tests
-        .iter()
-        .zip(&ran)
-        .map(|(test, ran)| match ran {
-            Ran::Passed => format!("{} passed", test.name),
-            Ran::Failed { at, message } => format!(
-                "{} failed {} {message}",
-                test.name,
-                at.map_or("?".to_string(), |at| emitted.place(at))
-            ),
-            Ran::NotRun(reason) => format!("{} not run: {reason}", test.name),
-        })
-        .collect();
+    let ran = hgraph.run(&emitted, &all);
+    let described = outcomes(&emitted, &all, &ran);
     assert_eq!(
         described,
         [
             "fits passed",
-            "too_large failed escapes.hgl:4:18 HglError: convert.invalid: the number is outside `i64` once rounded",
-            "no_number failed escapes.hgl:5:18 HglError: convert.invalid: a NaN is no `i64`",
-            "no_flag failed escapes.hgl:6:16 HglError: convert.invalid: the text is no `bool` literal",
+            "too_large failed demo.escapes.hgl:4:18 HglError: convert.invalid: the number is outside `i64` once rounded",
+            "no_number failed demo.escapes.hgl:5:18 HglError: convert.invalid: a NaN is no `i64`",
+            "no_flag failed demo.escapes.hgl:6:16 HglError: convert.invalid: the text is no `bool` literal",
         ]
     );
 }
@@ -7920,7 +4307,6 @@ fn a_conversion_that_fails_under_fail_escapes() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_run_in_real_time_is_stopped_by_its_host() {
-    let python = python_with_hgraph();
     let emitted = emit(&APPLICATIONS);
     let endless = emitted
         .output
@@ -7929,11 +4315,10 @@ fn a_run_in_real_time_is_stopped_by_its_host() {
         .position(|application| application.path == "demo.ticks.endless")
         .expect("the application is written");
     let ran = |name: &str, stop: &Stop| {
-        let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        fs::remove_dir_all(&directory).ok();
+        let hgraph = on_hgraph(name);
         run_application(
-            Path::new(&python),
-            &directory,
+            &hgraph.python,
+            &hgraph.directory,
             &emitted.output,
             endless,
             stop,
@@ -7997,135 +4382,119 @@ fn a_run_in_real_time_is_stopped_by_its_host() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_names_the_statement_that_failed() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_failures");
-    fs::remove_dir_all(&directory).ok();
+    let hgraph = on_hgraph("hgraph_failures");
     let mut files = REACH.to_vec();
-    files.push(("fails.hgl", DIVISION_FAILS));
-    files.push(("node.hgl", RESULT_FAILS));
-    files.push(("close.hgl", CLOSE_FAILS));
-    files.push(("enums.hgl", ENUM_FAILS));
-    files.push(("structs.hgl", STRUCT_FAILS));
-    files.push(("raises.hgl", RAISES_FAILS));
-    files.push(("bounded.hgl", BOUNDED_FAILS));
-    files.push(("loops.hgl", LOOP_FAILS));
-    files.push(("elements.hgl", ELEMENT_FAILS));
-    files.push(("stops.hgl", STOP_FAILS));
-    files.push(("caps.hgl", CAPABILITIES_FAIL));
-    files.push(("sets.hgl", SET_FAILS));
-    files.push(("given.hgl", GIVEN_FAILS));
+    files.push(DIVISION_FAILS);
+    files.push(RESULT_FAILS);
+    files.push(CLOSE_FAILS);
+    files.push(ENUM_FAILS);
+    files.push(STRUCT_FAILS);
+    files.push(RAISES_FAILS);
+    files.push(BOUNDED_FAILS);
+    files.push(LOOP_FAILS);
+    files.push(ELEMENT_FAILS);
+    files.push(STOP_FAILS);
+    files.push(CAPABILITIES_FAIL);
+    files.push(SET_FAILS);
+    files.push(GIVEN_FAILS);
     let emitted = emit(&files);
-    let tests = [
-        emitted.test("direct").0,
-        emitted.test("wrong").0,
-        emitted.test("overflows").0,
-        emitted.test("too_long").0,
-        emitted.test("too_late").0,
-        emitted.test("whole_by_zero").0,
-        emitted.test("strict_by_zero").0,
-        emitted.test("negative_tolerance").0,
-        emitted.test("no_number").0,
-        emitted.test("no_name").0,
-        emitted.test("given").0,
-        emitted.test("omitted").0,
-        emitted.test("in_order").0,
-        emitted.test("unequal").0,
-        emitted.test("unmatched").0,
-        emitted.test("beyond").0,
-        emitted.test("before").0,
-        emitted.test("absent").0,
-        emitted.test("outside").0,
-        emitted.test("removed_is_not_added").0,
-        emitted.test("one_more").0,
-        emitted.test("removed_first").0,
-        emitted.test("silence_counted").0,
-        emitted.test("nothing_raised").0,
-        emitted.test("another_code").0,
-        emitted.test("nested_assertion").0,
-        emitted.test("nested_raises").0,
-        emitted.test("nested_then_raised").0,
-        emitted.test("both_ends").0,
-        emitted.test("too_dense").0,
-    ];
-    let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
-    let said: Vec<String> = ran
-        .iter()
-        .map(|ran| match ran {
-            Ran::Passed => "passed".to_string(),
-            Ran::Failed { at, message } => format!(
-                "failed {} {message}",
-                at.map_or("nowhere".to_string(), |at| emitted.place(at))
-            ),
-            Ran::NotRun(reason) => format!("not run {reason}"),
-        })
-        .collect();
+    let tests: Vec<usize> = [
+        "direct",
+        "wrong",
+        "overflows",
+        "too_long",
+        "too_late",
+        "whole_by_zero",
+        "strict_by_zero",
+        "negative_tolerance",
+        "no_number",
+        "no_name",
+        "given",
+        "omitted",
+        "in_order",
+        "unequal",
+        "unmatched",
+        "beyond",
+        "before",
+        "absent",
+        "outside",
+        "removed_is_not_added",
+        "one_more",
+        "removed_first",
+        "silence_counted",
+        "nothing_raised",
+        "another_code",
+        "nested_assertion",
+        "nested_raises",
+        "nested_then_raised",
+        "both_ends",
+        "too_dense",
+    ]
+    .iter()
+    .map(|name| emitted.test(name).0)
+    .collect();
+    let ran = hgraph.run(&emitted, &tests);
     assert_eq!(
-        said,
+        outcomes(&emitted, &tests, &ran),
         [
-            "passed",
-            "failed reach.hgl:22:5 the assertion does not hold",
-            "failed reach.hgl:26:5 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
-            "failed reach.hgl:30:5 HglError: numeric.out_of_range: a duration result is outside the signed 64-bit range of microseconds",
-            "failed reach.hgl:33:5 HglError: numeric.out_of_range: an instant result is outside the years 1 to 9999",
-            "failed fails.hgl:4:22 HglError: numeric.division_by_zero: a division by zero",
-            "failed fails.hgl:5:23 HglError: numeric.division_by_zero: a division by zero",
-            "failed close.hgl:3:27 HglError: the tolerance `abs` is not finite and nonnegative",
-            "failed enums.hgl:5:18 HglError: `Side` has no member 9",
-            "failed enums.hgl:6:16 HglError: `Side` has no member 'none'",
+            "direct passed",
+            "wrong failed reach.hgl:22:5 the assertion does not hold",
+            "overflows failed reach.hgl:26:5 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
+            "too_long failed reach.hgl:32:5 HglError: numeric.out_of_range: a duration result is outside the signed 64-bit range of microseconds",
+            "too_late failed reach.hgl:37:5 HglError: numeric.out_of_range: an instant result is outside the years 1 to 9999",
+            "whole_by_zero failed demo.div.fails.hgl:4:22 HglError: numeric.division_by_zero: a division by zero",
+            "strict_by_zero failed demo.div.fails.hgl:5:23 HglError: numeric.division_by_zero: a division by zero",
+            "negative_tolerance failed demo.close.fails.hgl:3:27 HglError: the tolerance `abs` is not finite and nonnegative",
+            "no_number failed demo.enums.fails.hgl:5:18 HglError: `Side` has no member 9",
+            "no_name failed demo.enums.fails.hgl:6:16 HglError: `Side` has no member 'none'",
             // TYPE-5: "Defaults are evaluated only when omitted", and
             // "Written arguments evaluate once in source order; failure
             // prevents later arguments."
-            "passed",
-            "failed structs.hgl:10:16 HglError: numeric.division_by_zero: a division by zero",
-            "failed structs.hgl:11:17 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
-            "failed structs.hgl:12:16 the assertion does not hold",
+            "given passed",
+            "omitted failed demo.structs.fails.hgl:10:16 HglError: numeric.division_by_zero: a division by zero",
+            "in_order failed demo.structs.fails.hgl:11:17 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
+            "unequal failed demo.structs.fails.hgl:12:16 the assertion does not hold",
             // CTRL-6: "An unmatched selector uses default or fails."
-            "failed loops.hgl:9:18 HglError: no case of the `switch` has the value 'z'",
+            "unmatched failed demo.loops.fails.hgl:9:18 HglError: no case of the `switch` has the value 'z'",
             // EXPR-3: "An index outside a list fails where it is
             // evaluated", and ERR-6: a strict read of a key that is
             // not there.
-            "failed elements.hgl:9:15 HglError: the index 2 is outside a sequence of 2",
-            "failed elements.hgl:10:15 HglError: the index -1 is outside a sequence of 2",
-            "failed elements.hgl:11:15 HglError: value.missing_key: the dictionary has no key 'z'",
-            "failed elements.hgl:12:16 HglError: the index 5 is outside a sequence of 2",
+            "beyond failed demo.elements.fails.hgl:9:15 HglError: the index 2 is outside a sequence of 2",
+            "before failed demo.elements.fails.hgl:10:15 HglError: the index -1 is outside a sequence of 2",
+            "absent failed demo.elements.fails.hgl:11:15 HglError: value.missing_key: the dictionary has no key 'z'",
+            "outside failed demo.elements.fails.hgl:12:16 HglError: the index 5 is outside a sequence of 2",
             // TST-4: a delta that removed an element is not one that
             // added it, and a trace of one cell is not one of two.
-            "failed sets.hgl:9:5 the assertion does not hold",
-            "failed sets.hgl:12:5 the assertion does not hold",
+            "removed_is_not_added failed demo.sets.fails.hgl:9:5 the assertion does not hold",
+            "one_more failed demo.sets.fails.hgl:12:5 the assertion does not hold",
             // EXPR-13: a delta's properties are evaluated as written.
-            "failed sets.hgl:16:26 HglError: numeric.division_by_zero: a division by zero",
+            "removed_first failed demo.sets.fails.hgl:18:26 HglError: numeric.division_by_zero: a division by zero",
             // TST-16: a `_` of a dense trace gives a `const fn` no
             // tuple, so two publications are counted, and not three.
-            "failed given.hgl:10:24 the assertion does not hold",
+            "silence_counted failed demo.given.fails.hgl:10:24 the assertion does not hold",
             // TST-10: a block that completes fails at the assertion, and
             // one that lets out another code fails where that was
             // raised, with what it says. TST-11: a failed assertion in
             // the block is the test's failure.
-            "failed raises.hgl:6:5 AssertionError: the block raised nothing, and `numeric.division_by_zero` was expected",
-            "failed raises.hgl:9:49 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
-            "failed raises.hgl:13:9 the assertion does not hold",
+            "nothing_raised failed demo.raises.fails.hgl:6:5 AssertionError: the block raised nothing, and `numeric.division_by_zero` was expected",
+            "another_code failed demo.raises.fails.hgl:9:49 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
+            "nested_assertion failed demo.raises.fails.hgl:13:9 the assertion does not hold",
             // A refused error fails the inner assertion, and is no
             // match for the outer one though it has its code.
-            "failed raises.hgl:18:46 HglError: numeric.division_by_zero: a division by zero",
-            "passed",
+            "nested_raises failed demo.raises.fails.hgl:20:46 HglError: numeric.division_by_zero: a division by zero",
+            "nested_then_raised passed",
             // CRUN-2: an `end` with a `length`. TST-6: a publication a
             // second after the start is not one at the start.
-            "failed bounded.hgl:9:5 HglError: run.end_and_length: a run's configuration gives both an `end` and a `length`",
-            "failed bounded.hgl:12:5 the assertion does not hold",
+            "both_ends failed demo.bounded.fails.hgl:9:5 HglError: run.end_and_length: a run's configuration gives both an `end` and a `length`",
+            "too_dense failed demo.bounded.fails.hgl:12:5 the assertion does not hold",
         ]
     );
 
     // hgraph words a node's failure itself, and the error's own line
     // is in what it says.
     let node = [emitted.test("node_fails").0];
-    let ran = run(Path::new(&python), &directory, &emitted.output, &node);
-    let [Ran::Failed { at, message }] = ran.as_slice() else {
-        panic!("the test failed: {ran:?}");
-    };
-    assert_eq!(
-        at.map(|at| emitted.place(at)),
-        Some("node.hgl:6:19".to_string())
-    );
+    let (at, message) = failed(&emitted, &hgraph.run(&emitted, &node));
+    assert_eq!(at, Some("demo.results.fails.hgl:6:19".to_string()));
     assert!(
         message.contains("HglError: numeric.division_by_zero: a division by zero"),
         "{message}"
@@ -8134,14 +4503,8 @@ fn a_failure_names_the_statement_that_failed() {
     // TIME-5: a `stop` reads an input under its guard. The input is
     // valid here, so the guarded statement is run, and fails.
     let stop = [emitted.test("stop_fails").0];
-    let ran = run(Path::new(&python), &directory, &emitted.output, &stop);
-    let [Ran::Failed { at, message }] = ran.as_slice() else {
-        panic!("the test failed: {ran:?}");
-    };
-    assert_eq!(
-        at.map(|at| emitted.place(at)),
-        Some("stops.hgl:9:19".to_string())
-    );
+    let (at, message) = failed(&emitted, &hgraph.run(&emitted, &stop));
+    assert_eq!(at, Some("demo.stops.fails.hgl:9:19".to_string()));
     assert!(
         message.contains("HglError: numeric.division_by_zero: a division by zero"),
         "{message}"
@@ -8149,14 +4512,8 @@ fn a_failure_names_the_statement_that_failed() {
 
     // CAP-6: "an absent key fails the node."
     let absent = [emitted.test("an_absent_key_fails_the_node").0];
-    let ran = run(Path::new(&python), &directory, &emitted.output, &absent);
-    let [Ran::Failed { at, message }] = ran.as_slice() else {
-        panic!("the test failed: {ran:?}");
-    };
-    assert_eq!(
-        at.map(|at| emitted.place(at)),
-        Some("caps.hgl:7:9".to_string())
-    );
+    let (at, message) = failed(&emitted, &hgraph.run(&emitted, &absent));
+    assert_eq!(at, Some("demo.caps.fails.hgl:7:9".to_string()));
     assert!(
         message.contains("HglError: the global store holds nothing under 'nothing'"),
         "{message}"
@@ -8168,27 +4525,16 @@ fn a_failure_names_the_statement_that_failed() {
 /// data handler even if another input woke the node.
 #[test]
 fn changing_input_activity_preserves_a_modified_guard() {
-    let emitted = emit(&[(
-        "activity.hgl",
-        concat!(
-            "module activity\n",
-            "fn toggle(control: bool, data: i64) -> i64 {\n",
-            "    when modified(control) && valid(control) {\n",
-            "        if control { activate(data) } else { passivate(data) }\n",
-            "    }\n",
-            "    when modified(data) && valid(data) { return data }\n",
-            "}\n",
-        ),
+    let emitted = emit_clean(&[fixture!(
+        "changing_input_activity_preserves_a_modified_guard",
+        "activity.hgl"
     )]);
-    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
-    let python = emitted.text("_hgl/_m_activity/__init__.py");
-    for expected in [
+    let python = emitted.module("activity");
+    python.assert_writes(&[
         "data.make_active()",
         "data.make_passive()",
         "if data.valid and data.modified:",
-    ] {
-        assert!(python.contains(expected), "{python}");
-    }
+    ]);
 }
 
 /// END-5, TIME-3: querying activity reads the input at that point in the
@@ -8196,49 +4542,27 @@ fn changing_input_activity_preserves_a_modified_guard() {
 /// requirement and stays in the executable condition.
 #[test]
 fn an_activity_query_in_a_guard_reads_the_direct_input() {
-    let emitted = emit(&[(
-        "observed.hgl",
-        concat!(
-            "module observed\n",
-            "use core as c\n",
-            "fn sample(probe: bool, data: i64) -> bool {\n",
-            "    when modified(probe) && valid([]) && is_active(input: data) {\n",
-            "        passivate(data)\n",
-            "        return c::is_active<i64>(data)\n",
-            "    }\n",
-            "    stop { let final_activity = is_active(data) }\n",
-            "}\n",
-        ),
+    let emitted = emit_clean(&[fixture!(
+        "an_activity_query_in_a_guard_reads_the_direct_input",
+        "observed.hgl"
     )]);
-    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
-    let python = emitted.text("_hgl/_m_observed/__init__.py");
-    for expected in [
+    let python = emitted.module("observed");
+    python.assert_writes(&[
         "@_hg.compute_node(active=(\"probe\",), valid=())\ndef sample(",
         "data.active:\n        data.make_passive()\n        return data.active\n",
         "    final_activity = data.active\n",
-    ] {
-        assert!(python.contains(expected), "{python}");
-    }
+    ]);
 }
 
 /// TST-5, FN-6, TYPE-16: the replay publishes a nullable or a set to
 /// the lifted function. Its wire carries the payload, not the trace delta.
 #[test]
 fn a_value_helper_in_eval_is_lifted_with_the_replayed_payload_type() {
-    let emitted = emit(&[(
-        "payload.hgl",
-        concat!(
-            "module payload\n",
-            "const fn keep(value: i64?) -> i64? => value\n",
-            "const fn from_members(values: set<i64>) -> i64 => 7\n",
-            "test lifted {\n",
-            "    assert eval(keep(value: [null, 7])) == [null, 7]\n",
-            "    assert eval(from_members(values: [delta<set<i64>>(added: [1])])) == [7]\n",
-            "}\n",
-        ),
+    let emitted = emit_clean(&[fixture!(
+        "a_value_helper_in_eval_is_lifted_with_the_replayed_payload_type",
+        "payload.hgl"
     )]);
-    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
-    let python = emitted.text("_hgl/_m_payload/__init__.py");
+    let python = emitted.module("payload");
     assert!(python.contains("def _lift_0_keep(value: _hg.TS[_py.int | None])"));
     assert!(python.contains("def _lift_1_from_members(values: _hg.TSS[_py.int])"));
 }
@@ -8246,7 +4570,7 @@ fn a_value_helper_in_eval_is_lifted_with_the_replayed_payload_type() {
 /// TYPE-9: "Temporalization recursively maps tuples/structs to child
 /// fields ... `atomic<V>` stops expansion at a complete ordinary V".
 /// TYPE-16: a struct's delta has "a property for each field".
-const TEMPORAL_STRUCTS: &str = include_str!("fixtures/temporal_structs.hgl");
+const TEMPORAL_STRUCTS: (&str, &str) = fixture!("demo.bundles.hgl");
 
 /// A temporal struct is hgraph's bundle over a schema the provider
 /// makes beside the struct's class, each field temporalized in turn;
@@ -8255,14 +4579,13 @@ const TEMPORAL_STRUCTS: &str = include_str!("fixtures/temporal_structs.hgl");
 /// fields that changed.
 #[test]
 fn a_temporal_struct_is_a_bundle_of_its_fields() {
-    let emitted = emit(&[("temporal_structs.hgl", TEMPORAL_STRUCTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_bundles/__init__.py");
+    let emitted = emit_clean(&[TEMPORAL_STRUCTS]);
+    let python = emitted.module("demo.bundles");
     let quote = concat!(
         "_hg.TSB[_core.schema(Quote, ",
         "{\"bid\": _hg.TS[_py.int], \"ask\": _hg.TS[_py.int]})]"
     );
-    for expected in [
+    python.assert_writes(&[
         format!("def quoted(bid: _hg.TS[_py.int], ask: _hg.TS[_py.int]) -> {quote}:"),
         "    return _core.bundled(Quote(bid=bid.value, ask=ask.value))".to_string(),
         "        return _core.struct_delta(bid=price.value)".to_string(),
@@ -8301,12 +4624,7 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
             part("quote[\"bid\"]"),
             part("quote[\"ask\"]")
         ),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TYPE-9: a dictionary field of a temporal struct is a `TSD`, which
@@ -8315,22 +4633,16 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
 /// its delta is not.
 #[test]
 fn a_whole_struct_with_a_dictionary_field_is_not_published_yet() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "struct Tagged {\n",
-            "    tags: dict<str, i64>\n",
-            "}\n",
-            "fn whole(tag: str) -> Tagged {\n",
-            "    when { return Tagged(tags: [tag: 1]) }\n",
-            "}\n",
-            "fn changed(tag: str) -> Tagged {\n",
-            "    when { return delta<Tagged>(tags: delta<dict<str, i64>>(removed: [tag])) }\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_whole_struct_with_a_dictionary_field_is_not_published_yet",
+        "m.hgl"
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:6:19 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:6:19 target.unsupported: the hgraph target does not write a whole dictionary published to a temporal dictionary yet"
+        ]
+    );
 }
 
 /// CTRL-13 and TYPE-9: an ordinary fixed list or dictionary of structs
@@ -8338,51 +4650,35 @@ fn a_whole_struct_with_a_dictionary_field_is_not_published_yet() {
 /// which is not written for composite elements: reported.
 #[test]
 fn an_ordinary_list_of_structs_branch_of_a_graph_is_not_written_yet() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "struct Quote {\n",
-            "    bid: i64\n",
-            "}\n",
-            "fn quoted(bid: i64) -> list<Quote, 1> {\n",
-            "    when { return delta<list<Quote, 1>>(updated: [0: delta<Quote>(bid: bid)]) }\n",
-            "}\n",
-            "const fn fixed() -> list<Quote, 1> => [Quote(bid: 0)]\n",
-            "fn chosen(take: bool, bid: i64) -> list<Quote, 1> {\n",
-            "    if take { return quoted(bid) }\n",
-            "    return fixed()\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "an_ordinary_list_of_structs_branch_of_a_graph_is_not_written_yet/1",
+        "m.hgl"
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:11:12 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:11:12 target.unsupported: the hgraph target does not write a whole list published where an element is temporal composite or nullable yet"
+        ]
+    );
     // A dictionary of structs as a branch's constant would be given each
     // struct whole, where its `TSD`'s children take their fields.
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "struct Quote {\n",
-            "    bid: i64\n",
-            "}\n",
-            "fn quoted(key: str, bid: i64) -> dict<str, Quote> {\n",
-            "    when { return delta<dict<str, Quote>>(updated: [key: delta<Quote>(bid: bid)]) }\n",
-            "}\n",
-            "const fn fixed() -> dict<str, Quote> => [\"a\": Quote(bid: 0)]\n",
-            "fn chosen(take: bool, key: str, bid: i64) -> dict<str, Quote> {\n",
-            "    if take { return quoted(key, bid) }\n",
-            "    return fixed()\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "an_ordinary_list_of_structs_branch_of_a_graph_is_not_written_yet/2",
+        "m.hgl"
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:11:12 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:11:12 target.unsupported: the hgraph target does not write an ordinary dictionary of composites as a branch's connection yet"
+        ]
+    );
 }
 
 /// TYPE-9: temporalization maps "lists to child positions, dictionaries
 /// to keyed children". TYPE-10: "`list<T>` denotes a growing shape".
 /// TYPE-16: a list's delta is a `dict<i64, delta<V>>`, a dictionary's
 /// has `updated` and `removed`.
-const TEMPORAL_COLLECTIONS: &str = include_str!("fixtures/temporal_collections.hgl");
+const TEMPORAL_COLLECTIONS: (&str, &str) = fixture!("demo.collections.hgl");
 
 /// A fixed list is hgraph's `TSL`, a dictionary its `TSD`, and an
 /// unsized list a `TS` of a whole tuple. An element is the child's port
@@ -8390,12 +4686,11 @@ const TEMPORAL_COLLECTIONS: &str = include_str!("fixtures/temporal_collections.h
 /// helper as a Python list or dict.
 #[test]
 fn a_temporal_list_or_dictionary_is_written_by_its_children() {
-    let emitted = emit(&[("temporal_collections.hgl", TEMPORAL_COLLECTIONS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_collections/__init__.py");
+    let emitted = emit_clean(&[TEMPORAL_COLLECTIONS]);
+    let python = emitted.module("demo.collections");
     let pair = "_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]";
     let prices = "_hg.TSD[_py.str, _hg.TS[_py.int]]";
-    for expected in [
+    python.assert_writes(&[
         "-> _hg.TS[_py.tuple[_py.int, ...]]:".to_string(),
         "        return _py.tuple([])".to_string(),
         "    return _core.item(_py.list(values.value), 1)".to_string(),
@@ -8416,12 +4711,7 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
         "store=_core.updated(change), key=\"A\"".to_string(),
         "    return _core.entry_of(priced(key=key, price=price), _hg.const(\"B\", tp=_hg.TS[_py.str]))".to_string(),
         "    return _core.entry_of(priced(key=key, price=price), chosen)".to_string(),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// What this target does not write of a temporal list or dictionary
@@ -8433,47 +4723,20 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
 /// list as the child of a temporal composite.
 #[test]
 fn a_temporal_collection_form_not_written_yet_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "struct Quote { bid: i64 }\n",
-            "fn grown(slot: i64) -> list<i64, 2> {\n",
-            "    when {\n",
-            "        return delta<list<i64, 2>>(removed: [slot])\n",
-            "    }\n",
-            "}\n",
-            "fn grown_delta(values: list<i64>) -> i64? {\n",
-            "    when { return get(delta_value(values).updated, 0) }\n",
-            "}\n",
-            "fn quotes(values: list<Quote>) -> i64 {\n",
-            "    when { return 1 }\n",
-            "}\n",
-            "fn whole(key: str) -> dict<str, Quote> {\n",
-            "    when { return [key: Quote(bid: 1)] }\n",
-            "}\n",
-            "fn maybe(value: i64) -> list<i64?, 2> {\n",
-            "    when { return [value, null] }\n",
-            "}\n",
-            "fn fixed(value: i64) -> list<i64, 2> {\n",
-            "    when { return [value, value] }\n",
-            "}\n",
-            "fn moving(slot: i64, value: i64) -> i64 => fixed(value)[slot]\n",
-            "fn nested(key: str) -> dict<str, list<i64>> {\n",
-            "    when { return delta<dict<str, list<i64>>>(removed: [key]) }\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_temporal_collection_form_not_written_yet_is_reported",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:5:45 target.unsupported",
-            "m.hgl:9:23 target.unsupported",
-            "m.hgl:11:11 target.unsupported",
-            "m.hgl:15:19 target.unsupported",
-            "m.hgl:18:19 target.unsupported",
-            "m.hgl:23:44 target.unsupported",
-            "m.hgl:24:4 target.unsupported",
+            "m.hgl:5:45 target.unsupported: the hgraph target does not write the `removed` of a fixed list's delta: hgraph's bounded `TSL` takes no removed position and no size yet",
+            "m.hgl:9:23 target.unsupported: the hgraph target does not write the delta of an unsized list yet",
+            "m.hgl:11:11 target.unsupported: the hgraph target does not write the type `list<Quote>` yet",
+            "m.hgl:15:19 target.unsupported: the hgraph target does not write a whole dictionary published to a temporal dictionary yet",
+            "m.hgl:18:19 target.unsupported: the hgraph target does not write a whole list published where an element is temporal composite or nullable yet",
+            "m.hgl:23:44 target.unsupported: the hgraph target does not write a list's element at a position that ticks yet",
+            "m.hgl:24:4 target.unsupported: the hgraph target does not write the type `dict<str, list<i64>>` yet",
         ]
     );
 }
@@ -8481,7 +4744,7 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
 /// The scalars as temporal values and as configuration (TYPE-1, TYPE-2,
 /// TYPE-14, TYPE-17), what an endpoint is observed to hold (TIME-1,
 /// END-1, END-2), and value and lifted calls of one computation (NUM-8).
-const SCALARS: &str = include_str!("fixtures/scalars.hgl");
+const SCALARS: (&str, &str) = fixture!("demo.scalars.hgl");
 
 /// TYPE-1: "`bool`, signed 64-bit `i64`, binary64 `f64`, Unicode `str`,
 /// and octet-sequence `bytes` retain distinct identities": `bytes` is
@@ -8493,10 +4756,9 @@ const SCALARS: &str = include_str!("fixtures/scalars.hgl");
 /// made by the provider's function, which checks it.
 #[test]
 fn every_scalar_is_a_temporal_type() {
-    let emitted = emit(&[("scalars.hgl", SCALARS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_scalars/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[SCALARS]);
+    let python = emitted.module("demo.scalars");
+    python.assert_writes(&[
         "def pass_bytes(value: _hg.TS[_py.bytes]) -> _hg.TS[_py.bytes]:",
         "def pass_tenor(value: _hg.TS[_core.Tenor]) -> _hg.TS[_core.Tenor]:",
         "def pass_zone(value: _hg.TS[_core.Timezone]) -> _hg.TS[_core.Timezone]:",
@@ -8510,12 +4772,7 @@ fn every_scalar_is_a_temporal_type() {
         "_core.zoned_time(_dt.time(9, 30, 0, 0), \"Europe/London\")",
         "_core.zoned_datetime(_dt.datetime(2026, 9, 3, 9, 30, 0, 0), 60, \"Europe/London\")",
         "_core.add__zoned_datetime_duration(lhs=",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TYPE-2: "Instants/durations use signed 64-bit microseconds", and an
@@ -8525,26 +4782,16 @@ fn every_scalar_is_a_temporal_type() {
 /// written.
 #[test]
 fn an_instant_outside_the_calendar_in_utc_is_reported() {
-    let emitted = emit(&[(
-        "edges.hgl",
-        concat!(
-            "module edges\n",
-            "test late { let at = @9999-12-31T23:00-01:00 }\n",
-            "test early { let at = @0001-01-01T00:59+01:00 }\n",
-            "test zoned { let at = @9999-12-31T23:30-01:00[Etc/GMT+1] }\n",
-            "test inside {\n",
-            "    let late = @9999-12-31T22:59-01:00\n",
-            "    let early = @0001-01-01T01:00+01:00\n",
-            "    let east = @9999-12-31T23:59+01:00\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "an_instant_outside_the_calendar_in_utc_is_reported",
+        "edges.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "edges.hgl:2:22 target.unsupported",
-            "edges.hgl:3:23 target.unsupported",
-            "edges.hgl:4:23 target.unsupported",
+            "edges.hgl:2:22 target.unsupported: the hgraph target does not write an instant outside the years 1 to 9999 yet",
+            "edges.hgl:3:23 target.unsupported: the hgraph target does not write an instant outside the years 1 to 9999 yet",
+            "edges.hgl:4:23 target.unsupported: the hgraph target does not write an instant outside the years 1 to 9999 yet",
         ]
     );
     assert_eq!(emitted.blocked("inside"), None);
@@ -8559,38 +4806,11 @@ fn an_instant_outside_the_calendar_in_utc_is_reported() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn the_run_provider_checks_a_zone() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_zones");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[(
-        "zones.hgl",
-        concat!(
-            "module zones\n",
-            "test unknown { let at = @[Mars/Olympus] }\n",
-            "test unknown_time { let at = @09:30[Mars/Olympus] }\n",
-            "test inconsistent { let at = @2026-09-03T09:30+00:00[Europe/London] }\n",
-            "test skipped { let at = @2026-03-29T01:30+00:00[Europe/London] }\n",
-            "test consistent { let at = @2026-03-29T02:30+01:00[Europe/London] }\n",
-        ),
-    )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let hgraph = on_hgraph("hgraph_zones");
+    let emitted = emit_clean(&[fixture!("the_run_provider_checks_a_zone", "zones.hgl")]);
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
-    let described: Vec<String> = emitted
-        .output
-        .tests
-        .iter()
-        .zip(&ran)
-        .map(|(test, ran)| match ran {
-            Ran::Passed => format!("{} passed", test.name),
-            Ran::Failed { at, message } => format!(
-                "{} failed {} {message}",
-                test.name,
-                at.map_or("?".to_string(), |at| emitted.place(at))
-            ),
-            Ran::NotRun(reason) => format!("{} not run: {reason}", test.name),
-        })
-        .collect();
+    let ran = hgraph.run(&emitted, &all);
+    let described = outcomes(&emitted, &all, &ran);
     let absent = "HglError: the zone `Mars/Olympus` is not in the run provider's zone catalogue";
     let offset = "is not the offset of the zone `Europe/London` at that time";
     assert_eq!(
@@ -8617,42 +4837,23 @@ fn the_run_provider_checks_a_zone() {
 /// `_output` here, does not yet. A fixed list's `removed` is not read: hgraph's bounded `TSL` does not report it.
 #[test]
 fn collection_validity_and_a_lists_delta_are_written() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "fn both(probe: bool, pair: list<i64, 2>) -> bool {\n",
-            "    when modified(probe) && valid([]) { return valid(pair) && all_valid(pair) }\n",
-            "}\n",
-            "fn resized(size: i64) -> list<i64> {\n",
-            "    when { return delta<list<i64>>(size_modified: size) }\n",
-            "}\n",
-            "fn shrinking() -> list<i64> {\n",
-            "    yield 1s: delta<list<i64>>(size_modified: 0)\n",
-            "}\n",
-            "fn lost(pair: list<i64, 2>) -> set<i64> {\n",
-            "    when { return delta_value(pair).removed }\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "collection_validity_and_a_lists_delta_are_written",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:9:15 target.unsupported",
-            "m.hgl:12:19 target.unsupported"
+            "m.hgl:9:15 target.unsupported: the hgraph target does not write a delta published to an unsized list yet",
+            "m.hgl:12:19 target.unsupported: the hgraph target does not write the `removed` of a fixed list's delta: hgraph's bounded `TSL` does not report a position that became invalid yet"
         ]
     );
-    let python = emitted.text("_hgl/_m_m/__init__.py");
-    for expected in [
+    let python = emitted.module("m");
+    python.assert_writes(&[
         "pair.valid and pair.all_valid",
         "_output: _hg.TS_OUT[_py.tuple[_py.int, ...]] = None",
         "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
-    ] {
-        assert!(
-            python.contains(expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TYPE-16: "A delta written with a smaller `size_modified` and no
@@ -8663,36 +4864,13 @@ fn collection_validity_and_a_lists_delta_are_written() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_negative_list_size_reduces_the_list_as_the_graph_runs() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_negative_size");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[(
-        "sizes.hgl",
-        concat!(
-            "module sizes\n",
-            "fn resize(size: i64) -> list<i64> {\n",
-            "    when {\n",
-            "        if size == 3 { return [10, 20, 30] }\n",
-            "        return delta<list<i64>>(size_modified: size)\n",
-            "    }\n",
-            "}\n",
-            "const fn total(values: list<i64>) -> i64 {\n",
-            "    var sum: i64 = 0\n",
-            "    for value in values { sum += value }\n",
-            "    return sum\n",
-            "}\n",
-            "fn total_after(size: i64) -> i64 => total(resize(size))\n",
-            "test shrinks {\n",
-            "    assert eval(total_after(size: [3, 1])) == [60, 10]\n",
-            "}\n",
-            "test negative {\n",
-            "    assert eval(total_after(size: [3, -1, -5])) == [60, 30, 0]\n",
-            "}\n",
-        ),
+    let hgraph = on_hgraph("hgraph_negative_size");
+    let emitted = emit_clean(&[fixture!(
+        "a_negative_list_size_reduces_the_list_as_the_graph_runs",
+        "sizes.hgl"
     )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
     let tests = [emitted.test("shrinks").0, emitted.test("negative").0];
-    let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
+    let ran = hgraph.run(&emitted, &tests);
     assert!(matches!(ran[0], Ran::Passed), "{:?}", ran[0]);
     assert!(matches!(ran[1], Ran::Passed), "{:?}", ran[1]);
 }
@@ -8700,7 +4878,7 @@ fn a_negative_list_size_reduces_the_list_as_the_graph_runs() {
 /// CTRL-2, CTRL-3 and CTRL-7 to CTRL-15: a graph's `for`, `while` and
 /// `switch` over an ordinary value, an outputless `if`, and a `return`
 /// in an `if` that gives a `let` its value.
-const GRAPH_FOR: &str = include_str!("fixtures/graph_for.hgl");
+const GRAPH_FOR: (&str, &str) = fixture!("demo.graph_for.hgl");
 
 /// CTRL-15: "`for item in items` over an ordinary list, set, or
 /// dictionary composes its body once for each element ... Over a
@@ -8713,10 +4891,9 @@ const GRAPH_FOR: &str = include_str!("fixtures/graph_for.hgl");
 /// performs no conditional work": `switch_` of graphs with no output.
 #[test]
 fn a_graph_for_is_a_python_loop_or_a_child_for_each_member() {
-    let emitted = emit(&[("graph_for.hgl", GRAPH_FOR)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_graph_for/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[GRAPH_FOR]);
+    let python = emitted.module("demo.graph_for");
+    python.assert_writes(&[
         // Unrolled where the graph is built, carrying the `var`.
         concat!(
             "    running = price\n",
@@ -8768,12 +4945,7 @@ fn a_graph_for_is_a_python_loop_or_a_child_for_each_member() {
             "        return _lift_10_add__i64_i64(lhs=taken, rhs=1)\n",
             "    return _hg.switch_(flag, {True: _case_4_0, False: _case_4_1}, left=left, right=right)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// What this target does not write of a graph's loops is reported: a
@@ -8785,48 +4957,20 @@ fn a_graph_for_is_a_python_loop_or_a_child_for_each_member() {
 /// a `let` its value where a branch has none.
 #[test]
 fn a_graph_loop_form_not_written_yet_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "fn sink(value: i64) { when { } }\n",
-            "fn labelled(value: i64, const label: str) { when { } }\n",
-            "fn keyed(prices: dict<str, i64>) {\n",
-            "    for name, price in prices {\n",
-            "        if name == \"a\" { sink(price) }\n",
-            "    }\n",
-            "}\n",
-            "fn configured(prices: dict<str, i64>) {\n",
-            "    for name, price in prices {\n",
-            "        labelled(price, name)\n",
-            "    }\n",
-            "}\n",
-            "fn looped(flag: bool, price: i64, const factors: list<i64>) -> i64 {\n",
-            "    for factor in factors {\n",
-            "        if flag { return price }\n",
-            "    }\n",
-            "    return price\n",
-            "}\n",
-            "fn nsink(value: i64?) { when { } }\n",
-            "fn maybe(values: list<i64?>) {\n",
-            "    for value in values { nsink(value) }\n",
-            "}\n",
-            "fn absent(flag: bool, price: i64) -> i64? {\n",
-            "    let taken: i64? = if flag { return price }\n",
-            "    return taken\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_graph_loop_form_not_written_yet_is_reported",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:6:12 target.unsupported",
-            "m.hgl:11:25 target.unsupported",
-            "m.hgl:16:9 target.unsupported",
+            "m.hgl:6:12 target.unsupported: the hgraph target does not write a loop's key or member read other than as the argument of a temporal parameter yet",
+            "m.hgl:11:25 target.unsupported: the hgraph target does not write a loop's key or member read other than as the argument of a temporal parameter yet",
+            "m.hgl:16:9 target.unsupported: the hgraph target does not write a `return` under a branch selected at runtime in a loop unrolled where the graph is built yet",
             // A nullable element of an unsized list (TYPE-14).
-            "m.hgl:21:10 target.unsupported",
-            "m.hgl:22:5 target.unsupported",
-            "m.hgl:25:23 target.unsupported",
+            "m.hgl:21:10 target.unsupported: the hgraph target does not write the type `list<i64?>` yet",
+            "m.hgl:22:5 target.unsupported: the hgraph target does not write a loop over `list<i64?>` yet",
+            "m.hgl:25:23 target.unsupported: the hgraph target does not write a `return` in an `if` over a connection that gives a `let` or a `var` its value, with a branch that has no value yet",
         ]
     );
 }
@@ -8836,38 +4980,7 @@ fn a_graph_loop_form_not_written_yet_is_reported() {
 /// tuple's delta is "`tuple<delta<A>?, delta<B>?>`". TYPE-3: a generic
 /// struct's application, and an abstract struct with the structs below
 /// it. TIME-7: `out` assigned by part.
-const TUPLES: &str = include_str!("fixtures/tuples.hgl");
-
-/// TYPE-3: "Structs are nominal". A module whose structs have the names
-/// of `demo.tuples`'s, with other fields.
-const TUPLES_NAMES: &str = include_str!("fixtures/tuples_names.hgl");
-
-/// Two modules' structs of one name, a generic one among them, each a
-/// bundle and an atomic value, are two types to hgraph: the modules load
-/// together and each one's tests pass. hgraph knows a class and a
-/// bundle's schema by its module and its name, and each struct's are of
-/// its own module. Needs hgraph, as above.
-#[test]
-#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
-fn structs_of_one_name_in_two_modules_are_two_types_on_hgraph() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_struct_names");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[("tuples.hgl", TUPLES), ("tuples_names.hgl", TUPLES_NAMES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
-    let not_passed: Vec<String> = emitted
-        .output
-        .tests
-        .iter()
-        .zip(&ran)
-        .filter(|(_, ran)| **ran != Ran::Passed)
-        .map(|(test, ran)| format!("{}: {ran:?}", test.identity()))
-        .collect();
-    assert_eq!(not_passed, Vec::<String>::new());
-    assert_eq!(ran.len(), 6);
-}
+const TUPLES: (&str, &str) = fixture!("demo.tuples.hgl");
 
 /// A tuple is hgraph's bundle with no name, a field for each position;
 /// a generic struct's bundle has the field types its arguments give; an
@@ -8876,12 +4989,11 @@ fn structs_of_one_name_in_two_modules_are_two_types_on_hgraph() {
 /// its fields and a set field whole; a part of `out` is its own port.
 #[test]
 fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
-    let emitted = emit(&[("tuples.hgl", TUPLES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_tuples/__init__.py");
+    let emitted = emit_clean(&[TUPLES]);
+    let python = emitted.module("demo.tuples");
     let pair = "_hg.TSB[\"_0\": _hg.TS[_py.int], \"_1\": _hg.TS[_py.str]]";
     let shape = "_hg.TSB[_core.schema(Shape, {\"id\": _hg.TS[_py.int]})]";
-    for expected in [
+    python.assert_writes(&[
         // TYPE-9, TYPE-10, TYPE-16: a tuple.
         format!("-> {pair}:\n    return _core.bundled((a.value, b.value,), (None, None,))"),
         "    only_first = (value.value, None,)".to_string(),
@@ -8891,7 +5003,8 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
             part("pair[\"_0\"]"),
             part("pair[\"_1\"]")
         ),
-        "    first = _core.item(_core.positions(pair.delta_value, (None, None,)), 0)".to_string(),
+        "    first = _core.item(_core.positions(pair.delta_value, (None, None,)), 0)"
+            .to_string(),
         "_core.positions(parts.delta_value, (None, (None, None,),))".to_string(),
         "    return _core.bundled((None, \"none\",), (None, None,))".to_string(),
         "    return paired(a=a, b=b)[\"_0\"]".to_string(),
@@ -8923,7 +5036,8 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         "    return _core.bundled(Square(id=id.value, side=1), {\"id\": None})".to_string(),
         // TIME-7: a whole struct with a struct field and a set field.
         "{\"quote\": {\"bid\": None, \"ask\": None}, \"size\": None})".to_string(),
-        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1))".to_string(),
+        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1))"
+            .to_string(),
         // TIME-7: `out` assigned by part, and read back.
         format!(
             "    _output[\"ask\"].value = _core.add__i64_i64(lhs={}, rhs=1)",
@@ -8946,12 +5060,7 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
             part("_output[\"bid\"]"),
             part("_output[\"ask\"]")
         ),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// What this target does not write of a temporal tuple or struct is
@@ -8961,52 +5070,19 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
 /// in a tuple of connections.
 #[test]
 fn a_temporal_tuple_or_struct_form_not_written_yet_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "abstract struct Shape { id: i64 }\n",
-            "struct Circle : Shape { radius: i64 }\n",
-            "struct Quote { bid: i64 }\n",
-            "fn whole(shape: Shape) -> i64 {\n",
-            "    when {\n",
-            "        let held = shape\n",
-            "        return held.id\n",
-            "    }\n",
-            "}\n",
-            "const fn id_of(shape: Shape) -> i64 => shape.id\n",
-            "fn shaped(id: i64) -> Shape {\n",
-            "    when { return delta<Shape>(id: id) }\n",
-            "}\n",
-            "fn lifted(value: i64) -> i64 => id_of(shaped(value))\n",
-            "fn configured(const shape: Shape, value: i64) -> i64 {\n",
-            "    when { return value }\n",
-            "}\n",
-            "fn changes(pairs: list<tuple<i64, i64>, 2>) -> i64 {\n",
-            "    when {\n",
-            "        let change = delta_value(pairs)\n",
-            "        return 1\n",
-            "    }\n",
-            "}\n",
-            "fn keyed(key: str, bid: i64) -> dict<str, Quote> {\n",
-            "    inject out\n",
-            "    when { out[key].bid = bid }\n",
-            "}\n",
-            "fn first(pair: tuple<i64, Quote>) -> i64 {\n",
-            "    when all_valid(pair) { return pair[0] }\n",
-            "}\n",
-            "fn made(a: i64) -> i64 => first((a, Quote(bid: 1)))\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_temporal_tuple_or_struct_form_not_written_yet_is_reported",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:7:20 target.unsupported",
-            "m.hgl:15:33 target.unsupported",
-            "m.hgl:16:21 target.unsupported",
-            "m.hgl:21:22 target.unsupported",
-            "m.hgl:27:12 target.unsupported",
-            "m.hgl:32:37 target.unsupported",
+            "m.hgl:7:20 target.unsupported: the hgraph target does not write a whole value of the temporal `Shape` yet",
+            "m.hgl:15:33 target.unsupported: the hgraph target does not write a whole value of the temporal `Shape` yet",
+            "m.hgl:16:21 target.unsupported: the hgraph target does not write the type `Shape` yet",
+            "m.hgl:21:22 target.unsupported: the hgraph target does not write the delta of a list or a dictionary that holds a tuple yet",
+            "m.hgl:27:12 target.unsupported: the hgraph target does not write an assignment inside an entry of `out` yet",
+            "m.hgl:32:37 target.unsupported: the hgraph target does not write a composite value in a tuple of connections yet",
         ]
     );
 }
@@ -9018,7 +5094,7 @@ fn a_temporal_tuple_or_struct_form_not_written_yet_is_reported() {
 /// selected target". GEN-11: argument inference removes reference
 /// boundaries. TYPE-9: "`atomic<V>` stops expansion at a complete
 /// ordinary V".
-const REFERENCES: &str = include_str!("fixtures/references.hgl");
+const REFERENCES: (&str, &str) = fixture!("demo.references.hgl");
 
 /// A reference is hgraph's `REF` of the temporal type it designates,
 /// and a `signal` its `SIGNAL`. A node returns a `REF` input's value, a
@@ -9031,17 +5107,17 @@ const REFERENCES: &str = include_str!("fixtures/references.hgl");
 /// input as its whole value.
 #[test]
 fn a_reference_is_a_ref_and_a_signal_a_signal() {
-    let emitted = emit(&[("references.hgl", REFERENCES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_references/__init__.py");
+    let emitted = emit_clean(&[REFERENCES]);
+    let python = emitted.module("demo.references");
     let reference = "_hg.REF[_hg.TS[_py.int]]";
-    for expected in [
+    python.assert_writes(&[
         format!(
             "def pick(use_left: _hg.TS[_py.bool], left: {reference}, right: {reference}) -> {reference}:"
         ),
         "        return left.value\n".to_string(),
         "    held = target.value\n    return held\n".to_string(),
-        "def counted(tick: _hg.SIGNAL, _state: _hg.STATE = None) -> _hg.TS[_py.int]:".to_string(),
+        "def counted(tick: _hg.SIGNAL, _state: _hg.STATE = None) -> _hg.TS[_py.int]:"
+            .to_string(),
         "def _lift_0_doubled(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:".to_string(),
         "    return _lift_0_doubled(value=pick(use_left=use_left, left=left, right=right))"
             .to_string(),
@@ -9050,7 +5126,8 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
             .to_string(),
         format!("def _inst_ref_ticks__i64(value: {reference}, "),
         "    return _inst_same__ref_i64_(value=left)".to_string(),
-        "    return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))".to_string(),
+        "    return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))"
+            .to_string(),
         // A captured call binds what it leaves out as a call does.
         "        return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))"
             .to_string(),
@@ -9058,17 +5135,13 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
         "    held = quote.value\n".to_string(),
         "    return quote.delta_value.ask".to_string(),
         "    whole = _output.value\n".to_string(),
-        "def bid_or(value: _hg.TS[_py.int], quote: _hg.TS[Quote]) -> _hg.TS[_py.int]:".to_string(),
+        "def bid_or(value: _hg.TS[_py.int], quote: _hg.TS[Quote]) -> _hg.TS[_py.int]:"
+            .to_string(),
         // An atomic input's value is hgraph's: a `var` takes a copy.
         "    saved = _core.copied(triple.value)\n".to_string(),
         "        whole = quote.value\n".to_string(),
         "rhs=quote.value.ask), rhs=quote.value.ask)".to_string(),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TIME-10 and GEN-11: a lifted helper given a reference to a reference,
@@ -9077,28 +5150,17 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
 /// analyser admits it by.
 #[test]
 fn a_lifted_input_follows_every_reference_it_is_given() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "const fn doubled(value: i64) -> i64 => value * 2\n",
-            "fn twice(left: ref<ref<i64>>) -> i64 => doubled(left)\n",
-            "fn optional(left: ref<i64>?) -> i64 => doubled(left)\n",
-        ),
+    let emitted = emit_clean(&[fixture!(
+        "a_lifted_input_follows_every_reference_it_is_given",
+        "m.hgl"
     )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_m/__init__.py");
+    let python = emitted.module("m");
     assert!(!python.contains("value: _hg.REF"), "{python}");
-    for expected in [
+    python.assert_writes(&[
         "def _lift_0_doubled(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:",
         "def twice(left: _hg.REF[_hg.REF[_hg.TS[_py.int]]]) -> _hg.TS[_py.int]:",
         "def optional(left: _hg.REF[_hg.TS[_py.int]]) -> _hg.TS[_py.int]:",
-    ] {
-        assert!(
-            python.contains(expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TYPE-3: a struct is a value where an abstract struct it inherits from
@@ -9107,32 +5169,15 @@ fn a_lifted_input_follows_every_reference_it_is_given() {
 /// not written yet: reported, where the same struct on both sides is not.
 #[test]
 fn an_inherited_struct_across_a_reference_is_not_written_yet() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "abstract struct Shape {\n",
-            "    id: i64\n",
-            "}\n",
-            "struct Circle : Shape {\n",
-            "    radius: i64\n",
-            "}\n",
-            "fn circled(id: i64) -> Circle {\n",
-            "    when { return Circle(id: id, radius: 1) }\n",
-            "}\n",
-            "fn shape_id(shape: Shape) -> i64 {\n",
-            "    when all_valid(shape) { return shape.id }\n",
-            "}\n",
-            "fn designated(id: i64) -> ref<Shape> => circled(id)\n",
-            "fn same(id: i64) -> ref<Circle> => circled(id)\n",
-            "fn followed(id: i64) -> i64 => shape_id(same(id))\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "an_inherited_struct_across_a_reference_is_not_written_yet",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:14:41 target.unsupported",
-            "m.hgl:16:41 target.unsupported",
+            "m.hgl:14:41 target.unsupported: the hgraph target does not write a struct connection given across a reference to a struct it inherits from yet",
+            "m.hgl:16:41 target.unsupported: the hgraph target does not write a struct connection given across a reference to a struct it inherits from yet",
         ]
     );
 }
@@ -9142,34 +5187,16 @@ fn an_inherited_struct_across_a_reference_is_not_written_yet() {
 /// an atomic field that may be left out (TYPE-14).
 #[test]
 fn a_reference_inside_a_temporal_composite_is_not_written_yet() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "struct Quote { bid: i64 }\n",
-            "struct Routed {\n",
-            "    target: ref<i64>\n",
-            "}\n",
-            "struct Maybe {\n",
-            "    quote: atomic<Quote>?\n",
-            "}\n",
-            "fn routed(value: Routed) -> i64 {\n",
-            "    when { return 1 }\n",
-            "}\n",
-            "fn maybe(value: Maybe) -> i64 {\n",
-            "    when { return 1 }\n",
-            "}\n",
-            "fn pair(values: list<ref<i64>, 2>) -> i64 {\n",
-            "    when { return 1 }\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_reference_inside_a_temporal_composite_is_not_written_yet",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:9:11 target.unsupported",
-            "m.hgl:12:10 target.unsupported",
-            "m.hgl:15:9 target.unsupported",
+            "m.hgl:9:11 target.unsupported: the hgraph target does not write the type `Routed` yet",
+            "m.hgl:12:10 target.unsupported: the hgraph target does not write the type `Maybe` yet",
+            "m.hgl:15:9 target.unsupported: the hgraph target does not write the type `list<ref<i64>, 2>` yet",
         ]
     );
 }
@@ -9184,7 +5211,7 @@ fn part(port: &str) -> String {
 /// TYPE-9 and TIME-9: a part of a struct or a tuple that has not
 /// published, read alone or whole; an ordinary composite as a graph
 /// branch's constant (FN-3); and a struct with no field.
-const STRUCT_REVIEW: &str = include_str!("fixtures/struct_review.hgl");
+const STRUCT_REVIEW: (&str, &str) = fixture!("demo.struct_review.hgl");
 
 /// A part read in a hook is its port's value where it is valid: a
 /// required one fails with `value.unset_read` where it is not (an
@@ -9194,10 +5221,9 @@ const STRUCT_REVIEW: &str = include_str!("fixtures/struct_review.hgl");
 /// its one value.
 #[test]
 fn a_part_not_published_and_a_composite_constant_are_written() {
-    let emitted = emit(&[("struct_review.hgl", STRUCT_REVIEW)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_struct_review/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[STRUCT_REVIEW]);
+    let python = emitted.module("demo.struct_review");
+    python.assert_writes(&[
         "    return _core.add__i64_i64(lhs=(quote[\"ask\"].value if quote[\"ask\"].valid else _core.unset_read()), rhs=1)",
         "    price = (level[\"price\"].value if level[\"price\"].valid else None)",
         "    held = ((pair[\"_0\"].value if pair[\"_0\"].valid else _core.unset_read()), (pair[\"_1\"].value if pair[\"_1\"].valid else _core.unset_read()),)",
@@ -9207,12 +5233,7 @@ fn a_part_not_published_and_a_composite_constant_are_written() {
         "def emptied(a: _hg.TS[_py.int]) -> _hg.TS[Empty]:\n    return _core.only_value(Empty(), Empty)",
         "    _output.value = _core.only_value(_core.struct_delta(), Empty)",
         "    return _py.tuple([e.valid, e.all_valid, (e.modified and e.valid)])",
-    ] {
-        assert!(
-            python.contains(expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 // ---- Analyser value rules ----
@@ -9223,22 +5244,22 @@ fn a_part_not_published_and_a_composite_constant_are_written() {
 /// yet, and reports it where it is written.
 #[test]
 fn a_list_of_structs_converted_to_their_parent_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "abstract struct Shape {}\n",
-            "struct Round : Shape { radius: f64 }\n",
-            "export const fn widened(values: list<Round>) -> list<Shape> => convert<list<Shape>>(values)\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_list_of_structs_converted_to_their_parent_is_reported",
+        "m.hgl"
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:4:64 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:4:64 target.unsupported: the hgraph target does not write a list of structs converted to a list of their parent yet"
+        ]
+    );
 }
 
 /// CTRL-6, CTRL-13, CTRL-14 and TYPE-14: a label that is a constant, a
 /// `T?` result of a graph's `if`, an ordinary null a graph returns, and
 /// a `var` read in a returned branch.
-const CONTROL_REVIEW: &str = include_str!("fixtures/control_review.hgl");
+const CONTROL_REVIEW: (&str, &str) = fixture!("demo.control_review.hgl");
 
 /// TYPE-14: "a T is a value where a T? is expected": a branch's graph
 /// gives a connection of `T` as the provider's `nullable` of it, and an
@@ -9247,38 +5268,25 @@ const CONTROL_REVIEW: &str = include_str!("fixtures/control_review.hgl");
 /// `switch` does.
 #[test]
 fn a_nullable_branch_and_an_unmatched_selector_are_written() {
-    let emitted = emit(&[
-        ("control_review.hgl", CONTROL_REVIEW),
-        (
-            "m.hgl",
-            concat!(
-                "module m\n",
-                "fn routed(route: i64, a: i64) -> i64 {\n",
-                "    switch route {\n",
-                "        case 1: return a\n",
-                "    }\n",
-                "    return a\n",
-                "}\n",
-            ),
+    let emitted = emit_clean(&[
+        CONTROL_REVIEW,
+        fixture!(
+            "a_nullable_branch_and_an_unmatched_selector_are_written",
+            "m.hgl"
         ),
     ]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_control_review/__init__.py");
-    for expected in [
+    let python = emitted.module("demo.control_review");
+    python.assert_writes(&[
         "        return _core.nullable(price, _py.int)\n",
         "        return _hg.const(_core.published(None), _hg.TS[_py.int | None])\n",
         "    return _hg.const(_core.published(t), _hg.TS[_py.int | None])\n",
-    ] {
-        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
-    }
-    let routed = emitted.text("_hgl/_m_m/__init__.py");
-    for expected in [
+    ]);
+    let routed = emitted.module("m");
+    routed.assert_writes(&[
         "    _core.unmatched(key.value)\n",
         "def _case_0_1(key: _hg.TS[_py.int], a: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
         "    return _hg.switch_(route, {1: _case_0_0, _hg.DEFAULT: _case_0_1}, a=a)\n",
-    ] {
-        assert!(routed.contains(expected), "{expected}\nnot in\n{routed}");
-    }
+    ]);
 }
 
 /// CTRL-14: "After the `if` the `var` is one connection: the branch's
@@ -9289,49 +5297,17 @@ fn a_nullable_branch_and_an_unmatched_selector_are_written() {
 /// has another label's value is reported.
 #[test]
 fn a_control_form_that_would_be_wrong_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "fn both(flag: bool, a: i64, b: i64) -> i64 {\n",
-            "    var chosen = a\n",
-            "    let taken = if flag {\n",
-            "        chosen = b\n",
-            "        a\n",
-            "    } else {\n",
-            "        a\n",
-            "    }\n",
-            "    return chosen + taken\n",
-            "}\n",
-            "fn both_var(flag: bool, a: i64, b: i64) -> i64 {\n",
-            "    var chosen = a\n",
-            "    var taken = if flag { chosen = b\n a } else { a }\n",
-            "    return chosen + taken\n",
-            "}\n",
-            "fn nested_let(outer: bool, flag: bool, a: i64, b: i64) -> i64 {\n",
-            "    var chosen = a\n",
-            "    if outer {\n",
-            "        let taken = if flag { chosen = b\n a } else { a }\n",
-            "    }\n",
-            "    return chosen\n",
-            "}\n",
-            "fn twice<const k: i64>(route: i64, a: i64) -> i64 {\n",
-            "    switch route {\n",
-            "        case k: return a * 10\n",
-            "        case 1: return a * 100\n",
-            "        default: return a\n",
-            "    }\n",
-            "}\n",
-            "fn at_one(route: i64, a: i64) -> i64 => twice<1>(route, a)\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_control_form_that_would_be_wrong_is_reported",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:4:17 target.unsupported",
-            "m.hgl:14:17 target.unsupported",
-            "m.hgl:21:21 target.unsupported",
-            "m.hgl:29:14 target.unsupported",
+            "m.hgl:4:17 target.unsupported: the hgraph target does not write an `if` over a connection that gives a `let` or a `var` its value and assigns a `var` declared before it yet",
+            "m.hgl:14:17 target.unsupported: the hgraph target does not write an `if` over a connection that gives a `let` or a `var` its value and assigns a `var` declared before it yet",
+            "m.hgl:21:21 target.unsupported: the hgraph target does not write an `if` over a connection that gives a `let` or a `var` its value and assigns a `var` declared before it yet",
+            "m.hgl:29:14 target.unsupported: the hgraph target does not write a `switch` two of whose labels have one value in an instance yet",
         ]
     );
 }
@@ -9342,50 +5318,12 @@ fn a_control_form_that_would_be_wrong_is_reported() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn an_unmatched_selector_fails_alike_on_each_path() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_unmatched");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[(
-        "u.hgl",
-        concat!(
-            "module u\n",
-            "fn routed(route: i64, a: i64) -> i64 {\n",
-            "    switch route {\n",
-            "        case 1: return a\n",
-            "    }\n",
-            "    return a\n",
-            "}\n",
-            "fn counted(route: i64, a: i64) -> i64 {\n",
-            "    var chosen = a\n",
-            "    switch route {\n",
-            "        case 1: chosen = a * 2\n",
-            "    }\n",
-            "    return chosen\n",
-            "}\n",
-            "fn sink(value: i64) { when { } }\n",
-            "fn sunk(route: i64, a: i64) {\n",
-            "    switch route {\n",
-            "        case 1: sink(a)\n",
-            "    }\n",
-            "}\n",
-            "fn hooked(route: i64) -> i64 {\n",
-            "    when {\n",
-            "        switch route {\n",
-            "            case 1: return 1\n",
-            "        }\n",
-            "        return 0\n",
-            "    }\n",
-            "}\n",
-            "test in_a_graph { assert eval(routed(route: [1, 3], a: [1, 2])) == [1, 2] }\n",
-            "test in_an_assignment { assert eval(counted(route: [1, 3], a: [1, 2])) == [2, 2] }\n",
-            "test outputless { eval(sunk(route: [1, 3], a: [1, 2])) }\n",
-            "test in_a_hook { assert eval(hooked(route: [1, 3])) == [1, 0] }\n",
-            "test matched { assert eval(routed(route: [1, 1], a: [1, 2])) == [1, 2] }\n",
-        ),
+    let hgraph = on_hgraph("hgraph_unmatched");
+    let emitted = emit_clean(&[fixture!(
+        "an_unmatched_selector_fails_alike_on_each_path",
+        "u.hgl"
     )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let ran = hgraph.run_all(&emitted);
     let messages: Vec<String> = ran
         .iter()
         .map(|ran| match ran {
@@ -9404,7 +5342,7 @@ fn an_unmatched_selector_fails_alike_on_each_path() {
 /// A collection's child (TIME-1, TIME-4, TIME-9, END-8, ERR-14), trace
 /// cells written whole or as a delta (TST-5, TST-9), the list's delta
 /// (TYPE-16), and what a node publishes to its own `out` (TIME-7).
-const VALIDITY: &str = include_str!("fixtures/validity.hgl");
+const VALIDITY: (&str, &str) = fixture!("demo.validity.hgl");
 
 /// TIME-1: a child is hgraph's own child of the input, an endpoint
 /// whether or not it is valid; a read at a run-time index is checked
@@ -9414,11 +5352,10 @@ const VALIDITY: &str = include_str!("fixtures/validity.hgl");
 /// and a fixed list's `out` is hgraph's `TS_OUT[TSL[...]]`.
 #[test]
 fn a_collections_child_is_an_endpoint_of_its_own() {
-    let emitted = emit(&[("validity.hgl", VALIDITY)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_validity/__init__.py");
+    let emitted = emit_clean(&[VALIDITY]);
+    let python = emitted.module("demo.validity");
     let pair = "_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]";
-    for expected in [
+    python.assert_writes(&[
         "    if _core.position_of(parts, 1).valid:\n".to_string(),
         "    if parts.all_valid:\n".to_string(),
         "    if quote[\"ask\"].valid:\n".to_string(),
@@ -9433,9 +5370,7 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
         format!("def pair_once(value: _hg.TS[_py.int], _output: _hg.TS_OUT[{pair}] = None) -> {pair}:"),
         "    _output.value = {key.value: value.value}\n".to_string(),
         "    _output[0].value = value.value\n".to_string(),
-    ] {
-        assert!(python.contains(&expected), "missing {expected} in:\n{python}");
-    }
+    ]);
 }
 
 /// What this target does not write of a collection is reported: an
@@ -9448,52 +5383,21 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
 /// the cell's (TST-5, TST-9).
 #[test]
 fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "fn maybe(value: i64) -> list<i64?> {\n",
-            "    when { return [value] }\n",
-            "}\n",
-            "fn none(value: i64) -> list<i64, 0> {\n",
-            "    when { return [] }\n",
-            "}\n",
-            "fn second(values: list<i64>) -> bool {\n",
-            "    when { return valid(values[1]) }\n",
-            "}\n",
-            "fn nested(key: str, value: i64) -> dict<str, list<i64, 2>> {\n",
-            "    inject out\n",
-            "    when { out[key][0] = value }\n",
-            "}\n",
-            "struct Inner { value: i64 }\n",
-            "struct Outer { inner: Inner }\n",
-            "fn relay(outer: Outer, book: dict<str, dict<str, i64>>, nulls: list<i64?, 2>) -> i64 {\n",
-            "    when { return 1 }\n",
-            "}\n",
-            "test nested_cells {\n",
-            "    assert eval(relay(outer: [Outer(inner: Inner(value: 7))], book: [[\"a\": [\"b\": 1]]], nulls: [[null, 3]])) == [1]\n",
-            "}\n",
-            "abstract struct Shape { id: i64 }\n",
-            "struct Circle : Shape { radius: i64 }\n",
-            "fn identified(shape: Shape) -> i64 {\n",
-            "    when { return 1 }\n",
-            "}\n",
-            "test below_cells {\n",
-            "    assert eval(identified(shape: [Circle(id: 1, radius: 2)])) == [1]\n",
-            "}\n",
-        ),
+    let emitted = emit(&[fixture!(
+        "a_collection_form_not_written_yet_is_reported_by_this_lane",
+        "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:2:4 target.unsupported",
-            "m.hgl:5:4 target.unsupported",
-            "m.hgl:9:19 target.unsupported",
-            "m.hgl:13:12 target.unsupported",
-            "m.hgl:21:31 target.unsupported",
-            "m.hgl:21:70 target.unsupported",
-            "m.hgl:21:96 target.unsupported",
-            "m.hgl:29:36 target.unsupported",
+            "m.hgl:2:4 target.unsupported: the hgraph target does not write the type `list<i64?>` yet",
+            "m.hgl:5:4 target.unsupported: the hgraph target does not write the type `list<i64, 0>` yet",
+            "m.hgl:9:19 target.unsupported: the hgraph target does not write an endpoint of an unsized list's element, a whole tuple here yet",
+            "m.hgl:13:12 target.unsupported: the hgraph target does not write an assignment inside an entry of `out` yet",
+            "m.hgl:21:31 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
+            "m.hgl:21:70 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
+            "m.hgl:21:96 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
+            "m.hgl:29:36 target.unsupported: the hgraph target does not write a whole trace cell of a struct below its type yet",
         ]
     );
 }
