@@ -32,7 +32,7 @@ use hgl_analyser::{Detail, LocalKind, Program};
 use crate::emit::changed_in_place;
 
 /// What one body's `let`s and loop names are bound to.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Copies {
     /// The `let`s, and the first name of each loop, that are bound to
     /// a copy: the place read is changed while the name is in scope.

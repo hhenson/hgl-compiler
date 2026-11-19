@@ -4,56 +4,12 @@
 //! directory of their own each. The last test reads core's conformance
 //! cases from the pinned `spec/` directory.
 
+mod common;
+
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
 
-/// Runs `hgl` with `arguments` and waits for it to finish.
-fn hgl(arguments: &[&str]) -> Output {
-    // Cargo builds the binary before the test and puts its path in this
-    // environment variable at compile time.
-    Command::new(env!("CARGO_BIN_EXE_hgl"))
-        .args(arguments)
-        .output()
-        .expect("the hgl binary runs")
-}
-
-/// A stream's bytes as text.
-fn text(bytes: &[u8]) -> String {
-    String::from_utf8(bytes.to_vec()).expect("hgl writes UTF-8")
-}
-
-/// An empty directory for the test named `test`.
-fn scratch(test: &str) -> PathBuf {
-    // Cargo gives integration tests a scratch directory under `target/`.
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("check")
-        .join(test);
-    // Left over from an earlier run, perhaps; `ok()` ignores "not there".
-    fs::remove_dir_all(&directory).ok();
-    fs::create_dir_all(&directory).unwrap();
-    directory
-}
-
-/// Writes `text` to `directory/name`, making the directories on the way,
-/// and gives the path as `hgl` will print it. `name` is written with `/`
-/// between its parts on every system.
-fn write(directory: &Path, name: &str, text: &str) -> String {
-    // Joined a part at a time, so that the path has the system's own
-    // separator throughout: `hgl` prints paths as the system gives them.
-    let mut path = directory.to_path_buf();
-    for part in name.split('/') {
-        path.push(part);
-    }
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, text).unwrap();
-    path.display().to_string()
-}
-
-/// A path as an argument.
-fn argument(path: &Path) -> String {
-    path.display().to_string()
-}
+use common::{argument, hgl, scratch, text, write};
 
 /// UNIT-1: a program is every `.hgl` file under its source roots, and a
 /// file belongs to the module its `module` line names, wherever it is.
