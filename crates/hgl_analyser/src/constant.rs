@@ -1467,6 +1467,20 @@ fn joined(
     let (_, right, operator) = operands(node)?;
     let mut left = left;
     let mut right = value(&right, operand_hint(operator, expected), scope)?;
+    // EXPR-6: "Boolean connectives short-circuit left to right": the
+    // right operand of `false &&` and of `true ||` is not evaluated, so
+    // a failure of its evaluation is none, and the connective is the
+    // left operand. Its type is still held to a `bool`, and one of no
+    // type is still of none.
+    let skipped = matches!(
+        (operator, &left.value),
+        (BinaryOperator::And, ConstantValue::Bool(false))
+            | (BinaryOperator::Or, ConstantValue::Bool(true))
+    );
+    if skipped && right.failed {
+        right.value = left.value.clone();
+        right.failed = false;
+    }
     if configured(node) {
         return configured_value(node, scope, None);
     }

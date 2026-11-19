@@ -1034,8 +1034,9 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
 
 /// EXPR-6: "Boolean connectives short-circuit left to right": the
 /// right operand of `false &&` and of `true ||` is not needed where it
-/// is a parameter not yet given its value. "The operands of `&&`, `||`,
-/// and `!` are bools", that one too. One not worked out leaves the
+/// is a parameter not yet given its value, or fails when it is
+/// evaluated, `1 // 0 == 0`. "The operands of `&&`, `||`, and `!` are
+/// bools", that one too. One otherwise not worked out leaves the
 /// connective not worked out: it may be of no type, `1 + "a"`.
 #[test]
 fn a_boolean_connective_short_circuits() {
@@ -1043,7 +1044,8 @@ fn a_boolean_connective_short_circuits() {
     expect(
         &format!(
             "{shared}const fn a<const N: bool>(x: Flag<(false && N)>) -> Flag<false> => x\n\
-             const fn b<const N: bool>(x: Flag<(true || N)>) -> Flag<true> => x\n"
+             const fn b<const N: bool>(x: Flag<(true || N)>) -> Flag<true> => x\n\
+             const fn c(x: Flag<(false && (1 // 0 == 0))>) -> Flag<false> => x\n"
         ),
         &[],
     );
@@ -1286,6 +1288,19 @@ fn a_constant_that_fails_is_rejected_where_it_is_declared() {
              const fn c(t: list<i64, FORTY>) -> list<i64, 40> => t\n\
              const MANY: i64 = {four_hundred}\n\
              const fn d(t: IBox<MANY>) -> IBox<400> => t\n"
+        ),
+        &[],
+    );
+    // EXPR-6: "Boolean connectives short-circuit left to right": the
+    // right operand of `false &&` and of `true ||` is not evaluated, so
+    // its failure is none, and the connective is the left operand.
+    expect(
+        &format!(
+            "{shared}struct Flag<const X: bool> {{ v: i64 }}\n\
+             const NO: bool = false && (1 // 0 == 0)\n\
+             const YES: bool = true || (9223372036854775807 + 1 > 0)\n\
+             const fn a(x: Flag<NO>, y: Flag<YES>) -> Flag<false> => x\n\
+             const fn b(y: Flag<YES>) -> Flag<true> => y\n"
         ),
         &[],
     );

@@ -64,6 +64,7 @@ analyser: partial
 analyser: partial
 
 - The Boolean connectives and `!` take bools, in value functions
+- A compile-time constant short-circuits (`constant`): the right operand of `false &&` and `true ||` is not needed where it is a parameter, a constant held by its name, or one whose evaluation fails, which is then no failure (`const NO: bool = false && (1 // 0 == 0)` is `false`); one of no type is held to a `bool` still
 - Left: a guard precedes the payload read it protects
 
 transpiler: planned
