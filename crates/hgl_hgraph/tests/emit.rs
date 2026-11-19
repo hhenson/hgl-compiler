@@ -5166,29 +5166,6 @@ fn a_tenor_moves_a_date_on_a_calendar_and_under_a_rule() {
     );
 }
 
-/// TYPE-17: a tenor is written as a value. As the type of a temporal
-/// function's input or result it is reported as not written.
-#[test]
-fn a_tenor_is_no_temporal_type_yet() {
-    let emitted = emit(&[(
-        "tenor.hgl",
-        concat!(
-            "module demo.rules\n",
-            "const fn quarter() -> tenor => 3M\n",
-            "fn passed(lag: tenor) -> tenor {\n",
-            "    when { return lag }\n",
-            "}\n",
-        ),
-    )]);
-    assert_eq!(
-        emitted.reported,
-        [
-            "tenor.hgl:3:11 target.unsupported",
-            "tenor.hgl:3:4 target.unsupported",
-        ]
-    );
-}
-
 /// TYPE-14: a temporal `T?` is written for a scalar and an enum, which
 /// publish whole. A nullable set is not: a set publishes its changes,
 /// which hgraph's value that may be unset would not gather. It is
@@ -5837,7 +5814,8 @@ fn timed_traces_replay_and_compare_at_the_runs_start() {
 }
 
 /// A program with forms that are not written: a pack parameter of two
-/// of its functions, and a zoned datetime in one of its tests.
+/// of its functions, and an instant outside the years 1 to 9999 in UTC
+/// in one of its tests.
 const REACH: [(&str, &str); 3] = [
     (
         "reach.hgl",
@@ -5859,7 +5837,7 @@ const REACH: [(&str, &str); 3] = [
             "    assert fine(2) == 3\n",
             "}\n",
             "test reaches { assert outer(1) == 2 }\n",
-            "test own { let at = @2026-09-03T09:30:00+01:00[Europe/London] }\n",
+            "test own { let at = @9999-12-31T23:30:00-01:00 }\n",
             "test across { assert far::relay(1) == 2 }\n",
             "test wrong {\n",
             "    assert fine(1) == 2\n",
@@ -5933,7 +5911,7 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     assert_eq!(
         emitted.blocked("own"),
         Some(
-            "reach.hgl:18:21 the hgraph target does not write a zoned datetime, a zoned time or a time zone yet"
+            "reach.hgl:18:21 the hgraph target does not write an instant outside the years 1 to 9999 yet"
                 .to_string()
         )
     );
@@ -6084,6 +6062,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("conditionals.hgl", CONDITIONALS));
     files.push(("graph_for.hgl", GRAPH_FOR));
     files.push(("captures.hgl", CAPTURES));
+    files.push(("scalars.hgl", SCALARS));
     files.push(("errors.hgl", ERRORS));
     files.extend(MODULES);
     files.extend(NESTED);
@@ -7900,6 +7879,137 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
             "m.hgl:18:19 target.unsupported",
             "m.hgl:23:44 target.unsupported",
             "m.hgl:24:4 target.unsupported",
+        ]
+    );
+}
+
+/// The scalars as temporal values and as configuration (TYPE-1, TYPE-2,
+/// TYPE-14, TYPE-17), what an endpoint is observed to hold (TIME-1,
+/// END-1, END-2), and value and lifted calls of one computation (NUM-8).
+const SCALARS: &str = include_str!("fixtures/scalars.hgl");
+
+/// TYPE-1: "`bool`, signed 64-bit `i64`, binary64 `f64`, Unicode `str`,
+/// and octet-sequence `bytes` retain distinct identities": `bytes` is
+/// Python's. TYPE-17: a tenor is the provider's `Tenor`. TYPE-2: "named
+/// `timezone`, resolved `zoned_datetime`, and date-independent
+/// `zoned_time`" are the provider's classes, each a temporal value, and
+/// TYPE-14 a nullable one. LEX-12: "The selected run provider checks
+/// exact catalog membership and offset consistency": a zone literal is
+/// made by the provider's function, which checks it.
+#[test]
+fn every_scalar_is_a_temporal_type() {
+    let emitted = emit(&[("scalars.hgl", SCALARS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_scalars/__init__.py");
+    for expected in [
+        "def pass_bytes(value: _hg.TS[_py.bytes]) -> _hg.TS[_py.bytes]:",
+        "def pass_tenor(value: _hg.TS[_core.Tenor]) -> _hg.TS[_core.Tenor]:",
+        "def pass_zone(value: _hg.TS[_core.Timezone]) -> _hg.TS[_core.Timezone]:",
+        "def pass_zoned(value: _hg.TS[_core.ZonedDatetime]) -> _hg.TS[_core.ZonedDatetime]:",
+        "def pass_zoned_time(value: _hg.TS[_core.ZonedTime]) -> _hg.TS[_core.ZonedTime]:",
+        "def maybe_bytes(value: _hg.TS[_py.bytes | None]) -> _hg.TS[_py.bytes | None]:",
+        "def maybe_tenor(value: _hg.TS[_core.Tenor | None]) -> _hg.TS[_core.Tenor | None]:",
+        "def maybe_zoned(value: _hg.TS[_core.ZonedDatetime | None]) -> _hg.TS[_core.ZonedDatetime | None]:",
+        "def zoned_on(tick: _hg.TS[_py.bool], zone: _core.Timezone, lag: _core.Tenor) -> _hg.TS[_core.Tenor]:",
+        "_core.timezone(\"Europe/London\")",
+        "_core.zoned_time(_dt.time(9, 30, 0, 0), \"Europe/London\")",
+        "_core.zoned_datetime(_dt.datetime(2026, 9, 3, 9, 30, 0, 0), 60, \"Europe/London\")",
+        "_core.add__zoned_datetime_duration(lhs=",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// TYPE-2: "Instants/durations use signed 64-bit microseconds", and an
+/// instant on hgraph is a Python `datetime`, of the years 1 to 9999. A
+/// literal written with an offset near either end whose instant in UTC
+/// is outside them is reported where it is written; one inside is
+/// written.
+#[test]
+fn an_instant_outside_the_calendar_in_utc_is_reported() {
+    let emitted = emit(&[(
+        "edges.hgl",
+        concat!(
+            "module edges\n",
+            "test late { let at = @9999-12-31T23:00-01:00 }\n",
+            "test early { let at = @0001-01-01T00:59+01:00 }\n",
+            "test zoned { let at = @9999-12-31T23:30-01:00[Etc/GMT+1] }\n",
+            "test inside {\n",
+            "    let late = @9999-12-31T22:59-01:00\n",
+            "    let early = @0001-01-01T01:00+01:00\n",
+            "    let east = @9999-12-31T23:59+01:00\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "edges.hgl:2:22 target.unsupported",
+            "edges.hgl:3:23 target.unsupported",
+            "edges.hgl:4:23 target.unsupported",
+        ]
+    );
+    assert_eq!(emitted.blocked("inside"), None);
+}
+
+/// LEX-12: "The selected run provider checks exact catalog membership
+/// and offset consistency". A name the run's zone catalogue has not
+/// fails where it is evaluated, and so does an offset that is not the
+/// zone's at the instant it gives: London is an hour east of UTC in
+/// September, and skips 01:30 on 29 March 2026. No execution code is
+/// catalogued for either. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn the_run_provider_checks_a_zone() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_zones");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[(
+        "zones.hgl",
+        concat!(
+            "module zones\n",
+            "test unknown { let at = @[Mars/Olympus] }\n",
+            "test unknown_time { let at = @09:30[Mars/Olympus] }\n",
+            "test inconsistent { let at = @2026-09-03T09:30+00:00[Europe/London] }\n",
+            "test skipped { let at = @2026-03-29T01:30+00:00[Europe/London] }\n",
+            "test consistent { let at = @2026-03-29T02:30+01:00[Europe/London] }\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let described: Vec<String> = emitted
+        .output
+        .tests
+        .iter()
+        .zip(&ran)
+        .map(|(test, ran)| match ran {
+            Ran::Passed => format!("{} passed", test.name),
+            Ran::Failed { at, message } => format!(
+                "{} failed {} {message}",
+                test.name,
+                at.map_or("?".to_string(), |at| emitted.place(at))
+            ),
+            Ran::NotRun(reason) => format!("{} not run: {reason}", test.name),
+        })
+        .collect();
+    let absent = "HglError: the zone `Mars/Olympus` is not in the run provider's zone catalogue";
+    let offset = "is not the offset of the zone `Europe/London` at that time";
+    assert_eq!(
+        described,
+        [
+            format!("unknown failed zones.hgl:2:20 {absent}"),
+            format!("unknown_time failed zones.hgl:3:25 {absent}"),
+            format!(
+                "inconsistent failed zones.hgl:4:25 HglError: the offset of `2026-09-03T09:30:00` {offset}"
+            ),
+            format!(
+                "skipped failed zones.hgl:5:20 HglError: the offset of `2026-03-29T01:30:00` {offset}"
+            ),
+            "consistent passed".to_string(),
         ]
     );
 }
