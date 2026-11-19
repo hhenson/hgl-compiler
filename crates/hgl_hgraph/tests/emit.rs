@@ -3901,6 +3901,11 @@ fn a_windows_readiness_and_its_list_are_written() {
         "_core.window_values(_core.position_of(both, 0))".to_string(),
         "_core.checked_child(_core.position_of(both, at.value), lambda _port: _core.window_values(_port))"
             .to_string(),
+        "_core.window_values(_core.entry_port(prices, \"a\"))".to_string(),
+        "_core.checked_child(_core.entry_port(prices, key.value), lambda _port: _core.window_values(_port))"
+            .to_string(),
+        "_core.checked_child(_core.position_of(rows, at.value)[\"prices\"], lambda _port: _core.window_values(_port))"
+            .to_string(),
         // A duration, and a minimum of `0s` written as the maximum.
         format!("-> _hg.TSW[_py.float, {}, {}]:", seconds(3), seconds(2)),
         format!(

@@ -271,6 +271,42 @@ fn slot_flow(slot: i64, price: i64, at: i64) -> list<i64> =>
     slot_values(slots(slot, price), at)
 fn first_slot_flow(slot: i64, price: i64) -> list<i64> => first_slot(slots(slot, price))
 
+# A dictionary's entry that is a window, at a key known when the program
+# is compiled and at one known when it runs; a struct's window field
+# within a list's element read when it runs.
+fn keyed(key: str, price: i64) -> dict<str, rolling_window<i64, 2>> {
+    when { return delta<dict<str, rolling_window<i64, 2>>>(updated: [key: price]) }
+}
+
+fn entry_a(prices: dict<str, rolling_window<i64, 2>>) -> list<i64> {
+    when all_valid(prices["a"]) { return prices["a"] }
+}
+
+fn early_entry_a(prices: dict<str, rolling_window<i64, 2>>) -> list<i64> {
+    when valid(prices["a"]) { return prices["a"] }
+}
+
+fn entry_at(prices: dict<str, rolling_window<i64, 2>>, key: str) -> list<i64> {
+    when modified(key) { return prices[key] }
+}
+
+struct Row {
+    prices: rolling_window<i64, 2>
+}
+
+fn rowed(slot: i64, price: i64) -> list<Row, 2> {
+    when { return delta<list<Row, 2>>(updated: [slot: delta<Row>(prices: price)]) }
+}
+
+fn row_prices(rows: list<Row, 2>, at: i64) -> list<i64> {
+    when modified(at) { return rows[at].prices }
+}
+
+fn entry_flow(key: str, price: i64) -> list<i64> => entry_a(keyed(key, price))
+fn early_entry_flow(key: str, price: i64) -> list<i64> => early_entry_a(keyed(key, price))
+fn entry_at_flow(key: str, price: i64, at: str) -> list<i64> => entry_at(keyed(key, price), at)
+fn row_flow(slot: i64, price: i64, at: i64) -> list<i64> => row_prices(rowed(slot, price), at)
+
 test a_window_within_a_value_is_read_as_its_list {
     assert eval(book_flow(probe: [true, true, true], price: [_, 1, 2])) ==
         [[false, false, false], [true, true, false], [true, true, true]]
@@ -278,6 +314,11 @@ test a_window_within_a_value_is_read_as_its_list {
     assert eval(slot_flow(slot: [0, 0, 1, 1], price: [1, 2, 3, 4], at: [_, 0, _, 1])) ==
         [_, [1, 2], _, [3, 4]]
     assert eval(first_slot_flow(slot: [0, 0, 1], price: [1, 2, 3])) == [_, [1, 2], [1, 2]]
+    assert eval(entry_flow(key: ["b", "a", "a", "a"], price: [1, 2, 3, 4])) ==
+        [_, _, [2, 3], [3, 4]]
+    assert eval(entry_at_flow(key: ["a", "a", "b"], price: [1, 2, 3], at: [_, "a", _])) ==
+        [_, [1, 2], _]
+    assert eval(row_flow(slot: [1, 1, 0], price: [1, 2, 3], at: [_, 1, _])) == [_, [1, 2], _]
 }
 
 test a_window_within_a_value_read_before_it_is_all_valid_fails {
@@ -287,6 +328,13 @@ test a_window_within_a_value_read_before_it_is_all_valid_fails {
     }
     assert raises("value.unset_read") {
         eval(slot_flow(slot: [0, 0], price: [1, 2], at: [1, _]))
+    }
+    assert raises("value.unset_read") { eval(early_entry_flow(key: ["a"], price: [1])) }
+    assert raises("value.unset_read") {
+        eval(entry_at_flow(key: ["a", "a"], price: [1, 2], at: ["b", _]))
+    }
+    assert raises("value.unset_read") {
+        eval(row_flow(slot: [1, 1], price: [1, 2], at: [1, _]))
     }
 }
 
