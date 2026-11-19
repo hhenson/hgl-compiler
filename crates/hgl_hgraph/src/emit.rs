@@ -113,6 +113,7 @@ pub(crate) fn module(
         lifts: Vec::new(),
         lifted: 0,
         switched: 0,
+        captured: 0,
         bound: Vec::new(),
         in_case: 0,
         scheduled: None,
@@ -742,6 +743,9 @@ struct Emitter<'a> {
     /// How many `if`s and `switch`es over a connection have been
     /// written: each names its branches' graphs with its number.
     switched: usize,
+    /// How many captures of a graph given a wiring-time value have been
+    /// written: each names its graph with its number (ERR-7).
+    captured: usize,
     /// The locals of the graph being written that have a value so far:
     /// its parameters, a `let` or `var` declared with one, a `var` once
     /// assigned. A branch's graph is given only these (CTRL-14).
@@ -1736,6 +1740,12 @@ impl Emitter<'_> {
             (None, Type::Error) => {
                 self.natives = true;
                 "_core.Error".to_string()
+            }
+            // ERR-4: what an error's `.context` holds, the provider's
+            // `ErrorContext`.
+            (None, Type::ErrorContext) => {
+                self.natives = true;
+                "_core.ErrorContext".to_string()
             }
             (None, Type::Result { .. }) => {
                 self.natives = true;
@@ -3557,9 +3567,21 @@ impl Emitter<'_> {
         match statement {
             Stmt::Declare { local, value } => {
                 if let Some(value) = value {
-                    let written = match self.place_call(function, value, depth) {
-                        Some(result) => result,
-                        None => self.expression(function, value),
+                    // ERR-7: a capture of a graph given a wiring-time
+                    // value is written with a graph of its own, before
+                    // the statement.
+                    let captured = match &value.kind {
+                        ExprKind::Capture(call) if function.mode == Mode::Graph => {
+                            self.captured_graph(function, call, depth)
+                        }
+                        _ => None,
+                    };
+                    let written = match captured {
+                        Some(captured) => captured,
+                        None => match self.place_call(function, value, depth) {
+                            Some(result) => result,
+                            None => self.expression(function, value),
+                        },
                     };
                     let value = self.kept(function, *local, value, written);
                     let target = self.place(function, *local);
@@ -4086,6 +4108,7 @@ impl Emitter<'_> {
                     | ExprKind::Constant { .. }
                     | ExprKind::Capture(_)
                     | ExprKind::Captured { .. }
+                    | ExprKind::TagTest { .. }
             )
             && !self.connected_field(function, value)
             && !self.connected_element(function, value)
@@ -4574,11 +4597,24 @@ impl Emitter<'_> {
                 format!("_core.{tag}({payload})")
             }
             // ERR-3: `is_ok(value)` and `is_err(value)` give a `bool`.
-            ExprKind::TagTest { success, value } => {
+            // "In composition a test of a connection is an ordinary
+            // lifted call (FN-6): it gives a connection of `bool` and
+            // no fact": the provider's node, which publishes the test
+            // on each tick of the result.
+            ExprKind::TagTest {
+                success,
+                value: tested,
+            } => {
                 self.natives = true;
-                let value = self.expression(function, value);
+                let lifted = function.mode == Mode::Graph && self.connects(function, tested);
+                let tested = self.expression(function, tested);
+                let tag = if *success { "ok" } else { "err" };
+                if lifted {
+                    self.hgraph = true;
+                    return format!("_core.lifted_is_{tag}({tested})");
+                }
                 let tag = if *success { "Ok" } else { "Err" };
-                format!("_py.isinstance({value}, _core.{tag})")
+                format!("_py.isinstance({tested}, _core.{tag})")
             }
             // ERR-3: "`binding.value` is the T and `binding.error` the
             // E", where a guard has proved which the binding is.
@@ -4613,9 +4649,15 @@ impl Emitter<'_> {
             }
             ExprKind::ErrorPart { base, part } => {
                 let base = self.expression(function, base);
+                // ERR-4: the provider's `Error` has its context, an
+                // `ErrorContext` or `None`, as `context`.
                 let part = match part {
                     ErrorPart::Message => "message",
                     ErrorPart::Code => "code",
+                    ErrorPart::Context => "context",
+                    ErrorPart::Node => "node",
+                    ErrorPart::Phase => "phase",
+                    ErrorPart::EvaluationTime => "evaluation_time",
                 };
                 format!("{base}.{part}")
             }
@@ -4675,9 +4717,13 @@ impl Emitter<'_> {
     /// child's evaluation only, and the child is evaluated again on its
     /// next input. The nearest `try_except` catches a failure, once.
     ///
-    /// The call is a node or a graph of the program. A lifted value
-    /// function, and a graph given a wiring-time value, which hgraph's
-    /// `try_except` does not take, are not written yet.
+    /// The call is a node or a graph of the program, or a value
+    /// function of the program lifted over a connection (FN-6), whose
+    /// node is captured as any node is. A graph given a wiring-time
+    /// value, which hgraph's `try_except` does not take, is written
+    /// apart where the capture is the value of a `let`
+    /// (`Emitter::captured_graph`); anywhere else it is reported, as is
+    /// a lifted operator or native function.
     fn capture(&mut self, function: &Function, call: &Expr) -> String {
         let at = call.at;
         let program = self.program;
@@ -4713,8 +4759,35 @@ impl Emitter<'_> {
             self.unsupported(at, "this capture");
             return "None".to_string();
         };
+        // FN-6: "A selected value helper ... with temporal arguments in
+        // composition is lifted": the node the call is written as, the
+        // same node a call of it outside a capture is, with the same
+        // arguments. ERR-7: a value function given no connection
+        // composes nothing, which the analyser rejects
+        // (`capture.phase`).
+        if declared.kind.role() == Some(Role::Value)
+            && bodied
+            && arguments
+                .iter()
+                .any(|argument| self.connects(function, &argument.value))
+        {
+            let (written, bound) = self.bound(function, signature, arguments, |emitter, value| {
+                emitter.connects(function, value).then(|| value.ty.clone())
+            });
+            let result = signature.result.as_ref().map(|_| &call.ty);
+            let node = self.lifted(
+                (module, declaration),
+                Lifts::Function(generics),
+                signature,
+                &bound,
+                result,
+                at,
+            );
+            let given = [node].into_iter().chain(written).collect::<Vec<_>>();
+            return self.attempted(&given.join(", "), signature.result.is_none());
+        }
         if declared.kind.role() != Some(Role::Temporal) || !bodied {
-            self.unsupported(at, "a capture of a lifted call");
+            self.unsupported(at, "a capture of a lifted operator or native function");
             return "None".to_string();
         }
         if !self.is_node((module, declaration))
@@ -4723,7 +4796,10 @@ impl Emitter<'_> {
                 .iter()
                 .any(|parameter| parameter.constant)
         {
-            self.unsupported(at, "a capture of a graph given a wiring-time value");
+            self.unsupported(
+                at,
+                "a capture of a graph given a wiring-time value, other than as the value of a `let`",
+            );
             return "None".to_string();
         }
         let python = self.called_name((module, declaration), generics, at);
@@ -4739,13 +4815,174 @@ impl Emitter<'_> {
         } else {
             format!("{python}, {arguments}")
         };
+        self.attempted(&given, signature.result.is_none())
+    }
+
+    /// hgraph's `try_except` given `given`, its callable and then the
+    /// callable's arguments (ERR-7). For a callable with no output,
+    /// `outputless`, it gives the failures alone, which are put in a
+    /// bundle of that one field, so that `.error` reads either the same
+    /// way.
+    ///
+    /// ERR-8: "Start/stop failures escape, including lifecycle work
+    /// triggered during evaluation". hgraph's `try_except` captures the
+    /// failure of a child's `start` or `stop` that it meets while it
+    /// evaluates what it captures, a branch of a `switch_` selected or
+    /// left: the provider's `captured` wires beside it what raises such
+    /// a failure again.
+    fn attempted(&mut self, given: &str, outputless: bool) -> String {
         self.hgraph = true;
+        self.natives = true;
         let attempted = format!("_hg.try_except({given})");
-        if signature.result.is_none() {
-            format!("_hg.combine(exception={attempted})")
+        if outputless {
+            format!("_core.captured(_hg.combine(exception={attempted}))")
         } else {
-            attempted
+            format!("_core.captured({attempted})")
         }
+    }
+
+    /// `let seen = capture(child, value, 2)` in a graph, where `child`
+    /// is a graph that takes a `const` parameter (ERR-7). Writes what
+    /// the capture needs before the statement at `depth`, and gives the
+    /// capture; `None` where `call` is no such call, which
+    /// [`Emitter::capture`] writes.
+    ///
+    /// hgraph's `try_except` does not take a graph with a scalar input,
+    /// so the capture is of a graph of the target's own, `_capture_0`,
+    /// whose inputs are the child's temporal parameters and which calls
+    /// the child with each wiring-time value bound. "capturing a graph
+    /// covers failures that leave that subgraph": the subgraph is the
+    /// child's, called as it is anywhere else.
+    ///
+    /// EXPR-13: the arguments are evaluated once, in the order written,
+    /// where the capture is: before the `let`'s own line. Each
+    /// wiring-time value is held under a name of its own, which the
+    /// graph reads. A connection that is a local or a literal is given
+    /// as it is; any other is held too, in its place in the order. The
+    /// defaults of what the call leaves out are evaluated after, in
+    /// the graph's call of the child, as a call evaluates them.
+    fn captured_graph(&mut self, function: &Function, call: &Expr, depth: usize) -> Option<String> {
+        let at = call.at;
+        let program = self.program;
+        let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    generics,
+                    ..
+                }
+                | Callee::Candidate {
+                    module,
+                    declaration,
+                    generics,
+                    ..
+                },
+            arguments,
+            ..
+        } = &call.kind
+        else {
+            return None;
+        };
+        let callee = (*module, *declaration);
+        let declared = &program.modules[callee.0].declarations[callee.1];
+        let Some(Detail::Callable(signature)) = program.modules[callee.0].details.get(callee.1)
+        else {
+            return None;
+        };
+        let bodied = matches!(
+            declared.kind,
+            DeclarationKind::Implementation(..) | DeclarationKind::Function(_)
+        );
+        if declared.kind.role() != Some(Role::Temporal)
+            || !bodied
+            || self.is_node(callee)
+            || !signature
+                .parameters
+                .iter()
+                .any(|parameter| parameter.constant)
+        {
+            return None;
+        }
+        if signature
+            .parameters
+            .iter()
+            .any(|parameter| parameter.pack.is_some())
+        {
+            self.unsupported(
+                at,
+                "a capture of a graph with a pack, given a wiring-time value",
+            );
+            return Some("None".to_string());
+        }
+        let number = self.captured;
+        self.captured += 1;
+        let graph = format!("_capture_{number}");
+        // The child's graph is given its inputs by name, and the graph
+        // of the capture is given them as `try_except` is.
+        let mut inputs = Vec::new();
+        let mut given = Vec::new();
+        let mut called = Vec::new();
+        for argument in arguments {
+            let Some(parameter) = argument
+                .parameter
+                .and_then(|index| signature.parameters.get(index))
+            else {
+                continue;
+            };
+            let python = name(&parameter.name);
+            let value = self.expression(function, &argument.value);
+            let plain = matches!(
+                argument.value.kind,
+                ExprKind::Local(_) | ExprKind::Literal(_)
+            );
+            let value = if parameter.constant || !plain {
+                let held = format!("{graph}_{python}");
+                self.line(depth, &format!("{held} = {value}"));
+                held
+            } else {
+                value
+            };
+            if parameter.constant {
+                called.push(format!("{python}={value}"));
+            } else {
+                // A type the target does not write is reported there.
+                let Some(annotation) = self.annotation(&argument.value.ty, true, at) else {
+                    return Some("None".to_string());
+                };
+                inputs.push(format!("{python}: {annotation}"));
+                given.push(format!("{python}={value}"));
+                called.push(format!("{python}={python}"));
+            }
+        }
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            if arguments
+                .iter()
+                .any(|argument| argument.parameter == Some(index))
+            {
+                continue;
+            }
+            if let Some(value) = self.left_out(callee, index, parameter) {
+                called.push(format!("{}={value}", name(&parameter.name)));
+            }
+        }
+        let result = match &signature.result {
+            Some(_) => match self.annotation(&call.ty, true, at) {
+                Some(result) => result,
+                None => return Some("None".to_string()),
+            },
+            None => "None".to_string(),
+        };
+        let child = self.called_name(callee, generics, at);
+        self.hgraph = true;
+        self.line(depth, "@_hg.graph");
+        self.line(
+            depth,
+            &format!("def {graph}({}) -> {result}:", inputs.join(", ")),
+        );
+        self.line(depth + 1, &format!("return {child}({})", called.join(", ")));
+        let given = [graph].into_iter().chain(given).collect::<Vec<_>>();
+        Some(self.attempted(&given.join(", "), signature.result.is_none()))
     }
 
     /// `Quote(bid: 1.0, ask: 2.0)`: a value of the struct `of`, a
@@ -5717,6 +5954,10 @@ impl Emitter<'_> {
             ExprKind::Widen(inner) => self.connects(function, inner),
             // ERR-7: a capture is "read through two connections".
             ExprKind::Capture(_) | ExprKind::Captured { .. } => true,
+            // ERR-3: "In composition a test of a connection is an
+            // ordinary lifted call (FN-6): it gives a connection of
+            // `bool`".
+            ExprKind::TagTest { value, .. } => self.connects(function, value),
             // A field of a connection is the field's own connection,
             // and so is an element of one.
             ExprKind::Field { base, .. } | ExprKind::Index { base, .. } => {
@@ -6600,6 +6841,7 @@ fn canonical(program: &Program, ty: &Type) -> Option<String> {
         Type::Atomic(payload) => format!("atomic<{}>", one(payload)?),
         Type::Result { value, error } => format!("result<{}, {}>", one(value)?, one(error)?),
         Type::Error => "error".to_string(),
+        Type::ErrorContext => "error context".to_string(),
         Type::Delta(shape) => format!("delta<{}>", one(shape)?),
         Type::Nullable(inner) => format!("{}?", one(inner)?),
         Type::Parameter { .. } | Type::Trace { .. } | Type::Unknown => return None,
@@ -6812,7 +7054,8 @@ pub(crate) fn changed_in_place(program: &Program, ty: &Type, depth: usize) -> bo
             kind: NamedKind::Enum | NamedKind::Native,
             ..
         }
-        | Type::Error => false,
+        | Type::Error
+        | Type::ErrorContext => false,
         Type::Named {
             module,
             declaration,
@@ -6880,7 +7123,8 @@ fn held_types<'a>(program: &'a Program, ty: &'a Type) -> Option<Vec<&'a Type>> {
             kind: NamedKind::Enum,
             ..
         }
-        | Type::Error => Some(Vec::new()),
+        | Type::Error
+        | Type::ErrorContext => Some(Vec::new()),
         Type::Named {
             module,
             declaration,

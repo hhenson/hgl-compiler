@@ -512,9 +512,10 @@ pub enum ExprKind {
         /// null.
         code: Option<Box<Expr>>,
     },
-    /// `.message` or `.code` of an error (ERR-4).
+    /// `.message`, `.code` or `.context` of an error, or `.node`,
+    /// `.phase` or `.evaluation_time` of its context (ERR-4).
     ErrorPart {
-        /// The error read.
+        /// The error, or the context, read.
         base: Box<Expr>,
         /// Which of its parts.
         part: ErrorPart,
@@ -583,13 +584,24 @@ pub enum ExprKind {
     Unread,
 }
 
-/// A part of an error that source reads (ERR-4).
+/// A part of an error, or of an error's context, that source reads
+/// (ERR-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorPart {
     /// `.message`, a `str`.
     Message,
     /// `.code`, a `str?`.
     Code,
+    /// `.context`, the error's provenance: null for a constructed
+    /// error, and otherwise a record of the three parts below.
+    Context,
+    /// `.node` of a context, a `str`: the node that first failed.
+    Node,
+    /// `.phase` of a context, a `str`: `"evaluate"`, `"start"` or
+    /// `"stop"`.
+    Phase,
+    /// `.evaluation_time` of a context, a `datetime`.
+    EvaluationTime,
 }
 
 /// What a call calls.

@@ -56,6 +56,7 @@ from hgraph import (
     TSD as _TSD,
     TimeSeriesSchema as _TimeSeriesSchema,
     compute_node as _compute_node,
+    sink_node as _sink_node,
 )
 
 # `abs` is the name of an option of core's `eq_` and `ne_`, and so of a
@@ -214,6 +215,47 @@ class ErrorContext:
         self.phase = phase
         self.evaluation_time = evaluation_time
 
+    # OPS-2: "`==` and `!=` compare two values of one type": two
+    # contexts are equal when their three parts are. With `__eq__` and
+    # no `__hash__`, Python makes the class unhashable, as `Error` is.
+    def __eq__(self, other):
+        return type(other) is ErrorContext and (self.node, self.phase, self.evaluation_time) == (
+            other.node,
+            other.phase,
+            other.evaluation_time,
+        )
+
+    def __repr__(self):
+        return f"context(node: {self.node!r}, phase: {self.phase!r}, evaluation_time: {self.evaluation_time!r})"
+
+
+# A frame of a traceback, with the name of the function it is in.
+_FRAME = _re.compile(r'\s*File ".*", line \d+, in (\S+)$')
+
+
+def _phase_of(failure):
+    """The phase hgraph's `NodeError` `failure` was met in (ERR-4): one
+    of `"evaluate"`, `"start"`, and `"stop"`.
+
+    hgraph captures a failure of the start or the stop of a child that
+    the evaluation of what it captures starts or stops, a branch of a
+    `switch_` that is selected or left, as it captures a failure of an
+    evaluation. The node's `start` and `stop` are the target's functions
+    `_start_name` and `_stop_name`, which no name of a program is
+    written as, and the first frame of the traceback is the function
+    hgraph called.
+    """
+    for line in failure.error_msg.splitlines():
+        frame = _FRAME.match(line)
+        if frame is not None:
+            called = frame.group(1)
+            if called.startswith("_start_"):
+                return "start"
+            if called.startswith("_stop_"):
+                return "stop"
+            return "evaluate"
+    return "evaluate"
+
 
 def error_of(failure, evaluation_time):
     """The `error` a capture gives for hgraph's `NodeError` `failure`,
@@ -223,17 +265,18 @@ def error_of(failure, evaluation_time):
     `HglError`). "On first graph failure, attach original node identity,
     phase, and evaluation time; propagation/capture preserve them": an
     error with no context of its own is given the failing node's, in
-    the phase hgraph captures, evaluation. Any other failure is an error
+    the phase it was met in (`_phase_of`). Any other failure is an error
     of the traceback's last line, with no code.
     """
     lines = failure.error_msg.rstrip().splitlines()
     written = next((line for line in reversed(lines) if line.startswith(_NOTE)), None)
     if written is None:
-        return Error(lines[-1] if lines else "", None, ErrorContext(failure.label, "evaluate", evaluation_time))
+        context = ErrorContext(failure.label, _phase_of(failure), evaluation_time)
+        return Error(lines[-1] if lines else "", None, context)
     written = _json.loads(written[len(_NOTE):])
     context = written.get("context")
     if context is None:
-        context = ErrorContext(failure.label, "evaluate", evaluation_time)
+        context = ErrorContext(failure.label, _phase_of(failure), evaluation_time)
     else:
         node, phase, at = context
         context = ErrorContext(node, phase, _datetime.datetime.fromisoformat(at))
@@ -248,6 +291,28 @@ def captured_error(failure: _TS[_NodeError], _clock: _EvaluationClock = None) ->
     but unmodified": hgraph's stream of the child's failures, each made
     an `error`."""
     return error_of(failure.value, _clock.evaluation_time)
+
+
+@_sink_node
+def _lifecycle_escapes(failure: _TS[_NodeError], _clock: _EvaluationClock = None):
+    """ERR-8: "Start/stop failures escape, including lifecycle work
+    triggered during evaluation". hgraph's `try_except` captures the
+    failure of a `start` or a `stop` it meets while it evaluates the
+    child: it is raised again here, with its error and the context of
+    its first failure, which says its phase. A capture around this one
+    meets the failure again, as this node's, and its context says the
+    phase again: each boundary lets it out."""
+    error = error_of(failure.value, _clock.evaluation_time)
+    if error.context.phase != "evaluate":
+        raise HglError(error.message, code=error.code, context=error.context)
+
+
+def captured(attempt):
+    """A capture: `attempt`, what hgraph's `try_except` gives, with what
+    lets the failures of the child's `start` and `stop` out of it
+    (`_lifecycle_escapes`) wired beside it (ERR-7, ERR-8)."""
+    _lifecycle_escapes(attempt.exception)
+    return attempt
 
 
 class Propagated(Exception):
@@ -297,6 +362,21 @@ def succeeded(result):
     if type(result) is Ok:
         return result.value
     raise HglError(result.error.message, code=result.error.code, context=result.error.context)
+
+
+@_compute_node
+def lifted_is_ok(value: _TS[Result]) -> _TS[bool]:
+    """ERR-3: "In composition a test of a connection is an ordinary
+    lifted call (FN-6): it gives a connection of `bool` and no fact":
+    `is_ok` of each result `value` publishes."""
+    return type(value.value) is Ok
+
+
+@_compute_node
+def lifted_is_err(value: _TS[Result]) -> _TS[bool]:
+    """`is_err` lifted over a connection of `result`, as `lifted_is_ok`
+    is (ERR-3, FN-6)."""
+    return type(value.value) is Err
 
 
 def member(enum, value):
