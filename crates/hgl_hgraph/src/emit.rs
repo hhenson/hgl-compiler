@@ -9372,7 +9372,7 @@ fn canonical_constant(constant: &Constant) -> Option<String> {
 /// `ty` in brackets: `item` for a list and a tuple, by position, and
 /// `entry` for a dictionary, by key. `None` for a type brackets do not
 /// read.
-fn element_read(ty: &Type) -> Option<&'static str> {
+pub(super) fn element_read(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::List { .. } | Type::Tuple(_) => Some("item"),
         Type::Dict { .. } => Some("entry"),
@@ -9383,7 +9383,7 @@ fn element_read(ty: &Type) -> Option<&'static str> {
 /// The field at `member` among those a struct has, for a value of the
 /// type `ty`. `None` where the type is no struct: a native type has
 /// properties, and a delta its own.
-fn field_of<'p>(program: &'p Program, ty: &Type, member: usize) -> Option<&'p Member> {
+pub(super) fn field_of<'p>(program: &'p Program, ty: &Type, member: usize) -> Option<&'p Member> {
     let Type::Named {
         module,
         declaration,
@@ -9426,7 +9426,7 @@ fn is_null(value: &Expr) -> bool {
 /// hgraph keeps as it is: a list, a tuple or a dictionary, nullable or
 /// not. hgraph makes a value of its own of a node's configuration, and
 /// has none for some of what one of these may hold, a set's delta say.
-fn held(ty: &Type) -> bool {
+pub(super) fn held(ty: &Type) -> bool {
     match ty {
         Type::Nullable(inner) => held(inner),
         Type::List { .. } | Type::Tuple(_) | Type::Dict { .. } => true,
@@ -9733,7 +9733,7 @@ fn may_hold(program: &Program, holder: &Type, given: &Type) -> bool {
 /// True where another struct of the program inherits from the struct
 /// `declaration` of `module`: a value of that type may be of the other
 /// struct, with fields this one has not.
-fn inherited(program: &Program, module: usize, declaration: usize) -> bool {
+pub(super) fn inherited(program: &Program, module: usize, declaration: usize) -> bool {
     program.modules.iter().any(|module_of| {
         module_of.details.iter().any(|detail| {
             matches!(detail, Detail::Struct(other) if other.parents.iter().any(|parent| {
@@ -9745,14 +9745,14 @@ fn inherited(program: &Program, module: usize, declaration: usize) -> bool {
 }
 
 /// True for a type written `T?` (TYPE-14).
-fn is_nullable(ty: &Type) -> bool {
+pub(super) fn is_nullable(ty: &Type) -> bool {
     matches!(ty, Type::Nullable(_))
 }
 
 /// True for a concrete struct with no field, `struct Empty {}`, which
 /// this target writes as a temporal `TS` of its class
 /// (`Emitter::struct_annotation`).
-fn empty_struct(program: &Program, ty: &Type) -> bool {
+pub(super) fn empty_struct(program: &Program, ty: &Type) -> bool {
     let Type::Named {
         module,
         declaration,
@@ -9772,7 +9772,7 @@ fn empty_struct(program: &Program, ty: &Type) -> bool {
 /// which `Emitter::delta` makes a delta of and a read of the delta's
 /// field reads.
 #[derive(Clone, Copy)]
-enum DeltaOf<'t> {
+pub(super) enum DeltaOf<'t> {
     /// A nullable's: `value`, null for a published null.
     Nullable,
     /// A struct's, of this struct type: a property for each field.
@@ -9789,7 +9789,7 @@ enum DeltaOf<'t> {
 impl<'t> DeltaOf<'t> {
     /// What `ty` is the delta of. `None` for a type that is no
     /// `delta<T>` of these.
-    fn of(ty: &'t Type) -> Option<DeltaOf<'t>> {
+    pub(super) fn of(ty: &'t Type) -> Option<DeltaOf<'t>> {
         let Type::Delta(of) = ty else {
             return None;
         };
@@ -9820,13 +9820,13 @@ impl<'t> DeltaOf<'t> {
 /// `Function::publishes_null`, which asks whether it is a nullable's
 /// `delta<T?>`: the two part at an `atomic<T?>`, whose delta is the
 /// `T?` a whole value has, and which this calls a delta.
-fn whole_value(ty: &Type, value: &Expr) -> bool {
+pub(super) fn whole_value(ty: &Type, value: &Expr) -> bool {
     value.ty == *ty || value.ty != Type::delta(ty.clone())
 }
 
 /// True for a type hgraph holds as one value under `TS[...]`, so that a
 /// tick of it is the whole value: a scalar, an enum, and a nullable one.
-fn publishes_whole(ty: &Type) -> bool {
+pub(super) fn publishes_whole(ty: &Type) -> bool {
     match ty {
         Type::Nullable(inner) => publishes_whole(inner),
         Type::Named {
@@ -9841,7 +9841,7 @@ fn publishes_whole(ty: &Type) -> bool {
 /// `ty`'s generic arguments given (TYPE-4: a `Box<i64>`'s `value: T`
 /// is an `i64`), a parent's first. `None` where `ty` is no struct of
 /// the program.
-fn fields_of<'p>(program: &'p Program, ty: &Type) -> Option<Vec<(&'p Member, Type)>> {
+pub(super) fn fields_of<'p>(program: &'p Program, ty: &Type) -> Option<Vec<(&'p Member, Type)>> {
     let Type::Named {
         module,
         declaration,
@@ -9871,7 +9871,7 @@ fn endpoint_name(endpoint: &Local) -> String {
 /// What a value of `ty` holds, with the `atomic` taken off: TYPE-9's
 /// `atomic<V>` holds the whole V, whose fields and parts are V's. Any
 /// other type is itself.
-fn payload_of(ty: &Type) -> &Type {
+pub(super) fn payload_of(ty: &Type) -> &Type {
     match ty {
         Type::Atomic(payload) => payload,
         other => other,
@@ -9881,14 +9881,14 @@ fn payload_of(ty: &Type) -> &Type {
 /// True for a type hgraph holds as one value under `TS[...]` that is
 /// not nullable: a scalar or an enum. It looks at the top of the type
 /// only.
-fn whole_scalar(ty: &Type) -> bool {
+pub(super) fn whole_scalar(ty: &Type) -> bool {
     publishes_whole(ty) && !is_nullable(ty)
 }
 
 /// True where a cell of a trace of `trace` holds a value of `ty` whole:
 /// the trace's cell is the `delta<T>` of a list, a set, a dictionary or
 /// a struct, a type of its own, and the value is of T (TST-5).
-fn whole_cell(trace: &Type, ty: &Type) -> bool {
+pub(super) fn whole_cell(trace: &Type, ty: &Type) -> bool {
     matches!(
         trace,
         Type::Trace { cell, .. } if matches!(
@@ -9909,7 +9909,7 @@ fn whole_cell(trace: &Type, ty: &Type) -> bool {
 
 /// True where a cell of a trace of `trace`, of a struct's delta, holds a
 /// whole value of another struct, one below it (TYPE-3).
-fn descendant_cell(trace: &Type, ty: &Type) -> bool {
+pub(super) fn descendant_cell(trace: &Type, ty: &Type) -> bool {
     let struct_type = |ty: &Type| {
         matches!(
             ty,
@@ -9930,7 +9930,7 @@ fn descendant_cell(trace: &Type, ty: &Type) -> bool {
 
 /// True for a dictionary whose entries each publish whole and are not
 /// null, which a whole value of it is published as (see `dict_replaced`).
-fn whole_dictionary(ty: &Type) -> bool {
+pub(super) fn whole_dictionary(ty: &Type) -> bool {
     matches!(ty, Type::Dict { value, .. } if publishes_whole(value))
 }
 
@@ -9952,7 +9952,7 @@ fn returns_whole(statements: &[Stmt], ty: &Type) -> bool {
 /// struct's field, a tuple's position, a list's element, a dictionary's
 /// value, or under a `?` (TYPE-9: temporalization maps each to a child).
 /// A struct's fields are those of its application (`field_types`).
-fn windows_in(program: &Program, ty: &Type) -> Vec<Type> {
+pub(super) fn windows_in(program: &Program, ty: &Type) -> Vec<Type> {
     /// How deep a type is looked into: a struct does not hold itself
     /// but through an `atomic`, which holds no window (TYPE-12).
     const DEPTH: usize = 32;
@@ -9988,14 +9988,14 @@ fn windows_in(program: &Program, ty: &Type) -> Vec<Type> {
 
 /// True for an unsized list, `list<T>` (TYPE-10: "a growing shape"),
 /// which this target writes as a `TS` of a whole tuple.
-fn growing_list(ty: &Type) -> bool {
+pub(super) fn growing_list(ty: &Type) -> bool {
     matches!(ty, Type::List { size: None, .. })
 }
 
 /// True for a temporal type whose null is published whole, as hgraph's
 /// `Null`: a `T?`, and an `atomic<T?>` (TYPE-9: "`atomic<V>` stops
 /// expansion at a complete ordinary V").
-fn publishes_whole_null(ty: &Type) -> bool {
+pub(super) fn publishes_whole_null(ty: &Type) -> bool {
     match ty {
         Type::Atomic(payload) => is_nullable(payload),
         other => is_nullable(other),
