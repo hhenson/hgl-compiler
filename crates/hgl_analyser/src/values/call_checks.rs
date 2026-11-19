@@ -6,8 +6,9 @@
 
 use hgl_diagnostics::{Category, Location};
 
+use super::arguments::Takes;
 use super::evals::holds_trace;
-use super::{Selected, Takes, Typer, placed, whole};
+use super::{Selected, Typer, placed, whole};
 use crate::declared::substitute_within;
 use crate::hir::{Expr, ExprKind, Form, LocalId, Value, ValueCategory};
 use crate::program::{LocalKind, Role};

@@ -8,7 +8,8 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
-use super::{Inferred, Places, Slot, Takes, Typer, infer, mentions, not_null, open, placed};
+use super::arguments::{Slot, Takes};
+use super::{Inferred, Places, Typer, infer, mentions, not_null, open, placed};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Callee, EndpointOperation, ExprKind, Form, Hook};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Role};
