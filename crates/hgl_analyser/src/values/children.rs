@@ -129,7 +129,11 @@ impl Typer<'_> {
     /// runs.
     fn steps_of(&self, value: &Expr) -> Option<(LocalId, Location, Option<Vec<Step>>)> {
         match &value.kind {
-            ExprKind::Local(local) if self.is_temporal_input(*local) => {
+            // A `T?` is no collection, though a test against null has
+            // refined the read to its T (ERR-12): it publishes whole.
+            ExprKind::Local(local)
+                if self.is_temporal_input(*local) && collection(&self.locals[*local].ty) =>
+            {
                 Some((*local, value.at, Some(Vec::new())))
             }
             ExprKind::Field { base, member }
