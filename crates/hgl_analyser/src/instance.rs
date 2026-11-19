@@ -31,7 +31,7 @@
 use hgl_diagnostics::Location;
 
 use crate::declared::substitute_within;
-use crate::hir::{Answer, Body, Callee, Expr, ExprKind, Value, walk_statements_mut};
+use crate::hir::{Answer, Body, Callee, Expr, ExprKind, walk_statements_mut};
 use crate::program::Program;
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Signature, Type};
 
@@ -122,8 +122,6 @@ impl Program {
     /// that reads it: `None` for one whose value is not held.
     fn constant(&self, constant: &Constant, ty: &Type) -> Option<ExprKind> {
         match &constant.value {
-            ConstantValue::Int(value) => Some(ExprKind::Literal(Value::Int(*value))),
-            ConstantValue::Duration(value) => Some(ExprKind::Literal(Value::Duration(*value))),
             // TYPE-7: a member is known by its name, and the enum is
             // the parameter's type.
             ConstantValue::Member(name) => {
@@ -149,10 +147,8 @@ impl Program {
                     member,
                 })
             }
-            ConstantValue::Unbounded
-            | ConstantValue::Parameter { .. }
-            | ConstantValue::Other(_)
-            | ConstantValue::Unevaluated => None,
+            // A literal's value: an integer, a float, a string.
+            value => value.literal().map(ExprKind::Literal),
         }
     }
 }

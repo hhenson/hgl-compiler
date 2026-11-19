@@ -361,98 +361,69 @@ pub enum Argument {
 /// generic argument.
 #[derive(Debug, Clone)]
 pub struct Constant {
-    /// The expression as written: each token as it stands, and one
-    /// space wherever the source has whitespace or a comment between
-    /// two. `N + 1`.
+    /// The expression as written, for messages: each token as it
+    /// stands, and one space wherever the source has whitespace or a
+    /// comment between two. `N + 1`. Nothing compares it: two constants
+    /// are compared by `value`.
     pub text: String,
     /// What it comes to.
     pub value: ConstantValue,
 }
 
-// Two constants are the same when they come to the same value. One
-// whose value this pass does not hold, a literal of another kind or an
-// expression not evaluated yet, is compared as it is written, token for
-// token: `true` is not `false`, though both are "a bool", and
-// `limit( 1 )` is `limit(1)`.
+// Two constants are the same when their values are known to be equal
+// (`ConstantValue::same`). One whose value is not known is the same as
+// nothing, itself included: a type that holds one is no type another
+// is known to be. A pass that asks whether two types may differ, and
+// not whether they are known to be one, asks `same` itself.
 impl PartialEq for Constant {
     fn eq(&self, other: &Constant) -> bool {
-        match (&self.value, &other.value) {
-            (ConstantValue::Unevaluated, ConstantValue::Unevaluated)
-            | (ConstantValue::Other(_), ConstantValue::Other(_)) => {
-                unspaced(&self.text) == unspaced(&other.text)
-            }
-            (left, right) => left == right,
-        }
+        self.value.same(&other.value) == Some(true)
     }
-}
-
-impl Constant {
-    /// The constant's text without the spaces between its tokens: what
-    /// two constants whose value is not held here are compared by. A
-    /// stage after the analyser that needs one text for each such
-    /// constant uses this, and not `text`.
-    pub fn unspaced(&self) -> String {
-        unspaced(&self.text)
-    }
-}
-
-/// A constant's text without the spaces between its tokens. The spaces
-/// inside a string literal are the literal's own, and are kept.
-fn unspaced(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    // `chars().next()` is the first character, or `None` at the end.
-    while let Some(first) = rest.chars().next() {
-        if first != '"' {
-            if first != ' ' {
-                out.push(first);
-            }
-            rest = &rest[first.len_utf8()..];
-            continue;
-        }
-        // A string literal: a text block between `"""` and `"""`
-        // (LEX-25), or a string up to the next `"` that no backslash
-        // precedes (LEX-2). It is copied whole.
-        let length = if let Some(block) = rest.strip_prefix("\"\"\"") {
-            block.find("\"\"\"").map_or(rest.len(), |end| end + 6)
-        } else {
-            let mut escaped = false;
-            let mut end = rest.len();
-            for (index, character) in rest.char_indices().skip(1) {
-                match character {
-                    _ if escaped => escaped = false,
-                    '\\' => escaped = true,
-                    '"' => {
-                        end = index + 1;
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            end
-        };
-        out.push_str(&rest[..length]);
-        rest = &rest[length..];
-    }
-    out
 }
 
 impl Eq for Constant {}
 
-/// What a constant inside a type comes to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What a compile-time constant comes to (GEN-8, UNIT-13): a value of
+/// the type its place gives it, held as that value and not as it is
+/// written. `1.0` and `1.00`, `"\u{61}"` and `"a"`, `60s` and `1m`,
+/// `-1` and `-(1)`, `.slow` and `Mode.slow` are each one value.
+///
+/// `crate::constant` reads one from source, given the type its place
+/// expects (EXPR-5: an integer literal where an `f64` is expected is
+/// that `f64`), and compares two ([`ConstantValue::same`]).
+#[derive(Debug, Clone)]
 pub enum ConstantValue {
-    /// An integer.
+    /// An `i64`.
     Int(i64),
-    /// A duration, in microseconds.
+    /// An `f64`. Never a NaN: a constant that comes to one is
+    /// [`ConstantValue::Unevaluated`], since a NaN is equal to nothing,
+    /// itself included (NUM-5), and so names no one type.
+    Float(f64),
+    /// A `bool`.
+    Bool(bool),
+    /// A `str`: its characters, the escapes read (LEX-2).
+    Str(String),
+    /// `null`, of a nullable type (TYPE-14).
+    Null,
+    /// A `duration`, in microseconds.
     Duration(i64),
+    /// A `tenor` (TYPE-17): its counts, `1Y` and `12M` alike.
+    Tenor(crate::hir::Tenor),
+    /// A date, a time, an instant or a zone (TYPE-2): the parts its
+    /// literal writes. Which type it is, the parts say (`hir::Temporal`).
+    Temporal(crate::hir::Temporal),
+    /// A member of an enum, by its name. The enum is the type of the
+    /// place the constant is given to: a member of another is no value
+    /// there, and is rejected before it is held. A member is one however
+    /// it is written (TYPE-7): `.nan`, `Zero.nan`, `(Zero.nan)`,
+    /// `Zero("nan")` and `Zero(2)` may all come to `nan`.
+    Member(String),
+    /// A `list<T>`, its elements in order.
+    List(Vec<ConstantValue>),
+    /// A `tuple<...>`, its elements in order.
+    Tuple(Vec<ConstantValue>),
     /// `unbounded`, the size sentinel of a list (TYPE-10).
     Unbounded,
-    /// A member of an enum, by its name. The enum is the type of the
-    /// generic value parameter the constant is given to. An enum
-    /// member is one however it is written (TYPE-7): `.nan`,
-    /// `Zero.nan`, `(Zero.nan)` and `Zero("nan")` all come to `nan`.
-    Member(String),
     /// A generic value parameter of the declaration it is written in:
     /// the `N` of `list<f64, N>`.
     Parameter {
@@ -461,13 +432,45 @@ pub enum ConstantValue {
         /// Where it is declared.
         at: Location,
     },
-    /// A constant of another kind, named for messages: `a float`. Its
-    /// value is not held here; the constant's text is.
-    Other(&'static str),
-    /// Not evaluated by this pass: an expression that calls a function
-    /// or reads a name. The pass that evaluates constants in full reads
-    /// it again.
+    /// A constant of a module (UNIT-13) whose value this compiler does
+    /// not work out: one its expression computes by calling a `const
+    /// fn`, or one at the end of a chain of constants longer than is
+    /// followed. It is the same as itself, and not known beside any
+    /// other.
+    Named {
+        /// The position of its module in `Program::modules`.
+        module: usize,
+        /// Its position in that module's declarations.
+        declaration: usize,
+    },
+    /// A member of the enum its place is, constructed from what names a
+    /// generic value parameter: `Side(N)` (TYPE-7). Which member it is
+    /// is known once the parameter is given a value.
+    Constructed(Box<ConstantValue>),
+    /// A symbol over one operand that names a generic value parameter:
+    /// `-N`. What it comes to is known once the parameter is given a
+    /// value, and is worked out then.
+    Unary(crate::hir::UnaryOperator, Box<ConstantValue>),
+    /// A symbol over two operands, one of which names a generic value
+    /// parameter: `N + 1`.
+    Binary(
+        crate::hir::BinaryOperator,
+        Box<ConstantValue>,
+        Box<ConstantValue>,
+    ),
+    /// Not valued: a constant whose value this compiler does not work
+    /// out (an operation that overflows, a date moved by a tenor), or
+    /// what is no constant at all. It is equal to nothing and unequal to
+    /// nothing (`same` gives `None`), so no type that holds one is known
+    /// to be another type.
     Unevaluated,
+    /// Not known, and nothing more to be said of it: a constant whose
+    /// reading has been reported (ERR-9), or one nothing has said
+    /// anything of yet, in an output a call requests in part. As
+    /// `Type::Unknown` is, it is taken to agree with every constant where
+    /// a type is matched (`declared::agree`), so that nothing is reported
+    /// twice; `same` gives `None` for it.
+    Unknown,
 }
 
 impl fmt::Display for Constant {
@@ -818,27 +821,5 @@ impl fmt::Display for GenericParameter {
             GenericKind::Value(Type::Unknown) => write!(f, "const {}", self.name),
             GenericKind::Value(ty) => write!(f, "const {}: {ty}", self.name),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::unspaced;
-
-    /// The spaces between tokens are dropped; a string literal is kept
-    /// whole, escapes and all (LEX-2), and so is a text block (LEX-25).
-    #[test]
-    fn unspaced_keeps_string_literals_whole() {
-        assert_eq!(unspaced("limit( 1 ) + N"), "limit(1)+N");
-        assert_eq!(unspaced("\"bid  ask\""), "\"bid  ask\"");
-        assert_eq!(unspaced("f( \"a \\\" b\" , 2 )"), "f(\"a \\\" b\",2)");
-        assert_eq!(
-            unspaced("f( \"\"\"a \" b\"\"\" , 2 )"),
-            "f(\"\"\"a \" b\"\"\",2)"
-        );
-        // A string the lexer left unclosed has been reported; what is
-        // there is kept.
-        assert_eq!(unspaced("f( \"a b"), "f(\"a b");
-        assert_eq!(unspaced("π + \"é é\""), "π+\"é é\"");
     }
 }

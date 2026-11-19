@@ -29,17 +29,15 @@
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
-use hgl_lexer::literal::{
-    decode_duration, decode_float, decode_integer, decode_string, decode_temporal, decode_tenor,
-};
+use hgl_lexer::literal::{decode_integer, decode_string};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
+use crate::constant::{Fault, Scope, Typed};
 use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
-    self, BinaryOperator, Body, CalendarDate, Callee, ClockTime, EndpointOperation, ErrorPart,
-    Expr, ExprKind, Form, Hook, Local, LocalId, Run, Stmt, Temporal, UnaryOperator, Value,
-    ValueCategory,
+    self, BinaryOperator, Body, Callee, EndpointOperation, ErrorPart, Expr, ExprKind, Form, Hook,
+    Local, LocalId, Run, Stmt, UnaryOperator, Value, ValueCategory,
 };
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
@@ -551,12 +549,8 @@ struct Typer<'a> {
     /// the same operator's at every link.
     candidates: HashMap<(usize, usize), Vec<Candidate<'a>>>,
     /// The values of the module constants this function's constants
-    /// have named (UNIT-13).
-    constant_values: crate::read::ConstantValues,
-    /// The value each module constant comes to as a `switch` label,
-    /// once read ([`Typer::constant_label`]): a constant named twice is
-    /// read once.
-    constant_labels: std::cell::RefCell<HashMap<(usize, usize), Option<Label>>>,
+    /// have named (UNIT-13): a constant named twice is read once.
+    constants: crate::constant::Constants,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -622,8 +616,7 @@ impl<'a> Typer<'a> {
             requiring: 0,
             identities: HashMap::new(),
             candidates: HashMap::new(),
-            constant_values: Default::default(),
-            constant_labels: Default::default(),
+            constants: Default::default(),
             diagnostics,
         };
         for parameter in &signature.parameters {
@@ -672,70 +665,33 @@ impl<'a> Typer<'a> {
             {
                 continue;
             }
-            // The type as it is written: a type, or the name and the
-            // generic arguments a construction writes.
-            let at = written.at.span;
-            let node = self.declaration.syntax.descendants().find(|node| {
-                let span = node.span();
-                span.start == at.start
-                    && (span == at && is_type(node.kind())
-                        || child(node, SyntaxKind::GenericArgs)
-                            .is_some_and(|list| list.span().end == at.end))
-            });
-            for (position, (struct_, arguments)) in found.iter().enumerate() {
-                let application = node.as_ref().and_then(|node| {
-                    self.applied_at(node, *struct_, occurrence_of(&found, position))
-                });
-                let (values, defaulted): (Vec<(usize, SyntaxNode)>, Vec<usize>) =
-                    match application.map(|node| child(&node, SyntaxKind::GenericArgs)) {
-                        Some(Some(list)) => (
-                            list.children()
-                                .filter(|argument| argument.kind() != SyntaxKind::Error)
-                                .enumerate()
-                                .collect(),
-                            Vec::new(),
-                        ),
-                        Some(None) => (Vec::new(), (0..arguments.len()).collect()),
-                        None => (Vec::new(), Vec::new()),
-                    };
-                let given = Supplied {
-                    written: &values,
-                    defaulted: &defaulted,
-                };
-                self.requires_met(written.at, *struct_, arguments, &given);
+            // Each argument is held as the value it is (`crate::constant`),
+            // however the type writes it, or as the default it takes.
+            for (struct_, arguments) in &found {
+                self.requires_met(written.at, *struct_, arguments);
             }
         }
     }
 
-    /// Where the type written at `node` applies the struct `struct_`:
-    /// the `occurrence`th such place, in the order written. It is a
-    /// type that names the struct, or `node` itself where that is a
-    /// construction of it.
-    fn applied_at(
-        &self,
-        node: &SyntaxNode,
-        (struct_module, struct_declaration): (usize, usize),
-        occurrence: usize,
-    ) -> Option<SyntaxNode> {
-        node.descendants()
-            .filter(|candidate| {
-                (candidate == node || candidate.kind() == SyntaxKind::NamedType)
-                    && name_token(candidate)
-                        .and_then(|name| self.bindings.get(&(self.file, name.span().start)))
-                        .is_some_and(|binding| {
-                            matches!(
-                                binding,
-                                Binding::Declarations { module, declarations }
-                                    if *module == struct_module
-                                        && declarations.contains(&struct_declaration)
-                            )
-                        })
-            })
-            .nth(occurrence)
-    }
-
     fn at(&self, node: &SyntaxNode) -> Location {
         Location::new(self.file, node.span())
+    }
+
+    /// The expression of the declaration being read that `expression`
+    /// was read from, as written: the outermost node at its place.
+    fn syntax_of(&self, expression: &Expr) -> Option<SyntaxNode> {
+        self.node_at(expression.at)
+    }
+
+    /// The outermost node of the declaration being read written at `at`.
+    fn node_at(&self, at: Location) -> Option<SyntaxNode> {
+        if at.file != self.file {
+            return None;
+        }
+        self.declaration
+            .syntax
+            .descendants()
+            .find(|node| node.span() == at.span)
     }
 
     /// Adds a local. `assigned` says whether it has a value from the
@@ -2986,6 +2942,9 @@ impl<'a> Typer<'a> {
         let ty = ty.clone();
         let mut given = vec![false; properties.len()];
         let mut arguments = Vec::new();
+        // Each property given, with its value as written and its type,
+        // for the constants among its entries.
+        let mut written = Vec::new();
         for (name, value) in self.call_arguments(&list) {
             let position = name.as_ref().and_then(|name| {
                 properties
@@ -3031,10 +2990,49 @@ impl<'a> Typer<'a> {
                 parameter: Some(position),
                 value: self.fit(read, expected, &place),
             });
+            written.push((position, value, expected.clone()));
         }
-        self.delta_overlap(&ty, &arguments);
-        self.delta_bounds(&ty, &arguments);
+        self.delta_overlap(&ty, &written);
+        self.delta_bounds(&ty, &written);
         (ExprKind::Delta { arguments }, ty)
+    }
+
+    /// The entries of the properties `written` gives at `position` that
+    /// are written out, `[a, b]` or `[k: v]`: each member, or each key,
+    /// with what it is as a constant of the property's element or key
+    /// type (`crate::constant`). One that is no constant is known only
+    /// as the program runs, and is left out.
+    fn delta_entries(
+        &self,
+        written: &[(usize, SyntaxNode, Type)],
+        position: usize,
+    ) -> Vec<(Location, ConstantValue)> {
+        let mut entries = Vec::new();
+        for (_, value, ty) in written.iter().filter(|(at, _, _)| *at == position) {
+            let element = match ty {
+                Type::Set(element) | Type::List { element, .. } => element.as_ref(),
+                Type::Dict { key, .. } => key.as_ref(),
+                _ => continue,
+            };
+            let value = ungrouped(value.clone());
+            if value.kind() != SyntaxKind::SequenceExpr {
+                continue;
+            }
+            for entry in value.children() {
+                // `key: value`: the key is the first child.
+                let entry = match entry.kind() {
+                    SyntaxKind::SequencePair => match entry.children().next() {
+                        Some(key) => key,
+                        None => continue,
+                    },
+                    _ => entry,
+                };
+                if let Ok(constant) = self.read_constant(&entry, Some(element)) {
+                    entries.push((self.at(&entry), constant));
+                }
+            }
+        }
+        entries
     }
 
     /// TYPE-16: "A `list<V, N>` keeps its bounds: a constant entry past
@@ -3042,7 +3040,7 @@ impl<'a> Typer<'a> {
     /// "Negative/out-of-fixed-range index": a constant position of any
     /// list's delta, `updated` or `removed`, that is negative rejects
     /// too. A position known only as the program runs is checked then.
-    fn delta_bounds(&mut self, ty: &Type, arguments: &[hir::Argument]) {
+    fn delta_bounds(&mut self, ty: &Type, written: &[(usize, SyntaxNode, Type)]) {
         let Type::Delta(of) = ty else {
             return;
         };
@@ -3053,27 +3051,15 @@ impl<'a> Typer<'a> {
             Some(ConstantValue::Int(size)) => Some(*size),
             _ => None,
         };
-        let constant = |module: usize, declaration: usize| match crate::read::constant_value(
-            self.program,
-            module,
-            declaration,
-            &self.constant_values,
-        ) {
-            ConstantValue::Int(value) => Index::Known(value),
-            _ => Index::Unevaluated,
-        };
+        // A list's `updated` is keyed by position, and its `removed`
+        // holds positions.
         let mut outside = Vec::new();
-        for argument in arguments {
-            let positions: Vec<&Expr> = match (argument.parameter, &argument.value.kind) {
-                (Some(0), ExprKind::Pairs(pairs)) => pairs.iter().map(|(key, _)| key).collect(),
-                (Some(1), ExprKind::Sequence(items)) => items.iter().collect(),
-                _ => continue,
-            };
-            for position in positions {
-                if let Index::Known(value) = constant_index(position, &constant)
+        for position in [0, 1] {
+            for (at, value) in self.delta_entries(written, position) {
+                if let ConstantValue::Int(value) = value
                     && (value < 0 || size.is_some_and(|size| value >= size))
                 {
-                    outside.push((position.at, value));
+                    outside.push((at, value));
                 }
             }
         }
@@ -3100,48 +3086,28 @@ impl<'a> Typer<'a> {
     /// second. What is compared is each entry written as a literal; one
     /// that is not is known only as the graph runs, which "makes no
     /// check". The later of the two entries is reported.
-    fn delta_overlap(&mut self, ty: &Type, arguments: &[hir::Argument]) {
+    fn delta_overlap(&mut self, ty: &Type, written: &[(usize, SyntaxNode, Type)]) {
         let Type::Delta(of) = ty else {
             return;
         };
         if !matches!(**of, Type::Set(_) | Type::Dict { .. } | Type::List { .. }) {
             return;
         }
-        // Each entry of the property at `index`: a set's members, or a
-        // dictionary's keys.
-        let entries = |index: usize| -> Vec<&Expr> {
-            arguments
-                .iter()
-                .filter(|argument| argument.parameter == Some(index))
-                .flat_map(|argument| match &argument.value.kind {
-                    ExprKind::Sequence(items) => items.iter().collect(),
-                    ExprKind::Pairs(pairs) => pairs.iter().map(|(key, _)| key).collect(),
-                    _ => Vec::new(),
-                })
-                .collect()
-        };
-        // The constant a member, a key or a position is, by its value,
-        // as a `switch` label's is resolved (`label_value`): `-1`, an
-        // enum's member, a module's constant, and an `i64` widened to an
-        // `f64` key as the `f64` of the same number.
-        let removed: Vec<(&Expr, Option<Label>)> = entries(1)
-            .into_iter()
-            .map(|gone| (gone, self.label_value(gone)))
-            .collect();
-        let changed: Vec<(&Expr, Label)> = entries(0)
-            .into_iter()
-            .filter_map(|changed| Some((changed, self.label_value(changed)?)))
-            .collect();
+        // The constant a member, a key or a position is, by its value
+        // (`ConstantValue::same`): `-1`, an enum's member however it is
+        // written, a module's constant, `60s` and `1m` alike.
+        let removed = self.delta_entries(written, 1);
+        let changed = self.delta_entries(written, 0);
         for (changed, value) in changed {
             let clash = removed
                 .iter()
-                .find(|(_, other)| other.as_ref() == Some(&value))
+                .find(|(_, other)| other.same(&value) == Some(true))
                 .map(|(gone, _)| *gone);
             if let Some(gone) = clash {
-                let later = if gone.at.span.start > changed.at.span.start {
-                    gone.at
+                let later = if gone.span.start > changed.span.start {
+                    gone
                 } else {
-                    changed.at
+                    changed
                 };
                 self.diagnostics.emit(
                     error(
@@ -3639,32 +3605,10 @@ impl<'a> Typer<'a> {
         let Some(token) = tokens(node).next() else {
             return (ExprKind::Unread, Type::Unknown);
         };
-        let text = token.text();
         // A literal the lexer or `forms` has reported has no value
-        // here, and no type: it is reported once (ERR-9).
+        // here, and no type: it is reported once (ERR-9). Its value is
+        // read as every constant's is (`crate::constant::literal`).
         let read = match token.kind() {
-            SyntaxKind::Int => decode_integer(text)
-                .ok()
-                .and_then(|value| i64::try_from(value).ok())
-                .map(|value| (Value::Int(value), Scalar::I64)),
-            SyntaxKind::Float => decode_float(text)
-                .ok()
-                .map(|value| (Value::Float(value), Scalar::F64)),
-            SyntaxKind::Str => decode_string(text)
-                .ok()
-                .map(|value| (Value::Str(value), Scalar::Str)),
-            SyntaxKind::KwTrue => Some((Value::Bool(true), Scalar::Bool)),
-            SyntaxKind::KwFalse => Some((Value::Bool(false), Scalar::Bool)),
-            SyntaxKind::Duration => decode_duration(text)
-                .ok()
-                .map(|value| (Value::Duration(value), Scalar::Duration)),
-            // LEX-28, TYPE-17: a tenor literal is a `tenor`.
-            SyntaxKind::Tenor => decode_tenor(text)
-                .ok()
-                .map(|value| (Value::Tenor(value), Scalar::Tenor)),
-            SyntaxKind::Temporal => {
-                temporal(text).map(|(parts, scalar)| (Value::Temporal(parts), scalar))
-            }
             SyntaxKind::KwNull => {
                 return match expected {
                     // TYPE-14: "`T?` denotes an ordinary value that is
@@ -3712,7 +3656,7 @@ impl<'a> Typer<'a> {
                     }
                 };
             }
-            _ => None,
+            _ => crate::constant::literal(&token),
         };
         match read {
             Some((value, scalar)) => (ExprKind::Literal(value), Type::Scalar(scalar)),
@@ -5222,19 +5166,23 @@ impl<'a> Typer<'a> {
             if !selecting.contains(name.as_str()) {
                 continue;
             }
-            given.constant = Some(self.option_constant(&given.node));
-            if !self.is_compile_time(&given.node) {
+            // Its type is the candidate's to say (GEN-6): it is held to
+            // that once the candidate is (`instance`).
+            let read = self.typed_in(self.file, &given.node, None);
+            let value = read.clone().map(|read| read.value);
+            if let Some(why) = Self::not_constant(&value) {
                 self.diagnostics.emit(error(
                     Category::Type,
                     codes::GENERIC_ARGUMENT_CONSTANT,
                     self.at(&given.node),
                     format!(
                         "`{name}` is a generic value parameter, and this is no compile-time \
-                         constant: it is known only when the program runs"
+                         constant: {why}"
                     ),
                     "GEN-8",
                 ));
             }
+            given.constant = Some(read);
         }
     }
 
@@ -7284,9 +7232,7 @@ impl<'a> Typer<'a> {
         }
         // "Keys strictly increase": of the keys that are constants read
         // here, durations.
-        if let ConstantValue::Duration(now) =
-            crate::constant::fold(node, &|_| ConstantValue::Unevaluated)
-        {
+        if let Ok(ConstantValue::Duration(now)) = self.read_constant(node, None) {
             if last.is_some_and(|before| now <= before) {
                 self.diagnostics.emit(error(
                     Category::Type,
@@ -7842,7 +7788,7 @@ impl<'a> Typer<'a> {
             // generic parameters this pass does not resolve.
             if generics.is_empty() && self.diagnostics.len() == reported {
                 let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
-                self.requires_met(at, (module, declaration), &[], &Supplied::NOTHING);
+                self.requires_met(at, (module, declaration), &[]);
             }
             let requirements = if generics.is_empty() {
                 self.answers(module, declaration, &[])
@@ -7914,10 +7860,7 @@ impl<'a> Typer<'a> {
             values: &named,
             defaults: generics
                 .iter()
-                .map(|generic| {
-                    generic_default(&callee.syntax, generic)
-                        .map(|default| default_constant(&default, generic))
-                })
+                .map(|generic| self.default_constant(callee, generic))
                 .collect(),
         };
         let Inferred {
@@ -7991,13 +7934,7 @@ impl<'a> Typer<'a> {
         // Not where something else was reported of the call (ERR-9).
         if judged && unresolved.is_empty() {
             let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
-            let mut written = written_generics(list);
-            written.extend(named.iter().cloned());
-            let given = Supplied {
-                written: &written,
-                defaulted: &defaulted,
-            };
-            self.requires_met(at, (module, declaration), &resolved, &given);
+            self.requires_met(at, (module, declaration), &resolved);
         }
         let requirements = self.answers(module, declaration, &resolved);
         let callee = Callee::Function {
@@ -8055,20 +7992,31 @@ impl<'a> Typer<'a> {
                 self.expression(&value, Some(&Type::Unknown));
                 continue;
             }
-            if !self.is_compile_time(&value) {
+            // Read as a value of the parameter's type where that names
+            // no other parameter: one that does is held to it once that
+            // is known (`generic_values`), and its type reported there.
+            let expected = match &generics[index].kind {
+                GenericKind::Value(ty) if !names_parameter(ty) => Some(ty),
+                _ => None,
+            };
+            let read = self.read_constant(&value, expected);
+            if let Some(why) = Self::not_constant(&read) {
                 self.diagnostics.emit(error(
                     Category::Type,
                     codes::GENERIC_ARGUMENT_CONSTANT,
                     self.at(&value),
                     format!(
                         "`{}` is a generic value parameter, and this is no compile-time \
-                         constant: it is known only when the program runs",
+                         constant: {why}",
                         name.text()
                     ),
                     "GEN-8",
                 ));
             }
-            found[index] = Some(Argument::Constant(self.option_constant(&value)));
+            found[index] = Some(Argument::Constant(Constant {
+                text: constant_text(&value),
+                value: read.unwrap_or(ConstantValue::Unknown),
+            }));
             named.push((index, value));
         }
         named
@@ -8117,19 +8065,31 @@ impl<'a> Typer<'a> {
             };
             let place = format!("the generic value parameter `{}`", generics[*index].name);
             let expected = type_of(*index, found);
-            if whole(&expected) {
+            let expected = if whole(&expected) {
                 let value = self.expression(node, Some(&expected));
                 self.fit(value, &expected, &place);
-                continue;
+                expected
+            } else {
+                // Its type names a parameter nothing has said anything
+                // of: what it is given says.
+                let value = self.expression(node, Some(&Type::Unknown));
+                infer(pattern, &value.ty, generics, found);
+                let expected = type_of(*index, found);
+                self.fit(value, &expected, &place);
+                expected
+            };
+            // The constant as a value of that type (EXPR-5): `fallback:
+            // 1` is the `f64` one where `T` is an `f64`.
+            if whole(&expected) {
+                let value = self
+                    .read_constant(node, Some(&expected))
+                    .unwrap_or(ConstantValue::Unknown);
+                found[*index] = Some(Argument::Constant(Constant {
+                    text: constant_text(node),
+                    value,
+                }));
             }
-            // Its type names a parameter nothing has said anything of:
-            // what it is given says.
-            let value = self.expression(node, Some(&Type::Unknown));
-            infer(pattern, &value.ty, generics, found);
-            let expected = type_of(*index, found);
-            self.fit(value, &expected, &place);
         }
-        let program = self.program;
         for &index in defaulted {
             let generic = &generics[index];
             let GenericKind::Value(declared) = &generic.kind else {
@@ -8143,23 +8103,61 @@ impl<'a> Typer<'a> {
             // type parameter is of it for one call and not another: the
             // `2` of `<T, const fallback: T = 2>` is no `str`.
             let expected = type_of(index, found);
-            if constant_fits(program, &default, &expected) == Some(false)
-                && constant_fits(program, &default, declared) != Some(false)
-                && let Some(kind) = written(&default)
-            {
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::TYPE_MISMATCH,
-                    Location::new(self.file, callee.span()),
-                    format!(
-                        "this leaves `{}` to its default, {}, and `{}` is `{expected}` here",
-                        generic.name,
-                        kind.described(),
-                        generic.name
-                    ),
-                    "GEN-13",
-                ));
+            match self.unfit_default(declaration, &default, &expected, declared) {
+                Some(Ok(value)) => {
+                    // The default as a value of the type the call
+                    // resolves (EXPR-5): the `f64` 2 where `T` is one.
+                    found[index] = Some(Argument::Constant(Constant {
+                        text: constant_text(&default),
+                        value,
+                    }));
+                }
+                Some(Err(described)) => {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::TYPE_MISMATCH,
+                        Location::new(self.file, callee.span()),
+                        format!(
+                            "this leaves `{}` to its default, {described}, and `{}` is \
+                             `{expected}` here",
+                            generic.name, generic.name
+                        ),
+                        "GEN-13",
+                    ));
+                }
+                None => {}
             }
+        }
+    }
+
+    /// The default `default` of a generic value parameter of
+    /// `declaration`, declared of type `declared`, as a value of
+    /// `resolved`, the type a call resolves the parameter to (GEN-13):
+    /// `Ok` with it where it is one, and `Err` with what it is where it
+    /// is of another type and of the one declared. `None` where that is
+    /// not known, and where it is not of the type declared, which is
+    /// reported where it is declared.
+    fn unfit_default(
+        &self,
+        declaration: &Declaration,
+        default: &SyntaxNode,
+        resolved: &Type,
+        declared: &Type,
+    ) -> Option<Result<ConstantValue, String>> {
+        if !whole(resolved) {
+            return None;
+        }
+        let read = self
+            .typed_in(declaration.at.file, default, Some(resolved))
+            .ok()?;
+        let fits_declared = names_parameter(declared)
+            || crate::constant::fit(read.clone(), Some(declared), self.program).is_ok();
+        match crate::constant::fit(read.clone(), Some(resolved), self.program) {
+            Ok(value) => Some(Ok(value)),
+            Err(Fault::Mismatch(_)) if fits_declared => {
+                Some(Err(crate::constant::described(&read)))
+            }
+            Err(_) => None,
         }
     }
 
@@ -8222,6 +8220,30 @@ impl<'a> Typer<'a> {
                 // A parameter whose kind its signature does not settle
                 // is what the call gives it (GEN-13).
                 _ => {
+                    // GEN-8: "The value a call gives a generic value
+                    // parameter is a compile-time constant ... Any other
+                    // rejects." What it comes to has been read with the
+                    // types (`read`); one not valued is read again here
+                    // for what it is.
+                    if let Argument::Constant(Constant {
+                        value: ConstantValue::Unevaluated,
+                        ..
+                    }) = argument
+                        && let Some(node) = self.node_at(*at)
+                        && let Some(why) = Self::not_constant(&self.read_constant(&node, None))
+                    {
+                        self.diagnostics.emit(error(
+                            Category::Type,
+                            codes::GENERIC_ARGUMENT_CONSTANT,
+                            *at,
+                            format!(
+                                "`{}` is a generic value parameter, and this is no \
+                                 compile-time constant: {why}",
+                                generic.name
+                            ),
+                            "GEN-8",
+                        ));
+                    }
                     found[position] = Some(argument.clone());
                     None
                 }
@@ -8568,8 +8590,9 @@ impl<'a> Typer<'a> {
                 by_argument[generic] |= !was && found[generic].is_some();
             }
         }
-        let operator_syntax =
-            &program.modules[operator.module].declarations[operator.declaration].syntax;
+        let operator_declaration =
+            &program.modules[operator.module].declarations[operator.declaration];
+        let operator_syntax = &operator_declaration.syntax;
         // True when the call says something of the output itself: it
         // writes generic arguments, or one of the operator's takes its
         // default.
@@ -8581,7 +8604,9 @@ impl<'a> Typer<'a> {
             if found.is_none()
                 && let Some(default) = generic_default(operator_syntax, generic)
             {
-                *found = Some(Argument::Constant(default_constant(&default, generic)));
+                *found = self
+                    .default_constant(operator_declaration, generic)
+                    .map(Argument::Constant);
                 asked = true;
                 defaulted.push((index, default));
             }
@@ -8613,15 +8638,15 @@ impl<'a> Typer<'a> {
                 continue;
             };
             let resolved = placed(substitute_within(declared, &map), &own_generics);
-            if constant_fits(program, &default, &resolved) == Some(false)
-                && constant_fits(program, &default, declared) != Some(false)
+            if let Some(Err(described)) =
+                self.unfit_default(operator_declaration, &default, &resolved, declared)
             {
                 return Requested {
                     place: None,
                     among: None,
                     unfit: Some(Unfit {
                         generic: index,
-                        default,
+                        described,
                         resolved,
                     }),
                 };
@@ -8784,10 +8809,9 @@ impl<'a> Typer<'a> {
         // that is not of the type as it is declared is reported there.
         if let Some(Unfit {
             generic,
-            default,
+            described,
             resolved,
         }) = unfit
-            && let Some(kind) = self::written(&default)
         {
             let generic = &public.generics[generic];
             self.diagnostics.emit(error(
@@ -8795,10 +8819,8 @@ impl<'a> Typer<'a> {
                 codes::TYPE_MISMATCH,
                 Location::new(self.file, name.span()),
                 format!(
-                    "this leaves `{}` to its default, {}, and `{}` is `{resolved}` here",
-                    generic.name,
-                    kind.described(),
-                    generic.name
+                    "this leaves `{}` to its default, {described}, and `{}` is `{resolved}` here",
+                    generic.name, generic.name
                 ),
                 "GEN-13",
             ));
@@ -9032,57 +9054,6 @@ impl<'a> Typer<'a> {
             .then(|| asked.clone())
     }
 
-    /// The declarations the name of `node` is bound to, when it is a
-    /// lone name that names an enum.
-    fn names_enum(&self, node: &SyntaxNode) -> bool {
-        let Some((module, declarations)) = name_token(node)
-            .filter(|_| node.kind() == SyntaxKind::NameExpr)
-            .and_then(|name| self.declarations(&name))
-        else {
-            return false;
-        };
-        declarations.iter().any(|&declaration| {
-            self.program.modules[module].declarations[declaration].kind == DeclarationKind::Enum
-        })
-    }
-
-    /// `Side(1)`, as it is written (TYPE-7: "A call of the enum's name
-    /// constructs a member. It takes one argument, by position"): the
-    /// enum constructed, its module and declaration, and the value it
-    /// is given.
-    fn constructs_enum(&self, node: &SyntaxNode) -> Option<(usize, usize, SyntaxNode)> {
-        if node.kind() != SyntaxKind::CallExpr {
-            return None;
-        }
-        let callee = node
-            .children()
-            .next()
-            .filter(|callee| callee.kind() == SyntaxKind::NameExpr)?;
-        let name = name_token(&callee)?;
-        let (module, declarations) = self.declarations(&name)?;
-        let declaration = declarations.iter().copied().find(|&declaration| {
-            self.program.modules[module].declarations[declaration].kind == DeclarationKind::Enum
-        })?;
-        Some((module, declaration, one_by_position(node)?))
-    }
-
-    /// The name of the member an enum's construction from `argument`
-    /// names, where that is a constant that names one.
-    fn member_name(
-        &self,
-        module: usize,
-        declaration: usize,
-        argument: &SyntaxNode,
-    ) -> Option<String> {
-        let member = self
-            .member_constructed(module, declaration, argument)?
-            .ok()?;
-        match self.program.modules[module].details.get(declaration) {
-            Some(Detail::Enum(read)) => Some(read.members[member].name.clone()),
-            _ => None,
-        }
-    }
-
     /// The member an enum's construction from `argument` names, where
     /// that is a constant: its place among the members, `Ok`, or what
     /// the enum has none of, `Err`. `None` for a value that is no
@@ -9097,218 +9068,122 @@ impl<'a> Typer<'a> {
         declaration: usize,
         argument: &SyntaxNode,
     ) -> Option<Result<usize, String>> {
-        member_constructed(self.program, (module, declaration), argument)
-    }
-
-    /// The constant an option is given, for a candidate's condition to
-    /// compare (GEN-6). An enum member is one however it is written
-    /// (TYPE-7): `.nan`, `Zero.nan`, `alias::Zero.nan`.
-    fn option_value(&self, node: &SyntaxNode) -> Option<OptionValue> {
-        // EXPR-1: "Parentheses select grouping": `(Zero.nan)` is
-        // `Zero.nan`.
-        if node.kind() == SyntaxKind::ParenExpr {
-            return self.option_value(&node.children().next()?);
-        }
-        if node.kind() == SyntaxKind::MemberExpr
-            && node
-                .children()
-                .next()
-                .is_some_and(|base| self.names_enum(&base))
-        {
-            // The member's name is the last token: any word (LEX-9).
-            return tokens(node)
-                .last()
-                .map(|name| OptionValue::Member(name.text().to_string()));
-        }
-        // "an enum member however it is written (TYPE-7)": `Zero(1)`
-        // and `Zero("nan")` are the member they construct. One from a
-        // value that is no constant here, or that names no member, is
-        // not known.
-        if let Some((module, declaration, argument)) = self.constructs_enum(node) {
-            return self
-                .member_name(module, declaration, &argument)
-                .map(OptionValue::Member);
-        }
-        // A name among a call's generic arguments is parsed as a type
-        // is: `pick<OFF>(1)`.
-        if matches!(node.kind(), SyntaxKind::NameExpr | SyntaxKind::NamedType)
-            && let Some(value) = self.constant_option(node)
-        {
-            return Some(value);
-        }
-        constant_of(node).or_else(|| self.folded_in(self.file, node))
-    }
-
-    /// The integer or duration a constant expression written in `file`
-    /// comes to, each constant it names followed to its value (GEN-8:
-    /// "a constant expression of those"): `TWO + 1`.
-    fn folded_in(&self, file: FileId, node: &SyntaxNode) -> Option<OptionValue> {
-        constant_value(&crate::constant::fold(node, &|name| {
-            let bound =
-                name_token(name).and_then(|token| self.binding_at(file, token.span().start));
-            match bound {
-                Some(Binding::Declarations {
-                    module,
-                    declarations,
-                }) => match declarations.as_slice() {
-                    [declaration]
-                        if self.program.modules[*module].declarations[*declaration].kind
-                            == DeclarationKind::Constant =>
-                    {
-                        crate::read::constant_value(
-                            self.program,
-                            *module,
-                            *declaration,
-                            &self.constant_values,
-                        )
-                    }
-                    _ => ConstantValue::Unevaluated,
-                },
-                _ => ConstantValue::Unevaluated,
-            }
-        }))
-    }
-
-    /// The value of the constant of a module that `node` names, for a
-    /// candidate's condition to compare (UNIT-13: "a compile-time
-    /// constant where a generic value argument ... requires one"; an
-    /// option is one, GEN-6). `None` for a name that is no constant, and
-    /// for a constant whose value is not known here.
-    ///
-    /// An `i64` or a `duration` is followed to its value, as a size is.
-    /// Any other is what its expression is written as, where that is a
-    /// literal or a `.member`: the expression is in its declaration's
-    /// file, so no name in it is looked up here.
-    fn constant_option(&self, node: &SyntaxNode) -> Option<OptionValue> {
-        let name = name_token(node)?;
-        let (module, &[declaration]) = self.declarations(&name)? else {
+        let Some(Detail::Enum(read)) = self.program.modules[module].details.get(declaration) else {
             return None;
         };
-        constant_declared(self.program, (module, declaration), &self.constant_values)
+        let members = &read.members;
+        match self.read_constant(argument, None).ok()? {
+            ConstantValue::Int(given) if members.iter().all(|member| member.value.is_some()) => {
+                Some(
+                    members
+                        .iter()
+                        .position(|member| member.value == Some(given))
+                        .ok_or_else(|| format!("no member numbered {given}")),
+                )
+            }
+            ConstantValue::Str(given) => Some(
+                members
+                    .iter()
+                    .position(|member| member.name == given)
+                    .ok_or_else(|| format!("no member named `{given}`")),
+            ),
+            _ => None,
+        }
     }
 
-    /// The constant a declaration's default is, for a candidate's
-    /// condition to compare. `ty` is the type the option is declared
-    /// with.
-    ///
-    /// A default is written in its declaration's file, which may not be
-    /// the one being read, so a name in it is looked up in that file. An
-    /// enum member written in full, `Zero.ieee`, is known for one by the
-    /// option's type being an enum: a member of any other would not be
-    /// a value of it.
-    fn default_value(
+    /// What the compile-time constant `node`, written in `file`, reads
+    /// as, with nothing yet held to its place's type
+    /// (`crate::constant`). A generic value parameter of the declaration
+    /// being read is held as that parameter, of its declared type.
+    fn typed_in(
         &self,
         file: FileId,
         node: &SyntaxNode,
-        ty: Option<&Type>,
-    ) -> Option<OptionValue> {
-        if node.kind() == SyntaxKind::ParenExpr {
-            return self.default_value(file, &node.children().next()?, ty);
-        }
-        // TYPE-14: a `Zero?` is "either a T or null", and a member of
-        // `Zero` is a value of it.
-        let of_enum = match not_null(ty) {
-            Some(Type::Named {
-                module,
-                declaration,
-                ..
-            }) if self.program.modules[*module].declarations[*declaration].kind
-                == DeclarationKind::Enum =>
-            {
-                Some((*module, *declaration))
-            }
+        expected: Option<&Type>,
+    ) -> Result<Typed, Fault> {
+        // Closures: functions written in place, which may use what is in
+        // scope around them; here, `self`.
+        let binding = |file: FileId, offset: u32| self.binding_at(file, offset);
+        let parameter = |at: Location| {
+            self.signature
+                .generics
+                .iter()
+                .find(|generic| generic.at == at)
+                .and_then(|generic| match &generic.kind {
+                    GenericKind::Value(ty) => Some(ty.clone()),
+                    _ => None,
+                })
+        };
+        let scope = Scope {
+            program: self.program,
+            file,
+            binding: &binding,
+            parameter: &parameter,
+            constants: &self.constants,
+        };
+        crate::constant::typed(node, expected, &scope)
+    }
+
+    /// What the compile-time constant `node`, written in `file`, comes
+    /// to as a value of `expected`, the type its place expects (EXPR-5).
+    fn read_in(
+        &self,
+        file: FileId,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+    ) -> Result<ConstantValue, Fault> {
+        let expected = expected.filter(|expected| whole(expected));
+        self.typed_in(file, node, expected)
+            .and_then(|read| crate::constant::fit(read, expected, self.program))
+    }
+
+    /// [`Typer::read_in`], for a constant written in the file being read.
+    fn read_constant(
+        &self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+    ) -> Result<ConstantValue, Fault> {
+        self.read_in(self.file, node, expected)
+    }
+
+    /// The constant the default of `generic`, a generic value parameter
+    /// of `declaration`, comes to (GEN-2), read as a value of the
+    /// parameter's type where that is known, in the file the default is
+    /// written in. A default that is not of that type is reported where
+    /// it is declared (`signatures`).
+    fn default_constant(
+        &self,
+        declaration: &Declaration,
+        generic: &GenericParameter,
+    ) -> Option<Constant> {
+        let default = generic_default(&declaration.syntax, generic)?;
+        let file = declaration.at.file;
+        let expected = match &generic.kind {
+            GenericKind::Value(ty) if !names_parameter(ty) => Some(ty),
             _ => None,
         };
-        if of_enum.is_some() && node.kind() == SyntaxKind::MemberExpr {
-            // The member's name is the last token: any word (LEX-9).
-            return tokens(node)
-                .last()
-                .map(|name| OptionValue::Member(name.text().to_string()));
-        }
-        // `Zero(0)`, `Zero("nan")` (TYPE-7): a construction of the
-        // option's enum is the member it names. The callee is looked
-        // up in `file`, where the default is written: a call of
-        // anything else, `choose(0)`, is no constant read here.
-        if let Some((module, declaration)) = of_enum
-            && node.kind() == SyntaxKind::CallExpr
-        {
-            let callee = node
-                .children()
-                .next()
-                .filter(|callee| callee.kind() == SyntaxKind::NameExpr)?;
-            let name = name_token(&callee)?;
-            let constructs = matches!(
-                self.binding_at(file, name.span().start),
-                Some(Binding::Declarations {
-                    module: found,
-                    declarations,
-                }) if *found == module && declarations.contains(&declaration)
-            );
-            if !constructs {
-                return None;
+        let value = self
+            .read_in(file, &default, expected)
+            .unwrap_or(ConstantValue::Unknown);
+        Some(Constant {
+            text: constant_text(&default),
+            value,
+        })
+    }
+
+    /// Why the constant read as `read` is no compile-time constant this
+    /// pass has the value of, for a report: GEN-8, "The value a call
+    /// gives a generic value parameter is a compile-time constant ... Any
+    /// other rejects." `None` where it is one, or where what is wrong has
+    /// been reported.
+    fn not_constant(read: &Result<ConstantValue, Fault>) -> Option<&'static str> {
+        match read {
+            Err(Fault::NotConstant) => Some("it is known only when the program runs"),
+            Ok(value) if !crate::constant::worked_out(value) => {
+                Some("this compiler does not work out its value")
             }
-            return self
-                .member_name(module, declaration, &one_by_position(node)?)
-                .map(OptionValue::Member);
+            _ => None,
         }
-        // UNIT-13: a constant read by its name, which is looked up in
-        // `file`, where the default is written.
-        if matches!(node.kind(), SyntaxKind::NameExpr | SyntaxKind::NamedType)
-            && let Some(name) = name_token(node)
-            && let Some(Binding::Declarations {
-                module,
-                declarations,
-            }) = self.binding_at(file, name.span().start)
-            && let [declaration] = declarations.as_slice()
-            && let Some(value) =
-                constant_declared(self.program, (*module, *declaration), &self.constant_values)
-        {
-            return Some(value);
-        }
-        constant_of(node).or_else(|| self.folded_in(file, node))
-    }
-
-    /// True when an expression is a compile-time constant (GEN-8): "a
-    /// literal, an enum member however it is written (TYPE-7), `Zero.nan`
-    /// or `.nan`, a constant (UNIT-13), a generic value parameter in
-    /// scope, or a constant expression of those."
-    fn is_compile_time(&self, node: &SyntaxNode) -> bool {
-        match node.kind() {
-            SyntaxKind::Literal | SyntaxKind::ImpliedMember => true,
-            SyntaxKind::ParenExpr | SyntaxKind::UnaryExpr | SyntaxKind::BinaryExpr => node
-                .children()
-                .filter(|child| child.kind() != SyntaxKind::OperatorConfig)
-                .all(|operand| self.is_compile_time(&operand)),
-            SyntaxKind::MemberExpr => node
-                .children()
-                .next()
-                .is_some_and(|base| self.names_enum(&base)),
-            // "an enum member however it is written (TYPE-7)": one
-            // constructed from a compile-time constant, `Side(1)`.
-            SyntaxKind::CallExpr => self
-                .constructs_enum(node)
-                .is_some_and(|(_, _, argument)| self.is_compile_time(&argument)),
-            SyntaxKind::NameExpr => name_token(node).is_some_and(|name| {
-                matches!(
-                    self.bindings.get(&(self.file, name.span().start)),
-                    Some(Binding::Local {
-                        kind: LocalKind::GenericParameter,
-                        ..
-                    })
-                ) || self.names_constant(&name)
-            }),
-            _ => false,
-        }
-    }
-
-    /// True when `name` is bound to a constant of a module (UNIT-13).
-    fn names_constant(&self, name: &SyntaxToken) -> bool {
-        matches!(
-            self.declarations(name),
-            Some((module, &[declaration]))
-                if self.program.modules[module].declarations[declaration].kind
-                    == DeclarationKind::Constant
-        )
     }
 
     /// The value candidates of `operator`, wherever they are declared.
@@ -9367,55 +9242,6 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// The constant a call gives a generic value parameter. A member
-    /// of an enum comes to that member however it is written (TYPE-7):
-    /// `.nan`, `Zero.nan`, `(Zero.nan)`, `Zero("nan")`. Anything else
-    /// is read as [`Self::constant_here`] reads it.
-    fn option_constant(&self, node: &SyntaxNode) -> Constant {
-        let mut constant = self.constant_here(node);
-        if let Some(OptionValue::Member(name)) = self.option_value(node) {
-            constant.value = ConstantValue::Member(name);
-        }
-        constant
-    }
-
-    /// The compile-time constant `node` is, read where it stands: a
-    /// generic value parameter of the enclosing declaration is kept as
-    /// that parameter, so that `keep(value, N: M)` gives `N` the `M` it
-    /// names and not a constant of which nothing is known.
-    fn constant_here(&self, node: &SyntaxNode) -> Constant {
-        let name = |used: &SyntaxNode| {
-            let Some(name) = name_token(used) else {
-                return ConstantValue::Unevaluated;
-            };
-            match self.bindings.get(&(self.file, name.span().start)) {
-                Some(Binding::Local {
-                    at,
-                    kind: LocalKind::GenericParameter,
-                }) => ConstantValue::Parameter {
-                    name: name.text().to_string(),
-                    at: *at,
-                },
-                // UNIT-13: a constant of a module, followed to its
-                // value as a type that names it follows it.
-                Some(Binding::Declarations {
-                    module,
-                    declarations,
-                }) if declarations.len() == 1 => crate::read::constant_value(
-                    self.program,
-                    *module,
-                    declarations[0],
-                    &self.constant_values,
-                ),
-                _ => ConstantValue::Unevaluated,
-            }
-        };
-        Constant {
-            text: node.text().to_string().trim().to_string(),
-            value: crate::constant::fold(node, &name),
-        }
-    }
-
     /// The candidates of `operator` that admit a call, the most
     /// specific of them (GEN-5), and whether one could not be told to
     /// admit it or not.
@@ -9453,9 +9279,15 @@ impl<'a> Typer<'a> {
                 // The candidate as this call takes it: its generic
                 // parameters resolved (GEN-2).
                 let widens = |decided: &Type, later: &Type| self.widens(decided, later);
-                let Some((taken, generics, defaulted)) =
-                    instance((candidate, signature), public, given, wanted, &widens)
-                else {
+                let defaults =
+                    |generic: &GenericParameter| self.default_constant(candidate, generic);
+                let Some((taken, generics, defaulted)) = instance(
+                    signature,
+                    public,
+                    given,
+                    wanted,
+                    (&widens, &defaults, program),
+                ) else {
                     continue;
                 };
                 // GEN-13: a generic value parameter has an ordinary
@@ -9472,8 +9304,10 @@ impl<'a> Typer<'a> {
                     else {
                         return None;
                     };
-                    (constant_fits(program, &default, resolved) == Some(false))
-                        .then(|| constant_fits(program, &default, declared) == Some(false))
+                    let read = self.typed_in(candidate.at.file, &default, None).ok()?;
+                    let fits =
+                        |ty: &Type| crate::constant::fit(read.clone(), Some(ty), program).is_ok();
+                    (whole(resolved) && !fits(resolved)).then(|| !fits(declared))
                 });
                 match unfit {
                     Some(true) => {
@@ -9970,7 +9804,6 @@ impl<'a> Typer<'a> {
         at: Location,
         (module, declaration): (usize, usize),
         generics: &[Argument],
-        given: &Supplied,
     ) {
         let program = self.program;
         let Some((parameters, condition)) = required(program, (module, declaration)) else {
@@ -9987,32 +9820,14 @@ impl<'a> Typer<'a> {
                 .find(|(at, _)| *at == start)
                 .and_then(|(_, verdict)| *verdict)
         };
-        // The value a generic value parameter has here, where the call
-        // writes it, by name or after the callee's name, or leaves it
-        // to its default. What is written is read where it stands, so
-        // that a constant's name and an enum's member are followed
-        // (GEN-8: "a literal, an enum member however it is written
-        // (TYPE-7) ... a constant (UNIT-13)").
+        // What a constant the condition compares with comes to, read
+        // where the declaration is written (`crate::constant`). The
+        // values the call gives are `generics`, each read as a value of
+        // its parameter's type where the call writes it or leaves it to
+        // its default.
         let this = &*self;
-        let value_of = |index: usize| -> Option<OptionValue> {
-            let written = given
-                .written
-                .iter()
-                .find(|(position, _)| *position == index)
-                .and_then(|(_, node)| this.option_value(node));
-            if written.is_some() {
-                return written;
-            }
-            if !given.defaulted.contains(&index) {
-                return None;
-            }
-            let generic = &parameters[index];
-            let default = generic_default(&declared.syntax, generic)?;
-            let ty = match &generic.kind {
-                GenericKind::Value(ty) => Some(ty),
-                _ => None,
-            };
-            this.default_value(declared.at.file, &default, ty)
+        let constant = |node: &SyntaxNode, ty: Option<&Type>| -> Option<ConstantValue> {
+            this.read_in(declared.at.file, node, ty).ok()
         };
         let held = requires_holds(
             program,
@@ -10020,7 +9835,7 @@ impl<'a> Typer<'a> {
             generics,
             &condition,
             &Told {
-                value_of: &value_of,
+                constant: &constant,
                 callable: &callable,
             },
         );
@@ -10847,59 +10662,46 @@ impl<'a> Typer<'a> {
         // The value an option has at this call: what the call gives
         // it, or its default, the candidate's and then, for one of the
         // operator's own parameters, the operator's. `None` when it is
-        // no constant this pass reads.
+        // no constant this pass reads. Each is a value of the option's
+        // type (EXPR-5): what `instance` resolved for a generic value
+        // parameter, and what is given or defaulted for a parameter.
         let this = &*self;
-        let value_of = |name: &str| -> Option<OptionValue> {
+        let option_type = |name: &str| -> Option<Type> {
+            if let Some(generic) = signature.generics.iter().position(|generic| {
+                matches!(generic.kind, GenericKind::Value(_)) && generic.name == name
+            }) {
+                return match &signature.generics[generic].kind {
+                    GenericKind::Value(ty) => Some(ty.clone()),
+                    _ => None,
+                };
+            }
+            signature
+                .parameters
+                .iter()
+                .find(|parameter| parameter.name == name)
+                .map(|parameter| parameter.ty.clone())
+        };
+        let value_of = |name: &str| -> Option<ConstantValue> {
             // An option that selects: a generic value parameter.
             let generic = signature.generics.iter().position(|generic| {
                 matches!(generic.kind, GenericKind::Value(_)) && generic.name == name
             });
             if let Some(generic) = generic {
-                let argument = bound
-                    .iter()
-                    .position(|&place| place == Place::Generic(generic));
-                if let Some(position) = argument {
-                    return this.option_value(&given[position].node);
-                }
-                // What was resolved for it: from an argument's type or
-                // the result asked for, an integer or a duration, or
-                // else its default. The `N` of `value: list<i64, N>`
-                // given a list of two is 2 whatever its default says.
-                let resolved = match generics.get(generic) {
-                    Some(Argument::Constant(constant)) => &constant.value,
-                    _ => return None,
-                };
-                match resolved {
-                    ConstantValue::Int(_)
-                    | ConstantValue::Duration(_)
-                    | ConstantValue::Member(_) => {
-                        return constant_value(resolved);
-                    }
-                    // A generic value parameter of the enclosing
-                    // function, or `unbounded`: not a value held here.
-                    ConstantValue::Parameter { .. } | ConstantValue::Unbounded => return None,
-                    // A constant of another kind is held as it is
-                    // written, and one not inferred from a type is the
-                    // default.
-                    ConstantValue::Other(_) | ConstantValue::Unevaluated => {}
-                }
-                let declared = &signature.generics[generic];
-                let default = generic_default(&candidate.syntax, declared)?;
-                let ty = match &declared.kind {
-                    GenericKind::Value(ty) => Some(ty),
+                return match generics.get(generic) {
+                    Some(Argument::Constant(constant)) => Some(constant.value.clone()),
                     _ => None,
                 };
-                return this.default_value(candidate.at.file, &default, ty);
             }
             let index = signature
                 .parameters
                 .iter()
                 .position(|parameter| parameter.name == name)?;
+            let ty = &signature.parameters[index].ty;
             let argument = bound
                 .iter()
                 .position(|&place| place == Place::Parameter(index));
             if let Some(position) = argument {
-                return this.option_value(&given[position].node);
+                return this.read_constant(&given[position].node, Some(ty)).ok();
             }
             // A default and the file it is written in: the candidate's,
             // or else the operator's.
@@ -10913,12 +10715,16 @@ impl<'a> Typer<'a> {
                         .map(|default| (operator.at.file, default))
                 });
             match default {
-                Some((file, default)) => {
-                    this.default_value(file, &default, Some(&signature.parameters[index].ty))
-                }
+                Some((file, default)) => this.read_in(file, &default, Some(ty)).ok(),
                 // Written `T?` and left out: it is null.
-                None => Some(OptionValue::Literal(Value::Null)),
+                None => Some(ConstantValue::Null),
             }
+        };
+        // What a constant the condition compares an option with comes
+        // to, read where the candidate is written.
+        let constant = |node: &SyntaxNode, name: &str| -> Option<ConstantValue> {
+            let ty = option_type(name)?;
+            this.read_in(candidate.at.file, node, Some(&ty)).ok()
         };
         // GEN-3: "`requires` may use type/category membership,
         // equalities ...". What a generic parameter of the candidate
@@ -10953,6 +10759,7 @@ impl<'a> Typer<'a> {
         };
         let condition_of = Condition {
             value_of: &value_of,
+            constant: &constant,
             type_of: &type_of,
             written: &written,
             callable: &callable,
@@ -11197,8 +11004,6 @@ impl<'a> Typer<'a> {
             .collect();
         // With the arguments given, each field's type is known and the
         // values are read against it.
-        // The generic value parameters that took their defaults.
-        let mut defaulted_values = Vec::new();
         let (arguments, arguments_of_type) = match given {
             Some(given) => (self.bind(name, list, &slots, Takes::Fields), given),
             None if !inferring => (self.bind(name, list, &slots, Takes::Fields), Vec::new()),
@@ -11216,10 +11021,7 @@ impl<'a> Typer<'a> {
                     defaults: read
                         .generics
                         .iter()
-                        .map(|generic| {
-                            generic_default(&declared.syntax, generic)
-                                .map(|default| default_constant(&default, generic))
-                        })
+                        .map(|generic| self.default_constant(declared, generic))
                         .collect(),
                 };
                 let found = vec![None; read.generics.len()];
@@ -11244,7 +11046,6 @@ impl<'a> Typer<'a> {
                     .into_iter()
                     .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
                     .collect();
-                defaulted_values = defaulted;
                 (arguments, found)
             }
         };
@@ -11268,12 +11069,7 @@ impl<'a> Typer<'a> {
             && self.diagnostics.len() == before
         {
             let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
-            let written = written_generics(list);
-            let given = Supplied {
-                written: &written,
-                defaulted: &defaulted_values,
-            };
-            self.requires_met(at, (module, declaration), applied, &given);
+            self.requires_met(at, (module, declaration), applied);
         }
         // TST-3: a trace "is stored in no field", bare or inside a
         // value given to one.
@@ -11787,37 +11583,29 @@ impl<'a> Typer<'a> {
             // it selects the element's type."
             Type::Tuple(elements) => {
                 let integer = Type::Scalar(Scalar::I64);
+                // UNIT-13: an index that names a constant of a module is
+                // that constant's value: the index is read as every
+                // constant is (`crate::constant`).
+                let found = self.read_constant(&index, Some(&integer));
                 let index = self.expression(&index, Some(&integer));
                 // EXPR-7: "by an `i64` index". An index of another type,
                 // `pair[0 / 1]` or `pair[0 == 0]`, is reported as that,
                 // and is not evaluated.
                 let is_integer = self.admits(&integer, &index.ty);
                 let index = self.fit(index, &integer, "the index of a tuple");
-                // UNIT-13: an index that names a constant of a module
-                // is that constant's value, where it is followed to one.
-                let found = {
-                    let constant =
-                        |module: usize, declaration: usize| match crate::read::constant_value(
-                            self.program,
-                            module,
-                            declaration,
-                            &self.constant_values,
-                        ) {
-                            ConstantValue::Int(value) => Index::Known(value),
-                            _ => Index::Unevaluated,
-                        };
-                    constant_index(&index, &constant)
-                };
                 let element = match found {
                     _ if !is_integer => Some(&Type::Unknown),
-                    Index::Known(value) => usize::try_from(value)
+                    Ok(ConstantValue::Int(value)) => usize::try_from(value)
                         .ok()
                         .and_then(|position| elements.get(position)),
-                    // A constant this pass does not evaluate: the
-                    // element's type is then not known, and nothing is
-                    // reported of it.
-                    Index::Unevaluated => Some(&Type::Unknown),
-                    Index::NotConstant => None,
+                    // No compile-time constant: a local, a parameter, a
+                    // call.
+                    Err(Fault::NotConstant) => None,
+                    // A constant whose value is not known here, a
+                    // generic value parameter's or one this pass does
+                    // not work out, or one reported: the element's type
+                    // is then not known, and nothing is reported of it.
+                    _ => Some(&Type::Unknown),
                 };
                 let ty = match element {
                     Some(element) => element.clone(),
@@ -12533,8 +12321,8 @@ struct Requested {
 struct Unfit {
     /// The parameter's position among the operator's generics.
     generic: usize,
-    /// The default, as written.
-    default: SyntaxNode,
+    /// What the default is, for the message: `an \`i64\``.
+    described: String,
     /// The parameter's type as the call resolves it.
     resolved: Type,
 }
@@ -12649,8 +12437,9 @@ struct Given {
     retried: bool,
     /// The compile-time constant it is, read where the call stands, when
     /// it is given by a name a candidate declares as a generic value
-    /// parameter.
-    constant: Option<Constant>,
+    /// parameter: what it reads as, held to the candidate's type once
+    /// the candidate is known (`instance`).
+    constant: Option<Result<Typed, Fault>>,
 }
 
 impl Given {
@@ -12813,12 +12602,9 @@ pub(crate) fn generic_default(
     default_of(&written)
 }
 
-/// The constant a generic value parameter is given, as it is written.
-fn constant_at(node: &SyntaxNode) -> Constant {
-    Constant {
-        text: node.text().to_string().trim().to_string(),
-        value: crate::constant::fold(node, &|_| ConstantValue::Unevaluated),
-    }
+/// A constant as it is written, for messages: `Constant::text`.
+fn constant_text(node: &SyntaxNode) -> String {
+    node.text().to_string().trim().to_string()
 }
 
 /// The set of each requirement `name in {...}` in `node`: the relation
@@ -12853,122 +12639,6 @@ fn result_sets(node: &SyntaxNode, name: &str, sets: &mut Vec<SyntaxNode>) {
     }
 }
 
-/// A constant a candidate's condition compares an option with, or the
-/// value a call gives an option (GEN-6).
-#[derive(Debug, PartialEq)]
-enum OptionValue {
-    /// `.member`: the member's name. The enum it is of is the option's
-    /// type, the same for what the call gives and what it is compared
-    /// with.
-    Member(String),
-    /// A literal, as the value it denotes: `1_000` is `1000`, and a
-    /// string is its contents.
-    Literal(Value),
-}
-
-impl OptionValue {
-    /// True when two constants are one value. An integer and a float
-    /// are compared as numbers: an option of type `f64` may be given
-    /// `1` (EXPR-5).
-    fn same(&self, other: &OptionValue) -> bool {
-        match (self, other) {
-            (OptionValue::Literal(Value::Int(whole)), OptionValue::Literal(Value::Float(real)))
-            | (OptionValue::Literal(Value::Float(real)), OptionValue::Literal(Value::Int(whole))) =>
-            {
-                // `as` here converts an integer to the nearest float.
-                *whole as f64 == *real
-            }
-            _ => self == other,
-        }
-    }
-}
-
-/// The constant an expression is, when it is a literal, a number under
-/// a minus, or a `.member`; `None` for any other expression.
-fn constant_of(node: &SyntaxNode) -> Option<OptionValue> {
-    match node.kind() {
-        SyntaxKind::ParenExpr => constant_of(&node.children().next()?),
-        // `.member`: the name is the last token, any word (LEX-9).
-        SyntaxKind::ImpliedMember => tokens(node)
-            .last()
-            .map(|name| OptionValue::Member(name.text().to_string())),
-        SyntaxKind::UnaryExpr if has_token(node, SyntaxKind::Minus) => {
-            let operand = node.children().next()?;
-            // LEX-7: the least `i64` is written as a minus over 2^63,
-            // which is itself no `i64`.
-            if is_least_magnitude(&operand) {
-                return Some(OptionValue::Literal(Value::Int(i64::MIN)));
-            }
-            let value = match constant_of(&operand)? {
-                OptionValue::Literal(Value::Int(value)) => Value::Int(value.checked_neg()?),
-                OptionValue::Literal(Value::Float(value)) => Value::Float(-value),
-                OptionValue::Literal(Value::Duration(value)) => {
-                    Value::Duration(value.checked_neg()?)
-                }
-                _ => return None,
-            };
-            Some(OptionValue::Literal(value))
-        }
-        SyntaxKind::Literal => {
-            let token = tokens(node).next()?;
-            let text = token.text();
-            let value = match token.kind() {
-                SyntaxKind::Int => Value::Int(i64::try_from(decode_integer(text).ok()?).ok()?),
-                SyntaxKind::Float => Value::Float(decode_float(text).ok()?),
-                SyntaxKind::Str => Value::Str(decode_string(text).ok()?),
-                SyntaxKind::KwTrue => Value::Bool(true),
-                SyntaxKind::KwFalse => Value::Bool(false),
-                SyntaxKind::KwNull => Value::Null,
-                SyntaxKind::Duration => Value::Duration(decode_duration(text).ok()?),
-                SyntaxKind::Temporal => Value::Temporal(temporal(text)?.0),
-                _ => return None,
-            };
-            Some(OptionValue::Literal(value))
-        }
-        // "A constant expression of those": integer and duration
-        // arithmetic, as far as the pass that reads constants in types
-        // evaluates it. `1 + 1` is `2`.
-        _ => folded(node),
-    }
-}
-
-/// What a compile-time constant is, as far as how it is written says:
-/// no name in it is looked up.
-pub(crate) enum Written {
-    /// An integer literal, under a minus or not. It is an `f64` where
-    /// one is expected (EXPR-5).
-    Integer,
-    /// Integer arithmetic: an `i64`.
-    Whole,
-    /// A float literal.
-    Float,
-    /// A string literal.
-    Str,
-    /// `true` or `false`.
-    Bool,
-    /// `null`.
-    Null,
-    /// A duration literal, or arithmetic of them.
-    Duration,
-    /// `.member`, by its name.
-    Member(String),
-}
-
-impl Written {
-    /// As a message names it.
-    pub(crate) fn described(&self) -> String {
-        match self {
-            Written::Integer | Written::Whole => "an `i64`".to_string(),
-            Written::Float => "an `f64`".to_string(),
-            Written::Str => "a `str`".to_string(),
-            Written::Bool => "a `bool`".to_string(),
-            Written::Null => "`null`".to_string(),
-            Written::Duration => "a `duration`".to_string(),
-            Written::Member(name) => format!("the enum member `.{name}`"),
-        }
-    }
-}
-
 /// True when the callee `node` is an anonymous function, in
 /// parentheses or not, or a call of one, or of what such a call gives.
 fn calls_anonymous(node: &SyntaxNode) -> bool {
@@ -12980,144 +12650,6 @@ fn calls_anonymous(node: &SyntaxNode) -> bool {
             .is_some_and(|inner| calls_anonymous(&inner)),
         _ => false,
     }
-}
-
-/// What the constant `node` is, when how it is written says.
-pub(crate) fn written(node: &SyntaxNode) -> Option<Written> {
-    match node.kind() {
-        SyntaxKind::ParenExpr => written(&node.children().next()?),
-        SyntaxKind::ImpliedMember => tokens(node)
-            .last()
-            .map(|name| Written::Member(name.text().to_string())),
-        SyntaxKind::Literal => match tokens(node).next()?.kind() {
-            SyntaxKind::Int => Some(Written::Integer),
-            SyntaxKind::Float => Some(Written::Float),
-            SyntaxKind::Str => Some(Written::Str),
-            SyntaxKind::KwTrue | SyntaxKind::KwFalse => Some(Written::Bool),
-            SyntaxKind::KwNull => Some(Written::Null),
-            SyntaxKind::Duration => Some(Written::Duration),
-            // A date or a time: which, its text says, and is not read
-            // here.
-            _ => None,
-        },
-        SyntaxKind::UnaryExpr if has_token(node, SyntaxKind::Minus) => {
-            match written(&node.children().last()?)? {
-                kind @ (Written::Integer | Written::Whole | Written::Float | Written::Duration) => {
-                    Some(kind)
-                }
-                _ => None,
-            }
-        }
-        _ => match crate::constant::fold(node, &|_| ConstantValue::Unevaluated) {
-            ConstantValue::Int(_) => Some(Written::Whole),
-            ConstantValue::Duration(_) => Some(Written::Duration),
-            _ => None,
-        },
-    }
-}
-
-/// Whether the compile-time constant `node` is a value of `ty`, told
-/// from how it is written. `None` where that does not say: a constant
-/// that names something, or a type that is not known.
-pub(crate) fn constant_fits(program: &Program, node: &SyntaxNode, ty: &Type) -> Option<bool> {
-    let kind = written(node)?;
-    // TYPE-14: a `T?` is "either a T or null".
-    let (ty, optional) = match ty {
-        Type::Nullable(inner) => (inner.as_ref(), true),
-        other => (other, false),
-    };
-    match ty {
-        // An `any` holds a value of any type (TYPE-8).
-        Type::Scalar(Scalar::Any) => None,
-        Type::Scalar(scalar) => match kind {
-            Written::Integer => Some(matches!(scalar, Scalar::I64 | Scalar::F64)),
-            // Whether arithmetic of integer literals is an `f64` where
-            // one is expected is not judged here.
-            Written::Whole => match scalar {
-                Scalar::I64 => Some(true),
-                Scalar::F64 => None,
-                _ => Some(false),
-            },
-            Written::Float => Some(*scalar == Scalar::F64),
-            Written::Str => Some(*scalar == Scalar::Str),
-            Written::Bool => Some(*scalar == Scalar::Bool),
-            Written::Duration => Some(*scalar == Scalar::Duration),
-            Written::Null => Some(optional),
-            Written::Member(_) => Some(false),
-        },
-        Type::Named {
-            module,
-            declaration,
-            ..
-        } => match program.modules[*module].details.get(*declaration) {
-            Some(Detail::Enum(read)) => Some(match kind {
-                Written::Member(name) => read.members.iter().any(|member| member.name == name),
-                Written::Null => optional,
-                _ => false,
-            }),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// The integer or duration a constant expression comes to.
-fn folded(node: &SyntaxNode) -> Option<OptionValue> {
-    constant_value(&crate::constant::fold(node, &|_| {
-        ConstantValue::Unevaluated
-    }))
-}
-
-/// A constant held as a value, for a candidate's condition to compare:
-/// an integer, a duration or a member of an enum. `None` for one whose
-/// value is not held.
-fn constant_value(value: &ConstantValue) -> Option<OptionValue> {
-    match value {
-        ConstantValue::Int(value) => Some(OptionValue::Literal(Value::Int(*value))),
-        ConstantValue::Duration(value) => Some(OptionValue::Literal(Value::Duration(*value))),
-        ConstantValue::Member(name) => Some(OptionValue::Member(name.clone())),
-        _ => None,
-    }
-}
-
-/// The constant a generic value parameter's default is. Where the
-/// parameter is of an enum, a member written as one, `.ieee` or
-/// `Zero.ieee`, in parentheses or not, comes to that member (TYPE-7).
-///
-/// A default is written in its declaration's file, which may not be
-/// the one being read, so no name in it is looked up: the parameter's
-/// type says the member is of its enum.
-fn default_constant(default: &SyntaxNode, generic: &GenericParameter) -> Constant {
-    let mut constant = constant_at(default);
-    // `.ieee`: a member, whatever is around it.
-    if let Some(OptionValue::Member(name)) = constant_of(default) {
-        constant.value = ConstantValue::Member(name);
-        return constant;
-    }
-    let of_enum = matches!(
-        &generic.kind,
-        GenericKind::Value(ty) if matches!(
-            not_null(Some(ty)),
-            Some(Type::Named { kind: NamedKind::Enum, .. })
-        )
-    );
-    // EXPR-1: "Parentheses select grouping".
-    let mut written = default.clone();
-    while written.kind() == SyntaxKind::ParenExpr {
-        match written.children().next() {
-            Some(inner) => written = inner,
-            None => return constant,
-        }
-    }
-    // `Zero.ieee`: the member's name is the last token, any word
-    // (LEX-9).
-    if of_enum
-        && written.kind() == SyntaxKind::MemberExpr
-        && let Some(name) = tokens(&written).last()
-    {
-        constant.value = ConstantValue::Member(name.text().to_string());
-    }
-    constant
 }
 
 /// The default a declaration writes for `parameter`, one of its own.
@@ -13134,7 +12666,11 @@ fn default_at(declaration: &SyntaxNode, parameter: &crate::types::Parameter) -> 
 struct Condition<'c> {
     /// The value an option has at the call: what the call gives it, or
     /// its default. `None` when it is no constant this pass reads.
-    value_of: &'c dyn Fn(&str) -> Option<OptionValue>,
+    value_of: &'c dyn Fn(&str) -> Option<ConstantValue>,
+    /// What a constant the condition compares the option named with
+    /// comes to, as a value of the option's type (`crate::constant`).
+    /// `None` when it is no constant this pass reads.
+    constant: &'c dyn Fn(&SyntaxNode, &str) -> Option<ConstantValue>,
     /// What a generic parameter of the candidate stands for at the
     /// call. `None` for a name that is no generic parameter of it.
     type_of: &'c dyn Fn(&str) -> Option<Type>,
@@ -13165,20 +12701,27 @@ struct Chosen<'s> {
 /// A candidate as a call takes it: itself where it has no generic
 /// parameter, and otherwise with each resolved (GEN-2) and put in
 /// place. `None` when the call does not say what one of them is, or
-/// does not fit the candidate's parameters at all. `candidate` is its
-/// declaration, where the defaults of its generic value parameters are
-/// written.
+/// does not fit the candidate's parameters at all.
 ///
 /// GEN-5: "Match candidates against the requested output before
 /// inputs". GEN-12: "A prior binding constrains every later occurrence
 /// in declared parameter order." An argument whose type is not known
 /// all the way down, `null`, `.member` or `[]`, says nothing.
+///
+/// `defaults` gives the constant a generic value parameter's default
+/// comes to (GEN-2), and `program` the enums a constant given to an
+/// option is held to.
+#[allow(clippy::type_complexity)]
 fn instance<'s>(
-    (candidate, signature): (&Declaration, &'s Signature),
+    signature: &'s Signature,
     public: &Signature,
     given: &[Given],
     wanted: &Wanted,
-    widens: &dyn Fn(&Type, &Type) -> bool,
+    (widens, defaults, program): (
+        &dyn Fn(&Type, &Type) -> bool,
+        &dyn Fn(&GenericParameter) -> Option<Constant>,
+        &Program,
+    ),
 ) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>, Vec<usize>)> {
     let generics = &signature.generics;
     if generics.is_empty() {
@@ -13197,11 +12740,22 @@ fn instance<'s>(
     for (position, place) in bound.iter().enumerate() {
         if let Place::Generic(index) = *place {
             let given = &given[position];
-            let constant = given
+            // EXPR-5: a value of the option's type, as this candidate
+            // declares it: `scale: 1` is the `f64` one.
+            let expected = match &generics[index].kind {
+                GenericKind::Value(ty) if !names_parameter(ty) => Some(ty),
+                _ => None,
+            };
+            let value = given
                 .constant
                 .clone()
-                .unwrap_or_else(|| constant_at(&given.node));
-            found[index] = Some(Argument::Constant(constant));
+                .unwrap_or(Err(Fault::Reported))
+                .and_then(|read| crate::constant::fit(read, expected, program))
+                .unwrap_or(ConstantValue::Unknown);
+            found[index] = Some(Argument::Constant(Constant {
+                text: constant_text(&given.node),
+                value,
+            }));
         }
     }
     if let (Some(place), Some(result)) = (wanted.place, &signature.result) {
@@ -13262,8 +12816,8 @@ fn instance<'s>(
         if found[index].is_some() || !matches!(generic.kind, GenericKind::Value(_)) {
             continue;
         }
-        if let Some(default) = generic_default(&candidate.syntax, generic) {
-            found[index] = Some(Argument::Constant(default_constant(&default, generic)));
+        if let Some(default) = defaults(generic) {
+            found[index] = Some(Argument::Constant(default));
             defaulted.push(index);
         }
     }
@@ -13454,253 +13008,13 @@ fn required(
     Some((parameters, clause.children().next()?))
 }
 
-/// The member an enum's construction from `argument` names: see
-/// [`Typer::member_constructed`].
-fn member_constructed(
-    program: &Program,
-    (module, declaration): (usize, usize),
-    argument: &SyntaxNode,
-) -> Option<Result<usize, String>> {
-    let Some(Detail::Enum(read)) = program.modules[module].details.get(declaration) else {
-        return None;
-    };
-    let members = &read.members;
-    match constant_of(argument)? {
-        OptionValue::Literal(Value::Int(given))
-            if members.iter().all(|member| member.value.is_some()) =>
-        {
-            Some(
-                members
-                    .iter()
-                    .position(|member| member.value == Some(given))
-                    .ok_or_else(|| format!("no member numbered {given}")),
-            )
-        }
-        OptionValue::Literal(Value::Str(given)) => Some(
-            members
-                .iter()
-                .position(|member| member.name == given)
-                .ok_or_else(|| format!("no member named `{given}`")),
-        ),
-        _ => None,
-    }
-}
-
-/// How many constants a constant's value is followed through, one
-/// naming the next.
-const NAMED_DEPTH: usize = 32;
-
-/// The value of `declaration` of `module`, where it is a constant
-/// (UNIT-13), for a condition to compare: see
-/// [`Typer::constant_option`]. `None` for what is no constant, and for
-/// one whose value is not known here.
-///
-/// An `i64` or a `duration` is followed to its value, as a size is. Any
-/// other is what its expression is, read where the constant is
-/// declared: a literal; a member of the enum it is of, however that is
-/// written (TYPE-7), `.slow`, `Mode.slow`, `Mode("slow")`, `Mode(1)`;
-/// or another constant's name, which is followed in turn.
-fn constant_declared(
-    program: &Program,
-    target: (usize, usize),
-    values: &crate::read::ConstantValues,
-) -> Option<OptionValue> {
-    constant_declared_at(program, target, values, 0)
-}
-
-fn constant_declared_at(
-    program: &Program,
-    (module, declaration): (usize, usize),
-    values: &crate::read::ConstantValues,
-    depth: usize,
-) -> Option<OptionValue> {
-    if depth > NAMED_DEPTH {
-        return None;
-    }
-    let declared_in = &program.modules[module];
-    let declared = &declared_in.declarations[declaration];
-    if declared.kind != DeclarationKind::Constant {
-        return None;
-    }
-    match crate::read::constant_value(program, module, declaration, values) {
-        ConstantValue::Int(value) => return Some(OptionValue::Literal(Value::Int(value))),
-        ConstantValue::Duration(value) => {
-            return Some(OptionValue::Literal(Value::Duration(value)));
-        }
-        _ => {}
-    }
-    let ty = crate::read::type_child(&declared.syntax);
-    let written = declared
-        .syntax
-        .children()
-        .find(|child| Some(child) != ty.as_ref())?;
-    let written = ungrouped(written);
-    // What a name of the expression is bound to, in the file the
-    // constant is declared in.
-    let file = declared_in.files[declared.file].file;
-    let bound = |name: &SyntaxNode| -> Option<&Binding> {
-        let start = name_token(name)?.span().start;
-        declared_in
-            .uses
-            .iter()
-            .find(|used| used.at.file == file && used.at.span.start == start)
-            .map(|used| &used.binding)
-    };
-    // The enum the constant is of, where it is of one.
-    let of_enum = match declared_in.details.get(declaration) {
-        Some(Detail::Constant(ty)) => match not_null(Some(ty)) {
-            Some(Type::Named {
-                module,
-                declaration,
-                kind: NamedKind::Enum,
-                ..
-            }) => Some((*module, *declaration)),
-            _ => None,
-        },
-        _ => None,
-    };
-    match (written.kind(), of_enum) {
-        (SyntaxKind::NameExpr, _) => match bound(&written)? {
-            Binding::Declarations {
-                module,
-                declarations,
-            } => match declarations.as_slice() {
-                [declaration] => {
-                    constant_declared_at(program, (*module, *declaration), values, depth + 1)
-                }
-                _ => None,
-            },
-            Binding::Local { .. } => None,
-        },
-        // `Mode.slow`: the member's name is the last token, any word
-        // (LEX-9). A member of any other enum would be no value of the
-        // constant's type.
-        (SyntaxKind::MemberExpr, Some(_)) => tokens(&written)
-            .last()
-            .map(|name| OptionValue::Member(name.text().to_string())),
-        // `Mode("slow")`, `Mode(1)`: a construction of the constant's
-        // enum is the member it names.
-        (SyntaxKind::CallExpr, Some((enum_module, enum_declaration))) => {
-            let callee = written
-                .children()
-                .next()
-                .filter(|callee| callee.kind() == SyntaxKind::NameExpr)?;
-            let constructs = matches!(
-                bound(&callee),
-                Some(Binding::Declarations { module, declarations })
-                    if *module == enum_module && declarations.contains(&enum_declaration)
-            );
-            if !constructs {
-                return None;
-            }
-            let argument = one_by_position(&written)?;
-            let member =
-                member_constructed(program, (enum_module, enum_declaration), &argument)?.ok()?;
-            match program.modules[enum_module].details.get(enum_declaration) {
-                Some(Detail::Enum(read)) => {
-                    Some(OptionValue::Member(read.members[member].name.clone()))
-                }
-                _ => None,
-            }
-        }
-        _ => constant_of(&written),
-    }
-}
-
-/// What a call, a construction or a written type says of the generic
-/// value parameters of what it names, for [`Typer::requires_met`].
-struct Supplied<'g> {
-    /// The ones written, by name or after the name of what is called
-    /// or applied, each with its position among the declaration's and
-    /// where it is written.
-    written: &'g [(usize, SyntaxNode)],
-    /// The ones that took their defaults, by their positions.
-    defaulted: &'g [usize],
-}
-
-impl Supplied<'_> {
-    /// Of a declaration that has no generic parameter.
-    const NOTHING: Supplied<'static> = Supplied {
-        written: &[],
-        defaulted: &[],
-    };
-}
-
-/// The generic arguments a call writes after its callee's name,
-/// `pick<false>(1)`, each with its position among them. `list` is the
-/// call's argument list.
-fn written_generics(list: &SyntaxNode) -> Vec<(usize, SyntaxNode)> {
-    list.parent()
-        .and_then(|call| child(&call, SyntaxKind::GenericArgs))
-        .map(|arguments| {
-            arguments
-                .children()
-                .filter(|argument| argument.kind() != SyntaxKind::Error)
-                .enumerate()
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// The value of the constant a generic value parameter, `parameter`,
-/// is given, for a condition to compare, as far as what is held of it
-/// says. A literal that is no integer and no duration is held as it is
-/// written, and is read from that; so is a member of the parameter's
-/// enum written `.member` or `Enum.member`. `None` for any other: a
-/// constant's name, which is followed where a body is being read.
-fn held_value(constant: &Constant, parameter: &GenericParameter) -> Option<OptionValue> {
-    match &constant.value {
-        ConstantValue::Int(_) | ConstantValue::Duration(_) | ConstantValue::Member(_) => {
-            constant_value(&constant.value)
-        }
-        ConstantValue::Other(_) => {
-            let text = constant.text.as_str();
-            let value = match text {
-                "true" => Value::Bool(true),
-                "false" => Value::Bool(false),
-                "null" => Value::Null,
-                text if text.starts_with('"') => Value::Str(decode_string(text).ok()?),
-                text => match text.strip_prefix('-') {
-                    Some(digits) => Value::Float(-decode_float(digits.trim()).ok()?),
-                    None => Value::Float(decode_float(text).ok()?),
-                },
-            };
-            Some(OptionValue::Literal(value))
-        }
-        ConstantValue::Unevaluated => {
-            let of_enum = matches!(
-                &parameter.kind,
-                GenericKind::Value(ty) if matches!(
-                    not_null(Some(ty)),
-                    Some(Type::Named { kind: NamedKind::Enum, .. })
-                )
-            );
-            // `.member`, `Enum.member`, `alias::Enum.member`: a path
-            // and one member after its last `.`, with nothing called.
-            let (path, member) = constant.text.rsplit_once('.')?;
-            let word = |text: &str| {
-                !text.is_empty()
-                    && text
-                        .chars()
-                        .all(|character| character.is_alphanumeric() || character == '_')
-            };
-            let named = path
-                .split("::")
-                .all(|part| word(part.trim()) || path.is_empty());
-            (of_enum && named && word(member.trim()))
-                .then(|| OptionValue::Member(member.trim().to_string()))
-        }
-        ConstantValue::Parameter { .. } | ConstantValue::Unbounded => None,
-    }
-}
-
 /// What the place a `requires` is tested at says of it, beyond the
 /// generic arguments ([`requires_holds`]).
 struct Told<'t> {
-    /// What a generic value parameter is where the generic arguments do
-    /// not hold it as a constant, by its position among the
-    /// declaration's. `None` when the place does not say.
-    value_of: &'t dyn Fn(usize) -> Option<OptionValue>,
+    /// What a constant written in the condition comes to as a value of
+    /// the type given (`crate::constant`), read where the declaration
+    /// is written. `None` where it is no constant read so.
+    constant: &'t dyn Fn(&SyntaxNode, Option<&Type>) -> Option<ConstantValue>,
     /// Whether a named operator requirement holds (GEN-16). `None`
     /// when it cannot be told.
     callable: &'t dyn Fn(&SyntaxNode) -> Option<bool>,
@@ -13711,7 +13025,6 @@ struct Told<'t> {
 /// (GEN-3). `None` when it cannot be told: a generic argument is not
 /// known, or names a generic parameter of the declaration it is
 /// written in, which is no one type.
-///
 fn requires_holds(
     program: &Program,
     (module, declaration): (usize, usize),
@@ -13722,15 +13035,18 @@ fn requires_holds(
     let (parameters, _) = required(program, (module, declaration))?;
     let declared_in = &program.modules[module];
     let declared = &declared_in.declarations[declaration];
-    let value_of = |name: &str| -> Option<OptionValue> {
-        let index = parameters.iter().position(|generic| {
+    // The generic value parameter of the declaration named `name`, by
+    // its position.
+    let option = |name: &str| {
+        parameters.iter().position(|generic| {
             matches!(generic.kind, GenericKind::Value(_)) && generic.name == name
-        })?;
-        if let Some(value) = (place.value_of)(index) {
-            return Some(value);
-        }
-        match generics.get(index)? {
-            Argument::Constant(constant) => held_value(constant, &parameters[index]),
+        })
+    };
+    // GEN-3: the value it has is the constant the generic arguments give
+    // it, a default included.
+    let value_of = |name: &str| -> Option<ConstantValue> {
+        match generics.get(option(name)?)? {
+            Argument::Constant(constant) => Some(constant.value.clone()),
             Argument::Type(_) => None,
         }
     };
@@ -13753,10 +13069,20 @@ fn requires_holds(
             .find(|written| written.at.file == file && written.at.span.start == start)?;
         told(placed(substitute_within(&read.ty, &map), &own))
     };
+    // A constant the condition compares an option with is a value of
+    // the option's type (EXPR-5), its generic parameters in place.
+    let constant = |node: &SyntaxNode, name: &str| -> Option<ConstantValue> {
+        let ty = match &parameters[option(name)?].kind {
+            GenericKind::Value(ty) => placed(substitute_within(ty, &map), &own),
+            _ => return None,
+        };
+        (place.constant)(node, Some(&ty))
+    };
     holds(
         condition,
         &Condition {
             value_of: &value_of,
+            constant: &constant,
             type_of: &type_of,
             written: &written,
             callable: place.callable,
@@ -13793,16 +13119,6 @@ fn unmet(
         Location::new(declared_in.files[declared.file].file, condition.span()),
         "the condition that does not hold",
     )
-}
-
-/// Which of a type's applications of one struct the one at `position`
-/// of `found` is, counting from none: `found` is every struct the type
-/// applies, in the order written ([`struct_applications`]).
-fn occurrence_of(found: &[((usize, usize), Vec<Argument>)], position: usize) -> usize {
-    found[..position]
-        .iter()
-        .filter(|(earlier, _)| *earlier == found[position].0)
-        .count()
 }
 
 /// Every struct a type applies, at any depth, with the generic
@@ -13916,18 +13232,27 @@ fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
                     (None, Some(name)) => (name, left),
                     _ => return None,
                 };
-                Some((of.value_of)(&name)?.same(&constant_of(constant)?))
+                // The one comparison (`ConstantValue::same`): where the
+                // value is not known, whether it holds is not either.
+                (of.value_of)(&name)?.same(&(of.constant)(constant, &name)?)
             } else if within {
                 let name = option(left)?;
                 if right.kind() != SyntaxKind::ConstraintSet {
                     return None;
                 }
                 let value = (of.value_of)(&name)?;
-                let mut found = false;
+                // GEN-3: "the membership of a constant in a set of
+                // constants": it holds where it is one of them, and does
+                // not where it is known to be none.
+                let mut found = Some(false);
                 for member in right.children() {
-                    found |= constant_of(&member)?.same(&value);
+                    match (of.constant)(&member, &name).and_then(|member| value.same(&member)) {
+                        Some(true) => return Some(true),
+                        Some(false) => {}
+                        None => found = None,
+                    }
                 }
-                Some(found)
+                found
             } else {
                 None
             }
@@ -14699,7 +14024,7 @@ impl<'a> Typer<'a> {
         // What is assigned at the end of each case, and whether it has
         // returned.
         let mut ends: Vec<(Vec<bool>, bool)> = Vec::new();
-        let mut seen: Vec<(Label, Location)> = Vec::new();
+        let mut seen: Vec<(ConstantValue, Location)> = Vec::new();
         let mut cases = Vec::new();
         let mut default = None;
         for part in node.children() {
@@ -14713,6 +14038,10 @@ impl<'a> Typer<'a> {
                     self.returned = before_returned;
                     let label = self.expression(&written, Some(&of));
                     let label = self.fit(label, &of, "the selector");
+                    // CTRL-6: "Switch labels are typed source constants,
+                    // compared by resolved value": each is read as a
+                    // value of the selector's type (`crate::constant`).
+                    let read = self.read_constant(&written, Some(&of));
                     // FN-3: "Where a constant is required, a `switch`
                     // label ... a connection rejects."
                     if self.graph && self.category(&label) == ValueCategory::Connection {
@@ -14723,7 +14052,7 @@ impl<'a> Typer<'a> {
                             "a `switch` label is a constant, and this is a connection".to_string(),
                             "FN-3",
                         ));
-                    } else if !self.is_compile_time(&written) {
+                    } else if matches!(read, Err(Fault::NotConstant)) {
                         // UNIT-13: a constant is "a compile-time constant
                         // where ... a `switch` label (CTRL-12) requires
                         // one". CTRL-12: "Each label is a constant of
@@ -14731,7 +14060,12 @@ impl<'a> Typer<'a> {
                         // constant is: "a literal, an enum member however
                         // it is written (TYPE-7) ... a constant (UNIT-13),
                         // a generic value parameter in scope, or a
-                        // constant expression of those".
+                        // constant expression of those". One that is a
+                        // constant whose value this pass does not work
+                        // out, `-{shifted: true} 1` of a candidate of the
+                        // program's own, is a label: whether it repeats
+                        // another is left unjudged (CTRL-6, "compared by
+                        // resolved value").
                         self.diagnostics.emit(local_error(
                             Category::Type,
                             codes::local::SWITCH_LABEL_CONSTANT,
@@ -14742,9 +14076,15 @@ impl<'a> Typer<'a> {
                             self.loop_rule(),
                         ));
                     }
-                    let value = self.label_value(&label);
-                    if let Some(value) = value.clone() {
-                        match seen.iter().find(|(other, _)| *other == value) {
+                    let constant = read.ok();
+                    let value = constant
+                        .as_ref()
+                        .and_then(|constant| self::label(self.program, constant, &of));
+                    if let Some(constant) = constant {
+                        match seen
+                            .iter()
+                            .find(|(other, _)| other.same(&constant) == Some(true))
+                        {
                             Some((_, first)) => self.diagnostics.emit(
                                 error(
                                     Category::Type,
@@ -14755,7 +14095,7 @@ impl<'a> Typer<'a> {
                                 )
                                 .with_related(*first, "first here"),
                             ),
-                            None => seen.push((value, label.at)),
+                            None => seen.push((constant, label.at)),
                         }
                     }
                     // ERR-12: what a null test proves in one case is
@@ -14784,7 +14124,7 @@ impl<'a> Typer<'a> {
         }
         let covered = seen
             .iter()
-            .filter(|(label, _)| matches!(label, Label::Member(_)))
+            .filter(|(label, _)| matches!(label, ConstantValue::Member(_)))
             .count();
         let exhaustive = default.is_some() || members.is_some_and(|count| covered == count);
         let count = self.locals.len();
@@ -14926,103 +14266,38 @@ fn widened_block(branch: &Expr) -> Option<Expr> {
     })
 }
 
-impl Typer<'_> {
-    /// The value of a `switch` label, where this pass can tell it from
-    /// another's (CTRL-6: "Switch labels are typed source constants,
-    /// compared by resolved value"): a literal, a member of an enum, a
-    /// constant of a module that comes to one (UNIT-13: "The constant has
-    /// that one value wherever it is read"), and integers joined by
-    /// `+`, `-` and `*`. A generic value parameter's value is the call's,
-    /// and is not known here.
-    fn label_value(&self, label: &Expr) -> Option<Label> {
-        self.label_within(label, 0)
-    }
-
-    /// [`Typer::label_value`], `depth` constants into what a label
-    /// names.
-    fn label_within(&self, label: &Expr, depth: usize) -> Option<Label> {
-        if let Some(found) = label_of(label) {
-            return Some(found);
-        }
-        // EXPR-5, NUM-1: an `i64` widened where an `f64` is expected is
-        // the `f64` of the same number, so `1` and `1.0` of an `f64` are
-        // one value.
-        if let ExprKind::Widen(inner) = &label.kind {
-            return match self.label_within(inner, depth)? {
-                Label::Int(value) => Label::float(value as f64),
-                other => Some(other),
+/// A constant as the stages after the analyser hold a `switch` label's
+/// value (`hir::Case::value`) and a key a child is read by: of the
+/// types a label may be (CTRL-12), and a float. A member of an enum is
+/// by its position among the members of `ty`, the selector's enum.
+/// `None` for one of another type, or not valued.
+fn label(program: &Program, value: &ConstantValue, ty: &Type) -> Option<Label> {
+    Some(match value {
+        ConstantValue::Int(value) => Label::Int(*value),
+        ConstantValue::Bool(value) => Label::Bool(*value),
+        ConstantValue::Str(value) => Label::Str(value.clone()),
+        ConstantValue::Float(value) => return Label::float(*value),
+        ConstantValue::Member(name) => {
+            let Some(Type::Named {
+                module,
+                declaration,
+                ..
+            }) = not_null(Some(ty))
+            else {
+                return None;
             };
+            let Some(Detail::Enum(read)) = program.modules[*module].details.get(*declaration)
+            else {
+                return None;
+            };
+            Label::Member(
+                read.members
+                    .iter()
+                    .position(|member| member.name == *name)?,
+            )
         }
-        if let ExprKind::Constant {
-            module,
-            declaration,
-        } = label.kind
-        {
-            return self.constant_label(module, declaration, depth);
-        }
-        let constant = |module: usize, declaration: usize| match self.constant_label(
-            module,
-            declaration,
-            depth,
-        ) {
-            Some(Label::Int(value)) => Index::Known(value),
-            _ => Index::Unevaluated,
-        };
-        match constant_index(label, &constant) {
-            Index::Known(value) => Some(Label::Int(value)),
-            _ => None,
-        }
-    }
-
-    /// The value of the constant `declaration` of `module` as a label,
-    /// read `depth` constants in. A constant whose value depends on
-    /// itself is rejected elsewhere (`constant.cycle`), and is followed
-    /// no further than [`CONSTANT_LABEL_DEPTH`] constants.
-    fn constant_label(&self, module: usize, declaration: usize, depth: usize) -> Option<Label> {
-        if let Some(known) = self.constant_labels.borrow().get(&(module, declaration)) {
-            return known.clone();
-        }
-        if depth >= CONSTANT_LABEL_DEPTH {
-            return None;
-        }
-        let value = self
-            .program
-            .modules
-            .get(module)?
-            .constants
-            .get(declaration)?
-            .as_ref()?;
-        let found = self.label_within(value, depth + 1);
-        // Kept whatever it came to, so that a constant named twice, as
-        // both operands of `+` are, is read once. One cut short by the
-        // depth is then not known as a label, which no deeper reading
-        // makes wrong.
-        self.constant_labels
-            .borrow_mut()
-            .insert((module, declaration), found.clone());
-        found
-    }
-}
-
-/// How many constants naming one another a label is followed through.
-const CONSTANT_LABEL_DEPTH: usize = 64;
-
-/// The value of a label that is a constant this pass can tell from
-/// another: a literal, or a member of an enum.
-fn label_of(label: &Expr) -> Option<Label> {
-    match &label.kind {
-        ExprKind::Literal(Value::Int(value)) => Some(Label::Int(*value)),
-        ExprKind::Literal(Value::Bool(value)) => Some(Label::Bool(*value)),
-        ExprKind::Literal(Value::Str(value)) => Some(Label::Str(value.clone())),
-        ExprKind::Literal(Value::Float(value)) => Label::float(*value),
-        ExprKind::EnumMember { member, .. } => Some(Label::Member(*member)),
-        // `-1`: a minus over an integer literal, and `-1.5` over a float.
-        _ => match &negated(label)?.kind {
-            ExprKind::Literal(Value::Int(value)) => value.checked_neg().map(Label::Int),
-            ExprKind::Literal(Value::Float(value)) => Label::float(-*value),
-            _ => None,
-        },
-    }
+        _ => return None,
+    })
 }
 
 /// True when a value of `ty` has members that `value.member` reads: a
@@ -15069,71 +14344,6 @@ fn whole(ty: &Type) -> bool {
         | Type::Signal
         | Type::Error
         | Type::ErrorContext => true,
-    }
-}
-
-/// What the index of a tuple is, as far as this pass can say.
-enum Index {
-    /// A constant with this value.
-    Known(i64),
-    /// A constant whose value another pass finds: one that names a
-    /// generic value parameter, divides, or leaves the range of an
-    /// `i64`.
-    Unevaluated,
-    /// No constant: it reads a local, a parameter or a call.
-    NotConstant,
-}
-
-/// The value of a tuple's index (EXPR-7: "A tuple's index is a constant
-/// within its length"): an integer literal, or literals under a minus
-/// and joined by `+`, `-` and `*`, as in `pair[1 - 1]`. `constant` says
-/// what a constant of a module comes to (UNIT-13).
-fn constant_index(index: &Expr, constant: &dyn Fn(usize, usize) -> Index) -> Index {
-    match &index.kind {
-        ExprKind::Literal(Value::Int(value)) => return Index::Known(*value),
-        ExprKind::GenericValue { .. } => return Index::Unevaluated,
-        ExprKind::Constant {
-            module,
-            declaration,
-        } => return constant(*module, *declaration),
-        // A call of an operator of which no candidate is selected: it
-        // has been reported, or is not judged, and nothing more is said
-        // of it (ERR-9).
-        ExprKind::Call {
-            callee: Callee::Unread,
-            form: Form::Binary(_) | Form::Unary(_),
-            ..
-        } => return Index::Unevaluated,
-        _ => {}
-    }
-    // A symbol, as it is written or as core's own arithmetic.
-    if let Some(operand) = negated(index) {
-        return match constant_index(operand, constant) {
-            // `checked_neg` gives `None` where the result does not fit.
-            Index::Known(value) => value.checked_neg().map_or(Index::Unevaluated, Index::Known),
-            other => other,
-        };
-    }
-    let Some((operator, left, right)) = arithmetic(index) else {
-        return Index::NotConstant;
-    };
-    match (
-        constant_index(left, constant),
-        constant_index(right, constant),
-    ) {
-        (Index::NotConstant, _) | (_, Index::NotConstant) => Index::NotConstant,
-        (Index::Known(left), Index::Known(right)) => {
-            let value = match operator {
-                BinaryOperator::Add => left.checked_add(right),
-                BinaryOperator::Subtract => left.checked_sub(right),
-                BinaryOperator::Multiply => left.checked_mul(right),
-                // Division and remainder follow core's numeric
-                // contract, which this pass does not evaluate.
-                _ => None,
-            };
-            value.map_or(Index::Unevaluated, Index::Known)
-        }
-        _ => Index::Unevaluated,
     }
 }
 
@@ -15287,15 +14497,6 @@ fn holds_trace(ty: &Type) -> bool {
         | Type::ErrorContext
         | Type::Unknown => false,
     }
-}
-
-/// The one argument of a call that gives one value, by position:
-/// the `1` of `Side(1)`. `None` for any other call.
-fn one_by_position(call: &SyntaxNode) -> Option<SyntaxNode> {
-    let list = child(call, SyntaxKind::ArgList)?;
-    let mut arguments = arguments_of(&list).into_iter();
-    let (label, argument) = arguments.next()?;
-    (label.is_none() && arguments.next().is_none()).then_some(argument)
 }
 
 /// What `node` is with the parentheses around it taken off. EXPR-1:
@@ -15536,13 +14737,13 @@ fn infer_constant(
 fn unsaid() -> Constant {
     Constant {
         text: "_".to_string(),
-        value: ConstantValue::Unevaluated,
+        value: ConstantValue::Unknown,
     }
 }
 
 /// True for [`unsaid`]. No constant a source writes is `_`.
 fn is_unsaid(constant: &Constant) -> bool {
-    constant.text == "_" && matches!(constant.value, ConstantValue::Unevaluated)
+    constant.text == "_" && matches!(constant.value, ConstantValue::Unknown)
 }
 
 /// Records that the generic parameter declared at `at` stands for
@@ -15880,43 +15081,6 @@ fn name_token(node: &SyntaxNode) -> Option<SyntaxToken> {
         Some(qualified) => identifiers(&qualified).into_iter().nth(1),
         None => identifiers(node).into_iter().next(),
     }
-}
-
-/// The parts of a temporal literal and its type, which goes by the
-/// parts it writes (LEX-11: "Offset-free date/time is civil, not an
-/// implicit UTC instant. A zoned datetime requires an explicit
-/// offset"). `None` for one the lexer has reported.
-///
-/// The parts are kept as values, so that whatever reads the typed
-/// program has no literal to read again.
-fn temporal(text: &str) -> Option<(Temporal, Scalar)> {
-    let literal = decode_temporal(text).ok()?;
-    let zone = literal.zone.is_some();
-    let scalar = match (literal.date, literal.time, literal.offset) {
-        (Some(_), None, _) => Scalar::Date,
-        (Some(_), Some(_), None) => Scalar::CivilDatetime,
-        (Some(_), Some(_), Some(_)) if zone => Scalar::ZonedDatetime,
-        (Some(_), Some(_), Some(_)) => Scalar::Datetime,
-        (None, Some(_), _) if zone => Scalar::ZonedTime,
-        (None, Some(_), _) => Scalar::Time,
-        (None, None, _) => Scalar::Timezone,
-    };
-    let parts = Temporal {
-        date: literal.date.map(|date| CalendarDate {
-            year: date.year,
-            month: date.month,
-            day: date.day,
-        }),
-        time: literal.time.map(|time| ClockTime {
-            hour: time.hour,
-            minute: time.minute,
-            second: time.second,
-            microsecond: time.microsecond,
-        }),
-        offset: literal.offset.map(|offset| offset.minutes),
-        zone: literal.zone.map(str::to_string),
-    };
-    Some((parts, scalar))
 }
 
 /// The operator a token is, between two operands.

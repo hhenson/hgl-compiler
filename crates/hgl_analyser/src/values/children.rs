@@ -169,9 +169,15 @@ impl Typer<'_> {
     /// one that reads a local, a parameter, a `const` parameter among
     /// them, or a call.
     fn step(&self, of: &Type, index: &Expr) -> Option<Step> {
-        // The value the index comes to as a `switch` label's is resolved
-        // (`label_value`): one reading of a constant's value.
-        match self.label_value(index)? {
+        // The value the index comes to, read as every constant is
+        // (`crate::constant`), as a value of the key's type.
+        let key = match of {
+            Type::Dict { key, .. } => (**key).clone(),
+            _ => Type::Scalar(Scalar::I64),
+        };
+        let written = self.syntax_of(index)?;
+        let value = self.read_constant(&written, Some(&key)).ok()?;
+        match super::label(self.program, &value, &key)? {
             LabelValue::Int(value) => Some(Step::Position(value)),
             key if matches!(of, Type::Dict { .. }) => Some(Step::Key(key)),
             _ => None,

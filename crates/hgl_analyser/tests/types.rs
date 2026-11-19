@@ -393,8 +393,11 @@ fn a_name_in_a_type_position_is_a_type() {
 
 /// The parser reads a lone name among generic arguments as a type
 /// (`generic_argument = type | const_expression`). One that names a
-/// value, a local or a parameter, is a constant argument; whether it may
-/// stand in a constant is for the pass that evaluates constants.
+/// value, a local or a parameter, is a constant argument. GEN-8: "The
+/// value a call gives a generic value parameter is a compile-time
+/// constant ... Any other rejects": a local and a parameter are known
+/// only when the program runs, and each is rejected where it is written
+/// (`generic.argument_constant`).
 #[test]
 fn a_value_name_among_generic_arguments_is_a_constant() {
     let checked = module(concat!(
@@ -411,7 +414,13 @@ fn a_value_name_among_generic_arguments_is_a_constant() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:10:23 type/type.not_a_type UNIT-10"]
+        [
+            "m.hgl:5:22 type/generic.argument_constant GEN-8",
+            "m.hgl:5:33 type/generic.argument_constant GEN-8",
+            "m.hgl:6:23 type/generic.argument_constant GEN-8",
+            "m.hgl:6:38 type/generic.argument_constant GEN-8",
+            "m.hgl:10:23 type/type.not_a_type UNIT-10",
+        ]
     );
     let all = written(&checked);
     assert!(all.contains(&"Sized<n>".to_string()), "{all:?}");
@@ -600,8 +609,9 @@ fn forwarded_packs_too_long_to_sum_are_still_counted() {
 
 /// TYPE-3: "Generic applications are invariant by origin and complete
 /// canonical arguments." Two applications are one type when their
-/// arguments are the same: a constant by its value, and one this pass
-/// holds no value for by how it is written.
+/// arguments are the same: a constant by its value (the owner's decision
+/// on hhenson/hgl-compiler#211), and one with no value known is the same
+/// as no other.
 #[test]
 fn a_generic_application_is_known_by_its_arguments() {
     let checked = module(concat!(
@@ -647,15 +657,15 @@ fn a_generic_application_is_known_by_its_arguments() {
     assert_eq!(spaced[1].to_string(), "Label<\"bid  ask\">");
     assert_eq!(spaced[3], spaced[4]);
     assert_eq!(spaced[4].to_string(), "Sized<2 * 3>");
-    // A call is compared as written until constants are evaluated,
-    // token for token: the spacing between its tokens is no part of it.
+    // A constant is shown as it is written, and compared by its value
+    // alone (`ConstantValue::same`). A call has none known here: it is
+    // the same as nothing, however alike two are written.
     assert_eq!(spaced[5].to_string(), "Sized<limit( 1 )>");
-    assert_eq!(spaced[5], spaced[6]);
+    assert_ne!(spaced[5], spaced[6]);
     let sizes = types("sizes");
-    // By value where it is folded; as written where it is not.
     assert_eq!(sizes[0], sizes[1]);
     assert_ne!(sizes[0], sizes[2]);
-    assert_eq!(sizes[3], sizes[4]);
+    assert_ne!(sizes[3], sizes[4]);
     assert_ne!(sizes[3], sizes[5]);
 }
 

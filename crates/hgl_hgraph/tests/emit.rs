@@ -9497,3 +9497,42 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
         ]
     );
 }
+
+// ---- Constants by value (hhenson/hgl-compiler#211) ----
+
+/// The owner's decision on hhenson/hgl-compiler#211: two constants are
+/// the same where, read as values of the type their place gives them,
+/// they are equal, and "when writing transpiled code, we would write the
+/// code one way, i.e. f=1.0". EXPR-5: `1` where an `f64` is expected is
+/// `1.0`. So `FBox<1>` and `FBox<1.00>` are one class, and `scaled<1>`
+/// and `scaled<1.0>` one instance, which writes the value as `1.0`.
+#[test]
+fn a_constant_argument_is_written_by_its_value() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct FBox<const X: f64> { v: i64 }\n",
+            "const fn a() -> FBox<1> => FBox<1>(v: 1)\n",
+            "const fn b() -> FBox<1.00> => FBox<1.00>(v: 2)\n",
+            "fn scaled<const k: f64>(x: f64) -> f64 => x * k\n",
+            "fn uses(x: f64) -> f64 => scaled<1>(x) + scaled<1.0>(x) + scaled<2.5>(x)\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_m/__init__.py");
+    assert_eq!(
+        python.matches("_core.applied(FBox, \"1.0\")").count(),
+        2,
+        "{python}"
+    );
+    for expected in [
+        "_lift_2_add__f64_f64(lhs=_inst_scaled__1_0(x=x), rhs=_inst_scaled__1_0(x=x))",
+        "def _inst_scaled__1_0(x: _hg.TS[_py.float]) -> _hg.TS[_py.float]:\n",
+        "    return _lift_0_mul__f64_f64(lhs=x, rhs=1.0)\n",
+        "def _inst_scaled__2_5(x: _hg.TS[_py.float]) -> _hg.TS[_py.float]:\n",
+    ] {
+        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+    }
+    assert_eq!(python.matches("def _inst_scaled__").count(), 2, "{python}");
+}
