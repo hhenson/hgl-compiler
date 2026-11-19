@@ -24,15 +24,15 @@ impl<'a> Emitter<'a> {
     /// literal or a constant (UNIT-13), and elsewhere fails the call as
     /// the program runs."
     ///
-    /// In a hook a literal that is admitted there is given as it is; any
-    /// other duration is given through the provider's `wake_delay`, which
-    /// fails the call where it is not admitted. A literal that is not
-    /// admitted is one an instance gives a generic value parameter, which
-    /// the analyser did not see. A value function is given the
-    /// capability by a parameter, and whether a zero there is "in
-    /// `start`" the rule does not say: a duration there that may be zero,
-    /// anything but a literal more than zero or a constant that is one,
-    /// is reported.
+    /// In a hook a duration whose value this target works out
+    /// (`known_duration`) and that is admitted there is given as it is;
+    /// any other is given through the provider's `wake_delay`, which
+    /// fails the call where it is not admitted. One that is worked out
+    /// and not admitted is what an instance gives a generic value
+    /// parameter, which the analyser did not see. A value function is
+    /// given the capability by a parameter, and whether a zero there is
+    /// "in `start`" the rule does not say: a duration there that may be
+    /// zero, any but one worked out to be more than zero, is reported.
     fn wake_duration(
         &mut self,
         function: &Function,
@@ -51,31 +51,15 @@ impl<'a> Emitter<'a> {
             let parameter = signature.parameters.get(index)?;
             (parameter.ty == Type::Scalar(Scalar::Duration)).then_some((index, &argument.value))
         })?;
-        // A literal, or a constant followed to what it is written as: the
-        // analyser has rejected a constant that depends on itself
-        // (`constant.cycle`), so the chain ends.
-        let mut value = given;
-        while let ExprKind::Constant {
-            module,
-            declaration,
-        } = value.kind
-            && let Some(Some(constant)) = program.modules[module].constants.get(declaration)
-        {
-            value = constant;
-        }
-        let literal = match value.kind {
-            ExprKind::Literal(Value::Duration(micros)) => Some(micros),
-            _ => None,
-        };
+        let known = self.known_duration(given);
         match function.mode {
             Mode::Node | Mode::Stop | Mode::Lifecycle => {
                 let starting = function.mode == Mode::Lifecycle;
-                let admitted = matches!(given.kind, ExprKind::Literal(Value::Duration(micros))
-                    if micros > 0 || (micros == 0 && starting));
+                let admitted = known.is_some_and(|micros| micros > 0 || (micros == 0 && starting));
                 (!admitted).then_some(index)
             }
             _ => {
-                if !literal.is_some_and(|micros| micros > 0) {
+                if !known.is_some_and(|micros| micros > 0) {
                     self.unsupported(
                         given.at,
                         "a wake asked for with a duration that may be zero in a value function \
@@ -84,6 +68,70 @@ impl<'a> Emitter<'a> {
                 }
                 None
             }
+        }
+    }
+
+    /// The value of `value` in microseconds, where it is a duration this
+    /// target works out from how it is written: a literal, a constant
+    /// followed to what it is written as, and core's `-value`, `+` and
+    /// `-` of two of them and `*` of one by an `i64` literal (OPS-1), with
+    /// checked arithmetic. `None` for any other: a local, a call of
+    /// another function, one that overflows. The analyser has rejected a
+    /// constant that depends on itself (`constant.cycle`), so a chain of
+    /// constants ends.
+    fn known_duration(&self, value: &Expr) -> Option<i64> {
+        let program = self.program;
+        match &value.kind {
+            ExprKind::Literal(Value::Duration(micros)) => Some(*micros),
+            ExprKind::Constant {
+                module,
+                declaration,
+            } => match program.modules[*module].constants.get(*declaration) {
+                Some(Some(constant)) => self.known_duration(constant),
+                _ => None,
+            },
+            ExprKind::Call {
+                callee, arguments, ..
+            } => {
+                let (module, declaration) = callee.declaration()?;
+                if Some(module) != program.core() {
+                    return None;
+                }
+                // An operand that is a duration, or an `i64` literal.
+                let operand = |argument: &Argument| match (&argument.value.ty, &argument.value.kind)
+                {
+                    (Type::Scalar(Scalar::Duration), _) => {
+                        self.known_duration(&argument.value).map(Operand::Duration)
+                    }
+                    (Type::Scalar(Scalar::I64), ExprKind::Literal(Value::Int(count))) => {
+                        Some(Operand::Count(*count))
+                    }
+                    _ => None,
+                };
+                // In the order of the parameters, however they are
+                // written: `sub_(rhs: a, lhs: b)` is `b - a`.
+                let mut ordered: Vec<&Argument> = arguments.iter().collect();
+                ordered.sort_by_key(|argument| argument.parameter);
+                let operands: Option<Vec<Operand>> = ordered.into_iter().map(operand).collect();
+                let name = program.modules[module].declarations[declaration]
+                    .name
+                    .as_str();
+                match (name, operands?.as_slice()) {
+                    ("neg_", [Operand::Duration(micros)]) => micros.checked_neg(),
+                    ("add_", [Operand::Duration(lhs), Operand::Duration(rhs)]) => {
+                        lhs.checked_add(*rhs)
+                    }
+                    ("sub_", [Operand::Duration(lhs), Operand::Duration(rhs)]) => {
+                        lhs.checked_sub(*rhs)
+                    }
+                    ("mul_", [Operand::Duration(micros), Operand::Count(count)])
+                    | ("mul_", [Operand::Count(count), Operand::Duration(micros)]) => {
+                        micros.checked_mul(*count)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 
@@ -1236,4 +1284,13 @@ pub(super) fn called(value: &Expr) -> Option<(usize, usize, &[Argument])> {
     };
     let (module, declaration) = callee.declaration()?;
     Some((module, declaration, arguments))
+}
+
+/// An operand of core's arithmetic on durations, as `known_duration`
+/// works it out: a duration in microseconds, or an `i64` count.
+enum Operand {
+    /// A duration, in microseconds.
+    Duration(i64),
+    /// An `i64`.
+    Count(i64),
 }

@@ -24,4 +24,9 @@ const fn more_than_zero(alarm: Alarm) {
     schedule(alarm, 1s)
     schedule(alarm, EVERY)
     schedule(alarm, never)
+    schedule(alarm, 1s + 1s)
+    schedule(alarm, TWO * 2)
+    schedule(alarm, -(1s - 2s))
 }
+const TWO: duration = 1s + 1s
+const fn cancelled(alarm: Alarm) { schedule(alarm, 1s - 1s) }

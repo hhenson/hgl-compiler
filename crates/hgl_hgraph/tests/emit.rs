@@ -3657,9 +3657,10 @@ const TIMERS_WAVE3: (&str, &str) = fixture!("demo.timers_wave3.hgl");
 /// that no input is modified as `modified(input)` asks it, so that an
 /// invalidation is none, and a `ref` parameter is modified where its
 /// designation changed; `True` in a node with no input. TIME-8: a
-/// duration that is no literal is given through `_core.wake_delay`,
-/// which fails the call where it is not more than zero, but for a zero
-/// in `start`; a literal the analyser has judged is given as it is.
+/// duration whose value the target does not work out is given through
+/// `_core.wake_delay`, which fails the call where it is not more than
+/// zero, but for a zero in `start`; one worked out and admitted, a
+/// literal or a constant expression, is given as it is.
 #[test]
 fn the_empty_selection_as_a_bool_and_a_wakes_duration_are_written() {
     let emitted = emit_clean(&[TIMERS_WAVE3]);
@@ -3687,6 +3688,8 @@ fn the_empty_selection_as_a_bool_and_a_wakes_duration_are_written() {
             "def _stop_asked_in_stop(every: _dt.timedelta, value: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None):\n",
             "    _core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(every, starting=False)",
         ),
+        // A constant expression worked out to be more than zero.
+        "_core.schedule_Alarm_duration(capability=_scheduler, at=_core.add__duration_duration(lhs=_core.sub__duration_duration(lhs=_core.mul__duration_i64(lhs=STEP(), rhs=2), ",
         // An instance's literal, which the analyser did not see: one
         // more than zero is given as it is, and zero is checked.
         "at=_dt.timedelta(microseconds=1000000), tag=None",
@@ -3702,8 +3705,10 @@ fn the_empty_selection_as_a_bool_and_a_wakes_duration_are_written() {
 /// wake asked for with a `duration` takes one more than zero, but in
 /// `start`": whether a value function given the scheduler or the alarm
 /// asks in `start` the rule does not say, and a duration there that may
-/// be zero, a literal, a constant or a parameter, is reported; one that
-/// is more than zero, and an instant, are written.
+/// be zero, a literal, a constant, a constant expression or a parameter,
+/// is reported; one worked out to be more than zero, a constant
+/// expression of core's arithmetic among them, and an instant, are
+/// written.
 #[test]
 fn what_a_timer_form_not_written_is_reported() {
     let emitted = emit(&[fixture!(
@@ -3718,6 +3723,7 @@ fn what_a_timer_form_not_written_is_reported() {
             "m.hgl:20:59 target.unsupported: the hgraph target does not write a wake asked for with a duration that may be zero in a value function (TIME-8) yet",
             "m.hgl:21:77 target.unsupported: the hgraph target does not write a wake asked for with a duration that may be zero in a value function (TIME-8) yet",
             "m.hgl:22:56 target.unsupported: the hgraph target does not write a wake asked for with a duration that may be zero in a value function (TIME-8) yet",
+            "m.hgl:32:52 target.unsupported: the hgraph target does not write a wake asked for with a duration that may be zero in a value function (TIME-8) yet",
         ]
     );
 }
