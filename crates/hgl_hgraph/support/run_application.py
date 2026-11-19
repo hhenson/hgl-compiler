@@ -46,9 +46,9 @@ import signal
 import sys
 import threading
 
-
-def _escape(text):
-    return text.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r")
+# What this driver shares with the other, from beside it: Python put
+# this script's directory first on its path.
+import _driver
 
 
 def _described(error):
@@ -145,23 +145,13 @@ def _shown(value, core):
 
 
 def main(directory, module_name, function_name, results, mode):
-    # Python puts this script's directory first on its path. The
-    # program is found from the output directory and nowhere else.
-    own = os.path.dirname(os.path.abspath(__file__))
-    sys.path[:] = [entry for entry in sys.path if os.path.abspath(entry or ".") != own]
-    sys.path.insert(0, directory)
+    _driver.find_program(directory)
     # Standard output is made standard error, for Python and for what
     # is under it: hgraph logs to the first.
     sys.stdout.flush()
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     with open(results, "w", encoding="utf-8") as out:
-        lock = threading.Lock()
-
-        def say(*parts):
-            with lock:
-                out.write(" ".join(str(part) for part in parts) + "\n")
-                out.flush()
-
+        say = _driver.recorder(out)
         say("start")
         try:
             module = importlib.import_module(module_name)
@@ -171,7 +161,7 @@ def main(directory, module_name, function_name, results, mode):
             # write what is published.
             core = importlib.import_module("_hgl._core_native")
         except Exception as error:
-            say("unloaded", _escape(_described(error)))
+            say("unloaded", _driver.escape(_described(error)))
             return 1
 
         outcome = {}
@@ -223,14 +213,14 @@ def main(directory, module_name, function_name, results, mode):
             thread.join(0.1)
 
         if "error" in outcome:
-            say("failed", _escape(_described(outcome["error"])))
+            say("failed", _driver.escape(_described(outcome["error"])))
             return 1
         output = outcome.get("output")
         if output is None:
             say("stopped", "none")
             return 0
         for at, published in output:
-            say("published", _instant(at), _escape(_shown(published, core)))
+            say("published", _instant(at), _driver.escape(_shown(published, core)))
         say("stopped")
         return 0
 
