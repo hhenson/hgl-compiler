@@ -45,6 +45,9 @@
 //! * `signatures` checks each callable's signature with its types read:
 //!   a generic value parameter's default is of its type, and an option
 //!   is one kind across an operator's candidates (GEN-13, GEN-6);
+//! * `documentation` checks that a documentation comment's `Args:` and
+//!   `Type Args:` keys name the declaration's parameters and generic
+//!   parameters (SDOC-3), and records nothing (SDOC-6);
 //! * `inherited` compares the defaults a struct has for one field from
 //!   two parents, once `values` has read them (UNIT-9).
 //!
@@ -72,6 +75,7 @@ mod constant;
 mod cycles;
 mod declare;
 mod declared;
+mod documentation;
 mod forms;
 pub mod hir;
 mod imports;
@@ -457,6 +461,16 @@ pub mod codes {
     /// proposed to the specification, and is replaced by the catalogued
     /// code when one is agreed.
     pub mod local {
+        /// A node's `cache` initializer reads a temporal input (TIME-1):
+        /// a cache is initialized on every start, before any input has
+        /// a value (TIME-6, TIME-5). Local: the catalogue's
+        /// `state.input_read` names a state's initializer alone.
+        pub const CACHE_INPUT_READ: &str = "cache.input_read";
+        /// A key of a documentation comment's `Args:` or `Type Args:`
+        /// section names no parameter, or no generic parameter, of the
+        /// declaration it documents (SDOC-3). Local: the catalogue has
+        /// no row for it.
+        pub const DOC_UNKNOWN_KEY: &str = "doc.unknown_key";
         /// A struct has a field from two parents with two different
         /// defaults, and gives it none of its own (UNIT-9).
         pub const DEFAULT_CONFLICT: &str = "default.conflict";
@@ -467,7 +481,13 @@ pub mod codes {
         pub const YIELD_IN_VALUE: &str = "yield.in_value";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 3] = [DEFAULT_CONFLICT, SOURCE_RETURN_VALUE, YIELD_IN_VALUE];
+        pub const ALL: [&str; 5] = [
+            CACHE_INPUT_READ,
+            DOC_UNKNOWN_KEY,
+            DEFAULT_CONFLICT,
+            SOURCE_RETURN_VALUE,
+            YIELD_IN_VALUE,
+        ];
     }
 }
 
@@ -537,6 +557,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     phases::check(&program, diagnostics);
     let inherited = declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics);
+    documentation::check(&program, diagnostics);
     values::check(&mut program, diagnostics);
     // UNIT-9: asked once each default has been read.
     inherited::check(&program, &inherited, diagnostics);
@@ -556,6 +577,19 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
+}
+
+/// An error with a code of this compiler's own ([`codes::local`]), for a
+/// rejection the specification's catalogue has no row for. It cites the
+/// rule that requires it.
+fn local_error(
+    category: Category,
+    code: &'static str,
+    at: Location,
+    message: String,
+    rule: &'static str,
+) -> Diagnostic {
+    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
 }
 
 /// A warning of the specification's catalogue, which does not reject
