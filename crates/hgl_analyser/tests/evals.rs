@@ -605,7 +605,10 @@ fn a_tuple_cell_is_the_whole_tuple_where_it_is_one() {
 /// generic target's parameters of types written out are the same with
 /// its generic arguments in place (GEN-2): a tuple's trace there is a
 /// trace of that tuple, so a trace an earlier eval gave is taken, and a
-/// cell written as a T is read whole.
+/// cell written as a T is read whole. A tuple that names a generic
+/// parameter, `tuple<T, T>`, is found from a trace an eval gave as from
+/// one written out (GEN-2: "Resolve every needed generic from actual
+/// inputs"), and its cells are then read as any tuple's are.
 #[test]
 fn a_tuple_trace_is_given_to_a_generic_target() {
     let checked = module(concat!(
@@ -615,6 +618,9 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
         "fn consume<T>(pair: tuple<i64, i64?>, const tag: T) -> i64 {\n",
         "    when all_valid(pair) { return pair[0] }\n",
         "}\n",
+        "fn same_pair<T>(pair: tuple<T, T>) -> i64 {\n",
+        "    when all_valid(pair) { return 1 }\n",
+        "}\n",
         "fn forwarded<T>(pair: tuple<i64, i64>, const tag: T) -> tuple<i64, i64> {\n",
         "    when { return pair }\n",
         "}\n",
@@ -622,6 +628,8 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
         "    let pairs = eval(two(command: [1, 2]))\n",
         "    assert eval(forwarded(pair: pairs, tag: 1)) == [(1, 1), (2, 2)]\n",
         "    assert eval(consume(pair: [(1, null)], tag: 1)) == [1]\n",
+        "    assert eval(same_pair(pair: pairs)) == [1, 1]\n",
+        "    assert eval(same_pair(pair: [(1, 2), (null, 3)])) == [1, 1]\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
@@ -648,7 +656,13 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
             "tuple<i64, i64>",
             "tuple<i64, i64>",
             "tuple<i64, i64?>",
-            "i64"
+            "i64",
+            "i64",
+            "i64",
+            "tuple<i64, i64>",
+            "tuple<i64?, i64?>",
+            "i64",
+            "i64",
         ]
     );
 }
