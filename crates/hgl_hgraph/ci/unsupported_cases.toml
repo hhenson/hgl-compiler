@@ -3,10 +3,6 @@
 "`all_valid` of a value with an optional child (TIME-9)" = [
     "conformance::a_struct_with_an_optional_field_is_all_valid_and_read_whole",
 ]
-"the readiness END-9 gives `rolling_window<i64, 3, 2>`" = [
-    "conformance::a_window_is_valid_before_its_minimum_and_all_valid_at_it",
-    "conformance::reading_a_window_before_it_is_all_valid_fails",
-]
 
 # Rejection cases the compiler does not yet reject, each
 # `suite::file::declaration` with the file under the suite's directory,

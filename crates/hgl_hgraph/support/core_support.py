@@ -1155,9 +1155,16 @@ def child_delta(port, shape=None):
 
 
 def window_values(port):
-    """A window's value read in a hook (the language's TYPE-11): "a
-    `list<V>` of the values held, oldest first". hgraph's `TSW` holds them
-    as an array, each made the Python value it is."""
+    """A window's value read in a hook or given to a lifted helper (the
+    language's TYPE-11): "a `list<V>` of the values held, oldest first,
+    and the read before `all_valid` fails with `value.unset_read`", as
+    core's END-9 has it. hgraph's `TSW` holds them as an array, each made
+    the Python value it is. hgraph 0.9.5 reads a window that holds fewer
+    than its minimum as the values it holds: the read fails here."""
+    if not port.all_valid:
+        raise HglError(
+            "the window is read before it holds its minimum", code="value.unset_read"
+        )
     values = port.value
     return list(values.tolist() if hasattr(values, "tolist") else values)
 

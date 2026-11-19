@@ -66,7 +66,6 @@ impl Emitter<'_> {
         let declaration = &program.modules[self.module].declarations[index];
         let function = Function::of(self.program, body, Some(signature), Mode::Node);
         let (mut parameters, result) = self.temporal_signature(declaration, signature);
-        self.window_inputs(signature);
         self.window_published_once(signature, body);
         // The `const` parameters, as written for the node: a `start`
         // and a `stop` are functions of their own to hgraph, and are
@@ -697,7 +696,6 @@ impl Emitter<'_> {
         let program = self.program;
         let declaration = &program.modules[self.module].declarations[index];
         let (parameters, result) = self.temporal_signature(declaration, signature);
-        self.window_inputs(signature);
         // What the body is made of: the declarations, the hooks, and
         // the statements that yield.
         let NodeParts {
