@@ -319,8 +319,26 @@ pub enum Stmt {
 pub struct Case {
     /// The label.
     pub label: Expr,
+    /// The value the label comes to, where the analyser resolved it
+    /// (CTRL-6: "compared by resolved value"): `None` for one it cannot
+    /// fold, a generic value parameter among them, whose value only an
+    /// instance has (GEN-13).
+    pub value: Option<LabelValue>,
     /// Its statements. There is no fallthrough (CTRL-6).
     pub body: Vec<Stmt>,
+}
+
+/// The value of a `switch` label, for telling two alike (CTRL-6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LabelValue {
+    /// An integer.
+    Int(i64),
+    /// `true` or `false`.
+    Bool(bool),
+    /// A string.
+    Str(String),
+    /// A member of the selector's enum, by its position.
+    Member(usize),
 }
 
 /// One expression, with its type.

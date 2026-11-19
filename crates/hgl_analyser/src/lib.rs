@@ -480,13 +480,17 @@ pub mod codes {
         /// A source's `yield` stands inside a block or an `if` whose
         /// value is used (SOURCE-4).
         pub const YIELD_IN_VALUE: &str = "yield.in_value";
+        /// A `switch` label that is no compile-time constant (CTRL-12,
+        /// UNIT-13). Local: the catalogue has no row for it.
+        pub const SWITCH_LABEL_CONSTANT: &str = "switch.label_constant";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 4] = [
+        pub const ALL: [&str; 5] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
             YIELD_IN_VALUE,
+            SWITCH_LABEL_CONSTANT,
         ];
     }
 }
