@@ -729,6 +729,35 @@ fn a_constructed_member_and_a_sized_list_are_held_to_their_types() {
     );
 }
 
+/// NUM-1, NUM-3: `/` of two `i64` is an `f64` already, so where an
+/// `f64` is expected its literals are not widened (GEN-5), and the
+/// quotient is rounded once. NUM-2: "Mixed numeric comparison must not
+/// first round an i64 operand to f64". A constant has the value its
+/// expression has when the program runs.
+#[test]
+fn integer_division_and_mixed_comparison_are_exact() {
+    let shared = concat!(
+        "struct FBox<const X: f64> { v: i64 }\n",
+        "struct BBox<const B: bool> { v: i64 }\n",
+        "const QUOTIENT: f64 = 9007199254740993 / 3\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(x: FBox<9007199254740993 / 3>) -> FBox<3002399751580331.0> => x\n\
+             const fn b(x: BBox<9007199254740993 == 9007199254740992.0>) -> BBox<false> => x\n\
+             const fn c(x: FBox<QUOTIENT>) -> FBox<3002399751580331.0> => x\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(x: FBox<9007199254740993 / 3>) -> FBox<3002399751580330.5> => x\n\
+             const fn b(x: BBox<9007199254740993 == 9007199254740992.0>) -> BBox<true> => x\n"
+        ),
+        &["5 type.mismatch", "6 type.mismatch"],
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");

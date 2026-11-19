@@ -1220,11 +1220,15 @@ fn binary(
     let operator = tokens(node)
         .find_map(|token| binary_operator(token.kind()))
         .ok_or(Fault::NotConstant)?;
+    // GEN-5: "where a candidate that gives the requested output takes
+    // every integer literal as an `i64`, none is widened". `+`, `-` and
+    // `*` of two `i64` give an `i64`, so where an `f64` is requested
+    // their literals are widened; `/` of two gives an `f64` already
+    // (NUM-1), and its literals are not.
     let hint = match operator {
-        BinaryOperator::Add
-        | BinaryOperator::Subtract
-        | BinaryOperator::Multiply
-        | BinaryOperator::Divide => numeric_hint(expected),
+        BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply => {
+            numeric_hint(expected)
+        }
         _ => None,
     };
     let mut left = value(&left, hint, scope, depth + 1)?;
@@ -1232,13 +1236,23 @@ fn binary(
     if configured(node) {
         return configured_value(node, scope, None);
     }
-    // EXPR-5: an integer literal beside an `f64` is one, as core's
-    // numeric candidates take two numbers of one type (NUM-1).
+    // An integer literal beside an `f64` in arithmetic is taken as the
+    // `f64` it is nearest: core's mixed candidates make it one (NUM-1,
+    // "Unconfigured mixed i64/f64 and f64 arithmetic returns f64"). A
+    // comparison keeps it an `i64`: NUM-2, "Mixed numeric comparison
+    // must not first round an i64 operand to f64".
     let float = Some(Type::Scalar(Scalar::F64));
-    if left.open == Open::Integer && right.ty == float {
+    let arithmetic = matches!(
+        operator,
+        BinaryOperator::Add
+            | BinaryOperator::Subtract
+            | BinaryOperator::Multiply
+            | BinaryOperator::Divide
+    );
+    if arithmetic && left.open == Open::Integer && right.ty == float {
         left = widened(left);
     }
-    if right.open == Open::Integer && left.ty == float {
+    if arithmetic && right.open == Open::Integer && left.ty == float {
         right = widened(right);
     }
     let ty = binary_type(operator, left.ty.as_ref(), right.ty.as_ref());
@@ -1319,6 +1333,18 @@ fn binary_type(
             _,
             _,
         ) => Scalar::Bool,
+        // NUM-1: "Unconfigured mixed i64/f64 and f64 arithmetic returns
+        // f64".
+        (
+            BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply,
+            Some(Scalar::I64 | Scalar::F64),
+            Some(Scalar::F64),
+        )
+        | (
+            BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply,
+            Some(Scalar::F64),
+            Some(Scalar::I64),
+        ) => Scalar::F64,
         // NUM-3: "Division whose numeric result is f64"; a duration by
         // a duration is an `f64` too (OPS-1).
         (BinaryOperator::Divide, Some(Scalar::I64 | Scalar::F64), _)
@@ -1410,6 +1436,14 @@ pub(crate) fn combined(
         return V::Binary(operator, Box::new(left.clone()), Box::new(right.clone()));
     }
     let worked_out = match (operator, left, right) {
+        // OPS-2: "Numbers compare as the numeric contract says, an
+        // `i64` with an `f64` included", and exactly (NUM-2).
+        (Op::Equal, V::Int(_), V::Float(_)) | (Op::Equal, V::Float(_), V::Int(_)) => {
+            ordered(left, right).map(|order| V::Bool(order.is_eq()))
+        }
+        (Op::NotEqual, V::Int(_), V::Float(_)) | (Op::NotEqual, V::Float(_), V::Int(_)) => {
+            ordered(left, right).map(|order| V::Bool(order.is_ne()))
+        }
         (Op::Equal, _, _) => left.same(right).map(V::Bool),
         (Op::NotEqual, _, _) => left.same(right).map(|same| V::Bool(!same)),
         (Op::And, V::Bool(left), V::Bool(right)) => Some(V::Bool(*left && *right)),
@@ -1458,6 +1492,14 @@ pub(crate) fn combined(
         // zero is a signed infinity, and zero by zero a NaN, which is no
         // constant (NUM-5).
         (Op::Divide, V::Int(left), V::Int(right)) => float(divided(*left, *right)),
+        // NUM-1: "Unconfigured mixed i64/f64 and f64 arithmetic returns
+        // f64": the `i64` as the `f64` nearest it.
+        (Op::Add | Op::Subtract | Op::Multiply | Op::Divide, V::Int(whole), V::Float(_)) => {
+            return combined(operator, &V::Float(*whole as f64), right);
+        }
+        (Op::Add | Op::Subtract | Op::Multiply | Op::Divide, V::Float(_), V::Int(whole)) => {
+            return combined(operator, left, &V::Float(*whole as f64));
+        }
         (Op::Add, V::Float(left), V::Float(right)) => float(left + right),
         (Op::Subtract, V::Float(left), V::Float(right)) => float(left - right),
         (Op::Multiply, V::Float(left), V::Float(right)) => float(left * right),
@@ -1559,7 +1601,36 @@ fn ordered(left: &ConstantValue, right: &ConstantValue) -> Option<std::cmp::Orde
         (ConstantValue::Int(left), ConstantValue::Int(right))
         | (ConstantValue::Duration(left), ConstantValue::Duration(right)) => Some(left.cmp(right)),
         (ConstantValue::Float(left), ConstantValue::Float(right)) => left.partial_cmp(right),
+        (ConstantValue::Int(whole), ConstantValue::Float(real)) => Some(mixed(*whole, *real)),
+        (ConstantValue::Float(real), ConstantValue::Int(whole)) => {
+            Some(mixed(*whole, *real).reverse())
+        }
         _ => None,
+    }
+}
+
+/// How the `i64` `whole` orders beside the `f64` `real`, exactly: the
+/// integer is not rounded to an `f64` first (NUM-2). No constant is a
+/// NaN.
+fn mixed(whole: i64, real: f64) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    // 2^63 is exact as an `f64`: every `i64` is below it, and at or
+    // above -2^63.
+    const BOUND: f64 = 9_223_372_036_854_775_808.0;
+    if real >= BOUND {
+        return Ordering::Less;
+    }
+    if real < -BOUND {
+        return Ordering::Greater;
+    }
+    // In range, the floor of `real` is an `i64` exactly, and `as`
+    // gives it.
+    let floor = real.floor();
+    #[allow(clippy::cast_possible_truncation)]
+    let floor_whole = floor as i64;
+    match whole.cmp(&floor_whole) {
+        Ordering::Equal if real > floor => Ordering::Less,
+        order => order,
     }
 }
 
@@ -2076,6 +2147,57 @@ mod tests {
         assert_eq!(from_instant(instant(&leap).unwrap()), leap);
         let first = datetime(0, 0);
         assert_eq!(from_instant(instant(&first).unwrap()), first);
+    }
+
+    /// NUM-2: "Mixed numeric comparison must not first round an i64
+    /// operand to f64": 2^53 + 1 is more than the `f64` 2^53.
+    #[test]
+    fn a_mixed_comparison_is_exact() {
+        let compare = |operator, whole: i64, real: f64| {
+            combined(
+                operator,
+                &ConstantValue::Int(whole),
+                &ConstantValue::Float(real),
+            )
+            .key()
+        };
+        let yes = Some("true".to_string());
+        let no = Some("false".to_string());
+        assert_eq!(
+            compare(
+                BinaryOperator::Equal,
+                9_007_199_254_740_993,
+                9_007_199_254_740_992.0
+            ),
+            no
+        );
+        assert_eq!(
+            compare(
+                BinaryOperator::Greater,
+                9_007_199_254_740_993,
+                9_007_199_254_740_992.0
+            ),
+            yes
+        );
+        assert_eq!(compare(BinaryOperator::Equal, 1, 1.0), yes);
+        assert_eq!(compare(BinaryOperator::Less, 1, 1.5), yes);
+        assert_eq!(compare(BinaryOperator::Less, -2, -1.5), yes);
+        assert_eq!(
+            compare(BinaryOperator::Less, i64::MAX, 9_223_372_036_854_775_808.0),
+            yes
+        );
+        assert_eq!(
+            compare(BinaryOperator::Greater, i64::MIN, f64::NEG_INFINITY),
+            yes
+        );
+        assert_eq!(
+            compare(
+                BinaryOperator::NotEqual,
+                i64::MIN,
+                -9_223_372_036_854_775_808.0
+            ),
+            no
+        );
     }
 
     /// NUM-3: true division of two `i64` is the `f64` nearest the exact
