@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{Checked, check};
+use common::{Checked, check, module};
 use hgl_analyser::Binding;
 
 /// No lines.
@@ -42,12 +42,6 @@ fn uses(checked: &Checked, path: &str) -> Vec<String> {
             format!("{} {place} -> {what}", used.name)
         })
         .collect()
-}
-
-/// A module `m` with one file holding `body`.
-fn module(body: &str) -> Checked {
-    let text = format!("module m\n{body}");
-    check(&[("m.hgl", text.as_str())])
 }
 
 // ---- UNIT-10: what a name resolves to ----
