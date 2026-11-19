@@ -879,12 +879,16 @@ def dict_replaced(output, value):
     return made
 
 
-def whole_delta(value, keys):
-    """The delta that publishes `value` whole to an input that holds the
-    keys `keys` (the language's TST-9: "a T whole, which replaces what the
-    input held"): a dictionary's removes each key it has not, and a set's
-    each member; a struct's is each field, as hgraph's bundle takes it
-    (see `bundled`); a list's is its tuple."""
+def whole_delta(value, keys, fixed=False):
+    """The delta that publishing `value` whole records, to a value that
+    holds the keys or members `keys` (the language's TST-9: "a T whole,
+    which replaces what the input held"; TST-16: "A T published whole is
+    held as its delta too"), as hgraph records it and takes it back: a
+    dictionary's is each entry, and the removal of each key it has not; a
+    set's the members added and removed; a struct's each field, as
+    hgraph's bundle takes it (see `bundled`); a fixed list's, `fixed`,
+    each position, as its `TSL` records it; and an unsized list's its
+    whole tuple."""
     if isinstance(value, (set, frozenset)):
         added, removed = frozenset(value - keys), frozenset(keys - value)
         members = added | removed
@@ -897,6 +901,8 @@ def whole_delta(value, keys):
         return made
     if hasattr(value, "_hgl_fields"):
         return bundled(value)
+    if isinstance(value, list) and fixed:
+        return {position: published(entry) for position, entry in enumerate(value)}
     if isinstance(value, list):
         return tuple(value)
     return value

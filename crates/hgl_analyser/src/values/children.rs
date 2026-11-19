@@ -374,13 +374,7 @@ impl Typer<'_> {
     /// The child is named and not read: an index in it is read, as any
     /// value is.
     pub(super) fn child_endpoint(&mut self, node: &SyntaxNode) -> Option<Option<Expr>> {
-        // "Parentheses select grouping" (EXPR-1).
-        let mut named = node.clone();
-        while named.kind() == SyntaxKind::ParenExpr
-            && let Some(inner) = named.children().next()
-        {
-            named = inner;
-        }
+        let named = super::endpoint_argument(node);
         if !matches!(named.kind(), SyntaxKind::IndexExpr | SyntaxKind::MemberExpr) {
             return None;
         }
@@ -468,12 +462,7 @@ impl Typer<'_> {
         if operation == EndpointOperation::DeltaValue
             && let Some(path) = self.tested_child(&child)
         {
-            let mut named = given.clone();
-            while named.kind() == SyntaxKind::ParenExpr
-                && let Some(inner) = named.children().next()
-            {
-                named = inner;
-            }
+            let named = super::endpoint_argument(given);
             self.admit_child(path, &named, child.at);
         }
         let ty = match operation {

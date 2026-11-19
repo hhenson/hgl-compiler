@@ -1434,7 +1434,7 @@ impl<'a> Typer<'a> {
                     return None;
                 }
                 let list = child(header, SyntaxKind::ArgList)?;
-                let arguments = arguments_of(&list);
+                let arguments = endpoint_arguments(&list);
                 if arguments.is_empty() {
                     // `valid()`: every temporal input.
                     return Some(self.temporal_inputs());
@@ -1443,7 +1443,7 @@ impl<'a> Typer<'a> {
                 // `when` header that has the test alone or as a top-level
                 // conjunct guards its body". It names no input, and the
                 // default admission stands with it.
-                let of_child = arguments.iter().any(|(_, entry)| {
+                let of_child = arguments.iter().any(|entry| {
                     matches!(entry.kind(), SyntaxKind::IndexExpr | SyntaxKind::MemberExpr)
                 });
                 if of_child {
@@ -1457,7 +1457,6 @@ impl<'a> Typer<'a> {
                 Some(
                     arguments
                         .iter()
-                        .map(|(_, entry)| entry)
                         .filter(|entry| entry.kind() == SyntaxKind::NameExpr)
                         .filter_map(|entry| self.local_of(entry))
                         .filter(|local| self.is_temporal_input(*local))
@@ -1594,10 +1593,7 @@ impl<'a> Typer<'a> {
         list: &SyntaxNode,
     ) -> (ExprKind, Type) {
         let at = Location::new(self.file, name.span());
-        let arguments: Vec<SyntaxNode> = arguments_of(list)
-            .into_iter()
-            .map(|(_, value)| value)
-            .collect();
+        let arguments = endpoint_arguments(list);
         // How many it takes: a selector may stand with none, and with
         // as many inputs as it names (TIME-3: "`modified(a, b)`
         // subscribes to both named inputs, and similarly for more
@@ -1925,13 +1921,7 @@ impl<'a> Typer<'a> {
     /// function there is no enclosing node, and nothing to give.
     fn endpoint_given(&mut self, node: &SyntaxNode) -> Expr {
         let at = self.at(node);
-        // "Parentheses select grouping" (EXPR-1).
-        let mut named = node.clone();
-        while named.kind() == SyntaxKind::ParenExpr
-            && let Some(inner) = named.children().next()
-        {
-            named = inner;
-        }
+        let named = endpoint_argument(node);
         // TIME-9: "a child of one, `parts[1]`, `quote.bid` or
         // `parts[i]`", in a hook.
         let reported = self.diagnostics.len();
@@ -15009,6 +14999,29 @@ fn ungrouped(mut node: SyntaxNode) -> SyntaxNode {
 
 /// The arguments of an argument list, in order: each with its name,
 /// when it has one, and its value.
+/// An argument of an endpoint operation or an `endpoint<T>` parameter as
+/// every check reads it: EXPR-1, "Parentheses select grouping", so
+/// `valid((quote.bid))` names what `valid(quote.bid)` does, and grouping
+/// never changes what an argument is, its admission or its guard.
+fn endpoint_argument(node: &SyntaxNode) -> SyntaxNode {
+    let mut named = node.clone();
+    while named.kind() == SyntaxKind::ParenExpr
+        && let Some(inner) = named.children().next()
+    {
+        named = inner;
+    }
+    named
+}
+
+/// The arguments of the endpoint operation whose list is `list`, each
+/// as `endpoint_argument` reads it.
+fn endpoint_arguments(list: &SyntaxNode) -> Vec<SyntaxNode> {
+    arguments_of(list)
+        .into_iter()
+        .map(|(_, value)| endpoint_argument(&value))
+        .collect()
+}
+
 fn arguments_of(list: &SyntaxNode) -> Vec<(Option<SyntaxToken>, SyntaxNode)> {
     list.children()
         .filter(|argument| argument.kind() == SyntaxKind::Arg)

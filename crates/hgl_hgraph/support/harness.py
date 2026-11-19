@@ -55,15 +55,17 @@ class _Whole:
     input held" (TST-9), and an expectation's is "compared ... with the
     value the result holds once its cycle has published"."""
 
-    __slots__ = ("value",)
+    __slots__ = ("value", "fixed")
 
-    def __init__(self, value):
+    def __init__(self, value, fixed):
         self.value = value
+        self.fixed = fixed
 
 
-def whole(value):
-    """A trace's cell written as the whole value `value` (TST-5)."""
-    return _Whole(value)
+def whole(value, fixed=False):
+    """A trace's cell written as the whole value `value` (TST-5); `fixed`
+    where it is a fixed list's, whose delta is each position's."""
+    return _Whole(value, fixed)
 
 
 class _Published:
@@ -136,27 +138,39 @@ def _replay_entries(trace, start):
     member. The keys or members it holds are followed through each cell,
     a delta's among them."""
     entries = []
-    keys = set()
-    for after, published in _relative(trace, start):
+    for after, published in _deltas(_relative(trace, start)):
         if after < _datetime.timedelta(0):
             raise _core.HglError("a timed trace has a key before the run's start")
-        # A recording given as an input replays what it published.
+        entries.append((_core.add__datetime_duration(start, after), published))
+    return entries
+
+
+def _deltas(cells):
+    """Each of a trace's `cells`, `(key, publication)`, with what it
+    publishes as the delta its publication is: one cell written whole is
+    the delta that publishing it whole records (`_core.whole_delta`), and
+    one of a recording given again what it recorded. A delta is as it is.
+
+    The keys or members the value holds are followed through each cell,
+    a delta's among them, so that a whole dictionary or set removes what
+    it has not (TST-9). The same deltas are replayed to an input (CEVAL-2)
+    and given to a `const fn` (TST-16: "A T published whole is held as
+    its delta too")."""
+    keys = set()
+    for key, published in cells:
         if isinstance(published, _Published):
             published = published.delta
         if isinstance(published, _Whole):
-            published = _core.whole_delta(published.value, keys)
+            published = _core.whole_delta(published.value, keys, published.fixed)
         if isinstance(published, dict):
-            for key, change in published.items():
+            for held, change in published.items():
                 if _core._removes(change):
-                    keys.discard(key)
+                    keys.discard(held)
                 else:
-                    keys.add(key)
+                    keys.add(held)
         elif _is_set_delta(published):
             keys = (keys - set(published.removed)) | set(published.added)
-        elif isinstance(published, (set, frozenset)):
-            keys = set(published)
-        entries.append((_core.add__datetime_duration(start, after), published))
-    return entries
+        yield key, published
 
 
 def _bounds(config, unstated):
@@ -425,10 +439,8 @@ def publications(trace):
     # A written trace has no run to admit its keys against. Preserve
     # its absolute instants and anchor only offsets to the earliest start.
     entries = []
-    for key, published in _relative(trace):
-        # A cell written whole is held as what it publishes (TST-16).
-        if isinstance(published, _Whole):
-            published = published.value
+    # TST-16: "A T published whole is held as its delta too".
+    for key, published in _deltas(_relative(trace)):
         if isinstance(key, _datetime.timedelta):
             key = _core.add__datetime_duration(_EARLIEST_START, key)
         entries.append((key, published))

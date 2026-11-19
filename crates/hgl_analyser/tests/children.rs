@@ -362,3 +362,24 @@ fn a_child_in_parentheses_is_the_same_child() {
         ["m.hgl:9:19 phase/payload.unguarded TIME-1"]
     );
 }
+
+/// EXPR-1: "Parentheses select grouping", in a `when` header as
+/// elsewhere: `valid((quote.bid))` is a guard of a child, as
+/// `valid(quote.bid)` is, and names no input, so the default admission
+/// stands; `valid((other))` names `other`.
+#[test]
+fn grouping_never_changes_an_endpoint_argument() {
+    let checked = module(concat!(
+        "struct Quote { bid: i64\n ask: i64 }\n",
+        "fn bid(quote: Quote, other: i64) -> i64 {\n",
+        "    when valid((quote.bid)) { return quote.bid + other }\n",
+        "}\n",
+        "fn named(quote: Quote, other: i64) -> i64 {\n",
+        "    when valid((other)) { return other }\n",
+        "}\n",
+        "fn whole(quote: Quote) -> bool {\n",
+        "    when all_valid((quote)) { return valid((quote.ask)) && modified((quote)) }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+}

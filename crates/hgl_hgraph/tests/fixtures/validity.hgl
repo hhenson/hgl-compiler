@@ -358,3 +358,20 @@ test what_the_second_review_found {
     assert eval(both_first(value: [1])) == [delta<Both>(first: 1)]
     assert eval(both_first(value: [1])) != [Both(first: 1, second: 0)]
 }
+
+# ---- What the third review of this lane found ----
+
+# TST-16: "A T published whole is held as its delta too": a written cell
+# given to a `const fn` is the delta its publication records.
+const fn first_bid(seen: list<tuple<datetime, delta<Quote>>>) -> i64 {
+    let bid = seen[0][1].bid
+    if bid == null { return -1 }
+    return bid
+}
+
+test a_whole_cell_given_to_a_const_fn_is_its_delta {
+    var seen = eval(relay_quote(quote: [Quote(bid: 5, ask: 6)]))
+    assert first_bid(seen) == 5
+    seen = [Quote(bid: 1, ask: 2)]
+    assert first_bid(seen) == 1
+}

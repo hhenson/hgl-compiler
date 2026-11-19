@@ -9048,9 +9048,14 @@ impl Emitter<'_> {
                         self.unsupported(value.at, "a whole trace cell of composites");
                         return "None".to_string();
                     }
+                    let fixed = matches!(value.ty, Type::List { size: Some(_), .. });
                     let value = self.expression(function, value);
                     self.harness = true;
-                    format!("_harness.whole({value})")
+                    if fixed {
+                        format!("_harness.whole({value}, fixed=True)")
+                    } else {
+                        format!("_harness.whole({value})")
+                    }
                 }
                 Some(value) => self.expression(function, value),
             })
