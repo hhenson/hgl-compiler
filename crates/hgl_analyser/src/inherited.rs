@@ -14,13 +14,14 @@
 //! Conflicting inherited defaults require an explicit child override."
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
+use hgl_lexer::literal::{decode_float, decode_string};
 use hgl_source::Span;
 
 use crate::codes;
 use crate::declared::substitute_within;
 use crate::hir::{Callee, Expr, ExprKind, Form, Stmt, Value};
 use crate::program::Program;
-use crate::types::{Argument, ConstantValue, Detail, FieldRef, Type};
+use crate::types::{Argument, Constant, ConstantValue, Detail, FieldRef, Type};
 
 /// The defaults two parents give one field of a struct, which gives
 /// that field none of its own.
@@ -129,6 +130,7 @@ fn bound(program: &Program, default: &InheritedDefault, place: Location) -> Opti
     value.walk_mut(&mut |expression| {
         expression.at = place;
         expression.ty = substitute_within(&expression.ty, &map);
+        canonical_type(&mut expression.ty);
         match &mut expression.kind {
             ExprKind::Unread => known = false,
             // A generic value parameter of the struct that writes the
@@ -160,6 +162,12 @@ fn bound(program: &Program, default: &InheritedDefault, place: Location) -> Opti
                                 None => known = false,
                             }
                         }
+                        // A `bool`, an `f64` or a `str`, which this pass
+                        // holds as it is written: the literal it is.
+                        ConstantValue::Other(_) => match literal_of(constant) {
+                            Some(value) => expression.kind = ExprKind::Literal(value),
+                            None => known = false,
+                        },
                         _ => known = false,
                     },
                     Some(Argument::Type(_)) => known = false,
@@ -183,20 +191,20 @@ fn bound(program: &Program, default: &InheritedDefault, place: Location) -> Opti
                         // argument: `limit<N>()` is `limit<3>()` where
                         // the path gives `N` 3.
                         Argument::Constant(constant) => {
-                            let ConstantValue::Parameter { at, .. } = &constant.value else {
-                                continue;
-                            };
-                            let given = map
-                                .iter()
-                                .find(|(declared, _)| declared == at)
-                                .map(|(_, argument)| *argument);
-                            match given {
-                                None => {}
-                                Some(Argument::Constant(given)) => *constant = given.clone(),
-                                Some(Argument::Type(_)) => known = false,
+                            if let ConstantValue::Parameter { at, .. } = &constant.value {
+                                let given = map
+                                    .iter()
+                                    .find(|(declared, _)| declared == at)
+                                    .map(|(_, argument)| *argument);
+                                match given {
+                                    None => {}
+                                    Some(Argument::Constant(given)) => *constant = given.clone(),
+                                    Some(Argument::Type(_)) => known = false,
+                                }
                             }
                         }
                     }
+                    canonical_argument(generic);
                 }
             }
             ExprKind::Block { statements, .. } => {
@@ -229,6 +237,99 @@ fn member(program: &Program, ty: &Type, name: &str) -> Option<ExprKind> {
         declaration: *declaration,
         member,
     })
+}
+
+/// The literal a constant is, where this pass holds it as it is
+/// written: a `bool`, an `f64` or a `str` of one token. `None` for any
+/// other.
+fn literal_of(constant: &Constant) -> Option<Value> {
+    let text = constant.unspaced();
+    match text.as_str() {
+        "true" => Some(Value::Bool(true)),
+        "false" => Some(Value::Bool(false)),
+        text if text.starts_with('"') => decode_string(text).ok().map(Value::Str),
+        text => decode_float(text).ok().map(Value::Float),
+    }
+}
+
+/// Writes a constant this pass holds as it is written in one form for
+/// each value, so that two that are one value compare equal: `1.0` and
+/// `1.00`, or a string written with an escape and without one. Its
+/// other constants it holds by their value.
+fn canonical(constant: &mut Constant) {
+    if !matches!(constant.value, ConstantValue::Other(_)) {
+        return;
+    }
+    let text = constant.unspaced();
+    // A float after a minus: the minus, then the float's own form.
+    let (sign, number) = match text.strip_prefix('-') {
+        Some(number) => ("-", number.to_string()),
+        None => ("", text),
+    };
+    let one = Constant {
+        text: number,
+        value: constant.value.clone(),
+    };
+    let written = match literal_of(&one) {
+        Some(Value::Float(value)) => format!("{sign}{value:?}"),
+        // `{:?}` writes a string with its escapes in one form.
+        Some(Value::Str(value)) if sign.is_empty() => format!("{value:?}"),
+        Some(Value::Bool(value)) if sign.is_empty() => value.to_string(),
+        _ => return,
+    };
+    constant.text = written;
+}
+
+/// [`canonical`], for a generic argument: a constant, or each constant
+/// inside a type.
+fn canonical_argument(argument: &mut Argument) {
+    match argument {
+        Argument::Type(ty) => canonical_type(ty),
+        Argument::Constant(constant) => canonical(constant),
+    }
+}
+
+/// [`canonical`], for each constant inside `ty`: a size, a window's
+/// bounds, a generic argument.
+fn canonical_type(ty: &mut Type) {
+    match ty {
+        Type::Named { arguments, .. } => arguments.iter_mut().for_each(canonical_argument),
+        Type::Tuple(elements) => elements.iter_mut().for_each(canonical_type),
+        Type::List { element, size } => {
+            canonical_type(element);
+            size.iter_mut().for_each(canonical);
+        }
+        Type::RollingWindow {
+            value,
+            maximum,
+            minimum,
+        } => {
+            canonical_type(value);
+            canonical(maximum);
+            minimum.iter_mut().for_each(canonical);
+        }
+        Type::Set(inner)
+        | Type::Ref(inner)
+        | Type::Endpoint(inner)
+        | Type::Atomic(inner)
+        | Type::Delta(inner)
+        | Type::Trace { cell: inner, .. }
+        | Type::Nullable(inner) => canonical_type(inner),
+        Type::Dict { key, value } => {
+            canonical_type(key);
+            canonical_type(value);
+        }
+        Type::Result { value, error } => {
+            canonical_type(value);
+            canonical_type(error);
+        }
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => {}
+    }
 }
 
 /// Puts `statement`, and every statement inside it, at `place`. The

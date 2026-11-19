@@ -189,6 +189,47 @@ fn defaults_from_two_parents_are_one_or_the_struct_chooses() {
     );
 }
 
+/// UNIT-9: "Compare inherited defaults by bound expression and
+/// canonical type after substitution". A generic value parameter that
+/// is a `bool`, a `str` or an `f64` is the literal its path gives it,
+/// and a constant a callee is given is one value however it is written:
+/// `mark<1.0>()` is `mark<1.00>()`.
+#[test]
+fn literal_constants_in_defaults_are_compared_by_value() {
+    let checked = module(concat!(
+        "abstract struct Flagged { enabled: bool }\n",
+        "abstract struct ByParam<const B: bool> : Flagged { enabled = B }\n",
+        "abstract struct Off : Flagged { enabled = false }\n",
+        "struct Clash : ByParam<true>, Off {}\n",
+        "struct Agree : ByParam<false>, Off {}\n",
+        "abstract struct Named { label: str }\n",
+        "abstract struct ByLabel<const S: str> : Named { label = S }\n",
+        "abstract struct Fixed : Named { label = \"a\" }\n",
+        "struct LabelSame : ByLabel<\"a\">, Fixed {}\n",
+        "struct LabelClash : ByLabel<\"b\">, Fixed {}\n",
+        "const fn mark<const X: f64>() -> f64 => X\n",
+        "abstract struct Scaled { scale: f64 }\n",
+        "abstract struct One : Scaled { scale = mark<1.0>() }\n",
+        "abstract struct OneAgain : Scaled { scale = mark<1.00>() }\n",
+        "abstract struct Two : Scaled { scale = mark<2.0>() }\n",
+        "struct Marked : One, OneAgain {}\n",
+        "struct Remarked : One, Two {}\n",
+        "abstract struct ByReal<const R: f64> : Scaled { scale = R }\n",
+        "abstract struct Half : Scaled { scale = 0.5 }\n",
+        "struct RealSame : ByReal<0.50>, Half {}\n",
+        "struct RealClash : ByReal<0.25>, Half {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:31 local:type/default.conflict UNIT-9",
+            "m.hgl:11:35 local:type/default.conflict UNIT-9",
+            "m.hgl:18:24 local:type/default.conflict UNIT-9",
+            "m.hgl:22:34 local:type/default.conflict UNIT-9",
+        ]
+    );
+}
+
 /// UNIT-9 compares the defaults of one field. Two parents' fields of
 /// one name and two types are a `field.conflict` (TYPE-4), and are not
 /// reported again for their defaults.
