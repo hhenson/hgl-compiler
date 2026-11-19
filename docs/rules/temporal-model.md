@@ -37,6 +37,7 @@ analyser: partial
 - A `when` whose header has no `valid` selector alone or as a top-level conjunct runs with every temporal input valid; one that has admits those its selectors name: `valid(a, b)` each input it names, `valid([])` none
 - A header that is `scheduled()` alone, in parentheses or not, admits none, and one that is `modified([])` alone every input
 - `modified(a, b)` names the inputs it subscribes to, each by its name, and `modified([])` none: where the node injects neither `scheduler` nor `alarm`, or its `start` does not use the one it injects, the selector is warned of (`node.no_activation`) and the source accepted; any use in `start` counts, and `@suppress_warning("node.no_activation")` before the function acknowledges it
+- `modified([])` is that selector alone or as a top-level conjunct of its header; as a bool, in a body or under a negation or a disjunction, it leaves the default subscription, and is not warned of
 - A sequence that names inputs is no selector's form (`endpoint.argument`)
 - Left: subscription, which `modified` sets; a selector that takes no part in its header's condition
 

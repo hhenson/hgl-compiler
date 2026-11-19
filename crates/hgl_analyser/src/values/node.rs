@@ -254,7 +254,8 @@ impl<'a> Typer<'a> {
         let condition = header.map(|condition| self.condition(&condition));
         // A header that is itself rejected says nothing sure of what it
         // admits: the reads in its body are then not judged (ERR-9).
-        if self.diagnostics.len() != reported {
+        let rejected = self.diagnostics.len() != reported;
+        if rejected {
             let inputs = self.temporal_inputs();
             self.present.extend(inputs.iter().copied().map(Fact::Valid));
             self.present
@@ -279,6 +280,28 @@ impl<'a> Typer<'a> {
         self.present.truncate(frame);
         self.hook = before;
         let header = (hook == Hook::When).then(|| self.header_of(condition.as_ref()));
+        // TIME-3: "The empty selection `modified([])` subscribes to no
+        // input and selects a wake from the node's scheduler or alarm",
+        // where it is a selector: "A selector sets subscription or
+        // admission when it stands alone in the header or appears as a
+        // top-level conjunct." Each such is judged once the whole node
+        // is read (`node.no_activation`). One that "is a bool, in a body
+        // or under a negation or a disjunction" leaves the default
+        // subscription, which an input wakes. A header that is itself
+        // rejected is not judged further (ERR-9): `modified(step)` of a
+        // `const` parameter names no input either.
+        let selectors = condition.iter().filter(|_| !rejected);
+        let empty = selectors.flat_map(Expr::conjuncts).filter(|conjunct| {
+            matches!(&conjunct.kind, ExprKind::Endpoint {
+                operation: EndpointOperation::Modified,
+                inputs: Some(inputs),
+            } if inputs.is_empty())
+        });
+        for selector in empty {
+            if !self.undriven.contains(&selector.at) {
+                self.undriven.push(selector.at);
+            }
+        }
         Stmt::Hook {
             hook,
             condition,

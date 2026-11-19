@@ -640,7 +640,10 @@ What is rejected there:
 | The run's own key, `"run.output"`, written out as the key of a `get`, `has` or `put` on the global store. `Typer::store_keys` judges it where the call is finished; a key that is a `const` parameter is known when the graph is built, and is not judged | `store.reserved_key` | TIME-8 |
 
 `modified([])` subscribes to no input, so only the node's scheduler or
-alarm wakes the handler (TIME-3). Where the node injects neither, or its
+alarm wakes the handler (TIME-3). It is that selector alone or as a
+top-level conjunct of its header; as a bool, in a body or under a
+negation or a disjunction, it leaves the default subscription, and the
+node is not warned of. Where the node injects neither, or its
 `start` does not use the one it injects, the selector is warned of,
 `node.no_activation`, and the source is accepted. Any use in `start`
 counts, by the capability's name or by a local it is bound to: what a

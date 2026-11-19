@@ -166,19 +166,6 @@ impl<'a> Typer<'a> {
             EndpointOperation::Valid | EndpointOperation::Modified
         ) && matches!(arguments.as_slice(), [only]
                 if only.kind() == SyntaxKind::SequenceExpr && only.children().next().is_none());
-        // TIME-3: "`modified([])` subscribes to no input: it stands
-        // only in a node that injects `scheduler` or `alarm` and
-        // schedules a wake on it in `start`, which is then what wakes
-        // the handler."
-        if none && operation == EndpointOperation::Modified {
-            // The selector: `modified([])`, its name to its `)`.
-            let selector = list.parent().map_or(at, |call| self.at(&call));
-            // Once, where an argument is read a second time for the
-            // candidate it is given to.
-            if !self.undriven.contains(&selector) {
-                self.undriven.push(selector);
-            }
-        }
         // TIME-9: "`scheduled()` is the handler selector for a wake by
         // the node's scheduler or alarm ... A node that injects neither
         // rejects it". With a scheduler it is the scheduler's
