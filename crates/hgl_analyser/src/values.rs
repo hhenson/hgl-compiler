@@ -2748,8 +2748,18 @@ impl<'a> Typer<'a> {
     /// (NATIVE-6), or a delta that is a type of its own (TYPE-16). The
     /// place is a property of one or something inside one, however the
     /// value is reached: `items[0].size`, with `items` a list of a
-    /// native type, is one.
+    /// native type, is one. ERR-4: "`.context` is a read-only nullable
+    /// record": an error's context and its parts are read-only too.
     fn read_only_inside(place: &Expr) -> Option<(String, &'static str)> {
+        if let ExprKind::ErrorPart { part, .. } = &place.kind {
+            return match part {
+                ErrorPart::Context => Some(("`error`".to_string(), "ERR-4")),
+                ErrorPart::Node | ErrorPart::Phase | ErrorPart::EvaluationTime => {
+                    Some(("an error's context".to_string(), "ERR-4"))
+                }
+                ErrorPart::Message | ErrorPart::Code => None,
+            };
+        }
         let (ExprKind::Field { base, .. } | ExprKind::Index { base, .. }) = &place.kind else {
             return None;
         };
@@ -5962,14 +5972,13 @@ impl<'a> Typer<'a> {
     }
 
     /// `.message`, `.code` or `.context` of an error (ERR-4):
-    /// "`.message` is the `str` and `.code` the `str?`."
+    /// "`.message` is the `str` and `.code` the `str?`. `.context` is a
+    /// read-only nullable record", an `error context?`.
     fn error_part(&mut self, base: Expr, name: &SyntaxToken) -> (ExprKind, Type) {
         let (part, ty) = match name.text() {
             "message" => (ErrorPart::Message, Type::Scalar(Scalar::Str)),
             "code" => (ErrorPart::Code, nullable(Type::Scalar(Scalar::Str))),
-            // "`.context` is a read-only nullable record": what it is
-            // read as is for a later part.
-            "context" => return (ExprKind::Unread, Type::Unknown),
+            "context" => (ErrorPart::Context, nullable(Type::ErrorContext)),
             other => {
                 self.diagnostics.emit(error(
                     Category::Name,
@@ -5977,6 +5986,36 @@ impl<'a> Typer<'a> {
                     Location::new(self.file, name.span()),
                     format!(
                         "an `error` has no `{other}`: it has `.message`, `.code` and `.context`"
+                    ),
+                    "ERR-4",
+                ));
+                return (ExprKind::Unread, Type::Unknown);
+            }
+        };
+        let kind = ExprKind::ErrorPart {
+            base: Box::new(base),
+            part,
+        };
+        (kind, ty)
+    }
+
+    /// `.node`, `.phase` or `.evaluation_time` of an error's context
+    /// (ERR-4): "a read-only nullable record of `.node: str`, `.phase:
+    /// str`, one of `"evaluate"`, `"start"`, and `"stop"`, and
+    /// `.evaluation_time: datetime`". `base` has been proved present.
+    fn context_part(&mut self, base: Expr, name: &SyntaxToken) -> (ExprKind, Type) {
+        let (part, ty) = match name.text() {
+            "node" => (ErrorPart::Node, Type::Scalar(Scalar::Str)),
+            "phase" => (ErrorPart::Phase, Type::Scalar(Scalar::Str)),
+            "evaluation_time" => (ErrorPart::EvaluationTime, Type::Scalar(Scalar::Datetime)),
+            other => {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::MEMBER_UNKNOWN,
+                    Location::new(self.file, name.span()),
+                    format!(
+                        "an error's context has no `{other}`: it has `.node`, `.phase` and \
+                         `.evaluation_time`"
                     ),
                     "ERR-4",
                 ));
@@ -10739,6 +10778,31 @@ impl<'a> Typer<'a> {
                 return self.payload(base, &name, sides);
             }
             Type::Error => return self.error_part(base, &name),
+            Type::ErrorContext => return self.context_part(base, &name),
+            // ERR-4: "Nullable code/context observations require
+            // presence checking": a part of a context is read where a
+            // test against null has proved it present.
+            Type::Nullable(inner) if **inner == Type::ErrorContext => {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::NULLABLE_REQUIRED_PRESENCE,
+                        base.at,
+                        format!(
+                            "this is `{}`: an error's context may be null, and `.{}` is \
+                             read where it is not",
+                            base.ty,
+                            name.text()
+                        ),
+                        "ERR-4",
+                    )
+                    .with_note(
+                        "bind the context with `let` and test it against null: \
+                         `if context == null { return ... }`",
+                    ),
+                );
+                return (ExprKind::Unread, Type::Unknown);
+            }
             // TYPE-16: a set's delta has "the properties `added` and
             // `removed`, each a `set<K>`".
             Type::Delta(of) => return self.delta_property(base.clone(), &name, of),
@@ -12763,7 +12827,12 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
             struct_applications(value, found);
             struct_applications(error, found);
         }
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {}
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => {}
     }
 }
 
@@ -13858,7 +13927,11 @@ fn whole(ty: &Type) -> bool {
         Type::Dict { key, value } => whole(key) && whole(value),
         Type::RollingWindow { value, .. } => whole(value),
         Type::Result { value, error } => whole(value) && whole(error),
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error => true,
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext => true,
     }
 }
 
@@ -14070,9 +14143,12 @@ fn holds_trace(ty: &Type) -> bool {
         | Type::Nullable(inner) => holds_trace(inner),
         Type::Dict { key, value } => holds_trace(key) || holds_trace(value),
         Type::Result { value, error } => holds_trace(value) || holds_trace(error),
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
-            false
-        }
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => false,
     }
 }
 
@@ -14408,9 +14484,12 @@ fn names_value_of(ty: &Type, own: &[Location]) -> bool {
             minimum,
         } => named(maximum) || minimum.as_ref().is_some_and(named) || inner(value),
         Type::Result { value, error } => inner(value) || inner(error),
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
-            false
-        }
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => false,
     }
 }
 

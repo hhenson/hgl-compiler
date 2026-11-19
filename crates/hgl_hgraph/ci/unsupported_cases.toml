@@ -1,9 +1,5 @@
 # Each key completes the hgraph emitter's diagnostic "the hgraph target
 # does not write ... yet". A case is allowed only for the listed reason.
-# The analyser does not read an error's `.context` yet (ERR-4).
-"this expression" = [
-    "conformance::propagating_a_retained_error_preserves_its_origin",
-]
 "a zoned datetime, a zoned time or a time zone" = [
     "core_implementation::reverse_instant_addition",
 ]
