@@ -1833,6 +1833,16 @@ impl Emitter<'_> {
         // where the type under `TS[...]` is `T | None`, and a tick of
         // it may be the unset one: a published null.
         if let Type::Nullable(inner) = ty {
+            // TYPE-14: on a type that is no ordinary value the `?`
+            // marks an input that may be left out, and is no part of
+            // what is published (`Type::omission_removed`): the input
+            // is the type under it, and one left out is never valid
+            // (UNIT-8). A window that may be left out is not written
+            // yet.
+            let under = ty.omission_removed();
+            if temporal && !matches!(under, Type::Nullable(_) | Type::RollingWindow { .. }) {
+                return self.annotation(under, true, at);
+            }
             // As a temporal value only a scalar or an enum may be
             // unset this way: it publishes whole. A set publishes its
             // changes, which hgraph's `TS` of a set that may be unset
@@ -1856,6 +1866,24 @@ impl Emitter<'_> {
             } else {
                 format!("{inner} | None")
             });
+        }
+        // TYPE-12: "`ref<T>` designates an endpoint, not an ordinary
+        // payload type": hgraph's `REF` of the temporal T, whose value
+        // is a reference to an output. TIME-10: "A reference ticks on
+        // changed designation, not every target tick", as a `REF`
+        // input ticks when the reference it is given changes, and not
+        // when what it points at publishes.
+        if temporal && let Type::Ref(target) = ty {
+            let target = self.annotation(target, true, at)?;
+            self.hgraph = true;
+            return Some(format!("_hg.REF[{target}]"));
+        }
+        // TYPE-12: "`signal` is a complete temporal input constraint
+        // with no readable payload": hgraph's `SIGNAL`, an input bound
+        // to any output, which ticks when it does and holds no value.
+        if temporal && matches!(ty, Type::Signal) {
+            self.hgraph = true;
+            return Some("_hg.SIGNAL".to_string());
         }
         // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary
         // V": hgraph's `TS[V]`, whose tick is the whole value. Its V is
@@ -1934,7 +1962,12 @@ impl Emitter<'_> {
     /// update would give it a position's change, so as a child it is
     /// reported.
     fn child_annotation(&mut self, ty: &Type, child: &Type, at: Location) -> Option<String> {
-        if growing_list(child) {
+        // A reference as a child, and a field that may be left out
+        // because its type is no ordinary value (TYPE-14), are not
+        // written yet.
+        let under = child.omission_removed();
+        let omittable = matches!(child, Type::Nullable(_)) && !matches!(under, Type::Nullable(_));
+        if growing_list(child) || matches!(under, Type::Ref(_)) || omittable {
             self.unsupported(at, &format!("the type `{ty}`"));
             return None;
         }
@@ -4440,7 +4473,24 @@ impl Emitter<'_> {
     fn made_anew(&self, function: &Function, value: &Expr) -> bool {
         matches!(function.mode, Mode::Node | Mode::Stop)
             && self.input_port(function, value).is_some()
-            && built_anew(self.program, &value.ty, 0)
+            && built_anew(self.program, Self::port_type(function, value), 0)
+    }
+
+    /// The type of what the port `value` reads in a hook holds: an
+    /// input's or `out`'s declared type, and not the type the analyser
+    /// reads it as, an atomic's V (TYPE-9) or the type under a `?` that
+    /// marks omission (TYPE-14). hgraph keeps an atomic's value whole in
+    /// its port, and its read is that value, not one made anew. Any
+    /// other read is of its own type.
+    fn port_type<'f>(function: &'f Function, value: &'f Expr) -> &'f Type {
+        match value.kind {
+            ExprKind::Local(local)
+                if Self::is_input(function, local) || Self::is_out(function, local) =>
+            {
+                &function.locals[local].ty
+            }
+            _ => &value.ty,
+        }
     }
 
     /// True where `value` is a connection of a graph: hgraph's wiring,
@@ -6396,7 +6446,7 @@ impl Emitter<'_> {
                 {
                     continue;
                 }
-                if let Some(value) = self.left_out(callee, index, parameter) {
+                if let Some(value) = self.left_out_of_call(callee, generics, index, parameter) {
                     // A node keeps a default of its configuration as it
                     // keeps one given (`kept_configuration`).
                     let value = if kept[index] {
@@ -7172,11 +7222,62 @@ impl Emitter<'_> {
             if given || parameter.pack.is_some() {
                 continue;
             }
-            if let Some(value) = self.left_out(callee, index, parameter) {
+            if let Some(value) = self.left_out_of_call(callee, generics, index, parameter) {
                 written.push(format!("{}={}", name(&parameter.name), kept(index, value)));
             }
         }
         written.join(", ")
+    }
+
+    /// What a call of the function `callee`, with `generics`, binds
+    /// parameter `index` to when it leaves it out: every call of a
+    /// function by name, captured or not, asks this. UNIT-8: a temporal
+    /// input written `T?` with no default may be left out, "an input
+    /// that is then never valid" (`never_valid`); any other parameter
+    /// takes what `left_out` gives it.
+    fn left_out_of_call(
+        &mut self,
+        callee: (usize, usize),
+        generics: &[GenericArgument],
+        index: usize,
+        parameter: &Parameter,
+    ) -> Option<String> {
+        let temporal = self.program.modules[callee.0].declarations[callee.1]
+            .kind
+            .role()
+            == Some(Role::Temporal);
+        if !temporal
+            || parameter.constant
+            || parameter.has_default
+            || !matches!(parameter.ty, Type::Nullable(_))
+        {
+            return self.left_out(callee, index, parameter);
+        }
+        let instances = self.instances;
+        let instance = instances
+            .instanced(self.program, callee.0, callee.1)
+            .then(|| instances.find(self.program, callee, generics))
+            .flatten();
+        let ty = instance
+            .and_then(|instance| instance.signature.parameters.get(index))
+            .map_or(&parameter.ty, |parameter| &parameter.ty);
+        Some(self.never_valid(ty, parameter.at))
+    }
+
+    /// What a temporal input of `ty` left out is bound to (UNIT-8: "an
+    /// omitted temporal input is never valid"): hgraph's `nothing`, an
+    /// output of the input's type that never ticks. A `signal` is bound
+    /// to one of a `bool`, as it may be bound to any output.
+    fn never_valid(&mut self, ty: &Type, at: Location) -> String {
+        let annotation = match ty.omission_removed() {
+            Type::Signal => Some("_hg.TS[_py.bool]".to_string()),
+            _ => self.annotation(ty, true, at),
+        };
+        let Some(annotation) = annotation else {
+            return "None".to_string();
+        };
+        self.hgraph = true;
+        format!("_hg.nothing(tp={annotation})")
     }
 
     /// For each parameter of `callee`, a module and a declaration of it,
@@ -7403,6 +7504,30 @@ impl Emitter<'_> {
         value: &Expr,
         written: String,
     ) -> String {
+        // A connection given across a reference (TYPE-12, TIME-10)
+        // between two struct types, one inheriting from the other,
+        // would be narrowed on the far side of the reference
+        // (`Type::followed`), which is not written yet.
+        let (expected, given) = (ty.followed(), value.ty.followed());
+        let crosses = expected != *ty || given != value.ty;
+        if function.mode == Mode::Graph
+            && crosses
+            && expected != given
+            && matches!(
+                expected,
+                Type::Named {
+                    kind: NamedKind::Struct,
+                    ..
+                }
+            )
+            && self.connects(function, value)
+        {
+            self.unsupported(
+                value.at,
+                "a struct connection given across a reference to a struct it inherits from",
+            );
+            return written;
+        }
         let Type::Named {
             module,
             declaration,
@@ -7655,6 +7780,18 @@ impl Emitter<'_> {
             // The node's own output, hgraph's `_output`.
             ExprKind::Local(local) if Self::is_out(function, *local) => Some("_output".to_string()),
             ExprKind::Field { base, member } => {
+                // An atomic input is one port of the whole value, read
+                // in a hook as that value (TYPE-9), and has no port of
+                // a field. The `?` of `atomic<V>?` marks an input that
+                // may be left out (TYPE-14): its port is the atomic's.
+                if let ExprKind::Local(local) = base.kind
+                    && matches!(
+                        function.locals[local].ty.omission_removed(),
+                        Type::Atomic(_)
+                    )
+                {
+                    return None;
+                }
                 let field = field_of(self.program, &base.ty, *member)?;
                 let base = self.input_port(function, base)?;
                 Some(format!("{base}[{}]", string(&name(&field.name))))
@@ -8098,7 +8235,12 @@ impl Emitter<'_> {
                 continue;
             };
             let taken = match input(self, &argument.value) {
-                Some(ty) => Bound::Input(ty),
+                // TIME-10: "Ordinary followers observe the selected
+                // target": a lifted function given a reference takes an
+                // ordinary input of what it designates, as the analyser
+                // admitted it (`Type::followed`): every reference and a
+                // `?` that marks omission removed.
+                Some(ty) => Bound::Input(ty.followed()),
                 None => Bound::Configuration(argument.value.ty.clone()),
             };
             let value = self.expression(function, &argument.value);
