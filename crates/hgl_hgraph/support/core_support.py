@@ -1105,8 +1105,11 @@ def published_into(port, value, shape):
 
 def _emptied(port, shape):
     """Drops each position of each unsized list `shape` names in what
-    `port` holds, and each key or member of a dictionary or a set that
-    `shape` is, `"entries"` (`invalidated`)."""
+    `port` holds, and each key or member of each dictionary and set,
+    `"entries"`, through a struct's fields, a `dict` of each one's shape,
+    a tuple's positions, a tuple of them, and a fixed list's, `[part]`
+    (`invalidated`). What a dictionary or an unsized list holds goes with
+    the key or the position."""
     if shape is None:
         return
     if shape == "entries":
@@ -1116,6 +1119,10 @@ def _emptied(port, shape):
     if shape == "list":
         if len(port) > 0:
             port.value = _TSLDelta({}, size_modified=0)
+        return
+    if isinstance(shape, list):
+        for index in range(len(port)):
+            _emptied(port[index], shape[0])
         return
     parts = shape.items() if isinstance(shape, dict) else ((position(index), part) for index, part in enumerate(shape))
     for key, part in parts:
@@ -1130,9 +1137,9 @@ def invalidated(port, shape):
     keys and members, which the next delta read would name removed, and
     which a dictionary or a set made valid again by a delta that names no
     change would still hold (TIME-7: "it makes the value valid and
-    empty"): each is emptied first, which no one reads, since it is not
-    valid after. `shape` is as `published_into` has it, or `"entries"`
-    for a dictionary or a set."""
+    empty"): each is emptied first, at any depth of a struct, a tuple
+    and a fixed list, which no one reads, since it is not valid after.
+    `shape` is as `_emptied` has it."""
     _emptied(port, shape)
     port.invalidate()
 

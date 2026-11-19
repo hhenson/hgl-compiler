@@ -424,6 +424,66 @@ pub(super) fn list_parts_shape(program: &Program, ty: &Type) -> Option<String> {
     within(program, ty, 0)
 }
 
+/// Where a temporal value of `ty` holds what hgraph keeps when it is
+/// invalidated, the provider's shape of it for `invalidated`: `"list"`
+/// for an unsized list, `"entries"` for a dictionary or a set, a `dict`
+/// of the fields that hold one for a struct, a tuple of each position's,
+/// `None` where it holds none, for a tuple, and `[part]` for a fixed
+/// list whose elements hold one. `None` where `ty` holds none.
+///
+/// END-4: "Invalidation clears validity, modification, payload, and
+/// delta." hgraph 0.9.5's unbounded `TSL` keeps its positions, and its
+/// `TSD` and `TSS` their keys and members, which the next delta read
+/// would name removed, and which a delta that names no change would leave
+/// in what it makes valid (TIME-7: "it makes the value valid and empty").
+/// A struct, a tuple and a fixed list keep their children, so each is
+/// looked into; what a dictionary or an unsized list holds goes with the
+/// key or the position, so neither is.
+pub(super) fn emptied_shape(program: &Program, ty: &Type) -> Option<String> {
+    fn within(program: &Program, ty: &Type, depth: usize) -> Option<String> {
+        if depth > HELD_DEPTH {
+            return None;
+        }
+        match ty {
+            Type::List { size: None, .. } => Some("\"list\"".to_string()),
+            Type::Dict { .. } | Type::Set(_) => Some("\"entries\"".to_string()),
+            Type::List {
+                element,
+                size: Some(_),
+            } => within(program, element, depth + 1).map(|part| format!("[{part}]")),
+            Type::Tuple(elements) => {
+                let parts: Vec<Option<String>> = elements
+                    .iter()
+                    .map(|element| within(program, element, depth + 1))
+                    .collect();
+                if parts.iter().all(Option::is_none) {
+                    return None;
+                }
+                let written: Vec<String> = parts
+                    .into_iter()
+                    .map(|part| part.unwrap_or_else(|| "None".to_string()))
+                    .collect();
+                Some(format!("({},)", written.join(", ")))
+            }
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => {
+                let written: Vec<String> = fields_of(program, ty)?
+                    .into_iter()
+                    .filter_map(|(member, field)| {
+                        let part = within(program, &field, depth + 1)?;
+                        Some(format!("{}: {part}", string(&name(&member.name))))
+                    })
+                    .collect();
+                (!written.is_empty()).then(|| format!("{{{}}}", written.join(", ")))
+            }
+            _ => None,
+        }
+    }
+    within(program, ty, 0)
+}
+
 /// Where a temporal value of `ty` holds a dictionary or a set, itself
 /// among them, through dictionaries' values, structs' fields, tuples'
 /// positions and fixed lists' elements: the provider's shape of it for

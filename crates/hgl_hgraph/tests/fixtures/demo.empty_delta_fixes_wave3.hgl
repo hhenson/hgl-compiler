@@ -313,3 +313,144 @@ fn yielded_full_bag_members() -> i64 => bag_members(yielded_full_bags())
 test a_set_inside_a_whole_value_yielded_again_ticks {
     assert eval(yielded_full_bag_members(), RunConfig(length: 3s)) == [1s: 23, 2s: 23]
 }
+
+# ---- 4. Invalidation empties what holds a dictionary or a set ----
+#
+# END-4: "Invalidation clears validity, modification, payload, and
+# delta." TIME-7: where a dictionary or a set "is not valid, never
+# published or invalidated, it makes the value valid and empty". At each
+# depth: a struct's dictionary, a tuple's set, a dictionary in a struct in
+# a tuple, a dictionary of sets, an unsized and a fixed list of
+# dictionaries.
+struct Shelf {
+    book: dict<str, i64>
+    tag: i64
+}
+
+# 0 sets "a", 1 writes a delta that names no change, any other invalidates.
+fn write_shelf(step: i64) -> Shelf {
+    inject out
+    when {
+        if step == 0 { return delta<Shelf>(book: delta<dict<str, i64>>(updated: ["a": 1])) }
+        if step == 1 { return delta<Shelf>(book: delta<dict<str, i64>>()) }
+        invalidate(out)
+    }
+}
+
+fn shelf_book(shelf: Shelf) -> i64 {
+    when valid([]) {
+        if valid(shelf.book) { return entry_total(shelf.book) }
+        return -1
+    }
+}
+
+fn shelf_keys(step: i64) -> i64 => shelf_book(write_shelf(step))
+
+fn write_tagged(step: i64) -> tuple<i64, set<i64>> {
+    inject out
+    when {
+        let added: delta<tuple<i64, set<i64>>> = (null, delta<set<i64>>(added: [1]))
+        let empty: delta<tuple<i64, set<i64>>> = (null, delta<set<i64>>())
+        if step == 0 { return added }
+        if step == 1 { return empty }
+        invalidate(out)
+    }
+}
+
+fn tagged_members(tagged: tuple<i64, set<i64>>) -> i64 {
+    when valid([]) {
+        if valid(tagged[1]) { return member_total(tagged[1]) }
+        return -1
+    }
+}
+
+fn tagged_check(step: i64) -> i64 => tagged_members(write_tagged(step))
+
+fn write_held_shelf(step: i64) -> tuple<i64, Shelf> {
+    inject out
+    when {
+        let added: delta<tuple<i64, Shelf>> = (null, delta<Shelf>(book: delta<dict<str, i64>>(updated: ["a": 1])))
+        let empty: delta<tuple<i64, Shelf>> = (null, delta<Shelf>(book: delta<dict<str, i64>>()))
+        if step == 0 { return added }
+        if step == 1 { return empty }
+        invalidate(out)
+    }
+}
+
+fn held_shelf_book(held: tuple<i64, Shelf>) -> i64 {
+    when valid([]) {
+        if valid(held[1].book) { return entry_total(held[1].book) }
+        return -1
+    }
+}
+
+fn held_shelf_check(step: i64) -> i64 => held_shelf_book(write_held_shelf(step))
+
+fn write_groups(step: i64) -> dict<str, set<i64>> {
+    inject out
+    when {
+        if step == 0 { return delta<dict<str, set<i64>>>(updated: ["a": delta<set<i64>>(added: [1])]) }
+        if step == 1 { return delta<dict<str, set<i64>>>(updated: ["a": delta<set<i64>>()]) }
+        invalidate(out)
+    }
+}
+
+const fn group_total(groups: dict<str, set<i64>>) -> i64 {
+    var total: i64 = 0
+    for key, members in groups { total += 100 + member_total(members) }
+    return total
+}
+
+fn groups_read(groups: dict<str, set<i64>>) -> i64 {
+    when valid([]) {
+        if valid(groups) { return group_total(groups) }
+        return -1
+    }
+}
+
+fn groups_check(step: i64) -> i64 => groups_read(write_groups(step))
+
+fn write_pages(step: i64) -> list<dict<str, i64>> {
+    inject out
+    when {
+        if step == 0 { return delta<list<dict<str, i64>>>(updated: [0: delta<dict<str, i64>>(updated: ["a": 1])]) }
+        if step == 1 { return delta<list<dict<str, i64>>>(updated: [0: delta<dict<str, i64>>()]) }
+        invalidate(out)
+    }
+}
+
+fn pages_read(pages: list<dict<str, i64>>) -> i64 {
+    when valid([]) {
+        if valid(pages[0]) { return entry_total(pages[0]) }
+        return -1
+    }
+}
+
+fn pages_check(step: i64) -> i64 => pages_read(write_pages(step))
+
+fn write_two_pages(step: i64) -> list<dict<str, i64>, 2> {
+    inject out
+    when {
+        if step == 0 { return delta<list<dict<str, i64>, 2>>(updated: [0: delta<dict<str, i64>>(updated: ["a": 1])]) }
+        if step == 1 { return delta<list<dict<str, i64>, 2>>(updated: [0: delta<dict<str, i64>>()]) }
+        invalidate(out)
+    }
+}
+
+fn two_pages_read(pages: list<dict<str, i64>, 2>) -> i64 {
+    when valid([]) {
+        if valid(pages[0]) { return entry_total(pages[0]) }
+        return -1
+    }
+}
+
+fn two_pages_check(step: i64) -> i64 => two_pages_read(write_two_pages(step))
+
+test an_invalidated_value_holds_no_key_or_member_after {
+    assert eval(shelf_keys(step: [0, 9, 1])) == [11, -1, 0]
+    assert eval(tagged_check(step: [0, 9, 1])) == [11, -1, 0]
+    assert eval(held_shelf_check(step: [0, 9, 1])) == [11, -1, 0]
+    assert eval(groups_check(step: [0, 9, 1])) == [111, -1, 100]
+    assert eval(pages_check(step: [0, 9, 1])) == [11, -1, 0]
+    assert eval(two_pages_check(step: [0, 9, 1])) == [11, -1, 0]
+}
