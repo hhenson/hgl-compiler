@@ -161,4 +161,5 @@ analyser: done
 transpiler: partial
 
 - hgraph: `ok` of the child's value, or `err` of an `error` coded `value.unset_read` where the child is not valid (`_core.checked_child_result`); elsewhere the read fails with that code.; a dictionary's entry whose key is absent is a child that is not valid (TIME-1), and is read as one
+- A struct, a tuple or a fixed list read whole there that is valid and not all valid gives the same, a required part that is not valid failing the read
 - Left, reported: a window child's value where a `result` is expected: ERR-14 does not say what a window that is valid and not all valid gives (TYPE-11)

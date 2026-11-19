@@ -633,7 +633,7 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
         "    when all_valid(pair) { return 1 }\n",
         "}\n",
         "fn forwarded<T>(pair: tuple<i64, i64>, const tag: T) -> tuple<i64, i64> {\n",
-        "    when { return pair }\n",
+        "    when all_valid(pair) { return pair }\n",
         "}\n",
         "test given {\n",
         "    let pairs = eval(two(command: [1, 2]))\n",
