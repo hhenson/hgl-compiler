@@ -247,6 +247,50 @@ pub enum Type {
 }
 
 impl Type {
+    /// True when `test` holds of this type or of a type inside it, at
+    /// any depth: an element, a key, a value, a cell, a generic
+    /// argument. `constant` is asked of each constant inside it: a
+    /// list's size, a window's sizes and a constant generic argument;
+    /// `|_| false` looks at the types alone.
+    pub(crate) fn any_part(
+        &self,
+        test: &dyn Fn(&Type) -> bool,
+        constant: &dyn Fn(&Constant) -> bool,
+    ) -> bool {
+        if test(self) {
+            return true;
+        }
+        let part = |inner: &Type| inner.any_part(test, constant);
+        match self {
+            Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
+                Argument::Type(argument) => part(argument),
+                Argument::Constant(argument) => constant(argument),
+            }),
+            Type::Tuple(elements) => elements.iter().any(part),
+            Type::List { element, size } => size.as_ref().is_some_and(constant) || part(element),
+            Type::Set(inner)
+            | Type::Ref(inner)
+            | Type::Endpoint(inner)
+            | Type::Atomic(inner)
+            | Type::Delta(inner)
+            | Type::Trace { cell: inner, .. }
+            | Type::Nullable(inner) => part(inner),
+            Type::Dict { key, value } => part(key) || part(value),
+            Type::RollingWindow {
+                value,
+                maximum,
+                minimum,
+            } => constant(maximum) || minimum.as_ref().is_some_and(constant) || part(value),
+            Type::Result { value, error } => part(value) || part(error),
+            Type::Scalar(_)
+            | Type::Parameter { .. }
+            | Type::Signal
+            | Type::Error
+            | Type::ErrorContext
+            | Type::Unknown => false,
+        }
+    }
+
     /// What `atomic<payload>` is. TYPE-9: "`atomic<V>` stops expansion
     /// at a complete ordinary V. For non-composite S, `atomic<S>`
     /// normalizes to S before matching, recursively."

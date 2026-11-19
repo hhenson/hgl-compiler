@@ -41,7 +41,7 @@ use hgl_lexer::literal::{
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
-use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
+use crate::declared::{agree, is_optional, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
     self, BinaryOperator, Body, CalendarDate, Callee, ClockTime, EndpointOperation, ErrorPart,
     Expr, ExprKind, Form, Hook, Local, LocalId, Run, Stmt, Temporal, UnaryOperator, Value,
@@ -10991,7 +10991,7 @@ impl<'a> Typer<'a> {
                     // nullable ... or an `atomic<...>` of a nullable
                     // type", the generic arguments in place: the
                     // `value: T` of a `Box<i64?>` is.
-                    required: !member.has_default && !is_optional(&ty),
+                    required: !member.has_default && is_optional(&ty) != Some(true),
                     ty: placed(ty, &own),
                     pack: None,
                     listed: false,
@@ -14837,30 +14837,7 @@ fn has_members(ty: &Type) -> bool {
 /// True when a type is known all the way down: no part of it is
 /// `Type::Unknown`.
 fn whole(ty: &Type) -> bool {
-    match ty {
-        Type::Unknown => false,
-        Type::Named { arguments, .. } => arguments.iter().all(|argument| match argument {
-            Argument::Type(argument) => whole(argument),
-            Argument::Constant(_) => true,
-        }),
-        Type::Tuple(elements) => elements.iter().all(whole),
-        Type::List { element, .. } => whole(element),
-        Type::Set(inner)
-        | Type::Ref(inner)
-        | Type::Endpoint(inner)
-        | Type::Atomic(inner)
-        | Type::Delta(inner)
-        | Type::Trace { cell: inner, .. }
-        | Type::Nullable(inner) => whole(inner),
-        Type::Dict { key, value } => whole(key) && whole(value),
-        Type::RollingWindow { value, .. } => whole(value),
-        Type::Result { value, error } => whole(value) && whole(error),
-        Type::Scalar(_)
-        | Type::Parameter { .. }
-        | Type::Signal
-        | Type::Error
-        | Type::ErrorContext => true,
-    }
+    !ty.any_part(&|part| matches!(part, Type::Unknown), &|_| false)
 }
 
 /// What the index of a tuple is, as far as this pass can say.
@@ -15055,29 +15032,7 @@ fn publications(value: hir::Expr) -> hir::Expr {
 /// True when `ty` is a trace or holds one at any depth: the
 /// `list<trace of i64>` of `[seen]`.
 fn holds_trace(ty: &Type) -> bool {
-    match ty {
-        Type::Trace { .. } => true,
-        Type::Named { arguments, .. } => arguments
-            .iter()
-            .any(|argument| matches!(argument, Argument::Type(ty) if holds_trace(ty))),
-        Type::Tuple(elements) => elements.iter().any(holds_trace),
-        Type::List { element: inner, .. }
-        | Type::RollingWindow { value: inner, .. }
-        | Type::Set(inner)
-        | Type::Ref(inner)
-        | Type::Endpoint(inner)
-        | Type::Atomic(inner)
-        | Type::Delta(inner)
-        | Type::Nullable(inner) => holds_trace(inner),
-        Type::Dict { key, value } => holds_trace(key) || holds_trace(value),
-        Type::Result { value, error } => holds_trace(value) || holds_trace(error),
-        Type::Scalar(_)
-        | Type::Parameter { .. }
-        | Type::Signal
-        | Type::Error
-        | Type::ErrorContext
-        | Type::Unknown => false,
-    }
+    ty.any_part(&|part| matches!(part, Type::Trace { .. }), &|_| false)
 }
 
 /// The one argument of a call that gives one value, by position:
@@ -15362,16 +15317,6 @@ fn find(
     }
 }
 
-/// TYPE-4: "A field is optional when its type is nullable, `T?`, or an
-/// `atomic<...>` of a nullable type, `atomic<T?>`."
-fn is_optional(ty: &Type) -> bool {
-    match ty {
-        Type::Nullable(_) => true,
-        Type::Atomic(inner) => matches!(**inner, Type::Nullable(_)),
-        _ => false,
-    }
-}
-
 /// True when nothing can be said against a value of this type: it is
 /// not known, or it is `any`, whose typing is for a later pass
 /// (TYPE-8).
@@ -15412,36 +15357,9 @@ fn mentions(ty: &Type, own: &[Location]) -> bool {
 /// True when a size or a constant argument inside `ty` is a generic
 /// value parameter declared at one of `own`: the `N` of `list<i64, N>`.
 fn names_value_of(ty: &Type, own: &[Location]) -> bool {
-    let named = |constant: &Constant| matches!(&constant.value, ConstantValue::Parameter { at, .. } if own.contains(at));
-    let inner = |ty: &Type| names_value_of(ty, own);
-    match ty {
-        Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
-            Argument::Type(ty) => inner(ty),
-            Argument::Constant(constant) => named(constant),
-        }),
-        Type::Tuple(elements) => elements.iter().any(inner),
-        Type::List { element, size } => size.as_ref().is_some_and(named) || inner(element),
-        Type::Set(ty)
-        | Type::Ref(ty)
-        | Type::Endpoint(ty)
-        | Type::Atomic(ty)
-        | Type::Delta(ty)
-        | Type::Trace { cell: ty, .. }
-        | Type::Nullable(ty) => inner(ty),
-        Type::Dict { key, value } => inner(key) || inner(value),
-        Type::RollingWindow {
-            value,
-            maximum,
-            minimum,
-        } => named(maximum) || minimum.as_ref().is_some_and(named) || inner(value),
-        Type::Result { value, error } => inner(value) || inner(error),
-        Type::Scalar(_)
-        | Type::Parameter { .. }
-        | Type::Signal
-        | Type::Error
-        | Type::ErrorContext
-        | Type::Unknown => false,
-    }
+    ty.any_part(&|_| false, &|constant| {
+        matches!(&constant.value, ConstantValue::Parameter { at, .. } if own.contains(at))
+    })
 }
 
 /// What is expected of an expression that takes its type from its
