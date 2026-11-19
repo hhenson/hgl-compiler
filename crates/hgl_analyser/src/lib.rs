@@ -499,18 +499,31 @@ pub mod codes {
         /// A `switch` label that is no compile-time constant (CTRL-12,
         /// UNIT-13). Local: the catalogue has no row for it.
         pub const SWITCH_LABEL_CONSTANT: &str = "switch.label_constant";
+        /// A module's constant whose evaluation fails: an `i64` out of
+        /// range, a division by zero (UNIT-13: "a failure in evaluating
+        /// it is a required-constant failure (ERR-9)"; ERR-9: "Required
+        /// constant failures reject"). Local: the catalogue has no row
+        /// for it.
+        pub const CONSTANT_FAILURE: &str = "constant.failure";
+        /// A call makes more instances of generic functions than this
+        /// compiler follows to tell the `requires` they hold (GEN-3).
+        /// What is past that many is not told, and not taken to hold.
+        /// Local: the language sets no limit.
+        pub const INSTANCE_LIMIT: &str = "generic.instance_limit";
         /// `scheduled()` in a value function, a graph or a test, which is
         /// no node and has no schedule of its own (FN-9, TIME-9). Local:
         /// the catalogue's `inject.no_scheduler` names a node alone.
         pub const SCHEDULED_OUTSIDE_NODE: &str = "scheduled.outside_node";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 6] = [
+        pub const ALL: [&str; 8] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
             YIELD_IN_VALUE,
             SWITCH_LABEL_CONSTANT,
+            CONSTANT_FAILURE,
+            INSTANCE_LIMIT,
             SCHEDULED_OUTSIDE_NODE,
         ];
     }

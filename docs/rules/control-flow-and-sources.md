@@ -44,7 +44,7 @@ analyser: partial
 
 analyser: partial
 
-- A label is a compile-time constant of the selector's type (local `switch.label_constant`, UNIT-13), read by the one reader (`constant`) and compared by its value (`ConstantValue::same`): a literal however written, an enum member however written, a constant followed to its value, and a constant expression of those
+- A label is a compile-time constant of the selector's type (local `switch.label_constant`, UNIT-13), read by the one reader (`constant`) and compared as the selector's `==` compares them (`ConstantValue::equals`): a literal however written, an enum member however written, a constant followed to its value, and a constant expression of those
 - A repeated value is rejected (`switch.duplicate_label`), and an enum's coverage by such labels stands for a `default`
 - Left: a label whose value is not worked out, a generic value parameter's or one of a candidate of the program's own, whose repeat is not judged (the hgraph target reports one in an instance)
 

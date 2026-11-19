@@ -1034,8 +1034,9 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
 
 /// EXPR-6: "Boolean connectives short-circuit left to right": the
 /// right operand of `false &&` and of `true ||` is not needed where it
-/// is a parameter not yet given its value. "The operands of `&&`, `||`,
-/// and `!` are bools", that one too. One not worked out leaves the
+/// is a parameter not yet given its value, or fails when it is
+/// evaluated, `1 // 0 == 0`. "The operands of `&&`, `||`, and `!` are
+/// bools", that one too. One otherwise not worked out leaves the
 /// connective not worked out: it may be of no type, `1 + "a"`.
 #[test]
 fn a_boolean_connective_short_circuits() {
@@ -1043,7 +1044,8 @@ fn a_boolean_connective_short_circuits() {
     expect(
         &format!(
             "{shared}const fn a<const N: bool>(x: Flag<(false && N)>) -> Flag<false> => x\n\
-             const fn b<const N: bool>(x: Flag<(true || N)>) -> Flag<true> => x\n"
+             const fn b<const N: bool>(x: Flag<(true || N)>) -> Flag<true> => x\n\
+             const fn c(x: Flag<(false && (1 // 0 == 0))>) -> Flag<false> => x\n"
         ),
         &[],
     );
@@ -1102,6 +1104,353 @@ fn an_enum_construction_takes_an_integer_or_a_string() {
         &["6 enum.value"],
     );
     expect(&format!("{shared}enum E {{ a = B, b = 2 }}\n"), &[]);
+}
+
+// ---- The review of #218 ----
+
+/// GEN-3: "A call of a function whose `requires` does not hold with the
+/// generic arguments the call resolves is rejected." A call that passes
+/// on a generic value parameter of its own, `one_only<Y>`, resolves its
+/// arguments where a call gives `Y` a value: the `requires` is told
+/// there, at any depth, in a value function, a graph, an operator's
+/// candidate and one a named operator requirement is answered by, of a
+/// type as of a value. "Not told"
+/// is never "holds": one still not told where every argument is given,
+/// as of a constant this compiler does not work out, is rejected.
+#[test]
+fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
+    let shared = concat!(
+        "const fn one_only<const X: f64>(v: f64) -> f64 requires X == 1.0 => v * X\n",
+        "const fn outer<const Y: f64>(v: f64) -> f64 => one_only<Y>(v)\n",
+        "const fn outer2<const Z: f64>(v: f64) -> f64 => outer<Z>(v)\n",
+        "fn temporal_outer<const Y: f64>(v: f64) -> f64 => one_only<Y>(v)\n",
+        "const fn int_only<const X: i64>(v: i64) -> i64 requires X == 1 => v * X\n",
+        "const fn int_outer<const Y: i64>(v: i64) -> i64 => int_only<Y>(v)\n",
+        "const fn two() -> f64 => 2.0\n",
+        "const C: f64 = two()\n",
+        "struct FBox<const X: f64> { v: i64 }\n",
+        "const fn not_two<T>(x: T) -> i64 requires !(T == FBox<2.0>) => 1\n",
+        "const fn wrap<const X: f64>(fb: FBox<X>) -> i64 => not_two(fb)\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> f64 => outer<1.0>(5.0) + outer2<1.0>(5.0)\n\
+             fn b(v: f64) -> f64 => temporal_outer<1.0>(v)\n\
+             const fn c() -> i64 => int_outer<1>(5) + wrap(FBox<1.0>(v: 1))\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> f64 => outer<2.0>(5.0)\n\
+             const fn b() -> f64 => outer2<2.0>(5.0)\n\
+             fn c(v: f64) -> f64 => temporal_outer<2.0>(v)\n\
+             const fn d() -> i64 => int_outer<2>(5)\n\
+             const fn e() -> f64 => one_only<C>(1.0)\n\
+             const fn f() -> i64 => wrap(FBox<2.0>(v: 1))\n\
+             const fn only_two<T>(x: T) -> i64 requires T == FBox<2.0> => 1\n\
+             const fn g() -> i64 => only_two(FBox<C>(v: 1))\n\
+             operator unwrap<T>(boxed: T) -> i64\n\
+             impl const fn unwrap<const X: f64>(boxed: FBox<X>) -> i64 => only_two(boxed)\n\
+             const fn h() -> i64 => unwrap(FBox<1.0>(v: 1))\n\
+             const fn k() -> i64 => unwrap(FBox<2.0>(v: 1))\n\
+             struct Only<T> requires T == FBox<2.0> {{ v: i64 }}\n\
+             struct Outer<const X: f64> {{ held: Only<FBox<X>>? }}\n\
+             const fn m() -> Outer<1.0> => Outer<1.0>(held: null)\n\
+             const fn n() -> Outer<2.0> => Outer<2.0>(held: null)\n\
+             const fn relay<T>(x: T) -> i64 requires unwrap(T) -> i64 => unwrap(x)\n\
+             const fn o() -> i64 => relay(FBox<1.0>(v: 1))\n\
+             const fn p() -> i64 => relay(FBox<2.0>(v: 1))\n"
+        ),
+        &[
+            "13 requires.unmet",
+            "14 requires.unmet",
+            "15 requires.unmet",
+            "16 requires.unmet",
+            "17 requires.unmet",
+            "18 requires.unmet",
+            "20 requires.unmet",
+            "23 requires.unmet",
+            // The result's type and the construction each apply it.
+            "27 requires.unmet",
+            "27 requires.unmet",
+            "30 requires.unmet",
+        ],
+    );
+}
+
+/// The instances a call makes are followed only where they reach a
+/// `requires`, and no further than this compiler follows: what is past
+/// that is not told, which is reported (local `generic.instance_limit`)
+/// and not taken to hold (GEN-3). Two calls of itself at each level, with
+/// new arguments each time, make instances without end.
+#[test]
+fn the_instances_a_call_makes_are_followed_within_a_bound() {
+    let shared = concat!(
+        "const fn need<const N: i64>(v: i64) -> i64 requires N in {1, 2, 3} => v\n",
+        "const fn grow<const N: i64>(v: i64) -> i64 => need<N>(v) + grow<N * 2>(v) + grow<N * 2 + 1>(v)\n",
+        "const fn free<const N: i64>(v: i64) -> i64 => free<N * 2>(v) + free<N * 2 + 1>(v)\n",
+        "const fn every<const N: i64>(v: i64) -> i64 requires N == N => v\n",
+        "const fn spin<const N: i64>(v: i64) -> i64 => every<N>(v) + spin<N * 2>(v) + spin<N * 2 + 1>(v)\n",
+    );
+    expect(&format!("{shared}const fn a() -> i64 => free<1>(1)\n"), &[]);
+    // An instance whose arguments grow is followed no further than they
+    // may be held: `S + S` doubles a string at each level.
+    expect(
+        &format!(
+            "{shared}const fn same_text<const S: str>(v: i64) -> i64 requires S == S => v\n\
+             const fn doubled<const S: str>(v: i64) -> i64 => same_text<S>(v) + doubled<S + S>(v)\n\
+             const fn a() -> i64 => doubled<\"x\">(1)\n"
+        ),
+        &["9 generic.instance_limit"],
+    );
+    // One instance made from many calls is followed once: four thousand
+    // and more calls of `wrap<1>` are one instance of it, whose
+    // `requires` holds.
+    let calls: String = (0..4100)
+        .map(|index| format!("const fn c{index}() -> i64 => wrap<1>(1)\n"))
+        .collect();
+    expect(
+        &format!("{shared}const fn wrap<const N: i64>(v: i64) -> i64 => need<N>(v)\n{calls}"),
+        &[],
+    );
+    // A `requires` not told for a constant not worked out beside a
+    // parameter the call passes on is told for each instance: `B` may
+    // settle it whatever `C` is.
+    expect(
+        &format!(
+            "{shared}const fn two() -> f64 => 2.0\n\
+             const C: f64 = two()\n\
+             const fn either<const A: f64, const B: f64>(v: i64) -> i64 requires A == 1.0 || B == 2.0 => v\n\
+             const fn pass<const X: f64>(v: i64) -> i64 => either<C, X>(v)\n\
+             const fn a() -> i64 => pass<2.0>(1)\n\
+             const fn b() -> i64 => pass<3.0>(1)\n"
+        ),
+        &["12 requires.unmet"],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => grow<1>(1)\n\
+             const fn b() -> i64 => spin<1>(1)\n"
+        ),
+        &["7 requires.unmet", "8 generic.instance_limit"],
+    );
+}
+
+/// GEN-3: a `requires` "may use type/category membership, equalities,
+/// the membership of a constant in a set of constants": of two generic
+/// value parameters too, `N == M` and `N in {M, 5}`, each told by the one
+/// comparison. "under negation/disjunction it only tests
+/// already-resolved data": a type equality has the same three answers as
+/// a constant's: `!(T == FBox<2.0>)` is not told of an `FBox<X>` while
+/// `X` is not given (where it is, see
+/// `a_requires_is_told_where_a_passed_on_parameter_is_given`).
+#[test]
+fn a_requires_compares_two_options_and_a_type_in_three_answers() {
+    let shared = concat!(
+        "enum Mode { fast, slow }\n",
+        "struct FBox<const X: f64> { v: i64 }\n",
+        "const fn same_size<const N: i64, const M: i64>(v: i64) -> i64 requires N == M => v\n",
+        "const fn modes<const A: Mode, const B: Mode>(v: i64) -> i64 requires A == B => v\n",
+        "const fn within<const N: i64, const M: i64>(v: i64) -> i64 requires N in {M, 5} => v\n",
+        "const fn not_two<T>(x: T) -> i64 requires !(T == FBox<2.0>) => 1\n",
+        "const fn outer<const X: f64>(fb: FBox<X>) -> i64 => not_two(fb)\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => same_size<1, 1>(1) + modes<.fast, .fast>(1)\n\
+             const fn b() -> i64 => within<5, 2>(1) + within<2, 2>(1)\n\
+             const fn c() -> i64 => outer(FBox<1.0>(v: 1)) + not_two(FBox<1.0>(v: 1))\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => same_size<1, 2>(1)\n\
+             const fn b() -> i64 => modes<.fast, .slow>(1)\n\
+             const fn c() -> i64 => within<1, 2>(1)\n\
+             const fn e() -> i64 => not_two(FBox<2.0>(v: 1))\n"
+        ),
+        &[
+            "9 requires.unmet",
+            "10 requires.unmet",
+            "11 requires.unmet",
+            "12 requires.unmet",
+        ],
+    );
+}
+
+/// hhenson/hgl_spec#139, written in UNIT-13: "The same is the same
+/// value, not `==`: `-0.0` and `0.0` are different constants: different
+/// type arguments, different instances." "`requires X == 0.0` is the
+/// language's `==`: it holds for `-0.0`." "A NaN constant is the same
+/// constant as a NaN constant": NUM-3's true division "defaults to the
+/// `ieee` zero policy ... zero divided by zero produces NaN", which is a
+/// constant.
+#[test]
+fn a_constant_is_its_value_and_a_comparison_the_languages() {
+    let shared = concat!(
+        "struct Scaled<const X: f64> { v: i64 }\n",
+        "const fn z<const X: f64>(v: f64) -> f64 requires X == 0.0 => v\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(x: Scaled<0.0>) -> Scaled<0.00> => x\n\
+             const fn b(x: Scaled<-0.0>) -> Scaled<-(0.0)> => x\n\
+             const fn c() -> f64 => z<-0.0>(1.0) + z<0.0>(1.0)\n\
+             const NAN: f64 = 0.0 / 0.0\n\
+             const fn d(t: Scaled<NAN>) -> Scaled<0.0 / 0.0> => t\n"
+        ),
+        &[],
+    );
+    // NUM-5: "NaN is neither equal nor close to any value, including
+    // itself", and an ordering of one is false: a comparison the program
+    // makes of a NaN constant is the language's.
+    expect(
+        &format!(
+            "{shared}struct Flag<const X: bool> {{ v: i64 }}\n\
+             const NAN: f64 = 0.0 / 0.0\n\
+             const fn a(x: Flag<(0 == NAN)>, y: Flag<(NAN == NAN)>) -> Flag<false> => x\n\
+             const fn b(x: Flag<(NAN < 1.0)>, y: Flag<(1 >= NAN)>) -> Flag<false> => y\n\
+             const fn c(x: Flag<(NAN != NAN)>, y: Flag<(0 != NAN)>) -> Flag<true> => y\n\
+             const fn d(x: Flag<(0 == NAN)>) -> Flag<true> => x\n"
+        ),
+        &["9 type.mismatch"],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(x: Scaled<-0.0>) -> Scaled<0.0> => x\n\
+             const fn b(x: Scaled<0.0>) -> Scaled<-0.0> => x\n"
+        ),
+        &["4 type.mismatch", "5 type.mismatch"],
+    );
+}
+
+/// TYPE-7: "With no enum type expected, `.member` rejects", and a member
+/// its enum does not have is no value of it. GEN-13: a generic value
+/// parameter's default is a value of the type the call gives the
+/// parameter: `.slow`, the default of a `const X: T`, is held to each
+/// call's and each construction's `T`.
+#[test]
+fn an_implied_member_default_is_held_to_the_type_given() {
+    let shared = concat!(
+        "enum Mode { fast, slow }\n",
+        "const fn pick<T, const X: T = .slow>(v: T) -> T => X\n",
+        "const fn missing<T, const X: T = .medium>(v: T) -> T => X\n",
+        "struct TB<T, const X: T = .slow> { v: T }\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> Mode => pick(Mode.fast)\n\
+             const fn b(v: Mode) -> Mode => TB(v: v).v\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => pick(1)\n\
+             const fn b() -> Mode => missing(Mode.fast)\n\
+             const fn c(v: i64) -> i64 => TB(v: v).v\n"
+        ),
+        &["6 type.mismatch", "7 type.mismatch", "8 type.mismatch"],
+    );
+}
+
+/// UNIT-13: "a failure in evaluating it is a required-constant failure
+/// (ERR-9)", and ERR-9: "Required constant failures reject where
+/// specified": a constant whose `i64` arithmetic leaves the `i64`s
+/// (NUM-2) or divides by zero under `.fail` (NUM-12) is rejected where
+/// it is declared, and its uses say nothing more. A constant this
+/// compiler does not work out is not taken as known where a generic
+/// value argument needs it (GEN-8), as the same expression written in
+/// place is not. A sum of any length the parser builds a tree for is
+/// worked out.
+#[test]
+fn a_constant_that_fails_is_rejected_where_it_is_declared() {
+    let shared = concat!(
+        "struct IBox<const X: i64> { v: i64 }\n",
+        "struct FBox<const X: f64> { v: i64 }\n",
+    );
+    let forty = vec!["1"; 40].join(" + ");
+    let four_hundred = vec!["1"; 400].join(" + ");
+    expect(
+        &format!(
+            "{shared}const FORTY: i64 = {forty}\n\
+             const fn b(t: IBox<FORTY>) -> IBox<40> => t\n\
+             const fn c(t: list<i64, FORTY>) -> list<i64, 40> => t\n\
+             const MANY: i64 = {four_hundred}\n\
+             const fn d(t: IBox<MANY>) -> IBox<400> => t\n"
+        ),
+        &[],
+    );
+    // EXPR-6: "Boolean connectives short-circuit left to right": the
+    // right operand of `false &&` and of `true ||` is not evaluated, so
+    // its failure is none, and the connective is the left operand.
+    expect(
+        &format!(
+            "{shared}struct Flag<const X: bool> {{ v: i64 }}\n\
+             const NO: bool = false && (1 // 0 == 0)\n\
+             const YES: bool = true || (9223372036854775807 + 1 > 0)\n\
+             const fn a(x: Flag<NO>, y: Flag<YES>) -> Flag<false> => x\n\
+             const fn b(y: Flag<YES>) -> Flag<true> => y\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const BIG: i64 = 9223372036854775807 + 1\n\
+             const DIV: i64 = 1 // 0\n\
+             const fn a(t: IBox<BIG>) -> IBox<BIG> => t\n\
+             const fn b(t: IBox<DIV>) -> i64 => 1\n"
+        ),
+        &["4 constant.failure", "5 constant.failure"],
+    );
+    expect(
+        &format!(
+            "{shared}const LATER: datetime = @2024-01-01T00:00Z + 1s\n\
+             struct TBox<const X: datetime> {{ v: i64 }}\n\
+             const fn a(t: TBox<LATER>) -> i64 => 1\n"
+        ),
+        &["6 generic.argument_constant"],
+    );
+}
+
+/// GEN-8: "A call rejects when it leaves a generic parameter
+/// unresolved": a default that names its own parameter gives it no
+/// value. A default that names a parameter before its own is of what
+/// that one takes, in a call and in a struct written with no arguments,
+/// which takes its defaults (GEN-2): `W2` is `W2<1, 1>`.
+#[test]
+fn a_default_that_names_its_own_parameter_gives_no_value() {
+    let shared = concat!(
+        "struct IBox<const X: i64> { v: i64 }\n",
+        "const fn sized<const N: i64 = N>(v: i64) -> i64 => N + v\n",
+        "struct Selfish<const X: i64 = X> { v: i64 }\n",
+        "struct W2<const A: i64 = 1, const B: i64 = A> { v: i64 }\n",
+        "const fn d<const N: i64 = 1, const M: i64 = N>(v: i64) -> IBox<M> => IBox<M>(v: v)\n",
+        "const fn rec<const N: i64, const M: i64 = N>(v: i64) -> i64 => rec<N>(v) + M\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(w: W2) -> W2<1, 1> => w\n\
+             const fn b() -> i64 => sized<1>(2)\n\
+             const fn c() -> i64 {{\n    let one = d(1)\n    let three = d<3>(1)\n    \
+             let x: IBox<1> = one\n    let y: IBox<3> = three\n    return 1\n}}\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => sized(1)\n\
+             const fn b(s: Selfish) -> i64 => 1\n\
+             const fn c() -> i64 {{\n    let one = d(1)\n    let x: IBox<2> = one\n    return 1\n}}\n"
+        ),
+        &[
+            "8 generic.unresolved",
+            "9 generic.argument_count",
+            "12 type.mismatch",
+        ],
+    );
 }
 
 /// The types of the parameters of the function `name` of `m`.
