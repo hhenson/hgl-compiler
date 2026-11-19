@@ -6718,8 +6718,6 @@ impl Emitter<'_> {
         signature: &Signature,
         arguments: &[Argument],
     ) -> String {
-        // True where the callee is a node, which keeps what it is given.
-        let node = self.is_node(callee);
         let kept = self.kept_configuration(callee, generics, signature);
         // Whether the callee is a node: a node keeps what a graph
         // gives it that is no connection, so such an argument is
