@@ -212,10 +212,8 @@ impl Emitter<'_> {
             {
                 let condition = self.expression(function, condition);
                 self.line(depth, &format!("if {condition}:"));
-                let before = self.bound.clone();
                 let then = continued(&alternative_statements(Some(then)), rest);
-                self.block(function, &then, depth + 1);
-                self.bound = before;
+                self.scoped(|emitter| emitter.block(function, &then, depth + 1));
                 self.line(depth, "else:");
                 let other = continued(&alternative_statements(otherwise.as_deref()), rest);
                 self.block(function, &other, depth + 1);
@@ -478,19 +476,11 @@ impl Emitter<'_> {
                 // Python's `if`: what both branches bind is bound after,
                 // less a branch that returns, which does not reach the
                 // next statement.
-                let mut joined: Option<Vec<usize>> = None;
-                for (bound, reaches) in binds.into_iter().zip(reaches) {
-                    if reaches {
-                        joined = Some(match joined {
-                            None => bound,
-                            Some(mut joined) => {
-                                joined.retain(|local| bound.contains(local));
-                                joined
-                            }
-                        });
-                    }
-                }
-                self.bound = joined.unwrap_or(before);
+                let reached = binds
+                    .into_iter()
+                    .zip(reaches)
+                    .filter_map(|(bound, reaches)| reaches.then_some(bound));
+                self.bound = joined(reached).unwrap_or(before);
                 if let Some(local) = declared {
                     self.bind(function, local);
                 }
@@ -572,9 +562,6 @@ impl Emitter<'_> {
                 default,
                 ..
             } => {
-                if self.labels_repeat(cases) {
-                    return Branched::Ended;
-                }
                 let returns = cases.iter().any(|case| nested_return(&case.body))
                     || default.as_deref().is_some_and(nested_return);
                 let ends = returns && !rest.is_empty();
@@ -594,48 +581,9 @@ impl Emitter<'_> {
                     })
                     .collect();
                 let default = default.as_deref().map(on);
-                // What is bound after: what each case that reaches its
-                // end binds. One that matches no case fails (CTRL-6).
-                let before = self.bound.clone();
-                let mut joined: Option<Vec<usize>> = None;
-                let selected = format!("_selected_{depth}");
-                let written = self.expression(function, selector);
-                self.line(depth, &format!("{selected} = {written}"));
-                let bodies = cases
-                    .iter()
-                    .map(|case| Some(&case.body[..]))
-                    .chain([default.as_deref()]);
-                for (index, body) in bodies.enumerate() {
-                    self.bound = before.clone();
-                    if index < cases.len() {
-                        let label = self.expression(function, &cases[index].label);
-                        let word = if index == 0 { "if" } else { "elif" };
-                        self.line(depth, &format!("{word} {selected} == {label}:"));
-                    } else if !cases.is_empty() {
-                        self.line(depth, "else:");
-                    }
-                    let inner = if cases.is_empty() { depth } else { depth + 1 };
-                    match body {
-                        Some(body) => {
-                            self.block(function, body, inner);
-                            if !always_returns(body) {
-                                let bound = std::mem::take(&mut self.bound);
-                                joined = Some(match joined {
-                                    None => bound,
-                                    Some(mut joined) => {
-                                        joined.retain(|local| bound.contains(local));
-                                        joined
-                                    }
-                                });
-                            }
-                        }
-                        None => {
-                            self.natives = true;
-                            self.line(inner, &format!("_core.unmatched({selected})"));
-                        }
-                    }
+                if !self.switch(function, selector, &cases, default.as_deref(), depth) {
+                    return Branched::Ended;
                 }
-                self.bound = joined.unwrap_or(before);
                 if ends {
                     Branched::Ended
                 } else {
@@ -932,12 +880,8 @@ impl Emitter<'_> {
                 Tail::Nothing | Tail::Returns | Tail::Outputless | Tail::Unmatched => {}
             }
         }
-        let read = self.taken(function, read, &declared);
-        self.windows_given(function, &read, None, at);
-        let annotation = result.map(|result| {
-            self.annotation(result, true, at)
-                .unwrap_or_else(|| "_py.object".to_string())
-        });
+        let read = self.child_inputs(function, (read, &declared), None, at);
+        let annotation = result.map(|result| self.annotation_or_object(result, true, at));
         let returns = annotation
             .as_ref()
             .map_or(String::new(), |annotation| format!(" -> {annotation}"));
@@ -956,8 +900,7 @@ impl Emitter<'_> {
                 let failing = self.unmatched_node(key, annotation.as_deref(), at);
                 let mut taken = vec![format!(
                     "key: {}",
-                    self.annotation(&key.ty, true, at)
-                        .unwrap_or_else(|| "_py.object".to_string())
+                    self.annotation_or_object(&key.ty, true, at)
                 )];
                 taken.extend(parameters.iter().cloned());
                 self.line(
@@ -1034,9 +977,7 @@ impl Emitter<'_> {
     /// nothing.
     fn unmatched_node(&mut self, key: &Expr, annotation: Option<&str>, at: Location) -> String {
         self.natives = true;
-        let selector = self
-            .annotation(&key.ty, true, at)
-            .unwrap_or_else(|| "_py.object".to_string());
+        let selector = self.annotation_or_object(&key.ty, true, at);
         let (decorator, returns) = match annotation {
             Some(annotation) => ("compute_node", format!(" -> {annotation}")),
             None => ("sink_node", String::new()),
@@ -1046,6 +987,23 @@ impl Emitter<'_> {
             format!("@_hg.{decorator}\ndef "),
             format!("(key: {selector}){returns}:\n    _core.unmatched(key.value)\n"),
         )
+    }
+
+    /// What a child graph of a `switch_` or a `map_` takes of the graph
+    /// it is written in (`taken`), from what its statements name and
+    /// declare, `read` and `declared`, with each window given to it reported
+    /// (`windows_given`): `over` is the loop's sequence, where it is a
+    /// loop's.
+    fn child_inputs(
+        &mut self,
+        function: &Function,
+        (read, declared): (Vec<usize>, &[usize]),
+        over: Option<&Type>,
+        at: Location,
+    ) -> Vec<usize> {
+        let taken = self.taken(function, read, declared);
+        self.windows_given(function, &taken, over, at);
+        taken
     }
 
     /// What a child graph takes of the graph it is written in, from
@@ -1099,9 +1057,7 @@ impl Emitter<'_> {
             .iter()
             .map(|&local| {
                 let declared = &function.locals[local];
-                let of = self
-                    .annotation(&declared.ty, true, at)
-                    .unwrap_or_else(|| "_py.object".to_string());
+                let of = self.annotation_or_object(&declared.ty, true, at);
                 format!("{}: {of}", taken_name(&name(&declared.name)))
             })
             .collect()
@@ -1231,8 +1187,7 @@ impl Emitter<'_> {
         let mut declared: Vec<usize> = names.to_vec();
         walk_statement_nodes(body, &mut |node| named_in(node, &mut read, &mut declared));
         let key = key.filter(|key| read.contains(key));
-        let taken = self.taken(function, read, &declared);
-        self.windows_given(function, &taken, Some(&sequence.ty), at);
+        let taken = self.child_inputs(function, (read, &declared), Some(&sequence.ty), at);
         // The child's parameters: the key, where the body reads it, the
         // member's port, and what it takes.
         let mut parameters = Vec::new();
@@ -1243,9 +1198,7 @@ impl Emitter<'_> {
             if !whole_scalar(ty) {
                 self.unsupported(at, &format!("a loop's key or member of type `{ty}`"));
             }
-            let of = self
-                .annotation(ty, true, at)
-                .unwrap_or_else(|| "_py.object".to_string());
+            let of = self.annotation_or_object(ty, true, at);
             parameters.push(format!("{}: {of}", name(&function.locals[key].name)));
             own.push(key);
         }
@@ -1373,6 +1326,12 @@ impl Emitter<'_> {
     /// at: one nested in a case has another. Each case is an `if` on
     /// it, and what no case matches falls to the `default`, or fails in
     /// the provider.
+    ///
+    /// In a graph, CTRL-15: "a `switch` over an ordinary value composes
+    /// the one case selected". What is bound after is what each case
+    /// that reaches its end binds (`joined`); one that matches no case
+    /// fails (CTRL-6). False where it is reported and not written
+    /// (`labels_repeat`).
     pub(super) fn switch(
         &mut self,
         function: &Function,
@@ -1380,19 +1339,26 @@ impl Emitter<'_> {
         cases: &[Case],
         default: Option<&[Stmt]>,
         depth: usize,
-    ) {
+    ) -> bool {
         if self.labels_repeat(cases) {
-            return;
+            return false;
         }
+        let before = self.bound.clone();
+        let mut reached = Vec::new();
         let selected = format!("_selected_{depth}");
         let selector = self.expression(function, selector);
         self.line(depth, &format!("{selected} = {selector}"));
         for (index, case) in cases.iter().enumerate() {
+            self.bound = before.clone();
             let label = self.expression(function, &case.label);
             let word = if index == 0 { "if" } else { "elif" };
             self.line(depth, &format!("{word} {selected} == {label}:"));
             self.block(function, &case.body, depth + 1);
+            if !always_returns(&case.body) {
+                reached.push(std::mem::take(&mut self.bound));
+            }
         }
+        self.bound = before.clone();
         // With no case there is no `if` for an `else` to follow.
         let inner = if cases.is_empty() {
             depth
@@ -1401,12 +1367,19 @@ impl Emitter<'_> {
             depth + 1
         };
         match default {
-            Some(default) => self.block(function, default, inner),
+            Some(default) => {
+                self.block(function, default, inner);
+                if !always_returns(default) {
+                    reached.push(std::mem::take(&mut self.bound));
+                }
+            }
             None => {
                 self.natives = true;
                 self.line(inner, &format!("_core.unmatched({selected})"));
             }
         }
+        self.bound = joined(reached).unwrap_or(before);
+        true
     }
 
     /// `if condition { ... } else { ... }` standing as a statement.
@@ -1429,14 +1402,24 @@ impl Emitter<'_> {
         }
         // What is bound after: what both branches bind, less a branch
         // that returns, which does not reach the next statement.
+        // Where neither reaches it, the `else`'s bindings stand.
         let ends = |branch: &Expr| always_returns(&alternative_statements(Some(branch)));
-        if ends(then) {
-            // The `else`'s bindings stand.
-        } else if otherwise.is_some_and(ends) {
-            self.bound = after_then;
-        } else {
-            self.bound.retain(|local| after_then.contains(local));
-        }
+        let after_else = std::mem::take(&mut self.bound);
+        let reached = [
+            (!ends(then)).then_some(after_then),
+            (!otherwise.is_some_and(ends)).then(|| after_else.clone()),
+        ];
+        self.bound = joined(reached.into_iter().flatten()).unwrap_or(after_else);
+    }
+
+    /// Runs `write`, and then gives back what was bound before it
+    /// (`Emitter::bound`): what it binds is not bound after. A loop's
+    /// body may not run, and only the case selected of a `switch` runs.
+    pub(super) fn scoped<T>(&mut self, write: impl FnOnce(&mut Self) -> T) -> T {
+        let before = self.bound.clone();
+        let written = write(self);
+        self.bound = before;
+        written
     }
 
     /// Marks `local` as having a value in the graph being written
@@ -1491,24 +1474,14 @@ impl Emitter<'_> {
             self.unsupported(at, "a capture in a test, outside an eval");
             return "None".to_string();
         }
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = &call.kind
-        else {
-            self.unsupported(at, "this capture");
-            return "None".to_string();
-        };
-        let Some((module, declaration)) = callee.declaration() else {
-            self.unsupported(at, "this capture");
-            return "None".to_string();
-        };
-        let generics = callee.generics();
-        let declared = &program.modules[module].declarations[declaration];
-        let bodied = matches!(
-            declared.kind,
-            DeclarationKind::Implementation(..) | DeclarationKind::Function(_)
-        );
-        let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
+        let Some(CapturedCall {
+            callee: (module, declaration),
+            generics,
+            arguments,
+            declared,
+            signature,
+            bodied,
+        }) = captured_call_of(program, call)
         else {
             self.unsupported(at, "this capture");
             return "None".to_string();
@@ -1606,25 +1579,14 @@ impl Emitter<'_> {
     ) -> Option<String> {
         let at = call.at;
         let program = self.program;
-        let ExprKind::Call {
-            callee: called,
+        let CapturedCall {
+            callee,
+            generics,
             arguments,
-            ..
-        } = &call.kind
-        else {
-            return None;
-        };
-        let callee = called.declaration()?;
-        let generics = called.generics();
-        let declared = &program.modules[callee.0].declarations[callee.1];
-        let Some(Detail::Callable(signature)) = program.modules[callee.0].details.get(callee.1)
-        else {
-            return None;
-        };
-        let bodied = matches!(
-            declared.kind,
-            DeclarationKind::Implementation(..) | DeclarationKind::Function(_)
-        );
+            declared,
+            signature,
+            bodied,
+        } = captured_call_of(program, call)?;
         let node = self.is_node(callee);
         // FN-6: "A selected value helper ... with temporal arguments in
         // composition is lifted". ERR-7: a value function given no
@@ -1815,6 +1777,62 @@ enum Tail {
     /// unmatched selector uses default or fails". The graph fails when
     /// it is selected, as a node's `switch` does (`_core.unmatched`).
     Unmatched,
+}
+
+/// What a capture's call calls (ERR-7), as a captured `let` and a
+/// captured call of a graph read it: a function of the program or the
+/// candidate of an operator the call resolved to.
+struct CapturedCall<'p> {
+    /// Its module and its declaration.
+    callee: (usize, usize),
+    /// The call's generic arguments.
+    generics: &'p [GenericArgument],
+    /// The call's arguments.
+    arguments: &'p [Argument],
+    /// Its declaration.
+    declared: &'p Declaration,
+    /// Its signature.
+    signature: &'p Signature,
+    /// True for a function or a candidate with a body of its own.
+    bodied: bool,
+}
+
+/// What `call` calls, where it is a call of a function or a candidate
+/// with a signature. `None` for any other expression.
+fn captured_call_of<'p>(program: &'p Program, call: &'p Expr) -> Option<CapturedCall<'p>> {
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = &call.kind
+    else {
+        return None;
+    };
+    let (module, declaration) = callee.declaration()?;
+    let declared = &program.modules[module].declarations[declaration];
+    let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration) else {
+        return None;
+    };
+    let bodied = matches!(
+        declared.kind,
+        DeclarationKind::Implementation(..) | DeclarationKind::Function(_)
+    );
+    Some(CapturedCall {
+        callee: (module, declaration),
+        generics: callee.generics(),
+        arguments,
+        declared,
+        signature,
+        bodied,
+    })
+}
+
+/// What is bound after branches (`Emitter::bound`): what each of
+/// `reached`, the bindings of a branch that reaches its end, binds.
+/// `None` where no branch reaches it.
+fn joined(reached: impl IntoIterator<Item = Vec<usize>>) -> Option<Vec<usize>> {
+    reached.into_iter().reduce(|mut joined, bound| {
+        joined.retain(|local| bound.contains(local));
+        joined
+    })
 }
 
 /// The statements of a branch of an `if` that stands as a statement:

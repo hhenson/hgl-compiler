@@ -30,14 +30,15 @@ impl Emitter<'_> {
         // children": hgraph's `TSD`, a child for each key, each child
         // temporalized in turn. Its key is a value, a scalar or an enum.
         if temporal && let Type::Dict { key, value } = ty {
-            let key = self.annotation(key, false, at)?;
-            if key == "_py.object" {
+            let written = self.annotation(key, false, at)?;
+            // A held key is an object to hgraph (`held`).
+            if held(key) {
                 self.unsupported(at, &format!("the type `{ty}`"));
                 return None;
             }
             let child = self.child_annotation(ty, value, at)?;
             self.hgraph = true;
-            return Some(format!("_hg.TSD[{key}, {child}]"));
+            return Some(format!("_hg.TSD[{written}, {child}]"));
         }
         if temporal && let Type::Tuple(elements) = ty {
             return self.tuple_annotation(ty, elements, at);
@@ -122,7 +123,7 @@ impl Emitter<'_> {
             if !temporal {
                 return Some(payload_written);
             }
-            if payload_written == "_py.object" {
+            if held(payload) {
                 self.unsupported(at, &format!("the type `{ty}`"));
                 return None;
             }
@@ -182,6 +183,19 @@ impl Emitter<'_> {
         } else {
             Some(python)
         }
+    }
+
+    /// The annotation of `ty`, as `annotation` writes it, or `_py.object`
+    /// where it is not written: that is reported, and the piece is left
+    /// out.
+    pub(super) fn annotation_or_object(
+        &mut self,
+        ty: &Type,
+        temporal: bool,
+        at: Location,
+    ) -> String {
+        self.annotation(ty, temporal, at)
+            .unwrap_or_else(|| "_py.object".to_string())
     }
 
     /// The temporal annotation of `child`, a field, a position or a
@@ -500,9 +514,8 @@ impl Emitter<'_> {
             } else if parameter.has_default && !parameter.constant {
                 self.unsupported(parameter.at, "a default of a temporal input");
             }
-            let annotation = self
-                .annotation(&parameter.ty, !parameter.constant, parameter.at)
-                .unwrap_or_else(|| "_py.object".to_string());
+            let annotation =
+                self.annotation_or_object(&parameter.ty, !parameter.constant, parameter.at);
             parameters.push(format!("{}: {annotation}", name(&parameter.name)));
         }
         let result = signature
