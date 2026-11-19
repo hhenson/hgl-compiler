@@ -218,9 +218,23 @@ impl<'a> Typer<'a> {
         if !whole(resolved) {
             return None;
         }
-        let read = self
-            .typed_in(declaration.at.file, default, Some(resolved))
-            .ok()?;
+        let file = declaration.at.file;
+        // An implied member is of no type but an enum, and of no enum
+        // but one that has it (TYPE-7: "With no enum type expected,
+        // `.member` rejects"): `.slow` where the call resolves `T` to an
+        // `i64`, and `.medium` where it resolves it to a `Mode` with no
+        // such member. Where the declared type names a parameter, it is
+        // the call's to tell; otherwise it is reported where declared.
+        let no_member = |fault: &Fault| matches!(fault, Fault::NoEnum | Fault::NoMember(_));
+        let as_written = || -> Option<Result<ConstantValue, String>> {
+            let read = self.typed_in(file, default, None).ok()?;
+            Some(Err(crate::constant::described(&read)))
+        };
+        let read = match self.typed_in(file, default, Some(resolved)) {
+            Ok(read) => read,
+            Err(fault) if no_member(&fault) && names_parameter(declared) => return as_written(),
+            Err(_) => return None,
+        };
         let fits_declared = names_parameter(declared)
             || crate::constant::fit(read.clone(), Some(declared), self.program).is_ok();
         match crate::constant::fit(read.clone(), Some(resolved), self.program) {
@@ -228,6 +242,7 @@ impl<'a> Typer<'a> {
             Err(Fault::Mismatch(_)) if fits_declared => {
                 Some(Err(crate::constant::described(&read)))
             }
+            Err(fault) if no_member(&fault) && names_parameter(declared) => as_written(),
             Err(_) => None,
         }
     }

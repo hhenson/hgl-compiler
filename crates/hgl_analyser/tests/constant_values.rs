@@ -1138,6 +1138,36 @@ fn a_constant_is_its_value_and_a_comparison_the_languages() {
     );
 }
 
+/// TYPE-7: "With no enum type expected, `.member` rejects", and a member
+/// its enum does not have is no value of it. GEN-13: a generic value
+/// parameter's default is a value of the type the call gives the
+/// parameter: `.slow`, the default of a `const X: T`, is held to each
+/// call's and each construction's `T`.
+#[test]
+fn an_implied_member_default_is_held_to_the_type_given() {
+    let shared = concat!(
+        "enum Mode { fast, slow }\n",
+        "const fn pick<T, const X: T = .slow>(v: T) -> T => X\n",
+        "const fn missing<T, const X: T = .medium>(v: T) -> T => X\n",
+        "struct TB<T, const X: T = .slow> { v: T }\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> Mode => pick(Mode.fast)\n\
+             const fn b(v: Mode) -> Mode => TB(v: v).v\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => pick(1)\n\
+             const fn b() -> Mode => missing(Mode.fast)\n\
+             const fn c(v: i64) -> i64 => TB(v: v).v\n"
+        ),
+        &["6 type.mismatch", "7 type.mismatch", "8 type.mismatch"],
+    );
+}
+
 /// UNIT-13: "a failure in evaluating it is a required-constant failure
 /// (ERR-9)", and ERR-9: "Required constant failures reject where
 /// specified": a constant whose `i64` arithmetic leaves the `i64`s
