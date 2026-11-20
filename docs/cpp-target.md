@@ -56,6 +56,7 @@ one executable for each test module or application
 | `if`, `switch`, `for` over connections | hgraph's `switch_node`, `map_node` and `tsl_map_node`, each child a compiled sub-graph with its captures |
 | Lifted call | A generated node that calls the instance |
 | Source | A node with no input that schedules itself. The body is a C++23 coroutine (`std::generator` of a time and a payload) held in the node's state, made in `start` and destroyed in `stop`: `yield` inside loops and branches is written as it reads, with the body's locals in the coroutine's frame. A trial ran one on hgraph: the trace was right, a failure inside the body was the node's failure, and the frame was freed after a finished and after a failed run |
+| `ref` parameter and result | hgraph's `REF` input and output. A `REF` output holds the reference it was given, so a node that designates an endpoint is active on that endpoint's binding: where the binding changes it publishes the new designation and returns before its handlers, unless something else woke it (FN-16). A designation it holds already is not published again (TIME-10) |
 | Failure | Thrown as hgraph's `ExecutionFailure` carrying `CanonicalError` (code, message, node, phase, time). `capture` is `try_except_node` with canonical errors. `assert raises` finds the failure in the exception it catches |
 | Test | Core's `replay` and `record` are compiled like any module. The compiler writes each eval's entry graph, runs the executor in simulation and reads the recording from the run's store |
 | Application | The same, in real time, stopped through the engine's control |
@@ -99,7 +100,7 @@ saving ([hgraph 1838](https://github.com/hhenson/hgraph/issues/1838)).
 | --- | --- | --- |
 | [1833](https://github.com/hhenson/hgraph/issues/1833) | `switch_` and `map_` wiring outside the operator library | `libhglrt` carries the glue |
 | [1822](https://github.com/hhenson/hgraph/issues/1822), [1827](https://github.com/hhenson/hgraph/issues/1827) | Eight collection behaviours as the specification has them | `libhglrt` adapts each, as the Python provider does |
-| [1831](https://github.com/hhenson/hgraph/issues/1831) | Three reference behaviours left after 0.9.8 | The same |
+| [1831](https://github.com/hhenson/hgraph/issues/1831) | Two reference behaviours left after 0.9.8: a reference written again ticks, and a list of references given a re-pointed list does not | The same |
 | [1834](https://github.com/hhenson/hgraph/issues/1834) | A C++ struct as a bundle's whole value | Field by field |
 | [1835](https://github.com/hhenson/hgraph/issues/1835) | Canonical errors from `try_except_<G>` | The node is built directly |
 | [1836](https://github.com/hhenson/hgraph/issues/1836) | A `tenor` scalar | A type of `libhglrt` |
