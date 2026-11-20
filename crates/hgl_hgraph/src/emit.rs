@@ -16,8 +16,8 @@ use std::collections::BTreeSet;
 
 use hgl_analyser::hir::{
     Argument, BinaryOperator, Body, CalendarDate, Callee, Case, Cell, ClockTime, EndpointOperation,
-    ErrorPart, Expr, ExprKind, Header, Hook, Local, Run, Stmt, Temporal, Tenor, UnaryOperator,
-    Value, ValueCategory,
+    ErrorPart, Expr, ExprKind, Hook, Local, Run, Stmt, Temporal, Tenor, UnaryOperator, Value,
+    ValueCategory,
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
@@ -25,9 +25,13 @@ use hgl_analyser::{
     Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
+use hgl_lower::calls::{LeftOut, field_default, known_duration, left_out, left_out_never_valid};
 use hgl_lower::canonical::canonical_argument;
 use hgl_lower::copies::{self, Copies, by_value, changed_in_place, may_hold, struct_in_place};
 use hgl_lower::instances::{self, Instances};
+use hgl_lower::nodes::{
+    Handler, Timer, is_input, is_out, is_reference, required_inputs, subscribed_inputs,
+};
 use hgl_lower::pieces::Reach;
 use hgl_lower::types::{
     Asked, HELD_DEPTH, asked_children, empty_struct, field_of, fields_of, growing_list,
