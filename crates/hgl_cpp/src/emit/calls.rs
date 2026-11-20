@@ -176,6 +176,18 @@ impl Emitter<'_> {
             };
             let parameter = &signature.parameters[index];
             if parameter.var {
+                // A `list<bool>` is a `std::vector<bool>`, which holds its
+                // elements as bits: an element is no `bool` a `bool&`
+                // can refer to.
+                if let ExprKind::Index { base, .. } = &argument.value.kind
+                    && let Type::List { element, .. } = &base.ty
+                    && **element == Type::Scalar(hgl_analyser::Scalar::Bool)
+                {
+                    return self.missing(
+                        argument.value.at,
+                        "an element of a `list<bool>` given to a `var` parameter",
+                    );
+                }
                 let Some(place) = self.place(scope, &argument.value) else {
                     return self
                         .missing(argument.value.at, "this place given to a `var` parameter");
@@ -184,6 +196,9 @@ impl Emitter<'_> {
                 continue;
             }
             let value = self.expression(scope, &argument.value);
+            let Some(ty) = self.named_type(&argument.value.ty) else {
+                return self.missing(at, &format!("the type `{}`", argument.value.ty));
+            };
             let read = scope
                 .copies
                 .places(program, &scope.body.locals, &argument.value);
@@ -193,11 +208,11 @@ impl Emitter<'_> {
                 let Some(ty) = self.named_type(&parameter.ty) else {
                     return self.missing(at, &format!("the type `{}`", parameter.ty));
                 };
-                (format!("{ty}({value})"), Held::Value)
+                (format!("{ty}({value})"), Held::Value(ty))
             } else if refers(&argument.value) {
-                (value, Held::Reference)
+                (value, Held::Reference(ty))
             } else {
-                (value, Held::Value)
+                (value, Held::Value(ty))
             };
             written.push((index, value, may_fail(&argument.value), held));
         }
@@ -235,13 +250,19 @@ impl Emitter<'_> {
                     if !defaults.before.is_empty() {
                         return self.missing(default.at, "a default that propagates a failure");
                     }
-                    defaulted.push((index, value, may_fail(default), Held::Value));
+                    let Some(ty) = self.named_type(&default.ty) else {
+                        return self.missing(default.at, &format!("the type `{}`", default.ty));
+                    };
+                    defaulted.push((index, value, may_fail(default), Held::Value(ty)));
                 }
                 // UNIT-8: "A parameter whose type is written `T?` needs no
                 // default to be omitted: it is taken to have a default of
                 // `null`".
                 Some(LeftOut::Null) => {
-                    defaulted.push((index, "std::nullopt".to_string(), false, Held::Value))
+                    let Some(ty) = self.named_type(&parameter.ty) else {
+                        return self.missing(at, &format!("the type `{}`", parameter.ty));
+                    };
+                    defaulted.push((index, "std::nullopt".to_string(), false, Held::Value(ty)))
                 }
                 None => {
                     return self
@@ -281,14 +302,17 @@ impl Emitter<'_> {
         // A place is held by a reference to it, and what something else
         // holds by a `const` reference; any other value as it is, so that
         // nothing it is part of is gone before the call: `[7][0]` is an
-        // element of a list that ends with its statement.
+        // element of a list that ends with its statement. Each value is
+        // held as its own type, never as `auto` of what was read: an
+        // element of a `list<bool>` is read as the vector's reference to
+        // its bit, which a later argument could change.
         let mut steps = String::new();
         for (index, value, _, held) in ordered {
             let name = names::temporary("argument", self.temporary());
             let declared = match held {
-                Held::Place => "auto&",
-                Held::Reference if !changing => "const auto&",
-                Held::Reference | Held::Value => "const auto",
+                Held::Place => "auto&".to_string(),
+                Held::Reference(ty) if !changing => format!("const {ty}&"),
+                Held::Reference(ty) | Held::Value(ty) => format!("const {ty}"),
             };
             steps.push_str(&format!("{declared} {name} = {value}; "));
             given[index] = name;
@@ -403,16 +427,16 @@ impl Emitter<'_> {
 }
 
 /// How an argument evaluated before its call (EXPR-2) is held until the
-/// call is made.
-#[derive(Clone, Copy)]
+/// call is made, with the C++ type of the value it holds.
+#[derive(Clone)]
 enum Held {
     /// A place given to a `var` parameter: a reference to it.
     Place,
     /// What a local, a constant or a part of one holds, which outlives
     /// the call: a `const` reference to it.
-    Reference,
+    Reference(String),
     /// Any other value: a value of its own.
-    Value,
+    Value(String),
 }
 
 /// A constant, a generic value argument (GEN-8), as a C++ constant
