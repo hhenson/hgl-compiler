@@ -1,0 +1,88 @@
+// The reads that are checked when they run, which the generated code calls
+// where the compiler cannot prove the read sound: a payload that may not be
+// there (TIME-1, ERR-14) and a position that may be outside a list (EXPR-3).
+#pragma once
+
+#include <hglrt/failure.h>
+#include <hglrt/values.h>
+
+#include <array>
+#include <cstddef>
+#include <source_location>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+namespace hglrt {
+
+/// Fails a read that needs a value which is not there, with the code
+/// `value.unset_read` (TIME-1, ERR-14; the catalogue: "Executed operation
+/// requires an unset ordinary payload, a collection's child that is not
+/// valid, or a struct, a tuple or a fixed list read whole that is not all
+/// valid"). `message` says what was read.
+[[noreturn]] void unset_read(std::string message = "a part that has not published is read",
+                             std::source_location where = std::source_location::current());
+
+/// The value of the endpoint `input`, a typed hgraph input view, read where
+/// the read is checked when it runs (ERR-14): "a child that is not valid
+/// fails the read with `value.unset_read`".
+template <class Input>
+auto checked_value(const Input& input, std::source_location where = std::source_location::current())
+    -> std::remove_cvref_t<decltype(input.value())> {
+    if (!input.valid()) {
+        unset_read("the child read is not valid", where);
+    }
+    return input.value();
+}
+
+/// The same read where its place takes `result<T, error>` (ERR-14): "it gives
+/// `ok` of the child's value, or, for a child that is not valid, `err` of an
+/// `error` whose code is `value.unset_read`".
+template <class Input>
+auto checked_result(const Input& input) -> result<std::remove_cvref_t<decltype(input.value())>> {
+    if (!input.valid()) {
+        return std::unexpected(make_error("the child read is not valid", std::string{codes::unset_read}));
+    }
+    return input.value();
+}
+
+namespace detail {
+/// Fails unless `index` is a position of a sequence of `size` elements
+/// (EXPR-3: "An index outside a list fails where it is evaluated"). The
+/// catalogue has no code for it, so the failure has none.
+void check_index(i64 index, std::size_t size, std::source_location where);
+} // namespace detail
+
+/// `values[index]` (EXPR-7): the element of a list at an `i64` position. An
+/// index outside the list fails (EXPR-3), a negative one among them.
+template <class T>
+const T& item(const std::vector<T>& values, i64 index,
+              std::source_location where = std::source_location::current()) {
+    detail::check_index(index, values.size(), where);
+    return values[static_cast<std::size_t>(index)];
+}
+
+/// `values[index]` as a place, which an assignment writes (EXPR-3, FN-15).
+template <class T>
+T& item(std::vector<T>& values, i64 index, std::source_location where = std::source_location::current()) {
+    detail::check_index(index, values.size(), where);
+    return values[static_cast<std::size_t>(index)];
+}
+
+/// `values[index]` of a fixed list, `list<T, N>` (TYPE-4, EXPR-3).
+template <class T, std::size_t N>
+const T& item(const std::array<T, N>& values, i64 index,
+              std::source_location where = std::source_location::current()) {
+    detail::check_index(index, N, where);
+    return values[static_cast<std::size_t>(index)];
+}
+
+/// `values[index]` of a fixed list as a place.
+template <class T, std::size_t N>
+T& item(std::array<T, N>& values, i64 index, std::source_location where = std::source_location::current()) {
+    detail::check_index(index, N, where);
+    return values[static_cast<std::size_t>(index)];
+}
+
+} // namespace hglrt

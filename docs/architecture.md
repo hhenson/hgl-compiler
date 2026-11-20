@@ -2036,6 +2036,92 @@ unavailable host, a new gap, or a listed case that passes, is rejected or
 disappears fails the check. Remove a listed gap when its case starts
 passing. The backend owns this list alongside its target tests.
 
+### The C++ runtime library
+
+`runtime/cpp` is `libhglrt`, the C++ library that the C++ target's
+generated code links: what that code calls and hgraph does not have. It is
+a skeleton that the target's first step fills. It is built on hgraph's
+runtime and wiring libraries alone (`hgraph::runtime`, `hgraph::wiring`):
+`hgraph::core` would bring hgraph's standard library, which no generated
+code uses.
+
+| Header (`include/hglrt/`) | Holds | Rules |
+| --- | --- | --- |
+| `hglrt.h` | The one header generated code includes: all below | |
+| `values.h` | HGL's scalars as hgraph's types (`i64`, `f64`, `str`, `datetime`, `duration`); `list<T>`, a `std::vector<T>` with a hash, registered with hgraph as an atomic | TYPE-1, TYPE-2, TYPE-4 |
+| `failure.h` | `error` (hgraph's `CanonicalError`), `result<T>` (`std::expected`); `Failure`, hgraph's `ExecutionFailure` with the place it was raised at; `fail`, `fail_uncoded`, `raise`; the catalogued codes it raises | ERR-1, ERR-2, ERR-4, ERR-5, ERR-8 |
+| `checked.h` | Reads checked when they run: `unset_read`, `checked_value`, `checked_result`, `item` | TIME-1, ERR-14, EXPR-3 |
+| `scalar.h` | 28 of core's native scalar operators: checked `i64` arithmetic, `f64` arithmetic and division under each zero policy, exact numeric equality with tolerances, order, the Boolean forms, and `datetime + duration` | NUM-1 to NUM-12, OPS-2, OPS-5, OPS-10 |
+| `lists.h`, `capabilities.h` | `append`, `extend`; the global store's `get`, `has`, `put` | LIST-1 to LIST-3, CAP-6 |
+| `sources.h` | `constant`, a node that publishes a value once at the start; `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
+| `testing.h` | The test host: registration and `main`, `check`, `raises`, traces and their comparison, a run and its recording | TST-2 to TST-15, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
+
+A native is a function named as the Python target names the candidate:
+the operator's name and the type of each parameter, `add__i64_i64`. One
+with a generic type parameter is a template the generated code instances,
+`lt__T_T<i64>`; one with a generic value parameter takes it as a template
+argument, `div__f64_f64<ZeroPolicy::ieee>`. One that can fail takes the
+place it is called from, a defaulted `std::source_location`, which its
+failure carries: the HGL file and line where the generated code sets them
+with `#line`. hgraph keeps that place for a failure of `start` or `stop`,
+which it nests; one of an evaluation it throws again as a new
+`ExecutionFailure`, which has none.
+
+A list is `hglrt::list<T>` and not a bare `std::vector<T>` because hgraph
+hashes a value it holds as configuration, a source's items, through
+`std::hash`, which no program may give a `std::vector`.
+
+An executable of a module's tests calls `hglrt::testing::main` from its
+own `main`: `EXECUTABLE RESULTS NAME...` runs the tests named, in order, and
+writes RESULTS in the form `support/run_tests.py` writes for the Python
+target (`start N`, `passed N`, `failed N LINE TEXT`, `unloaded N TEXT`),
+so that the runner reads both with one reader. `LINE` is the line of the
+last statement the test marked with `statement()`. A test runs to its end:
+the time limit of an integration test comes with runs in real time.
+
+Built with CMake, once for each SDK. A build is given:
+
+| Variable | Is |
+| --- | --- |
+| `HGL_HGRAPH_SDK` | The SDK's install prefix (cache variable or environment) |
+| `HGL_HGRAPH_DEPS` | The dependency prefix (cache variable or environment) |
+| `BUILD_TESTING` | The unit tests (default on) |
+| `HGLRT_SANITIZE` | The library and its tests under the address and undefined-behaviour sanitizers, which what links it inherits (default off) |
+
+and gives `libhglrt.so`, the target `hglrt::hglrt`, and a CMake package of
+it (`-Dhglrt_DIR=` the build directory, or its install prefix). The unit
+tests use [doctest](https://github.com/doctest/doctest): hgraph's own use
+Catch2, which its SDK does not install, and doctest is the smallest
+established framework, one header. An installed doctest is used, or its
+release is fetched. The library's own C++ is built with `-Wall -Wextra
+-Werror`, and laid out by `runtime/cpp/.clang-format`.
+
+#### The SDK
+
+`scripts/provision-hgraph-sdk.sh TAG DIR` builds hgraph's shared C++ SDK
+at the tag `TAG` and installs it into `DIR`, as hgraph's CI job
+`native-shared-install` builds it: Release, shared libraries, no Python,
+against the dependency prefix `HGL_HGRAPH_DEPS`. It differs from that job
+in leaving out hgraph's tests and extensions, and in giving the SDK's
+libraries the prefix's library directory as their run path, where that job
+sets `LD_LIBRARY_PATH`. Where the prefix does not exist the script makes it
+with micromamba from conda-forge, with the packages hgraph's job installs
+(Arrow 25 with Compute and Acero, fmt, spdlog, simdjson, CMake, Ninja), at
+fixed versions. The compiler is the caller's: GCC 15 or later. The SDK is
+54 MB; its runtime library needs `libarrow` at run time, though no
+generated code includes an Arrow header
+([hgraph 1839](https://github.com/hhenson/hgraph/issues/1839)).
+
+CI's job `cpp` makes the prefix and the SDK with the script and caches
+both with `actions/cache`, under a key of the tag, the script and the
+runner's image, so that a run with that key builds neither. It then builds
+`runtime/cpp` and runs its unit tests, and does both again under the
+sanitizers. It runs on GitHub's Ubuntu 26.04 image, whose GCC 15.2 is
+Ubuntu's own: nothing is installed for it, it is the compiler a developer
+on that release has, and neither a container (which the cache and the
+checkout would run inside) nor a compiler in the conda prefix (which adds
+its own sysroot and runtime libraries) is needed.
+
 ## Finding source files
 
 The compiler is given one or more source roots. It reads every `.hgl` file
@@ -2107,6 +2193,17 @@ the job the way the design needs is dropped.
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `tempfile` | `hgl_cli` | the directory a program is written to for a test run or an application's run, removed after it |
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
+
+The C++ target's runtime library, `runtime/cpp`:
+
+| Dependency | For |
+| --- | --- |
+| hgraph's C++ SDK, its runtime and wiring libraries | the graph, node, type and runtime layers the library and generated code are built on |
+| Arrow 25 with Compute and Acero, fmt, spdlog, simdjson, date | hgraph's own dependencies: fmt's and spdlog's headers are in hgraph's, and its runtime library needs Arrow when it runs |
+| GCC 15 or later | C++23, and the libstdc++ the SDK links |
+| CMake, Ninja | building the SDK and the library |
+| micromamba, conda-forge | making the dependency prefix where there is none |
+| doctest | the library's unit tests |
 
 Hand-written where no tool fits:
 
