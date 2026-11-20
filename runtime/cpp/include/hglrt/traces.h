@@ -147,9 +147,8 @@ std::string scalar_text(const tenor& value);
 
 /// `value` as the language writes it, for a person to read in a failure: a
 /// scalar as its literal, `null`, a tuple `(1, 2.0)`, a list `[1, 2]`, a
-/// list's delta by its properties. An enum the compiler writes is written
-/// as its `hgl_text` gives it, found by argument-dependent lookup, and
-/// otherwise as its number.
+/// list's delta by its properties, an enum's member as `Type.member`
+/// (TYPE-7), from what its `hgl_enum` names (values.h).
 template <class T>
 std::string text_of(const T& value) {
     if constexpr (hglrt::detail::is_optional<T>::value) {
@@ -185,10 +184,8 @@ std::string text_of(const T& value) {
         return text_of(value.value);
     } else if constexpr (detail::is_variant<T>::value) {
         return std::visit([](const auto& held) { return text_of(held); }, value);
-    } else if constexpr (requires { hgl_text(value); }) {
-        return hgl_text(value);
-    } else if constexpr (std::is_enum_v<T>) {
-        return text_of(static_cast<i64>(value));
+    } else if constexpr (named_enum<T>) {
+        return hglrt::detail::member_text(value);
     } else if constexpr (requires { detail::scalar_text(value); }) {
         return detail::scalar_text(value);
     } else {

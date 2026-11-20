@@ -2202,7 +2202,7 @@ not use.
 | Header (`include/hglrt/`) | Holds | Rules |
 | --- | --- | --- |
 | `hglrt.h` | The one header generated code includes: all below | |
-| `values.h` | HGL's scalars as hgraph's types (`i64`, `f64`, `bool`, `str`, `bytes`, `date`, `time`, `datetime`, `duration`, `civil_datetime`, `zoned_datetime`, `tenor`); `list<T>`, a `std::vector<T>` with a hash, registered with hgraph as an atomic; `delta_t<T>`, a scalar's, a nullable's, a tuple's and a list's delta (`list_delta`) | TYPE-1, TYPE-2, TYPE-4, TYPE-16 |
+| `values.h` | HGL's scalars as hgraph's types (`i64`, `f64`, `bool`, `str`, `bytes`, `date`, `time`, `datetime`, `duration`, `civil_datetime`, `zoned_datetime`, `tenor`); `list<T>`, a `std::vector<T>` with a hash, registered with hgraph as an atomic; `delta_t<T>`, a scalar's, a nullable's, a tuple's and a list's delta (`list_delta`); an enum's names, `EnumNames`, which the enum gives through `hgl_enum` (found by argument-dependent lookup) and by which the library names it, prints its members (`Side.buy`) and registers it with hgraph as an atomic | TYPE-1, TYPE-2, TYPE-4, TYPE-7, TYPE-16 |
 | `failure.h` | `error` (hgraph's `CanonicalError`), `result<T>` (`std::expected`); `Failure`, hgraph's `ExecutionFailure` with the place it was raised at; `fail`, `fail_uncoded`, `raise`; the catalogued codes it raises | ERR-1, ERR-2, ERR-4, ERR-5, ERR-8 |
 | `checked.h` | Reads checked when they run: `unset_read`, `checked_value`, `checked_result`, `item` (a reference into a list that outlives the read, the element itself of one that ends with its statement) | TIME-1, ERR-14, EXPR-3 |
 | `scalar.h` | Core's natives of numbers and the ordered types: checked `i64` arithmetic, `f64` and mixed arithmetic, every division of numbers under each zero policy, exact numeric equality with tolerances, order and `compare_`, the Boolean forms; core's `ZeroPolicy` and `CmpResult` | NUM-1 to NUM-12, OPS-2, OPS-3, OPS-5 |
@@ -2230,7 +2230,11 @@ template whose first argument is the type converted to,
 takes `invalid` after it, `convert_str<i64, InvalidPolicy::fail>`. Core's
 enums that the natives take or give (`ZeroPolicy`, `CmpResult`,
 `Rounding`, `InvalidPolicy`) are the library's, their members in core's
-order. One that can fail takes the place it is called from, a defaulted
+order, each with its `hgl_enum`. The compiler writes one for each enum of
+a program, in the enum's namespace and right after it:
+`constexpr ::hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept { return
+{"demo.trade::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}}; }`, the
+type's name qualified with its module's path and each member's HGL name. One that can fail takes the place it is called from, a defaulted
 `std::source_location`, which its failure carries: the HGL file and line
 where the generated code sets them with `#line`. hgraph keeps that place
 for a failure of `start` or `stop`, which it nests; one of an evaluation

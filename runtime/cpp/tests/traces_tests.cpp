@@ -1,7 +1,10 @@
 // Unit tests of traces (traces.h) of nullables, tuples and lists of scalars:
 // their cells written whole and as deltas, their comparison with an eval's
 // recording, where two first differ, what one written out replays and gives
-// a `const fn`, and the text of a value.
+// a `const fn`, and the text of a value; and enums, core's and a program's,
+// as values the test host names, prints, records and compares.
+#include "core_nodes.h"
+
 #include <hglrt/testing.h>
 
 #include <doctest/doctest.h>
@@ -44,6 +47,17 @@ std::string said(const Left& left, const Right& right) {
 }
 
 } // namespace
+
+// An enum of a program, `enum Side { buy, sell }` of module `demo.trade`, as
+// the compiler writes it: the enumeration, and the names of it and of each
+// member, which `hgl_enum` gives (values.h, `EnumNames`).
+namespace demo_trade {
+enum class Side { buy, sell };
+
+constexpr hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept {
+    return {"demo.trade::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}};
+}
+} // namespace demo_trade
 
 TEST_CASE("a delta is T for a scalar and a nullable, and a value of its own otherwise (TYPE-16)") {
     static_assert(std::is_same_v<hglrt::delta_t<i64>, i64>);
@@ -247,7 +261,7 @@ TEST_CASE("the text of a value, as the language writes it") {
     CHECK(text_of(Flags{true, false}) == "[true, false]");
     CHECK(text_of(ValuesDelta{.updated = {{0, 4}}, .removed = {1}, .size_modified = 1}) ==
           "delta<list<i64>>(updated: [0: 4], removed: [1], size_modified: 1)");
-    CHECK(text_of(hglrt::CmpResult::greater) == "2");
+    CHECK(text_of(hglrt::CmpResult::greater) == "CmpResult.greater");
     CHECK(text_of(hglrt::date{year{2026} / 9 / 3}) == "@2026-09-03");
     CHECK(text_of(hgraph::time_of_day(9, 30)) == "@09:30");
     CHECK(text_of(hgraph::time_of_day(9, 30, 5, 250'000)) == "@09:30:05.25");
@@ -266,4 +280,56 @@ TEST_CASE("the text of a value, as the language writes it") {
         hgraph::at_zone(sys_days{year{2026} / 9 / 3} + 8h + 30min, hgraph::ZoneId{"Europe/London"}, *zones);
     CHECK(text_of(london).starts_with("@2026-09-03T09:30"));
     CHECK(text_of(london).ends_with("[Europe/London]"));
+}
+
+TEST_CASE("an enum's value is its member, named as the language writes it (TYPE-7, TST-4, TST-5)") {
+    using demo_trade::Side;
+    using hglrt::CmpResult;
+    using hglrt::testing::text_of;
+    // TYPE-7: "`Type.member` names one".
+    CHECK(text_of(CmpResult::less) == "CmpResult.less");
+    CHECK(text_of(CmpResult::unordered) == "CmpResult.unordered");
+    CHECK(text_of(hglrt::ZeroPolicy::nan) == "ZeroPolicy.nan");
+    CHECK(text_of(hglrt::Rounding::half_even) == "Rounding.half_even");
+    CHECK(text_of(hglrt::InvalidPolicy::fail) == "InvalidPolicy.fail");
+    CHECK(text_of(Side::sell) == "Side.sell");
+    CHECK(text_of(list<Side>{Side::buy, Side::sell}) == "[Side.buy, Side.sell]");
+    CHECK(text_of(std::optional<CmpResult>{}) == "null");
+    // Its HGL name is qualified with its module's path, and a list of it is
+    // registered with hgraph under its own.
+    CHECK(hglrt::type_name<CmpResult>() == "core::CmpResult");
+    CHECK(hglrt::type_name<list<Side>>() == "list<demo.trade::Side>");
+    CHECK(hglrt::type_name<Recorded<CmpResult>>() == "list<tuple<datetime, core::CmpResult>>");
+    CHECK(hgraph::scalar_descriptor<list<hglrt::ZeroPolicy>>::value_meta() != nullptr);
+    CHECK(hgraph::scalar_descriptor<list<hglrt::Rounding>>::value_meta() != nullptr);
+    CHECK(hgraph::scalar_descriptor<Recorded<hglrt::InvalidPolicy>>::value_meta() != nullptr);
+    CHECK(hgraph::scalar_descriptor<Recorded<Side>>::value_meta() != nullptr);
+    // A trace of one says where it differs by its members' names.
+    CHECK(said(Dense<CmpResult>{CmpResult::less}, Dense<CmpResult>{CmpResult::greater}) ==
+          "the traces differ at 0s from the start: the left one has CmpResult.less, and the right one has "
+          "CmpResult.greater");
+}
+
+TEST_CASE("an eval whose result is an enum records it and compares it (CEVAL-1, CEVAL-4, OPS-3)") {
+    using demo_trade::Side;
+    using hglrt::CmpResult;
+    // What a lifted `<=>` of two connections gives, wired as a constant.
+    const auto compared = hglrt::testing::evaluate<CmpResult>([](hgraph::Wiring& wiring, datetime) {
+        hgraph::wire<hglrt_test::RecordOf<CmpResult>>(wiring, hglrt::constant(wiring, CmpResult::less),
+                                                      hglrt::str{hglrt::testing::run_output});
+    });
+    CHECK(hglrt::testing::same(compared, Dense<CmpResult>{CmpResult::less}));
+    CHECK(
+        said(compared, Dense<CmpResult>{CmpResult::unordered}) ==
+        "the traces differ at 0s from the start: the eval has CmpResult.less, and the trace written out has "
+        "CmpResult.unordered");
+    // A program's enum, and a list of one, as connections.
+    const auto ran = hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        hgraph::wire<hglrt_test::RecordOf<list<Side>>>(
+            wiring, hglrt::constant(wiring, list<Side>{Side::sell}), hglrt::str{"sides"});
+        hgraph::wire<hglrt_test::RecordOf<Side>>(wiring, hglrt::constant(wiring, Side::buy),
+                                                 hglrt::str{"side"});
+    });
+    CHECK(ran.get<Recorded<list<Side>>>("sides") == Recorded<list<Side>>{{start, list<Side>{Side::sell}}});
+    CHECK(ran.get<Recorded<Side>>("side") == Recorded<Side>{{start, Side::buy}});
 }

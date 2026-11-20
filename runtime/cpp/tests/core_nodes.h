@@ -114,6 +114,29 @@ struct Doubled {
     }
 };
 
+/// `record<T>` at any T, as `Record` is at `i64`, with its cache as its
+/// state. It puts what it kept in the store through hgraph's own store, which
+/// `put` is a layer over.
+template <class T>
+struct RecordOf {
+    static constexpr auto name = "test::record_of";
+
+    static void start(hgraph::State<Recorded<T>> state) { state.set(Recorded<T>{}); }
+
+    static void eval(hgraph::In<"input", hgraph::TS<T>> input, hgraph::Scalar<"key", hglrt::str>,
+                     hgraph::State<Recorded<T>> state, hgraph::EvaluationClockView clock) {
+        if (input.valid() && input.modified()) {
+            hglrt::fn_append(state.modify(), std::tuple{clock.evaluation_time(), input.value()});
+        }
+    }
+
+    static void stop(hgraph::Scalar<"key", hglrt::str> key, hgraph::State<Recorded<T>> state,
+                     hgraph::GlobalStateView global_state) {
+        (void)hgraph::scalar_descriptor<Recorded<T>>::value_meta();
+        global_state.set(key.value(), hgraph::Value{state.ref()});
+    }
+};
+
 /// The entry of `eval(target(value: trace))`, for a node `Target` of one
 /// `i64` input and an `i64` result: `replay` of the trace, the target, and
 /// `record` under `"run.output"` (CEVAL-1).

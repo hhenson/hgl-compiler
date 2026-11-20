@@ -33,9 +33,25 @@ namespace hglrt {
 /// is rounded to an `i64`.
 enum class Rounding { truncate, floor, ceiling, half_even, half_up, half_down };
 
+/// The names of core's `Rounding` (values.h, `EnumNames`).
+constexpr EnumNames<Rounding, 6> hgl_enum(Rounding) noexcept {
+    return {"core::Rounding",
+            {{Rounding::truncate, "truncate"},
+             {Rounding::floor, "floor"},
+             {Rounding::ceiling, "ceiling"},
+             {Rounding::half_even, "half_even"},
+             {Rounding::half_up, "half_up"},
+             {Rounding::half_down, "half_down"}}};
+}
+
 /// The members of core's enum `InvalidPolicy` (OPS-8), in its order: what a
 /// conversion that fails does.
 enum class InvalidPolicy { error, fail };
+
+/// The names of core's `InvalidPolicy` (values.h, `EnumNames`).
+constexpr EnumNames<InvalidPolicy, 2> hgl_enum(InvalidPolicy) noexcept {
+    return {"core::InvalidPolicy", {{InvalidPolicy::error, "error"}, {InvalidPolicy::fail, "fail"}}};
+}
 
 namespace detail {
 /// What a conversion that can fail gives under `invalid`: under `.error`,
