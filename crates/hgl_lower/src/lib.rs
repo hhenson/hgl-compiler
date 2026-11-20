@@ -25,7 +25,7 @@
 //! * [`graphs`]: what a graph's branches and loops over connections
 //!   take, bind and return, as child graphs (CTRL-7, CTRL-14);
 //! * [`nodes`]: what a node's handlers subscribe to and require, and
-//!   which of its locals are its inputs (TIME-3, TIME-4);
+//!   which inputs a `ref` result designates (TIME-3, TIME-4, FN-16);
 //! * [`pieces`]: what a piece of a program reaches, and which tests and
 //!   applications reach a form a target does not write;
 //! * [`types`]: what a type of the program holds, and which of its

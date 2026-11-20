@@ -30,7 +30,8 @@ use hgl_lower::canonical::canonical_argument;
 use hgl_lower::copies::{self, Copies, by_value, changed_in_place, may_hold, struct_in_place};
 use hgl_lower::instances::{self, Instances};
 use hgl_lower::nodes::{
-    Handler, Timer, is_input, is_out, is_reference, required_inputs, subscribed_inputs,
+    Designated, Handler, Timer, designated, designates, designations, is_input, is_out,
+    is_reference, required_inputs, subscribed_inputs,
 };
 use hgl_lower::pieces::Reach;
 use hgl_lower::types::{
@@ -1712,57 +1713,6 @@ fn at_of(statement: &Stmt, locals: &[Local]) -> Location {
         | Stmt::Unread { at } => *at,
         Stmt::Expr(value) => value.at,
         Stmt::Declare { local, .. } => locals[*local].at,
-    }
-}
-
-/// True where `value` is a designation, what a `return` to a `ref` result
-/// or `out =` of one is given (FN-16): the endpoint of a temporal input
-/// of the node, or of a child of one, which the analyser reads as such
-/// only there.
-fn designates(value: &Expr) -> bool {
-    matches!(
-        value.kind,
-        ExprKind::EndpointOf(_) | ExprKind::ChildEndpointOf(_)
-    )
-}
-
-/// How a node designates a temporal input (FN-16: "A parameter that is
-/// not `ref` may be designated too"): whole, or by a position of it, a
-/// fixed list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Designated {
-    /// `return value`
-    Whole,
-    /// `return items[idx]`, of a `list<T, N>`.
-    Position,
-}
-
-/// What `value`, a designation (`designates`), designates of a temporal
-/// input of the node whose locals are `locals` and whose signature is
-/// `signature`: the input, and how. `None` for a child of a `ref`
-/// parameter, and for a child of another shape.
-fn designated(
-    locals: &[Local],
-    signature: Option<&Signature>,
-    value: &Expr,
-) -> Option<(usize, Designated)> {
-    match &value.kind {
-        ExprKind::EndpointOf(local) if is_input(locals, signature, *local) => {
-            Some((*local, Designated::Whole))
-        }
-        ExprKind::ChildEndpointOf(child) => match &child.kind {
-            ExprKind::Index { base, .. } => match (&base.kind, &base.ty) {
-                (ExprKind::Local(local), Type::List { size: Some(_), .. })
-                    if is_input(locals, signature, *local)
-                        && !is_reference(locals, signature, *local) =>
-                {
-                    Some((*local, Designated::Position))
-                }
-                _ => None,
-            },
-            _ => None,
-        },
-        _ => None,
     }
 }
 

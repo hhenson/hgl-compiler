@@ -1,11 +1,12 @@
 //! What a node's hooks ask, as the language says it: what each `when`
 //! subscribes to and requires, what the node's handlers ask together,
-//! what wakes it beside its inputs, and which of its locals are its
-//! inputs. Part of lowering: a transpiler writes each handler's guards
-//! with these (TIME-3, TIME-4, TIME-9).
+//! what wakes it beside its inputs, which of its locals are its inputs,
+//! and which inputs a `ref` result designates and how. Part of
+//! lowering: a transpiler writes each handler's guards and each
+//! designation with these (TIME-3, TIME-4, TIME-9, FN-16).
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Header, Local, Stmt};
-use hgl_analyser::{LocalKind, Signature};
+use hgl_analyser::{LocalKind, Signature, Type};
 use hgl_diagnostics::Location;
 
 /// What wakes a node beside its inputs (TIME-9): the scheduler or the
@@ -151,4 +152,82 @@ pub fn is_reference(locals: &[Local], signature: Option<&Signature>, local: usiz
 pub fn is_out(locals: &[Local], local: usize) -> bool {
     let declared = &locals[local];
     declared.kind == LocalKind::Inject && declared.name == "out"
+}
+
+/// Each designation of a temporal input that the node whose statements
+/// are `statements` makes, in the order written: what a `return` to its
+/// `ref` result, or an `out =` of it, designates (FN-16: "A parameter
+/// that is not `ref` may be designated too"), how, and where. `locals`
+/// and `signature` are the node's.
+pub fn designations(
+    locals: &[Local],
+    signature: Option<&Signature>,
+    statements: &[Stmt],
+) -> Vec<(usize, Designated, Location)> {
+    use hgl_analyser::hir::{Node, walk_statement_nodes};
+    let mut found: Vec<(usize, Designated, Location)> = Vec::new();
+    walk_statement_nodes(statements, &mut |node| {
+        let value = match node {
+            Node::Statement(Stmt::Return {
+                value: Some(value), ..
+            }) => value,
+            Node::Statement(Stmt::Assign { local, value, .. }) if is_out(locals, *local) => value,
+            _ => return,
+        };
+        if let Some((local, how)) = designated(locals, signature, value) {
+            found.push((local, how, value.at));
+        }
+    });
+    found
+}
+
+/// True where `value` is a designation, what a `return` to a `ref` result
+/// or `out =` of one is given (FN-16): the endpoint of a temporal input
+/// of the node, or of a child of one, which the analyser reads as such
+/// only there.
+pub fn designates(value: &Expr) -> bool {
+    matches!(
+        value.kind,
+        ExprKind::EndpointOf(_) | ExprKind::ChildEndpointOf(_)
+    )
+}
+
+/// How a node designates a temporal input (FN-16: "A parameter that is
+/// not `ref` may be designated too"): whole, or by a position of it, a
+/// fixed list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Designated {
+    /// `return value`
+    Whole,
+    /// `return items[idx]`, of a `list<T, N>`.
+    Position,
+}
+
+/// What `value`, a designation (`designates`), designates of a temporal
+/// input of the node whose locals are `locals` and whose signature is
+/// `signature`: the input, and how. `None` for a child of a `ref`
+/// parameter, and for a child of another shape.
+pub fn designated(
+    locals: &[Local],
+    signature: Option<&Signature>,
+    value: &Expr,
+) -> Option<(usize, Designated)> {
+    match &value.kind {
+        ExprKind::EndpointOf(local) if is_input(locals, signature, *local) => {
+            Some((*local, Designated::Whole))
+        }
+        ExprKind::ChildEndpointOf(child) => match &child.kind {
+            ExprKind::Index { base, .. } => match (&base.kind, &base.ty) {
+                (ExprKind::Local(local), Type::List { size: Some(_), .. })
+                    if is_input(locals, signature, *local)
+                        && !is_reference(locals, signature, *local) =>
+                {
+                    Some((*local, Designated::Position))
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
 }

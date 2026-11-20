@@ -1521,7 +1521,7 @@ analysed program.
 | `pieces` | What a piece a target writes reaches (`Reach`), and whether a test or an application reaches a form the target does not write (`blocked`) | |
 | `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, what is bound after branches, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
 | `types` | A struct's fields and descendants, the windows and unsized lists a type holds, which children `all_valid` asks, whether a value is whole or a delta | TYPE-3, TYPE-4, TYPE-9, TIME-1, TIME-7, TIME-9 |
-| `nodes` | A `when`'s subscriptions and requirements, what a node's handlers ask together, its timer, which locals are its inputs | TIME-3, TIME-4, TIME-9 |
+| `nodes` | A `when`'s subscriptions and requirements, what a node's handlers ask together, its timer, which inputs a `ref` result designates and how | TIME-3, TIME-4, TIME-9, FN-16 |
 | `calls` | What a parameter left out is given, which omitted input is never valid, a field's default, a duration's value worked out from how it is written | UNIT-7, UNIT-8, TIME-8 |
 
 The analyser exports what it works out and a target would otherwise

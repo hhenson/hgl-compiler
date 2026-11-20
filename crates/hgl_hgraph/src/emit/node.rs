@@ -1124,33 +1124,6 @@ pub(super) fn capability(injected: &str) -> Option<(&'static str, &'static str)>
     }
 }
 
-/// Each designation of a temporal input that the node whose statements
-/// are `statements` makes, in the order written: what a `return` to its
-/// `ref` result, or an `out =` of it, designates (FN-16: "A parameter
-/// that is not `ref` may be designated too"), how, and where. `locals`
-/// and `signature` are the node's.
-pub(super) fn designations(
-    locals: &[Local],
-    signature: Option<&Signature>,
-    statements: &[Stmt],
-) -> Vec<(usize, Designated, Location)> {
-    use hgl_analyser::hir::{Node, walk_statement_nodes};
-    let mut found: Vec<(usize, Designated, Location)> = Vec::new();
-    walk_statement_nodes(statements, &mut |node| {
-        let value = match node {
-            Node::Statement(Stmt::Return {
-                value: Some(value), ..
-            }) => value,
-            Node::Statement(Stmt::Assign { local, value, .. }) if is_out(locals, *local) => value,
-            _ => return,
-        };
-        if let Some((local, how)) = designated(locals, signature, value) {
-            found.push((local, how, value.at));
-        }
-    });
-    found
-}
-
 /// An input a node designates (FN-16), as the provider's `Designation`
 /// reads it (`Emitter::designated_inputs`).
 pub(super) struct Port {
