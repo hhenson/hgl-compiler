@@ -468,7 +468,15 @@ std::size_t key_hash_of(const T& value) {
                 return detail::combined(1, key_hash_of(*value));
             }
         }
-        return detail::combined(2, std::hash<std::string>{}(value.error().message));
+        if constexpr (std::is_same_v<typename T::error_type, error>) {
+            // ERR-4: an `error`'s equality excludes its context; equal
+            // errors have one message.
+            return detail::combined(2, std::hash<std::string>{}(value.error().message));
+        } else {
+            return detail::combined(2, key_hash_of(value.error()));
+        }
+    } else if constexpr (std::is_same_v<T, error>) {
+        return std::hash<std::string>{}(value.message);
     } else {
         return std::hash<T>{}(value);
     }

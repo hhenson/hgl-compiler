@@ -223,6 +223,18 @@ TEST_CASE("a list<bool> is a key, a member and a field (TYPE-14)") {
     CHECK(truths.size() == 2);
 }
 
+TEST_CASE("a result is a key whatever its failure's type (ERR-2)") {
+    using failing = std::expected<i64, str>;
+    hglrt::set<failing> results{failing{1}, failing{std::unexpect, "no"}, failing{std::unexpect, "no"}};
+    CHECK(results.size() == 2);
+    CHECK(results.contains(failing{std::unexpect, "no"}));
+    hglrt::set<hglrt::result<i64>> errors{hglrt::result<i64>{std::unexpect, hglrt::make_error("a", "x")},
+                                          hglrt::result<i64>{2}};
+    CHECK(errors.size() == 2);
+    CHECK(errors.contains(hglrt::result<i64>{std::unexpect, hglrt::make_error("a", "x")}));
+    CHECK(hglrt::key_hash_of(hglrt::make_error("a")) == hglrt::key_hash_of(hglrt::make_error("a")));
+}
+
 TEST_CASE("the deltas of a set, a dictionary and a list are values (TYPE-16)") {
     const hglrt::set_delta<i64> change{{1, 2}, {3}};
     CHECK(change == hglrt::set_delta<i64>{{2, 1}, {3}});

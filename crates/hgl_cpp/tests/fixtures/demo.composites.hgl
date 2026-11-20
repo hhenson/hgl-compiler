@@ -39,6 +39,11 @@ struct Sided<const side: Side> {
     count: i64 = 0
 }
 
+# A field of a result whose failure is no `error`.
+struct Outcome {
+    kept: result<i64, str>
+}
+
 struct Flags {
     on: list<bool>
     first: bool
@@ -271,6 +276,8 @@ test structs_are_values {
     assert point + Point(x: 3.0) == Point(x: 4.0, y: 2.0)
     assert first_x() == 1.0
     assert Empty() == Empty()
+    assert Outcome(kept: ok(1)) == Outcome(kept: ok(1))
+    assert Outcome(kept: err("no")) != Outcome(kept: ok(1))
     assert Sided<Side.sell>(count: 2).count == 2
 }
 
