@@ -421,28 +421,30 @@ impl Emitter<'_> {
                 written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type_{{}});\n"));
             }
             written.push_str(&prologue(body, &states));
-            let Some(made) = self.capabilities(body, &injected, statements, &mut hook) else {
+            // TIME-6: "Cache is reconstructible node-local value data,
+            // initialized on every start"; a `state` is given its first
+            // value as the node starts too, since no state is restored.
+            // An initializer may read a capability, which is made first.
+            let initialized: Vec<Stmt> = states
+                .iter()
+                .filter_map(|(local, value)| {
+                    value.map(|value| Stmt::Assign {
+                        local: *local,
+                        operator: None,
+                        value: value.clone(),
+                        at: body.locals[*local].at,
+                    })
+                })
+                .collect();
+            let used: Vec<Stmt> = initialized.iter().chain(statements).cloned().collect();
+            let Some(made) = self.capabilities(body, &injected, &used, &mut hook) else {
                 return;
             };
+            written.push_str(&made);
             context.kind = Kind::Hook(Hook::Start);
             let mut scope = Scope::cold(program, body);
             self.in_context(&mut context, |emitter| {
-                // TIME-6: "Cache is reconstructible node-local value data,
-                // initialized on every start"; a `state` is given its
-                // first value as the node starts too, since no state is
-                // restored.
-                for (local, value) in &states {
-                    if let Some(value) = value {
-                        let assigned = Stmt::Assign {
-                            local: *local,
-                            operator: None,
-                            value: (*value).clone(),
-                            at: body.locals[*local].at,
-                        };
-                        emitter.statement(&mut scope, &assigned, 2, &mut written);
-                    }
-                }
-                written.push_str(&made);
+                emitter.statements(&mut scope, &initialized, 2, &mut written);
                 emitter.statements(&mut scope, statements, 2, &mut written);
             });
             text.push_str(&format!(

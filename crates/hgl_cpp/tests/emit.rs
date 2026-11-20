@@ -416,6 +416,51 @@ fn a_temporal_form_not_written_yet_is_reported() {
     assert_eq!(emitted.blocked("a_scalar"), None);
 }
 
+/// TIME-6, TIME-8: a node's capability is made in `start` before a
+/// `cache` initializer that reads it.
+#[test]
+fn a_capability_is_made_before_the_initializers_that_read_it() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn opened(value: i64) -> datetime {\n",
+                "    inject clock\n",
+                "    cache opening: datetime = clock.evaluation_time\n",
+                "    when { return opening }\n",
+                "}\n",
+                "\n",
+                "test opens {\n",
+                "    assert eval(opened(value: [1])) == [earliest_start]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("opens"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    let start = unit
+        .split("static void start(")
+        .nth(1)
+        .expect("the node's start");
+    let start = start.split("static void eval(").next().unwrap();
+    let made = start
+        .find("const ::hglrt::Clock clock")
+        .expect("the clock made");
+    let read = start
+        .find("opening = (clock).evaluation_time();")
+        .expect("the cache initialized");
+    assert!(made < read, "{start}");
+}
+
 /// TST-5: a trace given to an eval that is no trace written out, a `let`
 /// of an eval's, is reported where it is given, and not wired as a
 /// constant of its payload.
