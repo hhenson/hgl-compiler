@@ -34,8 +34,15 @@ pub(super) fn cpp_type(program: &Program, ty: &Type) -> Option<String> {
             ..
         } => match program.modules[*module].declarations[*declaration].kind {
             DeclarationKind::Enum => enum_name(program, *module, *declaration),
+            // CAP-1: a capability is the runtime library's (`endpoints`).
+            DeclarationKind::NativeType => {
+                super::endpoints::capability_type(program, *module, *declaration)?
+            }
             _ => return None,
         },
+        // TYPE-16: "`delta<f64>` is `f64`": a scalar publishes whole, and
+        // its delta is itself.
+        Type::Delta(inner) if matches!(**inner, Type::Scalar(_)) => cpp_type(program, inner)?,
         Type::Nullable(inner) => format!("std::optional<{}>", cpp_type(program, inner)?),
         Type::Tuple(positions) => {
             let positions: Option<Vec<String>> = positions

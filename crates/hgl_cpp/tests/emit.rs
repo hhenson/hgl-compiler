@@ -312,30 +312,107 @@ fn a_form_not_written_yet_blocks_what_reaches_it() {
     assert!(!unit.contains("reaches_a_division"), "{unit}");
 }
 
-/// Core's conformance case `replay_preserves_equal_ticks` evaluates
-/// nodes, which are not written yet: it is listed with the first form
-/// it needs, and nothing of it is written.
+/// Temporal code over the scalars, as the target writes it: a graph and
+/// its lifted calls (FN-6), a constant connection (FN-3), nodes with
+/// state, handlers tested in order and capabilities (TIME-3, TIME-6,
+/// CAP-2, CAP-3), a source (SOURCE-1), and the evals of them, dense and
+/// timed, compared (TST-4 to TST-8). Everything is written, and each test
+/// can be run, against the runtime library `hgl` carries.
 #[test]
-fn an_eval_is_not_written_yet() {
-    let emitted = emit(&[(
-        "scalar_eval.hgl",
-        concat!(
-            "module conformance part scalar_eval\n",
-            "\n",
-            "fn pass_i64(value: i64) -> i64 {\n",
-            "    when { return delta_value(value) }\n",
-            "}\n",
-            "\n",
-            "test replay_preserves_equal_ticks {\n",
-            "    assert eval(pass_i64(value: [7, _, 7, 9])) == [7, _, 7, 9]\n",
-            "}\n",
-        ),
-    )]);
-    assert_eq!(
-        emitted.blocked("replay_preserves_equal_ticks").as_deref(),
-        Some("scalar_eval.hgl:8:12 the cpp target does not write an eval yet")
+fn temporal_code_is_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.temporal.hgl",
+            include_str!("fixtures/demo.temporal.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
     );
-    assert!(emitted.output.executables.is_empty());
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.temporal", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    // CEVAL-1: core's `replay` and `record` are written in core's unit,
+    // an instance for each type an eval replays and records; the test's
+    // executable links it.
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    for instance in [
+        "::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_i64>",
+        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_i64>",
+        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_datetime>",
+    ] {
+        assert!(core.contains(instance), "{instance} in\n{core}");
+    }
+    // hgraph issue 1866: a node whose configuration holds an `f64` is a
+    // node of its own, `replay<f64>` among them; one with none is
+    // interned, above.
+    assert!(core.contains("add_unique_node(typeid(::hgl::core::m_::n_::i_::replay::of_f64)"));
+    assert!(!core.contains("::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_f64>"));
+    let executable = &emitted.output.executables[0];
+    let units: Vec<&str> = executable
+        .units
+        .iter()
+        .map(|&unit| emitted.output.units[unit].source.as_str())
+        .collect();
+    assert!(units.contains(&"modules/core.cpp"), "{units:?}");
+}
+
+/// A temporal form the target does not write yet is reported through the
+/// dispatch point, where it is written, and blocks what reaches it: a
+/// temporal value of a type no family writes, and a capability no family
+/// makes. A test that reaches neither is run.
+#[test]
+fn a_temporal_form_not_written_yet_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn first(values: list<i64>) -> i64 {\n",
+                "    when { return 1 }\n",
+                "}\n",
+                "\n",
+                "fn later(value: i64) -> i64 {\n",
+                "    inject scheduler\n",
+                "    start { schedule(scheduler, 0s) }\n",
+                "    when { return value }\n",
+                "}\n",
+                "\n",
+                "fn passed(value: i64) -> i64 {\n",
+                "    when { return delta_value(value) }\n",
+                "}\n",
+                "\n",
+                "test a_list {\n",
+                "    assert eval(first(values: [[1, 2]])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_scheduler {\n",
+                "    assert eval(later(value: [1])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_scalar {\n",
+                "    assert eval(passed(value: [7, _, 7, 9])) == [7, _, 7, 9]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("a_list").as_deref(),
+        Some("m.hgl:18:31 the cpp target does not write a temporal value of `list<i64>` yet")
+    );
+    assert_eq!(
+        emitted.blocked("a_scheduler").as_deref(),
+        Some("m.hgl:8:12 the cpp target does not write an injected `scheduler` yet")
+    );
+    assert_eq!(emitted.blocked("a_scalar"), None);
 }
 
 /// UNIT-8: a default is written where its argument is left out; one
