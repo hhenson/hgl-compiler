@@ -172,6 +172,7 @@ transpiler: partial
 
 - hgraph: a source is a Python generator that holds its statements, a node that resumes it, and a graph that wakes the node once as it starts; a `cache` and a `state` are fields of the node's state, given their values in its `start`, which then runs the source's `start`; the source's `stop` is the node's, and runs when the node ends whatever the generator has done
 - A capability is put in the node's state for the evaluation the generator is resumed in; a source injects no other than `clock`, `logger` and `global_state` (the analyser's `source.statement`)
+- A `yield` to a dictionary or a set, or to what holds one, is held to TIME-7 as a node's `return` is, in one place (`_core._published_through`): a delta that names no change ticks only where it makes one valid, and a whole set, the same again or empty, ticks (`_core._whole_set`)
 - Left: recording a `state`
 
 ## SOURCE-2
