@@ -487,10 +487,12 @@ fn a_test_is_a_composition_block_with_assertions() {
             "    assert raises(\"value\\u{2e}missing_key\") { }\n",
             "}\n",
             // Each of these is an execution code of the catalogue, a
-            // result out of range among them, and is accepted.
+            // result out of range and an index outside a list (EXPR-3,
+            // EXPR-7) among them, and is accepted.
             "test catalogued {\n",
             "    assert raises(\"numeric.division_by_zero\") { }\n",
             "    assert raises(\"numeric.out_of_range\") { }\n",
+            "    assert raises(\"value.index_out_of_range\") { }\n",
             "}\n",
         ),
     )]);

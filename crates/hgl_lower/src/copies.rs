@@ -635,6 +635,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::ChildEndpointOf(inner)
         | ExprKind::CheckedChild { read: inner, .. }
         | ExprKind::CheckedWindow(inner)
+        | ExprKind::CheckedDelta(inner)
         | ExprKind::Publications(inner) => into.push(inner),
         ExprKind::Binary { left, right, .. }
         | ExprKind::Index {
