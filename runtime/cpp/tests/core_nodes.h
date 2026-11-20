@@ -86,7 +86,7 @@ struct Record {
 
     static void stop(hgraph::Scalar<"key", hglrt::str> key, hgraph::State<RecordState> state,
                      hgraph::GlobalStateView global_state) {
-        hglrt::put_GlobalState_str_V(global_state, key.value(), state.ref().entries);
+        hglrt::put_GlobalState_str_V(hglrt::GlobalState{global_state}, key.value(), state.ref().entries);
     }
 };
 

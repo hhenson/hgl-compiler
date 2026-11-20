@@ -62,6 +62,9 @@ inline constexpr std::string_view mixed_units = "tenor.mixed_units";
 inline constexpr std::string_view negative_duration = "yield.negative_duration";
 /// A source's `yield` at a time that is not after the one before (SOURCE-3).
 inline constexpr std::string_view non_increasing_time = "yield.non_increasing_time";
+/// A wake asked of a scheduler or an alarm with a duration that is not more
+/// than zero, or one below zero in `start` (TIME-8, CAP-4, CAP-5).
+inline constexpr std::string_view non_positive_duration = "schedule.non_positive_duration";
 /// A run's configuration with both an `end` and a `length` (CRUN-2).
 inline constexpr std::string_view end_and_length = "run.end_and_length";
 } // namespace codes
