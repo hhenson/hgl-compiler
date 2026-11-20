@@ -363,6 +363,89 @@ fn temporal_code_is_written() {
     assert!(units.contains(&"modules/core.cpp"), "{units:?}");
 }
 
+/// Control flow over connections in a graph (`demo.control`): each
+/// branch of an `if` or a `switch` over a connection is a child graph,
+/// which hgraph's `compiled::switch_` runs while it is selected (CTRL-2,
+/// CTRL-13 to CTRL-15), taking the connections it reads of the graph
+/// around it whole (CTRL-7) and its ordinary values as configuration.
+#[test]
+fn control_flow_is_written() {
+    let emitted = emit_with(
+        &[("demo.control.hgl", include_str!("fixtures/demo.control.hgl"))],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.control", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.control.cpp")
+        .unwrap()
+        .text;
+    // CTRL-3: the branch of no `else` never ticks; CTRL-6: a `switch`
+    // with no `default` fails for a value no case has.
+    assert!(unit.contains("return ::hglrt::never<::hgraph::TS<::hgraph::Int>>(wiring_);"));
+    assert!(unit.contains("::hglrt::unmatched<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>(wiring_, key_)"));
+    // CTRL-3: "An outputless if has no synthetic result".
+    assert!(unit.contains("::hgraph::compiled::switch_sink_("));
+    // An ordinary value a branch reads is its configuration.
+    assert!(unit.contains("::hgraph::Scalar<\"factor\", ::hgraph::Int> factor"));
+}
+
+/// What the control family does not write yet is reported where it is
+/// written: a `return` under a branch selected at runtime in a loop
+/// unrolled while the graph is built, and branches that assign two
+/// `var`s.
+#[test]
+fn control_flow_not_written_yet_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn first_open(open: bool, value: i64, const passes: list<i64>) -> i64 {\n",
+                "    for pass in passes {\n",
+                "        if open { return value }\n",
+                "    }\n",
+                "    return value\n",
+                "}\n",
+                "\n",
+                "fn both(open: bool, a: i64, b: i64) -> i64 {\n",
+                "    var x = a\n",
+                "    var y = b\n",
+                "    if open {\n",
+                "        x = b\n",
+                "        y = a\n",
+                "    }\n",
+                "    return x + y\n",
+                "}\n",
+                "\n",
+                "test a_loop { assert eval(first_open(open: [true], value: [1], passes: [1])) == [1] }\n",
+                "\n",
+                "test two_vars { assert eval(both(open: [true], a: [1], b: [2])) == [3] }\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("a_loop").as_deref(),
+        Some(
+            "m.hgl:5:9 the cpp target does not write a `return` under a branch selected at runtime in a loop unrolled while the graph is built yet"
+        )
+    );
+    assert_eq!(
+        emitted.blocked("two_vars").as_deref(),
+        Some(
+            "m.hgl:13:5 the cpp target does not write an `if` or a `switch` over a connection whose branches assign more than one `var` yet"
+        )
+    );
+}
+
 /// A temporal form the target does not write yet is reported through the
 /// dispatch point, where it is written, and blocks what reaches it: a
 /// temporal value of a type no family writes, and a capability no family

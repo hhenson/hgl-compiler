@@ -428,6 +428,80 @@ fn temporal_code_runs_on_the_sdk() {
     );
 }
 
+/// Control flow over connections on the SDK (`demo.control`): each
+/// branch of an `if` or a `switch` over a connection a child graph that
+/// hgraph's `compiled::switch_` runs while it is selected, started fresh
+/// each time (CTRL-2, CTRL-13 to CTRL-15). Every test of it passes, each
+/// expectation the language's.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn control_flow_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("control");
+    let file = write(
+        &root,
+        "src/demo.control.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.control.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 18 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// CTRL-6: "An unmatched selector uses default or fails." A `switch`
+/// over a connection with no `default` fails in the cycle its selector
+/// has a value no case has, with no code, and says the value.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn an_unmatched_selector_fails_the_run() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("unmatched");
+    let file = write(
+        &root,
+        "src/demo.unmatched.hgl",
+        concat!(
+            "module demo.unmatched\n",
+            "\n",
+            "fn routed(route: str, value: i64) -> i64 {\n",
+            "    var out = value\n",
+            "    switch route {\n",
+            "        case \"a\": out = value + 1\n",
+            "    }\n",
+            "    return out\n",
+            "}\n",
+            "\n",
+            "test another_value {\n",
+            "    assert eval(routed(route: [\"a\", \"c\"], value: [1, 2])) == [2, 3]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let rows: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        rows[0], "FAILED   executable  demo.unmatched::another_value",
+        "{stdout}"
+    );
+    assert!(
+        rows[1].starts_with(&format!("    {file}:12:5: "))
+            && rows[1].contains("no case of the `switch` has the value \"c\""),
+        "{stdout}"
+    );
+}
+
 /// EXPR-3: "An index outside a list fails where it is evaluated". The
 /// test is reported at the statement of it that was running, inside a
 /// function it called, with the runtime library's text of the failure.

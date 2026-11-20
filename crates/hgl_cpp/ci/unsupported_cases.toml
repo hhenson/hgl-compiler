@@ -19,6 +19,7 @@
     "conformance::activity_belongs_to_the_binding",
 ]
 "a `?` here" = [
+    "conformance::an_early_return_skips_the_continuation",
     "conformance::eval_preserves_failure",
 ]
 "a `capture`" = [
@@ -43,14 +44,8 @@
     "conformance::a_relay_samples_its_ref_parameter_when_it_runs",
     "conformance::a_relay_subscribed_to_its_ref_parameter_follows_it",
 ]
-"a `var` connection" = [
-    "conformance::a_switch_forwards_the_selected_connection",
-]
 "a call of a temporal candidate of an operator" = [
     "core_implementation::identity_arithmetic_is_generic",
-]
-"a connection here" = [
-    "conformance::an_early_return_skips_the_continuation",
 ]
 "a field of a connection" = [
     "conformance::an_atomic_quote_wakes_its_bid_projection",
@@ -158,12 +153,6 @@
 ]
 "a trace of `tuple<i64, str>`" = [
     "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",
-]
-"an `if` that gives a connection" = [
-    "conformance::a_branch_runs_once_with_the_values_held_when_it_starts",
-    "conformance::a_conditional_child_restarts_only_after_leaving_its_branch",
-    "conformance::a_probe_reads_a_selected_producer_that_stayed_quiet",
-    "conformance::an_outer_producer_keeps_its_lifetime_across_branches",
 ]
 "an eval of a value function" = [
     "conformance::a_membership_admits_what_each_listed_type_has",

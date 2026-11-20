@@ -33,6 +33,7 @@ use hgl_lower::pieces::Reach;
 use crate::codes;
 
 mod calls;
+mod control;
 mod endpoints;
 mod expressions;
 mod forms;
@@ -120,6 +121,7 @@ pub(crate) fn module(
         temporaries: 0,
         instanced: Vec::new(),
         temporal: None,
+        control: control::State::default(),
     };
     let declared = &program.modules[index];
     let declarations = (0..declared.declarations.len())
@@ -176,6 +178,9 @@ struct Emitter<'a> {
     /// node's hook, a source's body, a graph, a lifted call's node or an
     /// eval's entry (`nodes::Context`). `None` in value code.
     temporal: Option<nodes::Context>,
+    /// What the control family keeps while it writes a graph: what has a
+    /// value where a child graph is written (`control`).
+    control: control::State,
 }
 
 impl Emitter<'_> {
