@@ -65,7 +65,7 @@ analyser: partial
 - A generic candidate is admitted with its parameters resolved from the call, and the most specific admitted one is selected (GEN-12)
 - In a graph a call selects among temporal and value candidates, and a temporal candidate outranks a value one of the same parameter types
 - A call whose candidates are not told for a generic parameter of the declaration it is written in is selected for each instance (GEN-3), as it would be written with the instance's types; no candidate and a tie there are reported at the call that makes the instance
-- Left: a candidate with a pack; an operator with a pack, and so the Boolean connectives and `!`; an argument that is itself a call only its requested output selects; composition, where a temporal candidate outranks a value one of the same parameter types, and runtime bodies
+- Left: a call selected for each instance whose argument is read as its place's type and is no constant (`[x]`), and one in a default, which are not judged; a candidate with a pack; an operator with a pack, and so the Boolean connectives and `!`; an argument that is itself a call only its requested output selects; composition, where a temporal candidate outranks a value one of the same parameter types, and runtime bodies
 
 ## GEN-6
 
