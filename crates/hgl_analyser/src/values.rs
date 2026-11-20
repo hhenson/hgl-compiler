@@ -666,6 +666,7 @@ impl<'a> Typer<'a> {
             returned: self.returned,
             unsure: self.unsure,
             present: self.present.len(),
+            selecting: self.selecting.borrow().len(),
         }
     }
 
@@ -693,6 +694,9 @@ impl<'a> Typer<'a> {
         for diagnostic in spent {
             self.diagnostics.emit(diagnostic);
         }
+        // A call the reading put to be selected for each instance goes
+        // with it: the reading that stands puts its own.
+        self.selecting.borrow_mut().truncate(mark.selecting);
         // A reading that declared nothing has nothing of its own in the
         // tables of locals, and they are not walked: a reading taken
         // back costs what was read, not what the function holds.
@@ -815,6 +819,8 @@ struct Mark {
     unsure: bool,
     /// How many bindings are proved not null.
     present: usize,
+    /// How many calls are put to be selected for each instance.
+    selecting: usize,
 }
 
 /// A value candidate of an operator: the positions of its module and of

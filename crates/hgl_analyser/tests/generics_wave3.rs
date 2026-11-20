@@ -532,3 +532,44 @@ fn a_call_selected_for_each_instance_is_held_to_its_candidate() {
         checked.report
     );
 }
+
+/// A call selected for each instance is read for the instance as it is
+/// written in the body, and only the reading that stands is selected.
+/// GEN-8: "An operator's takes part in the output requested, in GEN-2's
+/// order: what the call writes, then what its place expects, then its
+/// arguments": `echo<f64>(1, mode: M)` gives the `f64` it writes, whose
+/// candidate takes the `1` as an `f64` (EXPR-5). An argument read first
+/// with nothing expected of it and then as its place's type, the `[pick(
+/// mode: M)]` given to `consume`'s `list<f64>`, is selected as the reading
+/// that stands asks: the `f64` candidate, and no tie with the `i64` one.
+/// GEN-13: a generic value parameter is of its type in the instance:
+/// `[N]` in `go<T, const N: T>` is a `list<bool>` in `go<bool, true>`.
+#[test]
+fn a_call_selected_for_each_instance_is_read_as_it_stands() {
+    let checked = module(concat!(
+        "enum Mode { slow, fast }\n",
+        "operator echo<T>(value: T, const mode: Mode) -> T\n",
+        "impl const fn echo(value: f64, const mode: Mode) -> f64 requires mode == .slow => value\n",
+        "const fn written<const M: Mode>() -> f64 => echo<f64>(1, mode: M)\n",
+        "operator pick<T>(const mode: Mode) -> T\n",
+        "impl const fn pick(const mode: Mode) -> i64 requires mode == .slow => 1\n",
+        "impl const fn pick(const mode: Mode) -> f64 requires mode == .slow => 1.5\n",
+        "operator consume<V>(values: V) -> i64\n",
+        "impl const fn consume(values: list<f64>) -> i64 => 1\n",
+        "const fn read<const M: Mode>() -> i64 => consume([pick(mode: M)])\n",
+        "operator count<T>(values: list<T>) -> i64\n",
+        "impl const fn count<T>(values: list<T>) -> i64 requires !(T == i64) => 1\n",
+        "const fn valued<T, const N: T>() -> i64 => count([N])\n",
+        "const fn a() -> f64 => written<.slow>()\n",
+        "const fn b() -> i64 => read<.slow>()\n",
+        "const fn c() -> i64 => valued<bool, true>()\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let instance = |caller: &str| instance_called_by(&checked, body(&checked, caller));
+    assert_eq!(called(&checked, &instance("a")), ["echo(f64, Mode)"]);
+    assert_eq!(
+        called(&checked, &instance("b")),
+        ["consume(list<f64>)", "pick(Mode)"]
+    );
+    assert_eq!(called(&checked, &instance("c")), ["count(list<T>) <bool>"]);
+}

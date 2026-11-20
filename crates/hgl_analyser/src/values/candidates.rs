@@ -734,12 +734,20 @@ impl<'a> Typer<'a> {
                     matches!(constant.value, ConstantValue::Unknown)
                 })
         };
-        let gives = public
-            .result
-            .as_ref()
-            .map(|result| placed(substitute_within(result, &map), &operator_own))
-            .filter(|result| known(result))
-            .or_else(|| requested.filter(|requested| known(requested)).cloned())
+        // GEN-8: what the call itself requests, through the generic
+        // arguments it writes and the operator's defaults, decides
+        // before what the arguments say: `echo<f64>(1, mode: M)` gives an
+        // `f64`.
+        let gives = requested
+            .filter(|requested| known(requested))
+            .cloned()
+            .or_else(|| {
+                public
+                    .result
+                    .as_ref()
+                    .map(|result| placed(substitute_within(result, &map), &operator_own))
+                    .filter(|result| known(result))
+            })
             .unwrap_or(Type::Unknown);
         self.selecting.borrow_mut().push(Selecting {
             at,
@@ -976,6 +984,41 @@ pub(crate) struct Selecting {
     pub(crate) graph: bool,
 }
 
+/// `signature`, a generic declaration's, as one instance of it reads its
+/// body: what `map` gives each generic parameter put in place in its
+/// parameters, its result, and the type of each generic value
+/// parameter, `N` of `<T, const N: T>` a `bool` where `T` is (GEN-13).
+/// The generic parameters stay, each where it is declared, so that a
+/// generic value parameter read as a value is still known by name.
+pub(crate) fn in_instance(signature: &Signature, map: &[(Location, &Argument)]) -> Signature {
+    Signature {
+        generics: signature
+            .generics
+            .iter()
+            .map(|generic| GenericParameter {
+                kind: match &generic.kind {
+                    GenericKind::Value(ty) => GenericKind::Value(substitute_within(ty, map)),
+                    other => other.clone(),
+                },
+                ..generic.clone()
+            })
+            .collect(),
+        parameters: signature
+            .parameters
+            .iter()
+            .map(|parameter| crate::types::Parameter {
+                ty: substitute_within(&parameter.ty, map),
+                ..parameter.clone()
+            })
+            .collect(),
+        result: signature
+            .result
+            .as_ref()
+            .map(|result| substitute_within(result, map)),
+        reference: signature.reference,
+    }
+}
+
 /// Puts in `body`, the body of an instance of `declaration` of `module`
 /// for `generics`, the call of the candidate that each call it
 /// selects for each instance ([`Selecting`]) selects there: as the call
@@ -998,9 +1041,16 @@ pub(crate) fn select_in_instance(
     else {
         return;
     };
-    let Some(Detail::Callable(signature)) = unit.details.get(declaration) else {
+    let Some(Detail::Callable(declared)) = unit.details.get(declaration) else {
         return;
     };
+    let map: Vec<(Location, &Argument)> = declared
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .zip(generics)
+        .collect();
+    let signature = in_instance(declared, &map);
     let (bindings, written, arguments) = super::tables(unit);
     let selecting = std::cell::RefCell::new(Vec::new());
     // What is reported here has been reported where the program was
@@ -1010,7 +1060,7 @@ pub(crate) fn select_in_instance(
         program,
         unit,
         &unit.declarations[declaration],
-        signature,
+        &signature,
         super::Tables {
             bindings: &bindings,
             written: &written,
@@ -1038,7 +1088,8 @@ pub(crate) fn select_in_instance(
         else {
             return;
         };
-        let Some(call) = calls.iter().find(|call| call.at == expression.at) else {
+        // The last put at the place: the reading of it that stands.
+        let Some(call) = calls.iter().rfind(|call| call.at == expression.at) else {
             return;
         };
         let values: Vec<Expr> = arguments

@@ -1364,9 +1364,13 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             if !selecting.is_empty() {
                 let (module, declaration) = made.callee;
                 let unit = &program.modules[module];
+                // GEN-13: the body is read as the instance has it, each
+                // generic value parameter of its type there.
                 let signature = match unit.details.get(declaration) {
-                    Some(Detail::Callable(signature)) => signature,
-                    _ => &empty,
+                    Some(Detail::Callable(signature)) => {
+                        super::candidates::in_instance(signature, &map)
+                    }
+                    _ => empty.clone(),
                 };
                 let (bindings, written, arguments) = &tables[module];
                 let sink = std::cell::RefCell::new(Vec::new());
@@ -1374,7 +1378,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     program,
                     unit,
                     &unit.declarations[declaration],
-                    signature,
+                    &signature,
                     super::Tables {
                         bindings,
                         written,
@@ -1401,7 +1405,18 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                         .collect();
                     typer.assigned = vec![true; body.locals.len()];
                 }
-                for call in selecting {
+                // The last put at each place: the reading of the call
+                // that stands.
+                let standing = selecting
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, call)| {
+                        !selecting[index + 1..]
+                            .iter()
+                            .any(|later| later.at == call.at)
+                    })
+                    .map(|(_, call)| call);
+                for call in standing {
                     let name = &program.modules[call.operator.module].declarations
                         [call.operator.declaration]
                         .name;
