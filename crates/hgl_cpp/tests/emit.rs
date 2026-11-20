@@ -830,3 +830,67 @@ fn a_case_binding_read_after_its_switch_is_reported() {
         ["m.hgl:4:5 the cpp target does not write a binding of a `switch` case, read after it yet"]
     );
 }
+
+/// UNIT-13, UNIT-8: the analyser keeps a constant's value and a default
+/// with no locals of their own, so a block in one that runs statements is
+/// reported, and not written (and the target does not fail on it).
+#[test]
+fn a_constant_or_a_default_that_runs_statements_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const made: i64 = {\n",
+            "    let a = 20\n",
+            "    a + 1\n",
+            "}\n",
+            "const fn offset(x: i64, by: i64 = {\n",
+            "    let b = 2\n",
+            "    b + 1\n",
+            "}) -> i64 => x + by\n",
+            "const fn used() -> i64 => offset(1)\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:2:7 the cpp target does not write a constant whose value runs statements yet",
+            "m.hgl:6:35 the cpp target does not write a default that runs statements yet",
+        ]
+    );
+}
+
+/// A plain HGL name is written as it is, a GNU keyword or a header's macro
+/// among them; each file `#undef`s the names it writes after its last
+/// `#include`, and the standard's own words are escaped.
+#[test]
+fn names_a_platform_may_take_are_kept_and_undefined() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn issubnormal(typeof: i64) -> i64 => typeof\n",
+            "const fn errno(x: i64) -> i64 => issubnormal(x)\n",
+        ),
+    )]);
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let header = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.h")
+        .expect("the module's header")
+        .text;
+    assert!(
+        header.contains("#include <hglrt/hglrt.h>\n\n// Names this file writes, which no macro of a header above takes.\n#undef issubnormal\n#undef m\n#undef typeof\n"),
+        "{header}"
+    );
+    assert!(
+        header.contains("::hgraph::Int issubnormal(::hgraph::Int typeof);"),
+        "{header}"
+    );
+    assert!(
+        header.contains("::hgraph::Int errno_(::hgraph::Int x);"),
+        "{header}"
+    );
+}

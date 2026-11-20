@@ -3,6 +3,23 @@
 
 #include <hglrt/hglrt.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef Mode
+#undef activity
+#undef bindings
+#undef data
+#undef demo
+#undef driving
+#undef gated
+#undef ignore
+#undef listen
+#undef listening
+#undef mode
+#undef mode_of
+#undef same_twice
+#undef sampled
+#undef value
+
 namespace hgl::demo::activity::m_
 {
 

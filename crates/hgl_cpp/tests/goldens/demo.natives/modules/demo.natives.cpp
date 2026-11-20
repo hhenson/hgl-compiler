@@ -1,6 +1,24 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include "demo.natives.h"
 
+// Names this file writes, which no macro of a header above takes.
+#undef InvalidPolicy
+#undef Rounding
+#undef ZeroPolicy
+#undef a
+#undef b
+#undef demo
+#undef fail
+#undef half_even
+#undef nan
+#undef natives
+#undef natives_are_called
+#undef ratio
+#undef same
+#undef text
+#undef value
+#undef whole
+
 namespace hgl::demo::natives::m_
 {
 

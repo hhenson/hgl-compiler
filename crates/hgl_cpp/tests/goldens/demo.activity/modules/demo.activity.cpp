@@ -2,6 +2,30 @@
 #include "demo.activity.h"
 #include "core.h"
 
+// Names this file writes, which no macro of a header above takes.
+#undef Mode
+#undef a_passive_input_wakes_no_node
+#undef activity
+#undef activity_belongs_to_the_binding
+#undef an_enum_is_a_constant_connection
+#undef an_enum_is_published
+#undef bindings
+#undef core
+#undef data
+#undef demo
+#undef driving
+#undef gated
+#undef ignore
+#undef listen
+#undef listening
+#undef mode
+#undef mode_of
+#undef record
+#undef replay
+#undef same_twice
+#undef sampled
+#undef value
+
 namespace hgl::demo::activity::m_
 {
 

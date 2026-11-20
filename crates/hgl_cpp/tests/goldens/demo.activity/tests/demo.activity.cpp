@@ -1,6 +1,14 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include <hglrt/host.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef a_passive_input_wakes_no_node
+#undef activity
+#undef activity_belongs_to_the_binding
+#undef an_enum_is_a_constant_connection
+#undef an_enum_is_published
+#undef demo
+
 namespace hgl::demo::activity::m_::t_
 {
 void a_passive_input_wakes_no_node();
