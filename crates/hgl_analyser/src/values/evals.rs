@@ -21,12 +21,19 @@ use crate::{codes, error};
 
 impl<'a> Typer<'a> {
     /// The block of a named test (TST-3): "A test is a
-    /// composition-phase block with assertions." It is read as a
-    /// graph's body is, with `assert` among its statements.
+    /// composition-phase block with assertions." Outside the argument
+    /// of an `eval` or a `run` its statements are value code, as an
+    /// application's are (UNIT-14): the owner, "inside of a test, outside
+    /// of eval / run only const fns can be called. A non-const function
+    /// must fail" (hhenson/hgl_spec#162). A call of a temporal function
+    /// there is `call.role`, an operator selects among its value
+    /// candidates, and nothing is lifted. The call an `eval` or a `run`
+    /// takes is read as composition is (`Typer::eval`).
     pub(super) fn test(mut self, integration: bool) -> Option<Body> {
         let block = child(&self.declaration.syntax, SyntaxKind::Block)?;
-        self.graph = true;
+        self.graph = false;
         self.testing = true;
+        self.value_code = true;
         self.integration = integration;
         let statements = block
             .children()
@@ -50,6 +57,9 @@ impl<'a> Typer<'a> {
     /// no parameter and no input, each is value code.
     pub(super) fn store(mut self, written: &[StoreStatement]) -> Option<Body> {
         self.hook = Some(Hook::Start);
+        // UNIT-14: "Those statements ... are value code", whose operators
+        // select among all candidates (GEN-5).
+        self.value_code = true;
         let mut statements = Vec::new();
         for store in written {
             let Some(node) = store.syntax.children().next() else {
@@ -433,6 +443,9 @@ impl<'a> Typer<'a> {
             return unread;
         }
         let name = called.name.clone();
+        // TST-5: the call an eval takes is composition's: "Composition
+        // and eval choose the temporal definition if one exists" (FN-4).
+        let composing = std::mem::replace(&mut self.graph, true);
         self.evaluating = true;
         let (kind, ty) = self.call_function(
             &called.name,
@@ -442,6 +455,7 @@ impl<'a> Typer<'a> {
             called.generics,
         );
         self.evaluating = false;
+        self.graph = composing;
         // The call is held to what any call in a graph is: a `const`
         // parameter is given no connection (FN-3).
         self.constants_of(&kind);
@@ -645,10 +659,15 @@ impl<'a> Typer<'a> {
     /// `RunConfig`, or `RunConfig()` where none is written." "An entry
     /// is a temporal function with no temporal parameters."
     ///
-    /// The call is read as a graph's call of the entry is: a `const`
-    /// parameter takes a constant.
+    /// UNIT-14: "the arguments of the run statement's call and its
+    /// configuration, are value code; the call itself, of the entry, is
+    /// composition (RUN-1)". The entry is its temporal definition
+    /// (`evaluated`), and what it is given, and the configuration, are
+    /// read as value code is: a `const` parameter takes a value, and a
+    /// temporal call there is `call.role`.
     pub(super) fn run_statement(mut self) -> Option<Run> {
-        self.graph = true;
+        self.graph = false;
+        self.value_code = true;
         let form = self.declaration.syntax.children().next()?;
         let at = self.at(&form);
         let real_time = form.kind() == SyntaxKind::RunExpr;

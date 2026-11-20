@@ -440,10 +440,12 @@ fn a_run_statement_that_calls_no_entry_is_reported() {
             "run(paced(every: 9223372036854775808))",
             "live.hgl:5:18 parse/number.integer_range LEX-7",
         ),
-        // FN-3: an entry's `const` parameter is given no connection.
+        // UNIT-14: "the arguments of the run statement's call and its
+        // configuration, are value code": a call of a node there is
+        // `call.role`, the code proposed.
         (
             "run(paced(every: beats()))",
-            "live.hgl:5:18 phase/connection.as_constant FN-3",
+            "live.hgl:5:18 function-kind/call.role UNIT-14",
         ),
         // The configuration, and what follows it.
         ("run(beats(), 3)", "live.hgl:5:14 type/type.mismatch EXPR-5"),

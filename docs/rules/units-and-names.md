@@ -135,6 +135,7 @@ analyser: done
 - It exports nothing (`application.export`), no `use` names one (`application.import`), and it has one run statement (`application.run_count`), which follows its declarations and stands in no module (`run.position`)
 - Between its declarations and its run statement it sets the run's store: `inject global_state`, and then calls of core's `put` on it, read together as the statements of one block are
 - Any other capability or call there, one of these after the run statement or before a declaration, and either in a module, is `application.statement`
+- Those statements, the arguments of the run statement's call and its configuration are value code: a call of a node, a graph or a source there is `call.role`, the code proposed, an operator selects among all its candidates and a temporal one selected is `call.role` too (GEN-5), and nothing is lifted; the call of the entry is composition (RUN-1)
 - Its path is no other file's: the first file of the path is the unit and each later one is reported (`application.duplicate_path`)
 
 transpiler: done
