@@ -6,6 +6,7 @@
 #undef Clock
 #undef Logger
 #undef a
+#undef a_run_is_bounded
 #undef add_one
 #undef adds_one
 #undef an_outputless_target_runs
@@ -24,11 +25,13 @@
 #undef log_debug
 #undef logger
 #undef noted
+#undef opening
 #undef record
 #undef replay
 #undef reset
 #undef rhs
 #undef scaled
+#undef seen
 #undef sources_and_constants
 #undef stamped
 #undef temporal
@@ -413,13 +416,17 @@ void handlers_run_in_order()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 3}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 2, 4}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_02_ = input_00_; const auto argument_03_ = input_01_; return ::hgl::demo::temporal::m_::w_::first_of(wiring_, argument_02_, argument_03_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_06_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 3};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 2, 4};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::temporal::m_::w_::first_of(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 20, 3};
-        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 20, 3};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 
@@ -455,6 +462,27 @@ void an_outputless_target_runs()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
         ::hgl::demo::temporal::m_::w_::noted(wiring_, input_00_);
     }));
+}
+
+void a_run_is_bounded()
+{
+    ::hglrt::testing::statement();
+    [[maybe_unused]] const ::hgraph::DateTime opening = ::hgraph::DateTime{std::chrono::microseconds{1767605400000000}};
+    ::hglrt::testing::statement();
+    [[maybe_unused]] const auto seen = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3};
+        const auto bounds_02_ = ::hglrt::testing::Bounds{.start = opening, .length = ::hgraph::TimeDelta{2}};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::temporal::m_::w_::add_one(wiring_, input_01_), ::hgraph::Str{::hglrt::testing::run_output});
+    }, bounds_02_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_03_ = seen;
+        const auto right_04_ = ::hglrt::testing::Dense<::hgraph::Int>{2, 3};
+        ::hglrt::testing::expect_same(left_03_, right_04_);
+    }();
 }
 
 }  // namespace hgl::demo::temporal::m_::t_

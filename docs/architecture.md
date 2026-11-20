@@ -2133,11 +2133,13 @@ test --target cpp` runs over any program to its end.
 | A value where a connection is expected (FN-3) | Its temporal form's constant, `::hglrt::constant<::hgraph::Int>(wiring_, 5)` |
 | A node whose configuration holds an `f64` | Wired with `Wiring::add_unique_node` and not `hgraph::wire`: hgraph interns two nodes whose configurations are `==`, as `0.0` and `-0.0` are ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)), until it tells them apart |
 | `eval(target(value: [1, _, 3]))` (TST-5 to TST-8, CEVAL-1) | `::hglrt::testing::evaluate<T>` of an entry that wires core's `replay` instance of each trace written to its input, the target's wiring function, and core's `record` of the result under `"run.output"`; `run(...)` in real time; a target with no result `::hglrt::testing::run` |
+| `eval(call, RunConfig(start: s, length: l))` (RUN-1, CRUN-2) | The run given `::hglrt::testing::Bounds{.start = s, .length = l}`, each field the configuration writes (`lifecycle`); the call's arguments and the configuration held first, in the order written, where more than one may fail (EXPR-2) |
+| `let seen = eval(...)` | `const auto seen = ...;`, the recording, read where a trace is |
 | Application `demo.app` (UNIT-14) | In its module's unit, `::hglrt::application::Output application_()`, which runs its run statement once; `applications/demo.app.cpp`, an entry unit whose `main` is the library's host of that run, `::hglrt::application::main` (`apps`, `assemble`) |
 | Its `inject global_state` and `put`s before its run statement (UNIT-14) | The first statements of the run's entry, on the store of its wiring, before its call is wired |
-| `eval(call, config)`, `run(call, config)` (RUN-1, RUN-3) | `::hglrt::application::run<T>(entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"`, as an eval's does; `run` of an entry with no result. The configuration is its value, `::hglrt::application::bounds(config)`, read for its `start`, `end` and `length`; none is `Bounds{}`. `eval` is a simulation, `run` in real time |
+| `eval(call, config)`, `run(call, config)` (RUN-1, RUN-3) | `::hglrt::application::run<T>(entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"`, as an eval's does; `run` of an entry with no result. The configuration's bounds are an eval's (`lifecycle`); none is `Bounds{}`. `eval` is a simulation, `run` in real time |
 | A trace written out; `==` and `!=` of two (TST-4, TST-6, TST-7, TST-16) | `::hglrt::testing::Dense<T>`, `Timed<T>`, each cell as its type's family writes it; in an `assert`, `expect_same` or `expect_different` of the two held in order, elsewhere `same`; a trace given to a `const fn`, `publications` |
-| Everything else | Reported: `the cpp target does not write ... yet`: a struct, a set, a dictionary, a window, a delta of any but a scalar, `timezone`, `zoned_time`; a temporal value of any but a scalar; a `ref` parameter or result, `inject scheduler` and `alarm`, `all_valid`, `activate`, `passivate`, `scheduled()`; `if`, `switch` and `for` over connections, `capture`, a lifted input with a default or a null; a source with declarations or hooks; an eval with a configuration or of a value function; a configuration of a run that is no struct the value code writes |
+| Everything else | Reported: `the cpp target does not write ... yet`: a struct, a set, a dictionary, a window, a delta of any but a scalar, `timezone`, `zoned_time`; a temporal value of any but a scalar; a `ref` parameter or result, `inject scheduler` and `alarm`, `all_valid`, `activate`, `passivate`, `scheduled()`; `if`, `switch` and `for` over connections, `capture`, a lifted input with a default or a null; a source with declarations or hooks; a run's configuration that is no `RunConfig(...)` written in its eval or its run statement; an eval of a value function |
 
 Every C++ name an HGL name gives is made by one function,
 `emit::names::identifier`: a plain name (a letter first, a letter or
@@ -2390,11 +2392,11 @@ later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
 which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists 129
+target's list, and `--write-list` writes from a run. Today it lists 125
 of core's 198 runtime cases, each with the form it needs that the
 target does not write: a temporal value of a collection, a struct or a
-nullable, the scheduler, `ref`, control flow over connections, an eval
-with a configuration, and the rest the step-2 lanes take.
+nullable, the scheduler, `ref`, control flow over connections,
+and the rest the step-2 lanes take.
 
 ### The C++ runtime library
 
@@ -2429,7 +2431,7 @@ not use.
 | `host.h` | What the entry unit of a test executable needs, and no hgraph header: registration and `main`, which holds a test to its time limit | TST-14, TST-15, TST-17 |
 | `traces.h` | Traces, dense and timed, of scalars, nullables, tuples and lists, each cell whole or a delta; their comparison and where two first differ; replay items and what a `const fn` is given; the text of a value | TST-4 to TST-7, TST-9, TST-16, CEVAL-2 |
 | `testing.h` | The rest of the test host: `check`, `raises`, `expect_same`, a run in simulation or in real time, from no earlier than the earliest start to no later than the latest end (one with no end ends there), its recording, and the values its result held | TST-2 to TST-11, TST-17, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
-| `application.h` | The run of an application: `run<T>`, the test host's run of its entry and its output as text, each publication's instant and value; `bounds`, a `RunConfig`'s | UNIT-14, RUN-1 to RUN-4, CRUN-1 to CRUN-8 |
+| `application.h` | The run of an application: `run<T>`, the test host's run of its entry and its output as text, each publication's instant and value | UNIT-14, RUN-1 to RUN-4, CRUN-1 to CRUN-8 |
 | `application_host.h` | What an application's entry unit needs, and no hgraph header: `main`, which runs the run statement once, writes what became of it to a results file, and stops a run when its host asks: down standard input, or by an interrupt | RUN-3, CRUN-6 |
 
 A native is a function named as the emitter names the candidate

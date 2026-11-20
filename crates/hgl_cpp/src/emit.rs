@@ -23,8 +23,9 @@
 //! capabilities), `nodes` (a node's hooks), `sources` (a source's body),
 //! `graphs` (a graph's wiring and lifted calls), `tests` (evals and
 //! traces), `apps` (the run's store where a graph or an application
-//! sets it). A construct lane adds its family as a module here and one
-//! entry in `forms::FAMILIES`.
+//! sets it); `lifecycle` writes a run's bounds for `tests` and `apps`. A
+//! construct lane adds its family as a module here and one entry in
+//! `forms::FAMILIES`.
 
 use hgl_analyser::{DeclarationKind, Program};
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
@@ -39,6 +40,7 @@ mod endpoints;
 mod expressions;
 mod forms;
 mod graphs;
+mod lifecycle;
 mod names;
 mod nodes;
 mod scalars;

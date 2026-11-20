@@ -271,6 +271,43 @@ const fn same_level(level: Level) -> Level => level
 
 enum Level { low, high }
 
+# TYPE-4: a `list<bool>`'s elements are read, written, held before a call
+# and given to a generic, each as the `bool` it holds then.
+const fn flipped(flags: list<bool>) -> list<bool> {
+    var changed = flags
+    changed[0] = !changed[0]
+    return changed
+}
+
+const fn first_flag(flags: list<bool>) -> bool => flags[0]
+
+const fn pick_flag(a: bool, b: bool) -> bool => a
+
+const fn first_bit_as_it_was() -> bool {
+    var flags = [false]
+    return pick_flag(flags[0], {
+        flags[0] = true
+        false
+    })
+}
+
+const fn bit_kept() -> bool {
+    var flags = [false]
+    let kept = flags[0]
+    flags[0] = true
+    return kept
+}
+
+const fn set_bits(flags: list<bool>) -> i64 {
+    var count = 0
+    for flag in flags {
+        if flag {
+            count += 1
+        }
+    }
+    return count
+}
+
 # FN-15: a `var` parameter is the place the call gives.
 const fn bump(var count: i64, by: i64) {
     count += by
@@ -315,6 +352,13 @@ test null_tests_of_any_value {
     assert present(3) && !present(null)
     assert !never_null(1)
     assert null_is_null()
+}
+
+test bits_are_values {
+    assert flipped([true, false]) == [false, false]
+    assert first_flag([true, false]) && first([false, true]) == false
+    assert !first_bit_as_it_was() && !bit_kept()
+    assert set_bits([true, false, true]) == 2
 }
 
 test results_propagate {
