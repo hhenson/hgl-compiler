@@ -470,6 +470,15 @@ pub enum ExprKind {
         /// True where the place expects `result<T, error>`.
         result: bool,
     },
+    /// A read of a window's value where its place expects
+    /// `result<list<V>, error>` (TYPE-11, ERR-14): `ok` of the `list<V>`
+    /// it holds, oldest first, or, where the window is not all valid,
+    /// `err` of an `error` whose code is `value.unset_read`. The read is
+    /// of a temporal input, of `out`, or of a child of either named when
+    /// the program is compiled, typed as the `list<V>` it holds; one at
+    /// an index known only when it runs is a
+    /// [`ExprKind::CheckedChild`]. The expression is of the result.
+    CheckedWindow(Box<Expr>),
     /// `{ statements }`: a block. Its value is that of its last
     /// statement, when that is an expression (CTRL-10).
     Block {
@@ -1077,6 +1086,7 @@ impl Expr {
             | ExprKind::ChildEndpoint { child: inner, .. }
             | ExprKind::ChildEndpointOf(inner)
             | ExprKind::CheckedChild { read: inner, .. }
+            | ExprKind::CheckedWindow(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes(visit),
             ExprKind::Binary { left, right, .. }
             | ExprKind::Index {
@@ -1174,6 +1184,7 @@ impl Expr {
             | ExprKind::ChildEndpoint { child: inner, .. }
             | ExprKind::ChildEndpointOf(inner)
             | ExprKind::CheckedChild { read: inner, .. }
+            | ExprKind::CheckedWindow(inner)
             | ExprKind::Publications(inner) => inner.walk_mut(visit),
             ExprKind::Binary { left, right, .. }
             | ExprKind::Index {

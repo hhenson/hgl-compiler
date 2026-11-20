@@ -49,6 +49,25 @@ impl<'a> Typer<'a> {
                 at,
             };
         }
+        // ERR-14: "... and so does ... a read of a window's value before
+        // it is `all_valid`, T being the `list<V>` it reads as
+        // (TYPE-11)". TYPE-11: it "gives an `err` of an `error` with that
+        // code where its place takes a `result<list<V>, error>`".
+        if let Type::Result {
+            value: success,
+            error,
+        } = expected
+            && **error == Type::Error
+            && self.window_read(&value)
+            && self.admits(success, &value.ty)
+        {
+            let at = value.at;
+            return Expr {
+                kind: ExprKind::CheckedWindow(Box::new(value)),
+                ty: expected.clone(),
+                at,
+            };
+        }
         if is_integer_literal(&value) && accepts_float(expected) {
             let at = value.at;
             return Expr {
@@ -112,7 +131,10 @@ impl<'a> Typer<'a> {
     /// `list<V>` (`listed`), which the function is lifted over. FN-12: "A
     /// window is passed only where it is `all_valid` ... That value, read
     /// in a hook or given to a lifted helper (FN-12), is a `list<V>` of
-    /// the values held" (TYPE-11).
+    /// the values held" (TYPE-11). FN-11: a window "is supplied only
+    /// where it is `all_valid` as well, whatever its default or null
+    /// contract": a `list<V>?`, whose contract admits null, takes it as
+    /// `list<V>` does.
     pub(super) fn lifted_window(
         &self,
         ty: &Type,
@@ -125,7 +147,7 @@ impl<'a> Typer<'a> {
             && listed
             && self.composes(value)
             && matches!(given, Type::RollingWindow { .. })
-            && matches!(ty, Type::List { size: None, .. })
+            && matches!(not_null(Some(ty)), Some(Type::List { size: None, .. }))
             && self.admits(ty, &window_value(given))
     }
 

@@ -335,6 +335,9 @@ transpiler: done
 transpiler: done
 
 - hgraph: a publication marks the input modified for its cycle, an equal one included; an idle cycle leaves it unmodified with its value; an input bound to a node's output observes that output
+- `modified(x)`, as a guard, admits a read of `x` as `valid(x)` does (TIME-4): the read stands under `(x.modified and x.valid)`
+- An input of a node in a branch started while the program runs, bound to an endpoint already valid, is modified in the cycle the branch starts and wakes its node, as hgraph samples an input it binds: of an `if`, a `switch` and a dictionary's child (CTRL-2, CTRL-7); core's conditional case passes
+- Not written as a rule, since the pinned text leaves it out: a `ref` parameter, a collection's children, and `delta_value` and `last_modified` of such an input as its branch starts
 
 ## END-3
 
@@ -354,7 +357,7 @@ transpiler: partial
 - A removed position the list does not hold lost no value, and is ignored: nothing fails and nothing is lost (the owner's decision on hhenson/hgl_spec#124, as for a dictionary's absent key)
 - An entry at or past a `size_modified` written with it contradicts the delta and fails the write as the graph runs, with no execution code (the owner's decision on hhenson/hgl_spec#124: "a failure"); a constant one is not yet rejected when compiled (TYPE-16)
 - A dictionary's delta removes a key with `REMOVE_IF_EXISTS`, so one it does not hold is ignored, and is no failure, a delta read from an input and published again among them (`_core.entries_published`); a set ignores a member it does not hold
-- A delta that names no change, of a dictionary, a set or an unsized list, ticks only where it makes the endpoint valid, empty and modified, and its `delta_value` is then that delta (END-3, TIME-7), by a node, a source and a trace's cell, at the top, within a dictionary, a struct, a tuple or a fixed list, and beside an unsized list in a struct or a tuple; one of a struct, a tuple or a fixed list sets no child and is never a tick; so, as END-3 proposes, is one whose every entry is an ignored removal. hgraph ticks a `TSD` and a `TSS` for neither, and `clear` makes one that is not valid valid; it ticks what holds one given such a change, so the provider leaves that child out (`_core.entries_published`); `invalidate(out)` of a dictionary or a set empties it first, as hgraph keeps its keys and members (`_core.invalidated`)
+- A delta that names no change, of a dictionary, a set or an unsized list, ticks only where it makes the endpoint valid, empty and modified, and its `delta_value` is then that delta (END-3, TIME-7), by a node, a source and a trace's cell, at the top, within a dictionary, a struct, a tuple or a fixed list, and beside an unsized list in a struct or a tuple; one of a struct, a tuple or a fixed list sets no child and is never a tick; so, as END-3 has it, agreed, is one whose every entry is an ignored removal. hgraph ticks a `TSD` and a `TSS` for neither, and `clear` makes one that is not valid valid; it ticks what holds one given such a change, so the provider leaves that child out (`_core.entries_published`); `invalidate(out)` of a dictionary or a set empties it first, as hgraph keeps its keys and members (`_core.invalidated`)
 - hgraph 0.9.5's bundle given a tuple ticks where any position is given, a change that a valid child is left as it was by among them, and fails the run for a dictionary's `REMOVE_IF_EXISTS` in it: a tuple that holds an unsized list is published as a `dict` of the positions it gives, as a struct is (`_core.published_into`)
 - A dictionary or a set in a struct or a tuple that holds an unsized list is published as a node's delta of one is, by a node and by a source, the provider told where (`entries=`): an entry whose change names nothing, where it is valid, is left out
 - Left: a dictionary's or a set's assigned to an entry of `out`; an unsized list's delta inside a dictionary's or a list's delta, which is reported (TYPE-16)
@@ -429,7 +432,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own, with a minimum of zero written as the maximum; a value leaves a window of a duration as the next arrives, and its exit is no tick
-- Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`); core's window cases pass
+- Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`), or gives that `err` where its place expects a `result<list<V>, error>` (`_core.window_result`); a lifted value function whose parameter has a default is not invoked where the window is valid and not all valid (FN-11); core's window cases pass
 - Left, reported: a window of a value that is no scalar or enum (TYPE-11), and invalidating one (END-4)
 
 ## END-10
@@ -437,6 +440,7 @@ transpiler: partial
 analyser: done
 
 - A `ref` parameter of T is given a connection of T, and a `ref` result designates what its `return` names, a child of an input valid or not, read as `EndpointOf` or `ChildEndpointOf` with no payload read (FN-16)
+- An assignment to a part of a `ref` result's `out` is `binding.immutable`, and `ref` on a `signal` parameter `ref.position`, each code proposed (FN-16, TYPE-12)
 
 transpiler: partial
 

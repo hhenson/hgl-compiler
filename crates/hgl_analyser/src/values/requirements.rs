@@ -1346,16 +1346,18 @@ fn past_the_limit(from: &[Location], diagnostics: &mut Diagnostics) {
                 && earlier.primary.span.start == at.span.start
         });
         if !rejected {
-            diagnostics.emit(crate::local_error(
-                Category::Constraint,
-                codes::local::INSTANCE_LIMIT,
+            // GEN-13 catalogues the code, proposed, for instances past
+            // the implementation's bound.
+            diagnostics.emit(crate::error(
+                Category::Type,
+                codes::INSTANCE_LIMIT,
                 at,
                 format!(
                     "this call makes more instances than this compiler follows ({INSTANCES}, \
                      with arguments no longer than {ARGUMENTS} characters written out), and \
                      the `requires` of those past them are not told"
                 ),
-                "GEN-3",
+                "GEN-13",
             ));
         }
     }

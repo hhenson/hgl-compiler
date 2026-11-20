@@ -1,0 +1,326 @@
+module demo.decisions_1120
+
+# ---- A test of `modified` guards the read of its input (TIME-4, END-2) ----
+
+# TIME-4: "A guard is a test of `valid(input)` or of `modified(input)`,
+# on the input by its name ... An input is not modified without being
+# valid, so `modified` of it guards what `valid` of it does". Every
+# input wakes the node, and nothing is required valid: the probe wakes
+# it where `value` is silent, before it is valid and after.
+fn forward_when_modified(value: i64, probe: bool) -> i64 {
+    when valid([]) {
+        if modified(value) { return value }
+        return -1
+    }
+}
+
+# TIME-4: "A `when` header that has the test alone or as a top-level
+# conjunct guards its body, ... `when modified(a) && valid([])`." `b`
+# cannot wake it, and nothing is required valid.
+fn latest_a(a: f64, b: f64) -> f64 {
+    when modified(a) && valid([]) { return a }
+}
+
+# In the right operand of the `&&` it guards, and after a branch that
+# returns where it does not hold.
+fn positive_when_modified(value: i64, probe: bool) -> i64 {
+    when valid([]) {
+        if modified(value) && value > 0 { return value }
+        if !modified(value) { return -1 }
+        return 0
+    }
+}
+
+# A nullable input published null is valid, and modified.
+fn null_when_modified(probe: bool, value: i64?) -> str {
+    when valid([]) {
+        if modified(value) {
+            if value == null { return "null" }
+            return "value"
+        }
+        return "silent"
+    }
+}
+
+# TIME-4: "or of `valid` or `modified` of the child as the read names
+# it". The quote's bid is published alone, and its ask never.
+struct Quote {
+    bid: f64
+    ask: f64
+}
+
+fn bids(bid: f64) -> Quote {
+    inject out
+    when { out.bid = bid }
+}
+
+fn bid_when_modified(quote: Quote, probe: bool) -> f64 {
+    when valid([]) {
+        if modified(quote.bid) { return quote.bid }
+        return -1.0
+    }
+}
+
+fn quoted_bid(bid: f64, probe: bool) -> f64 => bid_when_modified(bids(bid), probe)
+
+test a_modified_test_guards_the_read_of_the_input_it_names {
+    assert eval(forward_when_modified(value: [_, 7, _], probe: [true, true, true])) == [-1, 7, -1]
+    assert eval(latest_a(a: [1.0, _, 3.0], b: [_, 10.0, 20.0])) == [1.0, _, 3.0]
+    assert eval(positive_when_modified(value: [_, 7, -2, _], probe: [true, _, _, true])) ==
+        [-1, 7, 0, -1]
+    assert eval(null_when_modified(probe: [true, true, true], value: [_, null, 3])) ==
+        ["silent", "null", "value"]
+    assert eval(quoted_bid(bid: [_, 1.5, _], probe: [true, true, true])) == [-1.0, 1.5, -1.0]
+}
+
+# ---- A window's value where a `result` is taken (ERR-14, TYPE-11) ----
+
+fn collected(reading: i64) -> rolling_window<i64, 3, 2> {
+    when { return reading }
+}
+
+# TYPE-11: "A read of it before the window is `all_valid` fails with
+# `value.unset_read`, or gives an `err` of an `error` with that code where
+# its place takes a `result<list<V>, error>`, as a child's read checked
+# when it runs does (ERR-14)." Returned, bound and given to a function.
+fn checked_readings(readings: rolling_window<i64, 3, 2>) -> result<list<i64>, error> {
+    when { return readings }
+}
+
+const fn outcome_code(outcome: result<list<i64>, error>) -> str {
+    if is_ok(outcome) { return "ok" }
+    let code = outcome.error.code
+    if code == null { return "no code" }
+    return code
+}
+
+const fn outcome_values(outcome: result<list<i64>, error>) -> list<i64> {
+    if is_ok(outcome) { return outcome.value }
+    return []
+}
+
+fn bound_outcome(readings: rolling_window<i64, 3, 2>) -> str {
+    when {
+        let outcome: result<list<i64>, error> = readings
+        return outcome_code(outcome)
+    }
+}
+
+fn given_outcome(readings: rolling_window<i64, 3, 2>) -> str {
+    when { return outcome_code(readings) }
+}
+
+fn window_outcome(reading: i64) -> str => outcome_code(checked_readings(collected(reading)))
+fn window_values(reading: i64) -> list<i64> => outcome_values(checked_readings(collected(reading)))
+fn bound_flow(reading: i64) -> str => bound_outcome(collected(reading))
+fn given_flow(reading: i64) -> str => given_outcome(collected(reading))
+
+# A struct's field that is a window, named when compiled, and a fixed
+# list's position read when it runs, which gives the `err` of a child
+# that is not valid too (ERR-14).
+struct Book {
+    prices: rolling_window<i64, 3, 2>
+    last: i64
+}
+
+fn booked(price: i64) -> Book {
+    when { return delta<Book>(prices: price, last: price) }
+}
+
+fn checked_book(book: Book) -> result<list<i64>, error> {
+    when valid(book.prices) { return book.prices }
+}
+
+fn slots(slot: i64, price: i64) -> list<rolling_window<i64, 2>, 2> {
+    when { return delta<list<rolling_window<i64, 2>, 2>>(updated: [slot: price]) }
+}
+
+fn checked_slot(both: list<rolling_window<i64, 2>, 2>, at: i64) -> result<list<i64>, error> {
+    when modified(at) { return both[at] }
+}
+
+fn book_outcome(price: i64) -> str => outcome_code(checked_book(booked(price)))
+fn slot_outcome(slot: i64, price: i64, at: i64) -> str =>
+    outcome_code(checked_slot(slots(slot, price), at))
+
+test a_window_read_where_a_result_is_taken_gives_an_err_before_it_is_all_valid {
+    assert eval(window_outcome(reading: [1, 2, 3])) == ["value.unset_read", "ok", "ok"]
+    assert eval(window_values(reading: [1, 2, 3])) == [[], [1, 2], [1, 2, 3]]
+    assert eval(bound_flow(reading: [1, 2])) == ["value.unset_read", "ok"]
+    assert eval(given_flow(reading: [1, 2])) == ["value.unset_read", "ok"]
+    assert eval(book_outcome(price: [1, 2])) == ["value.unset_read", "ok"]
+    assert eval(slot_outcome(slot: [0, 0, 1], price: [1, 2, 3], at: [1, 0, 1])) ==
+        ["value.unset_read", "ok", "value.unset_read"]
+}
+
+# ---- A lifted parameter's default and a window below its minimum (FN-11, FN-12) ----
+
+# FN-11: "A struct, a tuple, a fixed list or a window is supplied only
+# where it is `all_valid` as well, whatever its default or null contract
+# (FN-12): one that is valid and not all valid binds no fallback, its
+# default included, and the helper is not invoked." The default binds for
+# an input that is not valid.
+const fn total_or_zero(readings: list<i64> = []) -> i64 {
+    var total = 0
+    for value in readings { total += value }
+    return total
+}
+
+const fn offset_total(offset: i64, readings: list<i64> = []) -> i64 {
+    var total = offset
+    for value in readings { total += value }
+    return total
+}
+
+const fn offset_or_negated(offset: i64, readings: list<i64>?) -> i64 {
+    if readings == null { return -offset }
+    var total = offset
+    for value in readings { total += value }
+    return total
+}
+
+fn defaulted_total(reading: i64) -> i64 => total_or_zero(collected(reading))
+fn offset_flow(offset: i64, reading: i64) -> i64 => offset_total(offset, collected(reading))
+fn nullable_flow(offset: i64, reading: i64) -> i64 => offset_or_negated(offset, collected(reading))
+
+test a_default_does_not_stand_for_a_window_below_its_minimum {
+    assert eval(defaulted_total(reading: [1, 2, 3])) == [_, 3, 6]
+    assert eval(offset_flow(offset: [10, _, _, 20], reading: [_, 1, 2, _])) == [10, _, 13, 23]
+    assert eval(nullable_flow(offset: [10, _, _, 20], reading: [_, 1, 2, _])) == [-10, _, 13, 23]
+}
+
+# ---- A branch started while the program runs (CTRL-2, CTRL-7, TIME-3, END-2) ----
+
+# CTRL-2's worked example: "`value` publishes 10 in the first cycle and
+# nothing after, and `open` publishes false, true, false, true. Each true
+# starts the branch fresh: `value`, valid since the first cycle, counts
+# as modified in that cycle, and `counted` runs once with 10 and
+# publishes 1. While `open` is false the result never ticks (CTRL-3)."
+fn counted(value: i64) -> i64 {
+    state count: i64 = 0
+    when {
+        count += 1
+        return count
+    }
+}
+
+fn counted_while(open: bool, value: i64) -> i64 {
+    if open { counted(value) }
+}
+
+# TIME-3: "An input that counts as modified as its branch starts (CTRL-2)
+# wakes its node and satisfies these tests as a publication on it does":
+# a `modified` selector, and the value held, read under it (TIME-4). The
+# branch kept on a repeated true counts the next publication.
+fn counted_on_modified(value: i64) -> i64 {
+    state count: i64 = 0
+    when modified(value) {
+        count += 1
+        return count
+    }
+}
+
+fn selected_count(open: bool, value: i64) -> i64 {
+    if open { counted_on_modified(value) }
+}
+
+fn held_value(value: i64) -> i64 {
+    when modified(value) { return value }
+}
+
+fn held_while(open: bool, value: i64) -> i64 {
+    if open { held_value(value) }
+}
+
+test a_branch_runs_once_with_the_values_held_when_it_starts {
+    assert eval(counted_while(open: [false, true, false, true], value: [10, _, _, _])) ==
+        [_, 1, _, 1]
+    assert eval(selected_count(open: [false, true, true, false, true], value: [10, _, 20, _, _])) ==
+        [_, 1, 2, _, 1]
+    assert eval(held_while(open: [false, true, false, true], value: [10, _, _, _])) ==
+        [_, 10, _, 10]
+}
+
+# CTRL-2: "A branch started while the program runs is the child a
+# temporal `if` or `switch` selects". Each label starts its branch fresh,
+# and an equal label keeps it.
+fn switched_count(route: str, value: i64, fallback: i64) -> i64 {
+    var selected = fallback
+    switch route {
+        case "on": selected = counted(value)
+        default: selected = counted(fallback)
+    }
+    return selected
+}
+
+test a_switched_branch_runs_once_with_the_values_held_when_it_starts {
+    assert eval(switched_count(
+        route:    ["off", "on", "on", "off", "on"],
+        value:    [   10,    _,   20,     _,    _],
+        fallback: [  100,    _,    _,     _,    _])) ==
+                  [    1,    1,    2,     1,    1]
+}
+
+# TIME-3: `modified([])` "Elsewhere, in another body or under a negation
+# or a disjunction, it is true in a cycle where no temporal input was
+# modified, and so false where one counts as modified as its branch
+# starts." The wake asked for in `start` lands in the next cycle, where
+# no input is modified.
+fn nothing_modified(value: i64) -> bool {
+    inject scheduler
+    start { schedule(scheduler, 1us) }
+    when { return modified([]) }
+    when scheduled() { return modified([]) }
+}
+
+fn quiet_while(open: bool, value: i64) -> bool {
+    if open { nothing_modified(value) }
+}
+
+test nothing_is_unmodified_in_the_cycle_a_branch_starts {
+    assert eval(quiet_while(open: [false, true, _], value: [10, _, _])) == [_, false, true]
+}
+
+# CTRL-7: "Dynamic independent dictionary/list bodies create one child
+# per member key/index ... A child created while the program runs starts
+# as CTRL-2 says." The child of "b", made in the third cycle, is given
+# `level`, captured and valid since the first: it counts as modified, and
+# the child records it. The store is read a cycle later.
+fn priced(key: str, price: i64) -> dict<str, i64> {
+    when {
+        if price < 0 { return delta<dict<str, i64>>(removed: [key]) }
+        return delta<dict<str, i64>>(updated: [key: price])
+    }
+}
+
+fn level_seen(name: str, price: i64, level: i64) {
+    inject global_state
+    when modified(level) {
+        if name == "b" { put(global_state, "b", level) }
+    }
+}
+
+fn stored_level(tick: bool, const key: str) -> i64 {
+    inject global_state
+    when modified(tick) {
+        if has(global_state, key) { return get<i64>(global_state, key) }
+        return 0
+    }
+}
+
+fn each_level(key: str, price: i64, level: i64, tick: bool, const shown: str) -> i64 {
+    for name, value in priced(key, price) {
+        level_seen(name, value, level)
+    }
+    return stored_level(tick, shown)
+}
+
+test a_keyed_child_runs_once_with_the_values_held_when_it_starts {
+    assert eval(each_level(
+        key:   ["a",    _, "b",    _],
+        price: [  1,    _,   2,    _],
+        level: [  5,    _,   _,    _],
+        tick:  [  _, true,   _, true],
+        shown: "b")) ==
+               [  _,    0,   _,    5]
+}

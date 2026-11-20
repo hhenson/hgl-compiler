@@ -4013,26 +4013,31 @@ fn a_windows_readiness_and_its_list_are_written() {
     ]);
 }
 
-/// Where the pinned rules do not say what a window's read gives, it is
-/// reported. FN-11 binds a lifted parameter's default where its input is
-/// not valid, and FN-12 passes a window only where it is all valid: what
-/// a window that is valid and not all valid binds to a parameter with a
-/// default is not said. ERR-14 gives `err` for a child that is not valid
-/// where the place takes a `result`, and not for a window child that is
-/// valid and not all valid.
+/// FN-11: a window "is supplied only where it is `all_valid` as well,
+/// whatever its default or null contract (FN-12): one that is valid and
+/// not all valid binds no fallback, its default included, and the helper
+/// is not invoked": the default binds where the window is not valid, and
+/// the node returns where it is valid and not all valid. ERR-14: "a read
+/// of a window's value before it is `all_valid`" takes its form from its
+/// place: a window child read when it runs where a `result` is taken is
+/// `checked_child_result` of the window's list, whose failure is the
+/// `err`. `demo.decisions_1120` runs both on hgraph.
 #[test]
-fn a_window_read_the_rules_do_not_settle_is_reported() {
-    let emitted = emit(&[fixture!(
-        "a_window_read_the_rules_do_not_settle_is_reported",
+fn a_window_below_its_minimum_given_a_default_or_a_result_is_written() {
+    let emitted = emit_clean(&[fixture!(
+        "a_window_below_its_minimum_given_a_default_or_a_result_is_written",
         "m.hgl"
     )]);
-    assert_eq!(
-        emitted.reported,
-        [
-            "m.hgl:10:38 target.unsupported: the hgraph target does not write a window given to a lifted helper's parameter that has a default (FN-11) yet",
-            "m.hgl:15:19 target.unsupported: the hgraph target does not write a window's value read where its place takes a `result` (ERR-14) yet",
-        ]
-    );
+    emitted.module("m").assert_writes(&[
+        concat!(
+            "@_hg.compute_node(valid=())\n",
+            "def _lift_0_total(values: _hg.TSW[_py.int, _hg.WindowSize[3], _hg.WindowSize[2]]) -> _hg.TS[_py.int]:\n",
+            "    if not ((not values.valid or values.all_valid)):\n",
+            "        return\n",
+            "    return total(values=(_core.window_values(values) if values.valid else []))\n",
+        ),
+        "    return _core.checked_child_result(_core.position_of(both, at.value), lambda _port: _core.window_values(_port))\n",
+    ]);
 }
 
 /// FN-1: a value function's "parameter and result types are ordinary

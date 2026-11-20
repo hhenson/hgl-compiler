@@ -424,9 +424,9 @@ test a_lifted_default_is_bound_only_where_the_input_is_not_valid {
 # never published or invalidated, it makes the value valid and empty, and
 # ticks. Where it is valid the delta changes nothing, and is no tick ...
 # A value published whole, the same again or empty, is no delta, and
-# ticks as any publication does". Proposed there: "a delta whose every
-# entry is ignored, the removal of a key, a member or a position that is
-# not held (TYPE-16), names no change".
+# ticks as any publication does", and "A delta whose every entry is
+# ignored, the removal of a key, a member or a position that is not held
+# (TYPE-16), names no change too".
 
 # TIME-7's worked example (`examples.empty_deltas`, its `woken` and
 # `watched` here `members_woken` and `members_watched`), for a set, and
@@ -557,7 +557,7 @@ test a_cell_that_names_no_change_ticks_only_where_it_makes_the_input_valid {
     ]
 }
 
-# Proposed: a delta whose every entry is an ignored removal names no
+# TIME-7: a delta whose every entry is an ignored removal names no
 # change. A removal beside a change keeps the change.
 fn edit_book(command: i64) -> dict<str, i64> {
     when {
