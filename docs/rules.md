@@ -110,7 +110,8 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | `inject clock`, `logger`, `global_state`, and a property of each | TIME-8, CAP-1, CAP-2, CAP-3 |
 | A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
-| `eval` with no configuration, dense and timed traces, their comparison, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
 
 Not written yet, and reported: a call that gives a `var` parameter a
 place beside an argument that runs statements (FN-15), a `?` after
@@ -122,9 +123,9 @@ dictionary, a window, a delta of any but a scalar, `timezone`,
 scalar, `ref` (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
 `all_valid`, `activate`, `passivate`, `scheduled()`, `if`, `switch` and
 `for` over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
-default or a null (FN-11), a source with declarations or hooks, an eval
-with a configuration or of a value function (RUN-1, TST-5), and an
-application.
+default or a null (FN-11), a source with declarations or hooks, an
+eval's configuration that is no `RunConfig(...)` written in it (RUN-1),
+an eval of a value function (TST-5), and an application.
 
 ## The C++ target's runtime library
 
