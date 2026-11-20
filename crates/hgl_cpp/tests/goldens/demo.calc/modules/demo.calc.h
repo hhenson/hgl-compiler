@@ -3,6 +3,15 @@
 
 #include <hglrt/hglrt.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef a
+#undef b
+#undef calc
+#undef demo
+#undef total
+#undef twice
+#undef value
+
 namespace hgl::demo::calc::m_
 {
 
