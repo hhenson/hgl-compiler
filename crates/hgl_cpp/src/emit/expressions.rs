@@ -30,7 +30,7 @@ use hgl_diagnostics::Location;
 use super::Emitter;
 use super::calls::{changes, may_fail};
 use super::names::{self, identifier};
-use super::statements::{Scope, returns};
+use super::statements::{Scope, refers, returns};
 use super::types::enum_name;
 use super::values::INDENT;
 use crate::runtime;
@@ -158,17 +158,20 @@ impl Emitter<'_> {
                     format!("std::get<{position}>({base})")
                 }
                 // EXPR-2: the list, then the index. Where they are held
-                // (`held_read`), the list is held first, as it was where
-                // the index may change it, and the element read is a
-                // value of its own.
+                // (`held_read`), the list is held first, and the element
+                // read is a value of its own. The list is held by
+                // reference only where it is what a local or a constant
+                // holds (`refers`) and the index changes nothing: any
+                // other may be part of a value that ends with its
+                // declaration, `[[7]][0]`.
                 Type::List { .. } if held_read(base, index) => {
                     let Some(ty) = self.written_type(&value.ty, value.at) else {
                         return "0".to_string();
                     };
-                    let held = if changes(index) {
-                        "const auto"
-                    } else {
+                    let held = if refers(base) && !changes(index) {
                         "const auto&"
+                    } else {
+                        "const auto"
                     };
                     let base = self.expression(scope, base);
                     let index = self.expression(scope, index);

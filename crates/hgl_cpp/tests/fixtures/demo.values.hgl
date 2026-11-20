@@ -169,6 +169,10 @@ const fn text_first() -> tuple<str, i64> {
     })
 }
 
+# A list held before its index is read, where it is an element of a list
+# made for the read.
+const fn from_a_made_row(one: i64) -> i64 => [[7]][0][0 // one]
+
 # NUM-2: a list whose entry is out of range.
 const fn grown(by: i64) -> list<i64> => [by + 9223372036854775807]
 
@@ -240,6 +244,7 @@ test evaluation_follows_the_order_written {
     assert held_text() == "text"
     assert tuple_first() == (1, 0)
     assert text_first() == ("before", 0)
+    assert from_a_made_row(1) == 7
     assert made_error() == "before"
 }
 
