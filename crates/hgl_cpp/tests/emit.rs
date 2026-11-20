@@ -363,6 +363,36 @@ fn temporal_code_is_written() {
     assert!(units.contains(&"modules/core.cpp"), "{units:?}");
 }
 
+/// The temporal forms of a list and of a tuple (`lists`): published whole
+/// and by delta, read whole and by child, a child wired, a list replayed
+/// and recorded, and the value an eval's result holds kept for a cell
+/// written whole (TST-5).
+#[test]
+fn list_code_is_written() {
+    let emitted = emit_with(
+        &[("demo.lists.hgl", include_str!("fixtures/demo.lists.hgl"))],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.lists", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    // TIME-7: core's `replay` of a list yields a whole list or a delta of
+    // one, as its trace's cells are written.
+    assert!(
+        core.contains("::hglrt::Yielded<::hglrt::yielded_t<::hglrt::list<::hgraph::Int>>>"),
+        "{core}"
+    );
+}
+
 /// A temporal form the target does not write yet is reported through the
 /// dispatch point, where it is written, and blocks what reaches it: a
 /// temporal value of a type no family writes, and a capability no family
@@ -375,7 +405,7 @@ fn a_temporal_form_not_written_yet_is_reported() {
             concat!(
                 "module m\n",
                 "\n",
-                "fn first(values: list<i64>) -> i64 {\n",
+                "fn first(values: set<i64>) -> i64 {\n",
                 "    when { return 1 }\n",
                 "}\n",
                 "\n",
@@ -406,7 +436,7 @@ fn a_temporal_form_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.blocked("a_list").as_deref(),
-        Some("m.hgl:18:31 the cpp target does not write a temporal value of `list<i64>` yet")
+        Some("m.hgl:18:31 the cpp target does not write a temporal value of `set<i64>` yet")
     );
     assert_eq!(
         emitted.blocked("a_scheduler").as_deref(),

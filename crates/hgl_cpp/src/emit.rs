@@ -39,6 +39,7 @@ mod endpoints;
 mod expressions;
 mod forms;
 mod graphs;
+mod lists;
 mod names;
 mod nodes;
 mod scalars;
