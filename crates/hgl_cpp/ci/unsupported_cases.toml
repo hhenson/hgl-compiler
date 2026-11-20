@@ -12,6 +12,9 @@
     "conformance::yield_payload_failure_precedes_target_validation",
     "core_implementation::the_two_forms_have_no_sum",
 ]
+"a call of a candidate with a body" = [
+    "core_implementation::mixed_numeric_arithmetic",
+]
 "a call with generic arguments" = [
     "conformance::a_wake_stays_due_after_a_reset_inside_it",
     "core_implementation::a_rule_rolls_to_a_business_day",
@@ -181,14 +184,8 @@
     "core_implementation::repeated_invalidation_is_silent",
     "core_implementation::unconfigured_arithmetic_uses_lifting",
 ]
-"the candidate `add_(i64, f64)`" = [
-    "core_implementation::mixed_numeric_arithmetic",
-]
 "the candidate `convert(i64)`" = [
     "core_implementation::a_number_is_a_flag_and_back",
-]
-"the candidate `eq_(zoned_datetime, zoned_datetime, bool)`" = [
-    "core_implementation::a_duration_moves_a_zoned_instant",
 ]
 "the candidate `lt_(tenor, tenor)`" = [
     "core_implementation::the_order_is_count_by_count",
@@ -220,6 +217,9 @@
 ]
 "this expression" = [
     "core_implementation::an_f64_is_rounded_as_asked",
+]
+"this literal" = [
+    "core_implementation::a_duration_moves_a_zoned_instant",
 ]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph
