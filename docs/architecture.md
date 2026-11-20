@@ -2125,7 +2125,8 @@ has ended. Each file the target writes, and `build.ninja`, is written
 only where it changed, and `ninja -k 0` builds the executables of the
 tests to run: one object for each module's unit, with the precompiled
 header, one for each entry unit, without it, and one executable for each
-module, linked from its entry and the units its tests reach. Where the
+module, linked from its entry, its module's unit and each unit that
+one calls into, through those (a unit is linked whole). Where the
 build fails, an executable is run only where `ninja -n` says nothing is
 left to do for it, and the tests of every other are not run, with the
 failure: an older executable is never run in a newer one's place.

@@ -14,7 +14,7 @@
 //! build has one object for each module's unit, compiled with the
 //! precompiled header, one for each entry unit, compiled without it,
 //! and one executable for each module with tests, linked from its entry
-//! and the units its tests reach.
+//! and the units `hgl_cpp` says it needs.
 //!
 //! A build that fails runs no executable it did not finish: where
 //! `ninja` fails, each executable is run only where `ninja` says

@@ -86,6 +86,7 @@ pub(crate) fn module(
         provides,
         diagnostics,
         piece: Piece::default(),
+        expanding: Vec::new(),
     };
     let declared = &program.modules[index];
     let declarations = (0..declared.declarations.len())
@@ -124,6 +125,10 @@ struct Emitter<'a> {
     diagnostics: &'a mut Diagnostics,
     /// The piece being written.
     piece: Piece,
+    /// The defaults being written, each as the position of its
+    /// function's module, the function's position there and the
+    /// parameter's: one that comes back while it is written is reported.
+    expanding: Vec<(usize, usize, usize)>,
 }
 
 impl Emitter<'_> {

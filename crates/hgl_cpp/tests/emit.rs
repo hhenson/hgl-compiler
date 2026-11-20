@@ -318,3 +318,58 @@ fn an_eval_is_not_written_yet() {
     );
     assert!(emitted.output.executables.is_empty());
 }
+
+/// UNIT-8: a default is written where its argument is left out; one
+/// that calls its own function with that argument left out again would
+/// be written inside itself without end, and is reported.
+#[test]
+fn a_default_that_leaves_itself_out_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn again(value: bool = again()) -> bool => value\n",
+            "const fn uses() -> bool => again()\n",
+            "test calls {\n",
+            "    assert uses()\n",
+            "}\n",
+        ),
+    )]);
+    let reported = "m.hgl:2:30 the cpp target does not write a default that leaves itself out yet";
+    assert_eq!(emitted.reported, [reported]);
+    assert_eq!(emitted.blocked("calls").as_deref(), Some(reported));
+}
+
+/// A unit holds every function of its module that is written, and is
+/// linked whole: an executable is linked with every unit its own calls
+/// into, though no test calls the function that does.
+#[test]
+fn an_executable_links_what_its_units_call() {
+    let emitted = emit(&[
+        (
+            "demo.b.hgl",
+            "module demo.b\nexport const fn one() -> i64 => 1\n",
+        ),
+        (
+            "demo.a.hgl",
+            concat!(
+                "module demo.a\n",
+                "use demo.b::{one}\n",
+                "const fn unused() -> i64 => one()\n",
+                "const fn yes() -> bool => true\n",
+                "test holds {\n",
+                "    assert yes()\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let output = &emitted.output;
+    assert_eq!(output.executables.len(), 1);
+    let units: Vec<&str> = output.executables[0]
+        .units
+        .iter()
+        .map(|&unit| output.units[unit].source.as_str())
+        .collect();
+    assert_eq!(units, ["modules/demo.a.cpp", "modules/demo.b.cpp"]);
+}

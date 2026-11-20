@@ -105,8 +105,9 @@ pub struct Executable {
     /// Its entry unit's file, one of [`Output::files`]: its `main`.
     pub source: String,
     /// The units it is linked from, as positions in [`Output::units`]:
-    /// those of the modules its tests reach, the module's own among
-    /// them.
+    /// its module's, and each that one calls into, through the units
+    /// those call into. A unit is linked whole, so each function it
+    /// holds needs what it calls, whether a test calls it or not.
     pub units: Vec<usize>,
 }
 

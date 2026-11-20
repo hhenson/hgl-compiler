@@ -352,11 +352,20 @@ impl Emitter<'_> {
                 .and_then(Option::as_ref);
             match default {
                 Some(default) => {
+                    // A default that calls its own function with that
+                    // same argument left out would be written inside
+                    // itself without end.
+                    let key = (module, declaration, index);
+                    if self.expanding.contains(&key) {
+                        return self.missing(default.at, "a default that leaves itself out");
+                    }
                     let cold = Body {
                         locals: Vec::new(),
                         statements: Vec::new(),
                     };
+                    self.expanding.push(key);
                     let value = self.expression(&cold, default);
+                    self.expanding.pop();
                     given[index] = Some(value);
                 }
                 None => {

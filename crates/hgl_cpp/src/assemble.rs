@@ -67,6 +67,9 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     let mut units = Vec::new();
     // The unit of each module, as a position in `units`.
     let mut unit_of: Vec<Option<usize>> = vec![None; written.len()];
+    // For each module's unit, the other modules whose functions what it
+    // holds calls: an executable that links it links theirs.
+    let mut calls_into: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); written.len()];
     // For each test of each module, where its statements start in the
     // module's unit.
     let mut test_lines: Vec<Vec<Vec<(usize, Location)>>> = written
@@ -107,9 +110,10 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             runtime::HEADER
         );
         let mut unit = format!("{WRITTEN}\n#include \"{path}.h\"\n");
-        for used in included {
+        for &used in &included {
             unit.push_str(&format!("#include \"{}.h\"\n", program.modules[used].path));
         }
+        calls_into[index] = included;
         if !defined.is_empty() {
             let namespace = module_namespace(path);
             let declared = namespace.trim_start_matches("::");
@@ -158,7 +162,10 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     }
 
     // One executable for each module with a test that can be run,
-    // linked from the units of the modules its tests reach.
+    // linked from its module's unit and every unit that one calls into,
+    // through the units those call into: a unit holds every function of
+    // its module that is written, which its tests may not call, and each
+    // is linked whole.
     let mut executables = Vec::new();
     let mut tests = Vec::new();
     for (index, module) in written.iter().enumerate() {
@@ -191,9 +198,12 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         if clear.is_empty() {
             continue;
         }
-        let mut reached: BTreeSet<usize> = BTreeSet::from([index]);
-        for (_, piece) in &clear {
-            reached.extend(reached_modules(written, piece));
+        let mut reached: BTreeSet<usize> = BTreeSet::new();
+        let mut next = vec![index];
+        while let Some(module) = next.pop() {
+            if reached.insert(module) {
+                next.extend(&calls_into[module]);
+            }
         }
         files.push(File {
             path: entry_path(&declared.path),
@@ -314,20 +324,4 @@ fn blocked(written: &[Written], piece: &Piece) -> Option<Diagnostic> {
         stack.extend(reached.uses.iter().rev().copied());
     }
     None
-}
-
-/// The modules whose pieces `piece` reaches through the pieces it
-/// names.
-fn reached_modules(written: &[Written], piece: &Piece) -> BTreeSet<usize> {
-    let mut seen: HashSet<Used> = HashSet::new();
-    let mut stack: Vec<Used> = piece.uses.iter().copied().collect();
-    while let Some(used) = stack.pop() {
-        if !seen.insert(used) {
-            continue;
-        }
-        if let Some(reached) = named(written, used) {
-            stack.extend(reached.uses.iter().copied());
-        }
-    }
-    seen.into_iter().map(|(module, _)| module).collect()
 }
