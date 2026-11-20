@@ -143,6 +143,17 @@ impl Test {
         format!("{}::{}", self.module, self.name)
     }
 
+    /// How long the test may run, by the host clock, before it is
+    /// stopped and fails. `None` for one with no limit.
+    ///
+    /// TST-17: an integration test "is time-bound: it runs within a
+    /// time limit by the host clock, the duration `@timeout(5s)` gives
+    /// on the line before it, or one minute where none is written."
+    pub fn limit(&self) -> Option<Duration> {
+        self.integration
+            .then(|| self.timeout.unwrap_or(hgl_analyser::INTEGRATION_LIMIT))
+    }
+
     /// The statement of the test that line `line` of its module's unit
     /// is part of: the last one to start at or before it.
     pub fn statement_at(&self, line: usize) -> Option<Location> {

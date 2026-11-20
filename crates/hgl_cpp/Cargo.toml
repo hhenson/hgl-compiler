@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 hgl_diagnostics.workspace = true
 hgl_analyser.workspace = true
+hgl_lower.workspace = true
 
 [dev-dependencies]
 hgl_source.workspace = true

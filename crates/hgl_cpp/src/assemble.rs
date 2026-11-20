@@ -6,20 +6,17 @@
 //! C++ is compiled a unit at a time and whole, so a piece is written
 //! only where it is *clear*: neither it nor any piece it names, through
 //! the pieces those name, has a form that is not written. A test that
-//! is not clear is listed with the first such form, found depth first
-//! in the order each piece names its functions.
-//!
-//! This model of pieces, what each names and what blocks it, is the
-//! hgraph target's, which `hgl_lower` is to share between the two
-//! targets; until that crate is in the workspace this target keeps its
-//! own small copy of the walk, and no other part of the hgraph target's.
+//! is not clear is listed with the first such form, which
+//! `hgl_lower::pieces::blocked` finds as it finds it for the hgraph
+//! target.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Location};
+use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
-use crate::emit::{Piece, Used, Written, module_namespace, test_namespace};
+use crate::emit::{Piece, Written, module_namespace, test_namespace};
 use crate::{
     Application, Executable, File, Output, Test, Unit, entry_path, header_path, runtime, unit_path,
 };
@@ -44,23 +41,24 @@ struct Blocks {
 /// reported where the program reaches them.
 pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Diagnostic>) {
     let core = program.core();
+    // What each piece a declaration is written as reaches: its own, as
+    // no instance is written yet.
+    let pieces = |(module, declaration, _): &Used| -> Vec<&Reach> {
+        written
+            .get(*module)
+            .and_then(|written| written.declarations.get(*declaration))
+            .map(|piece| &piece.reach)
+            .into_iter()
+            .collect()
+    };
+    let mut found = Found::new();
+    let mut blocked = |piece: &Piece| blocked(pieces, &mut found, &piece.reach);
     let blocks: Vec<Blocks> = written
         .iter()
         .map(|module| Blocks {
-            declarations: module
-                .declarations
-                .iter()
-                .map(|piece| blocked(written, piece))
-                .collect(),
-            tests: module
-                .tests
-                .iter()
-                .map(|piece| blocked(written, piece))
-                .collect(),
-            application: module
-                .application
-                .as_ref()
-                .and_then(|piece| blocked(written, piece)),
+            declarations: module.declarations.iter().map(&mut blocked).collect(),
+            tests: module.tests.iter().map(&mut blocked).collect(),
+            application: module.application.as_ref().and_then(&mut blocked),
         })
         .collect();
     let mut files = Vec::new();
@@ -101,8 +99,8 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .iter()
             .copied()
             .chain(tests.iter().map(|(_, piece)| *piece))
-            .flat_map(|piece| &piece.uses)
-            .map(|(module, _)| *module)
+            .flat_map(|piece| &piece.reach.uses)
+            .map(|(module, _, _)| *module)
             .filter(|&used| used != index)
             .collect();
         let mut header = format!(
@@ -247,7 +245,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .chain(module.tests.iter().zip(&blocks[index].tests))
             .chain(module.application.iter().zip([&blocks[index].application]));
         for (piece, blocked) in pieces {
-            if let (None, Some(diagnostic)) = (&piece.broken, blocked) {
+            if let (None, Some(diagnostic)) = (&piece.reach.broken, blocked) {
                 blocking.push(diagnostic.clone());
             }
         }
@@ -295,33 +293,4 @@ fn entry(program: &Program, index: usize, clear: &[(usize, &Piece)]) -> String {
         runtime::NAMESPACE
     ));
     text
-}
-
-/// The pieces `piece` names, of `written`.
-fn named(written: &[Written], (module, declaration): Used) -> Option<&Piece> {
-    written.get(module)?.declarations.get(declaration)
-}
-
-/// The first form `piece` needs that is not written: its own, or one of
-/// a piece it reaches through the pieces it names, each looked at once,
-/// depth first.
-fn blocked(written: &[Written], piece: &Piece) -> Option<Diagnostic> {
-    if let Some(diagnostic) = &piece.broken {
-        return Some(diagnostic.clone());
-    }
-    let mut seen: HashSet<Used> = HashSet::new();
-    let mut stack: Vec<Used> = piece.uses.iter().rev().copied().collect();
-    while let Some(used) = stack.pop() {
-        if !seen.insert(used) {
-            continue;
-        }
-        let Some(reached) = named(written, used) else {
-            continue;
-        };
-        if let Some(diagnostic) = &reached.broken {
-            return Some(diagnostic.clone());
-        }
-        stack.extend(reached.uses.iter().rev().copied());
-    }
-    None
 }

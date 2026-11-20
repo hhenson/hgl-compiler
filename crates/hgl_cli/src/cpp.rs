@@ -28,7 +28,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 use hgl_analyser::Program;
 use hgl_cpp::Output;
@@ -290,8 +289,9 @@ fn launch_one(
         .tests
         .iter()
         .map(|(_, test)| {
-            let limit =
-                limit(test).map_or("-".to_string(), |limit| limit.as_secs_f64().to_string());
+            let limit = test
+                .limit()
+                .map_or("-".to_string(), |limit| limit.as_secs_f64().to_string());
             format!("{} {limit}\n", test.identity())
         })
         .collect();
@@ -358,15 +358,6 @@ fn launch_one(
             (*slot, outcome)
         })
         .collect()
-}
-
-/// How long `test` may run, by the host clock, before it is stopped
-/// and fails: TST-17's limit for an integration test, the one
-/// `@timeout` writes or one minute, and none for any other. The minute
-/// is the hgraph target's constant until the shared crate holds it.
-fn limit(test: &hgl_cpp::Test) -> Option<Duration> {
-    test.integration
-        .then(|| test.timeout.unwrap_or(hgl_hgraph::INTEGRATION_LIMIT))
 }
 
 /// `hgl run --target cpp` of application `chosen` of `program`: no

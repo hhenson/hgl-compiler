@@ -18,6 +18,7 @@
 use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Stmt, UnaryOperator, Value};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role, Signature};
 use hgl_diagnostics::Location;
+use hgl_lower::calls::{LeftOut, left_out};
 
 use super::Emitter;
 use super::names::{self, identifier};
@@ -294,7 +295,7 @@ impl Emitter<'_> {
         };
         let called = match declared.kind {
             DeclarationKind::Function(Role::Value) => {
-                self.piece.uses.insert((module, declaration));
+                self.piece.reach.uses.insert((module, declaration, None));
                 names::function(program, module, declaration)
             }
             DeclarationKind::NativeCandidate(Role::Value, operator) => {
@@ -331,8 +332,9 @@ impl Emitter<'_> {
         if !signature.generics.is_empty() {
             return self.missing(at, "a call of a function with generic parameters");
         }
-        // Each parameter's argument: the one written for it, or its
-        // default (UNIT-8), which names nothing in scope (UNIT-7).
+        // Each parameter's argument: the one written for it, or what
+        // `hgl_lower` says one left out is given (UNIT-8), a default
+        // read with nothing in scope (UNIT-7).
         let mut given: Vec<Option<String>> = vec![None; signature.parameters.len()];
         let mut written: Vec<(usize, String)> = Vec::new();
         for argument in arguments {
@@ -342,16 +344,12 @@ impl Emitter<'_> {
             let value = self.expression(body, &argument.value);
             written.push((index, value));
         }
-        let defaults = program.modules[module].defaults.get(declaration);
         for (index, parameter) in signature.parameters.iter().enumerate() {
             if written.iter().any(|(given, _)| *given == index) {
                 continue;
             }
-            let default = defaults
-                .and_then(|defaults| defaults.get(index))
-                .and_then(Option::as_ref);
-            match default {
-                Some(default) => {
+            match left_out(program, (module, declaration), index, parameter) {
+                Some(LeftOut::Default(default)) => {
                     // A default that calls its own function with that
                     // same argument left out would be written inside
                     // itself without end.
@@ -367,6 +365,11 @@ impl Emitter<'_> {
                     let value = self.expression(&cold, default);
                     self.expanding.pop();
                     given[index] = Some(value);
+                }
+                // UNIT-8: a `T?` left out is null; no nullable type is
+                // written yet.
+                Some(LeftOut::Null) => {
+                    return self.missing(at, &format!("the type `{}`", parameter.ty));
                 }
                 None => {
                     return self

@@ -17,25 +17,6 @@ pub(super) fn element_read(ty: &Type) -> Option<&'static str> {
     }
 }
 
-/// The field at `member` among those a struct has, for a value of the
-/// type `ty`. `None` where the type is no struct: a native type has
-/// properties, and a delta its own.
-pub(super) fn field_of<'p>(program: &'p Program, ty: &Type, member: usize) -> Option<&'p Member> {
-    let Type::Named {
-        module,
-        declaration,
-        kind: NamedKind::Struct,
-        ..
-    } = ty
-    else {
-        return None;
-    };
-    match program.modules[*module].details.get(*declaration) {
-        Some(Detail::Struct(read)) => read.members.get(member),
-        _ => None,
-    }
-}
-
 /// True for a type of configuration a node is given inside an object
 /// hgraph keeps as it is: a list, a tuple or a dictionary, nullable or
 /// not. hgraph makes a value of its own of a node's configuration, and
@@ -48,45 +29,10 @@ pub(super) fn held(ty: &Type) -> bool {
     }
 }
 
-/// True where another struct of the program inherits from the struct
-/// `declaration` of `module`: a value of that type may be of the other
-/// struct, with fields this one has not.
-pub(crate) fn inherited(program: &Program, module: usize, declaration: usize) -> bool {
-    program.modules.iter().any(|module_of| {
-        module_of.details.iter().any(|detail| {
-            matches!(detail, Detail::Struct(other) if other.parents.iter().any(|parent| {
-                matches!(parent, Type::Named { module: parent_module, declaration: parent_declaration, .. }
-                    if *parent_module == module && *parent_declaration == declaration)
-            }))
-        })
-    })
-}
-
-/// True for a type written `T?` (TYPE-14).
-pub(super) fn is_nullable(ty: &Type) -> bool {
-    matches!(ty, Type::Nullable(_))
-}
-
-/// True for a temporal value of `ty` that is read whole only where it is
-/// all valid (TIME-1: "A read of a struct, a tuple or a fixed list whole
-/// ... requires `all_valid` of it"): a struct with a field, a tuple and a
-/// list of a size. A struct with none publishes its one value whole
-/// (`empty_struct`).
-pub(super) fn read_whole_all_valid(program: &Program, ty: &Type) -> bool {
-    match ty {
-        Type::Named {
-            kind: NamedKind::Struct,
-            ..
-        } => !empty_struct(program, ty),
-        Type::Tuple(_) | Type::List { size: Some(_), .. } => true,
-        _ => false,
-    }
-}
-
-/// True for a concrete struct with no field, `struct Empty {}`, which
-/// this target writes as a temporal `TS` of its class
-/// (`Emitter::struct_annotation`).
-pub(super) fn empty_struct(program: &Program, ty: &Type) -> bool {
+/// True for a struct whose value `port_value` makes anew from its
+/// bundle, every part of it: each field is of a type nothing changes
+/// where it is, or such a struct itself. Any other type is not.
+pub(super) fn built_anew(program: &Program, ty: &Type, depth: usize) -> bool {
     let Type::Named {
         module,
         declaration,
@@ -96,9 +42,15 @@ pub(super) fn empty_struct(program: &Program, ty: &Type) -> bool {
     else {
         return false;
     };
-    matches!(program.modules[*module].details.get(*declaration),
-        Some(Detail::Struct(read)) if read.members.is_empty())
+    let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
+        return false;
+    };
+    depth < 8
+        && read.generics.is_empty()
         && !inherited(program, *module, *declaration)
+        && read.members.iter().all(|member| {
+            !changed_in_place(program, &member.ty, 0) || built_anew(program, &member.ty, depth + 1)
+        })
 }
 
 /// What a delta is the delta of, where the delta is a type of its own
@@ -141,21 +93,6 @@ impl<'t> DeltaOf<'t> {
     }
 }
 
-/// True where `value` is published to a place of the type `ty` as a
-/// whole value, and false where it is a `delta<ty>`. TIME-7: "The place
-/// expects T (EXPR-5), so a value that is a T is published whole ... A
-/// value that is no T and is a `delta<T>` is published as that change."
-/// A value of a struct is a T where T is an abstract struct it inherits
-/// from (TYPE-3), and where T publishes whole `delta<T>` is T itself.
-///
-/// It asks whether `value` is `ty`'s delta, and is not the test of
-/// `Function::publishes_null`, which asks whether it is a nullable's
-/// `delta<T?>`: the two part at an `atomic<T?>`, whose delta is the
-/// `T?` a whole value has, and which this calls a delta.
-pub(super) fn whole_value(ty: &Type, value: &Expr) -> bool {
-    value.ty == *ty || value.ty != Type::delta(ty.clone())
-}
-
 /// True for a type hgraph holds as one value under `TS[...]`, so that a
 /// tick of it is the whole value: a scalar, an enum, and a nullable one.
 pub(super) fn publishes_whole(ty: &Type) -> bool {
@@ -166,36 +103,6 @@ pub(super) fn publishes_whole(ty: &Type) -> bool {
             ..
         } => true,
         other => scalar(other).is_some(),
-    }
-}
-
-/// The fields of the struct `ty`, each its member and its type with
-/// `ty`'s generic arguments given (TYPE-4: a `Box<i64>`'s `value: T`
-/// is an `i64`), a parent's first. `None` where `ty` is no struct of
-/// the program.
-pub(super) fn fields_of<'p>(program: &'p Program, ty: &Type) -> Option<Vec<(&'p Member, Type)>> {
-    let Type::Named {
-        module,
-        declaration,
-        kind: NamedKind::Struct,
-        ..
-    } = ty
-    else {
-        return None;
-    };
-    let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
-        return None;
-    };
-    Some(read.members.iter().zip(program.field_types(ty)?).collect())
-}
-
-/// What a value of `ty` holds, with the `atomic` taken off: TYPE-9's
-/// `atomic<V>` holds the whole V, whose fields and parts are V's. Any
-/// other type is itself.
-pub(super) fn payload_of(ty: &Type) -> &Type {
-    match ty {
-        Type::Atomic(payload) => payload,
-        other => other,
     }
 }
 
@@ -259,44 +166,6 @@ pub(super) fn whole_dictionary(ty: &Type) -> bool {
     matches!(ty, Type::Dict { value, .. } if publishes_whole(value))
 }
 
-/// Each window `ty` holds: itself, and one at any depth inside it, as a
-/// struct's field, a tuple's position, a list's element, a dictionary's
-/// value, or under a `?` (TYPE-9: temporalization maps each to a child).
-/// A struct's fields are those of its application (`field_types`).
-pub(super) fn windows_in(program: &Program, ty: &Type) -> Vec<Type> {
-    /// How deep a type is looked into: a struct does not hold itself
-    /// but through an `atomic`, which holds no window (TYPE-12).
-    const DEPTH: usize = 32;
-    fn within(program: &Program, ty: &Type, depth: usize, found: &mut Vec<Type>) {
-        if depth > DEPTH {
-            return;
-        }
-        match ty {
-            Type::RollingWindow { .. } => found.push(ty.clone()),
-            Type::Nullable(inner) => within(program, inner, depth + 1, found),
-            Type::List { element, .. } => within(program, element, depth + 1, found),
-            Type::Dict { value, .. } => within(program, value, depth + 1, found),
-            Type::Tuple(elements) => {
-                for element in elements {
-                    within(program, element, depth + 1, found);
-                }
-            }
-            Type::Named {
-                kind: NamedKind::Struct,
-                ..
-            } => {
-                for field in program.field_types(ty).unwrap_or_default() {
-                    within(program, &field, depth + 1, found);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut found = Vec::new();
-    within(program, ty, 0, &mut found);
-    found
-}
-
 /// True for a window of a duration, `rolling_window<f64, 3s, 2s>`
 /// (TYPE-11), which a value leaves as it ages, though nothing arrives.
 pub(super) fn duration_window(ty: &Type) -> bool {
@@ -304,48 +173,6 @@ pub(super) fn duration_window(ty: &Type) -> bool {
         ty,
         Type::RollingWindow { maximum, .. } if matches!(maximum.value, ConstantValue::Duration(_))
     )
-}
-
-/// True for an unsized list, `list<T>` (TYPE-10: "a growing shape"),
-/// which this target writes as hgraph's unbounded `TSL`.
-pub(super) fn growing_list(ty: &Type) -> bool {
-    matches!(ty, Type::List { size: None, .. })
-}
-
-/// How deep a type is looked into for what it holds: a struct holds
-/// itself only through an `atomic`, which is not looked into (TYPE-6).
-const HELD_DEPTH: usize = 32;
-
-/// True where a temporal value of `ty` holds an unsized list as a part
-/// at any depth, itself among them: a struct's field, a tuple's
-/// position, a list's element or a dictionary's value (TYPE-9), and
-/// what a delta is of. An `atomic<V>` publishes whole, and holds no
-/// part of its own.
-pub(super) fn holds_growing_list(program: &Program, ty: &Type) -> bool {
-    fn within(program: &Program, ty: &Type, depth: usize) -> bool {
-        if depth > HELD_DEPTH {
-            return false;
-        }
-        match ty {
-            Type::List { size: None, .. } => true,
-            Type::Nullable(inner) | Type::Delta(inner) => within(program, inner, depth + 1),
-            Type::List { element, .. } => within(program, element, depth + 1),
-            Type::Dict { value, .. } => within(program, value, depth + 1),
-            Type::Tuple(elements) => elements
-                .iter()
-                .any(|element| within(program, element, depth + 1)),
-            Type::Named {
-                kind: NamedKind::Struct,
-                ..
-            } => program
-                .field_types(ty)
-                .unwrap_or_default()
-                .iter()
-                .any(|field| within(program, field, depth + 1)),
-            _ => false,
-        }
-    }
-    within(program, ty, 0)
 }
 
 /// True where a whole value of `ty` is published through the port of

@@ -4,10 +4,11 @@
 //! each function does without its syntax. This walks them and writes
 //! the C++ that does the same on hgraph. Each declaration and each named
 //! test is a [`Piece`]: its declaration for the module's header, its
-//! definition for the module's unit, the functions it names, and the
-//! first form in it that is not written yet. `assemble` puts the pieces
-//! into files, leaving out each that is not written or reaches one that
-//! is not.
+//! definition for the module's unit, and what it reaches, as
+//! `hgl_lower::pieces` has it: the functions it names, and the first
+//! form in it that is not written yet. `assemble` puts the pieces into
+//! files, leaving out each that is not written or reaches one that is
+//! not.
 //!
 //! The modules by concern, each saying what it writes: `names` (every
 //! C++ name), `types` (types, and the declarations of structs and
@@ -15,10 +16,9 @@
 //! expressions), `nodes` and `graphs` (temporal functions and
 //! applications), `tests` (named tests).
 
-use std::collections::BTreeSet;
-
 use hgl_analyser::{DeclarationKind, Program};
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
+use hgl_lower::pieces::Reach;
 
 use crate::codes;
 
@@ -44,10 +44,6 @@ pub(crate) struct Written {
     pub(crate) application: Option<Piece>,
 }
 
-/// What a piece names: a declaration, as the position of its module in
-/// the program and its position in that module.
-pub(crate) type Used = (usize, usize);
-
 /// One top-level part of a module as it is written: a declaration or a
 /// named test.
 #[derive(Default)]
@@ -60,12 +56,12 @@ pub(crate) struct Piece {
     /// nothing: an operator, or a native function, which the runtime
     /// library defines.
     pub(crate) text: String,
-    /// The first form in it that the target does not write yet. A piece
-    /// with one is left out of the files.
-    pub(crate) broken: Option<Diagnostic>,
-    /// The declarations of the program it names, whose definitions it
-    /// needs.
-    pub(crate) uses: BTreeSet<Used>,
+    /// What it reaches (`hgl_lower::pieces`): the first form in it that
+    /// the target does not write yet, which leaves it out of the files,
+    /// and the declarations of the program it names, whose definitions
+    /// it needs. Instances are not written yet, so each is named with no
+    /// instance's suffix.
+    pub(crate) reach: Reach,
     /// For a test, where each of its statements starts: the line of
     /// its text, counted from 0, and the place in the source.
     pub(crate) statements: Vec<(usize, Location)>,
@@ -171,8 +167,8 @@ impl Emitter<'_> {
             at,
             format!("the cpp target does not write {what} yet"),
         );
-        if self.piece.broken.is_none() {
-            self.piece.broken = Some(diagnostic.clone());
+        if self.piece.reach.broken.is_none() {
+            self.piece.reach.broken = Some(diagnostic.clone());
         }
         if !self.diagnostics.as_slice().contains(&diagnostic) {
             self.diagnostics.emit(diagnostic);
