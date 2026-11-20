@@ -1,37 +1,21 @@
-// The test host: what an executable of a module's generated tests needs.
-//
-// The compiler writes one executable for each module with tests (TST-1). Its
-// tests register by the name the runner gives them, `module.path::name`
-// (TST-15), and its `main` calls `hglrt::testing::main`, which runs the ones
-// named on the command line and records what becomes of each in a results
-// file, in the form the runner reads from the Python target's driver
-// (`crates/hgl_hgraph/support/run_tests.py`):
-//
-//     EXECUTABLE RESULTS NAME...
-//
-//     start N            the test is about to run
-//     passed N           it ran to its end
-//     failed N LINE TEXT it raised: LINE is the line of the statement of the
-//                        test that was running (`statement`), 0 when unknown
-//     unloaded N TEXT    no test of the program has that name
-//
-// where N is the test's position among the names, from 0, and TEXT has `\\`,
-// `\n` and `\r` for a backslash, a line feed and a carriage return. Each line
-// is written as it happens, so that a test that stops the process shows a
-// `start` and nothing after it. The results are a file, and not what the
-// process prints, so that nothing a program or hgraph prints can be taken for
-// an outcome.
+// The test host: what the generated code of a module's tests needs, beside
+// what the entry unit of its executable needs (host.h): assertions, traces
+// and their comparison, and runs.
 //
 // A test's eval is a run (CEVAL-1): the compiler writes the entry, which
 // wires core's `replay` to each temporal input, the target, and core's
 // `record` to its result under `"run.output"`; `evaluate` builds the entry's
-// graph, runs it with hgraph's executor in simulation, and reads the
-// recording from the run's store once it has stopped.
+// graph, runs it with hgraph's executor, in simulation or, in an integration
+// test, in real time (TST-17), and reads the recording from the run's store
+// once it has stopped.
 #pragma once
 
 #include <hglrt/capabilities.h>
 #include <hglrt/failure.h>
+#include <hglrt/host.h>
 #include <hglrt/scalar.h>
+#include <hglrt/temporal.h>
+#include <hglrt/traces.h>
 #include <hglrt/values.h>
 
 #include <hgraph/runtime/executor.h>
@@ -103,178 +87,24 @@ void raises(std::string_view code, Block&& block) {
     throw AssertionFailed("the block raised nothing, and `" + std::string{code} + "` was expected");
 }
 
-// ---- Traces (TST-4 to TST-7, CEVAL-2, CEVAL-4) ---------------------------
+// ---- Comparing traces (TST-4) ---------------------------------------------
 
-/// A trace written out dense, `[7, _, 9]` (TST-6): cell i is the publication
-/// i smallest steps after the run's start, and an empty cell, `_`, is none.
-/// A cell of a nullable `T?` that publishes null is a present
-/// `std::optional<T>` that holds nothing.
-template <class T>
-using Dense = std::vector<std::optional<T>>;
-
-/// The key of a timed trace's entry (TST-7): a duration from the run's start,
-/// or an instant.
-using TraceKey = std::variant<duration, datetime>;
-
-/// A trace written out timed, `[0s: 7, 2s: 9]` (TST-7): its publications in
-/// the order written, each with its key.
-template <class T>
-struct Timed {
-    std::vector<std::pair<TraceKey, T>> entries;
-};
-
-/// A recording as core's `record` keeps it, and as `replay` takes its items
-/// (CEVAL-2, CEVAL-4): each publication's instant and delta, in time order.
-/// The delta of a scalar is its value.
-template <class T>
-using Recorded = list<std::tuple<datetime, T>>;
-
-/// The trace of an eval (CEVAL-4): what its run recorded, and the instant
-/// the run started at, which its publications are read against.
-template <class T>
-struct Recording {
-    datetime start{};
-    Recorded<T> entries{};
-};
-
-/// The smallest step of time (CRUN-3): a microsecond, hgraph's `MIN_TD`.
-duration smallest_step() noexcept;
-
-namespace detail {
-/// Fails a timed trace whose keys do not strictly increase (TST-7). The
-/// catalogue's `trace.key_order` is a source rejection; a key known only as
-/// the program runs fails with no code.
-[[noreturn]] void unordered_keys();
-
-/// Fails a trace that would publish before its run's start (CEVAL-2).
-[[noreturn]] void before_start();
-
-/// The key `key` of a timed trace read against a run that started at
-/// `start`, where there is one: a duration from the start.
-TraceKey relative_key(const TraceKey& key, const std::optional<datetime>& start);
-
-/// Whether `earlier` is before `later`; fails where the two cannot be
-/// ordered, a duration and an instant read against no run.
-bool before(const TraceKey& earlier, const TraceKey& later);
-
-/// A trace as its publications, each with its key: a duration from the
-/// run's start where there is one to read it against. A dense trace's empty
-/// cells are no publication.
-template <class T>
-std::vector<std::pair<TraceKey, const T*>> relative(const Dense<T>& trace, const std::optional<datetime>&) {
-    std::vector<std::pair<TraceKey, const T*>> out;
-    for (std::size_t position = 0; position < trace.size(); ++position) {
-        if (trace[position].has_value()) {
-            out.emplace_back(smallest_step() * static_cast<i64>(position), &*trace[position]);
-        }
-    }
-    return out;
-}
-
-template <class T>
-std::vector<std::pair<TraceKey, const T*>> relative(const Timed<T>& trace,
-                                                    const std::optional<datetime>& start) {
-    std::vector<std::pair<TraceKey, const T*>> out;
-    for (const auto& [key, value] : trace.entries) {
-        TraceKey after = relative_key(key, start);
-        if (!out.empty() && !before(out.back().first, after)) {
-            unordered_keys();
-        }
-        out.emplace_back(std::move(after), &value);
-    }
-    return out;
-}
-
-template <class T>
-std::vector<std::pair<TraceKey, const T*>> relative(const Recording<T>& trace,
-                                                    const std::optional<datetime>&) {
-    std::vector<std::pair<TraceKey, const T*>> out;
-    for (const auto& [at, value] : trace.entries) {
-        out.emplace_back(at - trace.start, &value);
-    }
-    return out;
-}
-
-template <class T>
-std::optional<datetime> start_of(const Recording<T>& trace) {
-    return trace.start;
-}
-template <class Trace>
-std::optional<datetime> start_of(const Trace&) {
-    return std::nullopt;
-}
-
-template <class Trace>
-struct cell_of;
-template <class T>
-struct cell_of<Dense<T>> {
-    using type = T;
-};
-template <class T>
-struct cell_of<Timed<T>> {
-    using type = T;
-};
-template <class T>
-struct cell_of<Recording<T>> {
-    using type = T;
-};
-} // namespace detail
-
-/// Whether two traces are the same (TST-4): they have the same publications,
-/// each as long after its run's start as the other's, and equal by the
-/// language's equality (OPS-2: a NaN is equal to nothing). "Trailing
-/// placeholders have no effect" (TST-6). A timed trace's instants are read
-/// against the run the other trace is of, where it is one.
+/// `assert left == right` of two traces (TST-4): fails the test where they
+/// differ, saying where they first do and what each has there.
 template <class Left, class Right>
-bool same(const Left& left, const Right& right) {
-    using T = typename detail::cell_of<Left>::type;
-    static_assert(std::is_same_v<T, typename detail::cell_of<Right>::type>,
-                  "hglrt::testing::same: two traces of one type");
-    std::optional<datetime> start = detail::start_of(left);
-    if (!start.has_value()) {
-        start = detail::start_of(right);
+void expect_same(const Left& left, const Right& right) {
+    if (std::optional<std::string> differs = difference(left, right); differs.has_value()) {
+        throw AssertionFailed(*differs);
     }
-    const auto ours = detail::relative(left, start);
-    const auto theirs = detail::relative(right, start);
-    if (ours.size() != theirs.size()) {
-        return false;
-    }
-    for (std::size_t index = 0; index < ours.size(); ++index) {
-        if (ours[index].first != theirs[index].first ||
-            !eq__T_T(*ours[index].second, *theirs[index].second)) {
-            return false;
-        }
-    }
-    return true;
 }
 
-/// The items core's `replay` is given for the dense trace `trace` of a run
-/// that starts at `start` (CEVAL-2): "dense position i is the start plus i
-/// smallest steps. A dense placeholder locates any later entries and adds no
-/// replay entry or run bound."
-template <class T>
-Recorded<T> replay_items(const Dense<T>& trace, datetime start) {
-    Recorded<T> items;
-    for (const auto& [key, value] : detail::relative(trace, start)) {
-        items.emplace_back(add__datetime_duration(start, std::get<duration>(key)), *value);
+/// `assert left != right` of two traces (TST-4): fails the test where they
+/// are the same.
+template <class Left, class Right>
+void expect_different(const Left& left, const Right& right) {
+    if (!difference(left, right).has_value()) {
+        throw AssertionFailed("the two traces are the same");
     }
-    return items;
-}
-
-/// The items `replay` is given for the timed trace `trace` (CEVAL-2, TST-7):
-/// each entry at its instant, a duration key from the start. Its keys
-/// strictly increase, and none is before the start.
-template <class T>
-Recorded<T> replay_items(const Timed<T>& trace, datetime start) {
-    Recorded<T> items;
-    for (const auto& [key, value] : detail::relative(trace, start)) {
-        const duration after = std::get<duration>(key);
-        if (after < duration::zero()) {
-            detail::before_start();
-        }
-        items.emplace_back(add__datetime_duration(start, after), *value);
-    }
-    return items;
 }
 
 // ---- Runs (CRUN-1 to CRUN-8, CEVAL-1, CEVAL-6) ---------------------------
@@ -282,10 +112,10 @@ Recorded<T> replay_items(const Timed<T>& trace, datetime start) {
 /// The key a run's recording is put under (CRUN-8).
 inline constexpr std::string_view run_output = "run.output";
 
-/// The earliest start (CRUN-3): "one smallest step after
-/// `1970-01-01T00:00:00Z`", hgraph's `MIN_ST`, which a simulation of hgraph
-/// runs from.
-datetime earliest_start() noexcept;
+/// How a run keeps time (RUN-3): a simulation's cycles are at the times its
+/// nodes ask for, one after the other; a run in real time, an integration
+/// test's `run(call, config)` (TST-17), is at the host clock's.
+enum class Mode { simulation, real_time };
 
 /// The bounds a run's configuration, core's `RunConfig`, gives it (CRUN-2):
 /// each null where the configuration gives none.
@@ -295,13 +125,14 @@ struct Bounds {
     std::optional<duration> length{};
 };
 
-/// The start a run in simulation has, and the end its bounds give it, none
+/// The start a run of `mode` has, and the end its bounds give it, none
 /// where they give none (CRUN-2: "A null `start` is the earliest start in
-/// simulation ... `length` gives the end counted from the start the run has
-/// ... A `RunConfig` with both an `end` and a `length` is refused before the
-/// run's graph is built, an HGL error with code `run.end_and_length`").
-/// A start before the earliest start fails.
-std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds);
+/// simulation and the host clock's present time in real time. ... `length`
+/// gives the end counted from the start the run has ... A `RunConfig` with
+/// both an `end` and a `length` is refused before the run's graph is built,
+/// an HGL error with code `run.end_and_length`"). A start before the
+/// earliest start fails.
+std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds, Mode mode = Mode::simulation);
 
 /// What wires a run's entry: given the run's graph and the instant it
 /// starts at, it wires the entry's nodes, core's `record` among them.
@@ -344,54 +175,80 @@ class Run {
     std::optional<hgraph::GraphExecutorValue> executor_;
 };
 
-/// Runs the entry `entry` in simulation within `bounds` (CRUN-1: "It builds
-/// the entry's graph, starts it, evaluates zero or more cycles, and stops it,
-/// once each"; CRUN-2: "`start` is inclusive and `end` exclusive"). A run
-/// whose end is not after its start runs no cycle, and its graph is not
-/// built; its entry is still wired, so that what the entry checks as it is
-/// wired, the traces it replays, is checked. A failure of the run escapes,
-/// as hgraph gives it.
-Run run(const Entry& entry, const Bounds& bounds = {});
+/// Runs the entry `entry` within `bounds`, in simulation or in real time
+/// (CRUN-1: "It builds the entry's graph, starts it, evaluates zero or more
+/// cycles, and stops it, once each"; CRUN-2: "`start` is inclusive and `end`
+/// exclusive"). A run whose end is not after its start runs no cycle, and
+/// its graph is not built; its entry is still wired, so that what the entry
+/// checks as it is wired, the traces it replays, is checked. A run of a test
+/// whose time limit has passed (TST-17, host.h) is stopped, at once where it
+/// starts after the limit, and ends as it does at its end. A failure of the
+/// run escapes, as hgraph gives it.
+Run run(const Entry& entry, const Bounds& bounds = {}, Mode mode = Mode::simulation);
 
-/// The recording that the run `ran` put under `"run.output"` (CEVAL-4).
-/// CEVAL-6: "A failed run or a missing recording makes eval fail."
+/// The recording that the run `ran` put under `"run.output"`, of a result
+/// whose type is `T` (CEVAL-4). CEVAL-6: "A failed run or a missing
+/// recording makes eval fail."
 template <class T>
 Recording<T> recording(const Run& ran) {
     if (!ran.has(run_output)) {
         fail_uncoded("the run stopped with no recording");
     }
-    return Recording<T>{ran.start(), ran.get<Recorded<T>>(run_output)};
+    return Recording<T>{ran.start(), ran.get<Recorded<delta_t<T>>>(run_output)};
 }
 
-/// `eval(...)` (CEVAL-1): the run of the entry `entry` within `bounds`, and
-/// the trace it recorded.
+namespace detail {
+/// Where the values the result of the eval of a `T` under way held are kept,
+/// on the thread the eval runs on; none outside an eval.
 template <class T>
-Recording<T> evaluate(const Entry& entry, const Bounds& bounds = {}) {
-    const Run ran = run(entry, bounds);
-    if (!ran.built()) {
-        // CEVAL-4: the recording starts empty, and no cycle added to it.
-        return Recording<T>{ran.start(), {}};
+inline thread_local Held<T>* holding = nullptr;
+
+/// Keeps the values held in `held` while it lives.
+template <class T>
+class Holding {
+  public:
+    explicit Holding(Held<T>& held) : before_(holding<T>) { holding<T> = &held; }
+    ~Holding() { holding<T> = before_; }
+    Holding(const Holding&) = delete;
+    Holding& operator=(const Holding&) = delete;
+
+  private:
+    Held<T>* before_;
+};
+} // namespace detail
+
+/// Keeps `value`, the value the result of the eval under way holds once it
+/// has published at `at`, or none where a part of it is not valid. The entry
+/// of an eval whose result's delta is no T, a tuple's or a list's, wires a
+/// node that calls this for each publication of the result, so that a cell
+/// written whole is compared with it (TST-5: "one written as a T [is
+/// compared] with the value the result holds once its cycle has
+/// published").
+template <class T>
+void hold(datetime at, std::optional<T> value) {
+    if (detail::holding<T> != nullptr) {
+        detail::holding<T>->emplace_back(at, std::move(value));
     }
-    return recording<T>(ran);
 }
 
-// ---- The host ------------------------------------------------------------
-
-/// A test's body, as the compiler writes it.
-using Body = void (*)();
-
-/// Registers the test `body` under `name`, `module.path::name` (TST-15),
-/// for `main` to run: the compiler writes one, at namespace scope, for each
-/// test of the module.
-class Registration {
-  public:
-    Registration(std::string_view name, Body body);
-};
-
-/// The `main` of an executable of tests: `argv` is the executable, the
-/// results file, and the name of each test to run, in the order to run
-/// them. Gives 0 once the results are written, and 2 where the command
-/// line is not that or the results file cannot be written.
-int main(int argc, char** argv);
+/// `eval(...)` (CEVAL-1) of a target whose result is a T: the run of the
+/// entry `entry` within `bounds`, and the trace it recorded, with the values
+/// the result held where the entry gave them (`hold`).
+template <class T>
+Recording<T> evaluate(const Entry& entry, const Bounds& bounds = {}, Mode mode = Mode::simulation) {
+    Held<T> held;
+    Recording<T> out;
+    {
+        const detail::Holding<T> keeping(held);
+        const Run ran = run(entry, bounds, mode);
+        // CEVAL-4: with no cycle the recording starts empty, and none added
+        // to it.
+        out = ran.built() ? recording<T>(ran) : Recording<T>{ran.start(), {}};
+    }
+    if (!held.empty()) {
+        out.held = std::move(held);
+    }
+    return out;
+}
 
 } // namespace hglrt::testing

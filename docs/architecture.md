@@ -2213,36 +2213,59 @@ code uses.
 | Header (`include/hglrt/`) | Holds | Rules |
 | --- | --- | --- |
 | `hglrt.h` | The one header generated code includes: all below | |
-| `values.h` | HGL's scalars as hgraph's types (`i64`, `f64`, `str`, `datetime`, `duration`); `list<T>`, a `std::vector<T>` with a hash, registered with hgraph as an atomic | TYPE-1, TYPE-2, TYPE-4 |
+| `values.h` | HGL's scalars as hgraph's types (`i64`, `f64`, `bool`, `str`, `bytes`, `date`, `time`, `datetime`, `duration`, `civil_datetime`, `zoned_datetime`, `tenor`); `list<T>`, a `std::vector<T>` with a hash, registered with hgraph as an atomic; `delta_t<T>`, a scalar's, a nullable's, a tuple's and a list's delta (`list_delta`) | TYPE-1, TYPE-2, TYPE-4, TYPE-16 |
 | `failure.h` | `error` (hgraph's `CanonicalError`), `result<T>` (`std::expected`); `Failure`, hgraph's `ExecutionFailure` with the place it was raised at; `fail`, `fail_uncoded`, `raise`; the catalogued codes it raises | ERR-1, ERR-2, ERR-4, ERR-5, ERR-8 |
 | `checked.h` | Reads checked when they run: `unset_read`, `checked_value`, `checked_result`, `item` | TIME-1, ERR-14, EXPR-3 |
-| `scalar.h` | 28 of core's native scalar operators: checked `i64` arithmetic, `f64` arithmetic and division under each zero policy, exact numeric equality with tolerances, order, the Boolean forms, and `datetime + duration` | NUM-1 to NUM-12, OPS-2, OPS-5, OPS-10 |
+| `scalar.h` | Core's natives of numbers and the ordered types: checked `i64` arithmetic, `f64` and mixed arithmetic, every division of numbers under each zero policy, exact numeric equality with tolerances, order and `compare_`, the Boolean forms; core's `ZeroPolicy` and `CmpResult` | NUM-1 to NUM-12, OPS-2, OPS-3, OPS-5 |
+| `temporal.h` | Core's natives of durations and instants: a duration's arithmetic, rounded and checked; a `datetime`, `civil_datetime`, `date` or `zoned_datetime` moved by a duration, and the duration between two; `date + time`; zoned equality | OPS-1, OPS-2, OPS-10, NUM-12 |
+| `text.h` | Core's natives of `str`: concatenation and repetition | OPS-1 |
+| `conversions.h` | Every `convert` of core's: those that cannot fail, and those that can under `invalid`; core's `Rounding` and `InvalidPolicy` | OPS-4, OPS-6 to OPS-8 |
+| `tenors.h` | Core's natives of `tenor`, which is hgraph's `Tenor` (counts and form alone): its arithmetic, order and text, and the parts core's calendar candidates use, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-9 |
 | `lists.h`, `capabilities.h` | `append`, `extend`; the global store's `get`, `has`, `put` | LIST-1 to LIST-3, CAP-6 |
 | `sources.h` | `constant`, a node that publishes a value once at the start; `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
-| `testing.h` | The test host: registration and `main`, `check`, `raises`, traces and their comparison, a run and its recording | TST-2 to TST-15, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
+| `host.h` | What the entry unit of a test executable needs, and no hgraph header: registration and `main`, which holds a test to its time limit | TST-14, TST-15, TST-17 |
+| `traces.h` | Traces, dense and timed, of scalars, nullables, tuples and lists, each cell whole or a delta; their comparison and where two first differ; replay items and what a `const fn` is given; the text of a value | TST-4 to TST-7, TST-9, TST-16, CEVAL-2 |
+| `testing.h` | The rest of the test host: `check`, `raises`, `expect_same`, a run in simulation or in real time, its recording, and the values its result held | TST-2 to TST-11, TST-17, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
 
-A native is a function named as the Python target names the candidate:
-the operator's name and the type of each parameter, `add__i64_i64`. One
-with a generic type parameter is a template the generated code instances,
-`lt__T_T<i64>`; one with a generic value parameter takes it as a template
-argument, `div__f64_f64<ZeroPolicy::ieee>`. One that can fail takes the
-place it is called from, a defaulted `std::source_location`, which its
-failure carries: the HGL file and line where the generated code sets them
-with `#line`. hgraph keeps that place for a failure of `start` or `stop`,
-which it nests; one of an evaluation it throws again as a new
-`ExecutionFailure`, which has none.
+A native is a function named as the emitter names the candidate
+(`hgl_cpp`, `names::native_candidate`): the operator's name and the type
+of each parameter, `add__i64_i64`. One with a generic type parameter is a
+template the generated code instances, `lt__T_T<i64>`; one with a generic
+value parameter takes it as a template argument,
+`div__f64_f64<ZeroPolicy::ieee>`, and so do the candidates that differ in
+it alone and in what they give. The candidates of `convert` that take one
+type and give different ones share a name, `convert_i64`, which is a
+template whose first argument is the type converted to,
+`convert_i64<f64>`, the `T` of `convert<T>(value)`; one that can fail
+takes `invalid` after it, `convert_str<i64, InvalidPolicy::fail>`. Core's
+enums that the natives take or give (`ZeroPolicy`, `CmpResult`,
+`Rounding`, `InvalidPolicy`) are the library's, their members in core's
+order. One that can fail takes the place it is called from, a defaulted
+`std::source_location`, which its failure carries: the HGL file and line
+where the generated code sets them with `#line`. hgraph keeps that place
+for a failure of `start` or `stop`, which it nests; one of an evaluation
+it throws again as a new `ExecutionFailure`, which has none. A zoned
+datetime moved by a duration takes its zone's offset from hgraph's
+time-zone provider for the process, as hgraph's own codecs do: a value
+function is given no run's store, which a provider of the run's would be
+in.
 
 A list is `hglrt::list<T>` and not a bare `std::vector<T>` because hgraph
 hashes a value it holds as configuration, a source's items, through
 `std::hash`, which no program may give a `std::vector`.
 
 An executable of a module's tests calls `hglrt::testing::main` from its
-own `main`: `EXECUTABLE RESULTS NAME...` runs the tests named, in order, and
+own `main`: `EXECUTABLE RESULTS TEST...` runs the tests named, in order, and
 writes RESULTS in the form `support/run_tests.py` writes for the Python
 target (`start N`, `passed N`, `failed N LINE TEXT`, `unloaded N TEXT`),
 so that the runner reads both with one reader. `LINE` is the line of the
-last statement the test marked with `statement()`. A test runs to its end:
-the time limit of an integration test comes with runs in real time.
+last statement the test marked with `statement()`. A test held to a time
+limit (TST-17) is named `NAME@MICROSECONDS`: it runs on a thread of its
+own, and at its limit its runs are asked to stop, as a host stops a run in
+real time, and it has failed; one that has not ended five seconds later
+ends the process, with the status 3. Its entry unit includes `host.h`
+alone, which compiles in 0.06 s where `hglrt.h` through the precompiled
+header takes 0.86 s (GCC 15, `-O0`).
 
 Built with CMake, once for each SDK. A build is given:
 

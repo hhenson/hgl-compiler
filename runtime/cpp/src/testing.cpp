@@ -1,70 +1,24 @@
-// The test host (testing.h).
+// The test host's assertions, traces and runs (testing.h, traces.h).
+#include "host_state.h"
 #include "nested.h"
 
+#include <hglrt/conversions.h>
 #include <hglrt/testing.h>
 
 #include <hgraph/runtime/graph.h>
+#include <hgraph/runtime/lifecycle_observer.h>
 
+#include <chrono>
 #include <cstdint>
-#include <cstdio>
 #include <format>
-#include <functional>
-#include <map>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
 #include <string>
 
 namespace hglrt::testing {
 
-namespace {
-
-/// The line of the last statement marked in the running test (`statement`),
-/// 0 before the first. Tests run one at a time, on the thread of `main`.
-thread_local std::uint_least32_t running_line = 0;
-
-/// The registered tests, by name.
-std::map<std::string, Body, std::less<>>& registered() {
-    static std::map<std::string, Body, std::less<>> tests;
-    return tests;
-}
-
-/// `text` as one line of the results file: a backslash, a line feed and a
-/// carriage return as `\\`, `\n` and `\r`, as the runner reads them.
-std::string escaped(std::string_view text) {
-    std::string out;
-    out.reserve(text.size());
-    for (const char character : text) {
-        switch (character) {
-        case '\\':
-            out += "\\\\";
-            break;
-        case '\n':
-            out += "\\n";
-            break;
-        case '\r':
-            out += "\\r";
-            break;
-        default:
-            out += character;
-        }
-    }
-    return out;
-}
-
-/// What became of a test, as the line under it says (TST-14): an
-/// assertion's failure as it says, and any other failure as `describe`
-/// gives it.
-std::string described(const std::exception_ptr& failure) {
-    try {
-        std::rethrow_exception(failure);
-    } catch (const AssertionFailed& assertion) {
-        return assertion.what();
-    } catch (const std::exception& other) {
-        return describe(other);
-    } catch (...) {
-        return "an exception that is no std::exception";
-    }
-}
-
-} // namespace
+std::atomic<std::uint_least32_t> detail::running_line{0};
 
 // ---- Assertions --------------------------------------------------------------
 
@@ -75,7 +29,7 @@ void check(bool holds) {
 }
 
 void statement(std::source_location where) noexcept {
-    running_line = where.line();
+    detail::running_line = where.line();
 }
 
 std::optional<std::string> detail::escaping_code(const std::exception_ptr& failure) {
@@ -99,6 +53,18 @@ std::optional<std::string> detail::escaping_code(const std::exception_ptr& failu
     }
 }
 
+std::string detail::described(const std::exception_ptr& failure) {
+    try {
+        std::rethrow_exception(failure);
+    } catch (const AssertionFailed& assertion) {
+        return assertion.what();
+    } catch (const std::exception& other) {
+        return describe(other);
+    } catch (...) {
+        return "an exception that is no std::exception";
+    }
+}
+
 std::string detail::refused(std::string_view code, const std::exception_ptr& failure) {
     return std::format("the block raised {}, and `{}` was expected", described(failure), code);
 }
@@ -109,12 +75,22 @@ duration smallest_step() noexcept {
     return hgraph::MIN_TD;
 }
 
+datetime earliest_start() noexcept {
+    return hgraph::MIN_ST;
+}
+
 void detail::unordered_keys() {
     fail_uncoded("the keys of a timed trace must strictly increase");
 }
 
 void detail::before_start() {
     fail_uncoded("a timed trace has a key before the run's start");
+}
+
+void detail::nothing_held() {
+    throw std::logic_error(
+        "hglrt: a cell written whole is compared with an eval whose entry kept no value its "
+        "result held (hglrt::testing::hold)");
 }
 
 TraceKey detail::relative_key(const TraceKey& key, const std::optional<datetime>& start) {
@@ -131,17 +107,213 @@ bool detail::before(const TraceKey& earlier, const TraceKey& later) {
     return earlier < later;
 }
 
-// ---- Runs ----------------------------------------------------------------------
-
-datetime earliest_start() noexcept {
-    return hgraph::MIN_ST;
+std::string detail::key_text(const TraceKey& key) {
+    if (const duration* after = std::get_if<duration>(&key)) {
+        return scalar_text(*after) + " from the start";
+    }
+    return scalar_text(std::get<datetime>(key));
 }
 
-std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds) {
+namespace {
+
+/// A time of day of `microseconds` from midnight: `09:30`, `09:30:05`,
+/// `09:30:05.25`, as the language writes one (LEX-11).
+std::string clock_text(std::int64_t microseconds) {
+    const std::int64_t minutes = microseconds / 60'000'000;
+    const std::int64_t rest = microseconds % 60'000'000;
+    std::string text = std::format("{:02}:{:02}", minutes / 60, minutes % 60);
+    if (rest != 0) {
+        text += std::format(":{:02}", rest / 1'000'000);
+        if (const std::int64_t fraction = rest % 1'000'000; fraction != 0) {
+            std::string digits = std::format("{:06}", fraction);
+            digits.erase(digits.find_last_not_of('0') + 1);
+            text += "." + digits;
+        }
+    }
+    return text;
+}
+
+/// A day and the microseconds into it of the count `microseconds` from the
+/// epoch, as the language writes a date and a time: `2026-09-03T09:30`.
+std::string day_and_clock_text(std::int64_t microseconds) {
+    const std::int64_t day = 86'400'000'000;
+    std::int64_t days = microseconds / day;
+    std::int64_t into = microseconds % day;
+    if (into < 0) {
+        into += day;
+        --days;
+    }
+    const std::chrono::year_month_day calendar{std::chrono::sys_days{std::chrono::days{days}}};
+    return std::format("{:%F}T{}", calendar, clock_text(into));
+}
+
+} // namespace
+
+std::string detail::scalar_text(i64 value) {
+    return hglrt::detail::text_of(value);
+}
+
+std::string detail::scalar_text(f64 value) {
+    return hglrt::detail::text_of(value);
+}
+
+std::string detail::scalar_text(bool value) {
+    return value ? "true" : "false";
+}
+
+std::string detail::scalar_text(const str& value) {
+    std::string text = "\"";
+    for (const char character : value) {
+        const auto code = static_cast<unsigned char>(character);
+        switch (character) {
+        case '"':
+            text += "\\\"";
+            break;
+        case '\\':
+            text += "\\\\";
+            break;
+        case '\n':
+            text += "\\n";
+            break;
+        case '\t':
+            text += "\\t";
+            break;
+        case '\r':
+            text += "\\r";
+            break;
+        default:
+            if (code < 0x20 || code == 0x7f) {
+                text += std::format("\\u{{{:x}}}", code);
+            } else {
+                text += character;
+            }
+        }
+    }
+    return text + "\"";
+}
+
+std::string detail::scalar_text(const bytes& value) {
+    std::string text = "bytes(";
+    for (std::size_t at = 0; at < value.data.size(); ++at) {
+        text += std::format("{}{}", at == 0 ? "" : ", ", static_cast<unsigned char>(value.data[at]));
+    }
+    return text + ")";
+}
+
+std::string detail::scalar_text(date value) {
+    return std::format("@{:%F}", value);
+}
+
+std::string detail::scalar_text(time value) {
+    return "@" + clock_text(value.microseconds);
+}
+
+std::string detail::scalar_text(datetime value) {
+    return "@" + day_and_clock_text(value.time_since_epoch().count()) + "Z";
+}
+
+std::string detail::scalar_text(duration value) {
+    // In the largest unit that holds it whole (LEX-11: `d`, `h`, `m`, `s`,
+    // `ms`, `us`).
+    const std::int64_t count = value.count();
+    if (count == 0) {
+        return "0s";
+    }
+    constexpr std::pair<std::int64_t, std::string_view> units[] = {
+        {86'400'000'000, "d"}, {3'600'000'000, "h"}, {60'000'000, "m"}, {1'000'000, "s"}, {1'000, "ms"}};
+    for (const auto& [size, unit] : units) {
+        if (count % size == 0) {
+            return std::format("{}{}", count / size, unit);
+        }
+    }
+    return std::format("{}us", count);
+}
+
+std::string detail::scalar_text(const civil_datetime& value) {
+    return "@" + day_and_clock_text(value.epoch_microseconds());
+}
+
+std::string detail::scalar_text(const zoned_datetime& value) {
+    return "@" + hgraph::format_zoned_datetime(value);
+}
+
+std::string detail::scalar_text(const tenor& value) {
+    return hglrt::detail::tenor_text(value);
+}
+
+// ---- Runs ----------------------------------------------------------------------
+
+namespace {
+
+/// The runs of the test under way, which its host stops once its limit has
+/// passed (TST-17): the executor of the run under way, whether runs are
+/// watched, and whether they are to stop.
+struct Runs {
+    std::mutex mutex;
+    std::optional<hgraph::GraphExecutorView> under_way;
+    std::atomic<bool> watched{false};
+    std::atomic<bool> stopping{false};
+};
+
+Runs& runs() {
+    static Runs kept;
+    return kept;
+}
+
+/// Asks the run under way to stop, where runs are to stop.
+void stop_if_stopping() noexcept {
+    Runs& all = runs();
+    const std::lock_guard lock(all.mutex);
+    if (all.stopping && all.under_way.has_value()) {
+        all.under_way->request_stop();
+    }
+}
+
+/// Asks a run to stop as it starts, where runs are to stop: hgraph clears a
+/// stop asked for before a run's graph starts.
+class StopAtStart final : public hgraph::LifecycleObserver {
+  public:
+    void on_after_start_graph(const hgraph::GraphView&) override { stop_if_stopping(); }
+};
+
+/// The run of `executor` as the one under way while it lives.
+class UnderWay {
+  public:
+    explicit UnderWay(hgraph::GraphExecutorView executor) {
+        const std::lock_guard lock(runs().mutex);
+        runs().under_way.emplace(std::move(executor));
+    }
+    ~UnderWay() {
+        const std::lock_guard lock(runs().mutex);
+        runs().under_way.reset();
+    }
+    UnderWay(const UnderWay&) = delete;
+    UnderWay& operator=(const UnderWay&) = delete;
+};
+
+} // namespace
+
+void detail::runs_watched(bool watched) noexcept {
+    runs().watched = watched;
+}
+
+void detail::stop_runs() noexcept {
+    runs().stopping = true;
+    stop_if_stopping();
+}
+
+void detail::stops_withdrawn() noexcept {
+    runs().stopping = false;
+}
+
+std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds, Mode mode) {
     if (bounds.end.has_value() && bounds.length.has_value()) {
         fail(codes::end_and_length, "a run's configuration gives both an `end` and a `length`");
     }
-    const datetime start = bounds.start.value_or(earliest_start());
+    const datetime unstated = mode == Mode::simulation
+                                  ? earliest_start()
+                                  : std::chrono::floor<duration>(hgraph::engine_clock::now());
+    const datetime start = bounds.start.value_or(unstated);
     // CRUN-3 reserves the epoch itself for `never`.
     if (start < earliest_start()) {
         fail_uncoded("the run's start is before the earliest evaluation time");
@@ -166,73 +338,32 @@ hgraph::GlobalStateView Run::store() const {
     return executor_->view().graph().global_state();
 }
 
-Run run(const Entry& entry, const Bounds& bounds) {
-    const auto [start, end] = resolved(bounds);
+Run run(const Entry& entry, const Bounds& bounds, Mode mode) {
+    const auto [start, end] = resolved(bounds, mode);
     hgraph::Wiring wiring;
     entry(wiring, start);
     if (end.has_value() && *end <= start) {
         // hgraph has no run that ends where it starts, so none is made.
         return Run(start);
     }
+    // One for the process: an executor keeps its observers for as long as
+    // it lives, and a run's is kept for its store.
+    static StopAtStart stopper;
     hgraph::GraphExecutorBuilder builder;
     builder.graph_builder(std::move(wiring).finish())
-        .mode(hgraph::GraphExecutorMode::Simulation)
-        .start_time(start);
+        .mode(mode == Mode::simulation ? hgraph::GraphExecutorMode::Simulation
+                                       : hgraph::GraphExecutorMode::RealTime)
+        .start_time(start)
+        .add_lifecycle_observer(&stopper);
     if (end.has_value()) {
         builder.end_time(*end);
     }
     hgraph::GraphExecutorValue executor = builder.make_executor();
-    executor.view().run();
+    {
+        const UnderWay registered(executor.view());
+        executor.view().run();
+    }
     return Run(start, std::move(executor));
-}
-
-// ---- The host ------------------------------------------------------------------
-
-Registration::Registration(std::string_view name, Body body) {
-    registered().emplace(std::string{name}, body);
-}
-
-int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::fprintf(stderr, "usage: %s RESULTS NAME...\n", argc > 0 ? argv[0] : "tests");
-        return 2;
-    }
-    std::FILE* results = std::fopen(argv[1], "w");
-    if (results == nullptr) {
-        std::fprintf(stderr, "%s: the results file %s cannot be written\n", argv[0], argv[1]);
-        return 2;
-    }
-    bool written = true;
-    // Each line is flushed as it is written, so that what was recorded is
-    // there however the process ends.
-    const auto say = [&](const std::string& line) {
-        written = std::fputs(line.c_str(), results) >= 0 && std::fputc('\n', results) != EOF &&
-                  std::fflush(results) == 0 && written;
-    };
-    for (int position = 2; position < argc; ++position) {
-        const int number = position - 2;
-        const std::string_view name = argv[position];
-        say(std::format("start {}", number));
-        const auto found = registered().find(name);
-        if (found == registered().end()) {
-            say(std::format("unloaded {} {}", number,
-                            escaped(std::format("the program has no test `{}`", name))));
-            continue;
-        }
-        running_line = 0;
-        std::exception_ptr failure;
-        try {
-            found->second();
-        } catch (...) {
-            failure = std::current_exception();
-        }
-        if (failure == nullptr) {
-            say(std::format("passed {}", number));
-        } else {
-            say(std::format("failed {} {} {}", number, running_line, escaped(described(failure))));
-        }
-    }
-    return std::fclose(results) == 0 && written ? 0 : 2;
 }
 
 } // namespace hglrt::testing

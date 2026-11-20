@@ -124,14 +124,19 @@ the chapters' entries stay the hgraph target's.
 | Reads checked when they run: `value.unset_read`, or `err` of it where the place takes a result; an index outside a list | TIME-1, ERR-14, EXPR-3 | `checked.h` | `checked_tests.cpp` |
 | `add_`, `sub_`, `mul_`, `neg_`, `floordiv_`, `mod_` of `i64`, checked, with their zero policies | NUM-1, NUM-2, NUM-3, NUM-9, NUM-12 | `scalar.h` | `scalar_tests.cpp` |
 | `add_`, `sub_`, `mul_`, `neg_` of `f64`; `div_` of two `f64` and of two `i64` under each zero policy | NUM-1, NUM-2, NUM-3, NUM-9, NUM-12 | `scalar.h` | `scalar_tests.cpp` |
+| `add_`, `sub_`, `mul_` of an `i64` and an `f64`; `div_`, `floordiv_`, `mod_` of an `i64` and an `f64`, and `floordiv_`, `mod_` of two `f64`, under each zero policy, special values included | NUM-1, NUM-2, NUM-3, NUM-9, NUM-12 | `scalar.h` | `scalar_tests.cpp` |
 | `eq_`, `ne_` of `i64` and `i64`, `f64` and `f64`, `i64` and `f64`: exact, and within `abs` and `rel` | NUM-2, NUM-4, NUM-5 | `scalar.h` | `scalar_tests.cpp` |
-| `eq_<T>`, `ne_<T>`; `lt_<T>`, `le_<T>`, `gt_<T>`, `ge_<T>` | OPS-2, NUM-6 | `scalar.h` | `scalar_tests.cpp` |
-| `and_`, `or_`, `not_` | OPS-5 | `scalar.h` | `scalar_tests.cpp` |
-| `add_(datetime, duration)`, checked | OPS-1, OPS-10 | `scalar.h` | `scalar_tests.cpp` |
+| `eq_<T>`, `ne_<T>`; `lt_<T>`, `le_<T>`, `gt_<T>`, `ge_<T>`, `compare_<T>` of each ordered type; `lt_`, `le_`, `gt_`, `ge_`, `compare_` of an `i64` and an `f64`, exactly | OPS-2, OPS-3, NUM-2, NUM-6 | `scalar.h` | `scalar_tests.cpp`, `text_tests.cpp` |
+| `and_`, `or_`, `not_`, `all_`, `any_` | OPS-5 | `scalar.h` | `scalar_tests.cpp` |
+| A duration's `neg_`, `add_`, `sub_`, `mul_` by an `i64` or an `f64`, `div_` by a number or a duration under each zero policy it admits, and `floordiv_` of two: rounded to the microsecond, a tie to the even one, checked | OPS-1, OPS-10, NUM-12 | `temporal.h` | `temporal_tests.cpp` |
+| An instant moved by a duration, and the duration between two: `datetime`, `civil_datetime`, a `date` as a `civil_datetime`, a `zoned_datetime` in its zone; `date + time`; two zoned datetimes equal by instant and zone, or as UTC | OPS-1, OPS-2, OPS-10, TYPE-2 | `temporal.h` | `temporal_tests.cpp` |
+| `str` concatenation and repetition | OPS-1 | `text.h` | `text_tests.cpp` |
+| Every `convert` of the scalars: those that cannot fail, and those that can under `invalid`, with `rounding` and `nan` | OPS-4, OPS-6, OPS-7, OPS-8 | `conversions.h` | `conversion_tests.cpp` |
+| A tenor, hgraph's `Tenor`: its arithmetic, count by count and checked; its order and `compare_`; its text; and the parts core's calendar candidates are written with, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-6, TEN-8, TEN-9 | `tenors.h` | `tenor_tests.cpp` |
 | `append`, `extend` | LIST-1, LIST-2, LIST-3 | `lists.h` | `capabilities_tests.cpp` |
 | `get`, `has`, `put` of the global store | CAP-6 | `capabilities.h` | `capabilities_tests.cpp` |
 | A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
-| Tests registered by name and run as named; `assert`; `assert raises` | TST-2, TST-10, TST-11, TST-15 | `testing.h` | `testing_tests.cpp` |
-| Traces written dense and timed, and their comparison; a trace replayed to an input | TST-4, TST-6, TST-7, CEVAL-2 | `testing.h` | `testing_tests.cpp` |
-| A run's bounds, the run in simulation, its store and its recording; an eval and its failure | CRUN-1, CRUN-2, CRUN-3, CRUN-7, CRUN-8, CEVAL-1, CEVAL-4, CEVAL-5, CEVAL-6 | `testing.h` | `testing_tests.cpp`, `sources_tests.cpp` |
+| Tests registered by name and run as named, from an entry unit that includes no hgraph header; `assert`; `assert raises`; a test held to a time limit, failed once past it and its runs stopped | TST-2, TST-10, TST-11, TST-15, TST-17 | `host.h`, `testing.h` | `testing_tests.cpp` |
+| Traces of scalars, nullables, tuples and lists, written dense and timed, each cell whole or a delta; their comparison with an eval's recording and the values its result held, and where two first differ; what one written out replays to an input and gives a `const fn` | TST-4, TST-5, TST-6, TST-7, TST-9, TST-16, CEVAL-2, TYPE-16 | `traces.h`, `testing.h` | `traces_tests.cpp`, `testing_tests.cpp` |
+| A run's bounds, the run in simulation and in real time, its store and its recording; an eval and its failure | CRUN-1, CRUN-2, CRUN-3, CRUN-7, CRUN-8, CEVAL-1, CEVAL-4, CEVAL-5, CEVAL-6, RUN-3 | `testing.h` | `testing_tests.cpp`, `sources_tests.cpp` |

@@ -10,6 +10,7 @@
 
 #include <hglrt/failure.h>
 #include <hglrt/scalar.h>
+#include <hglrt/temporal.h>
 #include <hglrt/values.h>
 
 #include <hgraph/types/graph_wiring.h>

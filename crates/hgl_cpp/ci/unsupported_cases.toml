@@ -167,60 +167,17 @@
     "core_implementation::repeated_invalidation_is_silent",
     "core_implementation::unconfigured_arithmetic_uses_lifting",
 ]
-"the candidate `add_(date, duration)`" = [
-    "core_implementation::reverse_instant_addition",
-]
-"the candidate `add_(date, time)`" = [
-    "core_implementation::reverse_date_time_addition",
-]
-"the candidate `add_(i64, f64)`" = [
-    "core_implementation::mixed_numeric_arithmetic",
-]
-"the candidate `convert(f64)`" = [
-    "core_implementation::an_f64_is_written_as_the_shortest_text_that_reads_back",
-]
-"the candidate `convert(f64, Rounding, i64?)`" = [
-    "core_implementation::an_f64_is_rounded_as_asked",
-    "core_implementation::an_f64_that_is_no_i64_fails",
-]
-"the candidate `convert(i64)`" = [
-    "core_implementation::a_number_is_a_flag_and_back",
-    "core_implementation::an_integer_and_a_flag_are_written",
-]
-"the candidate `convert(str)`" = [
-    "core_implementation::text_is_read_as_a_float",
-    "core_implementation::text_is_read_as_an_integer",
-    "core_implementation::the_other_conversions",
-]
-"the candidate `convert(tenor)`" = [
-    "core_implementation::a_tenors_text_has_its_largest_units",
-]
-"the candidate `eq_(zoned_datetime, zoned_datetime, bool)`" = [
-    "core_implementation::a_duration_moves_a_zoned_instant",
-    "core_implementation::zoned_datetimes_are_equal_by_instant_and_zone",
-    "core_implementation::zoned_datetimes_compared_as_utc_are_equal_by_instant",
-]
-"the candidate `lt_(tenor, tenor)`" = [
-    "core_implementation::the_order_is_count_by_count",
-]
-"the candidate `mul_(duration, i64)`" = [
-    "core_implementation::reverse_scaling",
-]
-"the candidate `sub_(datetime, duration)`" = [
-    "conformance::skipped_targets_still_establish_source_order",
-]
 "the type `Closed`" = [
     "core_implementation::a_calendar_says_what_a_business_day_is",
+    "core_implementation::a_rule_rolls_to_a_business_day",
 ]
 "the type `RunConfig`" = [
     "conformance::absolute_targets_before_at_and_after_start",
+    "conformance::skipped_targets_still_establish_source_order",
 ]
-"the type `tenor`" = [
-    "core_implementation::a_rule_rolls_to_a_business_day",
-    "core_implementation::a_tenor_is_its_counts",
+"the type `Weekdays`" = [
     "core_implementation::business_days_start_from_a_business_day",
     "core_implementation::months_end_at_the_months_last_day",
-    "core_implementation::the_two_forms_have_no_sum",
 ]
 "this expression" = [
     "conformance::a_wake_stays_due_after_a_reset_inside_it",
