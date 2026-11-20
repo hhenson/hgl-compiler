@@ -37,10 +37,10 @@
 namespace hgl::demo::references::m_
 {
 
-namespace n_
+namespace n_::pick
 {
 // pick(flag: bool, ref low: i64, ref high: i64) -> ref i64 (node), module demo.references, line 9
-struct pick
+struct impl_
 {
     static constexpr auto name = "demo.references::pick";
 
@@ -59,20 +59,20 @@ struct pick
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::pick
 namespace w_
 {
 // pick(flag: bool, ref low: i64, ref high: i64) -> ref i64 (node), module demo.references, line 9
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> pick(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
 {
-    return ::hgraph::wire<::hgl::demo::references::m_::n_::pick>(wiring_, flag, low, high).as<::hgraph::TS<::hgraph::Int>>();
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::pick::impl_>(wiring_, flag, low, high).as<::hgraph::TS<::hgraph::Int>>();
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::follow
 {
 // follow(item: i64) -> i64 (node), module demo.references, line 17
-struct follow
+struct impl_
 {
     static constexpr auto name = "demo.references::follow";
 
@@ -85,40 +85,40 @@ struct follow
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::follow
 namespace w_
 {
 // follow(item: i64) -> i64 (node), module demo.references, line 17
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> follow(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> item)
 {
-    return ::hgraph::wire<::hgl::demo::references::m_::n_::follow>(wiring_, item);
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::follow::impl_>(wiring_, item);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::picked
 {
 // picked(flag: bool, low: i64, high: i64) -> i64 (graph), module demo.references, line 21
-struct picked
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
     {
         return ::hgl::demo::references::m_::w_::follow(wiring_, ::hgl::demo::references::m_::w_::pick(wiring_, flag, low, high));
     }
 };
-}  // namespace n_
+}  // namespace n_::picked
 namespace w_
 {
 // picked(flag: bool, low: i64, high: i64) -> i64 (graph), module demo.references, line 21
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> picked(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
 {
-    return ::hgl::demo::references::m_::n_::picked::compose(wiring_, flag, low, high);
+    return ::hgl::demo::references::m_::n_::picked::impl_::compose(wiring_, flag, low, high);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::present
 {
 // present(probe: bool, ref target: i64) -> i64 (node), module demo.references, line 37
-struct present
+struct impl_
 {
     static constexpr auto name = "demo.references::present";
 
@@ -158,17 +158,17 @@ struct present
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::present
 }  // namespace hgl::demo::references::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::references::m_::n_::present::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::references::m_::n_::present::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::references::m_::n_::present::state_type_>("hgl:demo.references::present.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::references::m_::n_::present::impl_::state_type_>("hgl:demo.references::present.state");
     }
 };
 
@@ -179,34 +179,34 @@ namespace w_
 // present(probe: bool, ref target: i64) -> i64 (node), module demo.references, line 37
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> present(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> target)
 {
-    return ::hgraph::wire<::hgl::demo::references::m_::n_::present>(wiring_, probe, target);
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::present::impl_>(wiring_, probe, target);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::sample_picked
 {
 // sample_picked(take: bool, flag: bool, low: i64, high: i64) -> i64 (graph), module demo.references, line 55
-struct sample_picked
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
     {
         return ::hgl::demo::references::m_::w_::follow(wiring_, ::hgl::demo::references::m_::w_::i_::sampled::of_i64(wiring_, take, ::hgl::demo::references::m_::w_::pick(wiring_, flag, low, high)));
     }
 };
-}  // namespace n_
+}  // namespace n_::sample_picked
 namespace w_
 {
 // sample_picked(take: bool, flag: bool, low: i64, high: i64) -> i64 (graph), module demo.references, line 55
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> sample_picked(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
 {
-    return ::hgl::demo::references::m_::n_::sample_picked::compose(wiring_, take, flag, low, high);
+    return ::hgl::demo::references::m_::n_::sample_picked::impl_::compose(wiring_, take, flag, low, high);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::choose
 {
 // choose(flag: i64, low: i64, high: i64) -> ref i64 (node), module demo.references, line 70
-struct choose
+struct impl_
 {
     static constexpr auto name = "demo.references::choose";
 
@@ -263,17 +263,17 @@ struct choose
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::choose
 }  // namespace hgl::demo::references::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::references::m_::n_::choose::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::references::m_::n_::choose::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::references::m_::n_::choose::state_type_>("hgl:demo.references::choose.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::references::m_::n_::choose::impl_::state_type_>("hgl:demo.references::choose.state");
     }
 };
 
@@ -284,34 +284,34 @@ namespace w_
 // choose(flag: i64, low: i64, high: i64) -> ref i64 (node), module demo.references, line 70
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> choose(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
 {
-    return ::hgraph::wire<::hgl::demo::references::m_::n_::choose>(wiring_, flag, low, high, low, high).as<::hgraph::TS<::hgraph::Int>>();
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::choose::impl_>(wiring_, flag, low, high, low, high).as<::hgraph::TS<::hgraph::Int>>();
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::chosen
 {
 // chosen(flag: i64, sel: bool, a: i64, b: i64, high: i64) -> i64 (graph), module demo.references, line 79
-struct chosen
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> flag, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> sel, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> a, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> b, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
     {
         return ::hgl::demo::references::m_::w_::follow(wiring_, ::hgl::demo::references::m_::w_::choose(wiring_, flag, ::hgl::demo::references::m_::w_::pick(wiring_, sel, a, b), high));
     }
 };
-}  // namespace n_
+}  // namespace n_::chosen
 namespace w_
 {
 // chosen(flag: i64, sel: bool, a: i64, b: i64, high: i64) -> i64 (graph), module demo.references, line 79
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> chosen(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> sel, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> a, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> b, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
 {
-    return ::hgl::demo::references::m_::n_::chosen::compose(wiring_, flag, sel, a, b, high);
+    return ::hgl::demo::references::m_::n_::chosen::impl_::compose(wiring_, flag, sel, a, b, high);
 }
 }  // namespace w_
 
-namespace n_::i_::sampled
+namespace n_::i_::sampled::of_i64
 {
 // sampled(take: bool, ref target: i64) -> ref i64 (node), the instance `i64`, module demo.references, line 51
-struct of_i64
+struct impl_
 {
     static constexpr auto name = "demo.references::sampled[i64]";
 
@@ -325,13 +325,13 @@ struct of_i64
         }
     }
 };
-}  // namespace n_::i_::sampled
+}  // namespace n_::i_::sampled::of_i64
 namespace w_::i_::sampled
 {
 // sampled(take: bool, ref target: i64) -> ref i64 (node), the instance `i64`, module demo.references, line 51
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> of_i64(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> target)
 {
-    return ::hgraph::wire<::hgl::demo::references::m_::n_::i_::sampled::of_i64>(wiring_, take, target).as<::hgraph::TS<::hgraph::Int>>();
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::i_::sampled::of_i64::impl_>(wiring_, take, target).as<::hgraph::TS<::hgraph::Int>>();
 }
 }  // namespace w_::i_::sampled
 
@@ -344,14 +344,19 @@ void a_reader_observes_the_input_designated()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_06_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{false, std::nullopt, true, std::nullopt}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, std::nullopt}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_02_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, std::nullopt, 11}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_03_ = input_00_; const auto argument_04_ = input_01_; const auto argument_05_ = input_02_; return ::hgl::demo::references::m_::w_::picked(wiring_, argument_03_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_09_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, std::nullopt, true, std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, std::nullopt};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, std::nullopt, 11};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_06_ = input_01_; const auto argument_07_ = input_03_; const auto argument_08_ = input_05_; return ::hgl::demo::references::m_::w_::picked(wiring_, argument_06_, argument_07_, argument_08_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 10, 11};
-        ::hglrt::testing::expect_same(left_06_, right_07_);
+    }();
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 10, 11};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
     }();
 }
 
@@ -359,14 +364,19 @@ void an_eval_records_a_ref_result_as_a_reader_does()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_06_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_02_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{3, std::nullopt}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_03_ = input_00_; const auto argument_04_ = input_01_; const auto argument_05_ = input_02_; return ::hgl::demo::references::m_::w_::pick(wiring_, argument_03_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_09_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{3, std::nullopt};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_06_ = input_01_; const auto argument_07_ = input_03_; const auto argument_08_ = input_05_; return ::hgl::demo::references::m_::w_::pick(wiring_, argument_06_, argument_07_, argument_08_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{3, std::nullopt};
-        ::hglrt::testing::expect_same(left_06_, right_07_);
+    }();
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Int>{3, std::nullopt};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
     }();
 }
 
@@ -374,13 +384,17 @@ void a_ref_parameter_is_present_and_wakes_once()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, true, true}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 7, 8}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_02_ = input_00_; const auto argument_03_ = input_01_; return ::hgl::demo::references::m_::w_::present(wiring_, argument_02_, argument_03_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_06_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 7, 8};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::references::m_::w_::present(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 1, 1};
-        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 1, 1};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 
@@ -388,15 +402,21 @@ void a_relay_keeps_what_it_sampled()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_08_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt, std::nullopt, true}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{false, true, std::nullopt, std::nullopt}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_02_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, std::nullopt}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 11, std::nullopt}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_00_; const auto argument_05_ = input_01_; const auto argument_06_ = input_02_; const auto argument_07_ = input_03_; return ::hgl::demo::references::m_::w_::sample_picked(wiring_, argument_04_, argument_05_, argument_06_, argument_07_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_012_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt, std::nullopt, true};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, true, std::nullopt, std::nullopt};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, std::nullopt};
+        const auto trace_06_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 11, std::nullopt};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_07_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_06_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_08_ = input_01_; const auto argument_09_ = input_03_; const auto argument_010_ = input_05_; const auto argument_011_ = input_07_; return ::hgl::demo::references::m_::w_::sample_picked(wiring_, argument_08_, argument_09_, argument_010_, argument_011_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_09_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, 11};
-        ::hglrt::testing::expect_same(left_08_, right_09_);
+    }();
+        const auto right_013_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, 11};
+        ::hglrt::testing::expect_same(left_012_, right_013_);
     }();
 }
 
@@ -404,16 +424,23 @@ void a_designated_input_is_followed_through_its_rebinding()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_010_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, std::nullopt, std::nullopt, 2, std::nullopt, 0, std::nullopt, 1}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{false, std::nullopt, true, std::nullopt, std::nullopt, std::nullopt, std::nullopt, false, std::nullopt}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_02_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, 3, std::nullopt, std::nullopt, std::nullopt, 4, std::nullopt}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, std::nullopt, 11, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_04_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{100, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 101, std::nullopt, 102, std::nullopt}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_05_ = input_00_; const auto argument_06_ = input_01_; const auto argument_07_ = input_02_; const auto argument_08_ = input_03_; const auto argument_09_ = input_04_; return ::hgl::demo::references::m_::w_::chosen(wiring_, argument_05_, argument_06_, argument_07_, argument_08_, argument_09_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_015_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, std::nullopt, std::nullopt, 2, std::nullopt, 0, std::nullopt, 1};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, std::nullopt, true, std::nullopt, std::nullopt, std::nullopt, std::nullopt, false, std::nullopt};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, 3, std::nullopt, std::nullopt, std::nullopt, 4, std::nullopt};
+        const auto trace_06_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, std::nullopt, 11, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+        const auto trace_08_ = ::hglrt::testing::Dense<::hgraph::Int>{100, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 101, std::nullopt, 102, std::nullopt};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_07_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_06_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_08_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_010_ = input_01_; const auto argument_011_ = input_03_; const auto argument_012_ = input_05_; const auto argument_013_ = input_07_; const auto argument_014_ = input_09_; return ::hgl::demo::references::m_::w_::chosen(wiring_, argument_010_, argument_011_, argument_012_, argument_013_, argument_014_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 10, 11, 100, 101, std::nullopt, std::nullopt, 4};
-        ::hglrt::testing::expect_same(left_010_, right_011_);
+    }();
+        const auto right_016_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 10, 11, 100, 101, std::nullopt, std::nullopt, 4};
+        ::hglrt::testing::expect_same(left_015_, right_016_);
     }();
 }
 

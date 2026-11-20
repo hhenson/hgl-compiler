@@ -987,9 +987,6 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:42:39 target.unsupported: the hgraph target does not write this expression in a graph yet",
             "m.hgl:46:42 target.unsupported: the hgraph target does not write a generic struct made where its arguments are not known yet",
             "m.hgl:48:11 target.unsupported: the hgraph target does not write the type `atomic<tuple<f64, f64>>` yet",
-            // A node called in a test, outside an eval. The timed
-            // traces of the line before it are written.
-            "m.hgl:28:17 target.unsupported: the hgraph target does not write a call of a temporal function in a test, outside an eval yet",
         ]
     );
 }
@@ -4285,8 +4282,8 @@ fn a_failure_that_is_no_hgl_error_escapes_every_capture() {
 
 /// ERR-7: a capture of a node, of a lifted call or of a graph given a
 /// wiring-time value anywhere but as the value of a `let` is reported,
-/// and not written; so is a capture of a lifted operator, and one in a
-/// test outside an eval (TST-3), as a temporal call there is.
+/// and not written; so is a capture of a lifted operator. A test outside
+/// an eval is value code (TST-3), which the analyser holds to that.
 #[test]
 fn a_capture_outside_a_let_is_reported() {
     let emitted = emit(&[fixture!("a_capture_outside_a_let_is_reported", "m.hgl")]);
@@ -4296,7 +4293,6 @@ fn a_capture_outside_a_let_is_reported() {
             "m.hgl:4:12 target.unsupported: the hgraph target does not write a capture of a node, of a lifted call or of a graph given a wiring-time value, other than as the value of a `let` yet",
             "m.hgl:7:20 target.unsupported: the hgraph target does not write a capture of a lifted operator or native function yet",
             "m.hgl:12:12 target.unsupported: the hgraph target does not write a capture of a node, of a lifted call or of a graph given a wiring-time value, other than as the value of a `let` yet",
-            "m.hgl:15:16 target.unsupported: the hgraph target does not write a capture in a test, outside an eval yet",
         ]
     );
 }
