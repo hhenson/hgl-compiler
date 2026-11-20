@@ -186,6 +186,19 @@ impl Family for Windows {
         emitter.named_type(value)
     }
 
+    // TYPE-11: "A window's value, read in a hook or given to a lifted
+    // helper (FN-12), is a `list<V>` of the values held".
+    fn read_type(&self, emitter: &mut Emitter<'_>, ty: &Type) -> Option<Type> {
+        window(emitter, ty)?;
+        let Type::RollingWindow { value, .. } = ty else {
+            return None;
+        };
+        Some(Type::List {
+            element: value.clone(),
+            size: None,
+        })
+    }
+
     // FN-12: "A window is passed only where it is `all_valid`, whatever
     // the parameter's default (FN-11): its value is not read before".
     fn admission(&self, emitter: &mut Emitter<'_>, ty: &Type) -> Option<String> {

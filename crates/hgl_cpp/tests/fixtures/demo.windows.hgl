@@ -154,6 +154,9 @@ test a_value_leaves_a_window_of_a_duration {
         ["1", "2", _, _, "value.unset_read", "3", _, _, _, "value.unset_read"]
     assert eval(observe_recent_departure(reading: [1, 2, _, _, _, 3])) ==
         ["value.unset_read", "value.unset_read", _, _, "1", "2", _, _, _, "3"]
+    # A run that ends before the 3 leaves.
+    assert eval(observe_recent_departure(reading: [1, 2, _, _, _, 3]), RunConfig(length: 6us)) ==
+        ["value.unset_read", "value.unset_read", _, _, "1", "2"]
 }
 
 # A window of 4us at most and 2us at least.

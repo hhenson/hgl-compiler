@@ -203,43 +203,43 @@ namespace w_
 
 namespace w_
 {
-// collect_spanned(reading: i64) -> rolling_window<i64, 4us, 2us> (node), module demo.windows, line 160
+// collect_spanned(reading: i64) -> rolling_window<i64, 4us, 2us> (node), module demo.windows, line 163
 ::hgraph::Port<::hgraph::TSWDuration<::hgraph::Int, 4, 2>> collect_spanned(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
 }  // namespace w_
 
 namespace w_
 {
-// spanned_readiness(probe: bool, readings: rolling_window<i64, 4us, 2us>) -> bool (node), module demo.windows, line 164
+// spanned_readiness(probe: bool, readings: rolling_window<i64, 4us, 2us>) -> bool (node), module demo.windows, line 167
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> spanned_readiness(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::TSWDuration<::hgraph::Int, 4, 2>> readings);
 }  // namespace w_
 
 namespace w_
 {
-// recent_validity(readings: rolling_window<i64, 3us, 1us>) -> bool (node), module demo.windows, line 168
+// recent_validity(readings: rolling_window<i64, 3us, 1us>) -> bool (node), module demo.windows, line 171
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> recent_validity(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSWDuration<::hgraph::Int, 3, 1>> readings);
 }  // namespace w_
 
 namespace w_
 {
-// observe_spanned(probe: bool, reading: i64) -> bool (graph), module demo.windows, line 172
+// observe_spanned(probe: bool, reading: i64) -> bool (graph), module demo.windows, line 175
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> observe_spanned(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
 }  // namespace w_
 
 namespace w_
 {
-// observe_recent_validity(reading: i64) -> bool (graph), module demo.windows, line 174
+// observe_recent_validity(reading: i64) -> bool (graph), module demo.windows, line 177
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> observe_recent_validity(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
 }  // namespace w_
 
 namespace w_
 {
-// total_at_tick(readings: rolling_window<i64, 3us, 0s>) -> i64 (node), module demo.windows, line 186
+// total_at_tick(readings: rolling_window<i64, 3us, 0s>) -> i64 (node), module demo.windows, line 189
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> total_at_tick(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSWDuration<::hgraph::Int, 3, 0>> readings);
 }  // namespace w_
 
 namespace w_
 {
-// observe_total(reading: i64) -> i64 (graph), module demo.windows, line 193
+// observe_total(reading: i64) -> i64 (graph), module demo.windows, line 196
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> observe_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
 }  // namespace w_
 
