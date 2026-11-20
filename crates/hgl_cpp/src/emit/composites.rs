@@ -1076,10 +1076,13 @@ impl Emitter<'_> {
     }
 
     /// `[key: value, ...]` where a dictionary is expected (EXPR-9): each
-    /// key and each value evaluated in the order written; a key written
-    /// twice has the value written last. Where an entry after the first
-    /// runs statements, which may change what an earlier one read, each
-    /// is first held as a value of its own.
+    /// key and each value evaluated in the order written. Where an entry
+    /// after the first runs statements, which may change what an earlier
+    /// one read, each is first held as a value of its own. The pinned text
+    /// does not say what a dictionary written with one key twice holds, so
+    /// one of more than one entry is written only where its keys are
+    /// constants that are not `==` ([`distinct_keys`]), and reported
+    /// otherwise.
     pub(super) fn dict_literal(
         &mut self,
         scope: &mut Scope,
@@ -1105,6 +1108,9 @@ impl Emitter<'_> {
             "::{}::dict_of<{key_type}, {value_type}>",
             runtime::NAMESPACE
         );
+        if !distinct_keys(entries) {
+            return self.missing(value.at, "a dictionary written with keys that may be one");
+        }
         let flattened: Vec<&Expr> = entries
             .iter()
             .flat_map(|(key, value)| [key, value])
@@ -1442,6 +1448,48 @@ impl Emitter<'_> {
             _ => None,
         }
     }
+}
+
+/// True where the keys of `entries`, a dictionary written out, are known
+/// to be distinct: there is at most one, or each is a literal or an enum's
+/// member and no two are `==` (OPS-2: the two zeros are one).
+fn distinct_keys(entries: &[(Expr, Expr)]) -> bool {
+    /// A key as a constant, where it is one that is told apart here.
+    #[derive(PartialEq)]
+    enum Key<'e> {
+        Value(&'e Value),
+        Float(f64),
+        Member(usize, usize, usize),
+    }
+    fn key(expr: &Expr) -> Option<Key<'_>> {
+        match &expr.kind {
+            ExprKind::Literal(Value::Float(number)) => Some(Key::Float(*number)),
+            ExprKind::Literal(
+                value @ (Value::Int(_) | Value::Str(_) | Value::Bool(_) | Value::Duration(_)),
+            ) => Some(Key::Value(value)),
+            // An integer literal where an `f64` is expected (EXPR-5).
+            ExprKind::Widen(inner) => match inner.kind {
+                ExprKind::Literal(Value::Int(number)) => Some(Key::Float(number as f64)),
+                _ => None,
+            },
+            ExprKind::EnumMember {
+                module,
+                declaration,
+                member,
+            } => Some(Key::Member(*module, *declaration, *member)),
+            _ => None,
+        }
+    }
+    if entries.len() <= 1 {
+        return true;
+    }
+    let keys: Option<Vec<Key>> = entries.iter().map(|(written, _)| key(written)).collect();
+    let Some(keys) = keys else {
+        return false;
+    };
+    keys.iter()
+        .enumerate()
+        .all(|(at, one)| keys[at + 1..].iter().all(|other| other != one))
 }
 
 /// A struct of `members` (each a name, a type and a property's type),

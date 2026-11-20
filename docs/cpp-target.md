@@ -52,7 +52,7 @@ one executable for each test module or application
 | Scalars | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `ZonedDateTime` and `Tenor`. Tenor literals keep their calendar or business-day form |
 | Struct | A generated struct with HGL's equality. As a temporal value, a nominal bundle whose whole value is the struct |
 | Enum, tuple, optional, list, fixed list, result | `enum class`, `std::tuple`, `std::optional`, `std::vector`, `std::array`, `std::expected` |
-| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key's identity is `==`, but that every NaN is one key |
+| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key is told apart by `==` of its type |
 | Abstract struct | A class that holds any struct that inherits from it, read through a function of each field's name |
 | `delta<T>` | As a value: an optional, `hglrt::list_delta`, `set_delta`, `dict_delta`, a struct's own delta struct, a tuple. Converting to and from hgraph's delta value is the temporal work's |
 | Node | A struct with `eval`, `start` and `stop`. A handler header is the input's declared activity and validity; handlers are tested in source order. State and cache are one generated struct for each node |

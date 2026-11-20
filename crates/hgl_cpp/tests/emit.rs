@@ -799,8 +799,9 @@ fn composite_values_are_written() {
 /// What the target does not write of the composites yet is reported
 /// where it is written, and nothing is miswritten: a struct that holds
 /// itself (TYPE-6), a field's default that runs statements of its own,
-/// a field of an abstract struct assigned, a dictionary's entry given to
-/// a `var` parameter.
+/// a field of an abstract struct assigned, a dictionary written with keys
+/// that may be one, which the pinned text does not say what it holds, and
+/// a dictionary's entry given to a `var` parameter.
 #[test]
 fn composite_forms_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -827,6 +828,7 @@ fn composite_forms_not_written_yet_are_reported() {
             "const fn bump(var count: i64, by: i64) {\n",
             "    count = by\n",
             "}\n",
+            "const fn twice(name: str) -> dict<str, i64> => [name: 1, \"b\": 2]\n",
             "const fn given(book: dict<str, i64>) -> dict<str, i64> {\n",
             "    var changed = book\n",
             "    bump(changed[\"a\"], 1)\n",
@@ -844,7 +846,8 @@ fn composite_forms_not_written_yet_are_reported() {
         [
             holds_itself,
             "m.hgl:16:5 the cpp target does not write an assignment to this place yet",
-            "m.hgl:24:10 the cpp target does not write this place given to a `var` parameter yet",
+            "m.hgl:22:48 the cpp target does not write a dictionary written with keys that may be one yet",
+            "m.hgl:25:10 the cpp target does not write this place given to a `var` parameter yet",
             // Where the default is written, which a construction that
             // leaves the field out reaches.
             "m.hgl:7:18 the cpp target does not write a default that runs statements yet",

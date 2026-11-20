@@ -306,8 +306,6 @@ test dictionaries_read_add_and_loop {
     assert counted(["x", "y", "x"]) == ["x": 2, "y": 1]
     assert bumped(book, "b") == ["a": 1, "b": 3]
     assert doubled_all(["a": 1]) == ["a": 2, "extra": 0]
-    let again: dict<str, i64> = ["a": 1, "a": 2]
-    assert again == ["a": 2]
     let shelf = Book(owner: "o", prices: ["a": 5])
     assert price_of(shelf, "a") == 5
     assert first_price([shelf]) == 5

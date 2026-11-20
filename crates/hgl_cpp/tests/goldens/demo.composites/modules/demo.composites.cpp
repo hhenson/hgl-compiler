@@ -18,7 +18,6 @@
 #undef a_missing_key_fails
 #undef a_struct_holding_nan_is_not_equal_to_itself
 #undef a_var_place_is_taken_where_the_call_is_made
-#undef again
 #undef arguments_are_evaluated_in_the_order_written
 #undef arrived
 #undef as_base
@@ -430,7 +429,7 @@ void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int 
     return ::hglrt::parent_list<::hgl::demo::composites::m_::Shape>(rounds);
 }
 
-// failing() -> i64 (`const fn`), module demo.composites, line 329
+// failing() -> i64 (`const fn`), module demo.composites, line 327
 ::hgraph::Int failing()
 {
     return ::hglrt::item(::hglrt::list<::hgraph::Int>{1}, 5);
@@ -569,10 +568,6 @@ void dictionaries_read_add_and_loop()
     ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(::hgl::demo::composites::m_::bumped(book, ::hgraph::Str{"b"}), ::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}, {::hgraph::Str{"b"}, 3}})));
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(::hgl::demo::composites::m_::doubled_all(::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}})), ::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 2}, {::hgraph::Str{"extra"}, 0}})));
-    ::hglrt::testing::statement();
-    [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int> again = ::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}, {::hgraph::Str{"a"}, 2}});
-    ::hglrt::testing::statement();
-    ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(again, ::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 2}})));
     ::hglrt::testing::statement();
     [[maybe_unused]] const ::hgl::demo::composites::m_::Book shelf = ::hgl::demo::composites::m_::Book{::hgraph::Str{"o"}, ::hglrt::set<::hgraph::Str>{}, ::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 5}}), std::nullopt, ::hglrt::list<::hgl::demo::composites::m_::Point>{}};
     ::hglrt::testing::statement();

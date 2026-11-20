@@ -11,11 +11,11 @@
 // same members, and two dictionaries where they have the same keys and each
 // value is equal as `==` of its type has it (OPS-2), whatever the order.
 //
-// A key is told apart from another by its identity, `same`: `==` of its
-// type, at any depth, but that every NaN is one key. `==` of an `f64` holds
-// for no NaN (NUM-5), and a key must be one with itself; the two zeros are one
-// key, as `==` has them. `key_hash` hashes a key as `same` tells keys apart.
-// The pinned text says nothing more of a key of `f64`.
+// A key is told apart from another by `==` of its type (OPS-2), as a set's
+// members and a dictionary's keys are: the two zeros are one key, as `==`
+// has them, and a key that holds a NaN is equal to no key, itself included
+// (NUM-5), so it is found by no read. `key_hash` hashes a key alike for keys
+// that are `==`. The pinned text says no more of a key that holds a NaN.
 //
 // A struct the compiler writes is a plain aggregate of its fields, a parent's
 // first, with HGL's equality, `==` of each field (OPS-2). It tells this
@@ -29,7 +29,6 @@
 #include <hglrt/failure.h>
 #include <hglrt/values.h>
 
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -79,15 +78,12 @@ concept written_struct = requires { fields<S>::members; };
 /// A value of an abstract struct (TYPE-3): a class the compiler writes, which
 /// holds the struct it is through `held_`, a pointer to a `held_value`.
 template <class A>
-concept abstract_value = requires(const A& value) { value.held_->same_(*value.held_); };
-
-template <class T>
-bool same(const T& lhs, const T& rhs);
+concept abstract_value = requires(const A& value) { value.held_->hash_(); };
 
 template <class T>
 std::size_t key_hash_of(const T& value);
 
-/// The hash of a key, as `same` tells keys apart.
+/// The hash of a key, alike for keys that are `==`.
 struct key_hash {
     template <class T>
     std::size_t operator()(const T& value) const {
@@ -95,11 +91,11 @@ struct key_hash {
     }
 };
 
-/// The identity of a key (`same`).
+/// Whether two keys are one: `==` of their type (OPS-2, NUM-5).
 struct key_equal {
     template <class T>
     bool operator()(const T& lhs, const T& rhs) const {
-        return same(lhs, rhs);
+        return lhs == rhs;
     }
 };
 
@@ -145,13 +141,13 @@ struct dict : std::unordered_map<K, V, key_hash, key_equal> {
 };
 
 /// The dictionary `[key: value, ...]` (EXPR-9) of `entries`, each in the order
-/// written: a key written twice has the value written last.
+/// written, whose keys the compiler knows are distinct.
 template <class K, class V>
 dict<K, V> dict_of(std::initializer_list<std::pair<K, V>> entries) {
     dict<K, V> made;
     made.reserve(entries.size());
     for (const auto& [key, value] : entries) {
-        made.insert_or_assign(key, value);
+        made.emplace(key, value);
     }
     return made;
 }
@@ -299,8 +295,8 @@ list_delta<L> list_delta_of(const dict<i64, delta_t<typename L::value_type>>& up
 }
 
 /// The part of a value of an abstract struct (TYPE-3) that every one has,
-/// whatever struct it holds: HGL's `==` of two, their identity as keys, and
-/// the hash of that identity. Its names, and those of `held_as`, end with
+/// whatever struct it holds: HGL's `==` of two, and a hash alike where that
+/// holds. Its names, and those of `held_as`, end with
 /// `_`, which no name of a field the compiler writes does: the class of the
 /// abstract struct gives each field a function of the field's name.
 struct held_value {
@@ -312,9 +308,7 @@ struct held_value {
     /// `==` (OPS-2): "Two structs are equal when they are of one struct with
     /// the same generic arguments ... and each field is equal".
     [[nodiscard]] virtual bool equal_(const held_value& other) const = 0;
-    /// Their identity as keys (`same`).
-    [[nodiscard]] virtual bool same_(const held_value& other) const = 0;
-    /// The hash of that identity.
+    /// The hash of the struct held, alike where `equal_` holds.
     [[nodiscard]] virtual std::size_t hash_() const = 0;
 };
 
@@ -331,10 +325,6 @@ struct held_as : Interface {
     [[nodiscard]] bool equal_(const held_value& other) const final {
         const auto* of = dynamic_cast<const held_as*>(&other);
         return of != nullptr && held_ == of->held_;
-    }
-    [[nodiscard]] bool same_(const held_value& other) const final {
-        const auto* of = dynamic_cast<const held_as*>(&other);
-        return of != nullptr && hglrt::same(held_, of->held_);
     }
     [[nodiscard]] std::size_t hash_() const final {
         return detail::combined(typeid(S).hash_code(), key_hash_of(held_));
@@ -417,88 +407,12 @@ inline std::size_t mixed(std::uint64_t hash) {
 }
 } // namespace detail
 
-/// The identity of two keys of one type: `==` of the type, at any depth,
-/// but that every NaN is one with every other (see the head of this file). A
-/// set's and a dictionary's keys are told apart by it.
-template <class T>
-bool same(const T& lhs, const T& rhs) {
-    if constexpr (std::is_floating_point_v<T>) {
-        return lhs == rhs || (std::isnan(lhs) && std::isnan(rhs));
-    } else if constexpr (detail::is_optional<T>::value) {
-        return lhs.has_value() == rhs.has_value() && (!lhs.has_value() || same(*lhs, *rhs));
-    } else if constexpr (detail::is_tuple<T>::value) {
-        return [&]<std::size_t... I>(std::index_sequence<I...>) {
-            return (same(std::get<I>(lhs), std::get<I>(rhs)) && ...);
-        }(std::make_index_sequence<std::tuple_size_v<T>>{});
-    } else if constexpr (detail::is_list<T>::value || detail::is_fixed_list<T>::value) {
-        if (lhs.size() != rhs.size()) {
-            return false;
-        }
-        for (std::size_t at = 0; at < lhs.size(); ++at) {
-            if (!same(lhs[at], rhs[at])) {
-                return false;
-            }
-        }
-        return true;
-    } else if constexpr (detail::is_set<T>::value) {
-        // Members are told apart by their identity already.
-        return lhs == rhs;
-    } else if constexpr (detail::is_dict<T>::value) {
-        if (lhs.size() != rhs.size()) {
-            return false;
-        }
-        for (const auto& [key, value] : lhs) {
-            const auto found = rhs.find(key);
-            if (found == rhs.end() || !same(value, found->second)) {
-                return false;
-            }
-        }
-        return true;
-    } else if constexpr (detail::is_list_delta<T>::value) {
-        if (lhs.updated.size() != rhs.updated.size() || lhs.removed != rhs.removed ||
-            lhs.size_modified != rhs.size_modified) {
-            return false;
-        }
-        // Both are in the order of their positions.
-        auto other = rhs.updated.begin();
-        for (const auto& [position, change] : lhs.updated) {
-            if (position != other->first || !same(change, other->second)) {
-                return false;
-            }
-            ++other;
-        }
-        return true;
-    } else if constexpr (written_struct<T>) {
-        return std::apply([&](const auto... member) { return (same(lhs.*member, rhs.*member) && ...); },
-                          fields<T>::members);
-    } else if constexpr (abstract_value<T>) {
-        return lhs.held_->same_(*rhs.held_);
-    } else if constexpr (detail::is_expected<T>::value) {
-        if (lhs.has_value() != rhs.has_value()) {
-            return false;
-        }
-        if (lhs.has_value()) {
-            if constexpr (std::is_void_v<typename T::value_type>) {
-                return true;
-            } else {
-                return same(*lhs, *rhs);
-            }
-        }
-        return same(lhs.error(), rhs.error());
-    } else {
-        return lhs == rhs;
-    }
-}
-
-/// The hash of a key, as `same` tells keys apart: one for every NaN, one for
-/// both zeros, and a set's and a dictionary's whatever the order of their
-/// members.
+/// The hash of a key, alike for keys that are `==`: one for both zeros, and a
+/// set's and a dictionary's whatever the order of their members.
 template <class T>
 std::size_t key_hash_of(const T& value) {
     if constexpr (std::is_floating_point_v<T>) {
-        if (std::isnan(value)) {
-            return 0x7ff8000000000000ULL;
-        }
+        // `-0.0 == 0.0`: the two hash alike. A NaN is equal to nothing.
         return std::hash<T>{}(value == 0 ? T{0} : value);
     } else if constexpr (detail::is_optional<T>::value) {
         return value.has_value() ? detail::combined(1, key_hash_of(*value)) : 0;
