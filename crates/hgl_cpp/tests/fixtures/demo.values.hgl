@@ -129,6 +129,16 @@ const fn list_first() -> i64 {
     return picked
 }
 
+# EXPR-3: a place is checked before the value assigned to it runs.
+const fn replaced_first() -> list<i64> {
+    var items = [10]
+    items[2] = {
+        items = [10, 20, 30]
+        5
+    }
+    return items
+}
+
 # EXPR-3: a place's index is evaluated before the value assigned.
 const fn index_first() -> list<i64> {
     var items = [10, 20]
@@ -183,6 +193,17 @@ const fn text_first() -> tuple<str, i64> {
 # A list held before its index is read, where it is an element of a list
 # made for the read.
 const fn from_a_made_row(one: i64) -> i64 => [[7]][0][0 // one]
+
+# A loop over a list that is part of a value made for it.
+const fn made_rows() -> list<list<i64>> => [[1, 2], [3]]
+
+const fn first_row_total() -> i64 {
+    var total = 0
+    for entry in made_rows()[0] {
+        total += entry
+    }
+    return total
+}
 
 # NUM-2: a list whose entry is out of range.
 const fn grown(by: i64) -> list<i64> => [by + 9223372036854775807]
@@ -267,6 +288,7 @@ test evaluation_follows_the_order_written {
     assert tuple_first() == (1, 0)
     assert text_first() == ("before", 0)
     assert from_a_made_row(1) == 7
+    assert first_row_total() == 3
     assert made_error() == "before"
     assert code_first() == "after"
 }
@@ -285,6 +307,14 @@ test a_var_parameter_is_its_place {
 test an_overflow_fails_with_its_code {
     assert raises("numeric.out_of_range") {
         let big = triangle(10) + 9223372036854775807
+    }
+}
+
+# EXPR-3: the place an assignment writes is checked before its value
+# runs, here against the list before the value replaced it.
+test a_place_is_checked_before_its_value {
+    assert raises("value.index_out_of_range") {
+        let replaced = replaced_first()
     }
 }
 

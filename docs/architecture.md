@@ -2203,8 +2203,8 @@ later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
 which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists 166
-of core's 191 runtime cases: 159 evals, 6 that need a struct, and one
+target's list, and `--write-list` writes from a run. Today it lists 170
+of core's 198 runtime cases: 162 evals, 7 that need a struct, and one
 that gives an eval's trace to a `const fn` (TST-16).
 
 ### The C++ runtime library

@@ -27,7 +27,7 @@ use hgl_lower::graphs::may_return;
 
 use super::Emitter;
 use super::calls::changes;
-use super::expressions::held_read;
+use super::expressions::{held_read, reads_an_element};
 use super::names::{self, identifier};
 use super::types::by_value;
 use super::values::INDENT;
@@ -244,6 +244,12 @@ impl Emitter<'_> {
                     self.unsupported(*at, "an assignment to this place");
                     return;
                 };
+                // Where the indices are held, the place is also checked
+                // there, before the value runs (EXPR-3, EXPR-7): the value
+                // could replace the list it is in.
+                if holds && reads_an_element(place) {
+                    scope.before.push(format!("static_cast<void>({written});"));
+                }
                 let outer = operator
                     .is_some()
                     .then(|| scope.read_as.replace((place.clone(), written.clone())));
@@ -371,17 +377,24 @@ impl Emitter<'_> {
                 };
                 let items = self.expression(scope, sequence);
                 let local = identifier(&body.locals[*name].name);
-                if scope.copies.copied(*name) {
+                let copied = scope.copies.copied(*name);
+                // A list that is not what a local or a constant holds may
+                // be part of a value that ends with the loop's first line,
+                // `rows()[0]`: it is held as a value of its own, as is one
+                // the loop could change.
+                let source = if copied || !refers(sequence) {
                     let held = names::temporary("items", self.temporary());
                     text.push_str(&format!("{indent}const {list} {held} = {items};\n"));
-                    text.push_str(&format!(
-                        "{indent}for (const {element} {local} : {held})\n{indent}{{\n"
-                    ));
+                    held
                 } else {
-                    text.push_str(&format!(
-                        "{indent}for (const {element}& {local} : {items})\n{indent}{{\n"
-                    ));
-                }
+                    items
+                };
+                let binding = if copied {
+                    format!("const {element} {local}")
+                } else {
+                    format!("const {element}& {local}")
+                };
+                text.push_str(&format!("{indent}for ({binding} : {source})\n{indent}{{\n"));
                 self.statements(scope, statements, depth + 1, text);
                 text.push_str(&format!("{indent}}}\n"));
             }
