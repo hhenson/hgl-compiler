@@ -1119,7 +1119,7 @@ def _published_through(port, value, shape, entries):
     child only then."""
     published = _pruned(port, _entries_change(_published_parts(port, value, shape), entries), entries)
     _whole_sets(port, published, entries)
-    port.value = _by_position(published, shape)
+    port.value = _by_position(published, shape, entries)
     _validated_parts(port, published, entries)
     return published
 
@@ -1139,31 +1139,50 @@ def _published_parts(port, value, shape):
     )
 
 
-def _by_position(value, shape):
+def _by_position(value, shape, entries=None):
     """`value`, what `_published_parts` gives for `shape`, with each tuple
-    at a place `shape` gives a tuple's shape published as a `dict` of the
-    positions it gives, by their fields, `_0`, `_1`, as a struct's is.
+    at a place `shape` or `entries` gives a tuple's shape published as a
+    `dict` of the positions it gives, by their fields, `_0`, `_1`, as a
+    struct's is. `shape` is where the unsized lists are, as
+    `published_into` has it, and `entries` where the dictionaries and the
+    sets are, as `_entries_change` has it.
 
     TIME-7: a delta that names no change, "Where it is valid ... is no
     tick", and a tuple's that sets no position "sets no child: it changes
-    no validity, and is never a tick". hgraph 0.9.5's bundle given a
-    tuple ticks where any position is given, a delta that changes nothing
-    a valid child holds among them, and fails the run for a dictionary's
-    `REMOVE_IF_EXISTS` in it; given a `dict` it ticks only where a child
-    does."""
-    if value is None or shape is None or shape == "list":
+    no validity, and is never a tick". TYPE-16: a tuple's delta is "each
+    position's delta, null where it did not change", and a dictionary's
+    `removed` the keys it removes. hgraph 0.9.5's bundle given a tuple
+    ticks where any position is given, a delta that changes nothing a
+    valid child holds among them, and fails the run (`std::bad_cast`) for
+    a dictionary's `REMOVE_IF_EXISTS` in it; given a `dict` it ticks only
+    where a child does, and takes the removal."""
+    if value is None:
         return value
-    if isinstance(shape, dict):
+    lists = shape if isinstance(shape, (dict, tuple)) else None
+    kind, part = entries if isinstance(entries, tuple) else (None, None)
+    if isinstance(lists, tuple) or kind == "positions":
+        if not isinstance(value, tuple):
+            return value
+        lists = lists if isinstance(lists, tuple) else (None,) * len(value)
+        part = part if kind == "positions" else (None,) * len(value)
+        return {
+            position(index): _by_position(entry, within, held)
+            for index, (entry, within, held) in enumerate(zip(value, lists, part))
+            if entry is not None
+        }
+    if isinstance(lists, dict) or kind == "fields":
         if not isinstance(value, dict):
             return value
-        return {field: _by_position(part, shape.get(field)) for field, part in value.items()}
-    if not isinstance(value, tuple):
-        return value
-    return {
-        position(index): _by_position(part, within)
-        for index, (part, within) in enumerate(zip(value, shape))
-        if part is not None
-    }
+        lists = lists if isinstance(lists, dict) else {}
+        part = part if kind == "fields" else {}
+        return {field: _by_position(entry, lists.get(field), part.get(field)) for field, entry in value.items()}
+    if kind in ("entries", "list"):
+        # A dictionary's entries and a fixed list's positions, each the
+        # delta of a value of `part`.
+        if not isinstance(value, dict):
+            return value
+        return {key: entry if _removes(entry) else _by_position(entry, None, part) for key, entry in value.items()}
+    return value
 
 
 def _emptied(port, shape):

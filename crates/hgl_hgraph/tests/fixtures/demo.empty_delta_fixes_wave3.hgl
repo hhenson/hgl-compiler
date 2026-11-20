@@ -608,3 +608,139 @@ fn first_empty_quote_check(step: i64) -> i64 => quotes_read(first_empty_quote(st
 test an_entry_delta_that_names_no_change_adds_no_key {
     assert eval(first_empty_quote_check(step: [0, 1])) == [0, 102]
 }
+
+# ---- 6. A key or a member removed inside a tuple ----
+#
+# TYPE-16: a tuple's delta is "each position's delta, null where it did
+# not change", and a dictionary's has "`removed`, a `set<K>`" of the keys
+# it removes, a set's "`removed`" of its members. Removed inside a tuple,
+# from a `return`, from `out =` and from a trace's cell, and inside a
+# struct and a tuple within a struct, a key or a member that is held goes.
+fn returned_tuple_book(step: i64) -> tuple<i64, dict<str, i64>> {
+    when {
+        let added: delta<tuple<i64, dict<str, i64>>> = (null, delta<dict<str, i64>>(updated: ["a": 1, "b": 2]))
+        let gone: delta<tuple<i64, dict<str, i64>>> = (null, delta<dict<str, i64>>(removed: ["a"]))
+        if step == 0 { return added }
+        return gone
+    }
+}
+
+fn assigned_tuple_book(step: i64) -> tuple<i64, dict<str, i64>> {
+    inject out
+    when {
+        let added: delta<tuple<i64, dict<str, i64>>> = (null, delta<dict<str, i64>>(updated: ["a": 1, "b": 2]))
+        let gone: delta<tuple<i64, dict<str, i64>>> = (null, delta<dict<str, i64>>(removed: ["a"]))
+        if step == 0 { out = added }
+        if step == 1 { out = gone }
+    }
+}
+
+fn tuple_book_read(held: tuple<i64, dict<str, i64>>) -> i64 {
+    when valid([]) {
+        if valid(held[1]) { return entry_total(held[1]) }
+        return -1
+    }
+}
+
+fn returned_tuple_book_read(step: i64) -> i64 => tuple_book_read(returned_tuple_book(step))
+fn assigned_tuple_book_read(step: i64) -> i64 => tuple_book_read(assigned_tuple_book(step))
+
+fn returned_tuple_members(step: i64) -> tuple<i64, set<i64>> {
+    when {
+        let added: delta<tuple<i64, set<i64>>> = (null, delta<set<i64>>(added: [1, 2]))
+        let gone: delta<tuple<i64, set<i64>>> = (null, delta<set<i64>>(removed: [1]))
+        if step == 0 { return added }
+        return gone
+    }
+}
+
+fn assigned_tuple_members(step: i64) -> tuple<i64, set<i64>> {
+    inject out
+    when {
+        let added: delta<tuple<i64, set<i64>>> = (null, delta<set<i64>>(added: [1, 2]))
+        let gone: delta<tuple<i64, set<i64>>> = (null, delta<set<i64>>(removed: [1]))
+        if step == 0 { out = added }
+        if step == 1 { out = gone }
+    }
+}
+
+fn tuple_members_read(held: tuple<i64, set<i64>>) -> i64 {
+    when valid([]) {
+        if valid(held[1]) { return member_total(held[1]) }
+        return -1
+    }
+}
+
+fn returned_tuple_members_read(step: i64) -> i64 => tuple_members_read(returned_tuple_members(step))
+fn assigned_tuple_members_read(step: i64) -> i64 => tuple_members_read(assigned_tuple_members(step))
+
+struct Drawer {
+    book: dict<str, i64>
+    members: set<i64>
+    pair: tuple<i64, dict<str, i64>>
+}
+
+fn returned_drawer(step: i64) -> Drawer {
+    when {
+        let added: delta<tuple<i64, dict<str, i64>>> = (null, delta<dict<str, i64>>(updated: ["a": 1, "b": 2]))
+        let gone: delta<tuple<i64, dict<str, i64>>> = (null, delta<dict<str, i64>>(removed: ["a"]))
+        if step == 0 {
+            return delta<Drawer>(
+                book: delta<dict<str, i64>>(updated: ["a": 1, "b": 2]),
+                members: delta<set<i64>>(added: [1, 2]),
+                pair: added,
+            )
+        }
+        return delta<Drawer>(
+            book: delta<dict<str, i64>>(removed: ["a"]),
+            members: delta<set<i64>>(removed: [1]),
+            pair: gone,
+        )
+    }
+}
+
+fn drawer_read(drawer: Drawer) -> list<i64, 3> {
+    when valid([]) {
+        if valid(drawer.book) && valid(drawer.members) && valid(drawer.pair[1]) {
+            return [entry_total(drawer.book), member_total(drawer.members), entry_total(drawer.pair[1])]
+        }
+        return [-1, -1, -1]
+    }
+}
+
+fn returned_drawer_read(step: i64) -> list<i64, 3> => drawer_read(returned_drawer(step))
+
+fn returned_shelves(step: i64) -> dict<str, tuple<i64, dict<str, i64>>> {
+    when {
+        let added: delta<tuple<i64, dict<str, i64>>> = (null, delta<dict<str, i64>>(updated: ["a": 1, "b": 2]))
+        let gone: delta<tuple<i64, dict<str, i64>>> = (null, delta<dict<str, i64>>(removed: ["a"]))
+        if step == 0 { return delta<dict<str, tuple<i64, dict<str, i64>>>>(updated: ["x": added]) }
+        return delta<dict<str, tuple<i64, dict<str, i64>>>>(updated: ["x": gone])
+    }
+}
+
+fn shelves_read(shelves: dict<str, tuple<i64, dict<str, i64>>>) -> i64 {
+    when valid([]) {
+        if valid(shelves["x"][1]) { return entry_total(shelves["x"][1]) }
+        return -1
+    }
+}
+
+fn returned_shelves_read(step: i64) -> i64 => shelves_read(returned_shelves(step))
+
+test a_held_key_or_member_removed_inside_a_tuple_goes {
+    assert eval(returned_tuple_book_read(step: [0, 1])) == [23, 12]
+    assert eval(assigned_tuple_book_read(step: [0, 1])) == [23, 12]
+    assert eval(tuple_book_read(held: [
+        (null, delta<dict<str, i64>>(updated: ["a": 1, "b": 2])),
+        (null, delta<dict<str, i64>>(removed: ["a"])),
+    ])) == [23, 12]
+    assert eval(returned_tuple_members_read(step: [0, 1])) == [23, 12]
+    assert eval(assigned_tuple_members_read(step: [0, 1])) == [23, 12]
+    assert eval(tuple_members_read(held: [
+        (null, delta<set<i64>>(added: [1, 2])),
+        (null, delta<set<i64>>(removed: [1])),
+    ])) == [23, 12]
+    assert eval(returned_drawer_read(step: [0, 1])) == [[23, 23, 23], [12, 12, 12]]
+    assert eval(returned_shelves_read(step: [0, 1])) == [23, 12]
+}
