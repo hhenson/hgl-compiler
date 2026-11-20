@@ -193,6 +193,36 @@ TEST_CASE("a struct is a key through its fields") {
     CHECK_FALSE(points.contains(odd));
 }
 
+namespace {
+/// A struct with a field of a `list<bool>`, whose elements libc++ gives as
+/// references to their bits.
+struct Bits {
+    hglrt::list<bool> on;
+
+    friend bool operator==(const Bits&, const Bits&) = default;
+};
+} // namespace
+
+template <>
+struct hglrt::fields<Bits> {
+    static constexpr auto members = std::tuple{&Bits::on};
+};
+
+TEST_CASE("a list<bool> is a key, a member and a field (TYPE-14)") {
+    const hglrt::list<bool> flags{true, false};
+    hglrt::set<hglrt::list<bool>> members{flags, hglrt::list<bool>{true, false}, hglrt::list<bool>{false}};
+    CHECK(members.size() == 2);
+    CHECK(members.contains(flags));
+    const hglrt::dict<hglrt::list<bool>, i64> keyed{{flags, 1}};
+    CHECK(hglrt::entry_at(keyed, hglrt::list<bool>{true, false}) == 1);
+    hglrt::set<Bits> fields{Bits{flags}, Bits{flags}, Bits{{false}}};
+    CHECK(fields.size() == 2);
+    CHECK(hglrt::key_hash_of(Bits{flags}) == hglrt::key_hash_of(Bits{{true, false}}));
+    CHECK(hglrt::hash_of(flags) == hglrt::hash_of(hglrt::list<bool>{true, false}));
+    const hglrt::set<bool> truths{true, false, true};
+    CHECK(truths.size() == 2);
+}
+
 TEST_CASE("the deltas of a set, a dictionary and a list are values (TYPE-16)") {
     const hglrt::set_delta<i64> change{{1, 2}, {3}};
     CHECK(change == hglrt::set_delta<i64>{{2, 1}, {3}});
