@@ -23,7 +23,8 @@
 //!   take, bind and return, as child graphs (CTRL-7, CTRL-14);
 //! * [`pieces`]: what a piece of a program reaches, and which tests and
 //!   applications reach a form a target does not write;
-//! * [`types`]: what a type of the program holds (TYPE-3).
+//! * [`types`]: what a type of the program holds, and which of its
+//!   children `all_valid` asks (TYPE-3, TYPE-9, TIME-1, TIME-9).
 
 pub mod canonical;
 pub mod copies;

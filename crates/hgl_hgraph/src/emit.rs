@@ -21,7 +21,7 @@ use hgl_analyser::hir::{
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
-    FieldRef, LocalKind, Member, NamedKind, OperatorRef, Parameter, Phase, Program, Role, Scalar,
+    FieldRef, LocalKind, NamedKind, OperatorRef, Parameter, Phase, Program, Role, Scalar,
     Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
@@ -29,7 +29,11 @@ use hgl_lower::canonical::canonical_argument;
 use hgl_lower::copies::{self, Copies, by_value, changed_in_place, may_hold, struct_in_place};
 use hgl_lower::instances::{self, Instances};
 use hgl_lower::pieces::Reach;
-use hgl_lower::types::inherited;
+use hgl_lower::types::{
+    Asked, HELD_DEPTH, asked_children, empty_struct, field_of, fields_of, growing_list,
+    holds_growing_list, inherited, is_nullable, payload_of, read_whole_all_valid, whole_value,
+    windows_in,
+};
 
 use crate::{codes, provides, python_module, test_function};
 
