@@ -109,7 +109,21 @@ pub use types::{
     Signature, StructType, TraceStyle, Type, WrittenType,
 };
 
+/// The most instances of one generic declaration that one call is
+/// followed to: of those the call makes, through the instance it calls
+/// and each one those call in turn, each counted once. No rule says
+/// whether a program whose instances never end, as `climb<N + 1>` in
+/// `climb<const N: i64>` makes, is accepted, so none is followed past
+/// this many. The analyser tells the `requires` and the generic
+/// arguments of no more, and reports a call whose instances go past it
+/// (local `generic.instance_limit`); a target makes no more from one call
+/// either, and reports a call of one it does not write. So neither stage
+/// runs without end.
+pub const INSTANCES: usize = 4096;
+
 /// The diagnostic codes this stage reports.
+///
+/// Those directly in this module are codes/// The diagnostic codes this stage reports.
 ///
 /// Those directly in this module are codes of the specification's
 /// diagnostic catalogue, so an `expect-error` annotation can expect them
@@ -512,10 +526,12 @@ pub mod codes {
         /// constant failures reject"). Local: the catalogue has no row
         /// for it.
         pub const CONSTANT_FAILURE: &str = "constant.failure";
-        /// A call makes more instances of generic functions than this
-        /// compiler follows to tell the `requires` they hold (GEN-3).
-        /// What is past that many is not told, and not taken to hold.
-        /// Local: the language sets no limit.
+        /// The instances of a generic declaration that a call makes do
+        /// not end within the [`crate::INSTANCES`] this compiler follows
+        /// to tell the `requires` and the generic arguments they hold
+        /// (GEN-3, ERR-9). What is past that many is not told, and not
+        /// taken to hold. Local: no rule says whether a program whose
+        /// instances never end is rejected.
         pub const INSTANCE_LIMIT: &str = "generic.instance_limit";
         /// `scheduled()` in a value function, a graph or a test, which is
         /// no node and has no schedule of its own (FN-9, TIME-9). Local:

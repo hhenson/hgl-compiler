@@ -1086,12 +1086,12 @@ struct Made {
     at: Location,
 }
 
-/// How many instances are followed in all. A recursion that gives new
-/// arguments each time, `grow<N * 2>` and `grow<N * 2 + 1>` in
-/// `grow<const N: i64>`, makes instances without end; what is past this
-/// many is not told, and is reported where it is called from
-/// (`generic.instance_limit`).
-const INSTANCES: usize = 4096;
+/// How many instances one call is followed to ([`crate::INSTANCES`]). A
+/// recursion that gives new arguments each time, `grow<N * 2>` and
+/// `grow<N * 2 + 1>` in `grow<const N: i64>`, makes instances without
+/// end; what is past this many is not told, and is reported where it is
+/// called from (`generic.instance_limit`).
+use crate::INSTANCES;
 
 /// How long, written out, an instance's generic arguments may grow: `S +
 /// S` in `doubled<const S: str>` doubles a string at each instance. One
@@ -1247,7 +1247,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
         .into_iter()
         .filter(|made| reaching.contains(&made.callee))
     {
-        let key = format!("{:?}{:?}{:?}", made.callee, made.generics, made.answers);
+        let key = instance_key(made.callee, &made.generics, &made.answers);
         match root_of.get(&key) {
             Some(&root) => roots[root].1.push(made.at),
             None => {
@@ -1259,16 +1259,23 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     }
     for (root, from) in roots {
         // Each instance this one makes followed once, by what it is: its
-        // callee and its arguments.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // callee and its arguments, the root's own among them.
+        let mut seen: std::collections::HashSet<String> =
+            std::collections::HashSet::from([instance_key(
+                root.callee,
+                &root.generics,
+                &root.answers,
+            )]);
         let mut waiting: std::collections::VecDeque<Made> =
             std::collections::VecDeque::from([root]);
-        let mut followed = 0;
+        // How many instances of each declaration this one has made.
+        let mut followed: HashMap<(usize, usize), usize> = HashMap::new();
         let mut exhausted = false;
         while let Some(made) = waiting.pop_front() {
-            followed += 1;
-            if followed > INSTANCES {
-                past_the_limit(&from, diagnostics);
+            let count = followed.entry(made.callee).or_insert(0);
+            *count += 1;
+            if *count > INSTANCES {
+                past_the_limit(&from, made.callee, program, diagnostics);
                 break;
             }
             let inner = passed.get(&made.callee).map_or(&[][..], Vec::as_slice);
@@ -1426,7 +1433,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 at,
             } in calls
             {
-                let key = format!("{callee:?}{generics:?}{answers:?}");
+                let key = instance_key(callee, &generics, &answers);
                 if key.len() > ARGUMENTS {
                     exhausted = true;
                     break;
@@ -1464,11 +1471,26 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 }
             }
             if exhausted {
-                past_the_limit(&from, diagnostics);
+                past_the_limit(&from, made.callee, program, diagnostics);
                 break;
             }
         }
     }
+}
+
+/// What an instance is, written out: its declaration, its generic
+/// arguments and what answers its requirements. A constant argument is
+/// its value however it is written, so `turn<0>` and the `turn<((N + 1)
+/// % 2)>` that comes back to it are one instance.
+fn instance_key(callee: (usize, usize), generics: &[Argument], answers: &[hir::Answer]) -> String {
+    let generics: Vec<String> = generics
+        .iter()
+        .map(|argument| match argument {
+            Argument::Constant(constant) => format!("{:?}", constant.value),
+            Argument::Type(ty) => format!("{ty:?}"),
+        })
+        .collect();
+    format!("{callee:?}{generics:?}{answers:?}")
 }
 
 /// A call an instance makes: what it calls, with what it gives the
@@ -1590,9 +1612,16 @@ fn argument_fails(
 
 /// Reports each call in `from` whose instances go past what is followed
 /// ([`INSTANCES`], [`ARGUMENTS`]): what is past it is not told, and is
-/// not taken to hold (GEN-3). One already rejected for a `requires` is
+/// not taken to hold (GEN-3). `callee` is the declaration whose instance
+/// was being followed there. One already rejected for a `requires` is
 /// not reported again (ERR-9: "Do not demand cascaded diagnostics").
-fn past_the_limit(from: &[Location], diagnostics: &mut Diagnostics) {
+fn past_the_limit(
+    from: &[Location],
+    (module, declaration): (usize, usize),
+    program: &Program,
+    diagnostics: &mut Diagnostics,
+) {
+    let name = &program.modules[module].declarations[declaration].name;
     for &at in from {
         let rejected = diagnostics.as_slice().iter().any(|earlier| {
             earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
@@ -1605,9 +1634,10 @@ fn past_the_limit(from: &[Location], diagnostics: &mut Diagnostics) {
                 codes::local::INSTANCE_LIMIT,
                 at,
                 format!(
-                    "this call makes more instances than this compiler follows ({INSTANCES}, \
-                     with arguments no longer than {ARGUMENTS} characters written out), and \
-                     the `requires` of those past them are not told"
+                    "the instances of `{name}` this call makes do not end within the \
+                     {INSTANCES} this compiler follows, with generic arguments no longer than \
+                     {ARGUMENTS} characters written out: the `requires` and the generic \
+                     arguments of those past them are not told"
                 ),
                 "GEN-3",
             ));

@@ -400,3 +400,62 @@ fn a_constant_in_a_requires_is_read_by_its_name() {
         ["add_(i64, i64)", "step(i64, Mode)", "step(i64, Mode)"]
     );
 }
+
+/// No rule pins a program whose instances never end, so the instances
+/// of one declaration that one call makes are followed up to one bound,
+/// `hgl_analyser::INSTANCES`, which the hgraph target writes no more than
+/// either. A call that makes exactly that many of one is followed whole,
+/// each once, and so is one that makes that many of each of two; one
+/// that makes one more of one is the local `generic.instance_limit`,
+/// which says that its instances do not end within the bound.
+/// `climb<N + 1>` in `climb<N>` ends when the program runs, and every
+/// instance's `requires` holds, but its instances do not end.
+#[test]
+fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
+    assert_eq!(hgl_analyser::INSTANCES, 4096);
+    // `turn<0>` makes `turn<1>` and on to `turn<size - 1>`, which makes
+    // `turn<0>` again: `size` instances in all.
+    let turning = |size: usize| {
+        format!(
+            "const fn need<const N: i64>(v: i64) -> i64 requires !(N == 100000) => v\n\
+             const fn turn<const N: i64>(v: i64) -> i64 =>\n    \
+                 if v <= 0 {{ need<N>(v) }} else {{ turn<((N + 1) % {size})>(v - 1) }}\n\
+             const fn a() -> i64 => turn<0>(3)\n"
+        )
+    };
+    assert_eq!(
+        module(&turning(hgl_analyser::INSTANCES - 1)).summary(),
+        NONE
+    );
+    assert_eq!(module(&turning(hgl_analyser::INSTANCES)).summary(), NONE);
+    // `turn` and `back` call each other, each making as many instances.
+    let both = format!(
+        "const fn need<const N: i64>(v: i64) -> i64 requires !(N == 100000) => v\n\
+         const fn turn<const N: i64>(v: i64) -> i64 =>\n    \
+             if v <= 0 {{ need<N>(v) }} else {{ back<N>(v - 1) }}\n\
+         const fn back<const N: i64>(v: i64) -> i64 => turn<((N + 1) % {})>(v)\n\
+         const fn a() -> i64 => turn<0>(3)\n",
+        hgl_analyser::INSTANCES
+    );
+    assert_eq!(module(&both).summary(), NONE);
+    let past = module(&turning(hgl_analyser::INSTANCES + 1));
+    assert_eq!(
+        past.summary(),
+        ["m.hgl:5:24 local:constraint/generic.instance_limit GEN-3"]
+    );
+    let climb = module(concat!(
+        "const fn small<const K: i64>(v: i64) -> i64 requires !(K == 1000000) => v + K\n",
+        "const fn climb<const N: i64>(v: i64) -> i64 =>\n",
+        "    if v <= 0 { small<N>(v) } else { climb<N + 1>(v - 1) }\n",
+        "const fn a() -> i64 => climb<0>(3)\n",
+    ));
+    assert_eq!(
+        climb.summary(),
+        ["m.hgl:5:24 local:constraint/generic.instance_limit GEN-3"]
+    );
+    let message = &climb.findings[0].message;
+    assert!(
+        message.contains("instances of `climb` this call makes do not end within the 4096"),
+        "{message}"
+    );
+}

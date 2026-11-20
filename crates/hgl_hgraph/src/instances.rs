@@ -82,6 +82,10 @@ pub(crate) struct Instances {
     /// instance: those whose body [`requires`], and those that call
     /// one written by instance with arguments that are not whole.
     requiring: BTreeSet<(usize, usize)>,
+    /// The instances asked for and not made, each by its declaration and
+    /// its key: those past the [`hgl_analyser::INSTANCES`] of one
+    /// declaration that one call makes.
+    past: BTreeSet<(usize, usize, Vec<String>)>,
 }
 
 /// One call's request for an instance.
@@ -332,8 +336,11 @@ impl Instances {
     /// so the search starts from every other body, and from the tests,
     /// and goes on through each instance it finds. A call whose
     /// arguments are not whole asks for nothing. It ends: an instance is
-    /// found once, and the analyser gives up a type that grows past
-    /// its bound, which is then not whole.
+    /// found once, the analyser gives up a type that grows past its
+    /// bound, which is then not whole, and no more instances of one
+    /// declaration are made from one call than the analyser follows
+    /// ([`hgl_analyser::INSTANCES`]): one past them is not made, and a
+    /// call of it is reported.
     pub(crate) fn of(program: &Program) -> Instances {
         let mut instances = Instances::default();
         for (index, module) in program.modules.iter().enumerate() {
@@ -432,7 +439,16 @@ impl Instances {
                 waiting.extend(instances.asked_in(program, value));
             }
         }
-        while let Some(next) = waiting.pop_front() {
+        // Each call asked from where the search starts is a root, and
+        // what an instance asks for is asked from that instance's root:
+        // how many instances of each declaration each root has made.
+        let mut waiting: VecDeque<(Asked, usize)> = waiting
+            .into_iter()
+            .enumerate()
+            .map(|(root, asked)| (asked, root))
+            .collect();
+        let mut made: BTreeMap<(usize, usize, usize), usize> = BTreeMap::new();
+        while let Some((next, root)) = waiting.pop_front() {
             let Some(key) = key(program, (next.module, next.declaration), &next.generics) else {
                 continue;
             };
@@ -440,6 +456,17 @@ impl Instances {
             if found.iter().any(|instance| instance.key == key) {
                 continue;
             }
+            // No rule says a program whose instances never end is
+            // rejected or accepted: none is made past the analyser's
+            // bound, so that writing the program ends.
+            let count = made
+                .entry((root, next.module, next.declaration))
+                .or_insert(0);
+            if *count >= hgl_analyser::INSTANCES {
+                instances.past.insert((next.module, next.declaration, key));
+                continue;
+            }
+            *count += 1;
             let Some((signature, body)) = program.instance(
                 next.module,
                 next.declaration,
@@ -468,7 +495,12 @@ impl Instances {
                 suffix = format!("{plain}_{number}");
                 number += 1;
             }
-            waiting.extend(instances.asked(program, &body.statements));
+            waiting.extend(
+                instances
+                    .asked(program, &body.statements)
+                    .into_iter()
+                    .map(|asked| (asked, root)),
+            );
             instances
                 .declared
                 .entry((next.module, next.declaration))
@@ -574,6 +606,19 @@ impl Instances {
         self.declared
             .get(&(module, declaration))
             .map_or(&[], Vec::as_slice)
+    }
+
+    /// True where the instance of `declaration` of `module` for the
+    /// generic arguments `generics` was asked for and not made: it is
+    /// past the instances of it one call makes ([`hgl_analyser::INSTANCES`]).
+    pub(crate) fn past(
+        &self,
+        program: &Program,
+        (module, declaration): (usize, usize),
+        generics: &[GenericArgument],
+    ) -> bool {
+        key(program, (module, declaration), generics)
+            .is_some_and(|key| self.past.contains(&(module, declaration, key)))
     }
 
     /// The instance of `declaration` of `module` for the generic

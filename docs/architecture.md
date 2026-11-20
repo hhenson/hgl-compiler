@@ -1220,18 +1220,25 @@ A function and a struct with no generic parameter are held to a
 `requires` they state too. What cannot be told where a generic body
 passes on a parameter of its own is told once the typed program is
 whole, for each instance a call that gives every argument makes, at any
-depth (`requirements::instances_hold`), and reported at that call. Only
-the calls that reach a `requires` are followed, each instance once
-however many calls make it, and at most 4096 instances from one, whose
-arguments are no longer than 65536 characters written out; a call whose
-instances go past that is local
-`generic.instance_limit`, for what is past it is not told. What
+depth (`requirements::instances_hold`), and reported at that call. So
+is a call of an operator whose candidate the body's own generic
+parameters select (`values::Selecting`): each instance selects it with
+its types, rejects where none or two most-specific candidates admit
+it, and `Program::instance` gives the instance the call of the one it
+selects; and a generic argument worked out from them, rejected
+(`generic.argument_constant`) where its evaluation fails there. Only
+the calls that reach one of those are followed, each instance once
+however many calls make it, and at most `hgl_analyser::INSTANCES`
+(4096) instances of one declaration from one call, whose arguments are
+no longer than 65536 characters written out; a call whose instances go
+past that is local `generic.instance_limit`, for what is past it is
+not told. The hgraph target makes no more than that many either. What
 is not told for a constant this compiler does not work out is reported
 as not known to hold; nothing else that cannot be told is reported.
 A generic parameter of the declaration a call is written in is no one
-type, so a membership of it is not told; a named operator requirement
-of it is, by what that declaration states (GEN-7), a struct's as a
-function's. A generic value is read however it is written (GEN-8): a
+type, so a membership of it is not told there; a named operator
+requirement of it is, by what that declaration states (GEN-7), a
+struct's as a function's. A generic value is read however it is written (GEN-8): a
 literal of any kind, an enum's member in any spelling, a constant's
 name, after the callee's name or by name. One reader does that for a
 call, a construction and a written type, so a spelling means the same

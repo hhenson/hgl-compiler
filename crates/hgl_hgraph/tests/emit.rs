@@ -6272,3 +6272,104 @@ fn a_constant_in_a_requires_is_read_by_its_name() {
     let python = emitted.module("demo.generics_fixes_wave3");
     python.assert_writes(&["def _inst_named__3(v):", "def _inst_among__5(v):"]);
 }
+
+/// Lexes, parses and analyses `files` as [`emit`] does, and writes the
+/// program for hgraph whatever the analyser reported: each code the
+/// analyser reported, and what the target reported, each as `emit`
+/// gives it.
+fn written_despite(files: &[(&str, &str)]) -> (Vec<String>, Vec<String>) {
+    let mut sources = SourceMap::new();
+    let mut diagnostics = Diagnostics::new();
+    let mut parsed = Vec::new();
+    for (name, text) in files.iter().chain(&hgl_analyser::CORE_FILES) {
+        let file = sources.add(*name, *text).unwrap();
+        let tokens = lex(&sources, file, &mut diagnostics);
+        let tree = parse(
+            &sources,
+            file,
+            &tokens,
+            Entry::SourceFile,
+            Limits::default(),
+            &mut diagnostics,
+        );
+        parsed.push(ParsedFile {
+            file,
+            root: tree.syntax(),
+            omit: Vec::new(),
+        });
+    }
+    let program = analyse(&parsed, &mut diagnostics);
+    let analysed: Vec<String> = diagnostics
+        .as_slice()
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str().to_string())
+        .collect();
+    let before = diagnostics.len();
+    transpile(&program, &mut diagnostics);
+    let reported = diagnostics.as_slice()[before..]
+        .iter()
+        .map(|diagnostic| {
+            let source = sources.file(diagnostic.primary.file);
+            format!(
+                "{}:{} {}: {}",
+                source.name(),
+                source.line_col(diagnostic.primary.span.start),
+                diagnostic.code.as_str(),
+                diagnostic.message
+            )
+        })
+        .collect();
+    (analysed, reported)
+}
+
+/// The instances of one declaration that one call makes are written up
+/// to the analyser's bound (`hgl_analyser::INSTANCES`), so writing a
+/// program ends however many it would make. A call that makes exactly
+/// that many is written whole. One that makes one more, which the
+/// analyser rejects (local `generic.instance_limit`), is not written past
+/// them, and the call of the next is reported; and so is one whose
+/// instances never end, `climb<N + 1>` in `climb<N>`, which is given to
+/// the target here as the analyser leaves it.
+#[test]
+fn the_instances_one_call_makes_are_written_up_to_one_bound() {
+    let turning = |size: usize| {
+        format!(
+            "module m\n\
+             const fn need<const N: i64>(v: i64) -> i64 requires !(N == 100000) => v + N\n\
+             const fn turn<const N: i64>(v: i64) -> i64 =>\n    \
+                 if v <= 0 {{ need<N>(v) }} else {{ turn<((N + 1) % {size})>(v - 1) }}\n\
+             test a {{ assert turn<0>(3) == 3 }}\n"
+        )
+    };
+    let within = emit_clean(&[("m.hgl", &turning(hgl_analyser::INSTANCES))]);
+    let python = within.text("_hgl/_m_m/__init__.py");
+    assert_eq!(
+        python.matches("def _inst_turn__").count(),
+        hgl_analyser::INSTANCES
+    );
+    let (analysed, reported) = written_despite(&[("m.hgl", &turning(hgl_analyser::INSTANCES + 1))]);
+    assert_eq!(analysed, ["generic.instance_limit"]);
+    assert_eq!(
+        reported,
+        [
+            "m.hgl:4:37 target.unsupported: the hgraph target does not write an instance of `turn` past the 4096 instances of it one call makes yet"
+        ]
+    );
+    let (analysed, reported) = written_despite(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn small<const K: i64>(v: i64) -> i64 => v + K\n",
+            "const fn climb<const N: i64>(v: i64) -> i64 =>\n",
+            "    if v <= 0 { small<N>(v) } else { climb<N + 1>(v - 1) }\n",
+            "test a { assert climb<0>(3) == 3 }\n",
+        ),
+    )]);
+    assert_eq!(analysed, ["generic.instance_limit"]);
+    assert_eq!(
+        reported,
+        [
+            "m.hgl:4:38 target.unsupported: the hgraph target does not write an instance of `climb` past the 4096 instances of it one call makes yet"
+        ]
+    );
+}
