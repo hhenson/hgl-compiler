@@ -587,3 +587,26 @@ fn a_propagation_after_a_constant_that_may_fail_is_reported() {
         ["m.hgl:5:58 the cpp target does not write a `?` here yet"]
     );
 }
+
+/// EXPR-3, EXPR-13: a compound assignment reads its place first, and a
+/// read of a list's element may fail (EXPR-7), so a `?` in its value
+/// would run before that read; it is reported.
+#[test]
+fn a_propagation_in_a_compound_assignment_to_an_element_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
+            "const fn grown() -> result<list<i64>, error> {\n",
+            "    var items = [1]\n",
+            "    items[2] += checked(11)?\n",
+            "    return ok(items)\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        ["m.hgl:5:17 the cpp target does not write a `?` here yet"]
+    );
+}

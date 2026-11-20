@@ -42,7 +42,13 @@ impl Emitter<'_> {
         if let Some((place, written)) = &scope.read_as
             && place == value
         {
+            // EXPR-3: "A compound assignment reads its existing target",
+            // its left operand, first (EXPR-13); a read of a list's
+            // element is checked, and may fail (EXPR-7).
             scope.read = true;
+            if reads_an_element(place) {
+                scope.acted = true;
+            }
             return written.clone();
         }
         if matches!(value.kind, ExprKind::Local(_) | ExprKind::Constant { .. }) {
@@ -476,6 +482,17 @@ impl Emitter<'_> {
 /// evaluate in either order. The element read is then a value of its own.
 pub(super) fn held_read(base: &Expr, index: &Expr) -> bool {
     changes(base) || changes(index) || (may_fail(base) && may_fail(index))
+}
+
+/// True where the place `place` is, at any depth, an element of a list,
+/// whose read is checked (EXPR-7).
+fn reads_an_element(place: &Expr) -> bool {
+    match &place.kind {
+        ExprKind::Index { base, .. } => {
+            matches!(base.ty, Type::List { .. }) || reads_an_element(base)
+        }
+        _ => false,
+    }
 }
 
 /// An `i64` as a C++ literal. The least has none: its negation is out of
