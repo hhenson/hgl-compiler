@@ -363,6 +363,101 @@ fn temporal_code_is_written() {
     assert!(units.contains(&"modules/core.cpp"), "{units:?}");
 }
 
+/// The temporal form of a set and of a dictionary (TYPE-9): each
+/// published whole and as a delta (TIME-7), read whole and by its delta
+/// (TIME-1, END-3), `all_valid` of a dictionary (TIME-9), invalidation
+/// (END-4), a lifted call given one whole, and their traces, a cell
+/// written whole among them (TST-5, TST-9). Everything is written, and
+/// each test can be run.
+#[test]
+fn keyed_temporal_code_is_written() {
+    let emitted = emit_with(
+        &[("demo.keyed.hgl", include_str!("fixtures/demo.keyed.hgl"))],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.keyed", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    // CEVAL-1: core's `replay` of a set is a source whose body yields the
+    // set's delta, which the set's form publishes as that change (TIME-7).
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    assert!(
+        core.contains("using yielded_type_ = ::hglrt::Yielded<::hglrt::set_delta<::hgraph::Int>>;"),
+        "{core}"
+    );
+}
+
+/// A dictionary's key of a type the family does not write, a constant
+/// connection of a set, an entry of a dictionary's entry in a hook, and a
+/// key's child as a connection of a graph are reported, and block what
+/// reaches them.
+#[test]
+fn a_keyed_form_not_written_yet_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "enum Side { buy, sell }\n",
+                "\n",
+                "fn sides(values: dict<Side, i64>) -> i64 {\n",
+                "    when { return 1 }\n",
+                "}\n",
+                "\n",
+                "fn constant_members() -> set<i64> => [1, 2]\n",
+                "\n",
+                "fn entry_a(book: dict<str, dict<str, i64>>) -> i64 {\n",
+                "    when { if valid(book[\"A\"][\"B\"]) { return book[\"A\"][\"B\"] } }\n",
+                "}\n",
+                "\n",
+                "fn child_a(book: dict<str, i64>) -> i64 => book[\"A\"]\n",
+                "\n",
+                "test enum_keys {\n",
+                "    assert eval(sides(values: [[Side.buy: 1]])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_constant_set {\n",
+                "    assert eval(constant_members()) == [[1, 2]]\n",
+                "}\n",
+                "\n",
+                "test an_entry_of_an_entry {\n",
+                "    assert eval(entry_a(book: [[\"A\": [\"B\": 1]]])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_child_in_a_graph {\n",
+                "    assert eval(child_a(book: [[\"A\": 1]])) == [1]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("enum_keys").as_deref(),
+        Some("m.hgl:18:31 the cpp target does not write a temporal value of `dict<Side, i64>` yet")
+    );
+    assert_eq!(
+        emitted.blocked("a_constant_set").as_deref(),
+        Some("m.hgl:9:38 the cpp target does not write a constant connection of `set<i64>` yet")
+    );
+    assert_eq!(
+        emitted.blocked("an_entry_of_an_entry").as_deref(),
+        Some("m.hgl:12:21 the cpp target does not write an entry of a dictionary's entry yet")
+    );
+    assert_eq!(
+        emitted.blocked("a_child_in_a_graph").as_deref(),
+        Some("m.hgl:15:44 the cpp target does not write a child of a connection yet")
+    );
+}
+
 /// A temporal form the target does not write yet is reported through the
 /// dispatch point, where it is written, and blocks what reaches it: a
 /// temporal value of a type no family writes, and a capability no family

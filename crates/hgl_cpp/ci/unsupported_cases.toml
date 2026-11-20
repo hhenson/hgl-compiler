@@ -74,11 +74,6 @@
 "a temporal value of `WriteOrder`" = [
     "conformance::the_last_write_decides_validity",
 ]
-"a temporal value of `dict<str, i64>`" = [
-    "conformance::a_whole_dictionary_is_a_trace_cell",
-    "conformance::an_empty_dictionary_given_to_an_empty_dictionary_is_no_tick",
-    "conformance::removing_only_an_absent_key_is_no_tick",
-]
 "a temporal value of `i64?`" = [
     "conformance::a_published_null_has_a_delta",
     "conformance::a_removed_key_is_absent_until_added_again",
@@ -127,14 +122,6 @@
 "a temporal value of `rolling_window<i64, 3us, 1us>`" = [
     "conformance::a_value_leaves_a_window_of_a_duration_with_a_tick",
 ]
-"a temporal value of `set<i64>`" = [
-    "conformance::a_set_given_the_members_it_holds_is_no_tick",
-    "conformance::a_whole_set_replaces_the_previous_members",
-    "conformance::an_empty_set_delta_ticks_only_where_it_makes_the_set_valid",
-    "conformance::mixed_replay",
-    "conformance::removing_only_an_absent_member_is_no_tick",
-    "core_implementation::record_can_be_empty",
-]
 "a trace of `MarketQuote`" = [
     "conformance::a_struct_delta_keeps_the_final_write_to_each_field",
 ]
@@ -159,10 +146,6 @@
 ]
 "a trace of `list<i64, 2>`" = [
     "conformance::a_fixed_list_delta_reports_the_position_in_updated",
-]
-"a trace of `set<i64>`" = [
-    "conformance::set_writes_coalesce",
-    "core_implementation::record_retains_each_delta",
 ]
 "a trace of `tuple<i64, str>`" = [
     "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",

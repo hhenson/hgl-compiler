@@ -1,0 +1,195 @@
+module demo.keyed
+
+# The temporal form of a set and of a dictionary (TYPE-9): each published
+# whole and as a delta (TIME-7), read whole and by its delta (TIME-1,
+# END-3), `all_valid` of a dictionary (TIME-9), invalidation (END-4), a
+# lifted call given one whole (FN-12), and traces of each, dense, their
+# cells whole or deltas (TST-5, TST-9).
+
+# 0 a delta that names no change, 1 [1] whole, 2 [1, 2] whole, 3 the
+# removal of 9, which the set does not hold, 4 an invalidation, 5 two
+# deltas in one evaluation.
+fn write_members(step: i64) -> set<i64> {
+    inject out
+    when {
+        if step == 0 { return delta<set<i64>>() }
+        if step == 1 { return [1] }
+        if step == 2 { return [1, 2] }
+        if step == 3 { return delta<set<i64>>(removed: [9]) }
+        if step == 5 {
+            out = delta<set<i64>>(added: [2, 3])
+            out = delta<set<i64>>(removed: [1, 2])
+            return
+        }
+        invalidate(out)
+    }
+}
+
+fn members_valid(members: set<i64>) -> bool {
+    when valid([]) { return valid(members) }
+}
+
+fn member_wakes(step: i64) -> bool => members_valid(write_members(step))
+
+fn read_delta(members: set<i64>) -> set<i64> {
+    when { return delta_value(members) }
+}
+
+fn member_changes(step: i64) -> set<i64> => read_delta(write_members(step))
+
+const fn sum_members(members: set<i64>) -> i64 {
+    var total: i64 = 0
+    for member in members { total += member }
+    return total
+}
+
+fn total_of_members(step: i64) -> i64 => sum_members(write_members(step))
+
+test a_set_ticks_only_where_it_changes {
+    assert eval(member_wakes(step: [0, 0, 4, 0])) == [true, _, false, true]
+    assert eval(member_wakes(step: [1, 1, 3, 2, 2])) == [true, _, _, true, _]
+}
+
+test two_writes_of_a_set_are_one_change {
+    assert eval(member_changes(step: [1, 5])) == [
+        delta<set<i64>>(added: [1]),
+        delta<set<i64>>(added: [3], removed: [1]),
+    ]
+}
+
+test a_lifted_call_reads_the_set_whole {
+    assert eval(total_of_members(step: [0, 1, 2, 5])) == [0, 1, 3, 3]
+}
+
+fn relay_members(members: set<i64>) -> set<i64> {
+    when { return members }
+}
+
+test a_set_relayed_whole_publishes_its_change {
+    assert eval(relay_members(members: [[1, 2], [2, 3], [2, 3], []])) == [
+        delta<set<i64>>(added: [1, 2]),
+        delta<set<i64>>(added: [3], removed: [1]),
+        _,
+        delta<set<i64>>(removed: [2, 3]),
+    ]
+    assert eval(relay_members(members: [[1, 2], delta<set<i64>>(added: [3]), [3]])) ==
+        [[1, 2], [1, 2, 3], [3]]
+}
+
+fn relay_floats(values: set<f64>) -> set<f64> {
+    when { return values }
+}
+
+test a_set_of_floats {
+    assert eval(relay_floats(values: [[1.0, 2.0], [2.0]])) == [[1.0, 2.0], [2.0]]
+}
+
+# 0 a delta that names no change, 1 A updated to 7, 2 A to 9, 3 the removal
+# of B, which the dictionary does not hold, 4 an invalidation, 5 [] whole,
+# 6 ["A": 7] whole.
+fn write_book(step: i64) -> dict<str, i64> {
+    inject out
+    when {
+        if step == 0 { return delta<dict<str, i64>>() }
+        if step == 1 { return delta<dict<str, i64>>(updated: ["A": 7]) }
+        if step == 2 { return delta<dict<str, i64>>(updated: ["A": 9]) }
+        if step == 3 { return delta<dict<str, i64>>(removed: ["B"]) }
+        if step == 5 { return [] }
+        if step == 6 { return ["A": 7] }
+        invalidate(out)
+    }
+}
+
+fn book_valid(book: dict<str, i64>) -> bool {
+    when valid([]) { return valid(book) }
+}
+
+fn book_wakes(step: i64) -> bool => book_valid(write_book(step))
+
+const fn price_of_a(book: dict<str, i64>) -> i64 {
+    let found = get(book, "A")
+    if found == null { return -1 }
+    return found
+}
+
+fn priced(step: i64) -> i64 => price_of_a(write_book(step))
+
+test a_dictionary_ticks_only_where_it_changes {
+    assert eval(book_wakes(step: [0, 0, 4, 0])) == [true, _, false, true]
+    assert eval(book_wakes(step: [1, 3, 2])) == [true, _, true]
+    assert eval(book_wakes(step: [5, 5, 6, 6])) == [true, _, true, true]
+}
+
+test a_lifted_call_reads_the_dictionary_whole {
+    assert eval(priced(step: [0, 1, 4, 6])) == [-1, 7, _, 7]
+}
+
+fn relay_book(book: dict<str, i64>) -> dict<str, i64> {
+    when all_valid(book) { return book }
+}
+
+fn book_changes(book: dict<str, i64>) -> dict<str, i64> {
+    when { return delta_value(book) }
+}
+
+test a_dictionary_relayed_whole_publishes_each_entry {
+    assert eval(relay_book(book: [["bid": 10, "ask": 12], _, ["bid": 11]])) ==
+        [["bid": 10, "ask": 12], _, ["bid": 11]]
+    assert eval(book_changes(book: [["bid": 10], delta<dict<str, i64>>(removed: ["bid"]), ["ask": 3]])) == [
+        delta<dict<str, i64>>(updated: ["bid": 10]),
+        delta<dict<str, i64>>(removed: ["bid"]),
+        delta<dict<str, i64>>(updated: ["ask": 3]),
+    ]
+}
+
+fn relay_groups(groups: dict<str, set<i64>>) -> dict<str, set<i64>> {
+    when { return groups }
+}
+
+test a_dictionary_of_sets {
+    assert eval(relay_groups(groups: [
+        ["a": [1, 2]],
+        delta<dict<str, set<i64>>>(updated: ["a": delta<set<i64>>(removed: [1])]),
+        ["b": [3]],
+    ])) == [["a": [1, 2]], ["a": [2]], ["b": [3]]]
+}
+
+# An entry of a dictionary input is an endpoint whether or not it is valid
+# (TIME-1, TIME-9), read checked when it runs (EXPR-7, ERR-14).
+fn entry_a(book: dict<str, i64>) -> i64 {
+    when { if valid(book["A"]) { return book["A"] } }
+}
+
+fn entry_at(book: dict<str, i64>, key: str) -> i64 {
+    when { return book[key] }
+}
+
+fn entry_or_code(book: dict<str, i64>, key: str) -> str {
+    when {
+        let read: result<i64, error> = book[key]
+        if is_ok(read) { return "ok" }
+        let code = read.error.code
+        if code == null { return "no code" }
+        return code
+    }
+}
+
+fn entry_delta(book: dict<str, i64>) -> i64 {
+    when modified(book) && valid([]) {
+        if modified(book["A"]) { return delta_value(book["A"]) }
+    }
+}
+
+test an_entry_of_a_dictionary_is_read_checked {
+    assert eval(entry_a(book: [["A": 1], ["B": 2], ["A": 3, "B": 2]])) == [1, _, 3]
+    assert eval(entry_at(book: [["A": 1, "B": 2], _], key: ["B", "A"])) == [2, 1]
+    assert raises("value.unset_read") {
+        eval(entry_at(book: [["A": 1]], key: ["C"]))
+    }
+    assert eval(entry_or_code(book: [["A": 1], _], key: ["A", "C"])) == ["ok", "value.unset_read"]
+    assert eval(entry_delta(book: [
+        ["A": 1],
+        delta<dict<str, i64>>(updated: ["B": 3]),
+        delta<dict<str, i64>>(updated: ["A": 4]),
+    ])) == [1, _, 4]
+}

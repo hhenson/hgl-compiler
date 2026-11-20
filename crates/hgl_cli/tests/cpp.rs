@@ -430,6 +430,35 @@ fn temporal_code_runs_on_the_sdk() {
     );
 }
 
+/// `demo.keyed`, the temporal form of a set and of a dictionary (TYPE-9,
+/// TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
+/// SDK, and under the sanitizers where `HGL_CPP_FLAGS` names them.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn keyed_temporal_code_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("keyed");
+    let file = write(
+        &root,
+        "src/demo.keyed.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// `demo.composites`, structs, sets, dictionaries and deltas as values
 /// (TYPE-3 to TYPE-6, TYPE-14, TYPE-16, EXPR-3, ERR-6, CTRL-12): every
 /// test of it passes on the SDK, and under the sanitizers where

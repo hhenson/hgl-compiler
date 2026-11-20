@@ -137,6 +137,7 @@ pub(super) trait Family: Sync {
 /// Every family, in the order each lookup asks them. A construct lane
 /// puts its own ahead of the spine's.
 static FAMILIES: &[&dyn Family] = &[
+    &super::keyed::Keyed,
     &super::scalars::Scalars,
     &super::tests::Tests,
     &super::sources::Sources,
