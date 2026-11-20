@@ -2,6 +2,41 @@
 #include "demo.temporal.h"
 #include "core.h"
 
+// Names this file writes, which no macro of a header above takes.
+#undef Clock
+#undef Logger
+#undef a
+#undef add_one
+#undef adds_one
+#undef an_outputless_target_runs
+#undef b
+#undef clock
+#undef core
+#undef count
+#undef count_publications
+#undef counted
+#undef counted_ticks
+#undef demo
+#undef earliest_start
+#undef first_of
+#undef handlers_run_in_order
+#undef lhs
+#undef log_debug
+#undef logger
+#undef noted
+#undef record
+#undef replay
+#undef reset
+#undef rhs
+#undef scaled
+#undef sources_and_constants
+#undef stamped
+#undef temporal
+#undef the_clock_is_read
+#undef ticks
+#undef value
+#undef values
+
 namespace hgl::demo::temporal::m_
 {
 
@@ -87,22 +122,22 @@ struct count_publications
     static constexpr auto name = "demo.temporal::count_publications";
 
     // The node's `state` and `cache` (TIME-6).
-    struct state_type
+    struct state_type_
     {
         ::hgraph::Int count{};
     };
 
-    static void start([[maybe_unused]] ::hgraph::State<state_type> state_)
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
     {
-        state_.set(state_type{});
-        state_type& kept_ = state_.modify();
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
         count = 0;
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::State<state_type> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        state_type& kept_ = state_.modify();
+        state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
         // when, line 19 (TIME-3)
         {
@@ -117,12 +152,12 @@ struct count_publications
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::temporal::m_::n_::count_publications::state_type>
+struct hgraph::scalar_descriptor<::hgl::demo::temporal::m_::n_::count_publications::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::temporal::m_::n_::count_publications::state_type>("hgl:demo.temporal::count_publications.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::temporal::m_::n_::count_publications::state_type_>("hgl:demo.temporal::count_publications.state");
     }
 };
 
@@ -178,45 +213,45 @@ struct ticks
     static constexpr auto name = "demo.temporal::ticks";
     // SOURCE-2: "The first evaluation begins the body".
     static constexpr bool schedule_on_start = true;
-    using yielded_type = ::hglrt::Yielded<::hgraph::Int>;
-    using body_type = ::hglrt::generator<yielded_type>;
+    using yielded_type_ = ::hglrt::Yielded<::hgraph::Int>;
+    using body_type_ = ::hglrt::generator<yielded_type_>;
 
     // The body (SOURCE-1), given its configuration by value.
-    static body_type body([[maybe_unused]] ::hglrt::list<::hgraph::Int> values)
+    static body_type_ body_([[maybe_unused]] ::hglrt::list<::hgraph::Int> values)
     {
         for (const ::hgraph::Int& value : values)
         {
-            co_yield yielded_type{::hgraph::TimeDelta{1}, value};
+            co_yield yielded_type_{::hgraph::TimeDelta{1}, value};
         }
     }
 
     // The node's state (TIME-6): the body, where it is, and the
     // timing of its yields.
-    struct state_type
+    struct state_type_
     {
         ::hglrt::Source<::hgraph::Int> source_{};
-        std::optional<body_type> body_{};
-        std::optional<body_type::iterator> at_{};
+        std::optional<body_type_> frame_{};
+        std::optional<body_type_::iterator> at_{};
     };
 
-    static void start(::hgraph::Scalar<"values", ::hglrt::list<::hgraph::Int>> values, ::hgraph::State<state_type> state_)
+    static void start(::hgraph::Scalar<"values", ::hglrt::list<::hgraph::Int>> values, ::hgraph::State<state_type_> state_)
     {
-        state_.set(state_type{});
-        state_type& kept_ = state_.modify();
-        kept_.body_.emplace(body(values.value()));
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+        kept_.frame_.emplace(body_(values.value()));
     }
 
     // SOURCE-3: what is due now is published, and the node asks for
     // a wake at the next target.
-    static void eval([[maybe_unused]] ::hgraph::Scalar<"values", ::hglrt::list<::hgraph::Int>> values, ::hgraph::State<state_type> state_, ::hgraph::DateTime now_, ::hgraph::NodeScheduler scheduler_, ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    static void eval([[maybe_unused]] ::hgraph::Scalar<"values", ::hglrt::list<::hgraph::Int>> values, ::hgraph::State<state_type_> state_, ::hgraph::DateTime now_, ::hgraph::NodeScheduler scheduler_, ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        state_type& kept_ = state_.modify();
+        state_type_& kept_ = state_.modify();
         ::hglrt::resume(
             kept_.source_, now_, scheduler_,
-            [&kept_]() -> std::optional<yielded_type> {
+            [&kept_]() -> std::optional<yielded_type_> {
                 if (!kept_.at_.has_value())
                 {
-                    kept_.at_.emplace(kept_.body_->begin());
+                    kept_.at_.emplace(kept_.frame_->begin());
                 }
                 else
                 {
@@ -226,17 +261,17 @@ struct ticks
                 {
                     return std::nullopt;
                 }
-                return std::optional<yielded_type>{**kept_.at_};
+                return std::optional<yielded_type_>{**kept_.at_};
             },
             [&out_](::hgraph::Int value_) { out_.set(value_); });
     }
 
     // SOURCE-4: the body's frame, and the locals in it, end with the run.
-    static void stop(::hgraph::State<state_type> state_)
+    static void stop(::hgraph::State<state_type_> state_)
     {
-        state_type& kept_ = state_.modify();
+        state_type_& kept_ = state_.modify();
         kept_.at_.reset();
-        kept_.body_.reset();
+        kept_.frame_.reset();
     }
 };
 }  // namespace n_
@@ -244,12 +279,12 @@ struct ticks
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::temporal::m_::n_::ticks::state_type>
+struct hgraph::scalar_descriptor<::hgl::demo::temporal::m_::n_::ticks::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::temporal::m_::n_::ticks::state_type>("hgl:demo.temporal::ticks.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::temporal::m_::n_::ticks::state_type_>("hgl:demo.temporal::ticks.state");
     }
 };
 
