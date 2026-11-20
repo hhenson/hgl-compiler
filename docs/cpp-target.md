@@ -17,7 +17,7 @@ with this target as its reference for behaviour and for speed.
 | Nothing from either engine's standard library | Owner | Operators are HGL's: core's HGL sources compiled, and core's 155 native declarations written in C++ here. Nothing under hgraph's `include/hgraph/lib/` is used, its test helpers included |
 | The integration point is hgraph's graph, node, type and runtime layers, with its structural nodes (`map_`, `switch_`, `reduce`, nested graphs, capture) | Owner | Generated code needs `libhgraph_runtime` and `libhgraph_wiring` only |
 | What hgraph lacks is added to hgraph, from a specified issue | Owner | No adaptation layer is designed. Where a behaviour differs from the specification, the difference is raised on hgraph, and a workaround here is temporary and names its issue |
-| GCC 15 or later on Linux; no `manylinux` build | Owner | C++23 and its standard library are assumed |
+| GCC 15 or later on Linux, with no `manylinux` build; macOS too, and Windows later (2026-11-20) | Owner | C++23 and each platform's standard library are assumed: Linux builds with GCC 15 or later and libstdc++, macOS with Apple clang 21 or later and the system's libc++. What one of them lacks is written once in `libhglrt` and used on every platform, not chosen by platform: Apple's libc++ has no `<generator>`, so a source's body is an `hglrt::generator` |
 
 A trial transcription of four programs (scalar, keyed children, a struct with
 generic functions and a failure, a stateful `switch`) matched the Python

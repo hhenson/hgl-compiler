@@ -5,7 +5,9 @@
 # runtime library"). It is built without Arrow: hgraph's graph, node, type
 # and runtime layers, its runtime and wiring libraries, and nothing of its
 # standard library, which is all the C++ target takes from hgraph
-# (docs/cpp-target.md).
+# (docs/cpp-target.md). It runs on Linux and on macOS, under bash 3.2 or
+# later (macOS's own), and builds with the platform's compiler: GCC 15 or
+# later on Linux, Apple clang 21 or later on macOS.
 #
 # Usage: scripts/provision-hgraph-sdk.sh TAG DIR
 #
@@ -25,7 +27,8 @@
 #                      holds more, Arrow among it, does: nothing more is used.
 #   HGL_HGRAPH_SOURCE  a checkout of hgraph at TAG to build. Without it, TAG
 #                      is cloned from GitHub into a temporary directory.
-#   CXX                the C++ compiler, GCC 15 or later (default: g++).
+#   CXX                the C++ compiler (default: g++ on Linux, clang++ on
+#                      macOS).
 #   HGL_BUILD_JOBS     how many jobs the build runs at once (default: every
 #                      processor).
 #   MAMBA_EXE          micromamba, where it is not `micromamba` on the path.
@@ -42,8 +45,14 @@
 # on what else a prefix holds. hgraph's tests and warnings are hgraph's, so
 # they are left out. The SDK's libraries are given the prefix's library
 # directory as their own run path (CMAKE_INSTALL_RPATH, which hgraph puts
-# before its `$ORIGIN`), so that a program built against the SDK finds fmt
-# and spdlog with no setting of its own.
+# before its `$ORIGIN`, `@loader_path` on macOS), so that a program built
+# against the SDK finds fmt and spdlog with no setting of its own.
+#
+# On macOS conda-forge's fmt, spdlog and simdjson link conda-forge's own
+# libc++, which the prefix then holds, where the SDK and what is built
+# against it link the system's. That libc++ re-exports the system's
+# libc++abi, so a process has one runtime of exceptions and type
+# information, and an exception thrown in one library is caught in another.
 #
 # DIR/hgl-sdk.txt says what was built: the tag, its commit, how it was
 # configured (`arrow=off`), the compiler and the dependency prefix. It is
@@ -68,9 +77,12 @@ DEPENDENCIES=(
 # How the SDK is configured, as hgl-sdk.txt says it.
 CONFIGURATION="arrow=off"
 
-# The oldest GCC the SDK is built with: hgraph's headers need C++23, and the
-# SDK's library needs GCC 15's libstdc++ (GLIBCXX_3.4.34) to link.
+# The oldest compiler the SDK is built with. On Linux, GCC 15: hgraph's
+# headers need C++23, and the SDK's library needs GCC 15's libstdc++
+# (GLIBCXX_3.4.34) to link. On macOS, Apple clang 21, the oldest it has been
+# built and tested with.
 MINIMUM_GCC=15
+MINIMUM_APPLE_CLANG=21
 
 # hgraph's repository, where TAG is cloned from.
 HGRAPH_REPOSITORY=https://github.com/hhenson/hgraph.git
@@ -107,6 +119,12 @@ tool() {
 main() {
     [[ $# -eq 2 && -n $1 && -n $2 ]] || fail "usage: $0 TAG DIR"
     [[ -n ${HGL_HGRAPH_DEPS:-} ]] || fail "HGL_HGRAPH_DEPS must name the dependency prefix"
+    local platform
+    platform=$(uname -s)
+    case $platform in
+        Linux | Darwin) ;;
+        *) fail "the SDK is built on Linux and on macOS, not on $platform" ;;
+    esac
     local tag=$1
     local dir deps
     dir=$(absolute "$2")
@@ -133,22 +151,37 @@ main() {
         command -v "$mamba" >/dev/null || fail "$deps does not exist, and micromamba is needed to make it"
         say "making the dependency prefix $deps"
         mkdir -p -- "$(dirname -- "$deps")"
-        # A package cache of its own, so that nothing outside the prefix
-        # and the temporary directory is written.
-        "$mamba" create --yes --quiet --prefix "$deps" --override-channels \
+        # A package cache and a home directory of its own: micromamba
+        # writes caches and a list of environments under the home
+        # directory too. So nothing outside the prefix and the temporary
+        # directory is written.
+        mkdir -p -- "$work/home"
+        HOME="$work/home" "$mamba" create --yes --quiet --prefix "$deps" --override-channels \
             --channel conda-forge --root-prefix "$work/mamba" "${DEPENDENCIES[@]}"
     fi
     local cmake ninja
     cmake=$(tool "$deps" cmake)
     ninja=$(tool "$deps" ninja)
 
-    local cxx defines version
-    cxx=$(command -v "${CXX:-g++}") || fail "the C++ compiler ${CXX:-g++} was not found"
-    # Clang defines __GNUC__ too, and answers -dumpversion with its own.
-    defines=$("$cxx" -dM -E -x c++ /dev/null)
-    [[ $defines == *__GNUC__* && $defines != *__clang__* ]] || fail "$cxx is not GCC"
-    version=$("$cxx" -dumpfullversion -dumpversion)
-    [[ ${version%%.*} -ge $MINIMUM_GCC ]] || fail "$cxx is GCC $version; GCC $MINIMUM_GCC or later is needed"
+    # The platform's compiler. Clang defines __GNUC__ too, and answers
+    # -dumpversion with its own version; GCC's whole version is
+    # -dumpfullversion's.
+    local cxx defines version compiler default_cxx=g++
+    [[ $platform == Darwin ]] && default_cxx=clang++
+    cxx=$(command -v "${CXX:-$default_cxx}") || fail "the C++ compiler ${CXX:-$default_cxx} was not found"
+    defines=$("$cxx" -dM -E -x c++ /dev/null 2>/dev/null) || fail "$cxx does not run as a C++ compiler"
+    if [[ $platform == Darwin ]]; then
+        [[ $defines == *__apple_build_version__* ]] || fail "$cxx is not Apple clang"
+        version=$("$cxx" -dumpversion)
+        [[ ${version%%.*} -ge $MINIMUM_APPLE_CLANG ]] ||
+            fail "$cxx is Apple clang $version; Apple clang $MINIMUM_APPLE_CLANG or later is needed"
+        compiler="Apple clang $version"
+    else
+        [[ $defines == *__GNUC__* && $defines != *__clang__* ]] || fail "$cxx is not GCC"
+        version=$("$cxx" -dumpfullversion -dumpversion)
+        [[ ${version%%.*} -ge $MINIMUM_GCC ]] || fail "$cxx is GCC $version; GCC $MINIMUM_GCC or later is needed"
+        compiler="GCC $version"
+    fi
 
     # The source at the tag.
     local source
@@ -167,8 +200,9 @@ main() {
     grep -q 'option(HGRAPH_WITH_ARROW' "$source/CMakeLists.txt" ||
         fail "hgraph $tag cannot be built without Arrow: 0.9.12 or later is needed"
 
-    local jobs=${HGL_BUILD_JOBS:-$(nproc)}
-    say "building hgraph $tag ($commit) with GCC $version, $jobs jobs"
+    # Every processor: `getconf` counts them on Linux and on macOS alike.
+    local jobs=${HGL_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}
+    say "building hgraph $tag ($commit) with $compiler, $jobs jobs"
     local started=$SECONDS
     "$cmake" -S "$source" -B "$work/build" -G Ninja \
         -DCMAKE_MAKE_PROGRAM="$ninja" \
@@ -191,7 +225,7 @@ main() {
     "$cmake" --build "$work/build" --parallel "$jobs"
     "$cmake" --install "$work/build"
 
-    printf 'tag=%s\ncommit=%s\n%s\ncompiler=GCC %s\ndependencies=%s\n' "$tag" "$commit" "$CONFIGURATION" "$version" \
+    printf 'tag=%s\ncommit=%s\n%s\ncompiler=%s\ndependencies=%s\n' "$tag" "$commit" "$CONFIGURATION" "$compiler" \
         "$deps" >"$stamp"
     say "installed hgraph $tag's SDK into $dir in $((SECONDS - started)) s"
 }
