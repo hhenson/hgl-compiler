@@ -36,6 +36,38 @@ fn recorded(checked: &Checked, body: &Body) -> Vec<String> {
     found
 }
 
+/// The body of the instance that the first call of a function in the
+/// body of `caller` asks for.
+fn instance_called_by(checked: &Checked, caller: &str) -> Body {
+    let mut call = None;
+    walk_statements(&body(checked, caller).statements, &mut |expression| {
+        if let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    generics,
+                    requirements,
+                },
+            ..
+        } = &expression.kind
+        {
+            call.get_or_insert((
+                *module,
+                *declaration,
+                generics.clone(),
+                requirements.clone(),
+            ));
+        }
+    });
+    let (module, declaration, generics, requirements) = call.expect("the caller calls a function");
+    let (_, instance) = checked
+        .program
+        .instance(module, declaration, &generics, &requirements)
+        .expect("the function has a body");
+    instance
+}
+
 /// FN-3: "There a temporal parameter, and the result of a temporal or
 /// lifted call, is a connection: the argument of a call, the operand of
 /// a symbol, a condition, a bound local, or what is returned." The
@@ -148,32 +180,7 @@ fn an_instance_records_what_its_candidates_give() {
             "x: connection",
         ]
     );
-    let mut call = None;
-    walk_statements(&body(&checked, "used").statements, &mut |expression| {
-        if let ExprKind::Call {
-            callee:
-                Callee::Function {
-                    module,
-                    declaration,
-                    generics,
-                    requirements,
-                },
-            ..
-        } = &expression.kind
-        {
-            call.get_or_insert((
-                *module,
-                *declaration,
-                generics.clone(),
-                requirements.clone(),
-            ));
-        }
-    });
-    let (module, declaration, generics, requirements) = call.expect("`used` calls `total`");
-    let (_, instance) = checked
-        .program
-        .instance(module, declaration, &generics, &requirements)
-        .expect("`total` has a body");
+    let instance = instance_called_by(&checked, "used");
     assert_eq!(instance.locals[2].category, ValueCategory::Value);
     assert_eq!(
         recorded(&checked, &instance),
@@ -185,5 +192,48 @@ fn an_instance_records_what_its_candidates_give() {
             "s: value",
             "x: connection",
         ]
+    );
+}
+
+/// EXPR-3: "Initialization fixes a binding's value/connection
+/// category", and a block's value is the one it ends in (CTRL-10). A
+/// local that the value of another declares is settled first in the
+/// instance, and the other with it: `s` is what `t` is, an ordinary
+/// value once core's value candidate of `add_` answers the requirement.
+#[test]
+fn an_instance_settles_a_local_that_a_value_declares() {
+    let checked = module(concat!(
+        "fn total<T>(const k: T, x: T) -> T requires add_(T, T) -> T {\n",
+        "    let s = {\n",
+        "        let t = add_(k, k)\n",
+        "        t\n",
+        "    }\n",
+        "    return add_(s, x)\n",
+        "}\n",
+        "fn used(x: i64) -> i64 => total(2, x)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    let instance = instance_called_by(&checked, "used");
+    let categories: Vec<(&str, ValueCategory)> = instance
+        .locals
+        .iter()
+        .map(|local| (local.name.as_str(), local.category))
+        .collect();
+    assert_eq!(
+        categories,
+        [
+            ("k", ValueCategory::Value),
+            ("x", ValueCategory::Connection),
+            ("t", ValueCategory::Value),
+            ("s", ValueCategory::Value),
+        ]
+    );
+    let calls: Vec<String> = recorded(&checked, &instance)
+        .into_iter()
+        .filter(|line| line.starts_with("add_"))
+        .collect();
+    assert_eq!(
+        calls,
+        ["add_(k, k): value", "add_(s, x): connection lifted"]
     );
 }

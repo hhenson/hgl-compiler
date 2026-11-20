@@ -350,30 +350,41 @@ fn lifts(program: &Program, callee: &Callee) -> bool {
 /// lifted". A node's hooks, a value function and a test lift nothing
 /// (a test's eval wires its target itself, TST-8).
 ///
-/// A local that is not settled takes what the first value it is given
-/// is (EXPR-3: "Initialization fixes a binding's value/connection
-/// category"), as the typing pass has it. That changes nothing in a
-/// body as it was read, and settles an instance's
+/// A local that is not settled takes what the first of its values that
+/// is settled is (EXPR-3: "Initialization fixes a binding's
+/// value/connection category"), as the typing pass has it. That changes
+/// nothing in a body as it was read, and settles an instance's
 /// ([`Program::instance`]): there each operation the declaration
 /// requires is the call of the candidate that answers it, a temporal
-/// one or a value one, so what it gives is known.
+/// one or a value one, so what it gives is known. A value may read a
+/// local declared inside it, `let s = { let t = add_(k, k); t }`, which
+/// a walk meets after the declaration it is in, so the walk is made
+/// again until it settles no more: each walk but the last settles one
+/// at least.
 pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
     use ValueCategory::Unsettled;
     let Body { locals, statements } = body;
-    walk_statement_nodes(statements, &mut |node| {
-        let (local, value) = match node {
-            Node::Statement(Stmt::Declare {
-                local,
-                value: Some(value),
-            })
-            | Node::Statement(Stmt::Assign { local, value, .. }) => (*local, value),
-            _ => return,
-        };
-        if locals[local].category == Unsettled {
-            let given = category(program, locals, value);
-            locals[local].category = given;
-        }
-    });
+    let mut settling = true;
+    while settling {
+        settling = false;
+        walk_statement_nodes(statements, &mut |node| {
+            let (local, value) = match node {
+                Node::Statement(Stmt::Declare {
+                    local,
+                    value: Some(value),
+                })
+                | Node::Statement(Stmt::Assign { local, value, .. }) => (*local, value),
+                _ => return,
+            };
+            if locals[local].category == Unsettled {
+                let given = category(program, locals, value);
+                if given != Unsettled {
+                    locals[local].category = given;
+                    settling = true;
+                }
+            }
+        });
+    }
     walk_statements_mut(statements, &mut |value| {
         recorded(program, locals, composition, value);
     });
