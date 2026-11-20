@@ -21,10 +21,13 @@ hgl_parser.workspace = true
 hgl_analyser.workspace = true
 hgl_runner.workspace = true
 hgl_hgraph.workspace = true
+hgl_cpp.workspace = true
 clap.workspace = true
 ctrlc.workspace = true
 walkdir.workspace = true
 tempfile.workspace = true
+dirs.workspace = true
+which.workspace = true
 
 [lints]
 workspace = true

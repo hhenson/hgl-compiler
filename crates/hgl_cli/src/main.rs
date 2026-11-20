@@ -34,6 +34,7 @@
 //! exits with status 1 and a diagnostic like any other rejection.
 
 mod check_json;
+mod cpp;
 mod replace;
 
 use std::collections::HashSet;
@@ -177,7 +178,9 @@ struct TestArgs {
 
     /// Keep what the target wrote for the run in this directory. With
     /// none, it is written to a temporary directory and removed after
-    /// the run.
+    /// the run. For `--target cpp` it is the directory the program is
+    /// built in; with none, one under the cache is kept for the next
+    /// run.
     #[arg(long, value_name = "DIR", requires = "target")]
     keep: Option<PathBuf>,
 
@@ -294,6 +297,9 @@ fn chosen_application(program: &Program, named: Option<&str>) -> Result<String, 
 enum Target {
     /// Python wiring for hgraph.
     Hgraph,
+    /// C++ against hgraph's C++ API, built with the SDK that
+    /// `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name.
+    Cpp,
 }
 
 /// The path of core's module (UNIT-11).
@@ -806,25 +812,45 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
         println!("nothing written: the program is rejected");
         return report(&sources, diagnostics);
     }
-    let (name, files) = match arguments.target {
-        Target::Hgraph => (
-            hgl_hgraph::TARGET,
-            hgl_hgraph::transpile(&program, &mut diagnostics).files,
-        ),
+    // What the target wrote, as what writes it into a directory and
+    // says how many files it wrote. A `Box<dyn FnOnce>` holds either
+    // target's, each closure owning its files.
+    type Writes = Box<dyn FnOnce(&Path) -> Result<usize, String>>;
+    let (name, write): (&str, Writes) = match arguments.target {
+        Target::Hgraph => {
+            let files = hgl_hgraph::transpile(&program, &mut diagnostics).files;
+            (
+                hgl_hgraph::TARGET,
+                Box::new(move |out| {
+                    hgl_hgraph::write(&files, out)
+                        .map(|()| files.len())
+                        .map_err(|error| error.to_string())
+                }),
+            )
+        }
+        Target::Cpp => {
+            let files = hgl_cpp::transpile(&program, &mut diagnostics).files;
+            (
+                hgl_cpp::TARGET,
+                Box::new(move |out| cpp::write(&files, out).map(|()| files.len())),
+            )
+        }
     };
     if diagnostics.has_errors() {
         println!("nothing written: the {name} target does not write all of the program yet");
         return report(&sources, diagnostics);
     }
-    if let Err(error) = hgl_hgraph::write(&files, &arguments.out) {
-        eprintln!("hgl: cannot write to {}: {error}", arguments.out.display());
-        return ExitCode::from(EXIT_FAILED);
+    match write(&arguments.out) {
+        Ok(written) => println!(
+            "wrote {} for {name} to {}",
+            count(written, "file"),
+            arguments.out.display()
+        ),
+        Err(error) => {
+            eprintln!("hgl: cannot write to {}: {error}", arguments.out.display());
+            return ExitCode::from(EXIT_FAILED);
+        }
     }
-    println!(
-        "wrote {} for {name} to {}",
-        count(files.len(), "file"),
-        arguments.out.display()
-    );
     report(&sources, diagnostics)
 }
 
@@ -868,7 +894,6 @@ fn run(arguments: &RunArgs) -> ExitCode {
         println!("not run: the program is rejected");
         return report(&sources, diagnostics);
     }
-    let Target::Hgraph = arguments.target;
     let chosen = match chosen_application(&program, arguments.application.as_deref()) {
         Ok(path) => path,
         Err(status) => return status,
@@ -971,6 +996,9 @@ fn run(arguments: &RunArgs) -> ExitCode {
             );
             return ExitCode::from(EXIT_REJECTED);
         }
+    }
+    if let Target::Cpp = arguments.target {
+        return cpp::run(&sources, &program, &chosen);
     }
     // What the target does not write yet is no error of the program:
     // it matters where the application needs it.
@@ -1101,14 +1129,21 @@ fn test(arguments: &TestArgs) -> ExitCode {
         integration: arguments.integration,
     };
     // The target the tests run on, and where it writes the program.
-    let mut on_hgraph = arguments.target.map(|Target::Hgraph| OnHgraph {
+    let mut on_hgraph = OnHgraph {
         sources: &sources,
         python: interpreter(&arguments.python),
         keep: arguments.keep.as_deref(),
-    });
-    let executor = on_hgraph
-        .as_mut()
-        .map(|executor| executor as &mut dyn Executor);
+    };
+    let mut on_cpp = cpp::OnCpp {
+        sources: &sources,
+        keep: arguments.keep.as_deref(),
+        roots: &arguments.roots,
+    };
+    let executor: Option<&mut dyn Executor> = match arguments.target {
+        None => None,
+        Some(Target::Hgraph) => Some(&mut on_hgraph),
+        Some(Target::Cpp) => Some(&mut on_cpp),
+    };
     let report = hgl_runner::run(&sources, &parsed, &front_end, &selection, executor);
 
     // TST-14: invalid metadata and errors in the surviving source stop

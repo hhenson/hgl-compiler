@@ -27,6 +27,7 @@ hgl_analyser = { path = "crates/hgl_analyser" }
 hgl_lower = { path = "crates/hgl_lower" }
 hgl_runner = { path = "crates/hgl_runner" }
 hgl_hgraph = { path = "crates/hgl_hgraph" }
+hgl_cpp = { path = "crates/hgl_cpp" }
 clap = { version = "4.6", features = ["derive"] }
 codespan-reporting = "0.13"
 # `termination`: a request to end is taken as an interrupt is.
@@ -36,6 +37,10 @@ petgraph = { version = "0.8", default-features = false, features = ["std"] }
 rowan = "0.17"
 tempfile = "3.27"
 walkdir = "2.5"
+# The user's cache directory, where the C++ target's builds are kept.
+dirs = "6"
+# Programs on the PATH: the C++ compiler, `ninja`, `cmake`, `ld.lld`.
+which = "8"
 
 # Lints every crate inherits with `[lints] workspace = true`.
 [workspace.lints.rust]

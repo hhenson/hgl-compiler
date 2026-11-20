@@ -3,7 +3,7 @@
 from subprocess import CompletedProcess
 import unittest
 
-from check_core import verify
+from check_core import gaps_of, verify
 
 
 class CoreGateTest(unittest.TestCase):
@@ -103,3 +103,31 @@ class CoreGateTest(unittest.TestCase):
         counts = "rejection cases: 0 passed, 1 failed\n"
         listed = {"conformance::rejections/instances.hgl::climbed"}
         self.assertFalse(self.rejection_problems(row + detail, counts, code=1, listed=listed))
+
+
+class NamedTargetTest(unittest.TestCase):
+    """`--target cpp`: the C++ target's words, and its list, which may hold
+    every case while it passes none."""
+
+    inventory = CompletedProcess([], 2, stdout="not run  executable  conformance::pending\n")
+    rows = (
+        "not run  executable  conformance::pending\n"
+        "    fixture.hgl:3:4: the cpp target does not write an eval yet\n"
+        "rejection cases: 0 passed, 0 failed\n"
+        "executable cases: 0 passed, 0 failed, 1 not run\n"
+    )
+    expected = {"conformance::pending": "an eval"}
+
+    def test_a_target_is_held_to_its_own_words(self):
+        result = CompletedProcess([], 2, stdout=self.rows)
+        self.assertFalse(verify(self.inventory, result, self.expected, target="cpp"))
+        # The hgraph target's words are no gap of the cpp target's, and the
+        # hgraph target must pass a case.
+        self.assertTrue(verify(self.inventory, result, self.expected, target="hgraph"))
+        hgraph = CompletedProcess([], 2, stdout=self.rows.replace("cpp target", "hgraph target"))
+        self.assertTrue(verify(self.inventory, hgraph, self.expected, target="cpp"))
+
+    def test_the_gaps_of_a_run_are_read_by_their_form(self):
+        result = CompletedProcess([], 2, stdout=self.rows)
+        self.assertEqual(gaps_of(result, "cpp"), self.expected)
+        self.assertEqual(gaps_of(result, "hgraph"), {})

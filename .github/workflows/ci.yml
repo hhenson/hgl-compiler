@@ -131,6 +131,10 @@ jobs:
       HGL_HGRAPH_SDK: ${{ github.workspace }}/.hgraph/sdk
     steps:
       - uses: actions/checkout@v7
+        # `hgl`, which the C++ target's steps below build, is built with
+        # core's module from the pinned hgl_core submodule.
+        with:
+          submodules: recursive
       # What the two are made from: the tag, the script, which names every
       # package of the prefix and how the SDK is configured, and the image
       # they are built on.
@@ -165,3 +169,10 @@ jobs:
       - run: cmake -S runtime/cpp -B build/cpp-sanitize -G Ninja -DCMAKE_BUILD_TYPE=Debug -DHGLRT_SANITIZE=ON
       - run: cmake --build build/cpp-sanitize
       - run: ctest --test-dir build/cpp-sanitize --output-on-failure
+      # The C++ target on the SDK: the tests that build and run what it
+      # writes, and core's cases, held to the list of those it does not
+      # run yet (crates/hgl_cpp/ci/unsupported_cases.toml).
+      - run: cargo --version
+      - run: cargo test -p hgl_cli --locked --test cpp -- --ignored
+      - run: cargo build --locked --bin hgl
+      - run: python3 crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core --target cpp

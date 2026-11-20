@@ -66,7 +66,10 @@ use hgl_diagnostics::{Diagnostic, Diagnostics, Location};
 
 use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
-pub use host::{Ran, RanApplication, Stop, run, run_application, run_within, write};
+pub use host::{
+    Ran, RanApplication, Recorded, Said, Stop, read_results, run, run_application, run_within,
+    write,
+};
 
 /// The name `hgl emit --target` takes for this target.
 pub const TARGET: &str = "hgraph";

@@ -19,7 +19,7 @@ syntax tree ---------> formatter (planned) ---------> source text
 analysed program ----> error reporting (`check`)
     |  hgl_lower (in the optimiser's place)
 analysed program, and the facts every target decides the same way
-    |  one transpiler per target (`hgl_hgraph`)
+    |  one transpiler per target (`hgl_hgraph`, `hgl_cpp`)
 target output
 ```
 
@@ -47,6 +47,7 @@ Rules for every stage:
 | optimiser | Analysed program to analysed program | planned |
 | `hgl_lower` | Lowering, in the optimiser's place: the facts every target decides the same way, read from the analysed program | implemented for what the hgraph target needed: see "Lowering" below |
 | `hgl_hgraph` | The hgraph target: the analysed program to Python wiring, and its tests run on a Python that has hgraph | in part: see "hgraph" below |
+| `hgl_cpp` | The cpp target: the analysed program to C++ against hgraph's C++ API; its build driver is in `hgl_cli` | skeleton: see "cpp" below |
 
 A crate is created when its stage is built, not before.
 [rules.md](rules.md) lists each rule of the specification against the stage
@@ -2065,6 +2066,115 @@ unavailable host, a new gap, or a listed case that passes, is rejected or
 disappears fails the check. Remove a listed gap when its case starts
 passing. The backend owns this list alongside its target tests.
 
+### cpp
+
+The second target, designed in [cpp-target.md](cpp-target.md): C++ against
+hgraph's graph, node, type and runtime layers, linked with `libhglrt`,
+the runtime library in `runtime/cpp`. It is a skeleton: it writes the
+smallest slice whole and reports every other form, as the hgraph target
+reports what it does not write, so that `hgl test --target cpp` runs
+over any program to its end.
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| Emitter | `crates/hgl_cpp/src/emit.rs` and `emit/` by concern: `names`, `types`, `values`, `nodes`, `graphs`, `tests` | Writes each declaration and named test as a piece: a prototype for the module's header, a definition for its unit, the functions it calls, and the first form in it not written |
+| Assembly | `crates/hgl_cpp/src/assemble.rs` | Leaves out each piece that is not written or reaches one that is not, puts the rest into each module's header and unit, and writes an entry unit for each module with a test that can be run |
+| Runtime library | `crates/hgl_cpp/src/runtime.rs`, `build.rs` | Carries `runtime/cpp` in `hgl`, and reads from its headers which of core's natives it defines |
+| Build driver | `crates/hgl_cli/src/cpp.rs` and `cpp/` | Finds the toolchain, prepares it once, builds a program in a workspace kept between runs, runs the executables and reads their results |
+
+| HGL | C++ |
+| --- | --- |
+| Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, namespace `hgl::demo::calc::m_` |
+| `const fn` over `i64`, `f64`, `bool` | A function over hgraph's `Int`, `Float`, `Bool` |
+| A native candidate or function of core | The runtime library's function, named as the hgraph target names its provider's: `::hglrt::add__i64_i64` |
+| A call with more than one argument that may fail | Its arguments evaluated one statement at a time, in the order written (EXPR-2), in a lambda called where it stands |
+| Named test | A function of `hgl::demo::calc::m_::t_`; each statement told to the library's test host first, `::hglrt::testing::statement()`; `assert` is `::hglrt::testing::check` |
+| The tests of a module | `tests/demo.calc.cpp`: a `hglrt::testing::Registration` of each by its identity, and a `main` that is `hglrt::testing::main`; one executable |
+| Everything else | Reported: `the cpp target does not write ... yet` |
+
+Every C++ name an HGL name gives is made by one function,
+`emit::names::identifier`: a plain name (a letter first, a letter or
+digit last, no `__`, a lowercase letter in it, no C++ word or known
+macro) is written as it is, and any other with each `_` as `_1` and a
+`_` after it, so no two names give one identifier and none is
+reserved. The target's own namespaces, `m_` and `t_`, are of a form no
+name gives.
+
+C++ compiles a unit whole, so a piece that calls one not written is
+left out too, and a test that reaches one is listed with the first form
+it reaches, as `hgl_lower::pieces` finds it for both targets. What a
+call that leaves an argument out gives it is `hgl_lower::calls`'s.
+
+What the target takes of the runtime library ("The C++ runtime
+library" below): its CMake project, configured with `HGL_HGRAPH_SDK`,
+`HGL_HGRAPH_DEPS` and `BUILD_TESTING=OFF`, built and installed;
+`hglrt/hglrt.h`, the fixed include set; core's natives in `hglrt`, a
+native being defined where its name followed by `(` is in a header under
+`include/`; and its test host, `hglrt::testing`. An executable is run as
+`EXE RESULTS NAME...`, and the results are the hgraph driver's protocol
+(`start N`, `passed N`, `failed N LINE TEXT`, `unloaded N TEXT`), read by
+the same code, `hgl_hgraph::read_results`, with LINE a line of the
+module's unit. The host takes no time limit, so a test held to one
+(TST-17) is run in a process of its own, which the driver ends at the
+limit.
+
+#### The build driver
+
+| Variable | What it names |
+| --- | --- |
+| `HGL_HGRAPH_SDK` | hgraph's C++ SDK, its install prefix: required, with no default |
+| `HGL_HGRAPH_DEPS` | The prefix of the libraries the SDK was built against: required, with no default |
+| `CXX` | The compiler; otherwise the first of `g++-17`, `g++-16`, `g++-15`, `g++` on the `PATH` that is GCC 15 or later |
+| `HGL_CPP_FLAGS` | Flags added to every compile and link, the runtime library's too: `-O2`, `-g`, the sanitizers |
+| `HGL_NATIVE_CACHE` | Where builds are kept; otherwise `hgl/native` in the user's cache directory |
+| `CMAKE_BUILD_PARALLEL_LEVEL` | How many jobs a build, and the executables run, take at once |
+
+A toolchain is prepared once and kept under the cache in
+`toolchains/<hash>`, the hash of the SDK's and the dependencies' paths
+and the SDK's own files, the compiler and its version, the linker, the
+flags and the runtime library's sources, under a lock: the runtime
+library is configured, built and installed with CMake; a small CMake
+project of the driver's own, a program linked with it, is configured,
+and CMake's file API describes how CMake compiles and links it, which
+is the description every generated unit is built with
+(`description.json`); and the library's header is precompiled with it.
+Links add `-Wl,--disable-new-dtags`, so that the SDK's libraries find
+their dependencies, and `-fuse-ld=lld` where `ld.lld` is on the `PATH`.
+
+A program is built in `programs/<hash>` of its source roots, or the
+directory `--keep` names, under a lock held until its last executable
+has ended. Each file the target writes, and `build.ninja`, is written
+only where it changed, and `ninja -k 0` builds the executables of the
+tests to run: one object for each module's unit, with the precompiled
+header, one for each entry unit, with it too, and one executable for each
+module, linked from its entry, its module's unit and each unit that
+one calls into, through those (a unit is linked whole). Where the
+build fails, an executable is run only where `ninja -n` says nothing is
+left to do for it, and the tests of every other are not run, with the
+failure: an older executable is never run in a newer one's place.
+Executables run side by side.
+
+`hgl emit --target cpp --out DIR` writes the files. `hgl run --target
+cpp` says what the application needs that is not written: no
+application is written yet.
+
+The crate's tests compare the C++ written for the slice with goldens
+under `crates/hgl_cpp/tests/goldens/` (`HGL_UPDATE_GOLDENS=1 cargo test
+-p hgl_cpp --test emit` writes them again) and check what blocks what.
+`crates/hgl_cli/tests/cpp.rs` checks the driver: what is said with no
+SDK, `emit` and `run`; and, given an SDK, the whole route and that a
+failed build runs no older executable, with `cargo test -p hgl_cli
+--test cpp -- --ignored`, which the `cpp` job of the CI workflow runs,
+with `check_core.py --target cpp`.
+
+The target's progress is counted in cases: core's runtime cases, and
+later the fixture programs' tests. Each case the target does not run is
+listed with its reason in
+[`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
+which `check_core.py --target cpp` checks as it checks the hgraph
+target's list, and `--write-list` writes from a run. Today it lists all
+182 of core's runtime cases.
+
 ### The C++ runtime library
 
 `runtime/cpp` is `libhglrt`, the C++ library that the code of the
@@ -2223,6 +2333,12 @@ the job the way the design needs is dropped.
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `tempfile` | `hgl_cli` | the directory a program is written to for a test run or an application's run, removed after it |
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
+| `dirs` | `hgl_cli` | the user's cache directory, where the cpp target's builds are kept |
+| `which` | `hgl_cli` | the programs the cpp target builds with, found on the `PATH` |
+
+The cpp target's build driver runs programs, not crates: GCC 15 or
+later, `ninja`, `cmake` (once for each SDK) and `ld.lld` where it is on
+the `PATH`; see "cpp" under "Transpilers".
 
 The C++ target's runtime library, `runtime/cpp`:
 

@@ -33,6 +33,14 @@ specification says which is which.
 | diagnostics | `hgl_diagnostics` | The diagnostic model every stage reports through |
 | docs | none | Documentation extraction |
 
+The `transpiler` entries are the hgraph target's. Nothing is marked for
+the cpp target (`hgl_cpp`) yet. Its progress is counted in cases, as
+`docs/cpp-target.md` has it: each of core's runtime cases it does not
+run is listed with its reason in `crates/hgl_cpp/ci/unsupported_cases.toml`,
+and `crates/hgl_hgraph/ci/check_core.py --target cpp` fails where a
+listed case runs or a case not listed is not run
+([architecture](architecture.md#cpp)).
+
 Not listed: `TEST-1` to `TEST-4` and `WRITE-1` to `WRITE-12` of the
 specification. They say who owns what and how the documents are written;
 no compiler stage implements them.
