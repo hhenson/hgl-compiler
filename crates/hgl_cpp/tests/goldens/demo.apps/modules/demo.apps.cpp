@@ -26,10 +26,10 @@
 namespace hgl::demo::apps::m_
 {
 
-namespace n_
+namespace n_::ticks
 {
 // ticks(const values: list<i64>, const every: duration = ...) -> i64 (source), module demo.apps, line 8
-struct ticks
+struct impl_
 {
     static constexpr auto name = "demo.apps::ticks";
     // SOURCE-2: "The first evaluation begins the body".
@@ -95,17 +95,17 @@ struct ticks
         kept_.frame_.reset();
     }
 };
-}  // namespace n_
+}  // namespace n_::ticks
 }  // namespace hgl::demo::apps::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::apps::m_::n_::ticks::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::apps::m_::n_::ticks::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::apps::m_::n_::ticks::state_type_>("hgl:demo.apps::ticks.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::apps::m_::n_::ticks::impl_::state_type_>("hgl:demo.apps::ticks.state");
     }
 };
 
@@ -116,14 +116,14 @@ namespace w_
 // ticks(const values: list<i64>, const every: duration = ...) -> i64 (source), module demo.apps, line 8
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> ticks(::hgraph::Wiring& wiring_, const ::hglrt::list<::hgraph::Int>& values, ::hgraph::TimeDelta every)
 {
-    return ::hgraph::wire<::hgl::demo::apps::m_::n_::ticks>(wiring_, values, every);
+    return ::hgraph::wire<::hgl::demo::apps::m_::n_::ticks::impl_>(wiring_, values, every);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::limited
 {
 // limited(value: i64) -> i64 (node), module demo.apps, line 15
-struct limited
+struct impl_
 {
     static constexpr auto name = "demo.apps::limited";
 
@@ -140,20 +140,20 @@ struct limited
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::limited
 namespace w_
 {
 // limited(value: i64) -> i64 (node), module demo.apps, line 15
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> limited(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::apps::m_::n_::limited>(wiring_, value);
+    return ::hgraph::wire<::hgl::demo::apps::m_::n_::limited::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::seeded
 {
 // seeded(const limit: i64, const values: list<i64>) -> i64 (graph), module demo.apps, line 24
-struct seeded
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Int limit, [[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values)
     {
@@ -163,40 +163,40 @@ struct seeded
         return ::hgl::demo::apps::m_::w_::limited(wiring_, ::hgl::demo::apps::m_::w_::ticks(wiring_, values, ::hgl::core::m_::c_::mul_1_(seen, ::hgraph::TimeDelta{1000000})));
     }
 };
-}  // namespace n_
+}  // namespace n_::seeded
 namespace w_
 {
 // seeded(const limit: i64, const values: list<i64>) -> i64 (graph), module demo.apps, line 24
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> seeded(::hgraph::Wiring& wiring_, ::hgraph::Int limit, const ::hglrt::list<::hgraph::Int>& values)
 {
-    return ::hgl::demo::apps::m_::n_::seeded::compose(wiring_, limit, values);
+    return ::hgl::demo::apps::m_::n_::seeded::impl_::compose(wiring_, limit, values);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::bounded
 {
 // bounded(const values: list<i64>) -> i64 (graph), module demo.apps, line 32
-struct bounded
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values)
     {
         return ::hgl::demo::apps::m_::w_::limited(wiring_, ::hgl::demo::apps::m_::w_::ticks(wiring_, values, ::hgraph::TimeDelta{1000000}));
     }
 };
-}  // namespace n_
+}  // namespace n_::bounded
 namespace w_
 {
 // bounded(const values: list<i64>) -> i64 (graph), module demo.apps, line 32
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bounded(::hgraph::Wiring& wiring_, const ::hglrt::list<::hgraph::Int>& values)
 {
-    return ::hgl::demo::apps::m_::n_::bounded::compose(wiring_, values);
+    return ::hgl::demo::apps::m_::n_::bounded::impl_::compose(wiring_, values);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::kept
 {
 // kept(value: i64) (node), module demo.apps, line 37
-struct kept
+struct impl_
 {
     static constexpr auto name = "demo.apps::kept";
 
@@ -209,33 +209,33 @@ struct kept
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::kept
 namespace w_
 {
 // kept(value: i64) (node), module demo.apps, line 37
 void kept(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    ::hgraph::wire<::hgl::demo::apps::m_::n_::kept>(wiring_, value);
+    ::hgraph::wire<::hgl::demo::apps::m_::n_::kept::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::quiet
 {
 // quiet(const values: list<i64>) (graph), module demo.apps, line 43
-struct quiet
+struct impl_
 {
     static void compose(::hgraph::Wiring& wiring_, [[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values)
     {
         ::hgl::demo::apps::m_::w_::kept(wiring_, ::hgl::demo::apps::m_::w_::ticks(wiring_, values, ::hgraph::TimeDelta{1000000}));
     }
 };
-}  // namespace n_
+}  // namespace n_::quiet
 namespace w_
 {
 // quiet(const values: list<i64>) (graph), module demo.apps, line 43
 void quiet(::hgraph::Wiring& wiring_, const ::hglrt::list<::hgraph::Int>& values)
 {
-    ::hgl::demo::apps::m_::n_::quiet::compose(wiring_, values);
+    ::hgl::demo::apps::m_::n_::quiet::impl_::compose(wiring_, values);
 }
 }  // namespace w_
 

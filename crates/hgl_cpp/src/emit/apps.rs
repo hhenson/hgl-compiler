@@ -17,6 +17,7 @@
 //! (`hglrt/application_host.h`) writes it for the driver (`hgl_cli`).
 
 use hgl_analyser::hir::{Body, ExprKind, Stmt};
+use hgl_lower::calls::{LeftOut, left_out};
 use hgl_lower::instances::run_result;
 
 use super::Emitter;
@@ -91,23 +92,28 @@ impl Emitter<'_> {
             }
         }
 
-        // EXPR-2: the call's arguments in the order written, then the
-        // configuration, as an eval's (`tests`): where more than one of
-        // them may fail, or one runs statements, each argument is held
-        // first, in that order, before the configuration.
+        // EXPR-2: "the arguments written, then the defaults of those left
+        // out", and the configuration after the call, as an eval's
+        // (`tests`): where more than one of them may fail, or one runs
+        // statements, each argument and each default is held first, in
+        // that order, as its HGL type, before the configuration.
         let none = Body {
             locals: Vec::new(),
             statements: Vec::new(),
         };
         let mut scope = Scope::cold(program, &none);
-        let arguments = match &run.call.kind {
-            ExprKind::Call { arguments, .. } => arguments.as_slice(),
-            _ => &[],
+        let (callee, arguments) = match &run.call.kind {
+            ExprKind::Call {
+                callee, arguments, ..
+            } => (callee.declaration(), arguments.as_slice()),
+            _ => (None, &[][..]),
         };
+        let left = callee.map_or_else(Vec::new, |callee| left_defaults(program, callee, arguments));
         let config = run.config.as_ref();
         let held = arguments
             .iter()
             .map(|argument| &argument.value)
+            .chain(left.iter().map(|(_, default)| *default))
             .chain(config)
             .filter(|part| may_fail(part))
             .count()
@@ -124,16 +130,45 @@ impl Emitter<'_> {
             text.push_str(&format!("{INDENT}{line}\n"));
         };
         let mut given: Vec<(usize, String)> = Vec::new();
+        let mut defaults: Vec<(usize, String)> = Vec::new();
         if held {
             for (position, argument) in arguments.iter().enumerate() {
                 let written = self.expression(&mut scope, &argument.value);
+                // As its HGL type, so that a later part does not change it
+                // through a proxy (`graphs::temporal_call`).
+                let Some(ty) = self.written_type(&argument.value.ty, argument.value.at) else {
+                    return;
+                };
                 let name = names::temporary("argument", self.temporary());
                 hold(
                     &mut text,
                     &mut scope,
-                    format!("const auto {name} = {written};"),
+                    format!("const {ty} {name} = {written};"),
                 );
                 given.push((position, name));
+            }
+            for (index, default) in &left {
+                if changes(default) {
+                    self.unsupported(default.at, "a default that runs statements");
+                    return;
+                }
+                // A default is read with no local in scope (UNIT-7).
+                let mut cold = Scope::cold(program, &none);
+                let written = self.expression(&mut cold, default);
+                if !cold.before.is_empty() {
+                    self.unsupported(default.at, "a default that propagates a failure");
+                    return;
+                }
+                let Some(ty) = self.written_type(&default.ty, default.at) else {
+                    return;
+                };
+                let name = names::temporary("argument", self.temporary());
+                hold(
+                    &mut text,
+                    &mut scope,
+                    format!("const {ty} {name} = {written};"),
+                );
+                defaults.push((*index, name));
             }
         }
         // RUN-1, CRUN-2: the configuration's bounds, as an eval's are
@@ -155,7 +190,7 @@ impl Emitter<'_> {
         let mut context = Context::new(Kind::Entry, 0);
         let mut target = String::new();
         self.in_context(&mut context, |emitter| {
-            target = emitter.temporal_call(&mut called, &run.call, &given);
+            target = emitter.temporal_call_held(&mut called, &run.call, &given, &defaults);
         });
         for before in std::mem::take(&mut called.before) {
             for line in before.lines() {
@@ -195,6 +230,38 @@ impl Emitter<'_> {
             declared.path
         );
     }
+}
+
+/// The default of each `const` parameter of the function `callee` that
+/// `arguments` leave out, by the parameter's position (UNIT-8), in the
+/// order of the parameters.
+fn left_defaults<'p>(
+    program: &'p hgl_analyser::Program,
+    callee: (usize, usize),
+    arguments: &[hgl_analyser::hir::Argument],
+) -> Vec<(usize, &'p hgl_analyser::hir::Expr)> {
+    let Some(hgl_analyser::Detail::Callable(signature)) =
+        program.modules[callee.0].details.get(callee.1)
+    else {
+        return Vec::new();
+    };
+    signature
+        .parameters
+        .iter()
+        .enumerate()
+        .filter(|(index, parameter)| {
+            parameter.constant
+                && !arguments
+                    .iter()
+                    .any(|argument| argument.parameter == Some(*index))
+        })
+        .filter_map(
+            |(index, parameter)| match left_out(program, callee, index, parameter) {
+                Some(LeftOut::Default(default)) => Some((index, default)),
+                _ => None,
+            },
+        )
+        .collect()
 }
 
 /// The line, counted from 1, the run statement of the application

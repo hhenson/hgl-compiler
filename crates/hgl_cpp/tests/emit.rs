@@ -435,8 +435,9 @@ fn the_store_and_applications_are_written() {
 }
 
 /// UNIT-14, EXPR-2: an application's store is set first, in the order
-/// written; then its entry's arguments and its configuration, each held
-/// in the order written where more than one may fail, before the run.
+/// written; then its entry's arguments, the defaults of those it leaves
+/// out and its configuration, each held in the order written, as its HGL
+/// type, where more than one may fail, before the run.
 #[test]
 fn an_applications_parts_are_evaluated_in_the_order_written() {
     let emitted = emit_with(
@@ -450,7 +451,7 @@ fn an_applications_parts_are_evaluated_in_the_order_written() {
                     "const step: i64 = 2\n",
                     "inject global_state\n",
                     "put(global_state, \"first\", 6 // step)\n",
-                    "eval(ticks(values: [6 // step], every: step * 1s), RunConfig(length: step * 2s))\n",
+                    "eval(ticks(values: [6 // step]), RunConfig(length: step * 2s))\n",
                 ),
             ),
         ],
@@ -468,13 +469,15 @@ fn an_applications_parts_are_evaluated_in_the_order_written() {
         unit.find(text)
             .unwrap_or_else(|| panic!("{text} in\n{unit}"))
     };
+    let values = "const ::hglrt::list<::hgraph::Int> argument_00_ = ";
+    // `every`, left out: its default, `1s`.
+    let every = "const ::hgraph::TimeDelta argument_01_ = ::hgraph::TimeDelta{1000000};";
     assert!(at("::hglrt::application::Store store_;") < at("put_GlobalState_str_V"));
-    assert!(at("put_GlobalState_str_V") < at("const auto argument_00_ = "));
-    assert!(at("const auto argument_00_ = ") < at("const auto argument_01_ = "));
-    assert!(at("const auto argument_01_ = ") < at("const ::hglrt::testing::Bounds bounds_ = "));
+    assert!(at("put_GlobalState_str_V") < at(values));
+    assert!(at(values) < at(every));
+    assert!(at(every) < at("const ::hglrt::testing::Bounds bounds_ = "));
     // The entry, wired in the run, is given what was held.
-    assert!(at("= argument_00_;") > at("bounds_ = "));
-    assert!(at("= argument_01_;") > at("bounds_ = "));
+    assert!(at("w_::ticks(wiring_, argument_00_, argument_01_)") > at("bounds_ = "));
 }
 
 /// An application that needs a form the target does not write yet is
