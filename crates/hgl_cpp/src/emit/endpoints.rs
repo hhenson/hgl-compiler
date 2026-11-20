@@ -15,8 +15,9 @@
 //! | `is_active(a)`, an `endpoint<T>` argument of a native (TIME-9) | `::hglrt::fn_is_active(a)`: the view itself, which the natives take as it is |
 //! | `clock.evaluation_time`, a property of a capability (CAP-1) | `clock.evaluation_time()`: the library's capability, made at the top of the hook |
 //!
-//! `all_valid`, `activate`, `passivate`, `scheduled()` and `modified([])`
-//! read as a value are not written yet, and are reported.
+//! `is_active`, `activate` and `passivate` of an input are the `activity`
+//! family's. `all_valid`, `scheduled()` and `modified([])` read as a value
+//! are not written yet, and are reported.
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Local, Stmt};
 use hgl_analyser::{DeclarationKind, Detail, Program, Type};
