@@ -363,11 +363,18 @@ impl Emitter<'_> {
                 wired.push(format!("static_cast<{written}>({configured})"));
                 labels.push(Some(parameter.name.clone()));
             }
+            // What the helper is given is what a read of the input gives,
+            // which is not the input's own type for every form.
+            let read = if argument.value.is_connection() {
+                self.read_type(&ty)
+            } else {
+                ty.clone()
+            };
             synthetic.push(Argument {
                 parameter: argument.parameter,
                 value: Expr {
                     kind: ExprKind::Local(locals.len()),
-                    ty: ty.clone(),
+                    ty: read,
                     at: argument.value.at,
                     category: ValueCategory::Value,
                 },
