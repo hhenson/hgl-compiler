@@ -115,7 +115,7 @@ impl Emitter<'_> {
             [only] if *only == delta => &delta,
             _ => result,
         };
-        if delta != *result && yielded.iter().any(|ty| *ty == delta) && yielded.len() > 1 {
+        if delta != *result && yielded.contains(&delta) && yielded.len() > 1 {
             self.unsupported(at, "a source that yields both a whole value and a delta");
             return;
         }
