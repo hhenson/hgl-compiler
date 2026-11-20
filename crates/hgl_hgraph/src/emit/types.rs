@@ -166,15 +166,6 @@ pub(super) fn whole_dictionary(ty: &Type) -> bool {
     matches!(ty, Type::Dict { value, .. } if publishes_whole(value))
 }
 
-/// True for a window of a duration, `rolling_window<f64, 3s, 2s>`
-/// (TYPE-11), which a value leaves as it ages, though nothing arrives.
-pub(super) fn duration_window(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::RollingWindow { maximum, .. } if matches!(maximum.value, ConstantValue::Duration(_))
-    )
-}
-
 /// Where a temporal value of `ty`, an unsized list, a struct or a tuple,
 /// holds an unsized list through its own fields and positions, the
 /// provider's shape of it for `published_into` and `invalidated`:

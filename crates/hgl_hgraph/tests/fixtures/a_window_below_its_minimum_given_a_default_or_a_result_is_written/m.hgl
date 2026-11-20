@@ -8,9 +8,6 @@ fn collect(reading: i64) -> rolling_window<i64, 3, 2> {
     when { return reading }
 }
 fn defaulted(reading: i64) -> i64 => total(collect(reading))
-fn slots(slot: i64, price: i64) -> list<rolling_window<i64, 2>, 2> {
-    when { return delta<list<rolling_window<i64, 2>, 2>>(updated: [slot: price]) }
-}
 fn checked(both: list<rolling_window<i64, 2>, 2>, at: i64) -> result<list<i64>, error> {
     when { return both[at] }
 }

@@ -89,7 +89,15 @@ pub fn empty_struct(program: &Program, ty: &Type) -> bool {
 /// It asks whether `value` is `ty`'s delta, and not whether it is a
 /// nullable's `delta<T?>`: the two part at an `atomic<T?>`, whose delta
 /// is the `T?` a whole value has, and which this calls a delta.
+///
+/// A window is never published whole. TIME-7: "A result of
+/// `rolling_window<V, Max, Min>` takes a V, which arrives, or a delta of
+/// the window (TYPE-11)": each is a change to what the window holds, and
+/// this is false for both.
 pub fn whole_value(ty: &Type, value: &Expr) -> bool {
+    if matches!(ty, Type::RollingWindow { .. }) {
+        return false;
+    }
     value.ty == *ty || value.ty != Type::delta(ty.clone())
 }
 

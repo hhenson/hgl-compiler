@@ -831,6 +831,7 @@ impl<'a> Typer<'a> {
                                 kind: NamedKind::Struct,
                                 ..
                             }
+                            | Type::RollingWindow { .. }
                     )
                 {
                     // TST-5: "Each cell is one cycle's publication,
@@ -843,7 +844,9 @@ impl<'a> Typer<'a> {
                     // `delta<T>` as that change. So a tuple written
                     // `(2, null)` of a `tuple<i64, i64?>` is the whole
                     // tuple, its null a published null, and `(null, 3)`
-                    // of a `tuple<i64, i64>` its delta.
+                    // of a `tuple<i64, i64>` its delta. A window's cell
+                    // is a V, which arrives, or the window's delta, as a
+                    // `return` to a window is (TIME-7).
                     Some(self.published(&value, of, "a cell of the trace"))
                 } else {
                     let read = self.expression(&value, Some(cell));

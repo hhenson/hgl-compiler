@@ -204,13 +204,7 @@ impl Emitter<'_> {
                     // (`language_delta`).
                     EndpointOperation::DeltaValue => {
                         let ty = endpoint.ty.clone();
-                        if duration_window(&ty) {
-                            // A window of a duration's (`window_delta`).
-                            self.natives = true;
-                            format!("_core.window_delta({input})")
-                        } else {
-                            self.language_delta(&ty, format!("{input}.delta_value"), value.at)
-                        }
+                        self.language_delta(&ty, format!("{input}.delta_value"), value.at)
                     }
                     // END-6: an invalid endpoint has no timestamp, even
                     // if it held a value before being invalidated.
@@ -513,6 +507,13 @@ impl Emitter<'_> {
                             "None".to_string()
                         }
                     };
+                }
+                // TYPE-16: a window's delta has `added` and `removed`,
+                // which hgraph's `TSW` does not give (`WINDOW_DELTA`).
+                if matches!(&base.ty, Type::Delta(of) if matches!(**of, Type::RollingWindow { .. }))
+                {
+                    self.unsupported(value.at, WINDOW_DELTA);
+                    return "None".to_string();
                 }
                 let delta = DeltaOf::of(&base.ty);
                 // TYPE-16: a nullable's delta has one property, `value`,
@@ -1363,14 +1364,8 @@ impl Emitter<'_> {
             // END-8: a child's delta is read as a direct input's of its
             // type is (`language_delta`).
             EndpointOperation::DeltaValue => {
-                // A window of a duration's, of a child that is valid
-                // (`window_delta`).
-                if duration_window(&child.ty) {
-                    format!("_core.checked_child({port}, _core.window_delta)")
-                } else {
-                    let shape = self.child_shape(&child.ty);
-                    self.language_delta(&child.ty, format!("_core.child_delta({port}{shape})"), at)
-                }
+                let shape = self.child_shape(&child.ty);
+                self.language_delta(&child.ty, format!("_core.child_delta({port}{shape})"), at)
             }
             EndpointOperation::LastModified => {
                 let shape = self.child_shape(&child.ty);
@@ -1764,6 +1759,12 @@ impl Emitter<'_> {
         // published null", and `delta<i64?>(value: 7)` a published 7.
         // It is hgraph's own delta of such a value: `Null`, or the
         // value.
+        // TYPE-16: a window's delta, `delta<rolling_window<i64, 3>>(added:
+        // 5)`, is not written (`WINDOW_DELTA`).
+        if matches!(&value.ty, Type::Delta(of) if matches!(**of, Type::RollingWindow { .. })) {
+            self.unsupported(value.at, WINDOW_DELTA);
+            return "None".to_string();
+        }
         let delta = DeltaOf::of(&value.ty);
         if let Some(DeltaOf::Nullable) = delta {
             return match arguments.first() {

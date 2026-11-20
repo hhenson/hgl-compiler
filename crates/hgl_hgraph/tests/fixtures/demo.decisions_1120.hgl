@@ -117,14 +117,16 @@ fn given_flow(reading: i64) -> str => given_outcome(collected(reading))
 
 # A struct's field that is a window, named when compiled, and a fixed
 # list's position read when it runs, which gives the `err` of a child
-# that is not valid too (ERR-14).
+# that is not valid too (ERR-14). What is published to a window within a
+# value is a window's delta (TYPE-16), which this target does not write:
+# these are written, and not run.
 struct Book {
     prices: rolling_window<i64, 3, 2>
     last: i64
 }
 
 fn booked(price: i64) -> Book {
-    when { return delta<Book>(prices: price, last: price) }
+    when { return delta<Book>(last: price) }
 }
 
 fn checked_book(book: Book) -> result<list<i64>, error> {
@@ -132,7 +134,7 @@ fn checked_book(book: Book) -> result<list<i64>, error> {
 }
 
 fn slots(slot: i64, price: i64) -> list<rolling_window<i64, 2>, 2> {
-    when { return delta<list<rolling_window<i64, 2>, 2>>(updated: [slot: price]) }
+    when { return delta<list<rolling_window<i64, 2>, 2>>(removed: [slot]) }
 }
 
 fn checked_slot(both: list<rolling_window<i64, 2>, 2>, at: i64) -> result<list<i64>, error> {
@@ -148,9 +150,6 @@ test a_window_read_where_a_result_is_taken_gives_an_err_before_it_is_all_valid {
     assert eval(window_values(reading: [1, 2, 3])) == [[], [1, 2], [1, 2, 3]]
     assert eval(bound_flow(reading: [1, 2])) == ["value.unset_read", "ok"]
     assert eval(given_flow(reading: [1, 2])) == ["value.unset_read", "ok"]
-    assert eval(book_outcome(price: [1, 2])) == ["value.unset_read", "ok"]
-    assert eval(slot_outcome(slot: [0, 0, 1], price: [1, 2, 3], at: [1, 0, 1])) ==
-        ["value.unset_read", "ok", "value.unset_read"]
 }
 
 # ---- A lifted parameter's default and a window below its minimum (FN-11, FN-12) ----

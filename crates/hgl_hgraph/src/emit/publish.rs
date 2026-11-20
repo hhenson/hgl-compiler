@@ -39,6 +39,15 @@ impl Emitter<'_> {
         if !matches!(function.mode, Mode::Node | Mode::Source) {
             return written;
         }
+        // TIME-7: "A result of `rolling_window<V, Max, Min>` takes a V,
+        // which arrives, or a delta of the window (TYPE-11)", whose
+        // `added` is appended. A V is hgraph's `TSW`'s own; the window's
+        // delta is reported. One inside another delta is reported where
+        // it is made or read (`language_delta`, `delta`).
+        if matches!(&value.ty, Type::Delta(of) if matches!(**of, Type::RollingWindow { .. })) {
+            self.unsupported(value.at, WINDOW_DELTA);
+            return written;
+        }
         // TYPE-16: a list's delta has `updated`, `removed` and
         // `size_modified`, and an unsized list is hgraph's unbounded
         // `TSL` (`list_annotation`). The provider counts the size the
@@ -496,13 +505,14 @@ impl Emitter<'_> {
     /// tail positions in `removed`", as hgraph 0.9.8's unbounded `TSL`
     /// reads it.
     pub(super) fn language_delta(&mut self, ty: &Type, delta: String, at: Location) -> String {
-        // TYPE-11, proposed: "where a value leaves and none arrives,
-        // `delta_value` of the window ... has no value" (`window_delta`).
-        // What the delta of a value that holds one is then, a struct's
-        // field among them, it does not say, and hgraph gives that field
-        // none, as for one that did not change: it is reported.
-        if windows_in(self.program, ty).iter().any(duration_window) {
-            self.unsupported(at, "the delta of a value that holds a window of a duration");
+        // TYPE-16: a window's delta is "A type of its own, with the
+        // properties `added`, the value that arrived in the cycle, and
+        // `removed`, the value that left in it", read at each tick, an
+        // exit alone included (TYPE-11). hgraph's `TSW` gives the value
+        // that arrived, and nothing at an exit: the delta of a window,
+        // and of a value that holds one, is reported.
+        if !windows_in(self.program, ty).is_empty() {
+            self.unsupported(at, WINDOW_DELTA);
         }
         // TYPE-16: a struct's delta has "a property for each field": one
         // with no field has none, and its delta is the empty one.
@@ -625,3 +635,8 @@ pub(super) fn returns_whole(statements: &[Stmt], ty: &Type) -> bool {
     });
     found
 }
+
+/// What is reported of a window's delta (TYPE-11, TYPE-16): a delta with
+/// `added` and `removed`, read or published, which hgraph's `TSW` does not
+/// give.
+pub(super) const WINDOW_DELTA: &str = "a window's delta, `added` and `removed` (TYPE-11, TYPE-16)";

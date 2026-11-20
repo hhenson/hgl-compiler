@@ -7,10 +7,10 @@ fn collect(price: f64) -> rolling_window<f64, 3, 1> {
     when { return price }
 }
 fn arrived(prices: rolling_window<f64, 3, 1>) -> f64 {
-    when { return delta_value(prices) }
+    when all_valid(prices) { return 1.0 }
 }
 fn booked(price: f64) -> Book {
-    when { return delta<Book>(prices: price, last: price) }
+    when { return delta<Book>(last: price) }
 }
 fn last(book: Book) -> f64 {
     when valid(book.last) { return book.last }
@@ -24,10 +24,10 @@ fn routed_book(flag: bool, price: f64) -> f64 {
     if flag { return last(b) } else { return 0.0 }
 }
 fn keyed(key: str, price: f64) -> dict<str, rolling_window<f64, 3, 1>> {
-    when { return delta<dict<str, rolling_window<f64, 3, 1>>>(updated: [key: price]) }
+    when { return delta<dict<str, rolling_window<f64, 3, 1>>>(removed: [key]) }
 }
 fn watched(prices: rolling_window<f64, 3, 1>) {
-    when { let seen = delta_value(prices) }
+    when { let seen = valid(prices) }
 }
 fn each(key: str, price: f64) {
     for name, window in keyed(key, price) { watched(window) }
@@ -48,7 +48,7 @@ fn looped(price: f64) -> rolling_window<f64, 3, 1> {
 fn then_returned(price: f64) -> Book {
     inject out
     when { out = delta<Book>(last: price) }
-    when { return delta<Book>(prices: price) }
+    when { return delta<Book>(last: price + 1.0) }
 }
 fn returns(price: f64) -> rolling_window<f64, 3, 1> {
     when {

@@ -60,7 +60,7 @@ analyser: partial
 
 - An eval's first argument is a call of a function of a module, the temporal definition where there are both (`eval.target`: an operator, a struct, a value)
 - The call's arguments are bound as any call's are, its generic arguments among them: a `const` parameter takes configuration and every other a trace
-- A cell is written as a `return` is: a T whole or a `delta<T>`, each by its type, for a list, a set, a dictionary, a struct and a tuple; a tuple that is a T is the whole tuple, a null position a published null, and one that is no T, `(null, 3)` of a `tuple<i64, i64>`, its delta, a tuple of its positions
+- A cell is written as a `return` is: a T whole or a `delta<T>`, each by its type, for a list, a set, a dictionary, a struct and a tuple; a tuple that is a T is the whole tuple, a null position a published null, and one that is no T, `(null, 3)` of a `tuple<i64, i64>`, its delta, a tuple of its positions; a window's a V, which arrives, or the window's delta (TIME-7), a generic target's window among them once its arguments are known
 - A generic target's parameters are found from the cells, or from a trace an eval gave; a tuple that names one, `tuple<T, T>`, has its cells read as any tuple's once they are found
 - A trace is an argument of the eval's call and of no call inside it, which takes a value there (`type.mismatch`)
 - A second argument is a `RunConfig` of core's, and an eval takes no third
@@ -76,6 +76,8 @@ transpiler: partial
 - A tuple's cell written as its delta is that tuple of its positions, published and compared as recorded
 - A cell that is a delta naming no change is a tick only where it makes the input valid, so given to a valid input it wakes no reader, and a cycle whose node writes only such a delta where its result is valid records nothing, `_` in the expectation (TIME-7)
 - Not settled: an expectation's cell written as such a delta, at a cycle where the result is valid, is compared as a tick, which the cycle does not make: TST-5 does not say whether that cell is `_`
+- Not settled: what an expectation's cell of a window written as a V is compared with: TST-5 compares a cell written as a T with the value held and one written as a delta with the delta published, and a V is neither
+- Left, reported: a window's cell, which an eval's replay publishes and its record reads as a window's delta (TYPE-11)
 - Left: a whole cell of a tuple with a position that is composite, a list or a struct, which is reported, as a struct's with a composite field is
 
 ## TST-6
@@ -204,15 +206,16 @@ transpiler: partial
 
 analyser: partial
 
-- A trace given to a `const fn`, an eval or a `let` bound to one, is a `list<tuple<datetime, delta<T>>>` there: it is held to the parameter's type and says what a generic parameter is
+- A trace given to a `const fn`, an eval or a `let` bound to one, is a `list<tuple<datetime, delta<T>>>` there: it is held to the parameter's type and says what a generic parameter is; a window's, a list of its deltas
 - A sequence written as a `const fn`'s argument is the list it is written as
 - Left: a value that holds a trace, `[seen]`, which is given as it is and not held to the parameter's type
 
-transpiler: done
+transpiler: partial
 
 - hgraph: a `const fn` receives the recording's publications at their absolute instants, including published nulls
 - Silent positions add no entries
 - A written trace uses the earliest start for dense positions and duration keys and preserves absolute keys; a cell written whole is held as the delta its publication records (`_core.whole_delta`), the delta an input replays
+- Left, reported: a window's recording, a delta for each publication and each exit (TYPE-11, CEVAL-4)
 
 runner: planned
 

@@ -109,7 +109,7 @@ analyser: partial
 - `out` is read in a `when` and in `stop`, not in a `state`'s or a `cache`'s initialiser, and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`)
 - A field or an element of `out` is assigned in a `when` as `out` is (EXPR-3)
 - A window that is a child of `out` is read as the `list<V>` it holds (TYPE-11)
-- What a `return` in a hook, an assignment to `out` and a source's `yield` publish is a complete value of the result or its `delta<T>` (TYPE-16), as core's cases relay a set with `return delta_value(input)`
+- What a `return` in a hook, an assignment to `out` and a source's `yield` publish is a complete value of the result or its `delta<T>` (TYPE-16), as core's cases relay a set with `return delta_value(input)`; a window's result takes a V, which arrives, or the window's delta (TYPE-11), and nothing else (`type.mismatch`)
 - A `ref` result takes no value: a `return` to it, and `out =` of it, names an endpoint, which it designates, and `out` of it is as a `ref` parameter is (FN-16)
 
 transpiler: partial
@@ -128,6 +128,7 @@ transpiler: partial
 - An unsized list's `out`, hgraph 0.9.8's unbounded `TSL`: a whole value replaces what it held, a delta's size is counted from what it holds, `out[i] = v` is `_core.list_child(_output, i)`, which fails past the list, and two writes in one evaluation publish their sum (END-5); an empty whole value given to a list that is not valid makes it valid, and ticks, which hgraph's unbounded `TSL` does not (`_core.list_replaced`)
 - A part of `out` read is its own port, a fixed list's and an unsized list's position among them
 - A struct's or a tuple's delta that holds an unsized list's delta is published through the output, each list's size counted from what it holds (`_core.published_into`); a source's node publishes what it yields so when it is due, an empty list in a struct among them
+- Left, reported: a window's delta published to a window (TYPE-11)
 - Left: a place inside an entry of a dictionary `out`; an empty unsized list assigned to an entry or a list's position of `out`, which hgraph does not tick for and which has no port of its own where it is written, fails as the graph runs
 
 ## TIME-8
@@ -153,7 +154,7 @@ transpiler: partial
 
 analyser: partial
 
-- In a node's hooks the endpoint operations are read as the forms they are, by their name or through an alias of core, `c::valid(a)`, whether core declares them or nothing does yet: `valid`, `all_valid`, `modified` and `scheduled` are bools, `delta_value` the `delta<T>` of the input's type (TYPE-16), `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`), and `valid`, `all_valid`, `modified`, `delta_value` and `last_modified` a child of one, `parts[1]`, `quote.bid`, `parts[i]`, alone (END-8); an `atomic<V>`'s field is no child; a selector may stand with no argument or with several inputs, and `valid` and `modified` with `[]`
+- In a node's hooks the endpoint operations are read as the forms they are, by their name or through an alias of core, `c::valid(a)`, whether core declares them or nothing does yet: `valid`, `all_valid`, `modified` and `scheduled` are bools, `delta_value` the `delta<T>` of the input's type (TYPE-16), of a window its delta, read before it is all valid as after (TYPE-11), `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`), and `valid`, `all_valid`, `modified`, `delta_value` and `last_modified` a child of one, `parts[1]`, `quote.bid`, `parts[i]`, alone (END-8); an `atomic<V>`'s field is no child; a selector may stand with no argument or with several inputs, and `valid` and `modified` with `[]`
 - An `endpoint<T>` parameter of a native value function is given an input by its name, a child of one, or `out`, in a hook, and its payload is not read; anything else, and any argument in a graph or a value function, is `endpoint.argument`
 - Core declares the endpoint operations, including `delta_value` (UNIT-12)
 - `scheduled()` in a node that injects neither `scheduler` nor `alarm` is `inject.no_scheduler`: in a hook, a `state`'s or a `cache`'s initialiser, and a source's body (SOURCE-1)
@@ -174,7 +175,7 @@ transpiler: partial
 - The endpoint operations are the input's own properties: `valid` of a struct is hgraph's `valid`, true once any child is, and `all_valid` hgraph's `all_valid`
 - Where a list, fixed or unsized, is in the value, `valid` and `all_valid` are the provider's (`_core.valid_of`, `_core.all_valid_of`): hgraph's `TSL` stays valid once every position has lost its value or a size alone has grown it, where the language's list is not; a handler's and a lifted helper's admission of such an input is too
 - `is_scheduled_now` stays true for the rest of a wake after `un_schedule` or `reset` in it (CAP-4), read as the property, by a function given the scheduler, and as `scheduled()` in a body and in a later handler: hgraph 0.9.8's own is false once the wake due is cancelled
-- A window's `valid` and `all_valid` are the `TSW`'s, of ticks and of a duration (TYPE-11)
+- A window's `valid` and `all_valid` are the `TSW`'s, of ticks and of a duration (TYPE-11); its `delta_value` is reported (TYPE-16)
 - `all_valid` asks no optional child, a `T?` or a field TYPE-4 makes optional, a generic one given a `T?` among them: of a struct or a tuple with one, the provider asks the others (`_core.all_valid_of`), and of one whose every child is optional, a list or a dictionary of a `T?` among them, it is the value's `valid`
 - A list or a dictionary that a delta naming no change makes valid (TIME-7) has no element, and is valid and all valid
 

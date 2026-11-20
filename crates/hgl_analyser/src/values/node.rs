@@ -624,7 +624,11 @@ impl<'a> Typer<'a> {
     /// publishes in one cycle, its `delta<T>` (TYPE-16): core's cases
     /// relay a set with `return delta_value(input)`. A result of
     /// `atomic<V>` is published whole, as a V (TYPE-9: "`atomic<V>`
-    /// stops expansion at a complete ordinary V").
+    /// stops expansion at a complete ordinary V"). TIME-7: "A result of
+    /// `rolling_window<V, Max, Min>` takes a V, which arrives, or a delta
+    /// of the window (TYPE-11)": a V is its complete value here, and the
+    /// window's own delta, `delta<rolling_window<V, Max, Min>>`, its
+    /// delta.
     ///
     /// A value written out takes its type from its place (EXPR-5), and
     /// the place here is one or the other: `(1.0, null)` is no
@@ -634,7 +638,7 @@ impl<'a> Typer<'a> {
     /// stands, with what it reports.
     pub(super) fn published(&mut self, node: &SyntaxNode, result: &Type, what: &str) -> Expr {
         let whole = match result {
-            Type::Atomic(value) => (**value).clone(),
+            Type::Atomic(value) | Type::RollingWindow { value, .. } => (**value).clone(),
             other => other.clone(),
         };
         let delta = Type::delta(result.clone());

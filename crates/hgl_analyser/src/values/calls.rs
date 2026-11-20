@@ -732,7 +732,8 @@ impl<'a> Typer<'a> {
         // to a value function binds its generic parameters to the list
         // it holds (`inferred_from`); one that the call's place, or what
         // the call writes, binds to a type that holds a window rejects.
-        // FN-1's exception, "in a native value function, one of
+        // A window's delta is an ordinary value (TYPE-12: "the argument
+        // of `delta` [is] any type"), and is taken. FN-1's exception, "in a native value function, one of
         // `endpoint<T>` (TIME-9)", takes the endpoint and not its
         // payload, and is the whole type of its parameter (TYPE-12): a
         // generic that stands only there is in no ordinary position.
@@ -753,9 +754,7 @@ impl<'a> Typer<'a> {
                 if !ordinary(generic.at) {
                     continue;
                 }
-                if !ty.any_part(&|part| matches!(part, Type::RollingWindow { .. }), &|_| {
-                    false
-                }) {
+                if !ty.holds_window() {
                     continue;
                 }
                 self.diagnostics.emit(

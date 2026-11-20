@@ -150,9 +150,9 @@ fn published_type(cell: &Type) -> Type {
 /// A target with no generic parameter says the type of each input and
 /// of its result: they are its own. A generic one's are read back from
 /// its traces, since a trace's cell is the delta of what is published
-/// (the language's TST-5): a scalar is its own delta, and a set's and a
-/// nullable's delta name the type they are of. A delta does not say
-/// that a part of it was an `atomic<V>`, whose delta is V.
+/// (the language's TST-5): a scalar is its own delta, and a set's, a
+/// nullable's and a window's delta name the type they are of. A delta
+/// does not say that a part of it was an `atomic<V>`, whose delta is V.
 pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring> {
     let ExprKind::Call {
         callee:
@@ -190,25 +190,16 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
             let parameter = parameters.get(argument.parameter?)?;
             // Only an argument that is a trace is replayed.
             let payload = trace_payload(&argument.value.ty)?;
-            // TYPE-16: a window's delta is "V: the value that arrived",
-            // so a trace of one is a trace of V: the window is the
-            // parameter's.
-            let windowed = matches!(parameter.ty, Type::RollingWindow { .. });
             Some((
                 parameter.name.clone(),
-                if known || windowed {
-                    parameter.ty.clone()
-                } else {
-                    payload
-                },
+                if known { parameter.ty.clone() } else { payload },
             ))
         })
         .collect();
     // The call's own type is the result as this call has it.
-    let windowed = matches!(call.ty, Type::RollingWindow { .. });
     let result = match &signature.result {
         None => None,
-        Some(_) if known || windowed => Some(call.ty.clone()),
+        Some(_) if known => Some(call.ty.clone()),
         Some(_) => trace_payload(eval),
     };
     Some(Wiring { inputs, result })

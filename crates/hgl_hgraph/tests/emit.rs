@@ -3800,17 +3800,17 @@ fn an_empty_selection_beside_another_is_reported() {
     );
 }
 
-/// TYPE-11: windows of ticks and of a duration, as inputs and results;
-/// TYPE-16: a window's delta is "V: the value that arrived".
+/// TYPE-11: windows of ticks and of a duration, as inputs and results.
 const WINDOWS: (&str, &str) = fixture!("demo.windows.hgl");
 
 /// TYPE-11: "`rolling_window<V, Max, Min>` is a rolling window of V ...
 /// Omitted minimum equals maximum". It is hgraph's `TSW`, of a count of
-/// ticks or of a `timedelta`, which takes one size as both. TYPE-16: a
-/// window's delta is "V: the value that arrived", so a node publishes
-/// one value to it, `delta_value` is the value that arrived, and an
-/// eval's replay and record of one are core's for the window (core's
-/// CEVAL-1), whose trace is each value that arrived (TST-5).
+/// ticks or of a `timedelta`, which takes one size as both. TIME-7: a
+/// window's result "takes a V, which arrives", so a node publishes one
+/// value to it, and a reader reads the list it holds. A window's delta is
+/// a type of its own (TYPE-16), which this target does not write
+/// (`a_window_form_not_written_yet_is_reported`), so the fixture's evals
+/// wire their windows in a graph.
 #[test]
 fn a_window_is_hgraphs_tsw() {
     let emitted = emit_clean(&[WINDOWS]);
@@ -3828,20 +3828,16 @@ fn a_window_is_hgraphs_tsw() {
         )
         .to_string(),
         "-> _hg.TSW[_py.float, _hg.WindowSize[1]]:".to_string(),
-        format!("def arrived(prices: {ticks}) -> _hg.TS[_py.float]:\n    return prices.delta_value\n"),
+        format!(
+            "def arrived(prices: {ticks}) -> _hg.TS[_py.float]:\n    return newest_price(values=_core.window_values(prices))\n"
+        ),
         "    return prices.valid\n".to_string(),
         "    return (prices.modified and prices.valid)\n".to_string(),
         "(prices.last_modified_time if prices.valid else None)".to_string(),
         "-> _hg.TSW[Side, _hg.WindowSize[2], _hg.WindowSize[1]]:".to_string(),
-        "def _inst_newest__i64_4(values: _hg.TSW[_py.int, _hg.WindowSize[4], _hg.WindowSize[1]])"
+        "def _inst_newest__i64_4(values: _hg.TSW[_py.int, _hg.WindowSize[4], _hg.WindowSize[1]]"
         .to_string(),
         "    return arrived(prices=collect(price=price))\n".to_string(),
-        "_harness.evaluate(collect, {\"price\": _hgl_4core._inst_replay__f64}, \
-         _hgl_4core._inst_record__rolling_window_f64__3__1_, "
-        .to_string(),
-        "_harness.evaluate(arrived, {\"prices\": _hgl_4core._inst_replay__rolling_window_f64__3__1_}, \
-         _hgl_4core._inst_record__f64, "
-        .to_string(),
     ]);
     // TYPE-9: a window within a struct, a fixed list, a dictionary and
     // a tuple is that one's child, read by its port, and wired from it
@@ -3854,15 +3850,8 @@ fn a_window_is_hgraphs_tsw() {
         format!("_hg.TSB[\"_0\": {small}, \"_1\": _hg.TS[_py.float]]"),
         format!("    return {}\n", part("book[\"last\"]")),
         format!("    return {}\n", part("pair[\"_1\"]")),
-        "_core.changed(book.delta_value, \"prices\")".to_string(),
-        "    return arrived(prices=booked(price=price)[\"prices\"])\n".to_string(),
-        "    return arrived_two(prices=slots(slot=slot, price=price)[1])\n".to_string(),
-    ]);
-    // Core's `replay` and `record` written for the window.
-    let core = emitted.module("core");
-    core.assert_writes(&[
-        format!("def _inst_replay__rolling_window_f64__3__1_(items: _py.object) -> {ticks}:"),
-        format!("def _inst_record__rolling_window_f64__3__1_(input: {ticks}, "),
+        "    return arrived(prices=book[\"prices\"])\n".to_string(),
+        "    return arrived_two(prices=both[1])\n".to_string(),
     ]);
 }
 
@@ -3870,29 +3859,54 @@ fn a_window_is_hgraphs_tsw() {
 /// invalidation of a window, which hgraph's `TSW` survives with what it
 /// holds, and a window of a value that is no scalar or enum. Core's END-9
 /// gives every window's readiness, of ticks and of a duration, which is
-/// written: an input or `out` read at any minimum, a window given to a
-/// lifted helper as a `list<V>` (FN-12), and an eval's record of a window.
+/// written: an input or `out` read at any minimum, and a window given to
+/// a lifted helper as a `list<V>` (FN-12).
+///
+/// TYPE-16: a window's delta is "A type of its own, with the properties
+/// `added` ... and `removed`", read at each tick, an exit alone included
+/// (TYPE-11). hgraph's `TSW` gives the value that arrived and nothing at
+/// an exit, so each use of one is reported, and never written as that
+/// value: `delta_value` of a window and of a struct that holds one, its
+/// properties read, compared, made, and published to a window (TIME-7).
+/// An eval's record of a window reads its delta (core's CEVAL-4), and is
+/// reported with it.
 #[test]
 fn a_window_form_not_written_yet_is_reported() {
     let emitted = emit(&[fixture!(
         "a_window_form_not_written_yet_is_reported",
         "m.hgl"
     )]);
-    let reported: Vec<&String> = emitted
+    let reported: Vec<String> = emitted
         .reported
         .iter()
         .filter(|place| place.starts_with("m.hgl:"))
+        .cloned()
         .collect();
+    let delta = "target.unsupported: the hgraph target does not write a window's delta, `added` \
+                 and `removed` (TYPE-11, TYPE-16) yet";
     assert_eq!(
         reported,
         [
-            "m.hgl:21:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
-            "m.hgl:23:4 target.unsupported: the hgraph target does not write the type `rolling_window<Quote, 3, 1>` yet",
-            "m.hgl:26:4 target.unsupported: the hgraph target does not write the type `rolling_window<f64?, 3, 1>` yet",
+            format!("m.hgl:4:19 {delta}"),
+            format!("m.hgl:4:42 {delta}"),
+            format!("m.hgl:7:19 {delta}"),
+            "m.hgl:21:12 target.unsupported: the hgraph target does not write the invalidation of a window yet".to_string(),
+            "m.hgl:23:4 target.unsupported: the hgraph target does not write the type `rolling_window<Quote, 3, 1>` yet".to_string(),
+            "m.hgl:26:4 target.unsupported: the hgraph target does not write the type `rolling_window<f64?, 3, 1>` yet".to_string(),
+            format!("m.hgl:42:22 {delta}"),
+            format!("m.hgl:43:16 {delta}"),
+            format!("m.hgl:47:19 {delta}"),
+            format!("m.hgl:51:18 {delta}"),
+            format!("m.hgl:58:39 {delta}"),
+            format!("m.hgl:62:22 {delta}"),
         ]
     );
-    // The record of `recent`'s window is core's, which is written.
-    assert_eq!(emitted.blocked("recorded"), None);
+    // The record of `recent`'s window is core's, which reads its delta.
+    let blocked = emitted.blocked("recorded").expect("the eval is blocked");
+    assert!(
+        blocked.ends_with(&delta["target.unsupported: ".len()..]),
+        "{blocked}"
+    );
 }
 
 /// TYPE-9: a window inside a struct, a tuple, a list or a dictionary is
@@ -6386,43 +6400,44 @@ fn a_constant_under_any_is_written_whole() {
 /// not a value arrives then. The window ticks for that exit", as hgraph
 /// 0.9.8's `TSW` does (hhenson/hgraph#1818): its sizes are written as the
 /// program writes them, "A minimum of `0s` is held by the first value".
-/// "Proposed: where a value leaves and none arrives, `delta_value` of the
-/// window ... has no value, and its read fails with `value.unset_read`":
-/// the provider's `window_delta`, of an input and of a child. The
-/// fixture's tests run on hgraph with the others.
+/// The window's delta at an exit is a window's delta, which is reported
+/// (`a_window_form_not_written_yet_is_reported`). The fixture's tests run
+/// on hgraph with the others.
 #[test]
-fn a_duration_windows_exit_and_its_delta_are_written() {
+fn a_duration_windows_exit_is_written() {
     let emitted = emit_clean(&[fixture!("demo.hgraph097_wave3.hgl")]);
     let python = emitted.module("demo.hgraph097_wave3");
     let micros = |count: i64| format!("_hg.WindowSize[_dt.timedelta(microseconds={count})]");
-    python.assert_writes(&[
-        format!(
-            "def from_zero(reading: _hg.TS[_py.int]) -> _hg.TSW[_py.int, {}, {}]:",
-            micros(3),
-            micros(0)
-        ),
-        "    if reading.modified:\n        return _core.window_delta(held)\n".to_string(),
-        "    return _core.window_delta(held)\n".to_string(),
-        "        return _core.checked_child(quotes[\"prices\"], _core.window_delta)\n".to_string(),
-    ]);
+    python.assert_writes(&[format!(
+        "def from_zero(reading: _hg.TS[_py.int]) -> _hg.TSW[_py.int, {}, {}]:",
+        micros(3),
+        micros(0)
+    )]);
 }
 
-/// TYPE-11 says a window of a duration's own delta has no value where a
-/// value leaves and none arrives (proposed); what the delta of a struct
-/// or a list that holds one is then, it does not say, and hgraph gives
-/// the field none, as for one that did not change: it is reported. One
-/// of a window of ticks is written, and so is the child's own delta.
+/// TYPE-16: a window's delta is a type of its own, with `added` and
+/// `removed`, and a struct's or a list's delta holds the delta of each
+/// window in it. hgraph's `TSW` gives the value that arrived, and nothing
+/// at an exit: the delta of a window, of ticks or of a duration, and of a
+/// value that holds one is reported, a child's own among them.
 #[test]
-fn the_delta_of_a_value_that_holds_a_duration_window_is_reported() {
+fn the_delta_of_a_value_that_holds_a_window_is_reported() {
     let emitted = emit(&[fixture!(
-        "the_delta_of_a_value_that_holds_a_duration_window_is_reported",
+        "the_delta_of_a_value_that_holds_a_window_is_reported",
         "m.hgl"
     )]);
+    let delta = "target.unsupported: the hgraph target does not write a window's delta, `added` \
+                 and `removed` (TYPE-11, TYPE-16) yet";
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:11:19 target.unsupported: the hgraph target does not write the delta of a value that holds a window of a duration yet",
-            "m.hgl:14:19 target.unsupported: the hgraph target does not write the delta of a value that holds a window of a duration yet",
+            format!("m.hgl:11:19 {delta}"),
+            format!("m.hgl:14:19 {delta}"),
+            format!("m.hgl:17:19 {delta}"),
+            "m.hgl:19:4 target.unsupported: the hgraph target does not write the type \
+             `delta<rolling_window<i64, 3s, 1s>>` yet"
+                .to_string(),
+            format!("m.hgl:20:40 {delta}"),
         ]
     );
 }

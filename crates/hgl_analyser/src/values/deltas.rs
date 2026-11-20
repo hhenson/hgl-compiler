@@ -1,7 +1,7 @@
-//! The delta of a collection, of a nullable or of a struct as a type of
-//! its own: its properties, and a delta constructed from them, held to the
-//! bounds of its type and to naming no entry twice (TYPE-16). Part of the
-//! typing pass ([`super`]).
+//! The delta of a collection, of a nullable, of a struct or of a window
+//! as a type of its own: its properties, and a delta constructed from
+//! them, held to the bounds of its type and to naming no entry twice
+//! (TYPE-16). Part of the typing pass ([`super`]).
 
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
@@ -69,6 +69,19 @@ impl<'a> Typer<'a> {
                 "value".to_string(),
                 nullable(Type::delta((**payload).clone())),
             )]),
+            // "`rolling_window<V, Max, Min>`: A type of its own, with the
+            // properties `added`, the value that arrived in the cycle, and
+            // `removed`, the value that left in it, each a `V?`, null
+            // where absent". TYPE-11: "In a window of a nullable V,
+            // `rolling_window<f64?, 5>`, ... each is instead the optional
+            // a nullable's delta is, a `delta<f64?>?`".
+            Type::RollingWindow { value, .. } => {
+                let held = window_change(value);
+                Some(vec![
+                    ("added".to_string(), held.clone()),
+                    ("removed".to_string(), held),
+                ])
+            }
             Type::Named {
                 module,
                 declaration,
@@ -108,9 +121,9 @@ impl<'a> Typer<'a> {
     }
 
     /// A property of a delta that is a type of its own (TYPE-16):
-    /// `change.added`, of a set's delta; `change.updated`, of a
-    /// dictionary's; `change.value`, of a nullable's; `change.bid`, of
-    /// a struct's.
+    /// `change.added`, of a set's delta or of a window's;
+    /// `change.updated`, of a dictionary's; `change.value`, of a
+    /// nullable's; `change.bid`, of a struct's.
     pub(super) fn delta_property(
         &mut self,
         base: Expr,
@@ -150,7 +163,8 @@ impl<'a> Typer<'a> {
     /// TYPE-16: "One that is a type of its own is constructed by its
     /// properties, by name ... A property left out is empty, or null
     /// for a struct's field, a nullable's `value`, and a list's
-    /// `size_modified`. A tuple's delta is an ordinary tuple, and is
+    /// `size_modified`; a window's `added` or `removed` left out is
+    /// absent (TYPE-11). A tuple's delta is an ordinary tuple, and is
     /// written as one is." The constructor of a type that has no
     /// delta of its own is not read.
     pub(super) fn delta_constructor(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
@@ -310,7 +324,8 @@ impl<'a> Typer<'a> {
     /// added or updated and as removed is malformed. A constant one is
     /// rejected (`delta.overlap`)." A set's `added`, a dictionary's and
     /// a list's `updated`, are the first property, and `removed` the
-    /// second. What is compared is each entry written as a literal; one
+    /// second. "A window's delta holds values, not members, and is not
+    /// malformed where they are equal", and is not looked at. What is compared is each entry written as a literal; one
     /// that is not is known only as the graph runs, which "makes no
     /// check". The later of the two entries is reported.
     fn delta_overlap(&mut self, ty: &Type, written: &[(usize, SyntaxNode, Type)]) {
@@ -350,6 +365,20 @@ impl<'a> Typer<'a> {
                 );
             }
         }
+    }
+}
+
+/// The type of a window's `added` and of its `removed`, for a window of
+/// `value` (TYPE-11, TYPE-16): a `V?`, or for a nullable V the
+/// optional of its delta, `delta<f64?>?`, which tells a null that
+/// arrived, `delta<f64?>()`, from no arrival, null. A V that is a
+/// generic parameter may be either until it is known, and so is a
+/// value that is not known: neither is known here.
+fn window_change(value: &Type) -> Type {
+    match value {
+        Type::Nullable(_) => nullable(Type::delta(value.clone())),
+        Type::Parameter { .. } | Type::Unknown => Type::Unknown,
+        other => nullable(other.clone()),
     }
 }
 

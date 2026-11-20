@@ -1,6 +1,12 @@
 # Each key completes the hgraph emitter's diagnostic "the hgraph target
 # does not write ... yet". A case is allowed only for the listed reason.
 
+"a window's delta, `added` and `removed` (TYPE-11, TYPE-16)" = [
+    "conformance::a_window_delta_has_what_arrived_and_what_left",
+    "conformance::a_window_is_recorded_with_its_exits_and_replayed_by_what_arrived",
+    "conformance::an_arrival_at_a_full_window_of_ticks_has_the_value_it_pushes_out",
+]
+
 # Rejection cases the compiler does not yet reject, each
 # `suite::file::declaration` with the file under the suite's directory,
 # under a reason that names the missing rule. A listed case must fail by

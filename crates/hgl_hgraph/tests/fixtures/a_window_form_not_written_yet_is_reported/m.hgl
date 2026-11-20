@@ -1,10 +1,10 @@
 module m
 struct Quote { bid: f64 }
-fn full(prices: rolling_window<f64, 3>) -> f64 {
-    when { return delta_value(prices) }
+fn full(prices: rolling_window<f64, 3>) -> bool {
+    when { return delta_value(prices) == delta_value(prices) }
 }
-fn timed(prices: rolling_window<f64, 5s, 0s>) -> f64 {
-    when { return delta_value(prices) }
+fn timed(prices: rolling_window<f64, 5s, 0s>) -> f64? {
+    when { return delta_value(prices).removed }
 }
 fn whole(prices: rolling_window<f64, 3, 1>) -> list<f64> {
     when { return prices }
@@ -37,3 +37,29 @@ fn collected(price: f64) -> rolling_window<f64, 3, 1> {
     when { return price }
 }
 fn lifted(price: f64) -> f64 => total(collected(price))
+fn arrival(prices: rolling_window<f64, 3>) -> f64? {
+    when {
+        let change = delta_value(prices)
+        return change.added
+    }
+}
+fn relayed(prices: rolling_window<f64, 3>) -> rolling_window<f64, 3> {
+    when { return delta_value(prices) }
+}
+fn made(price: f64) -> rolling_window<f64, 3> {
+    inject out
+    when { out = delta<rolling_window<f64, 3>>(added: price) }
+}
+struct Book {
+    prices: rolling_window<f64, 3, 1>
+    last: f64
+}
+fn booked(price: f64) -> Book {
+    when { return delta<Book>(prices: delta<rolling_window<f64, 3, 1>>(added: price)) }
+}
+fn book_last(book: Book) -> f64 {
+    when valid(book.last) {
+        let change = delta_value(book)
+        return book.last
+    }
+}

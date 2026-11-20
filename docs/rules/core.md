@@ -345,7 +345,7 @@ transpiler: done
 analyser: partial
 
 - `delta_value(x)` is a `delta<T>` for an input of T, and for a child of one (END-8), the value itself for a scalar
-- For a nullable scalar it is the optional TYPE-16 gives it
+- For a nullable scalar it is the optional TYPE-16 gives it, and for a window the window's delta (END-9)
 - A child's `delta_value` needs the child's admission (TIME-1)
 - Left: proof that `x` is valid and modified
 
@@ -368,7 +368,7 @@ transpiler: partial
 transpiler: partial
 
 - hgraph: `invalidate(out)` clears the output; one that holds an unsized list, a dictionary or a set, at any depth of a struct, a tuple and a fixed list, empties each first (`_core.invalidated`), since hgraph's `TSL` keeps its positions and its `TSD` and `TSS` their keys and members, which the next delta read would name removed and a delta that names no change would leave in what it makes valid (TIME-7: "it makes the value valid and empty")
-- `invalidate(out)` of a `ref` result (FN-16, proposed: `out` of one takes the endpoint operations) leaves it designating nothing: the invalidation, for which hgraph 0.9.8 unbinds an ordinary reader and wakes it with its input not valid, and a `ref` parameter given it is not valid; the last action of the evaluation decides (`_core.Designation`); invalidated again while it is not valid, it wakes no reader, as hgraph has it
+- `invalidate(out)` of a `ref` result (FN-16: `out` of one takes the endpoint operations) leaves it designating nothing: the invalidation, for which hgraph 0.9.8 unbinds an ordinary reader and wakes it with its input not valid, and a `ref` parameter given it is not valid; the last action of the evaluation decides (`_core.Designation`); invalidated again while it is not valid, it wakes no reader, as hgraph has it
 - An active input's transition to invalid wakes the node
 - In a body or handler guard, `modified(input)` is false on invalidation, whether the input is active or passive
 - Repeated scalar invalidation is silent and a scalar producer's last action decides its final validity
@@ -426,20 +426,20 @@ transpiler: partial
 analyser: partial
 
 - `all_valid` takes a window, and its value is read in a hook, and given to a value function in composition, as a `list<V>` (TYPE-11, FN-12)
+- `delta_value(x)` of a window is its delta, `added` and `removed` (TYPE-16), read at each tick, before the window is all valid as after; a window's result takes a V, or the window's delta (TYPE-11)
 
 transpiler: partial
 
-- hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own; in one of a duration a value leaves one smallest step after its age is the maximum, and the window ticks for the exit, modified with nothing published (END-2), as hgraph 0.9.8's `TSW` does; a minimum of zero is held by the first value, and an empty window is not all valid; proposed: one emptied by exits stays valid, and `last_modified` is the exit's time
-- Proposed: `delta_value(x)` where a value leaves and none arrives fails with `value.unset_read` (`_core.window_delta`)
-- Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`), or gives that `err` where its place expects a `result<list<V>, error>` (`_core.window_result`); a lifted value function whose parameter has a default is not invoked where the window is valid and not all valid (FN-11); core's window cases pass
-- Left, reported: a window of a value that is no scalar or enum (TYPE-11), and invalidating one (END-4)
+- hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own; in one of a duration a value leaves one smallest step after its age is the maximum, and the window ticks for the exit, modified with nothing published (END-2), as hgraph 0.9.8's `TSW` does; a minimum of zero is held by the first value, and an empty window is not all valid; one emptied by exits stays valid; proposed: `last_modified` is the exit's time
+- Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`), or gives that `err` where its place expects a `result<list<V>, error>` (`_core.window_result`); a lifted value function whose parameter has a default is not invoked where the window is valid and not all valid (FN-11); core's window cases pass but those of a window's delta, listed in `crates/hgl_hgraph/ci/unsupported_cases.toml`
+- Left, reported: a window of a value that is no scalar or enum (TYPE-11), and invalidating one (END-4); a window's delta, read, made or published, and so a window's replay and record (CEVAL-3, CEVAL-4), which hgraph's `TSW`, giving the value that arrived and nothing at an exit, does not give
 
 ## END-10
 
 analyser: done
 
 - A `ref` parameter of T is given a connection of T, and a `ref` result designates what its `return` names, a child of an input valid or not, read as `EndpointOf` or `ChildEndpointOf` with no payload read (FN-16)
-- An assignment to a part of a `ref` result's `out` is `binding.immutable`, and `ref` on a `signal` parameter `ref.position`, each code proposed (FN-16, TYPE-12)
+- An assignment to a part of a `ref` result's `out` is `binding.immutable`, and `ref` on a `signal` parameter `ref.position` (FN-16, TYPE-12)
 
 transpiler: partial
 
@@ -567,15 +567,17 @@ transpiler: done
 
 ## CEVAL-3
 
-transpiler: done
+transpiler: partial
 
 - hgraph: core's `replay` is a source written from its own body: each entry at its time, equal values among them, and nothing for a silent slot; a set's entry is its delta, and a nullable's a published null or a value
+- Left, reported: a window's replay, whose entries are window deltas (TYPE-11)
 
 ## CEVAL-4
 
-transpiler: done
+transpiler: partial
 
 - hgraph: core's `record` is a node written from its own body: its recording starts empty, takes the evaluation time and the delta of each publication, and is put in the store under its key at stop, an empty one included
+- Left, reported: a window's record, which reads the window's delta at each publication and each exit (END-9)
 
 ## CEVAL-5
 
@@ -670,9 +672,10 @@ analyser: partial
 - The run's own key written out as a key of the global store is rejected (`store.reserved_key`)
 - Left: a key that is a `const` parameter
 
-transpiler: done
+transpiler: partial
 
 - hgraph: a run's output, an eval's and an application's, is what is under `"run.output"` in its store once it has stopped, a tuple for each publication; an entry with no result has none
+- Left, reported: the output of an entry whose result is a window, a tuple for each publication and each exit (END-9)
 
 runner: planned
 

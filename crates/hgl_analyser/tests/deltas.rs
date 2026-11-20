@@ -10,8 +10,9 @@ use hgl_analyser::hir::{ExprKind, Stmt};
 
 /// TYPE-16: "`delta<T>` is the ordinary value type of what a temporal
 /// value of T publishes in one cycle. The table gives it for each T.
-/// For most T it is another type the language has ... A set's, a
-/// dictionary's, and a struct's delta is a type of its own".
+/// For most T it is another type the language has ... A nullable's, a
+/// list's, a set's, a dictionary's, a struct's, and a window's delta is
+/// a type of its own".
 #[test]
 fn a_delta_is_what_the_table_gives_for_its_type() {
     let checked = module(concat!(
@@ -49,7 +50,7 @@ fn a_delta_is_what_the_table_gives_for_its_type() {
             "b: Side",
             "c: result<f64, error>",
             "d: Quote",
-            "e: f64",
+            "e: delta<rolling_window<f64, 5>>",
             "f: delta<list<f64>>",
             "g: delta<list<Quote, 3>>",
             "h: tuple<f64?, str?>",
@@ -345,11 +346,11 @@ fn a_node_publishes_a_whole_value_or_a_delta() {
         "}\n",
         // A scalar's delta is the scalar; a list's has `updated`.
         // Under a `?` that marks an input that may be left out, the
-        // delta is the shape's.
+        // delta is the shape's: a window's, a type of its own.
         "fn scalars(price: f64, rows: list<f64>, window: rolling_window<f64, 5>? = null) -> f64 {\n",
         "    when {\n",
         "        let moved: dict<i64, f64> = delta_value(rows).updated\n",
-        "        let latest: f64 = delta_value(window)\n",
+        "        let latest: delta<rolling_window<f64, 5>> = delta_value(window)\n",
         "        return delta_value(price)\n",
         "    }\n",
         "}\n",
