@@ -111,6 +111,7 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
 | `eval` with no configuration, dense and timed traces, their comparison, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| A `ref` parameter and result: hgraph's `REF` input and output; a whole `ref` parameter returned sampled; an input that is no `ref` parameter designated whole, and followed through its re-binding with no handler run for it; `out =` and `invalidate(out)` of a `ref` result | FN-16, TIME-10, END-10 |
 
 Not written yet, and reported: a call that gives a `var` parameter a
 place beside an argument that runs statements (FN-15), a `?` after
@@ -119,7 +120,7 @@ anything its statement reads or runs before it (ERR-5), a
 member made from a value (TYPE-7), a pack, a struct, a set, a
 dictionary, a window, a delta of any but a scalar, `timezone`,
 `zoned_time`, and of temporal code: a temporal value of any but a
-scalar, `ref` (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
+scalar, a designation of a child of an input (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
 `all_valid`, `activate`, `passivate`, `scheduled()`, `if`, `switch` and
 `for` over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
 default or a null (FN-11), a source with declarations or hooks, an eval
@@ -156,6 +157,7 @@ the chapters' entries stay the hgraph target's.
 | `Scheduler`: its three properties, `schedule` with a duration or a datetime under a tag or none, on the wall clock in real time and unchanged by it in simulation, `un_schedule`, `reset`; `Alarm` and its `schedule`; what may be asked of each | CAP-4, CAP-5, TIME-8 | `capabilities.h` | `scheduler_tests.cpp` |
 | `get`, `has`, `put` of the global store, in a node and where a graph is built | CAP-6, FN-9 | `capabilities.h` | `capabilities_tests.cpp` |
 | A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
+| What a `ref` parameter designates: the reference its `REF` input holds, present from the start where it is given a connection, or none, which an ordinary reader of the result it is published to observes | FN-16, TIME-10, END-10 | `references.h` | `references_tests.cpp` |
 | An enum as a value of the library and of the test host: its HGL name, its members' text, its schema with hgraph; core's `CmpResult`, `ZeroPolicy`, `Rounding`, `InvalidPolicy`, `LogLevel` | TYPE-7, TST-4, TST-5, OPS-3 | `values.h`, `traces.h` | `traces_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
 | A source's body as a coroutine, `generator<T>`: run on to each `yield` as it is resumed, in loops and branches, giving what it yields; what it lets out thrown again where it was resumed; its frame and the locals in it destroyed wherever it stopped | SOURCE-1 | `generator.h` | `generator_tests.cpp` |

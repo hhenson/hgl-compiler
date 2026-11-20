@@ -6,7 +6,8 @@
 // conversions.h, tenors.h, lists.h, endpoints.h, capabilities.h), HGL's failures
 // (failure.h), the reads checked when they run (checked.h), constants and
 // sources (sources.h) with the coroutine type of a source's body
-// (generator.h), and the test host (testing.h). It is built on
+// (generator.h), what a `ref` parameter designates (references.h), and
+// the test host (testing.h). It is built on
 // hgraph's runtime and wiring libraries alone: nothing of hgraph's standard
 // library is used (docs/cpp-target.md).
 #pragma once
@@ -18,6 +19,7 @@
 #include <hglrt/failure.h>
 #include <hglrt/generator.h>
 #include <hglrt/lists.h>
+#include <hglrt/references.h>
 #include <hglrt/scalar.h>
 #include <hglrt/sources.h>
 #include <hglrt/temporal.h>

@@ -428,6 +428,36 @@ fn temporal_code_runs_on_the_sdk() {
     );
 }
 
+/// The `ref` parameters and results on the SDK (`demo.references`): what
+/// an ordinary reader of a `ref` result observes, what wakes a node of a
+/// `ref` parameter, a sampled designation, and a designated input whose
+/// re-binding its reader follows (FN-16, TIME-10; core's END-10).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn references_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("references");
+    let file = write(
+        &root,
+        "src/demo.references.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.references.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-3: "An index outside a list fails where it is evaluated". The
 /// test is reported at the statement of it that was running, inside a
 /// function it called, with the runtime library's text of the failure.

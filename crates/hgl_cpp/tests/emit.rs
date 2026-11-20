@@ -363,6 +363,75 @@ fn temporal_code_is_written() {
     assert!(units.contains(&"modules/core.cpp"), "{units:?}");
 }
 
+/// FN-16, TIME-10: a `ref` parameter is hgraph's `REF` input and a `ref`
+/// result its `REF` output, which the wiring function gives as a
+/// connection of T; returning a whole `ref` parameter publishes what it
+/// designates; an input that is no `ref` parameter, designated, is given
+/// to the node again as a `REF` input it follows, and its state keeps
+/// which one the result follows. Everything is written, and each test can
+/// be run.
+#[test]
+fn references_are_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.references.hgl",
+            include_str!("fixtures/demo.references.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.references", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.references.cpp")
+        .unwrap()
+        .text;
+    for written in [
+        // A `ref` parameter, passive where no handler subscribes to it.
+        "::hgraph::In<\"low\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive> low",
+        // FN-16: "Returning a whole `ref` parameter samples its current
+        // designation when the `return` executes".
+        "out_.set(::hglrt::designation(high));",
+        // "a `ref` result is a connection of T to whoever reads it".
+        "(wiring_, flag, low, high).as<::hgraph::TS<::hgraph::Int>>()",
+        // An input designated is given again, and followed.
+        "(wiring_, flag, low, high, low, high).as<::hgraph::TS<::hgraph::Int>>()",
+        "::hgraph::In<\"designated:low\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_",
+        "if (designates_ == 0 && designated_01_.modified())",
+    ] {
+        assert!(unit.contains(written), "{written} in\n{unit}");
+    }
+}
+
+/// FN-16: a designation of a position of a list is reported, after the
+/// list's own temporal form where that is not written yet, so that a case
+/// is listed for the first form it reaches.
+#[test]
+fn a_designation_not_written_yet_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn route(idx: i64, items: list<i64, 3>) -> ref i64 {\n",
+                "    when modified(idx) { return items[idx] }\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.reported,
+        ["m.hgl:4:33 the cpp target does not write a temporal value of `list<i64, 3>` yet"]
+    );
+}
+
 /// A temporal form the target does not write yet is reported through the
 /// dispatch point, where it is written, and blocks what reaches it: a
 /// temporal value of a type no family writes, and a capability no family

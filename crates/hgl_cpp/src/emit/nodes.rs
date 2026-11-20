@@ -19,8 +19,9 @@
 //! then evaluates the node only once it is valid; one no handler
 //! subscribes to is `InputActivity::Passive`.
 //!
-//! Not written yet, and reported: a `ref` parameter or result (FN-16),
-//! `inject scheduler` and `inject alarm` (CAP-4, CAP-5), a handler that
+//! What the `ref` mode of a parameter and the result adds is
+//! `references`'s (FN-16). Not written yet, and reported: `inject
+//! scheduler` and `inject alarm` (CAP-4, CAP-5), a handler that
 //! `scheduled()` or `modified([])` selects where the node injects a
 //! timer, a read of `out`.
 
