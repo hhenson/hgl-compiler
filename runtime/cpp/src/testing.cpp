@@ -155,11 +155,11 @@ std::string day_and_clock_text(std::int64_t microseconds) {
 } // namespace
 
 std::string detail::scalar_text(i64 value) {
-    return hglrt::detail::text_of(value);
+    return hglrt::detail::number_text(value);
 }
 
 std::string detail::scalar_text(f64 value) {
-    return hglrt::detail::text_of(value);
+    return hglrt::detail::number_text(value);
 }
 
 std::string detail::scalar_text(bool value) {

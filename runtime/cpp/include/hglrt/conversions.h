@@ -88,7 +88,7 @@ converted<T, invalid> outcome(made<T> value, std::source_location where) {
 
 /// OPS-6, `i64` to `str`: "Its decimal digits, after a `-` where it is below
 /// zero".
-str text_of(i64 value);
+str number_text(i64 value);
 
 /// OPS-6, `f64` to `str`: "The shortest decimal text that reads back as the
 /// same `f64`, always with a `.` or an exponent, after a `-` where its sign
@@ -96,7 +96,7 @@ str text_of(i64 value);
 /// below 1e-4 and not zero, in size ... A NaN is `nan`, and the infinities
 /// are `inf` and `-inf`". The exponent is written as the language writes a
 /// literal's: `1e21`, `1.5e-7`.
-str text_of(f64 value);
+str number_text(f64 value);
 
 /// OPS-7, OPS-8: the `i64` that `rounding` selects for `value`, or `nan`
 /// for a NaN where it is given; "an `f64` that is NaN, an infinity, or
@@ -135,21 +135,21 @@ To convert_i64(i64 value) {
     } else if constexpr (std::same_as<To, bool>) {
         return value != 0;
     } else if constexpr (std::same_as<To, str>) {
-        return detail::text_of(value);
+        return detail::number_text(value);
     } else {
         static_assert(false, "OPS-4: an i64 converts to an f64, a bool or a str");
     }
 }
 
 /// `convert(value: f64) -> bool`, `-> str`: false for either zero and true
-/// otherwise, a NaN among them; its shortest text (`detail::text_of`). To an
+/// otherwise, a NaN among them; its shortest text (`detail::number_text`). To an
 /// `i64` is `convert_f64_Rounding_i64_`, which can fail.
 template <class To>
 To convert_f64(f64 value) {
     if constexpr (std::same_as<To, bool>) {
         return value != 0.0;
     } else if constexpr (std::same_as<To, str>) {
-        return detail::text_of(value);
+        return detail::number_text(value);
     } else {
         static_assert(false,
                       "OPS-4: an f64 converts to a bool or a str here, and to an i64 with its options");
