@@ -121,7 +121,7 @@ jobs:
     runs-on: ubuntu-26.04
     env:
       # The hgraph release the SDK is built from.
-      HGRAPH_TAG: "0.9.8"
+      HGRAPH_TAG: "0.9.10"
       # The image's GCC 15, for the SDK and for the library.
       CXX: g++-15
       # The dependency prefix and the SDK, which the steps below make or
