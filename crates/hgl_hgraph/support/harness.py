@@ -141,17 +141,19 @@ def _replay_entries(trace, start):
     the input held, and a `delta<T>` as that change"): for a dictionary,
     each key it held that the cell has not is removed, and for a set each
     member. The keys or members it holds are followed through each cell,
-    a delta's among them. The replay publishes such a cell as a whole
-    value (`_core.Whole`), which ticks where it changes nothing."""
+    a delta's among them. TIME-7 holds a collection published whole to
+    the same: "A collection published whole is published as its change
+    from what the result holds", which is no tick where it changes
+    nothing and the value is valid."""
     entries = []
-    for after, published in _deltas(_relative(trace, start), replayed=True):
+    for after, published in _deltas(_relative(trace, start)):
         if after < _datetime.timedelta(0):
             raise _core.HglError("a timed trace has a key before the run's start")
         entries.append((_core.add__datetime_duration(start, after), published))
     return entries
 
 
-def _deltas(cells, replayed=False):
+def _deltas(cells):
     """Each of a trace's `cells`, `(key, publication)`, with what it
     publishes as the delta its publication is: one cell written whole is
     the delta that publishing it whole records (`_core.whole_delta`), and
@@ -162,21 +164,13 @@ def _deltas(cells, replayed=False):
     it has not (TST-9), and so is the size of an unsized list, so that a
     whole list removes the tail it has not. The same deltas are replayed
     to an input (CEVAL-2) and given to a `const fn` (TST-16: "A T
-    published whole is held as its delta too").
-
-    `replayed` where they are replayed: a cell written whole is then
-    marked so (`_core.Whole`), a set's as its members. TST-5: "Each cell
-    is one cycle's publication, written as a `return` is (TIME-7) ... a
-    T, published whole", and TIME-7: "A value published whole, the same
-    again or empty, is no delta, and ticks as any publication does"."""
+    published whole is held as its delta too")."""
     keys = set()
     size = 0
     for key, published in cells:
         if isinstance(published, _Published):
             published = published.delta
-        whole = None
         if isinstance(published, _Whole):
-            whole = published
             published = _core.whole_delta(
                 published.value, keys, published.fixed, size, published.shape
             )
@@ -190,10 +184,6 @@ def _deltas(cells, replayed=False):
                     keys.add(held)
         elif _core._is_set_delta(published):
             keys = (keys - set(published.removed)) | set(published.added)
-        if whole is not None and replayed:
-            if isinstance(whole.value, (set, frozenset)):
-                published = frozenset(whole.value)
-            published = _core.Whole(published)
         yield key, published
 
 

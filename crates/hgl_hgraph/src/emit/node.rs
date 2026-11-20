@@ -131,21 +131,19 @@ impl Emitter<'_> {
         // TIME-7: "`inject out` exposes that same result": hgraph's own
         // `_output`, which it gives the node and its `stop`.
         // An unsized list's delta is counted from the size the list
-        // holds, and an empty one made to tick, on `_output` (see
-        // `bundled`), in the result or in a part of it; a whole set in
-        // it ticks through its port (`published_through_port`).
+        // holds, and an empty one made to tick where it makes the list
+        // valid, on `_output` (see `bundled`), in the result or in a part
+        // of it.
         let has_out = has_out
             || signature
                 .result
                 .as_ref()
-                .is_some_and(|result| published_through_port(self.program, result));
+                .is_some_and(|result| holds_growing_list(self.program, result));
         // A whole dictionary published replaces what the node published
-        // before, which it reads from `_output`, and a whole empty
-        // dictionary or set ticks on it (see `bundled`).
+        // before, which it reads from `_output` (see `bundled`).
         let has_out = has_out
             || signature.result.as_ref().is_some_and(|result| {
-                (whole_dictionary(result) || matches!(result, Type::Set(_)))
-                    && returns_whole(&body.statements, result)
+                whole_dictionary(result) && returns_whole(&body.statements, result)
             });
         // A delta of what holds a dictionary or a set is published on
         // `_output`, which makes each that is not valid valid where the

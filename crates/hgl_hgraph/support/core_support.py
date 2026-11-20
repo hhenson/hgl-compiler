@@ -844,58 +844,6 @@ def _validated_parts(port, change, shape):
                 _validated_parts(port[index], entry, part)
 
 
-def _whole_set(port, members):
-    """What publishes `members`, a whole value of the set at `port`: the
-    members, the set cleared first.
-
-    TIME-7: "A value published whole, the same again or empty, is no
-    delta, and ticks as any publication does". hgraph 0.9.8's `TSS` does not tick
-    for a whole value that leaves its members as they were, the empty one
-    among them, and has no way to mark it modified. `clear` publishes the
-    removal of each member it holds, and makes one that is not valid
-    valid; the members published after it in the same evaluation are
-    added again, which hgraph reads as no change of them: the set ticks,
-    and its delta is what the value changed. No member the set does not
-    hold is named."""
-    port.clear()
-    return members
-
-
-def _whole_sets(port, change, shape):
-    """Clears each set at `port`, of `shape` (`_entries_change`), that
-    `change` gives a whole value, before it is published (`_whole_set`,
-    `_published_through`).
-
-    A set's delta is hgraph's own `frozenset`, with what it `added` and
-    what it `removed`, and a whole set a plain one, so the two are told
-    apart where the value is published: what a source yields and what a
-    replay publishes for a trace's cell. A key a dictionary does not hold
-    yet has no set to clear: hgraph makes one."""
-    if change is None or shape is None:
-        return
-    if shape == "entries":
-        if isinstance(change, frozenset) and not _is_set_delta(change):
-            _whole_set(port, change)
-        return
-    kind, part = shape
-    if part is None or not isinstance(change, tuple if kind == "positions" else dict):
-        return
-    if kind == "entries":
-        for key, entry in change.items():
-            if not _removes(entry) and key in port:
-                _whole_sets(port[key], entry, part)
-    elif kind == "fields":
-        for field, entry in change.items():
-            _whole_sets(port[field], entry, part.get(field))
-    elif kind == "positions":
-        for index, (entry, within) in enumerate(zip(change, part)):
-            _whole_sets(port[position(index)], entry, within)
-    else:
-        for index, entry in change.items():
-            if not _removes(entry):
-                _whole_sets(port[index], entry, part)
-
-
 def entries_published(port, change, shape):
     """Publishes `change`, a delta (TYPE-16) of a value of `shape` that
     holds a dictionary or a set, to `port`, the node's own output
@@ -938,9 +886,9 @@ def _held_size(port):
 
 def _ticked(port):
     """Makes the unsized list at `port` tick in this evaluation where
-    what is published next would change nothing hgraph can see: a whole
-    list (`_whole_list`), and a delta that makes the list valid
-    (`list_applied`).
+    what is published next makes it valid and would change nothing
+    hgraph can see: an empty whole list (`_whole_list`), and a delta that
+    names no change (`list_applied`).
 
     TIME-7 has a write publish ("No write means no tick"), and TIME-9 has
     "A published empty list ... valid". hgraph 0.9.8's unbounded `TSL`
@@ -963,20 +911,24 @@ def _whole_list(value, port):
     element, dropping those past them. The tuple is a copy: hgraph keeps
     no list the program goes on changing.
 
-    An empty list published where the list holds none, or holds no value
-    yet, would not tick (`_ticked`), so `port`, the list's port of the
-    node's output, is made to: with no port, assigned to an entry of a
-    dictionary `out` or a position of a list `out`, which
-    `assigned_to_out` names once, it is not written. A source's
-    statements give `DEFERRED`: its node publishes the value through its
-    port when it is due (`published_into`)."""
+    TIME-7: "Where that leaves nothing to publish, ... an empty list ...
+    given to a valid empty one, the value is unchanged, and it is no
+    tick. Where a `list<V>` ... is not valid, an empty one given whole
+    makes it valid, and ticks", and hgraph 0.9.8's unbounded `TSL` does
+    neither for an empty list given to one that holds no value yet
+    (`_ticked`), so `port`, the list's port of the node's output, is made
+    to: with no port, assigned to an entry of a dictionary `out` or a
+    position of a list `out`, which `assigned_to_out` names once, it is
+    not written. A source's statements give `DEFERRED`: its node
+    publishes the value through its port when it is due
+    (`published_into`)."""
     if not value and port is not DEFERRED:
         if port is None:
             raise NotImplementedError(
                 "the hgraph target does not write an empty unsized list assigned to an entry "
                 "or a list's position of `out` yet"
             )
-        if len(port) == 0:
+        if len(port) == 0 and not port.valid:
             _ticked(port)
     return tuple(value)
 
@@ -993,7 +945,7 @@ def list_replaced(port, value):
     return _whole_list(value, port)
 
 
-def list_applied(port, delta, whole=False):
+def list_applied(port, delta):
     """What a node publishes to its unsized list at `port`, of elements
     of any type, for `delta`, the list's delta (TYPE-16), as hgraph's
     unbounded `TSL` takes it: a `TSLDelta` of the positions updated and
@@ -1025,12 +977,10 @@ def list_applied(port, delta, whole=False):
     is valid the delta changes nothing, and is no tick", and a delta whose
     every entry is an ignored removal names no change too. hgraph's `TSL`
     does not tick for either, valid or not: where the list is not valid it
-    is made to (`_ticked`).
-
-    `whole` where `delta` is what publishes a whole list, a trace's cell
-    written whole (`Whole`): "A value published whole, the same again or
-    empty, is no delta, and ticks as any publication does" (TIME-7), so
-    one that changes nothing is made to tick, valid or not."""
+    is made to (`_ticked`). A trace's cell written whole is replayed as
+    the delta that publishing it records (`whole_delta`), which TIME-7
+    holds to the same: "A collection published whole is published as its
+    change from what the result holds"."""
     held = _held_size(port)
     changes = updated(delta)
     gone = removed(delta)
@@ -1053,7 +1003,7 @@ def list_applied(port, delta, whole=False):
         raise HglError(
             f"the delta updates the position {min(beyond)} and gives the list a size of {size}"
         )
-    if size == held and not changes and (whole or not port.valid):
+    if size == held and not changes and not port.valid:
         _ticked(port)
     return _TSLDelta(changes, removed=tuple(position for position in gone if position < size), size_modified=size)
 
@@ -1113,13 +1063,14 @@ def _published_through(port, value, shape, entries):
     TIME-7: "a `delta<T>` (TYPE-16), published as that change". A key
     removed is given `REMOVE_IF_EXISTS`, which ignores one not held
     (`_entries_change`); a child that a change leaves as it was is left
-    out (`_pruned`); a set given a whole value is cleared first, so that
-    it ticks as any publication does (`_whole_sets`); and a dictionary or
-    a set that is not valid is made valid where the change names nothing
-    (`_validated_parts`), once it is published, since a key it adds is a
-    child only then."""
+    out (`_pruned`); and a dictionary or a set that is not valid is made
+    valid where the change names nothing (`_validated_parts`), once it is
+    published, since a key it adds is a child only then. A set given a
+    whole value, a plain `frozenset`, is hgraph's `TSS`'s own to publish:
+    it ticks only where the members change, or where it makes the set
+    valid, as TIME-7 has it ("a set given the members it holds ... is no
+    tick")."""
     published = _pruned(port, _entries_change(_published_parts(port, value, shape), entries), entries)
-    _whole_sets(port, published, entries)
     port.value = _by_position(published, shape, entries)
     _validated_parts(port, published, entries)
     return published
@@ -1744,27 +1695,16 @@ def dict_replaced(output, value):
     output holds that `value` has not. hgraph's `TSD` would otherwise
     keep those.
 
-    TIME-7: "A value published whole, the same again or empty, is no
-    delta, and ticks as any publication does". hgraph 0.9.8's `TSD` does
-    not tick for an empty one where it is valid and holds none, and is
-    made to (`clear`), which makes one that is not valid valid and
-    empty."""
+    TIME-7: "A collection published whole is published as its change
+    from what the result holds. Each entry of a dictionary ... that it
+    gives is published, the same value again included ... Where that
+    leaves nothing to publish, ... an empty list or dictionary given to a
+    valid empty one, the value is unchanged, and it is no tick. Where a
+    ... dictionary ... is not valid, an empty one given whole makes it
+    valid, and ticks": as hgraph 0.9.8's `TSD` takes the change."""
     made = {key: _REMOVE for key in (output.keys() if output.valid else ()) if key not in value}
     made.update({key: published(entry) for key, entry in value.items()})
-    if not made:
-        output.clear()
     return made
-
-
-def set_replaced(output, value):
-    """What a temporal set publishes for a whole value of it, given its
-    own port, `output` (TIME-7: "a complete value of the result's type
-    T, published whole"): the members of `value`, a `frozenset`, which
-    hgraph's `TSS` takes as what it now holds, the set cleared first so
-    that it ticks where they are the members it holds, the empty one
-    among them (`_whole_set`): a node's result, a part of its `out`, and
-    a lifted function's result."""
-    return _whole_set(output, value)
 
 
 def whole_delta(value, keys, fixed=False, size=0, shape=None):
@@ -1788,7 +1728,7 @@ def whole_delta(value, keys, fixed=False, size=0, shape=None):
         members = added | removed
         # A set given its members again changed none: its delta names
         # nothing added and nothing removed. A plain `frozenset` would be
-        # a whole set, and an empty one would empty it (`_whole_sets`).
+        # a whole set, and an empty one would empty it.
         if not members:
             return _set_delta(added=frozenset(), removed=frozenset(), tp=object)
         return _set_delta(added=added, removed=removed, tp=type(next(iter(members))))
@@ -1874,15 +1814,19 @@ def bundled(value, shape=None, port=None):
 
     `port` is the port of the output the value is published to, where
     the node has one: an unsized list in the value is made to tick
-    through its own (`_whole_list`), and so is a set, cleared first
-    (`_whole_set`). A source's statements give `DEFERRED`, and its node
-    publishes the value through its port when it is due
-    (`published_into`, `_whole_sets`); with no port a set is given as it
-    is, as a constant's one publication is."""
+    through its own where an empty one makes it valid (`_whole_list`). A
+    source's statements give `DEFERRED`, and its node publishes the value
+    through its port when it is due (`published_into`)."""
     if shape is None:
         # Each field publishes whole.
         shape = dict.fromkeys(value._hgl_fields)
-    return _bundled(value, shape, port)
+    made = _bundled(value, shape, port)
+    # TIME-7: "a set given the members it holds ... is no tick". hgraph
+    # 0.9.8's bundle given a tuple marks a set in it modified where it is
+    # given the members it holds; given a `dict` of its fields, by
+    # position (`_by_position`), it publishes each as the child takes it.
+    # A source's node does so when the value is due (`published_into`).
+    return made if port is DEFERRED else _by_position(made, shape)
 
 
 def _bundled(value, shape, port):
@@ -1891,7 +1835,7 @@ def _bundled(value, shape, port):
     if shape == "list":
         return _whole_list(value, port)
     if shape == "set":
-        return value if port is None or port is DEFERRED else _whole_set(port, value)
+        return value
     if port is None or port is DEFERRED:
         within = lambda key: port  # noqa: E731
     else:
@@ -1977,27 +1921,6 @@ def unpublished(delta):
     return None if delta is _Null else delta
 
 
-class Whole:
-    """A trace's cell written whole, as a replay publishes it (the
-    language's TST-5: "Each cell is one cycle's publication, written as a
-    `return` is (TIME-7) ... a T, published whole"; TST-9: "a T whole,
-    which replaces what the input held"). `published` is what hgraph is
-    given for it: a set's members, and for any other value the delta that
-    replaces what the input held (`whole_delta`).
-
-    TIME-7: "A value published whole, the same again or empty, is no delta, and
-    ticks as any publication does". A cell is given to the replay as a
-    `delta<T>` (core's `replay`), and one that changes nothing would be a
-    delta that names no change, which ticks only where it makes the value
-    valid: this marks it, and the replay publishes it as a whole value
-    (`resume`)."""
-
-    __slots__ = ("published",)
-
-    def __init__(self, published):
-        self.published = published
-
-
 class Source:
     """A source between two evaluations of its node (SOURCE-1).
 
@@ -2022,8 +1945,12 @@ def resume(source, now, scheduler, port, shape=None, entries=None):
     with no result), as `published_into` has it for `shape`. Where the
     output holds a dictionary or a set, `entries` is where, and what is
     published is held to TIME-7 as a node's delta is (`_published_through`):
-    a delta that names no change makes each that is not valid valid, and
-    a whole set ticks (SOURCE-1: a `yield` publishes as a `return` does).
+    a delta that names no change makes each that is not valid valid
+    (SOURCE-1: a `yield` publishes as a `return` does). A replay is given
+    a trace's cell written whole as the delta that publishing it records
+    (`whole_delta`), which TIME-7 holds to the same: "A collection
+    published whole is published as its change from what the result
+    holds".
 
     SOURCE-2: "A duration is relative to current evaluation time; a
     datetime is absolute. Negative duration fails. Resolve duration
@@ -2042,20 +1969,6 @@ def resume(source, now, scheduler, port, shape=None, entries=None):
     def publish(value):
         if port is None or value is None:
             return
-        if isinstance(value, Whole):
-            # A trace's cell written whole ticks as any publication does
-            # (`Whole`): an unsized list's that changes nothing is made to
-            # (`list_applied`), and a dictionary's that is empty and
-            # removes no key is cleared, as a node's is (`dict_replaced`).
-            # A set's is its members (`_whole_sets`), and a struct's or a
-            # tuple's publishes each part.
-            value = value.published
-            if shape == "list":
-                _published_through(port, list_applied(port, value, whole=True), None, entries)
-                return
-            dictionary = entries == "entries" or (isinstance(entries, tuple) and entries[0] == "entries")
-            if dictionary and isinstance(value, dict) and not value:
-                port.clear()
         _published_through(port, value, shape, entries)
 
     if source.pending is not None:

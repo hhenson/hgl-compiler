@@ -5128,9 +5128,12 @@ fn collection_validity_and_a_lists_delta_are_written() {
         "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]] = None",
         "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
         "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, \"list\")",
-        // TIME-7: a whole set ticks where it is empty and changes
-        // nothing, on the node's output.
-        "        return _core.set_replaced(_output, _core.removed(pair.delta_value))",
+        // TIME-7: a whole set is published as hgraph's `TSS` takes it,
+        // with no port of the node's output: "a set given the members it
+        // holds ... is no tick".
+        "def lost(pair: _hg.TSL[_hg.TS[_py.int], _hg.Size[2]]) -> _hg.TSS[_py.int]:\n\
+         \x20   if _core.valid_of(pair, (\"list\", None)):\n\
+         \x20       return _core.removed(pair.delta_value)",
     ]);
 }
 
@@ -5515,8 +5518,8 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         "    return _core.bundled(Square(id=id.value, side=1), {\"id\": None})".to_string(),
         // TIME-7: a whole struct with a struct field and a set field.
         "{\"quote\": {\"bid\": None, \"ask\": None}, \"size\": None})".to_string(),
-        // Its set is published through its own port (`_whole_set`).
-        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1), {\"tags\": \"set\", \"count\": None}, _output)"
+        // Its set is given as its members (TIME-7).
+        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1), {\"tags\": \"set\", \"count\": None})\n"
             .to_string(),
         // TIME-7: `out` assigned by part, and read back.
         format!(
