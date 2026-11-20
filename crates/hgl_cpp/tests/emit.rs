@@ -633,3 +633,30 @@ fn a_propagation_after_a_var_place_is_reported() {
         ["m.hgl:8:20 the cpp target does not write a `?` after a read in its statement yet"]
     );
 }
+
+/// UNIT-12: a `switch` case binds in the block around the `switch`, and
+/// each case is a C++ block of its own: a binding of a case read after
+/// the `switch` is reported, and not written.
+#[test]
+fn a_case_binding_read_after_its_switch_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "enum Side { buy, sell }\n",
+            "const fn chosen_of(side: Side) -> i64 {\n",
+            "    switch side {\n",
+            "        case .buy:\n",
+            "            let chosen = 1\n",
+            "        default:\n",
+            "            return 0\n",
+            "    }\n",
+            "    return chosen\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        ["m.hgl:4:5 the cpp target does not write a binding of a `switch` case, read after it yet"]
+    );
+}

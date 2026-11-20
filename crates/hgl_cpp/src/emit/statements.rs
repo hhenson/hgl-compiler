@@ -17,7 +17,9 @@
 //! held under a name of its own, and a failure leaves the function with
 //! it (`Scope::before`).
 
-use hgl_analyser::hir::{Body, Case, Expr, ExprKind, LabelValue, Stmt};
+use hgl_analyser::hir::{
+    Body, Case, Expr, ExprKind, LabelValue, LocalId, Node, Stmt, walk_statement_nodes,
+};
 use hgl_analyser::{LocalKind, Program, Signature, Type};
 use hgl_lower::copies::Copies;
 use hgl_lower::graphs::may_return;
@@ -213,8 +215,9 @@ impl Emitter<'_> {
                 ));
             }
             // The place is the one its indices name before the value is
-            // evaluated: where the value runs statements that may change
-            // an index, each index is held first. A compound assignment
+            // evaluated (EXPR-2, EXPR-3), which C++ evaluates first: where
+            // the value or the place runs statements, each index is held
+            // first. A compound assignment
             // reads the place it writes, as its value's left operand: it
             // is read where the held indices name it, so that each index
             // is evaluated once.
@@ -224,7 +227,7 @@ impl Emitter<'_> {
                 value,
                 at,
             } => {
-                let holds = changes(value);
+                let holds = changes(value) || changes(place);
                 let Some(written) = self.place_held(scope, place, holds) else {
                     self.unsupported(*at, "an assignment to this place");
                     return;
@@ -374,6 +377,27 @@ impl Emitter<'_> {
                 default,
                 at,
             } => {
+                // UNIT-12: "A `switch` case has no scope of its own: its
+                // statements bind in the block around the `switch`". Each
+                // case is a C++ block of its own, so a binding of one that
+                // is read after the `switch` is not written yet.
+                let outlives = cases
+                    .iter()
+                    .map(|case| case.body.as_slice())
+                    .chain(default.as_deref())
+                    .flatten()
+                    .filter_map(|bound| match bound {
+                        Stmt::Declare { local, .. } => Some(*local),
+                        _ => None,
+                    })
+                    .any(|local| {
+                        mentions(&scope.body.statements, local)
+                            > mentions(std::slice::from_ref(statement), local)
+                    });
+                if outlives {
+                    self.unsupported(*at, "a binding of a `switch` case, read after it");
+                    return;
+                }
                 let Some(ty) = self.written_type(&selector.ty, *at) else {
                     return;
                 };
@@ -535,6 +559,25 @@ impl Emitter<'_> {
             _ => None,
         }
     }
+}
+
+/// How many times `statements` name `local`, at any depth: each read of
+/// it, and each assignment to it.
+fn mentions(statements: &[Stmt], local: LocalId) -> usize {
+    let mut found = 0;
+    walk_statement_nodes(statements, &mut |node| match node {
+        Node::Expression(Expr {
+            kind: ExprKind::Local(read),
+            ..
+        })
+        | Node::Statement(Stmt::Assign { local: read, .. })
+            if *read == local =>
+        {
+            found += 1
+        }
+        _ => {}
+    });
+    found
 }
 
 /// True where `value` reads what something else holds, as it is: a
