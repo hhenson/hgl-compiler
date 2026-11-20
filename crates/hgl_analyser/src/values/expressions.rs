@@ -169,7 +169,12 @@ impl<'a> Typer<'a> {
         if self.graph {
             self.constants_of(&kind);
         }
-        let value = Expr { kind, ty, at };
+        let value = Expr {
+            kind,
+            ty,
+            at,
+            category: ValueCategory::Unsettled,
+        };
         // TIME-1: a read in a hook of a temporal input's child.
         if matches!(node.kind(), SyntaxKind::IndexExpr | SyntaxKind::MemberExpr) {
             return self.child_read(node, value);
@@ -268,6 +273,7 @@ impl<'a> Typer<'a> {
             kind: ExprKind::Unread,
             ty: Type::Unknown,
             at,
+            category: ValueCategory::Unsettled,
         };
         if let Some(local) = self.local_of(node) {
             return self.read_local(local, node);
@@ -288,6 +294,7 @@ impl<'a> Typer<'a> {
                 },
                 ty: ty.clone(),
                 at,
+                category: ValueCategory::Unsettled,
             };
         }
         let Some(Binding::Local {
@@ -312,6 +319,7 @@ impl<'a> Typer<'a> {
                 },
                 ty: ty.clone(),
                 at,
+                category: ValueCategory::Unsettled,
             },
             _ => unread,
         }
@@ -452,6 +460,7 @@ impl<'a> Typer<'a> {
             kind: ExprKind::Local(local),
             ty,
             at,
+            category: ValueCategory::Unsettled,
         }
     }
 

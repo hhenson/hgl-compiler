@@ -10,7 +10,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::calls::arguments_of;
 use super::fit::{not_null, nullable, whole};
 use super::{BOOL, Fact, Typer, children};
-use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LocalId};
+use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LocalId, ValueCategory};
 use crate::program::{DeclarationKind, Role};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{Argument, CallArguments, NamedKind, Scalar, Type};
@@ -499,6 +499,7 @@ impl<'a> Typer<'a> {
                     kind: ExprKind::ChildEndpointOf(Box::new(child)),
                     ty,
                     at,
+                    category: ValueCategory::Unsettled,
                 };
             }
             if self.diagnostics.len() != reported {
@@ -506,6 +507,7 @@ impl<'a> Typer<'a> {
                     kind: ExprKind::Unread,
                     ty: Type::Unknown,
                     at,
+                    category: ValueCategory::Unsettled,
                 };
             }
         }
@@ -537,12 +539,14 @@ impl<'a> Typer<'a> {
                 kind: ExprKind::Unread,
                 ty: Type::Unknown,
                 at,
+                category: ValueCategory::Unsettled,
             };
         };
         Expr {
             kind: ExprKind::EndpointOf(local),
             ty: Type::Endpoint(Box::new(self.locals[local].ty.clone())),
             at,
+            category: ValueCategory::Unsettled,
         }
     }
 
