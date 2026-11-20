@@ -325,3 +325,26 @@ test a_tuple_position_is_read_and_projected {
     assert eval(pair_sum(pair: [(1, 2), _, (3, 4)])) == [3, _, 7]
     assert eval(first_of(pair: [(1, "a"), (2, "b")])) == [1, 2]
 }
+
+# A struct that holds one with an optional field, as each field's own form.
+struct Wrapped {
+    noted: NotedQuote
+    count: i64
+}
+
+fn wrap(bid: i64) -> Wrapped {
+    when { return delta<Wrapped>(noted: delta<NotedQuote>(bid: bid), count: bid) }
+}
+
+fn wrapped_sum(wrapped: Wrapped) -> i64 {
+    when all_valid(wrapped) && all_valid(wrapped.noted) {
+        let whole = wrapped
+        return whole.noted.bid + whole.count
+    }
+}
+
+fn wrapped_of(bid: i64) -> i64 => wrapped_sum(wrap(bid))
+
+test a_struct_that_holds_one_with_an_optional_field_is_read_whole {
+    assert eval(wrapped_of(bid: [1, 2])) == [2, 4]
+}

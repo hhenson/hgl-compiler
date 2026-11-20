@@ -10,6 +10,7 @@
 #undef a_struct_delta_reads_the_field_that_changed
 #undef a_struct_is_all_valid_once_every_field_is
 #undef a_struct_is_valid_once_one_field_is
+#undef a_struct_that_holds_one_with_an_optional_field_is_read_whole
 #undef a_struct_with_an_optional_field_is_all_valid_and_read_whole
 #undef a_tuple_is_valid_once_one_position_is_and_all_valid_once_both_are
 #undef a_tuple_position_is_read_and_projected
@@ -43,6 +44,7 @@ void a_narrowed_read();
 void last_modified_follows_the_last_publication();
 void an_atomic_input_is_read_whole();
 void a_tuple_position_is_read_and_projected();
+void a_struct_that_holds_one_with_an_optional_field_is_read_whole();
 }  // namespace hgl::demo::structs::m_::t_
 
 namespace
@@ -66,6 +68,7 @@ const ::hglrt::testing::Registration test_14{"demo.structs::a_narrowed_read", &:
 const ::hglrt::testing::Registration test_15{"demo.structs::last_modified_follows_the_last_publication", &::hgl::demo::structs::m_::t_::last_modified_follows_the_last_publication};
 const ::hglrt::testing::Registration test_16{"demo.structs::an_atomic_input_is_read_whole", &::hgl::demo::structs::m_::t_::an_atomic_input_is_read_whole};
 const ::hglrt::testing::Registration test_17{"demo.structs::a_tuple_position_is_read_and_projected", &::hgl::demo::structs::m_::t_::a_tuple_position_is_read_and_projected};
+const ::hglrt::testing::Registration test_18{"demo.structs::a_struct_that_holds_one_with_an_optional_field_is_read_whole", &::hgl::demo::structs::m_::t_::a_struct_that_holds_one_with_an_optional_field_is_read_whole};
 }  // namespace
 
 int main(int argc, char **argv)

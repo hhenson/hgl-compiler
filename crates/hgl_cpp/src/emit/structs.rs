@@ -226,21 +226,31 @@ impl Family for Structs {
                 let program = emitter.program;
                 let fields = fields_of(program, ty)?;
                 let mut parts = Vec::new();
+                // Whether every field's form is the one hgraph's own mapping
+                // of the aggregate gives it (`NativeTSB`): a `TS` of the
+                // field's C++ type, or a struct's `NativeTSB`.
+                let mut native = true;
                 for (member, field) in &fields {
+                    // An atomic field holds its struct whole, which hgraph
+                    // reads through its own mapping (`holds_optional`).
+                    if matches!(field, Type::Atomic(_)) && holds_optional(program, field, 0) {
+                        return None;
+                    }
                     let schema = part_schema(emitter, field)?;
+                    let whole = cpp_type(program, field)
+                        .is_some_and(|written| schema == format!("::hgraph::TS<{written}>"));
+                    native &= !matches!(field, Type::Atomic(_))
+                        && (whole || schema.starts_with("::hgraph::NativeTSB<"));
                     parts.push(format!(
                         "::hgraph::Field<{}, {schema}>",
                         names::string(&member.name)
                     ));
                 }
-                // TYPE-9: each field a child of its own form. Where every
-                // one is as hgraph's own mapping of the aggregate has it,
-                // the form is hgraph's `NativeTSB`; an optional field or an
-                // atomic one is `NominalTSB` of each field's form.
-                if fields
-                    .iter()
-                    .any(|(_, field)| matches!(field, Type::Nullable(_) | Type::Atomic(_)))
-                {
+                // TYPE-9: each field a child of its own form: hgraph's
+                // `NativeTSB` where each is as its mapping has it, and
+                // otherwise, an optional field or an atomic one, at any
+                // depth, `NominalTSB` of each field's own form.
+                if !native {
                     Some(format!(
                         "::hgraph::NominalTSB<{written}, {}>",
                         parts.join(", ")

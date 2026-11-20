@@ -8,6 +8,7 @@
 #undef NotedQuote
 #undef Outer
 #undef PlainQuote
+#undef Wrapped
 #undef a_narrowed_read
 #undef a_nested_struct_delta_is_recorded
 #undef a_nested_struct_field_is_written_and_read_by_its_parts
@@ -16,6 +17,7 @@
 #undef a_struct_delta_reads_the_field_that_changed
 #undef a_struct_is_all_valid_once_every_field_is
 #undef a_struct_is_valid_once_one_field_is
+#undef a_struct_that_holds_one_with_an_optional_field_is_read_whole
 #undef a_struct_with_an_optional_field_is_all_valid_and_read_whole
 #undef a_tuple_is_valid_once_one_position_is_and_all_valid_once_both_are
 #undef a_tuple_position_is_read_and_projected
@@ -33,6 +35,7 @@
 #undef code
 #undef command
 #undef core
+#undef count
 #undef demo
 #undef doubled
 #undef earliest_start
@@ -46,6 +49,7 @@
 #undef make_outer
 #undef note
 #undef note_is_null
+#undef noted
 #undef nullable_delta_payload
 #undef observe_noted_quote
 #undef observe_part_validity
@@ -91,6 +95,10 @@
 #undef whole
 #undef whole_plain
 #undef whole_quote
+#undef wrap
+#undef wrapped
+#undef wrapped_of
+#undef wrapped_sum
 #undef write_bid
 #undef write_quote_fields
 
@@ -1009,6 +1017,80 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_
+{
+// wrap(bid: i64) -> Wrapped (node), module demo.structs, line 335
+struct wrap
+{
+    static constexpr auto name = "demo.structs::wrap";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"bid", ::hgraph::TS<::hgraph::Int>> bid, [[maybe_unused]] ::hgraph::Out<::hgraph::NominalTSB<::hgl::demo::structs::m_::Wrapped, ::hgraph::Field<"noted", ::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> out_)
+    {
+        // when, line 336 (TIME-3)
+        {
+            ::hglrt::publish(out_, ::hgl::demo::structs::m_::d_::Wrapped{::hgl::demo::structs::m_::d_::NotedQuote{::hglrt::checked_value(bid), std::nullopt}, ::hglrt::checked_value(bid)});
+            return;
+        }
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// wrap(bid: i64) -> Wrapped (node), module demo.structs, line 335
+::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::Wrapped, ::hgraph::Field<"noted", ::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> wrap(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
+{
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::wrap>(wiring_, bid);
+}
+}  // namespace w_
+
+namespace n_
+{
+// wrapped_sum(wrapped: Wrapped) -> i64 (node), module demo.structs, line 339
+struct wrapped_sum
+{
+    static constexpr auto name = "demo.structs::wrapped_sum";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"wrapped", ::hgraph::NominalTSB<::hgl::demo::structs::m_::Wrapped, ::hgraph::Field<"noted", ::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> wrapped, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        // when, line 340 (TIME-3)
+        if (::hglrt::fn_all_valid(wrapped) && ::hglrt::fn_all_valid(::hglrt::child<0>(wrapped)))
+        {
+            [[maybe_unused]] const ::hgl::demo::structs::m_::Wrapped& whole = ::hglrt::whole_value(wrapped);
+            out_.set(::hglrt::add__i64_i64(((whole).noted).bid, (whole).count));
+            return;
+        }
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// wrapped_sum(wrapped: Wrapped) -> i64 (node), module demo.structs, line 339
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> wrapped_sum(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::Wrapped, ::hgraph::Field<"noted", ::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> wrapped)
+{
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::wrapped_sum>(wiring_, wrapped);
+}
+}  // namespace w_
+
+namespace n_
+{
+// wrapped_of(bid: i64) -> i64 (graph), module demo.structs, line 346
+struct wrapped_of
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
+    {
+        return ::hgl::demo::structs::m_::w_::wrapped_sum(wiring_, ::hgl::demo::structs::m_::w_::wrap(wiring_, bid));
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// wrapped_of(bid: i64) -> i64 (graph), module demo.structs, line 346
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> wrapped_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
+{
+    return ::hgl::demo::structs::m_::n_::wrapped_of::compose(wiring_, bid);
+}
+}  // namespace w_
+
 }  // namespace hgl::demo::structs::m_
 
 namespace hgl::demo::structs::m_::t_
@@ -1325,6 +1407,19 @@ void a_tuple_position_is_read_and_projected()
     });
         const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2};
         ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+}
+
+void a_struct_that_holds_one_with_an_optional_field_is_read_whole()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::structs::m_::w_::wrapped_of(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{2, 4};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }
 

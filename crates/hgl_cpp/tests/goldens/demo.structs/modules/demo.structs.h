@@ -9,6 +9,7 @@
 #undef NotedQuote
 #undef Outer
 #undef PlainQuote
+#undef Wrapped
 #undef action
 #undef ask
 #undef atomic_bid_ticks
@@ -63,6 +64,10 @@
 #undef watched
 #undef whole_plain
 #undef whole_quote
+#undef wrap
+#undef wrapped
+#undef wrapped_of
+#undef wrapped_sum
 #undef write_bid
 #undef write_quote_fields
 
@@ -280,6 +285,24 @@ namespace w_
 {
 // first_of(pair: tuple<i64, str>) -> i64 (graph), module demo.structs, line 322
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> first_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>> pair);
+}  // namespace w_
+
+namespace w_
+{
+// wrap(bid: i64) -> Wrapped (node), module demo.structs, line 335
+::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::Wrapped, ::hgraph::Field<"noted", ::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> wrap(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid);
+}  // namespace w_
+
+namespace w_
+{
+// wrapped_sum(wrapped: Wrapped) -> i64 (node), module demo.structs, line 339
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> wrapped_sum(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::Wrapped, ::hgraph::Field<"noted", ::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> wrapped);
+}  // namespace w_
+
+namespace w_
+{
+// wrapped_of(bid: i64) -> i64 (graph), module demo.structs, line 346
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> wrapped_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid);
 }  // namespace w_
 
 }  // namespace hgl::demo::structs::m_

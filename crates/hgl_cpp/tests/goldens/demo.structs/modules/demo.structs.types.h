@@ -9,13 +9,16 @@
 #undef NotedQuote
 #undef Outer
 #undef PlainQuote
+#undef Wrapped
 #undef ask
 #undef bid
+#undef count
 #undef demo
 #undef high
 #undef inner
 #undef low
 #undef note
+#undef noted
 #undef size
 #undef structs
 #undef value
@@ -27,6 +30,7 @@ struct NotedQuote;
 struct Inner;
 struct Outer;
 struct PlainQuote;
+struct Wrapped;
 namespace d_
 {
 struct MarketQuote;
@@ -34,6 +38,7 @@ struct NotedQuote;
 struct Inner;
 struct Outer;
 struct PlainQuote;
+struct Wrapped;
 }  // namespace d_
 }  // namespace hgl::demo::structs::m_
 
@@ -61,6 +66,11 @@ template <>
 struct hglrt::delta_of<::hgl::demo::structs::m_::PlainQuote>
 {
     using type = ::hgl::demo::structs::m_::d_::PlainQuote;
+};
+template <>
+struct hglrt::delta_of<::hgl::demo::structs::m_::Wrapped>
+{
+    using type = ::hgl::demo::structs::m_::d_::Wrapped;
 };
 
 namespace hgl::demo::structs::m_
@@ -168,6 +178,27 @@ struct PlainQuote
     std::optional<::hgraph::Int> ask;
 
     friend bool operator==(const PlainQuote&, const PlainQuote&) = default;
+};
+}  // namespace d_
+
+// struct Wrapped (TYPE-3), module demo.structs, line 330
+struct Wrapped
+{
+    ::hgl::demo::structs::m_::NotedQuote noted;
+    ::hgraph::Int count;
+
+    friend bool operator==(const Wrapped&, const Wrapped&) = default;
+};
+
+namespace d_
+{
+// delta<Wrapped> (TYPE-16)
+struct Wrapped
+{
+    std::optional<::hgl::demo::structs::m_::d_::NotedQuote> noted;
+    std::optional<::hgraph::Int> count;
+
+    friend bool operator==(const Wrapped&, const Wrapped&) = default;
 };
 }  // namespace d_
 
@@ -376,5 +407,46 @@ struct hglrt::type_named<::hgl::demo::structs::m_::d_::PlainQuote>
 {
     static constexpr std::string_view name = "delta<demo.structs::PlainQuote>";
     static constexpr std::array<std::string_view, 2> fields{"bid", "ask"};
+    static constexpr bool delta = true;
+};
+template <>
+struct hglrt::fields<::hgl::demo::structs::m_::Wrapped>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::structs::m_::Wrapped::noted, &::hgl::demo::structs::m_::Wrapped::count};
+};
+template <>
+struct hglrt::fields<::hgl::demo::structs::m_::d_::Wrapped>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::structs::m_::d_::Wrapped::noted, &::hgl::demo::structs::m_::d_::Wrapped::count};
+};
+template <>
+struct std::hash<::hgl::demo::structs::m_::Wrapped>
+{
+    std::size_t operator()(const ::hgl::demo::structs::m_::Wrapped& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct std::hash<::hgl::demo::structs::m_::d_::Wrapped>
+{
+    std::size_t operator()(const ::hgl::demo::structs::m_::d_::Wrapped& value) const { return ::hglrt::key_hash_of(value); }
+};
+// TYPE-9: `Wrapped` as hgraph's nominal bundle, its fields as `fields` names them.
+template <>
+struct hgraph::native_bundle<::hgl::demo::structs::m_::Wrapped>
+{
+    using schema = ::hgraph::NominalBundle<"demo.structs", "Wrapped", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<>, ::hgraph::Field<"noted", ::hgraph::native_bundle<::hgl::demo::structs::m_::NotedQuote>::schema>, ::hgraph::Field<"count", ::hgraph::Int>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::structs::m_::Wrapped>::members;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::structs::m_::Wrapped>
+{
+    static constexpr std::string_view name = "demo.structs::Wrapped";
+    static constexpr std::array<std::string_view, 2> fields{"noted", "count"};
+    static constexpr bool delta = false;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::structs::m_::d_::Wrapped>
+{
+    static constexpr std::string_view name = "delta<demo.structs::Wrapped>";
+    static constexpr std::array<std::string_view, 2> fields{"noted", "count"};
     static constexpr bool delta = true;
 };
