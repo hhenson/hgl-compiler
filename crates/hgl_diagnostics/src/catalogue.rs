@@ -89,7 +89,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Phase, "payload.unguarded"),
     (Category::Phase, "ref.read"),
     (Category::Phase, "endpoint.argument"),
-    (Category::Type, "schedule.non_positive_duration"),
+    (Category::Type, "schedule.duration_bounds"),
     (Category::Phase, "scheduled.lifecycle"),
     (Category::Phase, "connection.as_constant"),
     (Category::Type, "generic.invalid_application"),
@@ -109,6 +109,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "generic.kind_unresolved"),
     (Category::Type, "generic.argument_kind"),
     (Category::Type, "generic.unresolved"),
+    (Category::Type, "generic.instance_limit"),
     (Category::Type, "generic.argument_constant"),
     (Category::Constraint, "requires.unmet"),
     (Category::Type, "struct.parent"),
@@ -192,9 +193,10 @@ pub fn contains(category: Category, code: &str) -> bool {
 /// Every execution code of the catalogue, in the specification's
 /// order: a failure of a running program that has a stable code. An
 /// `assert raises("code")` names one (TST-10). "The source and
-/// execution catalogs are disjoint", the chapter says, and yet it lists
-/// `schedule.non_positive_duration`, a proposed code, in both (TIME-8):
-/// it is here and among the source codes, as the chapter has it.
+/// execution catalogs are disjoint": TIME-8's wake whose duration is
+/// not more than zero is `schedule.non_positive_duration` here, where
+/// the program runs, and `schedule.duration_bounds` among the source
+/// codes, where the compiler sees the value.
 pub const EXECUTION_CODES: &[&str] = &[
     "value.missing_key",
     "value.unset_read",

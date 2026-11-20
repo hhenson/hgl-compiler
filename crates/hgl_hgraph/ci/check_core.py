@@ -17,9 +17,10 @@ CASE = re.compile(
 )
 UNSUPPORTED = re.compile(r".+\.hgl:\d+:\d+: the hgraph target does not write (.+) yet")
 # A rejection case's row names its file, its line and the declaration it
-# is: `.../tests/conformance/rejections/x.hgl:46 fn name`. Its failure to
+# is, as its source writes it: `.../tests/conformance/rejections/x.hgl:46
+# fn name`, or `... const fn name`, the name the last word. Its failure to
 # be rejected is "expected category/code on line N of file: not reported".
-REJECTION = re.compile(r"^(?:.*/)?tests/([^/]+)/(.+):\d+ \S+ (\S+)$")
+REJECTION = re.compile(r"^(?:.*/)?tests/([^/]+)/(.+?):\d+ (?:\S+ )+(\S+)$")
 NOT_REJECTED = re.compile(r"^expected \S+ on line \d+ of .+: not reported$")
 SUITES = {"conformance": "conformance", "implementation": "core_implementation"}
 

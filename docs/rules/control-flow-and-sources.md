@@ -13,6 +13,7 @@ analyser: done
 transpiler: done
 
 - hgraph: an `if` and a `switch` over a connection are `switch_`, which runs the selected branch's graph alone, keeps it while the selector is published again as it was, and stops it and starts the newly selected one afresh where it changes; what is composed outside is the enclosing graph's
+- A branch's input bound to an endpoint already valid counts as modified in the cycle the branch starts, and its nodes run once with the values held, as hgraph samples an input it binds: the worked example `counted_while`, an `if` and a `switch`, a `modified` selector and `modified([])` false in that cycle are tested
 
 ## CTRL-3
 
@@ -67,6 +68,7 @@ transpiler: partial
 - hgraph: a `for` over a connection of `list<T>`, `set<T>` or `dict<K, V>` is `map_` of a graph for the body: a child for each key, kept while the key stays, stopped where it is removed, started afresh where it is added again
 - A list's is hgraph 0.9.5's `map_` over its unbounded `TSL`: a child for each position it holds, one that lost its value among them, stopped where a shrink drops it; each child gives a constant and `_core.discarded` reads the `map_`, since hgraph fails one over that `TSL` of a graph with no output and drops a node nothing reads
 - A list is its positions (`convert` to a `TSD`), a set's members are the keys, and a connection from outside is given whole (`pass_through`)
+- A child created while the program runs starts as CTRL-2 says: a captured connection valid before it counts as modified as it starts, as hgraph's `map_` samples it
 - Left: a key or a member read other than as the argument of a temporal parameter (`map_` gives it as a port), and a list of nullables
 
 ## CTRL-8

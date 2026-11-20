@@ -113,13 +113,14 @@ transpiler: partial
 
 - hgraph: an input whose parameter has a default is not required valid, and the default is bound while it is not; every other input is required valid
 - A struct, a tuple and a fixed list are supplied only where they are `all_valid` too: one valid and not all valid binds no fallback, and the helper is not invoked
+- So is a window, to a parameter with a default or of `list<V>?`: the default or the null binds where the window is not valid, and where it is valid and not all valid the helper is not invoked, "its default included"
 - Left: null bound for an input that admits null, which waits on nullable scalars
 
 ## FN-12
 
 analyser: partial
 
-- A window's connection is given to a value function's parameter in composition as the `list<V>` it holds, which binds its generic parameters: the `T` of `list<T>` is V, and a bare `T` is `list<V>` (TYPE-11, FN-1)
+- A window's connection is given to a value function's parameter in composition as the `list<V>` it holds, which binds its generic parameters: the `T` of `list<T>` is V, and a bare `T` is `list<V>` (TYPE-11, FN-1); a `list<V>?` takes it too, "whatever its default or null contract" (FN-11)
 - Left: which aggregates need `all_valid` (FN-11)
 
 transpiler: partial
@@ -127,8 +128,7 @@ transpiler: partial
 - hgraph: a lifted helper is one invocation with the whole value; a fixed list given to one is required `valid`, as any list is
 - A position of an unsized list that holds no value is passed as TIME-1's table reads it, NaN for an `f64` and null for a `V?`, and fails the invocation otherwise (`value.unset_read`)
 - A struct, a tuple and a fixed list are required all valid (TIME-9), an optional child not asked and passed as null
-- A window is required valid, the helper invoked only where it is all valid, with the `list<V>` it holds
-- Left, reported: a window given to a parameter with a default, which FN-11 does not say what binds where the window is valid and not all valid
+- A window is required valid, the helper invoked only where it is all valid, with the `list<V>` it holds; one given to a parameter with a default or of `list<V>?` is not required valid, binds that fallback where it is not valid, and invokes nothing where it is valid and not all valid (FN-11)
 - Left, reported: a window that a value function's generic parameter stands for in an instance of a generic declaration, checked once (GEN-7)
 
 ## FN-13
@@ -183,6 +183,8 @@ analyser: partial
 
 - The mark is recorded on the parameter and on the signature, and is no part of the type (`Parameter::reference`, `Signature::reference`): a caller, a graph among them, gives a `ref` parameter a connection of its type, and a `ref` result is a connection of its type
 - A mark on a value function, a value candidate, a graph, an operator, or a native implementation part that is a graph (`{}`) is `ref.position`, a code whose row is proposed; a node, a temporal candidate that is one, and a native temporal declaration with no body take it
+- A mark on a `signal` parameter, `ref tick: signal` or one that may be left out, of any of them is `ref.position` too (with TYPE-12: "a signal has no payload to designate"), the code proposed
+- An assignment to a part of `out` of a `ref` result in a `when`, `out.bid = x`, `out[0] = x`, at any depth and compound, is `binding.immutable`, the code proposed: "A `ref` result designates one endpoint whole"; the place is named and not read, so no `ref.read` is reported beside it
 - In a hook a `ref` parameter, a child of one and `out` of a `ref` result are endpoints: the endpoint operations take them, and a read of the value or the `delta_value` of any of them is `ref.read`, a code whose row is proposed; an atomic projection, an iteration, a comparison and a call that reads one among them
 - A `return` to a `ref` result, and `out =` of one (proposed), names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`, and so is a source's `yield` to a `ref` result: a source has no temporal input to name (TIME-7: "A `ref` result takes no value")
 - Left: a native implementation part's marks matched with its declaration's (NATIVE-2)

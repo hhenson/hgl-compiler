@@ -881,6 +881,13 @@ impl Emitter<'_> {
     /// function it is written in. hgraph starts a branch's graph where
     /// its key is selected and stops it where another is, and keeps it
     /// while the key is published again as it was (CTRL-2).
+    ///
+    /// CTRL-2: "An input of a node in it, bound to an endpoint that is
+    /// already valid, counts as modified in the cycle the branch starts,
+    /// published in that cycle or not (TIME-3): the branch's nodes run
+    /// once with the values held." hgraph binds a started graph's inputs
+    /// in that cycle, and an input bound to a valid output is sampled
+    /// then: modified, which wakes its node, and `modified([])` false.
     fn switched(
         &mut self,
         function: &Function,
@@ -1162,8 +1169,11 @@ impl Emitter<'_> {
     /// ordinary `T`, the member itself, for a set; `key` is an ordinary
     /// `K` and `value` a connection of `V` for a dictionary." CTRL-7:
     /// "Update keeps the child; removal stops it; reinsertion creates
-    /// fresh state. Captured temporal connections are bound whole and
-    /// add no membership."
+    /// fresh state. A child created while the program runs starts as
+    /// CTRL-2 says": an input of it bound to a valid endpoint, a captured
+    /// connection among them, is modified as it starts, as hgraph's
+    /// `map_` samples it. "Captured temporal connections are bound whole
+    /// and add no membership."
     ///
     /// The body is a graph of its own, `_each_N`, and hgraph's `map_`
     /// runs one of it for each key of a `TSD` it is given, keeps it
