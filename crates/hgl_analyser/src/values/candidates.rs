@@ -753,7 +753,7 @@ impl<'a> Typer<'a> {
                         Key::Name(name) => Some(name.clone()),
                         Key::Position(_) => None,
                     };
-                    (name, given.node.clone(), given.value.ty.clone())
+                    (name, given.node.clone(), given.value.clone())
                 })
                 .collect(),
             place: wanted.place.cloned(),
@@ -768,7 +768,8 @@ impl<'a> Typer<'a> {
     /// instance gives that declaration's generic parameters
     /// ([`Typer::instance`]). `values` is each argument's value in the
     /// instance, in the order written, where the call is to be built;
-    /// without them each is read as of its type there alone.
+    /// without them each is the value the generic body read, of its type
+    /// in the instance.
     ///
     /// GEN-5: "Select exactly one most-specific admitted candidate ...
     /// No match rejects; tied most-specific candidates are ambiguous."
@@ -803,7 +804,7 @@ impl<'a> Typer<'a> {
         let given: Vec<Given> = selecting
             .arguments
             .iter()
-            .map(|(name, node, ty)| {
+            .map(|(name, node, written)| {
                 let key = match name {
                     Some(name) => Key::Name(name.clone()),
                     None => {
@@ -812,13 +813,15 @@ impl<'a> Typer<'a> {
                     }
                 };
                 let by_place = typed_by_place(node);
+                // Without the instance's own, the value the generic body
+                // read, of its type here: an integer literal is still
+                // one, which a candidate may take as an `f64` (EXPR-5).
                 let value = values
                     .as_mut()
                     .and_then(Iterator::next)
                     .unwrap_or_else(|| Expr {
-                        kind: ExprKind::Unread,
-                        ty: in_place(ty),
-                        at: Location::new(self.file, node.span()),
+                        ty: in_place(&written.ty),
+                        ..written.clone()
                     });
                 Given {
                     key,
@@ -893,8 +896,8 @@ pub(crate) struct Selecting {
     /// How the call is written.
     pub(crate) form: Form,
     /// Its arguments as written, each with its name where it is given
-    /// one, and the type it has in the generic body.
-    pub(crate) arguments: Vec<(Option<String>, SyntaxNode, Type)>,
+    /// one, and the value the generic body reads it as.
+    pub(crate) arguments: Vec<(Option<String>, SyntaxNode, Expr)>,
     /// The output the call asks of a candidate in the generic body
     /// ([`Wanted::place`]).
     pub(crate) place: Option<Type>,

@@ -459,3 +459,33 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
         "{message}"
     );
 }
+
+/// EXPR-5: "An integer literal is an `f64` where one is expected." GEN-5:
+/// "A candidate that takes each integer literal as the `i64` it is
+/// outranks one for which a literal is widened to an `f64`", and one that
+/// widens it is admitted where none takes it as it is. A call selected
+/// for each instance keeps its literals: in `go<const M: Mode>`,
+/// `scale(2, mode: M)` widens the `2` for the one candidate, which takes
+/// an `f64`, at `go<.slow>()`, as `scale(2, mode: .slow)` written in
+/// place does; and `pick(2, mode: M)` takes it as the `i64` it is where a
+/// candidate does.
+#[test]
+fn a_call_selected_for_each_instance_keeps_its_literals() {
+    let checked = module(concat!(
+        "enum Mode { slow, fast }\n",
+        "operator scale(value: f64, const mode: Mode) -> f64\n",
+        "impl const fn scale(value: f64, const mode: Mode) -> f64 requires mode == .slow => value\n",
+        "operator pick<V>(value: V, const mode: Mode) -> i64\n",
+        "impl const fn pick(value: f64, const mode: Mode) -> i64 requires mode == .slow => 1\n",
+        "impl const fn pick(value: i64, const mode: Mode) -> i64 requires mode == .slow => 2\n",
+        "const fn go<const M: Mode>() -> f64 => scale(2, mode: M)\n",
+        "const fn which<const M: Mode>() -> i64 => pick(2, mode: M)\n",
+        "const fn direct() -> f64 => scale(2, mode: .slow)\n",
+        "const fn slow() -> f64 => go<.slow>()\n",
+        "const fn picked() -> i64 => which<.slow>()\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let instance = |caller: &str| instance_called_by(&checked, body(&checked, caller));
+    assert_eq!(called(&checked, &instance("slow")), ["scale(f64, Mode)"]);
+    assert_eq!(called(&checked, &instance("picked")), ["pick(i64, Mode)"]);
+}
