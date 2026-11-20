@@ -344,17 +344,36 @@ fn temporal_code_is_written() {
         .unwrap()
         .text;
     for instance in [
-        "::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_i64>",
-        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_i64>",
-        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_datetime>",
+        "::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_i64::impl_>",
+        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_i64::impl_>",
+        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_datetime::impl_>",
     ] {
         assert!(core.contains(instance), "{instance} in\n{core}");
     }
     // hgraph issue 1866: a node whose configuration holds an `f64` is a
     // node of its own, `replay<f64>` among them; one with none is
     // interned, above.
-    assert!(core.contains("add_unique_node(typeid(::hgl::core::m_::n_::i_::replay::of_f64)"));
-    assert!(!core.contains("::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_f64>"));
+    assert!(
+        core.contains("add_unique_node(typeid(::hgl::core::m_::n_::i_::replay::of_f64::impl_)")
+    );
+    assert!(!core.contains("::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_f64::impl_>"));
+    // A temporal function's struct is `impl_`, in a namespace of the
+    // function's name: one named as a member of it, `name` or `compose`,
+    // is no member of the same name as its class.
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.temporal.cpp")
+        .unwrap()
+        .text;
+    for function in ["name", "compose"] {
+        assert!(
+            unit.contains(&format!("namespace n_::{function}\n{{\n// {function}(")),
+            "{function} in\n{unit}"
+        );
+        assert!(!unit.contains(&format!("struct {function}\n")), "{unit}");
+    }
     let executable = &emitted.output.executables[0];
     let units: Vec<&str> = executable
         .units
@@ -549,6 +568,125 @@ fn a_temporal_form_not_written_yet_is_reported() {
     assert_eq!(emitted.blocked("a_scalar"), None);
 }
 
+/// EXPR-2: an eval's call, the defaults of the `const` parameters it
+/// leaves out among it, is evaluated before the run's configuration:
+/// where they are held, each default is held before the configuration.
+#[test]
+fn an_evals_defaults_are_held_before_its_configuration() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "const fn one() -> i64 => 1\n",
+                "\n",
+                "const fn span() -> duration => 2us\n",
+                "\n",
+                "fn scaled(value: i64, const by: i64 = one()) -> i64 {\n",
+                "    when { return value * by }\n",
+                "}\n",
+                "\n",
+                "test bounded {\n",
+                "    assert eval(scaled(value: [1, 2, 3]), RunConfig(length: span())) == [1, 2]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("bounded"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    let test = unit.split("void bounded()").nth(1).unwrap();
+    let default = test
+        .find("= ::hgl::m::m_::one();")
+        .expect("the default held");
+    let bounds = test
+        .find("= ::hglrt::testing::Bounds{.length = ::hgl::m::m_::span()};")
+        .expect("the configuration held");
+    assert!(default < bounds, "{test}");
+}
+
+/// SOURCE-1: "A `let` there holds a working value": a `let` of a block's
+/// value in a source's body is written, its block's own `return` left to
+/// the lambda it is written as.
+#[test]
+fn a_sources_value_block_is_written() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn counted(const n: i64) -> i64 {\n",
+                "    let next = {\n",
+                "        let one = 1\n",
+                "        n + one\n",
+                "    }\n",
+                "    yield 1us: next\n",
+                "}\n",
+                "\n",
+                "test counts {\n",
+                "    assert eval(counted(n: 2)) == [_, 3]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_eq!(emitted.blocked("counts"), None);
+}
+
+/// TIME-6, TIME-8: a node's capability is made in `start` before a
+/// `cache` initializer that reads it.
+#[test]
+fn a_capability_is_made_before_the_initializers_that_read_it() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn opened(value: i64) -> datetime {\n",
+                "    inject clock\n",
+                "    cache opening: datetime = clock.evaluation_time\n",
+                "    when { return opening }\n",
+                "}\n",
+                "\n",
+                "test opens {\n",
+                "    assert eval(opened(value: [1])) == [earliest_start]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("opens"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    let start = unit
+        .split("static void start(")
+        .nth(1)
+        .expect("the node's start");
+    let start = start.split("static void eval(").next().unwrap();
+    let made = start
+        .find("const ::hglrt::Clock clock")
+        .expect("the clock made");
+    let read = start
+        .find("opening = (clock).evaluation_time();")
+        .expect("the cache initialized");
+    assert!(made < read, "{start}");
+}
+
 /// TST-5: a trace given to an eval that is no trace written out, a `let`
 /// of an eval's, is reported where it is given, and not wired as a
 /// constant of its payload.
@@ -641,12 +779,12 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
     // Both defaults call `one`, and each may fail: each is held, `by`
     // before `plus`, before the wiring function is called.
     let twice = unit
-        .split("struct twice")
+        .split("namespace n_::twice")
         .nth(1)
         .expect("the graph `twice`");
     assert!(
         twice.contains(
-            "[&] { const auto argument_00_ = value; const auto argument_01_ = ::hgl::m::m_::one(); const auto argument_02_ = ::hgl::m::m_::one(); return ::hgl::m::m_::w_::scaled(wiring_, argument_00_, argument_01_, argument_02_); }()"
+            "[&] { const auto argument_00_ = value; const ::hgraph::Int argument_01_ = ::hgl::m::m_::one(); const ::hgraph::Int argument_02_ = ::hgl::m::m_::one(); return ::hgl::m::m_::w_::scaled(wiring_, argument_00_, argument_01_, argument_02_); }()"
         ),
         "{twice}"
     );
