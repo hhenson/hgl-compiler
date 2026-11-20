@@ -574,10 +574,10 @@ pub(super) fn output_annotation(result: &str) -> String {
 
 /// The annotation of a `ref` parameter or a `ref` result whose type is
 /// annotated `annotation` (FN-16): hgraph's `REF` of it. A `REF` input
-/// is bound to the output it is given and holds a reference to it,
-/// which ticks where the reference changes and not where the target
-/// publishes (TIME-10); an ordinary input bound to a `REF` output
-/// follows its target. An annotation that is no time-series type, the
+/// is bound to the output it is given and holds a reference to it: "a
+/// `ref` parameter is passive to what it designates" (TIME-10); an
+/// ordinary input bound to a `REF` output "observes the endpoint
+/// designated as if wired to it". An annotation that is no time-series type, the
 /// `_py.object` of one not written, stays as it is.
 pub(super) fn designating(annotation: &str) -> String {
     if annotation.starts_with("_hg.") {

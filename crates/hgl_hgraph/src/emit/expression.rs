@@ -109,10 +109,12 @@ impl Emitter<'_> {
                 let input = endpoint_name(endpoint);
                 // FN-16: "the endpoint operations take" a `ref`
                 // parameter, and `out` of a `ref` result, each hgraph's
-                // `REF`. TIME-10, proposed: its `valid` is where it
-                // designates something, its `modified` where its
-                // designation changed, and its `last_modified` when it
-                // last did, which are the `REF`'s own.
+                // `REF`. TIME-10: "`valid` of a `ref` parameter is
+                // whether a reference is present"; core's END-10, its
+                // `modified` "whether the parameter was given a
+                // designation", and its `last_modified` "when the
+                // parameter was last given a designation", which are the
+                // `REF`'s own.
                 if function.designates(inputs[0]) {
                     // `out` of a `ref` result in a `when`: what it
                     // designates is the provider's `Designation`'s, which

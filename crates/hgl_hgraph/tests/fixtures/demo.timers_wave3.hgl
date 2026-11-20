@@ -98,8 +98,8 @@ fn inputless() -> bool {
     when scheduled() { return modified([]) }
 }
 
-# A `ref` parameter is modified where its designation changes (TIME-10,
-# proposed), and not where its target publishes.
+# A `ref` parameter is modified where it is given a designation, and not
+# where its target publishes (TIME-10, core's END-10).
 fn wake_on_ref(ref target: i64) -> bool {
     inject scheduler
     start { schedule(scheduler, 1s) }

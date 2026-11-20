@@ -1578,14 +1578,6 @@ def _bound(port):
     return port.value if port.valid else None
 
 
-def _same_designation(left, right):
-    """Whether two designations (`_bound`) are one: both nothing, or the
-    same reference."""
-    if left is None or right is None:
-        return left is None and right is None
-    return left == right
-
-
 # What a designation is before any write of an evaluation.
 _UNCHANGED = object()
 
@@ -1611,20 +1603,19 @@ class Designation:
     (`sample`): that is the reference the parameter's own `REF` holds,
     and nothing follows it, as hgraph's own reference output does not.
 
-    TIME-10: "A designation published again unchanged is no tick", and
-    END-10: "A publication of the designation it holds is no tick". The
-    writes of an evaluation are kept here, and `published` gives what
-    the node returns once it ends: the designation where it is not what
-    the result held before the evaluation, and nothing otherwise, so
-    `out = a; out = b` while it holds `b` is no tick. hgraph 0.9.8's
-    reference output ticks for each write, the reference it holds
-    among them, and a `ref` parameter given it is modified.
+    The writes of an evaluation are kept here, and `published` gives the
+    last as what the node returns once it ends, the designation the
+    result holds among them. TIME-10: "Where the result is given the
+    designation it holds, that gives the reader no tick": hgraph 0.9.8's
+    ordinary reader of a reference output given the reference it holds
+    stays bound as it was, and is not woken for it.
 
     Where the result designates nothing, after `invalidate(out)`, it is
     invalidated (END-4: "Invalidation clears validity ... The transition
     to invalid notifies active subscribers"): hgraph 0.9.8 leaves no
     reader bound to what it designated, and wakes each with its input
-    not valid (hhenson/hgraph#1826).
+    not valid (hhenson/hgraph#1826); invalidated again while it is not
+    valid, it wakes none.
     """
 
     __slots__ = ("_output", "_state", "_ports", "_held", "_pending", "_key")
@@ -1683,23 +1674,23 @@ class Designation:
 
     @property
     def valid(self):
-        """`valid(out)` (FN-16 and TIME-10, proposed): that it designates
-        something."""
+        """`valid(out)`, which FN-16, proposed, has as a `ref`
+        parameter's: TIME-10, "`valid` of a `ref` parameter is whether a
+        reference is present"."""
         return self._now() is not None
 
     @property
     def modified(self):
-        """`modified(out)` (FN-16 and TIME-10, proposed): that its
-        designation changed in this evaluation."""
-        return self._pending is not _UNCHANGED and not _same_designation(
-            self._pending, self._held
-        )
+        """`modified(out)`, as a `ref` parameter's (FN-16, proposed): core's
+        END-10, "whether the parameter was given a designation", here in
+        this evaluation."""
+        return self._pending is not _UNCHANGED and self._pending is not None
 
     @property
     def last_modified(self):
-        """`last_modified(out)` (FN-16 and TIME-10, proposed): when its
-        designation last changed, and null where it designates nothing
-        (END-6)."""
+        """`last_modified(out)`, as a `ref` parameter's (FN-16, proposed):
+        core's END-10, "when the parameter was last given a designation",
+        and null where it designates nothing (END-6)."""
         if not self.valid:
             return None
         if self.modified:
@@ -1707,12 +1698,12 @@ class Designation:
         return self._output.last_modified_time
 
     def published(self):
-        """What the node returns as it ends its evaluation: the
-        designation where it changed, `None` where it did not. One of
-        nothing is published here, as the invalidation."""
+        """What the node returns as it ends its evaluation: the last
+        designation written, `None` where none was. One of nothing is
+        published here, as the invalidation."""
         self._state._designates = self._key
         pending = self._pending
-        if pending is _UNCHANGED or _same_designation(pending, self._held):
+        if pending is _UNCHANGED:
             return None
         if pending is None:
             self._output.invalidate()

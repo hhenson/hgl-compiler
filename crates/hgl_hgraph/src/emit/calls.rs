@@ -748,8 +748,8 @@ impl<'a> Emitter<'a> {
                 continue;
             };
             let taken = match input(self, &argument.value) {
-                // TIME-10: "Ordinary followers observe the selected
-                // target": a lifted function given a `ref` result takes
+                // TIME-10: a reader of a `ref` result "observes the
+                // endpoint designated": a lifted function given one takes
                 // an ordinary input of its type (FN-16), which hgraph
                 // binds to what it designates. A `?` that marks omission
                 // is no part of it, as the analyser admitted it

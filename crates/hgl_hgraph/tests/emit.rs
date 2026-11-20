@@ -5623,18 +5623,17 @@ fn a_temporal_tuple_or_struct_form_not_written_yet_is_reported() {
 /// FN-16: "A node ... may mark a temporal parameter `ref`, `ref low:
 /// f64`, and its result, `-> ref f64`. The mark is a mode ... A
 /// connection of T is given to a `ref` parameter, and a `ref` result is a
-/// connection of T to whoever reads it." TIME-10: "A reference ticks
-/// where its designation changes, not at every tick of its target. A
-/// designation published again unchanged is no tick". TYPE-12: "`signal`
+/// connection of T to whoever reads it." TIME-10: a reader of a `ref`
+/// result "observes the endpoint designated as if wired to it", and "a
+/// `ref` parameter is passive to what it designates". TYPE-12: "`signal`
 /// is a complete temporal input constraint with no readable payload".
 /// TYPE-9: "`atomic<V>` stops expansion at a complete ordinary V".
 const REFERENCES: (&str, &str) = fixture!("demo.references.hgl");
 
 /// A `ref` parameter and a `ref` result are hgraph's `REF` of their type,
 /// and a `signal` its `SIGNAL`. A node returns a `ref` parameter's value,
-/// the reference it holds, sampled (FN-16), to re-point what follows it,
-/// and publishes no reference its result holds already (END-10): the
-/// provider's `Designation` keeps what it designates. An input that is no `ref`
+/// the reference it holds, sampled (FN-16), to re-point what follows it:
+/// the provider's `Designation` keeps what it designates. An input that is no `ref`
 /// parameter, is designated through a hidden `REF` input that a graph of
 /// the function's name gives it the input twice, and a fixed list's
 /// position through one for each position, which the graph gives each
@@ -5795,9 +5794,8 @@ fn a_ref_parameter_is_sampled_and_an_ordinary_input_followed() {
         "    if not (((once.modified or once.invalidated) and once.active) or \
          ((data.modified or data.invalidated) and data.active) or "
             .to_string(),
-        // TIME-10: "A designation published again unchanged is no tick":
-        // the writes of an evaluation are kept, and what the node returns
-        // is compared with what the result held before it.
+        // The writes of an evaluation are kept, and the node returns the
+        // last as it ends.
         "        _designation.sample(a)\n\
          \x20       _designation.sample(b)\n\
          \x20   return _designation.published()\n"

@@ -155,10 +155,9 @@ impl Emitter<'_> {
                 entries_delta(self.program, result).is_some()
                     && returns_delta(&body.statements, result)
             });
-        // TIME-10: "A designation published again unchanged is no tick":
-        // a `ref` result is published where it designates what it did not
-        // before the evaluation (`_core.Designation`), which it reads
-        // from `_output`.
+        // FN-16: `out` of a `ref` result takes the endpoint operations,
+        // which the provider answers from what the result held before
+        // the evaluation (`_core.Designation`), read from `_output`.
         let has_out = has_out || signature.reference;
         let output = has_out.then(|| {
             let annotation = match &result {
@@ -517,8 +516,8 @@ impl Emitter<'_> {
                         inputs: Some(inputs),
                     } if inputs.as_slice() == [local])
                 });
-                // A `ref` parameter's `valid` is its `REF`'s own
-                // (TIME-10, proposed): it designates something.
+                // A `ref` parameter's `valid` is its `REF`'s own:
+                // TIME-10, "whether a reference is present".
                 let precise = if function.is_reference(local) {
                     None
                 } else {
@@ -747,8 +746,8 @@ impl Emitter<'_> {
                 // graph gives the list's position, `items[0]`: hgraph
                 // binds that wherever the list comes from, a reference
                 // among them, and it ticks where the list is re-bound
-                // upstream (TIME-10: "A reference ticks where its
-                // designation changes"). hgraph 0.9.8's `TSL` of `REF`s
+                // upstream, so that the readers follow the re-binding
+                // (FN-16). hgraph 0.9.8's `TSL` of `REF`s
                 // given a list that is a reference follows the list, but
                 // its position does not tick where the list is re-bound.
                 (
