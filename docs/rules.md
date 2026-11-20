@@ -117,14 +117,19 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | An enum's member made from its number or its name | TYPE-7 |
 | `timezone` and `zoned_time`, and their literals; a `T?` compared with a `T` | TYPE-2, TYPE-14, OPS-2 |
 | A `var` place beside an argument that runs statements, taken where the call is made | FN-15, EXPR-2 |
+| A temporal struct, tuple and atomic struct: a field and a position a child of its own, read, given to an endpoint operation and written in a `when` (`out.bid = value`), and its connection in a graph; a whole read, `all_valid` one level deep with an optional child aside, a publication whole and by a delta, `delta_value`, trace cells | TYPE-9, TYPE-15, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, TST-5 |
+| A temporal nullable scalar or enum: a published null, its delta, a test against null of an input, a trace cell | TYPE-14, TYPE-15, END-1, END-3, END-6, ERR-12 |
 
 Not written yet, and reported: a `?` after anything its statement reads
 or runs before it (ERR-5), a `switch` case's binding read after the
 `switch` (UNIT-12), a struct that holds itself (TYPE-6), a field's
 default that runs statements, a field of an abstract struct assigned, a
 dictionary's entry given to a `var` parameter, a window, and of temporal
-code: a temporal value of any but a scalar, `ref` (FN-16), `inject
-scheduler` and `alarm` (CAP-4, CAP-5), `all_valid`, `activate`,
+code: a temporal list, set, dictionary or window, a generic or an abstract
+struct as a temporal value, a struct or a tuple with a part of a form the
+library does not read whole, a nullable put in the run's store, `ref`
+(FN-16), `inject
+scheduler` and `alarm` (CAP-4, CAP-5), `all_valid` of a list, `activate`,
 `passivate`, `scheduled()`, `if`, `switch` and `for` over connections
 (CTRL-7), `capture` (ERR-7), a lifted input with a default or a null
 (FN-11), a source with declarations or hooks, an eval with a
@@ -163,6 +168,8 @@ the chapters' entries stay the hgraph target's.
 | `Scheduler`: its three properties, `schedule` with a duration or a datetime under a tag or none, on the wall clock in real time and unchanged by it in simulation, `un_schedule`, `reset`; `Alarm` and its `schedule`; what may be asked of each | CAP-4, CAP-5, TIME-8 | `capabilities.h` | `scheduler_tests.cpp` |
 | `get`, `has`, `put` of the global store, in a node and where a graph is built | CAP-6, FN-9 | `capabilities.h` | `capabilities_tests.cpp` |
 | A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
+| A nullable scalar's temporal form: its payload read checked, a published null; a nullable value held by hgraph as an atomic | TYPE-14, TYPE-15, TIME-1, TIME-7 | `nullables.h` | `structs_tests.cpp` |
+| A struct's, a tuple's and an atomic struct's temporal forms: a child's view and connection, a whole read checked, `all_valid`, a publication whole and by a delta, the delta read, a field of an atomic struct, what a whole cell publishes and the text of a struct | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, TST-9 | `structs.h` | `structs_tests.cpp` |
 | An enum as a value of the library and of the test host: its HGL name, its members' text, its schema with hgraph; core's `CmpResult`, `ZeroPolicy`, `Rounding`, `InvalidPolicy`, `LogLevel` | TYPE-7, TST-4, TST-5, OPS-3 | `values.h`, `traces.h` | `traces_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
 | A source's body as a coroutine, `generator<T>`: run on to each `yield` as it is resumed, in loops and branches, giving what it yields; what it lets out thrown again where it was resumed; its frame and the locals in it destroyed wherever it stopped | SOURCE-1 | `generator.h` | `generator_tests.cpp` |

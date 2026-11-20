@@ -812,6 +812,100 @@ fn names_a_platform_may_take_are_kept_and_undefined() {
     );
 }
 
+/// The temporal forms of a struct, a tuple, an atomic struct and a
+/// nullable scalar, as the target writes them (TYPE-9, TYPE-15, TYPE-16,
+/// TIME-1, TIME-7, TIME-9, EXPR-7): a struct is hgraph's nominal bundle,
+/// whose whole value is the aggregate the value code writes; a field is a
+/// child of its own, in a hook and in a graph; a nullable is hgraph's
+/// `TS<Optional<T>>`. Everything is written, and each test can be run.
+#[test]
+fn temporal_structs_and_nullables_are_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.structs.hgl",
+            include_str!("fixtures/demo.structs.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.structs", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let file = |path: &str| {
+        emitted
+            .output
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap()
+            .text
+            .clone()
+    };
+    // TYPE-9: beside the aggregate, its nominal schema; a struct with an
+    // optional field has each field's own form.
+    let types = file("modules/demo.structs.types.h");
+    assert!(
+        types.contains("struct hgraph::native_bundle<::hgl::demo::structs::m_::MarketQuote>"),
+        "{types}"
+    );
+    let unit = file("modules/demo.structs.cpp");
+    assert!(
+        unit.contains(
+            "::hgraph::Out<::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>> out_"
+        ),
+        "{unit}"
+    );
+    assert!(
+        unit.contains("::hgraph::Field<\"note\", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>"),
+        "{unit}"
+    );
+    // EXPR-7: a field of a struct's connection is the child's own.
+    assert!(unit.contains("::hglrt::field_port<0>("), "{unit}");
+}
+
+/// What the target does not write of temporal structs, tuples and
+/// nullables yet is reported, and nothing is miswritten: a struct whose
+/// field has a form the library does not read whole (a list), a generic
+/// struct, an abstract one, and a nullable put in the run's store (the
+/// analyser gives the `get` of it the payload's type).
+#[test]
+fn temporal_structs_not_written_yet_are_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Listed {\n",
+            "    values: list<i64>\n",
+            "}\n",
+            "struct Box<T> {\n",
+            "    value: T\n",
+            "}\n",
+            "fn listed(value: Listed) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn boxed(value: Box<i64>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn stored(value: i64?) -> bool {\n",
+            "    inject global_state\n",
+            "    when {\n",
+            "        put(global_state, \"kept\", value)\n",
+            "        return true\n",
+            "    }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:8:11 the cpp target does not write a temporal value of `Listed` yet",
+            "m.hgl:11:10 the cpp target does not write a temporal value of `Box<i64>` yet",
+            "m.hgl:17:9 the cpp target does not write a nullable value put in the run's store yet",
+        ]
+    );
+}
+
 /// Structs, sets, dictionaries and deltas as values (TYPE-3 to TYPE-6,
 /// TYPE-14, TYPE-16, EXPR-3, ERR-6, CTRL-12), an enum's member made from a
 /// value (TYPE-7), a zone and a time in it (TYPE-2), a `T?` compared with

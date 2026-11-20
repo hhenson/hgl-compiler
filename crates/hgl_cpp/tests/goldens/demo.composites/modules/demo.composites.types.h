@@ -399,6 +399,27 @@ struct std::hash<::hgl::demo::composites::m_::d_::Point>
 {
     std::size_t operator()(const ::hgl::demo::composites::m_::d_::Point& value) const { return ::hglrt::key_hash_of(value); }
 };
+// TYPE-9: `Point` as hgraph's nominal bundle, its fields as `fields` names them.
+template <>
+struct hgraph::native_bundle<::hgl::demo::composites::m_::Point>
+{
+    using schema = ::hgraph::NominalBundle<"demo.composites", "Point", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<>, ::hgraph::Field<"x", ::hgraph::Float>, ::hgraph::Field<"y", ::hgraph::Float>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::composites::m_::Point>::members;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::Point>
+{
+    static constexpr std::string_view name = "demo.composites::Point";
+    static constexpr std::array<std::string_view, 2> fields{"x", "y"};
+    static constexpr bool delta = false;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::d_::Point>
+{
+    static constexpr std::string_view name = "delta<demo.composites::Point>";
+    static constexpr std::array<std::string_view, 2> fields{"x", "y"};
+    static constexpr bool delta = true;
+};
 template <>
 struct hglrt::fields<::hgl::demo::composites::m_::Line>
 {
@@ -418,6 +439,27 @@ template <>
 struct std::hash<::hgl::demo::composites::m_::d_::Line>
 {
     std::size_t operator()(const ::hgl::demo::composites::m_::d_::Line& value) const { return ::hglrt::key_hash_of(value); }
+};
+// TYPE-9: `Line` as hgraph's nominal bundle, its fields as `fields` names them.
+template <>
+struct hgraph::native_bundle<::hgl::demo::composites::m_::Line>
+{
+    using schema = ::hgraph::NominalBundle<"demo.composites", "Line", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<>, ::hgraph::Field<"start", ::hgraph::native_bundle<::hgl::demo::composites::m_::Point>::schema>, ::hgraph::Field<"end", ::hgraph::native_bundle<::hgl::demo::composites::m_::Point>::schema>, ::hgraph::Field<"class", ::hgraph::Int>, ::hgraph::Field<"note", ::hgraph::Optional<::hgraph::Str>>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::composites::m_::Line>::members;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::Line>
+{
+    static constexpr std::string_view name = "demo.composites::Line";
+    static constexpr std::array<std::string_view, 4> fields{"start", "end", "class", "note"};
+    static constexpr bool delta = false;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::d_::Line>
+{
+    static constexpr std::string_view name = "delta<demo.composites::Line>";
+    static constexpr std::array<std::string_view, 4> fields{"start", "end", "class", "note"};
+    static constexpr bool delta = true;
 };
 template <>
 struct hglrt::fields<::hgl::demo::composites::m_::Book>
@@ -528,6 +570,27 @@ template <>
 struct std::hash<::hgl::demo::composites::m_::d_::Round>
 {
     std::size_t operator()(const ::hgl::demo::composites::m_::d_::Round& value) const { return ::hglrt::key_hash_of(value); }
+};
+// TYPE-9: `Round` as hgraph's nominal bundle, its fields as `fields` names them.
+template <>
+struct hgraph::native_bundle<::hgl::demo::composites::m_::Round>
+{
+    using schema = ::hgraph::NominalBundle<"demo.composites", "Round", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<>, ::hgraph::Field<"id", ::hgraph::Int>, ::hgraph::Field<"name", ::hgraph::Str>, ::hgraph::Field<"radius", ::hgraph::Float>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::composites::m_::Round>::members;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::Round>
+{
+    static constexpr std::string_view name = "demo.composites::Round";
+    static constexpr std::array<std::string_view, 3> fields{"id", "name", "radius"};
+    static constexpr bool delta = false;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::d_::Round>
+{
+    static constexpr std::string_view name = "delta<demo.composites::Round>";
+    static constexpr std::array<std::string_view, 3> fields{"id", "name", "radius"};
+    static constexpr bool delta = true;
 };
 template <class T_>
 struct hglrt::fields<::hgl::demo::composites::m_::Tagged<T_>>
