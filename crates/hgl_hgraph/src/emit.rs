@@ -95,17 +95,27 @@ pub(crate) const APPLICATION: &str = "_application";
 /// that is written by instance, the suffix of the instance named.
 pub(crate) type Used = (usize, usize, Option<String>);
 
+/// What one piece of a program reaches: the first form in it that the
+/// target does not write yet, and the declarations it names, through
+/// which it reaches theirs (`crate::blocked`).
+#[derive(Default)]
+pub(crate) struct Reach {
+    /// The first form in it that the target does not write yet. A piece
+    /// with one is left out of the file.
+    pub(crate) broken: Option<Diagnostic>,
+    /// The functions and the types it names.
+    pub(crate) uses: BTreeSet<Used>,
+}
+
 /// One top-level part of a module as it is written: a declaration or a
 /// named test.
 #[derive(Default)]
 pub(crate) struct Piece {
     /// Its Python text.
     text: String,
-    /// The first form in it that the target does not write yet. A piece
-    /// with one is left out of the file.
-    pub(crate) broken: Option<Diagnostic>,
-    /// The functions and the types it names.
-    pub(crate) uses: BTreeSet<Used>,
+    /// What it reaches: the first form in it that is not written, and
+    /// what it names.
+    pub(crate) reach: Reach,
     /// True for a type, which is written before the functions: a
     /// function's annotations are read where it is defined, and may
     /// name a type the source declares after it.
@@ -490,8 +500,8 @@ impl<'a> Emitter<'a> {
             at,
             format!("the hgraph target does not write {what} yet"),
         );
-        if self.piece.broken.is_none() {
-            self.piece.broken = Some(diagnostic.clone());
+        if self.piece.reach.broken.is_none() {
+            self.piece.reach.broken = Some(diagnostic.clone());
         }
         // A declaration written by instance is written more than once,
         // and what one instance lacks another may lack too: it is
@@ -578,8 +588,8 @@ impl<'a> Emitter<'a> {
         let program = self.program;
         let early: BTreeSet<&str> = types
             .iter()
-            .filter(|piece| piece.broken.is_none())
-            .flat_map(|piece| piece.uses.iter())
+            .filter(|piece| piece.reach.broken.is_none())
+            .flat_map(|piece| piece.reach.uses.iter())
             .filter(|(module, _, _)| *module != self.module)
             .map(|(module, _, _)| program.modules[*module].path.as_str())
             .collect();
@@ -597,7 +607,7 @@ impl<'a> Emitter<'a> {
         // file, counted from 1: `lines` is the lines written so far.
         let mut lines = out.matches('\n').count();
         let write = |piece: &mut Piece, out: &mut String, lines: &mut usize| {
-            if piece.broken.is_some() {
+            if piece.reach.broken.is_some() {
                 // It is in no file, so its statements are on no line.
                 piece.statements.clear();
                 return;
@@ -619,7 +629,7 @@ impl<'a> Emitter<'a> {
         }
         if !late.is_empty() {
             // Two blank lines after the types, as before any piece.
-            if types.iter().any(|piece| piece.broken.is_none()) {
+            if types.iter().any(|piece| piece.reach.broken.is_none()) {
                 late.insert_str(0, "\n\n");
             }
             lines += late.matches('\n').count();

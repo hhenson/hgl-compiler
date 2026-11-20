@@ -64,6 +64,8 @@ use std::time::Duration;
 use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location};
 
+use crate::emit::{Reach, Used};
+
 pub use host::{Ran, RanApplication, Stop, run, run_application, run_within, write};
 
 /// The name `hgl emit --target` takes for this target.
@@ -311,6 +313,7 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
     // Each instance written, to be looked up by what names it, and what
     // each function written is found to need.
     let instanced = instanced(&modules);
+    let pieces = |used: &Used| pieces_of(&modules, &instanced, used);
     let mut found = Found::new();
     // A piece of the program that was written, and reaches one of
     // core's that was not, is reported with what core's piece lacks.
@@ -327,10 +330,10 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
             .chain(&written.tests)
             .chain(&written.application)
         {
-            if piece.broken.is_some() {
+            if piece.reach.broken.is_some() {
                 continue;
             }
-            if let Some(diagnostic) = blocked(&modules, &instanced, &mut found, piece)
+            if let Some(diagnostic) = blocked(pieces, &mut found, &piece.reach)
                 && unwritten_in_core.as_slice().contains(&diagnostic)
                 && !reached.contains(&diagnostic)
             {
@@ -353,7 +356,7 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
                 timeout: test
                     .timeout
                     .map(|micros| Duration::from_micros(micros.unsigned_abs())),
-                blocked: blocked(&modules, &instanced, &mut found, piece),
+                blocked: blocked(pieces, &mut found, &piece.reach),
                 statements: piece.statements.clone(),
             });
         }
@@ -368,7 +371,7 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
             Some(Application {
                 path: module.path.clone(),
                 real_time: module.run_body.as_ref().is_some_and(|run| run.real_time),
-                blocked: blocked(&modules, &instanced, &mut found, piece),
+                blocked: blocked(pieces, &mut found, &piece.reach),
             })
         })
         .collect();
@@ -424,12 +427,41 @@ fn instanced(modules: &[Option<emit::Written>]) -> Instanced<'_> {
 /// or none. Each is found once, however many pieces reach it: a chain of
 /// as many instances as one call makes (`hgl_analyser::INSTANCES`) is
 /// looked through once, and not once for each of its links.
-type Found = HashMap<emit::Used, Option<Diagnostic>>;
+type Found = HashMap<Used, Option<Diagnostic>>;
+
+/// What each piece a function or an instance is written as reaches,
+/// for [`blocked`]: the declaration's own, and the instance's. One
+/// written by instance has nothing in its own, and is still left out
+/// where the declaration itself is not written: one of a test context,
+/// say. `modules` is what was written for each module of the program,
+/// and `instanced` its instances.
+fn pieces_of<'w>(
+    modules: &'w [Option<emit::Written>],
+    instanced: &Instanced<'w>,
+    used: &Used,
+) -> Vec<&'w Reach> {
+    let (module, declaration, instance) = used;
+    let Some(written) = modules.get(*module).and_then(Option::as_ref) else {
+        return Vec::new();
+    };
+    let own = written.declarations.get(*declaration);
+    // GEN-2: the instance named, which is a piece of its own.
+    let named = instance.as_ref().and_then(|suffix| {
+        instanced
+            .get(*module)?
+            .get(&(*declaration, suffix.as_str()))
+            .copied()
+    });
+    own.into_iter()
+        .chain(named)
+        .map(|piece| &piece.reach)
+        .collect()
+}
 
 /// The first form `test` needs that the target did not write: one of
 /// its own, or of a function it reaches through the functions it
-/// names. `modules` is what was written for each module of the
-/// program, and `instanced` its instances.
+/// names. `pieces` gives what each piece a function or an instance is
+/// written as reaches, by what names it ([`pieces_of`]).
 ///
 /// The functions are looked through depth first, in the order each
 /// piece names them, each once: a function may be reached twice, or
@@ -437,40 +469,20 @@ type Found = HashMap<emit::Used, Option<Diagnostic>>;
 /// not hang on the path it was reached by: all that a look that finds
 /// nothing passed, and where no function reached one on its own path
 /// again, what each on the path to the form found reaches.
-fn blocked(
-    modules: &[Option<emit::Written>],
-    instanced: &Instanced,
+fn blocked<'p>(
+    pieces: impl Fn(&Used) -> Vec<&'p Reach>,
     found: &mut Found,
-    test: &emit::Piece,
+    test: &Reach,
 ) -> Option<Diagnostic> {
     if let Some(diagnostic) = &test.broken {
         return Some(diagnostic.clone());
     }
-    // The pieces a function or an instance is written as: the
-    // declaration's own, and the instance's. One written by instance
-    // has nothing in its own, and is still left out where the
-    // declaration itself is not written: one of a test context, say.
-    let pieces = |used: &emit::Used| -> Vec<&emit::Piece> {
-        let (module, declaration, instance) = used;
-        let Some(written) = modules.get(*module).and_then(Option::as_ref) else {
-            return Vec::new();
-        };
-        let own = written.declarations.get(*declaration);
-        // GEN-2: the instance named, which is a piece of its own.
-        let named = instance.as_ref().and_then(|suffix| {
-            instanced
-                .get(*module)?
-                .get(&(*declaration, suffix.as_str()))
-                .copied()
-        });
-        own.into_iter().chain(named).collect()
-    };
     // Each function on the path from `test`, with what it names, and how
     // many of those have been looked through.
-    let mut path: Vec<(Option<emit::Used>, Vec<emit::Used>, usize)> =
+    let mut path: Vec<(Option<Used>, Vec<Used>, usize)> =
         vec![(None, test.uses.iter().cloned().collect(), 0)];
-    let mut seen: HashSet<emit::Used> = HashSet::new();
-    let mut finished: Vec<emit::Used> = Vec::new();
+    let mut seen: HashSet<Used> = HashSet::new();
+    let mut finished: Vec<Used> = Vec::new();
     // True once a function named one on its own path again.
     let mut again = false;
     let result = loop {
@@ -501,7 +513,7 @@ fn blocked(
             path.push((Some(used), Vec::new(), 0));
             break Some(diagnostic);
         }
-        let names: Vec<emit::Used> = pieces
+        let names: Vec<Used> = pieces
             .iter()
             .rev()
             .flat_map(|piece| piece.uses.iter().cloned())

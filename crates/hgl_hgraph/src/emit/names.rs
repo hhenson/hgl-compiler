@@ -54,6 +54,7 @@ impl Emitter<'_> {
         };
         let python = self.instance_name(module, declaration, &instance.suffix);
         self.piece
+            .reach
             .uses
             .insert((module, declaration, Some(instance.suffix.clone())));
         if module == self.module {
@@ -71,7 +72,7 @@ impl Emitter<'_> {
     pub(super) fn type_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = name(&declared.declarations[declaration].name);
-        self.piece.uses.insert((module, declaration, None));
+        self.piece.reach.uses.insert((module, declaration, None));
         if module == self.module {
             return python;
         }
@@ -151,7 +152,7 @@ impl Emitter<'_> {
     pub(super) fn function_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = self.definition_name(module, declaration);
-        self.piece.uses.insert((module, declaration, None));
+        self.piece.reach.uses.insert((module, declaration, None));
         if module == self.module {
             return python;
         }
