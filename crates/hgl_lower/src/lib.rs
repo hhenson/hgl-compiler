@@ -7,9 +7,10 @@
 //! This stage sits where the pipeline has its optimiser, between the
 //! analyser and the transpilers. It reads the analysed program and says
 //! what follows from the language's rules alone, with no target's
-//! knowledge: where a value is copied, which values a struct is, and
-//! what a type holds. A transpiler asks it, and writes what the answers
-//! mean on its target; no two targets work them out twice.
+//! knowledge: where a value is copied, which instances a program asks
+//! for, what a type holds, and what a node's handlers and a graph's
+//! branches need. A transpiler asks it, and writes what the answers mean
+//! on its target; no two targets work them out twice.
 //!
 //! It reads only the analysed program (`hgl_analyser`) and the
 //! diagnostics model (`hgl_diagnostics`), and depends on no target.

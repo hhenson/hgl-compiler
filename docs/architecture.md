@@ -15,8 +15,8 @@ tokens
 syntax tree ---------> formatter (planned) ---------> source text
     |  hgl_analyser
 analysed program ----> error reporting (`check`)
-    |  optimiser (planned)
-analysed program
+    |  hgl_lower (in the optimiser's place)
+analysed program, and the facts every target decides the same way
     |  one transpiler per target (`hgl_hgraph`)
 target output
 ```
@@ -43,6 +43,7 @@ Rules for every stage:
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit`, `hgl run` |
 | formatter | Syntax tree to source text | planned |
 | optimiser | Analysed program to analysed program | planned |
+| `hgl_lower` | Lowering, in the optimiser's place: the facts every target decides the same way, read from the analysed program | implemented for what the hgraph target needed: see "Lowering" below |
 | `hgl_hgraph` | The hgraph target: the analysed program to Python wiring, and its tests run on a Python that has hgraph | in part: see "hgraph" below |
 
 A crate is created when its stage is built, not before.
@@ -1505,10 +1506,36 @@ names one (LEX-12, LEX-25):
 | Empty zone component, as in `@[Europe//London]` | `date_time.invalid_zone` |
 | Backslash directly before a line break in a text block | `string.unknown_escape` |
 
+## Lowering
+
+`hgl_lower` says what follows from the language's rules alone, before
+any target writes a program: no target works it out again. It depends on
+`hgl_analyser` and `hgl_diagnostics`, and on no target; a transpiler
+depends on it. It rewrites nothing: each module answers questions of the
+analysed program.
+
+| Module | What it decides | Rules |
+| --- | --- | --- |
+| `copies` | Where a value is copied: which `let`s and loops take a copy, what a name refers into, whether a result is the function's own; which structs are values (`by_value`) | the owner's rule (compiler issue 151), FN-13, FN-15 |
+| `instances`, `canonical` | Which instances of generic declarations a program asks for, each keyed by its canonical text; what an eval's run and an application's run are wired with | GEN-2, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
+| `pieces` | What a piece a target writes reaches (`Reach`), and whether a test or an application reaches a form the target does not write (`blocked`) | |
+| `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, what is bound after branches, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
+| `types` | A struct's fields and descendants, the windows and unsized lists a type holds, which children `all_valid` asks, whether a value is whole or a delta | TYPE-3, TYPE-4, TYPE-9, TIME-1, TIME-7, TIME-9 |
+| `nodes` | A `when`'s subscriptions and requirements, what a node's handlers ask together, its timer, which locals are its inputs | TIME-3, TIME-4, TIME-9 |
+| `calls` | What a parameter left out is given, which omitted input is never valid, a field's default, a duration's value worked out from how it is written | UNIT-7, UNIT-8, TIME-8 |
+
+The analyser exports what it works out and a target would otherwise
+work out again: which declarations are sources (`Module::is_source`,
+SOURCE-1), and an integration test's limit (`INTEGRATION_LIMIT`, TST-17).
+The hgraph target still decides two things the analyser decides too:
+whether an expression is a connection (`connects`, FN-3) and so which
+calls are lifted (FN-6). The two tables differ, on forms the hgraph
+target does not write in a graph, so neither is replaced yet.
+
 ## Transpilers
 
-A transpiler is a crate that depends on the analysed-program crate and the
-diagnostics crate, and on no other transpiler. `hgl emit --target NAME
+A transpiler is a crate that depends on the analysed-program crate, the
+lowering crate and the diagnostics crate, and on no other transpiler. `hgl emit --target NAME
 --out DIR` selects one by name and writes what it gives. The front end
 does not change, and no stage before a transpiler knows a target.
 
@@ -1544,7 +1571,7 @@ An hgraph node or graph is written with the types of its inputs, so a
 temporal function or candidate with generic parameters is written once
 for each set of generic arguments it is called with (GEN-2). Before any
 module is written the target reads the typed program for those calls
-(`instances.rs`): a call in one module asks for an instance that is
+(`hgl_lower::instances`): a call in one module asks for an instance that is
 written in the declaration's module. It starts from every body that
 is not itself written by instance and from the tests, asks the analyser
 for each instance (`Program::instance`), and goes on through the calls
@@ -1761,7 +1788,7 @@ is.
 | What is written | Where |
 | --- | --- |
 | `entries`, as it is | An argument, the read of an element or a field, an operand: a reference, which the function is given and does not change |
-| `before = _core.copied(entries)` | A `let` of what a place holds, or of a value written with it, where the place is changed while the name is in scope: in the rest of the `let`'s block, or anywhere in a loop the `let` is inside. `hgl_hgraph`'s `copies` reads each body for it |
+| `before = _core.copied(entries)` | A `let` of what a place holds, or of a value written with it, where the place is changed while the name is in scope: in the rest of the `let`'s block, or anywhere in a loop the `let` is inside. `hgl_lower::copies` reads each body for it |
 | `last = _core.item(rows, 2)` | A `let` whose place changes no more in its scope: a reference into the place |
 | `for item in _core.copied(values):` | A loop whose own body changes the place it runs over. Any other loop reads each entry where it is |
 | `push_all(items=rows, more=_core.copied(rows))` | The owner's first case: an argument read from a place that the same call gives to a `var` parameter. A second `var` parameter given the same place takes a copy too, and the place is given them in the order of the parameters (FN-15) |

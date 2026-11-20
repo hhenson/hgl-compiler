@@ -1,18 +1,19 @@
-//! The instances of generic temporal declarations a program asks for.
+//! The instances of generic declarations a program asks for. Part of
+//! lowering: a transpiler writes each before it writes the modules.
 //!
-//! An hgraph node or graph is written with the types of its inputs, and
-//! a node's code calls the function chosen for those types. So a
-//! temporal function with generic parameters, and a temporal candidate
-//! of an operator with them, is written once for each set of generic
-//! arguments it is called with (GEN-2):
+//! A node or a graph is written with the types of its inputs, and a
+//! node's code calls the function chosen for those types. So a temporal
+//! function with generic parameters, and a temporal candidate of an
+//! operator with them, is written once for each set of generic arguments
+//! it is called with (GEN-2):
 //!
 //! ```text
 //! fn identity_sum<T>(lhs: T, rhs: T) -> T
 //!     requires add_(T, T) -> T => lhs +{invalid: .identity} rhs
 //! ```
 //!
-//! called with two `f64` and with two `str` is two graphs,
-//! `_inst_identity_sum__f64` and `_inst_identity_sum__str`.
+//! called with two `f64` and with two `str` is two graphs, whose
+//! [`Instance::suffix`]es are `f64` and `str`.
 //!
 //! This reads the typed program for those calls before any module is
 //! written, since a call in one module asks for an instance that is
@@ -24,8 +25,10 @@
 //! OPS-9 gives a body of its own.
 //!
 //! A value function with generic parameters is written once where it
-//! can be: Python takes a value of any type. It is written by instance
-//! too where its body calls an operation the declaration requires, or
+//! can be, as the hgraph target writes it: Python takes a value of any
+//! type. (A target whose values are typed needs an instance of each; that
+//! choice is not yet a parameter.) It is written by instance too where
+//! its body calls an operation the declaration requires, or
 //! hands one of its requirements on to what it calls (GEN-16): which
 //! candidate that is depends on the types, and where its body has a call
 //! a membership it states authorises, whose candidate each instance
@@ -59,9 +62,9 @@ pub struct Instance {
     /// Each generic argument as text no other is written as
     /// (`canonical_argument`): what tells one instance from another.
     key: Vec<String>,
-    /// What follows the declaration's own name in the instance's Python
-    /// name: the generic arguments, each character that is no letter
-    /// or digit as `_`, and a number where two instances would
+    /// What follows the declaration's own name in the name a target
+    /// gives the instance: the generic arguments, each character that is
+    /// no letter or digit as `_`, and a number where two instances would
     /// otherwise have one name.
     pub suffix: String,
     /// Its signature, with the generic arguments in place.
@@ -474,7 +477,7 @@ impl Instances {
             ) else {
                 continue;
             };
-            // The arguments as part of a Python name.
+            // The arguments as part of a name.
             let plain: String = key
                 .join("_")
                 .chars()

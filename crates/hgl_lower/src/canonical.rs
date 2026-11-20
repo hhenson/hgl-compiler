@@ -5,8 +5,9 @@
 
 use hgl_analyser::{Argument as GenericArgument, Constant, Program, Type};
 
-/// A type as text that no other type is written as, for the class of a
-/// generic struct's application (see `Emitter::construct`). A named
+/// A type as text that no other type is written as: part of the key of
+/// a generic instance (GEN-2) and of a generic struct's application,
+/// whose values TYPE-3 tells apart by "complete canonical arguments". A named
 /// type has its module's path before it: two modules may each declare
 /// a `Quote`. `None` for a type that is not whole as the module is
 /// written: one that names a generic parameter, or is not known.

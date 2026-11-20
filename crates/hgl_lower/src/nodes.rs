@@ -50,7 +50,7 @@ pub struct Handler<'a> {
     pub selects: bool,
     /// Where its header has `modified([])` beside a `modified` selector
     /// that names inputs, each a top-level conjunct: the specification
-    /// does not say what the two ask together, and the target reports it.
+    /// does not say what the two ask together, and a target reports it.
     pub beside: Option<Location>,
     /// True where its header has `modified([])` alone or as a top-level
     /// conjunct: the selector, which a wake of the scheduler or the

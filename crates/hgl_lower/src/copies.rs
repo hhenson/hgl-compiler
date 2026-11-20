@@ -18,6 +18,9 @@
 //! modified in the scope of the let / parameter that we need to make a
 //! copy".
 //!
+//! The language's side of it is FN-13 (a retained result keeps its own
+//! contents) and FN-15 (a `var` parameter is the place given).
+//!
 //! This module reads one body and says, of each `let` and each loop,
 //! whether the place its value is read from is changed while the name
 //! is in scope. Where it is, the name is bound to a copy; where it is
@@ -54,7 +57,8 @@ pub struct Copies {
 }
 
 impl Copies {
-    /// Reads `body`.
+    /// Reads `body`: which of its `let`s and loops take a copy, and what
+    /// each other name refers into.
     pub fn of(program: &Program, body: &Body) -> Copies {
         let mut copies = Copies::default();
         copies.block(program, &body.locals, &body.statements, &[]);
@@ -727,10 +731,6 @@ pub fn changed_in_place(program: &Program, ty: &Type, depth: usize) -> bool {
 /// parameters is not one, nor is a struct that another inherits from: a
 /// value of the other may stand for it. Any other struct a `var`, a
 /// `state` or a `cache` holds is changed where it is, as a list is.
-///
-/// The provider's class says it too (`_core.struct(..., by_value=True)`),
-/// so that what changes a field where it is never changes a value of
-/// such a struct that a parent's type stands for.
 pub fn by_value(program: &Program, module: usize, declaration: usize) -> bool {
     let Some(Detail::Struct(read)) = program.modules[module].details.get(declaration) else {
         return false;

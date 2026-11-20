@@ -15,7 +15,7 @@ pub type Used = (usize, usize, Option<String>);
 
 /// What one piece of a program reaches: the first form in it that the
 /// target does not write yet, and the declarations it names, through
-/// which it reaches theirs (`crate::blocked`).
+/// which it reaches theirs ([`blocked`]).
 #[derive(Default)]
 pub struct Reach {
     /// The first form in it that the target does not write yet. A piece
@@ -35,7 +35,9 @@ pub type Found = HashMap<Used, Option<Diagnostic>>;
 /// The first form `test` needs that the target did not write: one of
 /// its own, or of a function it reaches through the functions it
 /// names. `pieces` gives what each piece a function or an instance is
-/// written as reaches, by what names it ([`pieces_of`]).
+/// written as reaches, by what names it: the declaration's own piece,
+/// and the instance's (GEN-2). A test or an application that reaches a
+/// form the target does not write cannot be run.
 ///
 /// The functions are looked through depth first, in the order each
 /// piece names them, each once: a function may be reached twice, or
