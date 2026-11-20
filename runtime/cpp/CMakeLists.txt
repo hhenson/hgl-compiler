@@ -126,6 +126,7 @@ if(BUILD_TESTING)
         tests/endpoint_tests.cpp
         tests/failure_tests.cpp
         tests/generator_tests.cpp
+        tests/references_tests.cpp
         tests/scalar_tests.cpp
         tests/scheduler_tests.cpp
         tests/sources_tests.cpp

@@ -32,18 +32,6 @@
     "conformance::an_entry_past_a_fixed_lists_end_fails",
     "conformance::stop_failures_cross_a_capture_boundary",
 ]
-"a `ref` parameter" = [
-    "conformance::a_ref_parameter_does_not_wake_its_node_for_its_target",
-    "conformance::valid_of_a_ref_parameter_is_whether_a_reference_is_present",
-]
-"a `ref` result" = [
-    "conformance::a_reader_is_not_valid_while_its_target_holds_no_value",
-    "conformance::a_reader_is_undisturbed_by_a_designation_given_again",
-    "conformance::a_reader_waits_for_a_target_that_has_not_published",
-    "conformance::a_ref_result_follows_the_element_it_designates",
-    "conformance::a_relay_samples_its_ref_parameter_when_it_runs",
-    "conformance::a_relay_subscribed_to_its_ref_parameter_follows_it",
-]
 "a `var` connection" = [
     "conformance::a_switch_forwards_the_selected_connection",
 ]
@@ -104,6 +92,9 @@
     "conformance::a_fixed_list_is_valid_once_one_position_is",
     "conformance::fixed_list_children_become_readable_independently",
     "conformance::reading_an_invalid_child_at_a_runtime_index_fails",
+]
+"a temporal value of `list<i64, 3>`" = [
+    "conformance::a_ref_result_follows_the_element_it_designates",
 ]
 "a temporal value of `list<i64>`" = [
     "conformance::a_negative_size_reduces_the_list_by_that_count",

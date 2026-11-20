@@ -163,6 +163,7 @@ pub(super) trait Family: Sync {
 /// puts its own ahead of the spine's.
 static FAMILIES: &[&dyn Family] = &[
     &super::windows::Windows,
+    &super::references::References,
     &super::scalars::Scalars,
     &super::tests::Tests,
     &super::sources::Sources,
