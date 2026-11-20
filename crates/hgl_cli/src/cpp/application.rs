@@ -35,8 +35,7 @@ use hgl_cpp::{Application, Output};
 use hgl_hgraph::RanApplication;
 
 use super::build::{self, Workspace};
-use super::library_path;
-use super::sdk::Toolchain;
+use super::sdk::{self, Toolchain};
 
 /// What asks an application's run to stop, as its host (RUN-3: "until
 /// the configuration's end or until its host stops it"). It may be asked
@@ -122,6 +121,10 @@ pub(super) fn run(
     }
 }
 
+/// The variable that names where an executable finds its libraries, and
+/// its value, where the platform has one (`sdk::library_path`).
+type Libraries = Option<(&'static str, std::ffi::OsString)>;
+
 /// The workspace with `application`'s executable built in it, held
 /// until the run has ended, and the libraries' path it runs with; or why
 /// it could not be built.
@@ -130,7 +133,7 @@ fn built(
     application: &Application,
     keep: Option<&Path>,
     roots: &[PathBuf],
-) -> Result<(Workspace, std::ffi::OsString), String> {
+) -> Result<(Workspace, Libraries), String> {
     let toolchain = Toolchain::find()?;
     let cache = build::cache()?;
     let jobs = std::env::var(build::JOBS)
@@ -146,16 +149,16 @@ fn built(
         let failure = built.failure.unwrap_or_default();
         return Err(format!("the build of its executable failed:\n{failure}"));
     }
-    Ok((workspace, library_path(&description.libraries)))
+    Ok((workspace, sdk::library_path(&description)))
 }
 
 /// Runs the executable of `application` built in `workspace`, with
-/// `libraries` as its `LD_LIBRARY_PATH`, passing it what `stop` is asked,
-/// and reads what became of the run from the results it writes.
+/// `libraries` where it finds its libraries, passing it what `stop` is
+/// asked, and reads what became of the run from the results it writes.
 fn launch(
     workspace: &Workspace,
     application: &Application,
-    libraries: &std::ffi::OsStr,
+    libraries: &Libraries,
     stop: &Stop,
 ) -> RanApplication {
     let results = workspace
@@ -174,8 +177,11 @@ fn launch(
         ));
     }
     let executable = workspace.application(&application.path);
-    let started = Command::new(&executable)
-        .env("LD_LIBRARY_PATH", libraries)
+    let mut command = Command::new(&executable);
+    if let Some((variable, value)) = libraries {
+        command.env(variable, value);
+    }
+    let started = command
         .arg(&results)
         .stdin(Stdio::piped())
         .stdout(Stdio::from(io::stderr()))
