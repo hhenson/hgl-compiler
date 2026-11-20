@@ -111,20 +111,26 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
 | `eval` with no configuration, dense and timed traces, their comparison, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| A struct, a generic one and an abstract one, with `==` of each field; its construction by named fields, defaults and nulls, in the order written; its fields read and assigned; structs in lists, tuples, optionals, sets and dictionaries; a candidate of an operator over one | TYPE-3, TYPE-4, TYPE-5, OPS-2, GEN-4 |
+| A set and a dictionary, in no order, equal whatever the order; their literals; a strict read that fails with `value.missing_key`, an assignment that adds a key, core's `get`; `for` over each | TYPE-14, EXPR-3, EXPR-9, ERR-6, CTRL-12, OPS-2 |
+| The delta of a nullable, a list, a set, a dictionary and a struct, built by its properties and read through them; a tuple's as a tuple | TYPE-16 |
+| An enum's member made from its number or its name | TYPE-7 |
+| `timezone` and `zoned_time`, and their literals; a `T?` compared with a `T` | TYPE-2, TYPE-14, OPS-2 |
+| A `var` place beside an argument that runs statements, taken where the call is made | FN-15, EXPR-2 |
 
-Not written yet, and reported: a call that gives a `var` parameter a
-place beside an argument that runs statements (FN-15), a `?` after
-anything its statement reads or runs before it (ERR-5), a
-`switch` case's binding read after the `switch` (UNIT-12), an enum's
-member made from a value (TYPE-7), a pack, a struct, a set, a
-dictionary, a window, a delta of any but a scalar, `timezone`,
-`zoned_time`, and of temporal code: a temporal value of any but a
-scalar, `ref` (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
-`all_valid`, `activate`, `passivate`, `scheduled()`, `if`, `switch` and
-`for` over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
-default or a null (FN-11), a source with declarations or hooks, an eval
-with a configuration or of a value function (RUN-1, TST-5), and an
-application.
+Not written yet, and reported: a `?` after anything its statement reads
+or runs before it (ERR-5), a `switch` case's binding read after the
+`switch` (UNIT-12), a struct that holds itself (TYPE-6), a field's
+default that runs statements, a field of an abstract struct assigned, a
+dictionary's entry given to a `var` parameter, a window, and of temporal
+code: a temporal value of any but a scalar, `ref` (FN-16), `inject
+scheduler` and `alarm` (CAP-4, CAP-5), `all_valid`, `activate`,
+`passivate`, `scheduled()`, `if`, `switch` and `for` over connections
+(CTRL-7), `capture` (ERR-7), a lifted input with a default or a null
+(FN-11), a source with declarations or hooks, an eval with a
+configuration or of a value function (RUN-1, TST-5), and an application.
+A call of a function with a pack, core's `all_` and `any_`, has no
+callee the analyser reads.
 
 ## The C++ target's runtime library
 
@@ -151,6 +157,7 @@ the chapters' entries stay the hgraph target's.
 | Every `convert` of the scalars: those that cannot fail, and those that can under `invalid`, with `rounding` and `nan` | OPS-4, OPS-6, OPS-7, OPS-8 | `conversions.h` | `conversion_tests.cpp` |
 | A tenor, hgraph's `Tenor`: its arithmetic, count by count and checked; its order and `compare_`; its text; and the parts core's calendar candidates are written with, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-6, TEN-8, TEN-9 | `tenors.h` | `tenor_tests.cpp` |
 | `append`, `extend` | LIST-1, LIST-2, LIST-3 | `lists.h` | `capabilities_tests.cpp` |
+| A set and a dictionary, hash containers equal where their members are; a key's identity, `==` but that every NaN is one key, and its hash; a strict read, `value.missing_key`; the place an assignment adds a key at; core's `get`; the deltas of a set and a dictionary, and a list's delta's properties; what a struct names of its fields, a value of an abstract struct, and what a struct inherits from; an enum's member made from a value | TYPE-3, TYPE-7, TYPE-14, TYPE-16, EXPR-3, ERR-6, OPS-2 | `collections.h` | `collections_tests.cpp` |
 | The operations on an endpoint of a scalar or a nullable scalar, input or result: `valid`, `modified`, `delta_value` plain and where a `result` is taken, `last_modified`, `invalidate` of the result, `is_active`, `activate`, `passivate`; `all_valid` and a form's own delta wait for their forms | TIME-9, END-1 to END-6, ERR-14 | `endpoints.h` | `endpoint_tests.cpp` |
 | `Logger` and `log`, `Clock` and its four properties | CAP-1, CAP-2, CAP-3 | `capabilities.h` | `capabilities_tests.cpp` |
 | `Scheduler`: its three properties, `schedule` with a duration or a datetime under a tag or none, on the wall clock in real time and unchanged by it in simulation, `un_schedule`, `reset`; `Alarm` and its `schedule`; what may be asked of each | CAP-4, CAP-5, TIME-8 | `capabilities.h` | `scheduler_tests.cpp` |

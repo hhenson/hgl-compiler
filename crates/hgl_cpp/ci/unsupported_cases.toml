@@ -133,6 +133,10 @@
     "conformance::an_empty_set_delta_ticks_only_where_it_makes_the_set_valid",
     "conformance::mixed_replay",
     "conformance::removing_only_an_absent_member_is_no_tick",
+    "core_implementation::record_can_be_empty",
+]
+"a trace of `MarketQuote`" = [
+    "conformance::a_struct_delta_keeps_the_final_write_to_each_field",
 ]
 "a trace of `datetime?`" = [
     "conformance::propagating_a_retained_error_preserves_its_origin",
@@ -156,6 +160,10 @@
 "a trace of `list<i64, 2>`" = [
     "conformance::a_fixed_list_delta_reports_the_position_in_updated",
 ]
+"a trace of `set<i64>`" = [
+    "conformance::set_writes_coalesce",
+    "core_implementation::record_retains_each_delta",
+]
 "a trace of `tuple<i64, str>`" = [
     "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",
 ]
@@ -178,9 +186,11 @@
     "conformance::a_run_length_counts_from_its_start",
     "conformance::a_simulation_runs_from_start_up_to_end",
     "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
+    "conformance::absolute_targets_before_at_and_after_start",
     "conformance::an_alarm_cannot_hide_an_input_tick",
     "conformance::an_earlier_recording_survives_a_second_run",
     "conformance::conflicting_run_bounds_fail_before_evaluation",
+    "conformance::skipped_targets_still_establish_source_order",
     "conformance::the_clock_reports_the_time_of_each_input",
     "core_implementation::a_null_publication_has_a_tuple_in_the_recording",
 ]
@@ -197,29 +207,8 @@
     "conformance::cancelling_the_later_tag_preserves_the_earlier_wake",
     "conformance::the_wall_clock_option_changes_nothing_in_simulation",
 ]
-"the type `Closed`" = [
-    "core_implementation::a_calendar_says_what_a_business_day_is",
-    "core_implementation::a_rule_rolls_to_a_business_day",
-]
-"the type `MarketQuote`" = [
-    "conformance::a_struct_delta_keeps_the_final_write_to_each_field",
-]
-"the type `RunConfig`" = [
-    "conformance::absolute_targets_before_at_and_after_start",
-    "conformance::skipped_targets_still_establish_source_order",
-]
-"the type `Weekdays`" = [
-    "core_implementation::business_days_start_from_a_business_day",
-    "core_implementation::months_end_at_the_months_last_day",
-    "core_implementation::only_the_result_of_a_move_is_held_to_the_range",
-]
 "the type `rolling_window<i64, 3us, 0s>`" = [
     "conformance::a_recording_of_a_window_holds_its_arrivals_and_replays_the_same_window",
-]
-"the type `set<i64>`" = [
-    "conformance::set_writes_coalesce",
-    "core_implementation::record_can_be_empty",
-    "core_implementation::record_retains_each_delta",
 ]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph

@@ -333,7 +333,7 @@ pub(crate) fn string(text: &str) -> String {
 
 /// Every name the program gives that [`identifier`] writes as it is: the
 /// parts of each module's path, and each declaration, test, enum member,
-/// parameter and local. A generated file `#undef`s each of them it writes,
+/// parameter, local, struct field and struct's generic parameter. A generated file `#undef`s each of them it writes,
 /// after its last `#include`, so that no macro a platform's header
 /// defines takes one (`assemble`); a macro already expanded in those
 /// headers is not changed by it.
@@ -360,6 +360,12 @@ pub(crate) fn program_names(program: &Program) -> BTreeSet<String> {
                             .iter()
                             .map(|parameter| parameter.name.clone()),
                     );
+                }
+                // A struct's fields and its generic parameters, which its
+                // declaration writes (`composites`).
+                Detail::Struct(read) => {
+                    names.extend(read.members.iter().map(|member| member.name.clone()));
+                    names.extend(read.generics.iter().map(|generic| generic.name.clone()));
                 }
                 _ => {}
             }
