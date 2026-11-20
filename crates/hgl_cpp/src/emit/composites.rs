@@ -522,6 +522,13 @@ impl Emitter<'_> {
             self.unsupported(at, "a generic parameter of this kind of a struct");
             return;
         };
+        // A generic value parameter's type, an enum of another module's
+        // among them, is named where the struct is declared.
+        for generic in &read.generics {
+            if let GenericKind::Value(ty) = &generic.kind {
+                self.note_types(ty);
+            }
+        }
         let name = identifier(&declaration.name);
         let namespace = module_namespace(&declared.path);
         let arguments = if parameters.is_empty() {

@@ -856,8 +856,9 @@ fn composite_forms_not_written_yet_are_reported() {
     assert_eq!(emitted.blocked("noded").as_deref(), Some(holds_itself));
 }
 
-/// A module's struct that holds another module's, and an instance of a
-/// generic function of the other module over it: each header includes
+/// A module's struct that holds another module's, a struct with a generic
+/// parameter of another module's enum, and an instance of a generic
+/// function of the other module over a struct: each header includes
 /// the types header of the module whose types it names, and no types
 /// header includes a module's header (GEN-2, UNIT-6).
 #[test]
@@ -868,7 +869,17 @@ fn a_struct_of_another_module_is_named_through_its_types_header() {
             concat!(
                 "module demo.b\n",
                 "export struct Inner { value: i64 }\n",
+                "export enum Mood { calm, keen }\n",
                 "export const fn same<T>(value: T) -> T => value\n",
+            ),
+        ),
+        (
+            "demo.c.hgl",
+            concat!(
+                "module demo.c\n",
+                "use demo.b::{Mood}\n",
+                "struct Moody<const mood: Mood> { count: i64 = 0 }\n",
+                "const fn counted(moody: Moody<Mood.keen>) -> i64 => moody.count\n",
             ),
         ),
         (
@@ -895,4 +906,6 @@ fn a_struct_of_another_module_is_named_through_its_types_header() {
     assert!(file("modules/demo.b.h").contains("#include \"demo.a.types.h\""));
     assert!(file("modules/demo.a.h").contains("#include \"demo.a.types.h\""));
     assert!(!file("modules/demo.b.types.h").contains("demo.a"));
+    // A generic parameter of another module's enum.
+    assert!(file("modules/demo.c.types.h").contains("#include \"demo.b.types.h\""));
 }
