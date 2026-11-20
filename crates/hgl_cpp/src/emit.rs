@@ -120,6 +120,7 @@ pub(crate) fn module(
         temporaries: 0,
         instanced: Vec::new(),
         temporal: None,
+        ahead: Vec::new(),
     };
     let declared = &program.modules[index];
     let declarations = (0..declared.declarations.len())
@@ -176,6 +177,11 @@ struct Emitter<'a> {
     /// node's hook, a source's body, a graph, a lifted call's node or an
     /// eval's entry (`nodes::Context`). `None` in value code.
     temporal: Option<nodes::Context>,
+    /// What the piece being written puts ahead of its definition, at the
+    /// scope of its namespace: the node an eval writes for a value
+    /// function it lifts (`lifting`), which a test, a function, cannot
+    /// hold with its name.
+    ahead: Vec<String>,
 }
 
 impl Emitter<'_> {
@@ -232,6 +238,7 @@ impl Emitter<'_> {
     /// Ends the piece being written, and gives it.
     fn close(&mut self) -> Piece {
         self.temporaries = 0;
+        self.ahead.clear();
         std::mem::take(&mut self.piece)
     }
 }

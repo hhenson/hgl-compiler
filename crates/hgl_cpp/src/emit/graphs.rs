@@ -166,6 +166,12 @@ impl Emitter<'_> {
                     declaration,
                     generics,
                     ..
+                }
+                | Callee::Candidate {
+                    module,
+                    declaration,
+                    generics,
+                    ..
                 },
             arguments,
             ..
