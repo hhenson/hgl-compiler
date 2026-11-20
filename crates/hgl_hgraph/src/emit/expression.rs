@@ -15,7 +15,7 @@ impl Emitter<'_> {
         // result back within it." The provider holds the months' date to
         // the range, so a move of a date written in the range's first or
         // last year is reported (`edge_move`).
-        if edge_move(value) {
+        if edge_move(self.program, value) {
             self.unsupported(
                 value.at,
                 "a move of a date in the first or last year of the range, which only its \
@@ -2151,12 +2151,15 @@ fn is_null(value: &Expr) -> bool {
 }
 
 /// True where `value` moves a date written in the first or the last
-/// year of the range, 1 or 9999, by a tenor: a call, `@9999-12-15 + 1M`
-/// among them, of a date literal there and a `tenor`, in either order.
+/// year of the range, 1 or 9999, by a tenor: a call of core's `add_` or
+/// `sub_` of a date literal there and a `tenor`, `@9999-12-15 + 1M`.
 /// Core's TEN-4 holds only the move's result to the range, and the
 /// provider holds the date the months give too: within those years the
 /// two may differ.
-fn edge_move(value: &Expr) -> bool {
+fn edge_move(program: &Program, value: &Expr) -> bool {
+    if !matches!(core_operator(program, value), Some("add_" | "sub_")) {
+        return false;
+    }
     let ExprKind::Call { arguments, .. } = &value.kind else {
         return false;
     };
@@ -2173,7 +2176,6 @@ fn edge_move(value: &Expr) -> bool {
     let tenor = |argument: &Expr| argument.ty == Type::Scalar(Scalar::Tenor);
     matches!(
         arguments.as_slice(),
-        [first, second, ..] if (edge(&first.value) && tenor(&second.value))
-            || (tenor(&first.value) && edge(&second.value))
+        [first, second, ..] if edge(&first.value) && tenor(&second.value)
     )
 }

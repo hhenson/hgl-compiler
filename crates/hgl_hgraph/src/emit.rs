@@ -1520,7 +1520,7 @@ impl<'a> Emitter<'a> {
                 // a list, `value.index_out_of_range`, and core's OPS-1
                 // text repeated a count below zero, `numeric.out_of_range`
                 // (`uncoded_failure`).
-                if let Some(form) = uncoded_failure(code, body) {
+                if let Some(form) = uncoded_failure(self.program, code, body) {
                     self.unsupported(*at, form);
                     return;
                 }
@@ -1740,9 +1740,9 @@ fn designated_name(input: &Local) -> String {
 /// `value.index_out_of_range` (EXPR-3, EXPR-7), which the provider's
 /// index outside a list has no code for, and core's OPS-1 text repeated a
 /// count below zero, `numeric.out_of_range`, which the provider does not
-/// write (`mul__str_i64`). The text is repeated by a call that gives a
-/// `str` of a `str` and an `i64`, in either order.
-fn uncoded_failure(code: &str, body: &[Stmt]) -> Option<&'static str> {
+/// write (`mul__str_i64`): a call of core's `mul_` of a `str` and an
+/// `i64`, in either order.
+fn uncoded_failure(program: &Program, code: &str, body: &[Stmt]) -> Option<&'static str> {
     if code == "value.index_out_of_range" {
         return Some("a failure coded `value.index_out_of_range` (EXPR-3, EXPR-7)");
     }
@@ -1753,9 +1753,9 @@ fn uncoded_failure(code: &str, body: &[Stmt]) -> Option<&'static str> {
     let count = |ty: &Type| *ty == Type::Scalar(Scalar::I64);
     let mut repeated = false;
     hgl_analyser::hir::walk_statements(body, &mut |value| {
-        if let ExprKind::Call { arguments, .. } = &value.kind
-            && text(&value.ty)
-            && let [first, second] = arguments.as_slice()
+        if core_operator(program, value) == Some("mul_")
+            && let ExprKind::Call { arguments, .. } = &value.kind
+            && let [first, second, ..] = arguments.as_slice()
             && ((text(&first.value.ty) && count(&second.value.ty))
                 || (count(&first.value.ty) && text(&second.value.ty)))
         {
@@ -1763,4 +1763,22 @@ fn uncoded_failure(code: &str, body: &[Stmt]) -> Option<&'static str> {
         }
     });
     repeated.then_some("text repeated a count below zero, `numeric.out_of_range` (OPS-1)")
+}
+
+/// The name of the operator of core that `value` calls a candidate of,
+/// `mul_` of `"ab" * 2` or of `mul_("ab", 2)`; `None` for any other
+/// value.
+pub(super) fn core_operator<'p>(program: &'p Program, value: &Expr) -> Option<&'p str> {
+    let ExprKind::Call {
+        callee: Callee::Candidate { operator, .. },
+        ..
+    } = &value.kind
+    else {
+        return None;
+    };
+    (Some(operator.0) == program.core()).then(|| {
+        program.modules[operator.0].declarations[operator.1]
+            .name
+            .as_str()
+    })
 }
