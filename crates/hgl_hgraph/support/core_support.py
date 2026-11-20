@@ -722,9 +722,10 @@ def _pruned(port, change, shape):
     that holds it where it is given one for that child (a bundle and a
     fixed `TSL` do not tick), and a `TSD` for a key given a struct's delta
     that names nothing, held or not, adding a key it does not hold: so a
-    child whose change names nothing is left out of its holder's change. A dictionary or a set that is not valid is kept, and
-    made valid (`_validated`); a key that a struct's delta naming nothing
-    would add is not added."""
+    child whose change names nothing is left out of its holder's change.
+    A dictionary or a set that is not valid is kept, and made valid
+    (`_validated`); a key that a struct's delta naming nothing would add
+    is not added."""
     if change is None or shape is None:
         return change
     valid = port is not None and port.valid
@@ -1547,11 +1548,10 @@ def window_delta(port):
     """`delta_value` of a window of a duration (the language's TYPE-11,
     TYPE-16): the value that arrived in this cycle. TYPE-11, proposed, as
     core's END-9 has it too: "where a value leaves and none arrives,
-    `delta_value` of the window,
-    which is the value that arrived (TYPE-16), has no value, and its read
-    fails with `value.unset_read`". hgraph 0.9.7's `TSW` ticks for an exit
-    and gives no delta for it, `None`, which no value it holds is: a
-    window holds no null."""
+    `delta_value` of the window, which is the value that arrived
+    (TYPE-16), has no value, and its read fails with `value.unset_read`".
+    hgraph 0.9.7's `TSW` ticks for an exit and gives no delta for it,
+    `None`, which no value it holds is: a window holds no null."""
     delta = port.delta_value
     if delta is None and port.modified:
         raise HglError(
