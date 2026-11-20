@@ -13,6 +13,7 @@
 
 #include <hglrt/capabilities.h>
 #include <hglrt/checked.h>
+#include <hglrt/control.h>
 #include <hglrt/conversions.h>
 #include <hglrt/endpoints.h>
 #include <hglrt/failure.h>
