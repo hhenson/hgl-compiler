@@ -11,6 +11,7 @@
 #pragma once
 
 #include <hglrt/capabilities.h>
+#include <hglrt/endpoints.h>
 #include <hglrt/failure.h>
 #include <hglrt/host.h>
 #include <hglrt/scalar.h>
@@ -231,6 +232,35 @@ template <class T>
 void hold(datetime at, std::optional<T> value) {
     if (detail::holding<T> != nullptr) {
         detail::holding<T>->emplace_back(at, std::move(value));
+    }
+}
+
+/// The node that keeps the values the result `S` of the eval under way, a
+/// temporal value of `T`, holds (`hold`): at each of its publications, its
+/// whole value where its temporal form reads one, `endpoint_read<S>::held`,
+/// and none where a part of it is not valid.
+template <class T, class S>
+struct Holder {
+    static constexpr auto name = "hgl.held";
+
+    static void eval(hgraph::In<"result", S, hgraph::InputValidity::Unchecked> result,
+                     hgraph::EvaluationClockView clock) {
+        if (result.modified()) {
+            hold<T>(clock.evaluation_time(), endpoint_read<S>::held(result));
+        }
+    }
+};
+
+/// Wires a `Holder` of `result`, the result of the eval under way, where its
+/// temporal form reads its whole value (`endpoint_read<S>::held`), and
+/// nothing otherwise: the entry of an eval whose result's delta is no T
+/// calls it, so that a cell written whole is compared with what it held.
+template <class T, class S>
+void keep_held(hgraph::Wiring& wiring, const hgraph::Port<S>& result) {
+    if constexpr (requires(const hgraph::In<"result", S, hgraph::InputValidity::Unchecked>& view) {
+                      endpoint_read<S>::held(view);
+                  }) {
+        static_cast<void>(hgraph::wire<Holder<T, S>>(wiring, result));
     }
 }
 

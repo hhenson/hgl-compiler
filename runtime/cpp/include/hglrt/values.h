@@ -243,6 +243,15 @@ std::size_t hash_of(const T& value) {
     }
 }
 
+/// The HGL name of a type the compiler writes and names outside it, a struct
+/// and its delta: a specialization the compiler writes beside the type gives
+/// `name`, the type as HGL writes it (`demo.trade::Quote`,
+/// `delta<demo.trade::Quote>`), which `type_name` gives; and for a struct
+/// `fields`, the name of each field in order, and whether it is a delta,
+/// by which its text is written (traces.h).
+template <class T>
+struct type_named;
+
 /// The name of the HGL type that the C++ type `T` holds, as HGL writes it
 /// (`i64`, `list<tuple<datetime, f64>>`, `str?`): the name a list is
 /// registered with hgraph under.
@@ -289,6 +298,8 @@ std::string type_name() {
         }(std::make_index_sequence<std::tuple_size_v<T>>{});
     } else if constexpr (named_enum<T>) {
         return std::string{hgl_enum(T{}).type};
+    } else if constexpr (requires { type_named<T>::name; }) {
+        return std::string{type_named<T>::name};
     } else if constexpr (requires { T::hgl_name; }) {
         // A type the compiler writes (a struct, a node's state) names itself.
         return std::string{T::hgl_name};

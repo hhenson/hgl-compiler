@@ -145,6 +145,11 @@ std::string scalar_text(const zoned_datetime& value);
 std::string scalar_text(const tenor& value);
 } // namespace detail
 
+/// The text of a value of `T` where its temporal form says it beside its
+/// other code: a static `of(value)`. A struct's is structs.h's.
+template <class T>
+struct value_text;
+
 /// `value` as the language writes it, for a person to read in a failure: a
 /// scalar as its literal, `null`, a tuple `(1, 2.0)`, a list `[1, 2]`, a
 /// list's delta by its properties, an enum's member as `Type.member`
@@ -184,6 +189,8 @@ std::string text_of(const T& value) {
         return text_of(value.value);
     } else if constexpr (detail::is_variant<T>::value) {
         return std::visit([](const auto& held) { return text_of(held); }, value);
+    } else if constexpr (requires { value_text<T>::of(value); }) {
+        return value_text<T>::of(value);
     } else if constexpr (named_enum<T>) {
         return hglrt::detail::member_text(value);
     } else if constexpr (requires { detail::scalar_text(value); }) {
@@ -447,6 +454,13 @@ bool same(const Left& left, const Right& right) {
 
 // ---- What a trace written out publishes (CEVAL-2, TST-9, TST-16) ---------
 
+/// The delta that publishing a whole value of `T` records, where `T`'s
+/// temporal form says it beside its other code: a static `delta(value)`.
+/// A struct's is structs.h's; a tuple's and a list's are `whole_delta`'s
+/// own, below.
+template <class T>
+struct whole_publication;
+
 namespace detail {
 /// How many positions a list of `size` holds once `delta` is published to it
 /// (TYPE-16): the size it gives, a negative one taken from the size, or,
@@ -477,7 +491,9 @@ std::size_t size_after(std::size_t size, const list_delta<L>& delta) {
 /// drops in `removed`"). Each part publishes whole.
 template <class T>
 delta_t<T> whole_delta(const T& value, std::size_t size) {
-    if constexpr (hglrt::detail::is_tuple<T>::value) {
+    if constexpr (requires { whole_publication<T>::delta(value); }) {
+        return whole_publication<T>::delta(value);
+    } else if constexpr (hglrt::detail::is_tuple<T>::value) {
         return std::apply(
             [](const auto&... part) {
                 static_assert((publishes_whole<std::remove_cvref_t<decltype(part)>> && ...),

@@ -160,6 +160,18 @@ impl Emitter<'_> {
         let Some(written) = self.written_type(result, call.at) else {
             return "0".to_string();
         };
+        // TST-5: "one written as a T [is compared] with the value the
+        // result holds once its cycle has published": where T's delta is
+        // no T, the entry keeps that value beside the recording
+        // (`hglrt::testing::keep_held`).
+        let target = if hgl_analyser::Type::delta(result.clone()) == *result {
+            target
+        } else {
+            text.push_str(&format!(
+                "{indent}const auto held_ = {target};\n{indent}{library}::keep_held<{written}>({WIRING}, held_);\n"
+            ));
+            "held_".to_string()
+        };
         text.push_str(&format!(
             "{indent}{record}({WIRING}, {target}, ::hgraph::Str{{{library}::run_output}});\n{INDENT}}}"
         ));
