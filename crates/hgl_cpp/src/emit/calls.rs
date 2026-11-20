@@ -255,6 +255,14 @@ impl Emitter<'_> {
         // turn, and each that is no place is held as a value of its own,
         // what it read then.
         let changing = arguments.iter().any(|argument| changes(&argument.value));
+        // A place held before such an argument could be one it replaces
+        // or grows: a list's element would be gone.
+        if changing && assigns {
+            return self.missing(
+                at,
+                "a call that gives a `var` parameter a place, beside an argument that runs statements",
+            );
+        }
         let ordered: Vec<(usize, String, bool, Held)> =
             written.into_iter().chain(defaulted).collect();
         if !changing && ordered.iter().filter(|(_, _, fails, _)| *fails).count() <= 1 {
@@ -480,7 +488,7 @@ pub(super) fn changes(value: &Expr) -> bool {
 /// True where evaluating `value` may fail or do anything at all: any
 /// expression but a literal, a local, an enum's member, and a tuple or a
 /// list made of those.
-fn may_fail(value: &Expr) -> bool {
+pub(super) fn may_fail(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Literal(_) | ExprKind::Local(_) | ExprKind::EnumMember { .. } => false,
         ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => entries.iter().any(may_fail),

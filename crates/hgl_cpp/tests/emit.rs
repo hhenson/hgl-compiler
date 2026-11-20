@@ -507,3 +507,33 @@ fn natives_are_called_with_their_templates() {
     assert_goldens("demo.natives", &emitted.output);
     assert_eq!(emitted.blocked("natives_are_called"), None);
 }
+
+/// FN-15: a place held for a `var` parameter could be one that a later
+/// argument, running statements of its own, replaces or grows; such a
+/// call is reported, and not written.
+#[test]
+fn a_place_beside_an_argument_that_runs_statements_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn bump(var count: i64, by: i64) {\n",
+            "    count = by\n",
+            "}\n",
+            "const fn grown() -> i64 {\n",
+            "    var items = [10]\n",
+            "    bump(items[0], {\n",
+            "        items = [20, 30]\n",
+            "        1\n",
+            "    })\n",
+            "    return 0\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:7:5 the cpp target does not write a call that gives a `var` parameter a place, beside an argument that runs statements yet"
+        ]
+    );
+}

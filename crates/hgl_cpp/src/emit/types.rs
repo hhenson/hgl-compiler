@@ -209,6 +209,7 @@ impl Emitter<'_> {
                     .map(|member| identifier(&member.name))
                     .collect();
                 let name = identifier(&declaration.name);
+                self.piece.is_type = true;
                 self.piece.declaration = format!(
                     "// enum {} (TYPE-7)\nenum class {name}\n{{\n    {},\n}};\n",
                     declaration.name,

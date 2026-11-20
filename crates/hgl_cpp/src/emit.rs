@@ -76,6 +76,10 @@ pub(crate) struct Piece {
     /// The other modules whose types it names, an enum's among them: the
     /// header that declares it includes theirs.
     pub(crate) types: std::collections::BTreeSet<usize>,
+    /// True for the declaration of a type: the module's header declares
+    /// each before any function, which may name it wherever it is
+    /// declared (UNIT-6).
+    pub(crate) is_type: bool,
 }
 
 /// Writes module `index` of `program`, reporting each form it does not

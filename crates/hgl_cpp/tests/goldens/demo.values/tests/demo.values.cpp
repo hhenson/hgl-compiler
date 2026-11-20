@@ -11,6 +11,7 @@ void generics_by_instance();
 void tuples_and_constants();
 void results_propagate();
 void evaluation_follows_the_order_written();
+void a_type_declared_after_its_use();
 void a_var_parameter_is_its_place();
 void an_overflow_fails_with_its_code();
 }  // namespace hgl::demo::values::m_::t_
@@ -26,8 +27,9 @@ const ::hglrt::testing::Registration test_4{"demo.values::generics_by_instance",
 const ::hglrt::testing::Registration test_5{"demo.values::tuples_and_constants", &::hgl::demo::values::m_::t_::tuples_and_constants};
 const ::hglrt::testing::Registration test_6{"demo.values::results_propagate", &::hgl::demo::values::m_::t_::results_propagate};
 const ::hglrt::testing::Registration test_7{"demo.values::evaluation_follows_the_order_written", &::hgl::demo::values::m_::t_::evaluation_follows_the_order_written};
-const ::hglrt::testing::Registration test_8{"demo.values::a_var_parameter_is_its_place", &::hgl::demo::values::m_::t_::a_var_parameter_is_its_place};
-const ::hglrt::testing::Registration test_9{"demo.values::an_overflow_fails_with_its_code", &::hgl::demo::values::m_::t_::an_overflow_fails_with_its_code};
+const ::hglrt::testing::Registration test_8{"demo.values::a_type_declared_after_its_use", &::hgl::demo::values::m_::t_::a_type_declared_after_its_use};
+const ::hglrt::testing::Registration test_9{"demo.values::a_var_parameter_is_its_place", &::hgl::demo::values::m_::t_::a_var_parameter_is_its_place};
+const ::hglrt::testing::Registration test_10{"demo.values::an_overflow_fails_with_its_code", &::hgl::demo::values::m_::t_::an_overflow_fails_with_its_code};
 }  // namespace
 
 int main(int argc, char **argv)

@@ -14,6 +14,13 @@ enum class Side
     hold,
 };
 
+// enum Level (TYPE-7)
+enum class Level
+{
+    low,
+    high,
+};
+
 // const limit: i64 (UNIT-13), module demo.values, line 9
 const ::hgraph::Int& limit();
 
@@ -59,7 +66,16 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped(const std::tuple<::hgraph::Int,
 // placed() -> list<i64> (`const fn`), module demo.values, line 105
 ::hglrt::list<::hgraph::Int> placed();
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 116
+// read_first() -> i64 (`const fn`), module demo.values, line 115
+::hgraph::Int read_first();
+
+// made_error() -> str (`const fn`), module demo.values, line 123
+::hgraph::Str made_error();
+
+// same_level(level: Level) -> Level (`const fn`), module demo.values, line 133
+::hgl::demo::values::m_::Level same_level(::hgl::demo::values::m_::Level level);
+
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 138
 void bump(::hgraph::Int& count, ::hgraph::Int by);
 
 namespace i_::first

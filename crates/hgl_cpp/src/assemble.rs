@@ -316,14 +316,17 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     (output, blocking)
 }
 
-/// The declarations of `pieces`, in the namespace `namespace`; nothing
-/// where none declares anything.
+/// The declarations of `pieces`, in the namespace `namespace`, the
+/// types' first: a function may name a type declared after it (UNIT-6).
+/// Nothing where none declares anything.
 fn declarations(namespace: &str, pieces: &[&Piece]) -> String {
     if pieces.iter().all(|piece| piece.declaration.is_empty()) {
         return String::new();
     }
     let mut text = format!("\nnamespace {namespace}\n{{\n");
-    for piece in pieces {
+    let types = pieces.iter().filter(|piece| piece.is_type);
+    let rest = pieces.iter().filter(|piece| !piece.is_type);
+    for piece in types.chain(rest) {
         if !piece.declaration.is_empty() {
             text.push('\n');
             text.push_str(&piece.declaration);

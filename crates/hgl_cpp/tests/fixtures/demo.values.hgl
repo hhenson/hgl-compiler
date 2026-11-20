@@ -112,6 +112,28 @@ const fn placed() -> list<i64> {
     return items
 }
 
+const fn read_first() -> i64 {
+    var values = [1, 2]
+    return values[{
+        values = [5, 6]
+        0
+    }]
+}
+
+const fn made_error() -> str {
+    var message = "before"
+    let made = error(message: message, code: {
+        message = "after"
+        "code"
+    })
+    return made.message
+}
+
+# UNIT-6: a function may name a type declared after it.
+const fn same_level(level: Level) -> Level => level
+
+enum Level { low, high }
+
 # FN-15: a `var` parameter is the place the call gives.
 const fn bump(var count: i64, by: i64) {
     count += by
@@ -160,6 +182,12 @@ test results_propagate {
 test evaluation_follows_the_order_written {
     assert in_order() == 1
     assert placed() == [15, 20]
+    assert read_first() == 1
+    assert made_error() == "before"
+}
+
+test a_type_declared_after_its_use {
+    assert same_level(.high) == .high
 }
 
 test a_var_parameter_is_its_place {

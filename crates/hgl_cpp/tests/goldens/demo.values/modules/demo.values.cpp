@@ -160,7 +160,34 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tup
     return items;
 }
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 116
+// read_first() -> i64 (`const fn`), module demo.values, line 115
+::hgraph::Int read_first()
+{
+    [[maybe_unused]] ::hglrt::list<::hgraph::Int> values = ::hglrt::list<::hgraph::Int>{1, 2};
+    return [&]() -> ::hgraph::Int { const auto list_00_ = values; const auto index_01_ = [&]() -> ::hgraph::Int {
+    values = ::hglrt::list<::hgraph::Int>{5, 6};
+    return 0;
+}(); return ::hglrt::item(list_00_, index_01_); }();
+}
+
+// made_error() -> str (`const fn`), module demo.values, line 123
+::hgraph::Str made_error()
+{
+    [[maybe_unused]] ::hgraph::Str message = ::hgraph::Str{"before"};
+    [[maybe_unused]] const ::hglrt::error made = [&] { const auto message_00_ = message; const auto code_01_ = [&]() -> ::hgraph::Str {
+    message = ::hgraph::Str{"after"};
+    return ::hgraph::Str{"code"};
+}(); return ::hglrt::make_error(message_00_, code_01_); }();
+    return (made).message;
+}
+
+// same_level(level: Level) -> Level (`const fn`), module demo.values, line 133
+::hgl::demo::values::m_::Level same_level([[maybe_unused]] ::hgl::demo::values::m_::Level level)
+{
+    return level;
+}
+
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 138
 void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int by)
 {
     count = ::hglrt::add__i64_i64(count, by);
@@ -257,6 +284,16 @@ void evaluation_follows_the_order_written()
     ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::in_order(), 1, 0.0, 0.0));
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hgraph::Int>>(::hgl::demo::values::m_::placed(), ::hglrt::list<::hgraph::Int>{15, 20}));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::read_first(), 1, 0.0, 0.0));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hgraph::Str>(::hgl::demo::values::m_::made_error(), ::hgraph::Str{"before"}));
+}
+
+void a_type_declared_after_its_use()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hgl::demo::values::m_::Level>(::hgl::demo::values::m_::same_level(::hgl::demo::values::m_::Level::high), ::hgl::demo::values::m_::Level::high));
 }
 
 void a_var_parameter_is_its_place()

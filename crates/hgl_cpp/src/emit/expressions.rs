@@ -26,6 +26,7 @@ use hgl_analyser::{Scalar, Type};
 use hgl_diagnostics::Location;
 
 use super::Emitter;
+use super::calls::{changes, may_fail};
 use super::names::{self, identifier};
 use super::statements::{Scope, returns};
 use super::types::enum_name;
@@ -151,6 +152,24 @@ impl Emitter<'_> {
                     let base = self.expression(scope, base);
                     format!("std::get<{position}>({base})")
                 }
+                // EXPR-2: the list, then the index; where the index runs
+                // statements that may change the list, the list is held
+                // as it was first, and the element read is a value of its
+                // own.
+                Type::List { .. } if changes(index) => {
+                    let Some(ty) = self.written_type(&value.ty, value.at) else {
+                        return "0".to_string();
+                    };
+                    let base = self.expression(scope, base);
+                    let index = self.expression(scope, index);
+                    scope.acted = true;
+                    let list = names::temporary("list", self.temporary());
+                    let at = names::temporary("index", self.temporary());
+                    format!(
+                        "[&]() -> {ty} {{ const auto {list} = {base}; const auto {at} = {index}; return ::{}::item({list}, {at}); }}()",
+                        runtime::NAMESPACE
+                    )
+                }
                 Type::List { .. } => {
                     let base = self.expression(scope, base);
                     let index = self.expression(scope, index);
@@ -222,13 +241,27 @@ impl Emitter<'_> {
                 }
             }
             // ERR-4: `error(message: text, code: code)`, with no context.
+            // EXPR-2: the message, then the code; where both may fail, or
+            // one runs statements, each is held in turn first.
             ExprKind::Error { message, code } => {
+                let ordered = changes(message)
+                    || code.as_deref().is_some_and(changes)
+                    || (may_fail(message) && code.as_deref().is_some_and(may_fail));
                 let message = self.expression(scope, message);
                 let code = match code {
                     Some(code) => self.expression(scope, code),
                     None => "std::nullopt".to_string(),
                 };
-                format!("::{}::make_error({message}, {code})", runtime::NAMESPACE)
+                let made = format!("::{}::make_error", runtime::NAMESPACE);
+                if ordered {
+                    let held = names::temporary("message", self.temporary());
+                    let coded = names::temporary("code", self.temporary());
+                    format!(
+                        "[&] {{ const auto {held} = {message}; const auto {coded} = {code}; return {made}({held}, {coded}); }}()"
+                    )
+                } else {
+                    format!("{made}({message}, {code})")
+                }
             }
             ExprKind::ErrorPart { base, part } => {
                 let base = self.expression(scope, base);

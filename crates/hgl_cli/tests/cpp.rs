@@ -344,7 +344,7 @@ fn value_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
