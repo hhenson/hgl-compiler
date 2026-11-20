@@ -1,0 +1,10 @@
+# The CMake package of libhglrt: the target `hglrt::hglrt`, which brings
+# hgraph's runtime and wiring libraries with it. The SDK and the dependency
+# prefix the library was built against are where they are looked for.
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+list(APPEND CMAKE_PREFIX_PATH "@HGL_HGRAPH_SDK@" "@HGL_HGRAPH_DEPS@")
+find_dependency(hgraph CONFIG)
+include("${CMAKE_CURRENT_LIST_DIR}/hglrtTargets.cmake")
+check_required_components(hglrt)

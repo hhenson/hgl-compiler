@@ -1,0 +1,22 @@
+# The layout of libhglrt's C++ (runtime/cpp), for clang-format.
+BasedOnStyle: LLVM
+Standard: Latest
+IndentWidth: 4
+ColumnLimit: 110
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: All
+AlwaysBreakTemplateDeclarations: Yes
+PointerAlignment: Left
+QualifierAlignment: Left
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<hglrt/'
+    Priority: 1
+  - Regex: '^<hgraph/'
+    Priority: 2
+  - Regex: '^<doctest/'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 3
+  - Regex: '.*'
+    Priority: 0
