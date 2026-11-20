@@ -16,7 +16,7 @@ use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Location};
 use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
-use crate::emit::{Piece, Written, module_namespace, test_namespace};
+use crate::emit::{Piece, Written, identifier, module_namespace, program_names, test_namespace};
 use crate::{
     Application, Executable, File, Output, Test, Unit, entry_path, header_path, runtime, unit_path,
 };
@@ -33,6 +33,9 @@ struct Blocks {
     tests: Vec<Option<Diagnostic>>,
     /// For an application's run statement.
     application: Option<Diagnostic>,
+    /// For each instance of a generic declaration, in the order of
+    /// [`Written::instances`].
+    instances: Vec<Option<Diagnostic>>,
 }
 
 /// The target's output for `program`, whose modules were written as
@@ -41,15 +44,28 @@ struct Blocks {
 /// reported where the program reaches them.
 pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Diagnostic>) {
     let core = program.core();
-    // What each piece a declaration is written as reaches: its own, as
-    // no instance is written yet.
-    let pieces = |(module, declaration, _): &Used| -> Vec<&Reach> {
-        written
-            .get(*module)
-            .and_then(|written| written.declarations.get(*declaration))
+    // What each piece a declaration or an instance is written as
+    // reaches: the declaration's own, and the instance's.
+    let pieces = |(module, declaration, instance): &Used| -> Vec<&Reach> {
+        let Some(written) = written.get(*module) else {
+            return Vec::new();
+        };
+        let mut found: Vec<&Reach> = written
+            .declarations
+            .get(*declaration)
             .map(|piece| &piece.reach)
             .into_iter()
-            .collect()
+            .collect();
+        if let Some(suffix) = instance {
+            found.extend(
+                written
+                    .instances
+                    .iter()
+                    .filter(|(of, named, _)| of == declaration && named == suffix)
+                    .map(|(_, _, piece)| &piece.reach),
+            );
+        }
+        found
     };
     let mut found = Found::new();
     let mut blocked = |piece: &Piece| blocked(pieces, &mut found, &piece.reach);
@@ -59,6 +75,11 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             declarations: module.declarations.iter().map(&mut blocked).collect(),
             tests: module.tests.iter().map(&mut blocked).collect(),
             application: module.application.as_ref().and_then(&mut blocked),
+            instances: module
+                .instances
+                .iter()
+                .map(|(_, _, piece)| blocked(piece))
+                .collect(),
         })
         .collect();
     let mut files = Vec::new();
@@ -76,11 +97,22 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         .collect();
     for (index, module) in written.iter().enumerate() {
         let path = &program.modules[index].path;
+        // A type's declaration is in the header alone; each other piece
+        // that is clear has its definition in the unit.
         let defined: Vec<&Piece> = module
             .declarations
             .iter()
             .zip(&blocks[index].declarations)
-            .filter(|(piece, blocked)| blocked.is_none() && !piece.text.is_empty())
+            .chain(
+                module
+                    .instances
+                    .iter()
+                    .map(|(_, _, piece)| piece)
+                    .zip(&blocks[index].instances),
+            )
+            .filter(|(piece, blocked)| {
+                blocked.is_none() && !(piece.text.is_empty() && piece.declaration.is_empty())
+            })
             .map(|(piece, _)| piece)
             .collect();
         // Core's tests are no tests of the program's.
@@ -94,19 +126,44 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             continue;
         }
         // The headers of the other modules whose functions its pieces
-        // call.
+        // call, and of those whose enums they name.
         let included: BTreeSet<usize> = defined
             .iter()
             .copied()
             .chain(tests.iter().map(|(_, piece)| *piece))
-            .flat_map(|piece| &piece.reach.uses)
-            .map(|(module, _, _)| *module)
+            .flat_map(|piece| {
+                piece
+                    .reach
+                    .uses
+                    .iter()
+                    .map(|(module, _, _)| *module)
+                    .chain(piece.types.iter().map(|(module, _)| *module))
+            })
             .filter(|&used| used != index)
+            .collect();
+        // The enums of other modules its declarations name: its header
+        // declares each opaque (TYPE-7: an `enum class`, whose values are
+        // `int`'s), and includes no other module's header. An instance is
+        // written in its declaration's module (GEN-2), and may name an
+        // enum of a module that imports that one, so two headers could
+        // otherwise include each other.
+        let typed: BTreeSet<(usize, usize)> = defined
+            .iter()
+            .flat_map(|piece| &piece.types)
+            .copied()
             .collect();
         let mut header = format!(
             "{WRITTEN}\n#pragma once\n\n#include <{}>\n",
             runtime::HEADER
         );
+        for &(module, declaration) in &typed {
+            let namespace = module_namespace(&program.modules[module].path);
+            header.push_str(&format!(
+                "\nnamespace {}\n{{\nenum class {};\n}}\n",
+                namespace.trim_start_matches("::"),
+                identifier(&program.modules[module].declarations[declaration].name)
+            ));
+        }
         let mut unit = format!("{WRITTEN}\n#include \"{path}.h\"\n");
         for &used in &included {
             unit.push_str(&format!("#include \"{}.h\"\n", program.modules[used].path));
@@ -115,15 +172,14 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         if !defined.is_empty() {
             let namespace = module_namespace(path);
             let declared = namespace.trim_start_matches("::");
-            header.push_str(&format!("\nnamespace {declared}\n{{\n"));
+            header.push_str(&declarations(declared, &defined));
             unit.push_str(&format!("\nnamespace {declared}\n{{\n"));
             for piece in &defined {
-                header.push('\n');
-                header.push_str(&piece.declaration);
-                unit.push('\n');
-                unit.push_str(&piece.text);
+                if !piece.text.is_empty() {
+                    unit.push('\n');
+                    unit.push_str(&piece.text);
+                }
             }
-            header.push_str(&format!("\n}}  // namespace {declared}\n"));
             unit.push_str(&format!("\n}}  // namespace {declared}\n"));
         }
         if !tests.is_empty() {
@@ -243,7 +299,14 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .iter()
             .zip(&blocks[index].declarations)
             .chain(module.tests.iter().zip(&blocks[index].tests))
-            .chain(module.application.iter().zip([&blocks[index].application]));
+            .chain(module.application.iter().zip([&blocks[index].application]))
+            .chain(
+                module
+                    .instances
+                    .iter()
+                    .map(|(_, _, piece)| piece)
+                    .zip(&blocks[index].instances),
+            );
         for (piece, blocked) in pieces {
             if let (None, Some(diagnostic)) = (&piece.reach.broken, blocked) {
                 blocking.push(diagnostic.clone());
@@ -251,6 +314,21 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         }
     }
 
+    // No macro of a platform's headers takes a name the files write.
+    // The lines a unit's block adds move each test's statements in it.
+    let names = program_names(program);
+    for file in &mut files {
+        let (text, added) = undefined(&file.text, &names);
+        file.text = text;
+        for test in tests
+            .iter_mut()
+            .filter(|test| unit_path(&test.module) == file.path)
+        {
+            for (line, _) in &mut test.statements {
+                *line += added;
+            }
+        }
+    }
     let output = Output {
         files,
         units,
@@ -259,6 +337,92 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         applications,
     };
     (output, blocking)
+}
+
+/// `text` with an `#undef` of each of `names` it writes, after its last
+/// `#include`, and how many lines that adds: a header included there may
+/// define any as a macro, and none is one where the file writes it. A
+/// macro already expanded in those headers is not changed by it, and
+/// `#undef` of a name no macro has does nothing.
+fn undefined(text: &str, names: &BTreeSet<String>) -> (String, usize) {
+    let split = text.rfind("#include ").map_or(0, |at| {
+        text[at..].find('\n').map_or(text.len(), |end| at + end + 1)
+    });
+    let (head, body) = text.split_at(split);
+    let written: BTreeSet<&str> = identifiers(body)
+        .into_iter()
+        .filter(|word| names.contains(*word))
+        .collect();
+    if written.is_empty() {
+        return (text.to_string(), 0);
+    }
+    let mut block =
+        String::from("\n// Names this file writes, which no macro of a header above takes.\n");
+    for name in written {
+        block.push_str(&format!("#undef {name}\n"));
+    }
+    let added = block.matches('\n').count();
+    (format!("{head}{block}{body}"), added)
+}
+
+/// The identifiers of C++ text, outside its comments and its string and
+/// character literals, in the order written.
+fn identifiers(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'/' if bytes.get(at + 1) == Some(&b'/') => {
+                while at < bytes.len() && bytes[at] != b'\n' {
+                    at += 1;
+                }
+            }
+            quote @ (b'"' | b'\'') => {
+                at += 1;
+                while at < bytes.len() && bytes[at] != quote {
+                    at += if bytes[at] == b'\\' { 2 } else { 1 };
+                }
+                at += 1;
+            }
+            byte if byte.is_ascii_alphabetic() || byte == b'_' => {
+                let begin = at;
+                while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+                    at += 1;
+                }
+                found.push(&text[begin..at]);
+            }
+            byte if byte.is_ascii_digit() => {
+                while at < bytes.len()
+                    && (bytes[at].is_ascii_alphanumeric() || matches!(bytes[at], b'_' | b'.'))
+                {
+                    at += 1;
+                }
+            }
+            _ => at += 1,
+        }
+    }
+    found
+}
+
+/// The declarations of `pieces`, in the namespace `namespace`, the
+/// types' first: a function may name a type declared after it (UNIT-6).
+/// Nothing where none declares anything.
+fn declarations(namespace: &str, pieces: &[&Piece]) -> String {
+    if pieces.iter().all(|piece| piece.declaration.is_empty()) {
+        return String::new();
+    }
+    let mut text = format!("\nnamespace {namespace}\n{{\n");
+    let types = pieces.iter().filter(|piece| piece.is_type);
+    let rest = pieces.iter().filter(|piece| !piece.is_type);
+    for piece in types.chain(rest) {
+        if !piece.declaration.is_empty() {
+            text.push('\n');
+            text.push_str(&piece.declaration);
+        }
+    }
+    text.push_str(&format!("\n}}  // namespace {namespace}\n"));
+    text
 }
 
 /// The entry unit of module `index`'s tests: their declarations, a
@@ -272,7 +436,7 @@ fn entry(program: &Program, index: usize, clear: &[(usize, &Piece)]) -> String {
     let module = &program.modules[index];
     let tested = test_namespace(&module.path);
     let declared = tested.trim_start_matches("::");
-    let mut text = format!("{WRITTEN}\n#include <{}>\n", runtime::HEADER);
+    let mut text = format!("{WRITTEN}\n#include <{}>\n", runtime::HOST_HEADER);
     text.push_str(&format!("\nnamespace {declared}\n{{\n"));
     for (test, _) in clear {
         let name = crate::emit::identifier(&module.tests[*test].name);

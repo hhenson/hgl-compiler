@@ -82,6 +82,38 @@ rule, made apart, then merge as long as they change different lines.
 - [Source documentation](rules/source-documentation.md)
 - [Core](rules/core.md)
 
+## The C++ target's emitter
+
+What `hgl_cpp` writes of value code, value functions and the tests of
+them, and the rules it follows doing so; core's cases it runs are listed
+in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cpp)).
+
+| What it writes | Rules |
+| --- | --- |
+| A `const fn`, an HGL candidate of an operator, and each instance of a generic one | FN-1, GEN-2, GEN-4 |
+| A parameter, a `var` parameter, and a call that gives it a place; a copy where the copy rule says | FN-13, FN-15 |
+| A module constant, one value wherever it is read | UNIT-13 |
+| An enum and its members; `switch` on one | TYPE-7, CTRL-6 |
+| The scalars, `tenor` among them, `T?` and `null`, tuples, lists and fixed lists, and their literals | TYPE-1, TYPE-2, TYPE-4, TYPE-10, TYPE-14, TYPE-17, LEX-11 |
+| `let`, `var`, assignment, compound assignment, a place of a list or a tuple | EXPR-3 |
+| `if` and `else`, as statements and values; blocks; `while`; `for` over a list; `return` | CTRL-5, CTRL-10, CTRL-12, FN-7 |
+| A test against `null`, and what it proves | ERR-12 |
+| A default, and a `T?` left out | UNIT-7, UNIT-8 |
+| Arguments evaluated in the order written | EXPR-2, EXPR-13 |
+| `ok`, `err`, `is_ok`, `is_err`, `.value`, `.error`, `error(...)`, `?` in a value function | ERR-2, ERR-3, ERR-4, ERR-5 |
+| A failure with its code, reported at the statement of the test that ran | ERR-1, EXPR-3 |
+| `assert`; `assert raises` | TST-4, TST-10, TST-11 |
+| A call of core's native candidates and functions, the library's | NATIVE-7, OPS-4 |
+
+Not written yet, and reported: a call that gives a `var` parameter a
+place beside an argument that runs statements (FN-15), a `?` after
+anything its statement reads or runs before it (ERR-5), a
+`switch` case's binding read after the `switch` (UNIT-12), an element
+of a `list<bool>` given to a `var` parameter (a bit, no `bool&`), an enum's
+member made from a value (TYPE-7), a pack, a struct, a set, a
+dictionary, a window, a delta, `timezone`, `zoned_time`, and anything
+temporal.
+
 ## The C++ target's runtime library
 
 No rule is `done` or `partial` for the C++ target yet: no program reaches

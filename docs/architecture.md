@@ -1529,7 +1529,7 @@ analysed program.
 | Module | What it decides | Rules |
 | --- | --- | --- |
 | `copies` | Where a value is copied: which `let`s and loops take a copy, what a name refers into, whether a result is the function's own; which structs are values (`by_value`) | the owner's rule (compiler issue 151), FN-13, FN-15 |
-| `instances`, `canonical` | Which instances of generic declarations a program asks for, each keyed by its canonical text; what an eval's run and an application's run are wired with | GEN-2, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
+| `instances`, `canonical` | Which instances of generic declarations a program asks for, each keyed by its canonical text: for a typed target every generic value function's too (`Instances::typed`); what an eval's run and an application's run are wired with | GEN-2, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
 | `pieces` | What a piece a target writes reaches (`Reach`), and whether a test or an application reaches a form the target does not write (`blocked`) | |
 | `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, what is bound after branches, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
 | `types` | A struct's fields and descendants, the windows and unsized lists a type holds, which children `all_valid` asks, whether a value is whole or a delta | TYPE-3, TYPE-4, TYPE-9, TIME-1, TIME-7, TIME-9 |
@@ -2085,14 +2085,14 @@ passing. The backend owns this list alongside its target tests.
 
 The second target, designed in [cpp-target.md](cpp-target.md): C++ against
 hgraph's graph, node, type and runtime layers, linked with `libhglrt`,
-the runtime library in `runtime/cpp`. It is a skeleton: it writes the
-smallest slice whole and reports every other form, as the hgraph target
-reports what it does not write, so that `hgl test --target cpp` runs
-over any program to its end.
+the runtime library in `runtime/cpp`. It writes value code whole, value
+functions and the tests of them, and reports every other form, as the
+hgraph target reports what it does not write, so that `hgl test --target
+cpp` runs over any program to its end.
 
 | Part | Where | What it does |
 | --- | --- | --- |
-| Emitter | `crates/hgl_cpp/src/emit.rs` and `emit/` by concern: `names`, `types`, `values`, `nodes`, `graphs`, `tests` | Writes each declaration and named test as a piece: a prototype for the module's header, a definition for its unit, the functions it calls, and the first form in it not written |
+| Emitter | `crates/hgl_cpp/src/emit.rs` and `emit/` by concern: `names`, `types`, `values`, `statements`, `expressions`, `calls`, `nodes`, `graphs`, `tests` | Writes each declaration, instance and named test as a piece: a prototype for the module's header, a definition for its unit, the functions it calls, and the first form in it not written |
 | Assembly | `crates/hgl_cpp/src/assemble.rs` | Leaves out each piece that is not written or reaches one that is not, puts the rest into each module's header and unit, and writes an entry unit for each module with a test that can be run |
 | Runtime library | `crates/hgl_cpp/src/runtime.rs`, `build.rs` | Carries `runtime/cpp` in `hgl`, and reads from its headers which of core's natives it defines |
 | Build driver | `crates/hgl_cli/src/cpp.rs` and `cpp/` | Finds the toolchain, prepares it once, builds a program in a workspace kept between runs, runs the executables and reads their results |
@@ -2100,20 +2100,40 @@ over any program to its end.
 | HGL | C++ |
 | --- | --- |
 | Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, namespace `hgl::demo::calc::m_` |
-| `const fn` over `i64`, `f64`, `bool` | A function over hgraph's `Int`, `Float`, `Bool` |
-| A native candidate or function of core | The runtime library's function, named as the hgraph target names its provider's: `::hglrt::add__i64_i64` |
+| `const fn` (FN-1); an HGL candidate of an operator (GEN-4) | A function, with its HGL name, signature and line in a comment; a candidate an overload of its operator's name in `c_` |
+| A generic one (GEN-2) | One function for each instance `hgl_lower` collects (`Instances::typed`), named by its suffix in `i_::name`: `i_::first::of_i64` |
+| A parameter; a `var` parameter (FN-15) | By value where it is small (`types::by_value`), a `const` reference otherwise; a reference to the place the call gives |
+| `i64`, `f64`, `bool`, `str`, `bytes`, `date`, `time`, `datetime`, `duration`, `civil_datetime`, `zoned_datetime`, `tenor` | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `CivilDateTime`, `ZonedDateTime`, `Tenor`, and their literals |
+| An enum (TYPE-7); one of core's the library declares | An `enum class` of the module's; the library's, `::hglrt::ZeroPolicy` |
+| Another module's enum, named | Declared opaque in the header, `enum class Side;`, whose unit includes the header that defines it: no header includes another module's, as an instance (written in its declaration's module) may name an enum of a module that imports that one |
+| `T?`, `tuple<A, B>`, `list<T>`, `list<T, N>` | `std::optional<T>`, `std::tuple<A, B>`, `hglrt::list<T>`, `std::array<T, N>` |
+| `error`, `result<T, error>`, `?` (ERR-2 to ERR-5) | `hglrt::error`, `hglrt::result<T>`; the result held before its statement, the function left with its failure; a `?` only where it is the first thing its statement evaluates, and reported anywhere else |
+| A constant (UNIT-13) | A function giving a reference to one `static` value, made where it is first read; a read of one whose value may fail is one that may fail, which a `?` after it is not run before |
+| `let`, `var` (EXPR-3) | `const T` or `const T&` as the copy rule says (`hgl_lower::copies`), `T` |
+| `if`, `switch`, `while`, `for` over a list (CTRL-6, CTRL-10, CTRL-12) | `if`, a chain of `if`s on the selector held once, each case a block (a case's binding read after the `switch`, which UNIT-12 binds in the block around it, is reported), `while`, a range `for` over the list or a copy of it |
+| A native candidate or function of core | The runtime library's function, named as the hgraph target names its provider's: `::hglrt::add__i64_i64`, a generic one's arguments its template's, `::hglrt::div__f64_f64<::hglrt::ZeroPolicy::nan>`; `convert`'s, of one value, given the type it gives first, `::hglrt::convert_i64<::hgraph::Float>` |
 | A call with more than one argument that may fail | Its arguments evaluated one statement at a time, in the order written (EXPR-2), in a lambda called where it stands |
-| Named test | A function of `hgl::demo::calc::m_::t_`; each statement told to the library's test host first, `::hglrt::testing::statement()`; `assert` is `::hglrt::testing::check` |
+| A tuple or a list with an entry after the first that runs statements; an element read whose list and index both may fail, or either runs statements | Each entry held as a value of its own type first, in order; the list held, then the index (`expressions::held_read`), the element a value of its own |
+| Named test | A function of `hgl::demo::calc::m_::t_`; each statement told to the library's test host first, `::hglrt::testing::statement()`; `assert` is `::hglrt::testing::check`, `assert raises` `::hglrt::testing::raises` of a lambda (TST-10) |
 | The tests of a module | `tests/demo.calc.cpp`: a `hglrt::testing::Registration` of each by its identity, and a `main` that is `hglrt::testing::main`; one executable |
-| Everything else | Reported: `the cpp target does not write ... yet` |
+| Everything else | Reported: `the cpp target does not write ... yet`: a struct, a set, a dictionary, a window, a delta, `timezone`, `zoned_time`, and anything temporal |
 
 Every C++ name an HGL name gives is made by one function,
 `emit::names::identifier`: a plain name (a letter first, a letter or
-digit last, no `__`, a lowercase letter in it, no C++ word or known
-macro) is written as it is, and any other with each `_` as `_1` and a
-`_` after it, so no two names give one identifier and none is
-reserved. The target's own namespaces, `m_` and `t_`, are of a form no
-name gives.
+digit last, no `__`, a lowercase letter in it, none of the words the
+C++ standard keeps: its keywords, alternative tokens, attribute tokens,
+the identifiers it gives a meaning in places, and its own library's
+lowercase macros) is written as it is, and any other with each `_` as
+`_1` and a `_` after it, so no two names give one identifier and none
+is reserved. The macros one platform's headers define (`issubnormal`,
+`htobe16`, `min`) are not listed: every generated file `#undef`s each
+plain name of the program it writes, once, after its last `#include`
+(`emit::names::program_names`, `assemble::undefined`), and units are
+compiled as strict C++23 (`-std=c++23`, never GNU's dialect, in which
+`typeof` is a keyword and `linux` a macro). The target's own
+namespaces, `m_`, `t_`, `c_` and `i_`, are of a form no name gives, and
+so are the names it makes for what a statement holds, `argument_00_` (a
+`0` after the `_`).
 
 C++ compiles a unit whole, so a piece that calls one not written is
 left out too, and a test that reaches one is listed with the first form
@@ -2123,15 +2143,18 @@ call that leaves an argument out gives it is `hgl_lower::calls`'s.
 What the target takes of the runtime library ("The C++ runtime
 library" below): its CMake project, configured with `HGL_HGRAPH_SDK`,
 `HGL_HGRAPH_DEPS` and `BUILD_TESTING=OFF`, built and installed;
-`hglrt/hglrt.h`, the fixed include set; core's natives in `hglrt`, a
-native being defined where its name followed by `(` is in a header under
-`include/`; and its test host, `hglrt::testing`. An executable is run as
-`EXE RESULTS NAME...`, and the results are the hgraph driver's protocol
-(`start N`, `passed N`, `failed N LINE TEXT`, `unloaded N TEXT`), read by
-the same code, `hgl_hgraph::read_results`, with LINE a line of the
-module's unit. The host takes no time limit, so a test held to one
-(TST-17) is run in a process of its own, which the driver ends at the
-limit.
+`hglrt/hglrt.h`, the fixed include set, and `hglrt/host.h`, the test
+host's light header, which an entry unit includes alone; core's natives
+in `hglrt`, a native being defined where its name followed by `(` is in a
+header under `include/`, and core's enums its natives take where it
+declares an `enum class` of the name; and its test host,
+`hglrt::testing`. An executable is run as `EXE RESULTS NAME...`, and the
+results are the hgraph driver's protocol (`start N`, `passed N`, `failed
+N LINE TEXT`, `unloaded N TEXT`), read by the same code,
+`hgl_hgraph::read_results`, with LINE a line of the module's unit. The
+driver runs a test held to a time limit (TST-17) in a process of its
+own, which it ends at the limit; the host's own limit, `NAME@MICROSECONDS`,
+is not used yet.
 
 #### The build driver
 
@@ -2161,8 +2184,9 @@ directory `--keep` names, under a lock held until its last executable
 has ended. Each file the target writes, and `build.ninja`, is written
 only where it changed, and `ninja -k 0` builds the executables of the
 tests to run: one object for each module's unit, with the precompiled
-header, one for each entry unit, with it too, and one executable for each
-module, linked from its entry, its module's unit and each unit that
+header, one for each entry unit, which includes the test host's light
+header (`hglrt/host.h`, nothing of hgraph's) and is compiled with no
+precompiled header, and one executable for each module, linked from its entry, its module's unit and each unit that
 one calls into, through those (a unit is linked whole). Where the
 build fails, an executable is run only where `ninja -n` says nothing is
 left to do for it, and the tests of every other are not run, with the
@@ -2173,22 +2197,27 @@ Executables run side by side.
 cpp` says what the application needs that is not written: no
 application is written yet.
 
-The crate's tests compare the C++ written for the slice with goldens
-under `crates/hgl_cpp/tests/goldens/` (`HGL_UPDATE_GOLDENS=1 cargo test
--p hgl_cpp --test emit` writes them again) and check what blocks what.
-`crates/hgl_cli/tests/cpp.rs` checks the driver: what is said with no
-SDK, `emit` and `run`; and, given an SDK, the whole route and that a
-failed build runs no older executable, with `cargo test -p hgl_cli
---test cpp -- --ignored`, which the `cpp` job of the CI workflow runs,
-with `check_core.py --target cpp`.
+The crate's tests compare the C++ written for two programs, `demo.calc`
+and `demo.values` (value code of every form written), with goldens under
+`crates/hgl_cpp/tests/goldens/` (`HGL_UPDATE_GOLDENS=1 cargo test -p
+hgl_cpp --test emit` writes them again; core's module is left out of
+them) and check what blocks what. `crates/hgl_cli/tests/cpp.rs` checks
+the driver: what is said with no SDK, `emit` and `run`; and, given an
+SDK, the whole route, that a failed build runs no older executable,
+that `demo.values` passes, and where a failure is reported, with `cargo
+test -p hgl_cli --test cpp -- --ignored`, which the `cpp` job of the CI
+workflow runs, with `check_core.py --target cpp`, and then both again
+with `HGL_CPP_FLAGS` naming the address and undefined-behaviour
+sanitizers. The generated code compiles with `-Wall -Wextra -Werror`.
 
 The target's progress is counted in cases: core's runtime cases, and
 later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
 which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists all
-182 of core's runtime cases.
+target's list, and `--write-list` writes from a run. Today it lists 170
+of core's 198 runtime cases: 162 evals, 7 that need a struct, and one
+that gives an eval's trace to a `const fn` (TST-16).
 
 ### The C++ runtime library
 

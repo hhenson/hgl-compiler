@@ -1,0 +1,427 @@
+module demo.values
+
+# Value functions over the scalars and the plain composites, and tests
+# of them, as the cpp target writes them (FN-1, CTRL-5 to CTRL-12).
+
+enum Side { buy, sell, hold }
+
+# UNIT-13: a constant has one value wherever it is read.
+const limit: i64 = 10
+const step: duration = 5s
+
+# CTRL-10: `if` and `else`, as statements and as values.
+const fn sign(value: i64) -> i64 {
+    if value < 0 {
+        return -1
+    } else if value == 0 {
+        return 0
+    }
+    return 1
+}
+
+const fn larger(a: i64, b: i64) -> i64 => if a < b { b } else { a }
+
+# CTRL-6: `switch` on an enum, compared by value; no fallthrough.
+const fn opposite(side: Side) -> Side {
+    switch side {
+        case .buy:
+            return .sell
+        case .sell:
+            return .buy
+        default:
+            return side
+    }
+}
+
+# CTRL-12: `while` and compound assignment.
+const fn triangle(count: i64) -> i64 {
+    var total = 0
+    var at = 1
+    while at <= count {
+        total += at
+        at += 1
+    }
+    return total
+}
+
+# CTRL-12: `for` over a list, and LIST-1: `append` grows a `var` in place.
+const fn evens(values: list<i64>) -> list<i64> {
+    var kept: list<i64> = []
+    for value in values {
+        if value % 2 == 0 {
+            append(kept, value)
+        }
+    }
+    return kept
+}
+
+# EXPR-3: an element of a `var` list is a place.
+const fn bumped(values: list<i64>, at: i64) -> list<i64> {
+    var changed = values
+    changed[at] += 1
+    return changed
+}
+
+# UNIT-8: a default, and a `T?` left out is null.
+const fn scaled(value: i64, factor: i64 = 2, offset: i64? = null) -> i64 {
+    if offset == null {
+        return value * factor
+    }
+    return value * factor + offset
+}
+
+# GEN-2: a generic function, written once for each type it is called with.
+const fn first<T>(values: list<T>) -> T => values[0]
+
+# TYPE-10: a tuple, and a position of one.
+const fn swapped(pair: tuple<i64, str>) -> tuple<str, i64> => (pair[1], pair[0])
+
+# ERR-2, ERR-5: a result, and `?`.
+const fn checked(value: i64) -> result<i64, error> {
+    if value > limit {
+        return err(error(message: "too large", code: "demo.too_large"))
+    }
+    return ok(value)
+}
+
+const fn doubled(value: i64) -> result<i64, error> {
+    let checked_value = checked(value)?
+    return ok(checked_value * 2)
+}
+
+# EXPR-2: arguments are evaluated in the order written, a block's
+# statements among them; and a place is the one its index names before
+# the value is evaluated.
+const fn pick(a: i64, b: i64) -> i64 => a
+
+const fn in_order() -> i64 {
+    var x = 1
+    return pick(x, {
+        x = 2
+        0
+    })
+}
+
+const fn placed() -> list<i64> {
+    var items = [10, 20]
+    var at = 0
+    items[at] += {
+        at = 1
+        5
+    }
+    return items
+}
+
+const fn read_first() -> i64 {
+    var values = [1, 2]
+    return values[{
+        values = [5, 6]
+        0
+    }]
+}
+
+const fn list_first() -> i64 {
+    var at = 0
+    let picked = ({
+        at = 1
+        [10, 20]
+    })[at]
+    return picked
+}
+
+# EXPR-3: a place is checked before the value assigned to it runs.
+const fn replaced_first() -> list<i64> {
+    var items = [10]
+    items[2] = {
+        items = [10, 20, 30]
+        5
+    }
+    return items
+}
+
+# EXPR-2: a place's list is looked up before its index, where both may
+# fail: as an assignment's place, and as a `var` argument.
+const fn placed_at(divisor: i64) -> list<list<i64>> {
+    var rows = [[10]]
+    rows[2][1 // divisor] = 0
+    return rows
+}
+
+const fn bumped_at(divisor: i64) -> list<list<i64>> {
+    var rows = [[10]]
+    bump(rows[2][1 // divisor], 1)
+    return rows
+}
+
+# EXPR-2: a place's indices are evaluated in the order written, an
+# earlier one before a later one's block runs.
+const fn indices_in_order() -> list<list<i64>> {
+    var rows = [[1, 2], [3, 4]]
+    var i = 0
+    rows[i][{
+        i = 1
+        0
+    }] = 5
+    return rows
+}
+
+# ERR-12, TYPE-14: a null test of a binding a test has refined, of a
+# value that is no `T?`, and of `null` itself.
+const fn present(a: i64?) -> bool {
+    if a == null {
+        return false
+    }
+    return a != null
+}
+
+const fn never_null(a: i64) -> bool => a == null
+
+const fn null_is_null() -> bool => null == null
+
+# EXPR-3: a place's index is evaluated before the value assigned.
+const fn index_first() -> list<i64> {
+    var items = [10, 20]
+    var at = 0
+    items[{
+        at = 1
+        at
+    }] = at
+    return items
+}
+
+# A compound assignment reads the place it writes: its index once.
+const fn index_once() -> tuple<list<i64>, i64> {
+    var items = [10, 20, 30]
+    var at = 0
+    items[{
+        at += 1
+        at
+    }] += 5
+    return (items, at)
+}
+
+# An element read with an index that runs statements is a value of its
+# own: the list it is read from is held for the read alone.
+const fn held_text() -> str {
+    let rows = [["text"]]
+    let held = rows[{
+        let zero = 0
+        zero
+    }][0]
+    return held
+}
+
+# A tuple holds what each entry gave when it was evaluated, where a
+# later entry changes what an earlier one read.
+const fn tuple_first() -> tuple<i64, i64> {
+    var x = 1
+    return (x, {
+        x = 2
+        0
+    })
+}
+
+const fn text_first() -> tuple<str, i64> {
+    var words = ["before"]
+    return (words[0], {
+        words = ["after", "more"]
+        0
+    })
+}
+
+# A list held before its index is read, where it is an element of a list
+# made for the read.
+const fn from_a_made_row(one: i64) -> i64 => [[7]][0][0 // one]
+
+# A loop over a list that is part of a value made for it.
+const fn made_rows() -> list<list<i64>> => [[1, 2], [3]]
+
+const fn first_row_total() -> i64 {
+    var total = 0
+    for entry in made_rows()[0] {
+        total += entry
+    }
+    return total
+}
+
+# NUM-2: a list whose entry is out of range.
+const fn grown(by: i64) -> list<i64> => [by + 9223372036854775807]
+
+const fn made_error() -> str {
+    var message = "before"
+    let made = error(message: message, code: {
+        message = "after"
+        "code"
+    })
+    return made.message
+}
+
+# EXPR-2: named arguments are evaluated in the order written.
+const fn code_first() -> str {
+    var text = "before"
+    let made = error(code: {
+        text = "after"
+        "code"
+    }, message: text)
+    return made.message
+}
+
+# UNIT-6: a function may name a type declared after it.
+const fn same_level(level: Level) -> Level => level
+
+enum Level { low, high }
+
+# TYPE-4: a `list<bool>`'s elements are read, written, held before a call
+# and given to a generic, each as the `bool` it holds then.
+const fn flipped(flags: list<bool>) -> list<bool> {
+    var changed = flags
+    changed[0] = !changed[0]
+    return changed
+}
+
+const fn first_flag(flags: list<bool>) -> bool => flags[0]
+
+const fn pick_flag(a: bool, b: bool) -> bool => a
+
+const fn first_bit_as_it_was() -> bool {
+    var flags = [false]
+    return pick_flag(flags[0], {
+        flags[0] = true
+        false
+    })
+}
+
+const fn bit_kept() -> bool {
+    var flags = [false]
+    let kept = flags[0]
+    flags[0] = true
+    return kept
+}
+
+const fn set_bits(flags: list<bool>) -> i64 {
+    var count = 0
+    for flag in flags {
+        if flag {
+            count += 1
+        }
+    }
+    return count
+}
+
+# FN-15: a `var` parameter is the place the call gives.
+const fn bump(var count: i64, by: i64) {
+    count += by
+}
+
+test conditions_choose {
+    assert sign(-5) == -1 && sign(0) == 0 && sign(7) == 1
+    assert larger(2, 9) == 9 && larger(9, 2) == 9
+    # EXPR-2: both arguments may fail, so each is held before the call,
+    # an element of a list as a value of its own.
+    assert larger([7][0], sign(1)) == 7
+}
+
+test a_switch_compares_by_value {
+    assert opposite(.buy) == .sell
+    assert opposite(Side.hold) == Side.hold
+}
+
+test loops_run {
+    assert triangle(4) == 10
+    assert evens([1, 2, 3, 4]) == [2, 4]
+    assert bumped([1, 2, 3], 1) == [1, 3, 3]
+}
+
+test defaults_and_nulls {
+    assert scaled(3) == 6
+    assert scaled(3, factor: 3) == 9
+    assert scaled(3, offset: 1) == 7
+}
+
+test generics_by_instance {
+    assert first([4, 5]) == 4
+    assert first(["a", "b"]) == "a"
+}
+
+test tuples_and_constants {
+    assert swapped((1, "one")) == ("one", 1)
+    assert limit == 10 && step == 5s
+}
+
+test null_tests_of_any_value {
+    assert present(3) && !present(null)
+    assert !never_null(1)
+    assert null_is_null()
+}
+
+test bits_are_values {
+    assert flipped([true, false]) == [false, false]
+    assert first_flag([true, false]) && first([false, true]) == false
+    assert !first_bit_as_it_was() && !bit_kept()
+    assert set_bits([true, false, true]) == 2
+}
+
+test results_propagate {
+    assert is_ok(doubled(3))
+    assert is_err(doubled(11))
+}
+
+test evaluation_follows_the_order_written {
+    assert in_order() == 1
+    assert placed() == [15, 20]
+    assert read_first() == 1
+    assert list_first() == 20
+    assert index_first() == [10, 1]
+    assert indices_in_order() == [[5, 2], [3, 4]]
+    assert index_once() == ([10, 25, 30], 1)
+    assert held_text() == "text"
+    assert tuple_first() == (1, 0)
+    assert text_first() == ("before", 0)
+    assert from_a_made_row(1) == 7
+    assert first_row_total() == 3
+    assert made_error() == "before"
+    assert code_first() == "after"
+}
+
+test a_type_declared_after_its_use {
+    assert same_level(.high) == .high
+}
+
+test a_var_parameter_is_its_place {
+    var count = 1
+    bump(count, 2)
+    assert count == 3
+}
+
+# NUM-2: an `i64` result out of range fails with its code (ERR-1).
+test an_overflow_fails_with_its_code {
+    assert raises("numeric.out_of_range") {
+        let big = triangle(10) + 9223372036854775807
+    }
+}
+
+# EXPR-3: the place an assignment writes is checked before its value
+# runs, here against the list before the value replaced it.
+test a_place_is_checked_before_its_value {
+    assert raises("value.index_out_of_range") {
+        let replaced = replaced_first()
+    }
+}
+
+test a_place_fails_at_its_list_first {
+    assert raises("value.index_out_of_range") {
+        let assigned = placed_at(0)
+    }
+    assert raises("value.index_out_of_range") {
+        let given = bumped_at(0)
+    }
+}
+
+# EXPR-2: an element's list is evaluated before its index, where both
+# may fail.
+test a_list_fails_before_its_index {
+    let zero = 0
+    assert raises("numeric.out_of_range") {
+        let element = grown(1)[1 // zero]
+    }
+}

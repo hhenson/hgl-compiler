@@ -111,9 +111,9 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
     );
 }
 
-/// `hgl emit --target cpp` writes each module's header and unit, and an
-/// entry unit for its tests; a program with a form the target does not
-/// write yet is not written.
+/// `hgl emit --target cpp` writes each module's header and unit, core's
+/// among them, and an entry unit for its tests; a program with a form
+/// the target does not write yet is not written.
 #[test]
 fn emit_writes_a_unit_a_header_and_an_entry() {
     let root = scratch("emit");
@@ -137,9 +137,11 @@ fn emit_writes_a_unit_a_header_and_an_entry() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert_eq!(
         text(&output.stdout),
-        format!("wrote 3 files for cpp to {}\n", argument(&out))
+        format!("wrote 5 files for cpp to {}\n", argument(&out))
     );
     for file in [
+        "modules/core.h",
+        "modules/core.cpp",
         "modules/demo.flags.h",
         "modules/demo.flags.cpp",
         "tests/demo.flags.cpp",
@@ -361,4 +363,239 @@ fn block(path: &Path) {
     assert!(path.is_file(), "{} was built", path.display());
     fs::remove_file(path).unwrap();
     fs::create_dir(path).unwrap();
+}
+
+/// Value code over the scalars and the plain composites, the emitter's
+/// own test program: constants, an enum, `if`, `switch`, `while` and
+/// `for`, places, defaults, a generic function by instance, tuples,
+/// results and `?`, a `var` parameter and `assert raises`. Every test
+/// of it passes on the SDK. With `HGL_CPP_FLAGS` naming the address and
+/// undefined-behaviour sanitizers, as the CI job for C++ runs it again,
+/// the same is true of the sanitized build.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn value_code_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("values");
+    let file = write(
+        &root,
+        "src/demo.values.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.values.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 16 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// EXPR-3: "An index outside a list fails where it is evaluated". The
+/// test is reported at the statement of it that was running, inside a
+/// function it called, with the runtime library's text of the failure.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_failure_is_reported_at_its_statement() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("index");
+    let file = write(
+        &root,
+        "src/demo.index.hgl",
+        concat!(
+            "module demo.index\n",
+            "\n",
+            "const fn first(values: list<i64>) -> i64 => values[0]\n",
+            "\n",
+            "test outside {\n",
+            "    let none: list<i64> = []\n",
+            "    assert first(none) == 0\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let rows: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        rows[0], "FAILED   executable  demo.index::outside",
+        "{stdout}"
+    );
+    assert!(
+        rows[1].starts_with(&format!("    {file}:7:5: "))
+            && rows[1].contains("the index 0 is outside a"),
+        "{stdout}"
+    );
+}
+
+/// A module whose declarations name another's enum: its header declares
+/// the enum opaque, and its unit includes the other's header, which
+/// defines it (TYPE-7), as it does where a test alone names it.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_module_that_names_anothers_enum_is_built() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("enums");
+    write(
+        &root,
+        "src/demo.left.hgl",
+        concat!("module demo.left\n", "export enum Side { up, down }\n",),
+    );
+    write(
+        &root,
+        "src/demo.right.hgl",
+        concat!(
+            "module demo.right\n",
+            "use demo.left::{Side}\n",
+            "const fn flip(side: Side) -> Side => if side == .up { .down } else { .up }\n",
+            "test it_finds_the_enum {\n",
+            "    assert flip(.up) == .down\n",
+            "}\n",
+            "test a_test_alone_names_it {\n",
+            "    let side = Side.up\n",
+            "    assert side == Side.up\n",
+            "}\n",
+        ),
+    );
+    let source = argument(&root.join("src"));
+    let output = hgl_in(&["test", &source, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("passed   executable  demo.right::it_finds_the_enum")
+            && stdout.contains("passed   executable  demo.right::a_test_alone_names_it"),
+        "{stdout}"
+    );
+}
+
+/// An instance of a generic function is written with its declaration,
+/// so it may name an enum of a module that imports the declaring one:
+/// each of the two headers then names the other's enum.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn two_modules_whose_headers_name_each_others_enums_are_built() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("enum-cycle");
+    write(
+        &root,
+        "src/demo.left.hgl",
+        concat!(
+            "module demo.left\n",
+            "export enum Side { up, down }\n",
+            "export const fn same<T>(value: T) -> T => value\n",
+        ),
+    );
+    write(
+        &root,
+        "src/demo.right.hgl",
+        concat!(
+            "module demo.right\n",
+            "use demo.left::{Side, same}\n",
+            "export enum Mood { calm, keen }\n",
+            "const fn flip(side: Side) -> Side => if side == .up { .down } else { .up }\n",
+            "test each_names_the_other {\n",
+            "    assert flip(.up) == .down\n",
+            "    assert same(Mood.keen) == Mood.keen\n",
+            "}\n",
+        ),
+    );
+    let source = argument(&root.join("src"));
+    let output = hgl_in(&["test", &source, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("passed   executable  demo.right::each_names_the_other"),
+        "{stdout}"
+    );
+}
+
+/// CTRL-6: "An unmatched selector uses default or fails": a `switch`
+/// with no `default` whose selector no case has fails its test.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn an_unmatched_switch_fails() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("unmatched");
+    let file = write(
+        &root,
+        "src/demo.unmatched.hgl",
+        concat!(
+            "module demo.unmatched\n",
+            "const fn matched(x: i64) -> i64 {\n",
+            "    var r = 0\n",
+            "    switch x {\n",
+            "        case 1:\n",
+            "            r = 10\n",
+            "    }\n",
+            "    return r\n",
+            "}\n",
+            "test matched_one { assert matched(1) == 10 }\n",
+            "test unmatched_two { assert matched(2) == 0 }\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(
+        stdout.contains("passed   executable  demo.unmatched::matched_one")
+            && stdout.contains("FAILED   executable  demo.unmatched::unmatched_two")
+            && stdout.contains("no case of the `switch` has the selector's value"),
+        "{stdout}"
+    );
+}
+
+/// Plain names that a platform's compiler or headers take, a GNU keyword
+/// and the macros of glibc's headers among them, are built as they are
+/// written: units are strict C++23, and each file `#undef`s its names.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn names_a_platform_takes_are_built() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("platform-names");
+    let file = write(
+        &root,
+        "src/demo.names.hgl",
+        concat!(
+            "module demo.names\n",
+            "const fn issubnormal(typeof: i64) -> i64 => typeof\n",
+            "const fn htobe16(alloca: i64, major: i64) -> i64 => alloca + major\n",
+            "const fn linux(unix: i64) -> i64 => unix\n",
+            "test each_is_its_own {\n",
+            "    let timerclear = issubnormal(1)\n",
+            "    assert htobe16(timerclear, 2) == 3 && linux(4) == 4\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(
+        stdout.contains("passed   executable  demo.names::each_is_its_own"),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
 }

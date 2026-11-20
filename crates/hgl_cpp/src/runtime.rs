@@ -17,10 +17,16 @@ use std::sync::LazyLock;
 /// Empty where `hgl` was built from a tree without the library.
 pub static FILES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/runtime_files.rs"));
 
-/// The header every generated unit includes first, under the library's
-/// include directory: the fixed include set, which the build driver
-/// precompiles.
+/// The header every generated module's unit includes first, under the
+/// library's include directory: the fixed include set, which the build
+/// driver precompiles.
 pub const HEADER: &str = "hglrt/hglrt.h";
+
+/// The header an entry unit includes, and no other: the test host's
+/// registration and `main`, with nothing of hgraph's, so that the build
+/// driver compiles an entry unit with no precompiled header, in a
+/// fraction of the time a module's unit takes.
+pub const HOST_HEADER: &str = "hglrt/host.h";
 
 /// The C++ namespace the library defines its names in: core's natives
 /// among them.
@@ -52,6 +58,35 @@ pub fn provides(name: &str) -> bool {
             .filter(|(path, _)| path.starts_with("include/"))
             .filter_map(|(_, bytes)| std::str::from_utf8(bytes).ok())
             .flat_map(called_names)
+            .collect()
+    });
+    DECLARED.contains(name)
+}
+
+/// True where the library declares the enum `name`, `enum class name`,
+/// in its own namespace: one of core's enums its natives take, which
+/// has core's members in core's order (`ZeroPolicy`, `Rounding`). The
+/// generated code names that one, and writes no enum of its own for it.
+pub fn declares_enum(name: &str) -> bool {
+    static DECLARED: LazyLock<HashSet<String>> = LazyLock::new(|| {
+        FILES
+            .iter()
+            .filter(|(path, _)| path.starts_with("include/"))
+            .filter_map(|(_, bytes)| std::str::from_utf8(bytes).ok())
+            .flat_map(|text| {
+                text.split("enum class ")
+                    .skip(1)
+                    .filter_map(|after| {
+                        let name: String = after
+                            .chars()
+                            .take_while(|character| {
+                                character.is_ascii_alphanumeric() || *character == '_'
+                            })
+                            .collect();
+                        (!name.is_empty()).then_some(name)
+                    })
+                    .collect::<Vec<_>>()
+            })
             .collect()
     });
     DECLARED.contains(name)

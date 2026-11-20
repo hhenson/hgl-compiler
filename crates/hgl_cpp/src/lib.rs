@@ -19,18 +19,19 @@
 //! reaches nothing left out can still be run; one that does is listed
 //! with the first form it reaches, as the hgraph target lists it.
 //!
-//! How an HGL form is written:
+//! How an HGL form is written, in short (`emit`'s modules say it all):
 //!
 //! | HGL | C++ |
 //! | --- | --- |
 //! | Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, in the namespace `hgl::demo::calc::m_` |
 //! | Its named tests | Functions in `hgl::demo::calc::m_::t_`, and `tests/demo.calc.cpp`, an entry unit that registers each with the runtime library's test host and runs those its command line names |
-//! | `const fn total(a: i64, b: i64) -> i64` | A function `::hgraph::Int total(::hgraph::Int a, ::hgraph::Int b)` |
-//! | `i64`, `f64`, `bool` | hgraph's `Int`, `Float`, `Bool` |
+//! | `const fn total(a: i64, b: i64) -> i64` | A function `::hgraph::Int total(::hgraph::Int a, ::hgraph::Int b)`; a generic one, a function for each instance |
+//! | The scalars, enums, `T?`, tuples, lists, results | hgraph's scalars, `enum class`, `std::optional`, `std::tuple`, `hglrt::list`, `hglrt::result` |
 //! | A native candidate of core, `a + b` of two `i64` | The library's function named as the hgraph target names it: `::hglrt::add__i64_i64(a, b)` |
-//! | `assert condition` | `::hglrt::testing::check(condition)`, after `::hglrt::testing::statement()` |
+//! | `assert condition`, `assert raises("code") { ... }` | `::hglrt::testing::check(condition)`, `::hglrt::testing::raises("code", ...)`, after `::hglrt::testing::statement()` |
 //!
-//! Every other form is reported as not written yet. `docs/architecture.md`
+//! Every other form is reported as not written yet: a struct, a set, a
+//! dictionary, and anything temporal among them. `docs/architecture.md`
 //! says what is covered and how the target's progress is counted.
 
 mod assemble;
@@ -222,13 +223,16 @@ pub fn transpile_for(
     diagnostics: &mut Diagnostics,
 ) -> Output {
     let core = program.core();
+    // GEN-2: C++ values are typed, so every generic function is written
+    // once for each set of generic arguments it is called with.
+    let instances = hgl_lower::instances::Instances::typed(program);
     let mut unwritten_in_core = Diagnostics::new();
     let written: Vec<emit::Written> = (0..program.modules.len())
         .map(|index| {
             if Some(index) == core {
-                emit::module(program, index, provides, &mut unwritten_in_core)
+                emit::module(program, index, provides, &instances, &mut unwritten_in_core)
             } else {
-                emit::module(program, index, provides, diagnostics)
+                emit::module(program, index, provides, &instances, diagnostics)
             }
         })
         .collect();

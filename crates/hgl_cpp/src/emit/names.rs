@@ -3,18 +3,26 @@
 //! runtime library's natives. Part of the transpiler, the last stage.
 //!
 //! An HGL name becomes a C++ one through [`identifier`] alone, which
-//! gives no two HGL names one C++ name, never a name C++ reserves or a
-//! macro of the included headers is known to take, and the same name on
-//! every run. The target's own names, the namespaces `m_` and `t_`,
+//! gives no two HGL names one C++ name, never a name the C++ standard
+//! keeps, and the same name on every run. A macro of a platform's
+//! headers cannot take one: each file `#undef`s the plain names it
+//! writes ([`program_names`]). The target's own names, the namespaces `m_` and `t_`,
 //! have a form [`identifier`] gives no HGL name.
 
-use hgl_analyser::{Program, Signature, Type};
+use std::collections::BTreeSet;
 
-/// The words C++ keeps for itself, its alternative tokens, the names it
-/// gives a meaning in some places (`final`, `module`, `import`), and
-/// the lowercase macros the generated code's headers define or the
-/// compiler predefines in its GNU mode (`linux`, `unix`), in the order
-/// of the alphabet. No plain identifier is one of them.
+use hgl_analyser::{DeclarationKind, Detail, Program, Signature, Type};
+
+/// The words the C++ standard keeps: its keywords and alternative
+/// tokens, the identifiers it gives a meaning in some places (`final`,
+/// `module`, `pre`), its attribute tokens, and the lowercase macros its
+/// own library defines (`errno`, `assert`), in the order of the
+/// alphabet. No plain identifier is one of them: a file may not
+/// `#undef` any of them ([macro.names]). The macros one platform's
+/// headers define besides are not here: each file `#undef`s the plain
+/// names it writes after its last `#include` (`assemble`), and units
+/// are compiled as strict C++23, in which the compiler predefines none
+/// (`linux`) and keeps no GNU keyword (`typeof`).
 const RESERVED: &[&str] = &[
     "alignas",
     "alignof",
@@ -22,14 +30,13 @@ const RESERVED: &[&str] = &[
     "and_eq",
     "asm",
     "assert",
-    "atomic_cancel",
-    "atomic_commit",
-    "atomic_noexcept",
+    "assume",
     "auto",
     "bitand",
     "bitor",
     "bool",
     "break",
+    "carries_dependency",
     "case",
     "catch",
     "char",
@@ -52,6 +59,7 @@ const RESERVED: &[&str] = &[
     "decltype",
     "default",
     "delete",
+    "deprecated",
     "do",
     "double",
     "dynamic_cast",
@@ -61,27 +69,30 @@ const RESERVED: &[&str] = &[
     "explicit",
     "export",
     "extern",
+    "fallthrough",
     "false",
     "final",
     "float",
     "for",
     "friend",
     "goto",
-    "i386",
     "if",
     "import",
+    "indeterminate",
     "inline",
     "int",
-    "linux",
+    "likely",
     "long",
-    "major",
-    "makedev",
-    "minor",
+    "math_errhandling",
+    "maybe_unused",
     "module",
     "mutable",
     "namespace",
     "new",
+    "no_unique_address",
+    "nodiscard",
     "noexcept",
+    "noreturn",
     "not",
     "not_eq",
     "nullptr",
@@ -95,7 +106,6 @@ const RESERVED: &[&str] = &[
     "private",
     "protected",
     "public",
-    "reflexpr",
     "register",
     "reinterpret_cast",
     "requires",
@@ -112,21 +122,17 @@ const RESERVED: &[&str] = &[
     "stdout",
     "struct",
     "switch",
-    "synchronized",
     "template",
     "this",
     "thread_local",
     "throw",
-    "trait",
-    "transaction_safe",
-    "transaction_safe_dynamic",
     "true",
     "try",
     "typedef",
     "typeid",
     "typename",
     "union",
-    "unix",
+    "unlikely",
     "unsigned",
     "using",
     "va_arg",
@@ -240,15 +246,65 @@ pub(crate) fn testing(name: &str) -> String {
     format!("::{}::{name}", crate::runtime::TESTING)
 }
 
-/// A value function of the program as a call names it, qualified from
-/// the global namespace: `::hgl::demo::calc::m_::total`.
-pub(super) fn function(program: &Program, module: usize, declaration: usize) -> String {
-    let declared = &program.modules[module];
-    format!(
-        "{}::{}",
-        module_namespace(&declared.path),
-        identifier(&declared.declarations[declaration].name)
-    )
+/// Where a function of the program is defined: the namespace it is in,
+/// under its module's (`module_namespace`), and its name there. A value
+/// function is named `identifier` gives its name, `total`. An HGL
+/// candidate of an operator is in `c_`, where the candidates of one
+/// operator are C++ overloads of its name, `c_::add_1_` (GEN-4). An
+/// instance of a generic declaration (GEN-2) is named by its suffix in a
+/// namespace of its declaration's own under `i_`: `i_::spread::of_f64`,
+/// `c_::i_::add_1_::of_Weekdays`. `c_` and `i_` have the form the target's
+/// own names have, which no HGL name gives.
+pub(super) fn placed(
+    program: &Program,
+    module: usize,
+    declaration: usize,
+    instance: Option<&str>,
+) -> (Option<String>, String) {
+    let declared = &program.modules[module].declarations[declaration];
+    let candidate = matches!(declared.kind, DeclarationKind::Implementation(..));
+    let name = identifier(&declared.name);
+    match (candidate, instance) {
+        (false, None) => (None, name),
+        (true, None) => (Some("c_".to_string()), name),
+        (false, Some(suffix)) => (Some(format!("i_::{name}")), instance_name(suffix)),
+        (true, Some(suffix)) => (Some(format!("c_::i_::{name}")), instance_name(suffix)),
+    }
+}
+
+/// The name of the instance whose suffix is `suffix` (`hgl_lower`'s:
+/// its generic arguments, each character that is no letter or digit as
+/// `_`): `of_` and the suffix, as [`identifier`] writes it, `of_f64`,
+/// `of_3`. A suffix may start with a digit, which no C++ name does.
+fn instance_name(suffix: &str) -> String {
+    identifier(&format!("of_{suffix}"))
+}
+
+/// A function of the program, or an instance of one, as a call names
+/// it, qualified from the global namespace:
+/// `::hgl::demo::calc::m_::total`, `::hgl::demo::m_::i_::spread::f64`
+/// ([`placed`]). A constant is named as a function of its value is.
+pub(super) fn function(
+    program: &Program,
+    module: usize,
+    declaration: usize,
+    instance: Option<&str>,
+) -> String {
+    let (namespace, name) = placed(program, module, declaration, instance);
+    let module = module_namespace(&program.modules[module].path);
+    match namespace {
+        Some(namespace) => format!("{module}::{namespace}::{name}"),
+        None => format!("{module}::{name}"),
+    }
+}
+
+/// A name the generated code makes for what it holds while a statement
+/// runs, `word` and its number in the piece: `argument_00_`,
+/// `propagated_01_`. Its number is written after a `0`, a form no name
+/// [`identifier`] gives has: a name it escapes has `_1` for each `_` but
+/// the last, and a plain one does not end with `_`.
+pub(super) fn temporary(word: &str, number: usize) -> String {
+    format!("{word}_0{number}_")
 }
 
 /// A string as a C++ narrow string literal, for text the target writes
@@ -275,6 +331,47 @@ pub(crate) fn string(text: &str) -> String {
     out
 }
 
+/// Every name the program gives that [`identifier`] writes as it is: the
+/// parts of each module's path, and each declaration, test, enum member,
+/// parameter and local. A generated file `#undef`s each of them it writes,
+/// after its last `#include`, so that no macro a platform's header
+/// defines takes one (`assemble`); a macro already expanded in those
+/// headers is not changed by it.
+pub(crate) fn program_names(program: &Program) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for module in &program.modules {
+        names.extend(module.path.split('.').map(str::to_string));
+        names.extend(
+            module
+                .declarations
+                .iter()
+                .map(|declared| declared.name.clone()),
+        );
+        names.extend(module.tests.iter().map(|test| test.name.clone()));
+        for detail in &module.details {
+            match detail {
+                Detail::Enum(read) => {
+                    names.extend(read.members.iter().map(|member| member.name.clone()));
+                }
+                Detail::Callable(signature) => {
+                    names.extend(
+                        signature
+                            .parameters
+                            .iter()
+                            .map(|parameter| parameter.name.clone()),
+                    );
+                }
+                _ => {}
+            }
+        }
+        for body in module.bodies.iter().chain(&module.test_bodies).flatten() {
+            names.extend(body.locals.iter().map(|local| local.name.clone()));
+        }
+    }
+    names.retain(|name| identifier(name) == *name);
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::{identifier, module_namespace, string};
@@ -295,12 +392,29 @@ mod tests {
         assert_eq!(identifier("add_"), "add_1_");
         assert_eq!(identifier("a__b"), "a_1_1b_");
         assert_eq!(identifier("int"), "int_");
-        assert_eq!(identifier("linux"), "linux_");
+        assert_eq!(identifier("errno"), "errno_");
+        assert_eq!(identifier("likely"), "likely_");
         assert_eq!(identifier("EOF"), "EOF_");
         assert_eq!(identifier("N"), "N_");
         assert_eq!(identifier("MAX_SIZE"), "MAX_1SIZE_");
         for name in ["_kept", "add_", "a__b", "int", "EOF", "_", "__", "_1_"] {
             assert!(!identifier(name).contains("__"), "{name}");
+        }
+    }
+
+    /// A macro of one platform's headers or a GNU keyword is a plain name:
+    /// a generated file `#undef`s it, and units are strict C++23.
+    #[test]
+    fn a_platform_word_is_a_plain_name() {
+        for name in [
+            "linux",
+            "typeof",
+            "issubnormal",
+            "htobe16",
+            "min",
+            "interface",
+        ] {
+            assert_eq!(identifier(name), name);
         }
     }
 

@@ -1,5 +1,11 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
-#include <hglrt/hglrt.h>
+#include <hglrt/host.h>
+
+// Names this file writes, which no macro of a header above takes.
+#undef calc
+#undef demo
+#undef overflows
+#undef sums
 
 namespace hgl::demo::calc::m_::t_
 {
