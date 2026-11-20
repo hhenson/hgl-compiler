@@ -50,6 +50,9 @@ impl<'a> Typer<'a> {
         };
         let mut selected: Vec<Chosen> = Vec::new();
         let mut untold = false;
+        // The candidates whose condition is not told: one a candidate that
+        // admits the call outranks leaves the selection as it is.
+        let mut not_told: Vec<Chosen> = Vec::new();
         // True when the candidates were tried with integer literals
         // widened.
         let mut widened = false;
@@ -114,16 +117,17 @@ impl<'a> Typer<'a> {
                     widening,
                 );
                 fits |= admits != Admits::Misfit;
+                let chosen = Chosen {
+                    module,
+                    declaration,
+                    declared: signature,
+                    taken,
+                    generics,
+                };
                 match admits {
-                    Admits::Yes => selected.push(Chosen {
-                        module,
-                        declaration,
-                        declared: signature,
-                        taken,
-                        generics,
-                    }),
+                    Admits::Yes => selected.push(chosen),
                     Admits::No | Admits::Misfit => {}
-                    Admits::Unknown => untold = true,
+                    Admits::Unknown => not_told.push(chosen),
                 }
             }
             // GEN-5: "Whether a literal is widened is settled by the
@@ -141,6 +145,18 @@ impl<'a> Typer<'a> {
         // Concrete types outrank variables; structurally constrained
         // variables outrank unconstrained ones."
         most_specific(&mut selected, public.parameters.len());
+        // GEN-5: "Select exactly one most-specific admitted candidate.
+        // Concrete types outrank variables". A candidate not told to admit
+        // the call that one admitted candidate outranks is selected by
+        // nothing whatever its condition comes to; any other leaves which
+        // is selected not told. GEN-7: so a candidate that takes every
+        // generic argument is known where nothing else can outrank it.
+        let own = public.parameters.len();
+        untold |= not_told.iter().any(|unknown| {
+            !selected
+                .iter()
+                .any(|admitted| outranks(admitted, unknown, own))
+        });
         if widened && selected.len() > 1 {
             Self::prefer_widened(&mut selected, public, given);
         }
@@ -1674,26 +1690,31 @@ fn most_specific(selected: &mut Vec<Chosen>, own: usize) {
     if selected.len() < 2 {
         return;
     }
-    let outranks = |better: &Chosen, worse: &Chosen| {
-        let whole = better
-            .declared
-            .parameters
-            .iter()
-            .zip(&worse.declared.parameters)
-            .take(own)
-            .map(|(better, worse)| specificity(&better.ty, &worse.ty))
-            .fold(Specific::Same, Specific::and);
-        whole == Specific::More
-    };
     let outranked: Vec<bool> = selected
         .iter()
-        .map(|chosen| selected.iter().any(|other| outranks(other, chosen)))
+        .map(|chosen| selected.iter().any(|other| outranks(other, chosen, own)))
         .collect();
     let mut position = 0;
     selected.retain(|_| {
         position += 1;
         !outranked[position - 1]
     });
+}
+
+/// True when `better` outranks `worse`, each a candidate a call admits
+/// or may admit: as specific in each of the operator's own parameters,
+/// `own` of them, compared place for place ([`specificity`]), and more
+/// specific in one (GEN-5, GEN-12).
+fn outranks(better: &Chosen, worse: &Chosen, own: usize) -> bool {
+    let whole = better
+        .declared
+        .parameters
+        .iter()
+        .zip(&worse.declared.parameters)
+        .take(own)
+        .map(|(better, worse)| specificity(&better.ty, &worse.ty))
+        .fold(Specific::Same, Specific::and);
+    whole == Specific::More
 }
 
 /// True when an integer literal was widened among the entries of a

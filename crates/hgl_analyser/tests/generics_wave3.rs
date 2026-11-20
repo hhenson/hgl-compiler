@@ -665,3 +665,37 @@ fn the_proposed_option_fragment_is_held_to_its_words() {
         .expect("`ratio_in` has a body");
     assert_eq!(called(&checked, &instance), ["ratio(f64, f64) <z>"]);
 }
+
+/// GEN-7: the requirements "make one known where a candidate takes every
+/// generic argument they admit". GEN-5: "Concrete types outrank
+/// variables; structurally constrained variables outrank unconstrained
+/// ones." A candidate for `list<T>` with no condition takes every
+/// `list<U>`, and outranks one for any `T` whatever that one's condition
+/// comes to: `kind(value)` in `wrap<U>(value: list<U>)` is the list
+/// candidate's, known where the body is declared, with nothing stated.
+/// Where the candidate whose condition is not known is as specific as the
+/// one that takes it, which of them is selected is not known, and the
+/// body rejects.
+#[test]
+fn a_candidate_that_outranks_every_one_not_told_is_known() {
+    let checked = module(concat!(
+        "operator kind<V>(value: V) -> i64\n",
+        "impl const fn kind<T>(value: list<T>) -> i64 => 1\n",
+        "impl const fn kind<T>(value: T) -> i64 requires !(T == list<i64>) => 2\n",
+        "const fn wrap<U>(value: list<U>) -> i64 => kind(value)\n",
+        "operator tied<V>(value: V) -> i64\n",
+        "impl const fn tied<T>(value: T) -> i64 => 1\n",
+        "impl const fn tied<T>(value: T) -> i64 requires !(T == i64) => 2\n",
+        "const fn level<U>(value: U) -> i64 => tied(value)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:9:39 operator/operator.no_candidate GEN-5"],
+        "{}",
+        checked.report
+    );
+    assert_eq!(
+        called(&checked, body(&checked, "wrap")),
+        ["kind(list<T>) <U>"]
+    );
+}
