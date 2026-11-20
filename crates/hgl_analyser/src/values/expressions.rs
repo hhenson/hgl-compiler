@@ -9,6 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::control::{Outcome, branch_is_null, branch_takes_its_type};
 use super::fit::{accepts_float, is_integer_literal, not_null, nullable, open, window_value};
+use super::node::RefRead;
 use super::{Fact, Typer, children};
 use crate::hir::{
     BinaryOperator, EndpointOperation, Expr, ExprKind, Hook, LocalId, UnaryOperator, Value,
@@ -358,7 +359,7 @@ impl<'a> Typer<'a> {
                 // endpoints, not values". A child of one is reported where
                 // it is read (`child_read`).
                 if self.is_reference(local) && self.reads_children() {
-                    self.ref_read(local, None, false, at);
+                    self.ref_read(local, None, RefRead::Value, at);
                 } else {
                     self.payload_read(local, at);
                 }
@@ -371,7 +372,7 @@ impl<'a> Typer<'a> {
             && self.reads_children()
             && self.naming != Some(at)
         {
-            self.ref_read(local, None, false, at);
+            self.ref_read(local, None, RefRead::Value, at);
         }
         self.signal_read(local, at);
         // TIME-7: "`out` is read in a `when` and in `stop` ... `start`

@@ -105,6 +105,10 @@ fn ref_marks(program: &Program, diagnostics: &mut Diagnostics) {
 /// (FN-16)". Each such mark of the declaration at `index` of `module`,
 /// one that may take a mark, is reported at its `ref`; a `signal?` that
 /// may be left out is a `signal` parameter too.
+///
+/// "Nor does `ref` stand on a window: a `ref` parameter or a `ref` result
+/// whose type is a `rolling_window` rejects ... A mark on a window
+/// rejects with `ref.position` too."
 fn signal_marks(
     module: &crate::program::Module,
     index: usize,
@@ -114,29 +118,65 @@ fn signal_marks(
     let Some(Detail::Callable(signature)) = module.details.get(index) else {
         return;
     };
-    let written = crate::read::parameters(&module.declarations[index].syntax);
+    let syntax = &module.declarations[index].syntax;
+    let mark_of = |node: &hgl_parser::SyntaxNode| {
+        crate::syntax::tokens(node).find(|token| token.kind() == hgl_parser::SyntaxKind::KwRef)
+    };
+    let window = |ty: &Type| matches!(ty.omission_removed(), Type::RollingWindow { .. });
+    let mut marks = Vec::new();
+    let written = crate::read::parameters(syntax);
     for (parameter, node) in signature.parameters.iter().zip(&written) {
-        if !parameter.reference || *parameter.ty.omission_removed() != Type::Signal {
+        if !parameter.reference {
             continue;
         }
-        let Some(mark) =
-            crate::syntax::tokens(node).find(|token| token.kind() == hgl_parser::SyntaxKind::KwRef)
-        else {
-            continue;
-        };
-        diagnostics.emit(
-            error(
-                Category::FunctionKind,
-                codes::REF_POSITION,
-                Location::new(file, mark.span()),
+        let message = if *parameter.ty.omission_removed() == Type::Signal {
+            (
                 format!(
                     "`{}` is a `signal`, which has no payload to designate, and is not marked \
                      `ref`",
                     parameter.name
                 ),
+                "a `signal` parameter is given a connection as it is, and ticks",
+            )
+        } else if window(&parameter.ty) {
+            (
+                format!(
+                    "`{}` is a window, which is not marked `ref`",
+                    parameter.name
+                ),
+                "a window parameter is given the window's connection as it is",
+            )
+        } else {
+            continue;
+        };
+        if let Some(mark) = mark_of(node) {
+            marks.push((mark, message));
+        }
+    }
+    if signature.reference
+        && signature.result.as_ref().is_some_and(window)
+        && let Some(mark) = crate::syntax::child(syntax, hgl_parser::SyntaxKind::ReturnType)
+            .as_ref()
+            .and_then(mark_of)
+    {
+        marks.push((
+            mark,
+            (
+                "the result is a window, which is not marked `ref`".to_string(),
+                "a window result publishes the values that arrive",
+            ),
+        ));
+    }
+    for (mark, (message, note)) in marks {
+        diagnostics.emit(
+            error(
+                Category::FunctionKind,
+                codes::REF_POSITION,
+                Location::new(file, mark.span()),
+                message,
                 "FN-16",
             )
-            .with_note("a `signal` parameter is given a connection as it is, and ticks"),
+            .with_note(note),
         );
     }
 }

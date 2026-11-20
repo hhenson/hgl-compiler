@@ -12,9 +12,10 @@ use super::Typer;
 use super::arguments::{Slot, Takes};
 use super::fit::{not_null, open};
 use super::inference::{Inferred, Places, infer, mentions, placed};
+use super::node::RefRead;
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Callee, EndpointOperation, ExprKind, Form, Hook};
-use crate::program::{Binding, DeclarationKind, OperatorRef, Role};
+use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{
     Argument, CallArguments, ConstantValue, Detail, GenericKind, NamedKind, Scalar, Type,
@@ -433,6 +434,16 @@ impl<'a> Typer<'a> {
         let reads_activity = Some(module) == self.program.core()
             && target.kind == DeclarationKind::NativeFunction(Role::Value)
             && target.name == "is_active";
+        // ERR-14: core's `removed_value` "takes its form from its place
+        // as `delta_value` does": the call gives the window's V, which a
+        // place that takes `result<V, error>` makes the `ok` of its
+        // result (`Typer::fit`). The window it is given says what V is,
+        // and the place does not.
+        let expected = if removes(self.program, (module, declaration)) {
+            None
+        } else {
+            expected
+        };
         let (kind, ty) = self.call_function_with(
             name,
             list,
@@ -443,6 +454,31 @@ impl<'a> Typer<'a> {
             // trace cannot supply the receiving node's input (TIME-9).
             evaluating && !reads_activity,
         );
+        // FN-16: "`removed_value` (TYPE-11) of a window that is
+        // a child of a `ref` parameter or of `out` of a `ref` result, a
+        // field of a struct given by `ref`, is set aside as `delta_value`
+        // is: a read of it there rejects with `ref.read`." A window is
+        // not marked `ref` itself (`ref.position`).
+        if removes(self.program, (module, declaration))
+            && let ExprKind::Call { arguments, .. } = &kind
+            && let [argument] = arguments.as_slice()
+            && let ExprKind::ChildEndpointOf(child) = &argument.value.kind
+            && let ExprKind::Local(input) = child.place_root().kind
+            && self.designates(input)
+        {
+            // The child as it is written.
+            let written = arguments_of(list)
+                .into_iter()
+                .next()
+                .map(|(_, value)| super::endpoint_argument(&value).text().to_string());
+            self.ref_read(
+                input,
+                written.as_deref(),
+                RefRead::Removed,
+                argument.value.at,
+            );
+            return (ExprKind::Unread, Type::Unknown);
+        }
         // END-5, TIME-9: only the bound core function queries activity.
         // Its ordinary signature has already checked the arguments and T.
         if reads_activity
@@ -866,4 +902,14 @@ pub(super) fn arguments_of(list: &SyntaxNode) -> Vec<(Option<SyntaxToken>, Synta
             Some((name, value))
         })
         .collect()
+}
+
+/// True where `callee`, a module's position and a declaration's, is
+/// core's `removed_value`, the value that left a window in the cycle
+/// (TIME-9, TYPE-11).
+pub(super) fn removes(program: &Program, (module, declaration): (usize, usize)) -> bool {
+    let target = &program.modules[module].declarations[declaration];
+    Some(module) == program.core()
+        && target.kind == DeclarationKind::NativeFunction(Role::Value)
+        && target.name == "removed_value"
 }

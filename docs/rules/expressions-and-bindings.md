@@ -85,6 +85,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: brackets read a list's and a tuple's element by its index, failing outside the sequence, and a dictionary's value by its key
+- Left, reported: an assertion that an index outside a list fails with `value.index_out_of_range`, a code the provider's failure has not (TST-10)
 - Left: projection of a connection; a child of a `ref` parameter, which is reported (FN-16)
 
 ## EXPR-8

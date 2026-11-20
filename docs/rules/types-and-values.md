@@ -159,7 +159,10 @@ analyser: partial
 - Size kind and bounds (`rolling_window.size_kind`, `rolling_window.size_bounds`) of sizes read by the one reader (`constant`): literals, generic value parameters, constants of a module and constant expressions of those, a duration and an `i64` multiplied in either order among them; a size of a type other than `i64` or `duration` is of the wrong kind; an omitted minimum is the maximum in identity
 - `all_valid` takes a window (TIME-9), and a window's value read in a hook, of an input, of `out` or of a child of either, and given to a value function in composition, is a `list<V>` (FN-12, END-9); that list indexed is no child (TIME-9)
 - Read where the place takes a `result<list<V>, error>`, returned, bound or given, it is of that result (`CheckedWindow`, or `CheckedChild` where it is a child known when the program runs), as ERR-14 has it
-- Left: a size computed by a call, or from a generic parameter, whose kind and bounds are not checked
+- Its delta is the V that arrived (TYPE-16), and of a nullable V the nullable's own delta, `delta<V>`, which its result takes as well (TIME-7), read before the window is all valid as after; a read of the delta of a window of a duration, an input's, a child's or `out`'s, whose place is not a `result` is `payload.unguarded`, and one of a window of a tick count is not
+- Core's `removed_value` is read where its place takes a `result<V, error>` (ERR-14); a read whose place is not a `result` is `payload.unguarded` for every window
+- A window's result takes a V and nothing else (TIME-7); its trace's cells are V (TST-5), a generic target's once its arguments are known
+- Left: a size computed by a call, or from a generic parameter, whose kind and bounds are not checked; the delta of a window of a duration that a generic parameter stands for, which is read in an instance
 
 transpiler: partial
 
@@ -167,10 +170,10 @@ transpiler: partial
 - A value published to it, and its `delta_value`, is the value that arrived (TYPE-16); `valid`, `modified` and `last_modified` are the `TSW`'s; an eval's replay and record are core's for the window
 - A window within a struct, a tuple, a fixed list or a dictionary is that one's child, wired by its port in a graph, and that value's validity is its children's
 - A window is valid at its first value and all valid at its minimum, of ticks or of its arrivals' span, the `TSW`'s own; in one of a duration a value leaves one smallest step after its age is the maximum, whether or not a value arrives, and the window ticks for the exit, which wakes its readers; a minimum of `0s` is written as it is, held by the first value; an empty window is not all valid, and one emptied by exits stays valid, as hgraph 0.9.8 does (hhenson/hgraph#1818)
-- `delta_value` of a window of a duration, an input's and a child's, is `_core.window_delta`, which fails with `value.unset_read` where a value leaves and none arrives (proposed)
+- `delta_value` of a window of ticks, read plain or where a `result` is taken, is the `TSW`'s, the value that arrived; core's `record` of one reads it so (ERR-14)
 - A window's value, of an input, of `out`, of a child where it is admitted or checked when it runs, in a `when` or `stop`, and given to a lifted helper, is the `list<V>` it holds, oldest first (`_core.window_values`), which fails with `value.unset_read` before the window is all valid, where hgraph 0.9.8 reads what it holds
 - Where its place takes a `result<list<V>, error>` it is `ok` of that list, or before the window is all valid `err` of an `error` coded `value.unset_read` (`_core.window_result`, and `_core.checked_child_result` of a child known when it runs); given to a lifted parameter with a default, FN-11's entry says what binds
-- Left, reported: the value of a window that a generic type parameter stands for, which the body, checked once (GEN-7), reads as a `T`; a value that holds a window read whole; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection; the delta of a value that holds a window of a duration, whose field's delta where a value leaves and none arrives the rules do not give, and hgraph gives none
+- Left, reported: the value of a window that a generic type parameter stands for, which the body, checked once (GEN-7), reads as a `T`; a value that holds a window read whole; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection; the delta of a value that holds a window of a duration, whose field's delta where a value only leaves the rules do not give, and hgraph gives none; `delta_value` of a window of a duration and `removed_value`, read where a `result` is taken, and so core's `record` of a window of a duration
 
 ## TYPE-12
 
@@ -181,7 +184,7 @@ parser: done
 analyser: done
 
 - `ref` is no type but a mark of a node's parameter and result, whose type is the T after it (FN-16); a graph gives a `ref` parameter of T a connection of T
-- A `signal` parameter marked `ref` is `ref.position`, a code whose row is proposed (FN-16)
+- A `signal` parameter marked `ref` is `ref.position` (FN-16)
 - `rolling_window`, `atomic` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)
 - A `signal` takes no default but `null` (`type.mismatch`), and a hook gives it to an endpoint operation and reads it nowhere else (`type.not_ordinary`)
 
@@ -234,12 +237,12 @@ transpiler: partial
 
 analyser: partial
 
-- `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window, a tuple of each position's delta under a `?`, and a type of its own for a nullable, a list, a set, a dictionary and a struct
+- `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window (of a window of a nullable V, `delta<V>`), a tuple of each position's delta under a `?`, and a type of its own for a nullable, a list, a set, a dictionary and a struct
 - A `signal` has none (`delta.unsupported_shape`); a `ref` parameter's `delta_value` is not read (`ref.read`, FN-16)
 - Each delta that is a type of its own has its properties: a set's `added` and `removed`, a list's `updated`, `removed` and `size_modified`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`)
 - It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`)
 - A `delta<V>` is a value where a `delta<V?>` is expected, and null is not
-- A set's, a dictionary's or a list's delta that names one constant entry both as added or updated and as removed is `delta.overlap`, constants read by the one reader (`constant`) as values of the key's type: `-1`, an enum's member however written, `60s` and `1m`, an integer literal as an `f64` key. Two are compared by the language's `==` (`ConstantValue::equals`), as TYPE-16 proposes, "and not by their sameness as constants (UNIT-13)": `0.0` and `-0.0` are one key, and two NaNs two
+- A set's, a dictionary's or a list's delta that names one constant entry both as added or updated and as removed is `delta.overlap`, constants read by the one reader (`constant`) as values of the key's type: `-1`, an enum's member however written, `60s` and `1m`, an integer literal as an `f64` key. Two are compared by the language's `==` (`ConstantValue::equals`), as TYPE-16 has it, "and not by their sameness as constants (UNIT-13)": `0.0` and `-0.0` are one key, and two NaNs two
 - A constant position of a list's delta that is negative or past a fixed list's bounds is `delta.index_bounds`; a negative `size_modified` is a count to reduce by
 - Left: a constructor written for a tuple's delta, which is not judged
 

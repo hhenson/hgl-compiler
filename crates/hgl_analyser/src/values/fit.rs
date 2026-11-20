@@ -10,9 +10,12 @@ use hgl_parser::SyntaxKind;
 
 use super::Typer;
 use super::arguments::Takes;
+use super::calls::removes;
 use crate::declared::{agree, names_one_of, substitute_within};
-use crate::hir::{BinaryOperator, Callee, Expr, ExprKind, UnaryOperator, Value, ValueCategory};
-use crate::program::DeclarationKind;
+use crate::hir::{
+    BinaryOperator, Callee, EndpointOperation, Expr, ExprKind, UnaryOperator, Value, ValueCategory,
+};
+use crate::program::{DeclarationKind, Program};
 use crate::syntax::has_token;
 use crate::types::{Argument, Detail, GenericKind, Scalar, Type};
 use crate::{codes, error};
@@ -65,6 +68,27 @@ impl<'a> Typer<'a> {
             let at = value.at;
             return Expr {
                 kind: ExprKind::CheckedWindow(Box::new(value)),
+                ty: expected.clone(),
+                at,
+                category: ValueCategory::Unsettled,
+            };
+        }
+        // ERR-14: `delta_value` takes its form from its place, of any
+        // endpoint: "where the place expects `result<delta<T>, error>` it
+        // gives `ok` of the delta, or `err` of an `error` coded
+        // `value.unset_read` where the endpoint has no delta in the
+        // cycle"; and so does a window's `removed_value`.
+        if let Type::Result {
+            value: success,
+            error,
+        } = expected
+            && **error == Type::Error
+            && reads_cycle(self.program, &value)
+            && self.admits(success, &value.ty)
+        {
+            let at = value.at;
+            return Expr {
+                kind: ExprKind::CheckedDelta(Box::new(value)),
                 ty: expected.clone(),
                 at,
                 category: ValueCategory::Unsettled,
@@ -319,6 +343,33 @@ pub(super) fn window_value(window: &Type) -> Type {
             size: None,
         },
         other => other.clone(),
+    }
+}
+
+/// True where `value` reads what an endpoint published in the cycle,
+/// `delta_value` of an input, of `out` or of a child, or what a window
+/// lost in it, core's `removed_value`: each takes its form from its place
+/// (ERR-14).
+pub(super) fn reads_cycle(program: &Program, value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::Endpoint {
+            operation: EndpointOperation::DeltaValue,
+            ..
+        }
+        | ExprKind::ChildEndpoint {
+            operation: EndpointOperation::DeltaValue,
+            ..
+        } => true,
+        ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    ..
+                },
+            ..
+        } => removes(program, (*module, *declaration)),
+        _ => false,
     }
 }
 
