@@ -23,6 +23,7 @@ use hgl_lower::copies::Copies;
 use hgl_lower::graphs::may_return;
 
 use super::Emitter;
+use super::calls::changes;
 use super::names::{self, identifier};
 use super::types::by_value;
 use super::values::INDENT;
@@ -196,14 +197,18 @@ impl Emitter<'_> {
                     identifier(&body.locals[*local].name)
                 ));
             }
+            // The place is the one its indices name before the value is
+            // evaluated: where the value runs statements that may change
+            // an index, each index is held first.
             Stmt::AssignPlace {
                 place, value, at, ..
             } => {
-                let value = self.expression(scope, value);
-                let Some(place) = self.place(scope, place) else {
+                let holds = changes(value);
+                let Some(place) = self.place_held(scope, place, holds) else {
                     self.unsupported(*at, "an assignment to this place");
                     return;
                 };
+                let value = self.expression(scope, value);
                 text.push_str(&format!("{indent}{place} = {value};\n"));
             }
             // CTRL-10: an `if` that stands as a statement, whose
@@ -461,6 +466,12 @@ impl Emitter<'_> {
     /// parameter writes (EXPR-3, FN-15): a local, a list's element, a
     /// tuple's position, at any depth. `None` for any other.
     pub(super) fn place(&mut self, scope: &mut Scope, place: &Expr) -> Option<String> {
+        self.place_held(scope, place, false)
+    }
+
+    /// [`Emitter::place`], each list's index held under a name of its
+    /// own before the statement where `holds` is true.
+    fn place_held(&mut self, scope: &mut Scope, place: &Expr, holds: bool) -> Option<String> {
         match &place.kind {
             ExprKind::Local(local) => Some(identifier(&scope.body.locals[*local].name)),
             ExprKind::Index { base, index } => match &base.ty {
@@ -469,12 +480,21 @@ impl Emitter<'_> {
                     else {
                         return None;
                     };
-                    let base = self.place(scope, base)?;
+                    let base = self.place_held(scope, base, holds)?;
                     Some(format!("std::get<{position}>({base})"))
                 }
                 Type::List { .. } => {
-                    let base = self.place(scope, base)?;
-                    let index = self.expression(scope, index);
+                    let base = self.place_held(scope, base, holds)?;
+                    let written = self.expression(scope, index);
+                    let index = if holds && !matches!(index.kind, ExprKind::Literal(_)) {
+                        let held = names::temporary("index", self.temporary());
+                        scope
+                            .before
+                            .push(format!("const ::hgraph::Int {held} = {written};"));
+                        held
+                    } else {
+                        written
+                    };
                     Some(format!(
                         "::{}::item({base}, {index})",
                         crate::runtime::NAMESPACE

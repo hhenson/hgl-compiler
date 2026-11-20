@@ -89,6 +89,29 @@ const fn doubled(value: i64) -> result<i64, error> {
     return ok(checked_value * 2)
 }
 
+# EXPR-2: arguments are evaluated in the order written, a block's
+# statements among them; and a place is the one its index names before
+# the value is evaluated.
+const fn pick(a: i64, b: i64) -> i64 => a
+
+const fn in_order() -> i64 {
+    var x = 1
+    return pick(x, {
+        x = 2
+        0
+    })
+}
+
+const fn placed() -> list<i64> {
+    var items = [10, 20]
+    var at = 0
+    items[at] += {
+        at = 1
+        5
+    }
+    return items
+}
+
 # FN-15: a `var` parameter is the place the call gives.
 const fn bump(var count: i64, by: i64) {
     count += by
@@ -132,6 +155,11 @@ test tuples_and_constants {
 test results_propagate {
     assert is_ok(doubled(3))
     assert is_err(doubled(11))
+}
+
+test evaluation_follows_the_order_written {
+    assert in_order() == 1
+    assert placed() == [15, 20]
 }
 
 test a_var_parameter_is_its_place {

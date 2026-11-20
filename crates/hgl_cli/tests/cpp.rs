@@ -344,7 +344,7 @@ fn value_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -389,7 +389,8 @@ fn a_failure_is_reported_at_its_statement() {
 }
 
 /// A module whose declarations name another's enum: its header includes
-/// the other's, which declares the enum (TYPE-7).
+/// the other's, which declares the enum (TYPE-7); and its unit includes
+/// it where a test alone names it.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn a_module_that_names_anothers_enum_is_built() {
@@ -412,6 +413,10 @@ fn a_module_that_names_anothers_enum_is_built() {
             "test it_finds_the_enum {\n",
             "    assert flip(.up) == .down\n",
             "}\n",
+            "test a_test_alone_names_it {\n",
+            "    let side = Side.up\n",
+            "    assert side == Side.up\n",
+            "}\n",
         ),
     );
     let source = argument(&root.join("src"));
@@ -424,7 +429,8 @@ fn a_module_that_names_anothers_enum_is_built() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("passed   executable  demo.right::it_finds_the_enum"),
+        stdout.contains("passed   executable  demo.right::it_finds_the_enum")
+            && stdout.contains("passed   executable  demo.right::a_test_alone_names_it"),
         "{stdout}"
     );
 }

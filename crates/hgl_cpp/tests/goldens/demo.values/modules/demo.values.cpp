@@ -131,7 +131,36 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tup
     return ::hglrt::result<::hgraph::Int>{::hglrt::mul__i64_i64(checked_value, 2)};
 }
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 93
+// pick(a: i64, b: i64) -> i64 (`const fn`), module demo.values, line 95
+::hgraph::Int pick([[maybe_unused]] ::hgraph::Int a, [[maybe_unused]] ::hgraph::Int b)
+{
+    return a;
+}
+
+// in_order() -> i64 (`const fn`), module demo.values, line 97
+::hgraph::Int in_order()
+{
+    [[maybe_unused]] ::hgraph::Int x = 1;
+    return [&] { const auto argument_00_ = x; const auto argument_01_ = [&]() -> ::hgraph::Int {
+    x = 2;
+    return 0;
+}(); return ::hgl::demo::values::m_::pick(argument_00_, argument_01_); }();
+}
+
+// placed() -> list<i64> (`const fn`), module demo.values, line 105
+::hglrt::list<::hgraph::Int> placed()
+{
+    [[maybe_unused]] ::hglrt::list<::hgraph::Int> items = ::hglrt::list<::hgraph::Int>{10, 20};
+    [[maybe_unused]] ::hgraph::Int at = 0;
+    const ::hgraph::Int index_00_ = at;
+    ::hglrt::item(items, index_00_) = [&] { const auto argument_01_ = ::hglrt::item(items, at); const auto argument_02_ = [&]() -> ::hgraph::Int {
+    at = 1;
+    return 5;
+}(); return ::hglrt::add__i64_i64(argument_01_, argument_02_); }();
+    return items;
+}
+
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 116
 void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int by)
 {
     count = ::hglrt::add__i64_i64(count, by);
@@ -220,6 +249,14 @@ void results_propagate()
     ::hglrt::testing::check((::hgl::demo::values::m_::doubled(3)).has_value());
     ::hglrt::testing::statement();
     ::hglrt::testing::check((!(::hgl::demo::values::m_::doubled(11)).has_value()));
+}
+
+void evaluation_follows_the_order_written()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::in_order(), 1, 0.0, 0.0));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hgraph::Int>>(::hgl::demo::values::m_::placed(), ::hglrt::list<::hgraph::Int>{15, 20}));
 }
 
 void a_var_parameter_is_its_place()

@@ -126,13 +126,18 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             continue;
         }
         // The headers of the other modules whose functions its pieces
-        // call.
+        // call, and of those whose types its tests name.
         let included: BTreeSet<usize> = defined
             .iter()
             .copied()
             .chain(tests.iter().map(|(_, piece)| *piece))
             .flat_map(|piece| &piece.reach.uses)
             .map(|(module, _, _)| *module)
+            .chain(
+                tests
+                    .iter()
+                    .flat_map(|(_, piece)| piece.types.iter().copied()),
+            )
             .filter(|&used| used != index)
             .collect();
         // The other modules whose types its pieces name: its header

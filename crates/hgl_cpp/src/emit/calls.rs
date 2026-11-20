@@ -250,9 +250,14 @@ impl Emitter<'_> {
         // order, before the call; a lambda called where the call is
         // gives them a block to be in.
         let mut given: Vec<String> = vec![String::new(); signature.parameters.len()];
+        // An argument that runs statements of its own may change what an
+        // argument before it reads: then every argument is evaluated in
+        // turn, and each that is no place is held as a value of its own,
+        // what it read then.
+        let changing = arguments.iter().any(|argument| changes(&argument.value));
         let ordered: Vec<(usize, String, bool, Held)> =
             written.into_iter().chain(defaulted).collect();
-        if ordered.iter().filter(|(_, _, fails, _)| *fails).count() <= 1 {
+        if !changing && ordered.iter().filter(|(_, _, fails, _)| *fails).count() <= 1 {
             for (index, value, _, _) in ordered {
                 given[index] = value;
             }
@@ -267,8 +272,8 @@ impl Emitter<'_> {
             let name = names::temporary("argument", self.temporary());
             let declared = match held {
                 Held::Place => "auto&",
-                Held::Reference => "const auto&",
-                Held::Value => "const auto",
+                Held::Reference if !changing => "const auto&",
+                Held::Reference | Held::Value => "const auto",
             };
             steps.push_str(&format!("{declared} {name} = {value}; "));
             given[index] = name;
@@ -459,6 +464,17 @@ fn told_apart_by_result(program: &Program, operator: OperatorRef) -> bool {
         read.push((takes, gives));
     }
     false
+}
+
+/// True where evaluating `value` runs statements of its own, a block's
+/// or a branch's, which may assign a local (EXPR-3).
+pub(super) fn changes(value: &Expr) -> bool {
+    let mut found = false;
+    value.walk(&mut |inner| {
+        found |=
+            matches!(&inner.kind, ExprKind::Block { statements, .. } if !statements.is_empty());
+    });
+    found
 }
 
 /// True where evaluating `value` may fail or do anything at all: any

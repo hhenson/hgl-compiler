@@ -50,7 +50,16 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped(const std::tuple<::hgraph::Int,
 // doubled(value: i64) -> result<i64, error> (`const fn`), module demo.values, line 87
 ::hglrt::result<::hgraph::Int> doubled(::hgraph::Int value);
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 93
+// pick(a: i64, b: i64) -> i64 (`const fn`), module demo.values, line 95
+::hgraph::Int pick(::hgraph::Int a, ::hgraph::Int b);
+
+// in_order() -> i64 (`const fn`), module demo.values, line 97
+::hgraph::Int in_order();
+
+// placed() -> list<i64> (`const fn`), module demo.values, line 105
+::hglrt::list<::hgraph::Int> placed();
+
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 116
 void bump(::hgraph::Int& count, ::hgraph::Int by);
 
 namespace i_::first
