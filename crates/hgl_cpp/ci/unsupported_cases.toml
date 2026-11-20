@@ -187,9 +187,6 @@
 "the candidate `convert(i64)`" = [
     "core_implementation::a_number_is_a_flag_and_back",
 ]
-"the candidate `lt_(tenor, tenor)`" = [
-    "core_implementation::the_order_is_count_by_count",
-]
 "the type `Closed`" = [
     "core_implementation::a_calendar_says_what_a_business_day_is",
 ]
@@ -220,6 +217,7 @@
 ]
 "this literal" = [
     "core_implementation::a_duration_moves_a_zoned_instant",
+    "core_implementation::the_order_is_count_by_count",
 ]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph
