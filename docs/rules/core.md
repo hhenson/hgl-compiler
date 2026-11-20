@@ -363,7 +363,7 @@ transpiler: partial
 
 transpiler: partial
 
-- hgraph: `invalidate(out)` clears the output; one that holds an unsized list empties each list first (`_core.invalidated`), since hgraph's `TSL` keeps its positions, which the next delta read would name removed
+- hgraph: `invalidate(out)` clears the output; one that holds an unsized list, a dictionary or a set, at any depth of a struct, a tuple and a fixed list, empties each first (`_core.invalidated`), since hgraph's `TSL` keeps its positions and its `TSD` and `TSS` their keys and members, which the next delta read would name removed and a delta that names no change would leave in what it makes valid (TIME-7: "it makes the value valid and empty")
 - `invalidate(out)` of a `ref` result (FN-16, proposed: `out` of one takes the endpoint operations) leaves it designating nothing: hgraph's empty reference, which unbinds a reader, then the invalidation, so a `ref` parameter given it is not valid, and modified; the last action of the evaluation decides (`_core.Designation`)
 - An active input's transition to invalid wakes the node
 - In a body or handler guard, `modified(input)` is false on invalidation, whether the input is active or passive

@@ -774,9 +774,10 @@ impl<'a> Emitter<'a> {
             Lifts::Function(_) => call,
         };
         // An unsized list in the result ticks through the node's own
-        // port of its output where it is published empty (`bundle_of`).
+        // port of its output where it is published empty, and a set
+        // where it keeps its members (`bundle_of`).
         let output = match (result, &returns) {
-            (Some(result), Some(returns)) if holds_growing_list(self.program, result) => {
+            (Some(result), Some(returns)) if published_through_port(self.program, result) => {
                 parameters.push(format!("_output: {} = None", output_annotation(returns)));
                 Some("_output")
             }

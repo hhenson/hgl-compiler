@@ -339,6 +339,41 @@ pub(super) fn holds_growing_list(program: &Program, ty: &Type) -> bool {
     within(program, ty, 0)
 }
 
+/// True where a whole value of `ty` is published through the port of
+/// the output it goes to: where it holds an unsized list or a set as a
+/// part at any depth, itself among them (`holds_growing_list`). TIME-7:
+/// "A value published whole, the same again or empty, is no delta, and
+/// ticks as any publication does", which hgraph's unbounded `TSL` does
+/// not for an empty list and its `TSS` does not for a set that keeps its
+/// members: the provider makes each tick through its own port
+/// (`_whole_list`, `_whole_set`).
+pub(super) fn published_through_port(program: &Program, ty: &Type) -> bool {
+    fn holds_set(program: &Program, ty: &Type, depth: usize) -> bool {
+        if depth > HELD_DEPTH {
+            return false;
+        }
+        match ty {
+            Type::Set(_) => true,
+            Type::Nullable(inner) | Type::Delta(inner) => holds_set(program, inner, depth + 1),
+            Type::List { element, .. } => holds_set(program, element, depth + 1),
+            Type::Dict { value, .. } => holds_set(program, value, depth + 1),
+            Type::Tuple(elements) => elements
+                .iter()
+                .any(|element| holds_set(program, element, depth + 1)),
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => program
+                .field_types(ty)
+                .unwrap_or_default()
+                .iter()
+                .any(|field| holds_set(program, field, depth + 1)),
+            _ => false,
+        }
+    }
+    holds_growing_list(program, ty) || holds_set(program, ty, 0)
+}
+
 /// Where a temporal value of `ty`, an unsized list, a struct or a tuple,
 /// holds an unsized list through its own fields and positions, the
 /// provider's shape of it for `published_into` and `invalidated`:
@@ -388,6 +423,66 @@ pub(super) fn list_parts_shape(program: &Program, ty: &Type) -> Option<String> {
     within(program, ty, 0)
 }
 
+/// Where a temporal value of `ty` holds what hgraph keeps when it is
+/// invalidated, the provider's shape of it for `invalidated`: `"list"`
+/// for an unsized list, `"entries"` for a dictionary or a set, a `dict`
+/// of the fields that hold one for a struct, a tuple of each position's,
+/// `None` where it holds none, for a tuple, and `[part]` for a fixed
+/// list whose elements hold one. `None` where `ty` holds none.
+///
+/// END-4: "Invalidation clears validity, modification, payload, and
+/// delta." hgraph 0.9.5's unbounded `TSL` keeps its positions, and its
+/// `TSD` and `TSS` their keys and members, which the next delta read
+/// would name removed, and which a delta that names no change would leave
+/// in what it makes valid (TIME-7: "it makes the value valid and empty").
+/// A struct, a tuple and a fixed list keep their children, so each is
+/// looked into; what a dictionary or an unsized list holds goes with the
+/// key or the position, so neither is.
+pub(super) fn emptied_shape(program: &Program, ty: &Type) -> Option<String> {
+    fn within(program: &Program, ty: &Type, depth: usize) -> Option<String> {
+        if depth > HELD_DEPTH {
+            return None;
+        }
+        match ty {
+            Type::List { size: None, .. } => Some("\"list\"".to_string()),
+            Type::Dict { .. } | Type::Set(_) => Some("\"entries\"".to_string()),
+            Type::List {
+                element,
+                size: Some(_),
+            } => within(program, element, depth + 1).map(|part| format!("[{part}]")),
+            Type::Tuple(elements) => {
+                let parts: Vec<Option<String>> = elements
+                    .iter()
+                    .map(|element| within(program, element, depth + 1))
+                    .collect();
+                if parts.iter().all(Option::is_none) {
+                    return None;
+                }
+                let written: Vec<String> = parts
+                    .into_iter()
+                    .map(|part| part.unwrap_or_else(|| "None".to_string()))
+                    .collect();
+                Some(format!("({},)", written.join(", ")))
+            }
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => {
+                let written: Vec<String> = fields_of(program, ty)?
+                    .into_iter()
+                    .filter_map(|(member, field)| {
+                        let part = within(program, &field, depth + 1)?;
+                        Some(format!("{}: {part}", string(&name(&member.name))))
+                    })
+                    .collect();
+                (!written.is_empty()).then(|| format!("{{{}}}", written.join(", ")))
+            }
+            _ => None,
+        }
+    }
+    within(program, ty, 0)
+}
+
 /// Where a temporal value of `ty` holds a dictionary or a set, itself
 /// among them, through dictionaries' values, structs' fields, tuples'
 /// positions and fixed lists' elements: the provider's shape of it for
@@ -400,26 +495,39 @@ pub(super) fn list_parts_shape(program: &Program, ty: &Type) -> Option<String> {
 /// it nor the `TSS` is made valid by a delta that names no change. An
 /// unsized list's is published by its size (`list_parts_shape`), and one
 /// in it is not looked for.
+///
+/// Within a dictionary's values a struct, a tuple and a fixed list are
+/// each written out whether or not they hold one, `("fields", {})` for a
+/// struct of fields that publish whole: TIME-7, "A struct, a tuple and
+/// a `list<V, N>` are valid where a child is (TIME-9), and such a delta
+/// of one, `delta<Quote>()`, sets no child: it changes no validity, and
+/// is never a tick". hgraph's `TSD` ticks for a key given one, where its
+/// bundle and its `TSL` do not, and the provider leaves it out of the
+/// dictionary's delta (`_pruned`).
 pub(super) fn entries_shape(program: &Program, ty: &Type) -> Option<String> {
-    fn within(program: &Program, ty: &Type, depth: usize) -> Option<String> {
+    /// `entry` is true within a dictionary's value.
+    fn within(program: &Program, ty: &Type, depth: usize, entry: bool) -> Option<String> {
         if depth > HELD_DEPTH {
             return None;
         }
-        let part = |ty: &Type| within(program, ty, depth + 1);
+        let part = |ty: &Type| within(program, ty, depth + 1, entry);
         let written = |part: Option<String>| part.unwrap_or_else(|| "None".to_string());
         match ty {
             Type::Set(_) => Some("\"entries\"".to_string()),
-            Type::Dict { value, .. } => Some(match part(value) {
+            Type::Dict { value, .. } => Some(match within(program, value, depth + 1, true) {
                 Some(inner) => format!("(\"entries\", {inner})"),
                 None => "\"entries\"".to_string(),
             }),
             Type::List {
                 element,
                 size: Some(_),
-            } => part(element).map(|inner| format!("(\"list\", {inner})")),
+            } => match part(element) {
+                Some(inner) => Some(format!("(\"list\", {inner})")),
+                None => entry.then(|| "(\"list\", None)".to_string()),
+            },
             Type::Tuple(elements) => {
                 let parts: Vec<Option<String>> = elements.iter().map(part).collect();
-                if parts.iter().all(Option::is_none) {
+                if !entry && parts.iter().all(Option::is_none) {
                     return None;
                 }
                 let parts: Vec<String> = parts.into_iter().map(written).collect();
@@ -436,12 +544,13 @@ pub(super) fn entries_shape(program: &Program, ty: &Type) -> Option<String> {
                         Some(format!("{}: {inner}", string(&name(&member.name))))
                     })
                     .collect();
-                (!fields.is_empty()).then(|| format!("(\"fields\", {{{}}})", fields.join(", ")))
+                (entry || !fields.is_empty())
+                    .then(|| format!("(\"fields\", {{{}}})", fields.join(", ")))
             }
             _ => None,
         }
     }
-    within(program, ty, 0)
+    within(program, ty, 0, false)
 }
 
 /// Where a temporal value of `ty` holds a list, fixed or unsized, as a

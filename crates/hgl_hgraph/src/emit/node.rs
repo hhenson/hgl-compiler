@@ -136,12 +136,13 @@ impl Emitter<'_> {
         // `_output`, which it gives the node and its `stop`.
         // An unsized list's delta is counted from the size the list
         // holds, and an empty one made to tick, on `_output` (see
-        // `bundled`), in the result or in a part of it.
+        // `bundled`), in the result or in a part of it; a whole set in
+        // it ticks through its port (`published_through_port`).
         let has_out = has_out
             || signature
                 .result
                 .as_ref()
-                .is_some_and(|result| holds_growing_list(self.program, result));
+                .is_some_and(|result| published_through_port(self.program, result));
         // A whole dictionary published replaces what the node published
         // before, which it reads from `_output`, and a whole empty
         // dictionary or set ticks on it (see `bundled`).
