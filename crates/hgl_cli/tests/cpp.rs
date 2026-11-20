@@ -428,6 +428,38 @@ fn temporal_code_runs_on_the_sdk() {
     );
 }
 
+/// The timing of nodes and sources on the SDK (`demo.timing`): nodes woken
+/// by a scheduler or an alarm, alone or with an input's tick, `scheduled()`
+/// and `modified([])` read as values, a wake dropped and one that fails
+/// (CAP-4, CAP-5, TIME-3, TIME-8, TIME-9), and sources that read their
+/// clock, keep a `cache` or a `state` and have `start` and `stop`
+/// (SOURCE-1 to SOURCE-4). Every test of it passes.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn timing_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("timing");
+    let file = write(
+        &root,
+        "src/demo.timing.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.timing.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 12 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-3: "An index outside a list fails where it is evaluated". The
 /// test is reported at the statement of it that was running, inside a
 /// function it called, with the runtime library's text of the failure.

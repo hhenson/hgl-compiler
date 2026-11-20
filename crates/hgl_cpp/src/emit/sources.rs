@@ -10,8 +10,9 @@
 //! | A bare `return`, the body's end (SOURCE-4) | `co_return;`, the coroutine's end |
 //! | Its node | `start` makes the body, held in the node's state with where it is; `eval` steps it with `::hglrt::resume`, which publishes what is due and asks the node's scheduler for the next target (SOURCE-2, SOURCE-3); `stop` destroys it, and the locals in its frame |
 //!
-//! A source with a declaration or a hook (`inject`, `cache`, `state`,
-//! `start`, `stop`; SOURCE-1) is not written yet, and is reported.
+//! What a source's declarations and hooks (`inject`, `cache`, `state`,
+//! `start`, `stop`; SOURCE-1) add to its node is `scheduling`'s: the
+//! parts it gives are written in their places here.
 
 use hgl_analyser::Signature;
 use hgl_analyser::hir::{Body, Stmt};

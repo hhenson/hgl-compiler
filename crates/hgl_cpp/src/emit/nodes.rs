@@ -9,6 +9,7 @@
 //! | A temporal parameter; a `const` one | `::hgraph::In<"value", TS<...>>`, its activity and its validity the node's (TIME-4); `::hgraph::Scalar<"key", T>` |
 //! | `state` and `cache` (TIME-6) | members of the node's one `state_type_`, held by hgraph as the node's `State`, each given its first value as the node starts, then bound by reference in each hook |
 //! | `inject clock`, `logger`, `global_state` (TIME-8) | the hgraph view of the hook, and the library's capability made from it at the top of the hook (`endpoints`) |
+//! | `inject scheduler`, `inject alarm` (TIME-8, TIME-9) | the same, made with the hook it is made in and in every `eval`, and what woke the node read as `eval` is entered, which guards the handlers (`scheduling`) |
 //! | `when` handlers (TIME-3) | tested in source order in `eval`, each guarded by what it asks beyond the node's own validity |
 //! | `return value`, `out = value` (TIME-7, FN-7) | the value published to the node's output, `out_`, as its temporal form publishes; a `return` then leaves the evaluation |
 //! | A generic node (GEN-2) | a struct and a wiring function for each instance `hgl_lower` collects, `n_::i_::record::of_i64` |
@@ -19,10 +20,8 @@
 //! then evaluates the node only once it is valid; one no handler
 //! subscribes to is `InputActivity::Passive`.
 //!
-//! Not written yet, and reported: a `ref` parameter or result (FN-16),
-//! `inject scheduler` and `inject alarm` (CAP-4, CAP-5), a handler that
-//! `scheduled()` or `modified([])` selects where the node injects a
-//! timer, a read of `out`.
+//! Not written yet, and reported: a `ref` parameter or result (FN-16), a
+//! read of `out`.
 
 use hgl_analyser::hir::{Body, Expr, ExprKind, Hook, Local, Stmt};
 use hgl_analyser::{Detail, LocalKind, Phase, Signature, Type};
@@ -496,7 +495,8 @@ impl Emitter<'_> {
             })
             .collect();
         // The scheduler or the alarm is made in every evaluation: what woke
-        // the node is read from it (`scheduling`).
+        // the node is read from the scheduler, or for an alarm from the
+        // inputs (`scheduling`).
         let Some(made) = self.capabilities(body, &injected, &timed, &all, Hook::When, &mut hook)
         else {
             return;
