@@ -364,7 +364,8 @@ fn emit_writes_a_unit_a_header_and_an_entry() {
 }
 
 /// `hgl run --target cpp` says what an application needs that the
-/// target does not write, and runs nothing.
+/// target does not write, and runs nothing: here the invalidation of a
+/// window result (END-4), which a node its entry wires reaches.
 #[test]
 fn run_says_what_an_application_lacks() {
     let root = scratch("run");
@@ -373,10 +374,15 @@ fn run_says_what_an_application_lacks() {
         "app.hgl",
         concat!(
             "application demo.app\n",
+            "fn cleared(reading: i64) -> rolling_window<i64, 2> {\n",
+            "    inject out\n",
+            "    when { invalidate(out) }\n",
+            "}\n",
+            "fn counted(readings: rolling_window<i64, 2>) -> i64 {\n",
+            "    when { return delta_value(readings) }\n",
+            "}\n",
             "fn later() -> i64 {\n",
-            "    inject scheduler\n",
-            "    start { schedule(scheduler, 1s) }\n",
-            "    when scheduled() { return 1 }\n",
+            "    return counted(readings: cleared(reading: 1))\n",
             "}\n",
             "eval(later())\n",
         ),
@@ -389,7 +395,7 @@ fn run_says_what_an_application_lacks() {
     );
     assert_eq!(
         text(&output.stderr),
-        format!("{file}:3:12: the cpp target does not write an injected `scheduler` yet\n")
+        format!("{file}:4:12: the cpp target does not write `invalidate` of a window yet\n")
     );
 }
 
@@ -708,6 +714,38 @@ fn references_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// The timing of nodes and sources on the SDK (`demo.timing`): nodes woken
+/// by a scheduler or an alarm, alone or with an input's tick, `scheduled()`
+/// and `modified([])` read as values, a wake dropped and one that fails
+/// (CAP-4, CAP-5, TIME-3, TIME-8, TIME-9), and sources that read their
+/// clock, keep a `cache` or a `state` and have `start` and `stop`
+/// (SOURCE-1 to SOURCE-4). Every test of it passes.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn timing_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("timing");
+    let file = write(
+        &root,
+        "src/demo.timing.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.timing.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 12 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

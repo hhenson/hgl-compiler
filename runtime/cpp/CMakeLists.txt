@@ -136,6 +136,7 @@ if(BUILD_TESTING)
         tests/tenor_tests.cpp
         tests/testing_tests.cpp
         tests/text_tests.cpp
+        tests/timing_tests.cpp
         tests/traces_tests.cpp
         tests/window_tests.cpp
     )

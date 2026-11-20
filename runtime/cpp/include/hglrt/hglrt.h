@@ -6,7 +6,8 @@
 // conversions.h, tenors.h, lists.h, endpoints.h, capabilities.h), HGL's failures
 // (failure.h), the reads checked when they run (checked.h), constants and
 // sources (sources.h) with the coroutine type of a source's body
-// (generator.h), windows (windows.h), what a `ref` parameter designates
+// (generator.h), what tells a node's wakes apart and what a source's body is
+// lent (timing.h), windows (windows.h), what a `ref` parameter designates
 // (references.h), the test host (testing.h), and the run of an
 // application (application.h). It is built on hgraph's runtime and wiring
 // libraries alone: nothing of hgraph's standard library is used
@@ -28,5 +29,6 @@
 #include <hglrt/tenors.h>
 #include <hglrt/testing.h>
 #include <hglrt/text.h>
+#include <hglrt/timing.h>
 #include <hglrt/values.h>
 #include <hglrt/windows.h>

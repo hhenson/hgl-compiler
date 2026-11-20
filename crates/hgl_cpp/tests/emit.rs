@@ -710,6 +710,37 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
 /// dispatch point, where it is written, and blocks what reaches it: a
 /// temporal value of a type no family writes, and a capability no family
 /// makes. A test that reaches neither is run.
+/// The timing the target writes (`emit/scheduling.rs`): nodes woken by a
+/// scheduler or an alarm, and sources with declarations and hooks, each
+/// as the goldens under `tests/goldens/demo.timing` have it. Each test of
+/// the program can be run, which `hgl_cli`'s tests do on the SDK.
+#[test]
+fn timing_is_written() {
+    let emitted = emit_with(
+        &[("demo.timing.hgl", include_str!("fixtures/demo.timing.hgl"))],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.timing", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.timing.cpp")
+        .unwrap()
+        .text;
+    // TIME-9: what woke a node is read once, as it is entered: the
+    // scheduler's due wake, or for an alarm that no input ticked.
+    assert!(unit.contains("const bool timer_woke_ = scheduler.is_scheduled_now();"));
+    assert!(unit.contains("const bool timer_woke_ = !(::hglrt::ticked(value));"));
+    // SOURCE-1, TIME-8: a source's body is lent each capability it reads
+    // for one resumption.
+    assert!(unit.contains("::hglrt::Lending<::hglrt::Clock>"));
+}
+
 #[test]
 fn a_temporal_form_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -751,10 +782,8 @@ fn a_temporal_form_not_written_yet_is_reported() {
         emitted.blocked("a_list").as_deref(),
         Some("m.hgl:18:31 the cpp target does not write a temporal value of `list<i64>` yet")
     );
-    assert_eq!(
-        emitted.blocked("a_scheduler").as_deref(),
-        Some("m.hgl:8:12 the cpp target does not write an injected `scheduler` yet")
-    );
+    // CAP-4: the scheduler is written (`scheduling`).
+    assert_eq!(emitted.blocked("a_scheduler"), None);
     assert_eq!(emitted.blocked("a_scalar"), None);
 }
 
