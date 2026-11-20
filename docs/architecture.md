@@ -2168,22 +2168,33 @@ is not used yet.
 | --- | --- |
 | `HGL_HGRAPH_SDK` | hgraph's C++ SDK, its install prefix: required, with no default |
 | `HGL_HGRAPH_DEPS` | The prefix of the libraries the SDK was built against: required, with no default |
-| `CXX` | The compiler; otherwise the first of `g++-17`, `g++-16`, `g++-15`, `g++` on the `PATH` that is GCC 15 or later |
+| `CXX` | The compiler, of the platform's family: GCC 15 or later on Linux, Apple clang 21 or later on macOS. Otherwise, on Linux, the first of `g++-17`, `g++-16`, `g++-15`, `g++` on the `PATH` that is GCC 15 or later, and on macOS `clang++`. A compiler is known by the macros it defines (`-dM -E`), not by its name |
 | `HGL_CPP_FLAGS` | Flags added to every compile and link, the runtime library's too: `-O2`, `-g`, the sanitizers |
 | `HGL_NATIVE_CACHE` | Where builds are kept; otherwise `hgl/native` in the user's cache directory |
 | `CMAKE_BUILD_PARALLEL_LEVEL` | How many jobs a build, and the executables run, take at once |
 
 A toolchain is prepared once and kept under the cache in
 `toolchains/<hash>`, the hash of the SDK's and the dependencies' paths
-and the SDK's own files, the compiler and its version, the linker, the
-flags and the runtime library's sources, under a lock: the runtime
+and the SDK's own files, the compiler, its family and version and what
+it reads from the environment (`MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`
+on macOS), the linker, the flags and the runtime library's sources,
+under a lock: the runtime
 library is configured, built and installed with CMake; a small CMake
 project of the driver's own, a program linked with it, is configured,
 and CMake's file API describes how CMake compiles and links it, which
 is the description every generated unit is built with
-(`description.json`); and the library's header is precompiled with it.
-Links add `-Wl,--disable-new-dtags`, so that the SDK's libraries find
-their dependencies, and `-fuse-ld=lld` where `ld.lld` is on the `PATH`.
+(`description.json`); and the library's header is precompiled with it,
+beside it as `hgl_pch.h.gch` for GCC and `hgl_pch.h.pch` for clang.
+What differs between the two families is said in one place, `Family` in
+`crates/hgl_cli/src/cpp/sdk.rs`. On Linux, links add
+`-Wl,--disable-new-dtags`, so that the SDK's libraries find their
+dependencies, and `-fuse-ld=lld` where `ld.lld` is on the `PATH`; an
+executable is run with the libraries' directories in `LD_LIBRARY_PATH`.
+On macOS, links are Apple's, and an executable finds every library
+through CMake's run paths (`-rpath`), which macOS's loader reads for
+each library on the way; it is run with no variable, as
+`DYLD_LIBRARY_PATH` naming the dependency prefix would load
+conda-forge's libc++ in place of the system's.
 
 A program is built in `programs/<hash>` of its source roots, or the
 directory `--keep` names, under a lock held until its last executable
@@ -2209,7 +2220,8 @@ The crate's tests compare the C++ written for three programs, `demo.calc`,
 `crates/hgl_cpp/tests/goldens/` (`HGL_UPDATE_GOLDENS=1 cargo test -p
 hgl_cpp --test emit` writes them again; core's module is left out of
 them) and check what blocks what. `crates/hgl_cli/tests/cpp.rs` checks
-the driver: what is said with no SDK, `emit` and `run`; and, given an
+the driver: what is said with no SDK and with a compiler not of the
+platform's family, `emit` and `run`; and, given an
 SDK, the whole route, that a failed build runs no older executable,
 that `demo.values` and `demo.composites` pass, and where a failure is reported, with `cargo
 test -p hgl_cli --test cpp -- --ignored`, which the `cpp` job of the CI
@@ -2461,8 +2473,9 @@ the job the way the design needs is dropped.
 | `which` | `hgl_cli` | the programs the cpp target builds with, found on the `PATH` |
 
 The cpp target's build driver runs programs, not crates: GCC 15 or
-later, `ninja`, `cmake` (once for each SDK) and `ld.lld` where it is on
-the `PATH`; see "cpp" under "Transpilers".
+later on Linux or Apple clang 21 or later on macOS, `ninja`, `cmake`
+(once for each SDK) and, on Linux, `ld.lld` where it is on the `PATH`;
+see "cpp" under "Transpilers".
 
 The C++ target's runtime library, `runtime/cpp`:
 

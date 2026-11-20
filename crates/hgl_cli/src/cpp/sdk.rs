@@ -8,16 +8,19 @@
 //! variables and nothing else: no default could be any machine's but
 //! one. `HGL_HGRAPH_SDK` names the SDK's install prefix, the directory
 //! that holds `lib/cmake/hgraph`; `HGL_HGRAPH_DEPS` the prefix of the
-//! libraries the SDK was built against (Arrow, fmt, spdlog and the
-//! rest). The compiler is the one `CXX` names, or the first GCC of
-//! version 15 or later on the `PATH` (`docs/cpp-target.md`: "GCC 15 or
-//! later on Linux"). `HGL_CPP_FLAGS` adds flags to every compile and
-//! link, the runtime library's too: `-O2`, `-g`, or the sanitizers.
+//! libraries the SDK was built against (fmt, spdlog and simdjson). The
+//! compiler is of the platform's family (`docs/cpp-target.md`): GCC 15
+//! or later on Linux, Apple clang 21 or later on macOS; the one `CXX`
+//! names, or else the first of the family's on the `PATH`. What the
+//! driver does differently for a family is said by [`Family`] alone.
+//! `HGL_CPP_FLAGS` adds flags to every compile and link, the runtime
+//! library's too: `-O2`, `-g`, or the sanitizers.
 //!
 //! What is made for a toolchain is kept under the cache, in a directory
 //! named by a hash of everything it depends on: the SDK's and the
-//! dependencies' paths and the SDK's own files, the compiler and its
-//! version, the linker, the flags, and the runtime library's sources.
+//! dependencies' paths and the SDK's own files, the compiler, its family
+//! and version and what it reads from the environment, the linker, the
+//! flags, and the runtime library's sources.
 //! It is made once, under a lock, by CMake:
 //!
 //! 1. the runtime library's project (`runtime/cpp`, carried by `hgl`)
@@ -31,6 +34,7 @@
 //! 3. the runtime library's header, the fixed include set, is
 //!    precompiled with those flags.
 
+use std::ffi::OsString;
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -49,20 +53,173 @@ pub(super) const DEPS: &str = "HGL_HGRAPH_DEPS";
 /// The variable whose flags are added to every compile and link.
 pub(super) const FLAGS: &str = "HGL_CPP_FLAGS";
 
-/// The oldest GCC the target is written for (`docs/cpp-target.md`).
-const OLDEST_GCC: u32 = 15;
-
-/// The compilers looked for on the `PATH` when `CXX` names none, the
-/// newest first.
-const COMPILERS: [&str; 4] = ["g++-17", "g++-16", "g++-15", "g++"];
-
 /// The file a prepared toolchain's description is kept in. It is
 /// written last: a directory that holds it is ready.
 const DESCRIPTION: &str = "description.json";
 
 /// A version of what is made for a toolchain: raised when what this
 /// driver makes changes, so that what an older `hgl` made is not used.
-const FORMAT: u32 = 3;
+const FORMAT: u32 = 4;
+
+/// The family of compilers a platform builds the cpp target with
+/// (`docs/cpp-target.md`): GCC on Linux, Apple clang on macOS. Each way
+/// the driver differs between them is one of its methods, and is said
+/// nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Family {
+    /// GCC, with its libstdc++: the compiler on Linux.
+    Gcc,
+    /// Apple clang, with the system's libc++: the compiler on macOS.
+    AppleClang,
+}
+
+impl Family {
+    /// The family of the platform `hgl` was built for.
+    fn of_platform() -> Family {
+        if cfg!(target_os = "macos") {
+            Family::AppleClang
+        } else {
+            Family::Gcc
+        }
+    }
+
+    /// The family's name, as a message says it.
+    fn name(self) -> &'static str {
+        match self {
+            Family::Gcc => "GCC",
+            Family::AppleClang => "Apple clang",
+        }
+    }
+
+    /// The family's word in a description's JSON.
+    fn word(self) -> &'static str {
+        match self {
+            Family::Gcc => "gcc",
+            Family::AppleClang => "apple-clang",
+        }
+    }
+
+    /// The family a description's JSON names by [`Family::word`].
+    fn from_word(word: &str) -> Option<Family> {
+        [Family::Gcc, Family::AppleClang]
+            .into_iter()
+            .find(|family| family.word() == word)
+    }
+
+    /// The oldest major version the target is built with: GCC 15, whose
+    /// libstdc++ the SDK's libraries need; Apple clang 21, the oldest
+    /// the SDK has been built and tested with.
+    fn oldest(self) -> u32 {
+        match self {
+            Family::Gcc => 15,
+            Family::AppleClang => 21,
+        }
+    }
+
+    /// The compilers looked for on the `PATH` when `CXX` names none, the
+    /// newest first.
+    fn candidates(self) -> &'static [&'static str] {
+        match self {
+            Family::Gcc => &["g++-17", "g++-16", "g++-15", "g++"],
+            Family::AppleClang => &["clang++"],
+        }
+    }
+
+    /// The family and version that a compiler's predefined macros, as
+    /// `-dM -E` prints them, say it is: `15.2.0` for GCC; for Apple clang
+    /// its version and Apple's build, `21.0.0 (21000401)`. `None` for a
+    /// compiler of neither family: clang defines `__GNUC__` too, and an
+    /// upstream clang is not Apple's.
+    fn identify(defines: &str) -> Option<(Family, String)> {
+        let value = |name: &str| {
+            defines.lines().find_map(|line| {
+                let rest = line.strip_prefix("#define ")?.strip_prefix(name)?;
+                rest.strip_prefix(' ').map(str::trim)
+            })
+        };
+        let version = |major: &str, minor: &str, patch: &str| {
+            Some(format!(
+                "{}.{}.{}",
+                value(major)?,
+                value(minor)?,
+                value(patch)?
+            ))
+        };
+        if let Some(build) = value("__apple_build_version__") {
+            let version = version("__clang_major__", "__clang_minor__", "__clang_patchlevel__")?;
+            return Some((Family::AppleClang, format!("{version} ({build})")));
+        }
+        if value("__clang__").is_none() && value("__GNUC__").is_some() {
+            let version = version("__GNUC__", "__GNUC_MINOR__", "__GNUC_PATCHLEVEL__")?;
+            return Some((Family::Gcc, version));
+        }
+        None
+    }
+
+    /// The variables of the environment a compiler of the family reads,
+    /// which change what it builds, and so the toolchain: Apple clang,
+    /// and CMake for it, take the oldest macOS to build for and the SDK
+    /// from them.
+    fn environment(self) -> &'static [&'static str] {
+        match self {
+            Family::Gcc => &[],
+            Family::AppleClang => &["MACOSX_DEPLOYMENT_TARGET", "SDKROOT"],
+        }
+    }
+
+    /// True where the family links with `ld.lld` when it is on the
+    /// `PATH`: GCC, whose own `ld` is slower. Apple's linker is the one
+    /// macOS builds with, and as fast.
+    fn links_with_lld(self) -> bool {
+        self == Family::Gcc
+    }
+
+    /// The flags a link takes beyond those CMake describes.
+    fn link_flags(self, lld: bool) -> Vec<String> {
+        match self {
+            // An `RPATH` of the program's, which the loader reads for
+            // what it loads where that has no `RUNPATH` of its own, so
+            // that an executable run by hand finds what it can.
+            Family::Gcc => {
+                let mut flags = vec!["-Wl,--disable-new-dtags".to_string()];
+                if lld {
+                    flags.push("-fuse-ld=lld".to_string());
+                }
+                flags
+            }
+            // None: macOS's loader resolves a library's `@rpath` through
+            // the run paths of every image on the way to it, the
+            // executable's among them, which CMake's `-rpath` flags give.
+            Family::AppleClang => Vec::new(),
+        }
+    }
+
+    /// The extension of a precompiled header beside the header, which
+    /// `-include` of the header reads in its place: GCC's `.gch`,
+    /// clang's `.pch`.
+    fn precompiled_extension(self) -> &'static str {
+        match self {
+            Family::Gcc => "h.gch",
+            Family::AppleClang => "h.pch",
+        }
+    }
+
+    /// The variable the platform's loader reads directories of
+    /// libraries from, which an executable is run with: `LD_LIBRARY_PATH`
+    /// on Linux, where the runtime library and the SDK's own find what
+    /// they need by their own `RUNPATH`s, which do not name the
+    /// dependencies' directory, and a `RUNPATH` stops the loader reading
+    /// the executable's `RPATH` for what they load. None on macOS, where
+    /// the run paths find everything, and where `DYLD_LIBRARY_PATH`
+    /// naming the dependency prefix would load conda-forge's libc++ in
+    /// place of the system's.
+    fn library_variable(self) -> Option<&'static str> {
+        match self {
+            Family::Gcc => Some("LD_LIBRARY_PATH"),
+            Family::AppleClang => None,
+        }
+    }
+}
 
 /// Everything the cpp target builds with, as it was found.
 #[derive(Debug, Clone)]
@@ -73,11 +230,14 @@ pub(super) struct Toolchain {
     deps: PathBuf,
     /// The C++ compiler.
     compiler: PathBuf,
-    /// The compiler's version, as `-dumpfullversion` gives it.
+    /// Its family, the platform's.
+    family: Family,
+    /// Its version, as [`Family::identify`] gives it.
     version: String,
     /// `ninja`.
     pub(super) ninja: PathBuf,
-    /// True where `ld.lld` is on the `PATH`, and links are made with it.
+    /// True where the family links with `ld.lld` and it is on the
+    /// `PATH`, and links are made with it.
     lld: bool,
     /// What `HGL_CPP_FLAGS` adds.
     flags: Vec<String>,
@@ -87,6 +247,8 @@ pub(super) struct Toolchain {
 /// toolchain: what `prepare` works out once and keeps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Description {
+    /// The compiler's family.
+    pub(super) family: Family,
     /// The compiler.
     pub(super) compiler: String,
     /// The flags of a compile, each as the shell reads it: the
@@ -100,10 +262,8 @@ pub(super) struct Description {
     pub(super) header: String,
     /// The directories an executable's libraries are loaded from: the
     /// runtime library's, the SDK's and its dependencies'. An executable
-    /// is run with them in `LD_LIBRARY_PATH`: the runtime library and
-    /// the SDK's own find what they need by their own `RUNPATH`s, which
-    /// do not name the dependencies' directory, and a `RUNPATH` stops
-    /// the loader reading the executable's `RPATH` for what they load.
+    /// is run with them in the family's [`Family::library_variable`],
+    /// where it has one ([`library_path`]).
     pub(super) libraries: Vec<String>,
 }
 
@@ -122,7 +282,8 @@ impl Toolchain {
             "the prefix of the libraries hgraph's C++ SDK was built against, which holds `include` and `lib`",
             &["include", "lib"],
         )?;
-        let (compiler, version) = compiler()?;
+        let family = Family::of_platform();
+        let (compiler, version) = compiler(family)?;
         let ninja = which::which("ninja").map_err(|_| {
             "`ninja` is not on the PATH: the cpp target builds with it (https://ninja-build.org)"
                 .to_string()
@@ -136,9 +297,10 @@ impl Toolchain {
             sdk,
             deps,
             compiler,
+            family,
             version,
             ninja,
-            lld: which::which("ld.lld").is_ok(),
+            lld: family.links_with_lld() && which::which("ld.lld").is_ok(),
             flags,
         })
     }
@@ -153,16 +315,22 @@ impl Toolchain {
         for path in [&self.sdk, &self.deps, &self.compiler] {
             path.hash(&mut hash);
         }
+        self.family.hash(&mut hash);
         self.version.hash(&mut hash);
+        for variable in self.family.environment() {
+            std::env::var_os(variable).hash(&mut hash);
+        }
         self.lld.hash(&mut hash);
         self.flags.hash(&mut hash);
-        // The SDK's own files: one rebuilt in place is another SDK.
+        // The SDK's own files: one rebuilt in place is another SDK. A
+        // shared library is `.so` on Linux, `.dylib` on macOS.
+        let suffix = std::env::consts::DLL_SUFFIX;
         for file in [
-            "lib/cmake/hgraph/hgraphConfigVersion.cmake",
-            "lib/libhgraph_runtime.so",
-            "lib/libhgraph_wiring.so",
+            "lib/cmake/hgraph/hgraphConfigVersion.cmake".to_string(),
+            format!("lib/libhgraph_runtime{suffix}"),
+            format!("lib/libhgraph_wiring{suffix}"),
         ] {
-            if let Ok(metadata) = fs::metadata(self.sdk.join(file)) {
+            if let Ok(metadata) = fs::metadata(self.sdk.join(&file)) {
                 metadata.len().hash(&mut hash);
                 metadata.modified().ok().hash(&mut hash);
             }
@@ -206,6 +374,7 @@ impl Toolchain {
             .display()
             .to_string();
         let json = serde_json::json!({
+            "family": description.family.word(),
             "compiler": description.compiler,
             "compile": description.compile,
             "link": description.link,
@@ -320,11 +489,8 @@ impl Toolchain {
             .arg(format!("-DHGL_RUNTIME={}", runtime.display()));
         run("the description of a build against the SDK", &mut configure)?;
         let target = probe_target(&build.join(".cmake/api/v1/reply"))?;
-        let mut description = description_of(&target, &self.compiler)?;
-        // An `RPATH` of the program's, which the loader reads for what
-        // it loads where that has no `RUNPATH` of its own, so that an
-        // executable run by hand finds what it can.
-        description.link.push("-Wl,--disable-new-dtags".to_string());
+        let mut description = description_of(&target, self.family, &self.compiler)?;
+        description.link.extend(self.family.link_flags(self.lld));
         description.libraries = [
             runtime.join("lib"),
             self.sdk.join("lib"),
@@ -333,15 +499,13 @@ impl Toolchain {
         .iter()
         .map(|directory| directory.display().to_string())
         .collect();
-        if self.lld {
-            description.link.push("-fuse-ld=lld".to_string());
-        }
         Ok(description)
     }
 
     /// Precompiles the runtime library's header with `description`'s
-    /// flags, and gives the header units are compiled with: GCC takes
-    /// the precompiled form beside it, `hgl_pch.h.gch`, in its place.
+    /// flags, and gives the header units are compiled with: the compiler
+    /// takes the precompiled form beside it in its place, `hgl_pch.h.gch`
+    /// for GCC and `hgl_pch.h.pch` for clang.
     fn precompile(&self, directory: &Path, description: &Description) -> Result<PathBuf, String> {
         let header = directory.join("pch").join("hgl_pch.h");
         write_if_changed(
@@ -356,7 +520,12 @@ impl Toolchain {
             description.compiler,
             description.compile.join(" "),
             quoted(&header.display().to_string()),
-            quoted(&header.with_extension("h.gch").display().to_string())
+            quoted(
+                &header
+                    .with_extension(self.family.precompiled_extension())
+                    .display()
+                    .to_string()
+            )
         );
         run(
             "the precompiled header",
@@ -379,7 +548,7 @@ list(APPEND CMAKE_PREFIX_PATH "${HGL_HGRAPH_SDK}" "${HGL_HGRAPH_DEPS}")
 find_package(hgraph CONFIG REQUIRED)
 add_library(hglrt SHARED IMPORTED)
 set_target_properties(hglrt PROPERTIES
-  IMPORTED_LOCATION "${HGL_RUNTIME}/lib/libhglrt.so"
+  IMPORTED_LOCATION "${HGL_RUNTIME}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}hglrt${CMAKE_SHARED_LIBRARY_SUFFIX}"
   INTERFACE_INCLUDE_DIRECTORIES "${HGL_RUNTIME}/include"
   INTERFACE_LINK_LIBRARIES "hgraph::runtime;hgraph::wiring")
 add_executable(hgl_probe probe.cpp)
@@ -408,10 +577,10 @@ fn prefix(variable: &str, what: &str, holds: &[&str]) -> Result<PathBuf, String>
     fs::canonicalize(&path).map_err(|error| format!("{variable} names {}: {error}", path.display()))
 }
 
-/// The compiler `CXX` names, or the first of [`COMPILERS`] on the
-/// `PATH`, with its version; or why there is none of version
-/// [`OLDEST_GCC`] or later.
-fn compiler() -> Result<(PathBuf, String), String> {
+/// The compiler `CXX` names, or the first of `family`'s candidates on
+/// the `PATH`, with its version; or why there is none of the family at
+/// its oldest version or later.
+fn compiler(family: Family) -> Result<(PathBuf, String), String> {
     let named = std::env::var_os("CXX").filter(|named| !named.is_empty());
     let candidates: Vec<PathBuf> = match &named {
         Some(named) => vec![which::which(named).map_err(|_| {
@@ -420,38 +589,45 @@ fn compiler() -> Result<(PathBuf, String), String> {
                 PathBuf::from(named).display()
             )
         })?],
-        None => COMPILERS
+        None => family
+            .candidates()
             .iter()
             .filter_map(|name| which::which(name).ok())
             .collect(),
     };
     let mut seen = Vec::new();
     for candidate in candidates {
-        let version = Command::new(&candidate)
-            .arg("-dumpfullversion")
+        // The macros it defines say which compiler it is, whatever its
+        // name: `g++` is Apple clang on macOS.
+        let found = Command::new(&candidate)
+            .args(["-dM", "-E", "-x", "c++", "/dev/null"])
             .output()
             .ok()
             .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-            .unwrap_or_default();
-        let major = version
-            .split('.')
-            .next()
-            .and_then(|major| major.parse::<u32>().ok());
-        // The path as found, and not where a link leads: a wrapper
-        // such as `ccache` linked as `g++` knows the compiler by it.
-        if major.is_some_and(|major| major >= OLDEST_GCC) {
-            return Ok((candidate, version));
-        }
-        seen.push(format!(
-            "{} ({})",
-            candidate.display(),
-            if version.is_empty() {
-                "no version"
-            } else {
-                &version
+            .and_then(|output| Family::identify(&String::from_utf8_lossy(&output.stdout)));
+        let major = |version: &str| {
+            version
+                .split('.')
+                .next()
+                .and_then(|major| major.parse::<u32>().ok())
+        };
+        match found {
+            // The path as found, and not where a link leads: a wrapper
+            // such as `ccache` linked as `g++` knows the compiler by it.
+            Some((of, version))
+                if of == family
+                    && major(&version).is_some_and(|major| major >= family.oldest()) =>
+            {
+                return Ok((candidate, version));
             }
-        ));
+            Some((of, version)) => {
+                seen.push(format!("{} ({} {version})", candidate.display(), of.name()))
+            }
+            None => seen.push(format!(
+                "{} (neither GCC nor Apple clang)",
+                candidate.display()
+            )),
+        }
     }
     let found = if seen.is_empty() {
         "none was found".to_string()
@@ -459,10 +635,29 @@ fn compiler() -> Result<(PathBuf, String), String> {
         format!("found {}", seen.join(", "))
     };
     Err(format!(
-        "the cpp target needs GCC {OLDEST_GCC} or later, named by CXX or on the PATH as one of \
-         {}: {found}",
-        COMPILERS.join(", ")
+        "the cpp target needs {} {} or later here, named by CXX or on the PATH as one of {}: \
+         {found}",
+        family.name(),
+        family.oldest(),
+        family.candidates().join(", ")
     ))
+}
+
+/// What an executable built with `description` is run with so that it
+/// finds its libraries: the family's [`Family::library_variable`], and
+/// as its value the description's directories before those it already
+/// names. `None` where the family has no such variable.
+pub(super) fn library_path(description: &Description) -> Option<(&'static str, OsString)> {
+    let variable = description.family.library_variable()?;
+    let inherited = std::env::var_os(variable).unwrap_or_default();
+    let paths = description
+        .libraries
+        .iter()
+        .map(PathBuf::from)
+        .chain(std::env::split_paths(&inherited));
+    // A directory with a `:` in it cannot be named in the list; it is
+    // then left to the executable's run path.
+    Some((variable, std::env::join_paths(paths).unwrap_or(inherited)))
 }
 
 /// Runs `command` to its end; `what` names it in the reason it failed,
@@ -532,7 +727,7 @@ fn probe_target(reply: &Path) -> Result<Value, String> {
 
 /// The description a file-API target gives: its one group of compile
 /// flags, defines and include directories, and its link's fragments.
-fn description_of(target: &Value, compiler: &Path) -> Result<Description, String> {
+fn description_of(target: &Value, family: Family, compiler: &Path) -> Result<Description, String> {
     let missing = || "CMake's description of the build has no compile flags".to_string();
     let group = &target["compileGroups"][0];
     let mut compile: Vec<String> = Vec::new();
@@ -566,6 +761,7 @@ fn description_of(target: &Value, compiler: &Path) -> Result<Description, String
         .map(str::to_string)
         .collect();
     Ok(Description {
+        family,
         compiler: quoted(&compiler.display().to_string()),
         compile,
         link,
@@ -586,6 +782,7 @@ fn read_description(text: &str) -> Option<Description> {
             .collect()
     };
     Some(Description {
+        family: Family::from_word(json["family"].as_str()?)?,
         compiler: json["compiler"].as_str()?.to_string(),
         compile: strings(&json["compile"])?,
         link: strings(&json["link"])?,
@@ -596,11 +793,49 @@ fn read_description(text: &str) -> Option<Description> {
 
 #[cfg(test)]
 mod tests {
-    use super::read_description;
+    use super::{Family, read_description};
+
+    /// Some of what GCC 15.2 defines, as `-dM -E` prints it.
+    const GCC: &str = "#define __cplusplus 201703L\n#define __GNUC__ 15\n\
+                       #define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 0\n";
+
+    /// Some of what Apple clang 21 defines: `__GNUC__` too.
+    const APPLE_CLANG: &str = "#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n\
+                               #define __GNUC_PATCHLEVEL__ 1\n#define __apple_build_version__ 21000401\n\
+                               #define __clang__ 1\n#define __clang_major__ 21\n\
+                               #define __clang_minor__ 0\n#define __clang_patchlevel__ 0\n";
+
+    /// Some of what an upstream clang defines: no Apple build.
+    const CLANG: &str = "#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n\
+                         #define __GNUC_PATCHLEVEL__ 1\n#define __clang__ 1\n\
+                         #define __clang_major__ 20\n#define __clang_minor__ 1\n\
+                         #define __clang_patchlevel__ 8\n";
 
     #[test]
     fn a_description_that_is_not_whole_is_none() {
         assert_eq!(read_description("{}"), None);
         assert_eq!(read_description("not json"), None);
+    }
+
+    #[test]
+    fn a_compiler_is_known_by_the_macros_it_defines() {
+        assert_eq!(
+            Family::identify(GCC),
+            Some((Family::Gcc, "15.2.0".to_string()))
+        );
+        assert_eq!(
+            Family::identify(APPLE_CLANG),
+            Some((Family::AppleClang, "21.0.0 (21000401)".to_string()))
+        );
+        assert_eq!(Family::identify(CLANG), None);
+        assert_eq!(Family::identify(""), None);
+    }
+
+    #[test]
+    fn a_family_is_written_and_read_by_its_word() {
+        for family in [Family::Gcc, Family::AppleClang] {
+            assert_eq!(Family::from_word(family.word()), Some(family));
+        }
+        assert_eq!(Family::from_word("msvc"), None);
     }
 }

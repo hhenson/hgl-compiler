@@ -24,6 +24,7 @@
 mod build;
 mod sdk;
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -204,13 +205,13 @@ impl OnCpp<'_> {
             }
         }
         let mut outcomes = vec![None; runnable.len()];
-        let libraries = library_path(&description.libraries);
+        let libraries = sdk::library_path(&description);
         for (slot, outcome) in launch_all(
             &workspace,
             output,
             &launches,
             self.sources,
-            &libraries,
+            libraries.as_ref(),
             jobs.as_deref(),
         ) {
             outcomes[slot] = Some(outcome);
@@ -240,15 +241,16 @@ struct Launch<'o> {
 }
 
 /// Runs each of `launches` in `workspace`, as many at once as `jobs`
-/// says or the machine has cores, each with `libraries` as its
-/// `LD_LIBRARY_PATH`, and gives what became of each test, by its
+/// says or the machine has cores, each with `libraries`, a variable and
+/// its value, in its environment where there is one
+/// (`sdk::library_path`), and gives what became of each test, by its
 /// position among those asked to run.
 fn launch_all(
     workspace: &Workspace,
     output: &Output,
     launches: &[Launch],
     sources: &SourceMap,
-    libraries: &std::ffi::OsStr,
+    libraries: Option<&(&'static str, OsString)>,
     jobs: Option<&str>,
 ) -> Vec<(usize, Outcome)> {
     let threads = jobs
@@ -290,15 +292,15 @@ fn launch_all(
 }
 
 /// Runs one executable, the `position`th of the runs, on its tests, with
-/// `libraries` as its `LD_LIBRARY_PATH`, and reads what became of each
-/// from the results it writes.
+/// `libraries` in its environment where there is one, and reads what
+/// became of each from the results it writes.
 fn launch_one(
     workspace: &Workspace,
     output: &Output,
     launch: &Launch,
     position: usize,
     sources: &SourceMap,
-    libraries: &std::ffi::OsStr,
+    libraries: Option<&(&'static str, OsString)>,
 ) -> Vec<(usize, Outcome)> {
     let module = &output.executables[launch.executable].module;
     let all = |reason: String| -> Vec<(usize, Outcome)> {
@@ -329,8 +331,10 @@ fn launch_one(
     // (`hglrt/testing.h`).
     let executable = workspace.executable(module);
     let mut command = Command::new(&executable);
+    if let Some((variable, value)) = libraries {
+        command.env(variable, value);
+    }
     command
-        .env("LD_LIBRARY_PATH", libraries)
         .arg(&results)
         .args(launch.tests.iter().map(|(_, test)| test.identity()));
     let (finished, timed_out) = match finish(&mut command, launch.limit) {
@@ -393,19 +397,6 @@ fn launch_one(
             (*slot, outcome)
         })
         .collect()
-}
-
-/// `directories`, the libraries' directories of a toolchain, before
-/// those `LD_LIBRARY_PATH` already names, as its value.
-fn library_path(directories: &[String]) -> std::ffi::OsString {
-    let inherited = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
-    let paths = directories
-        .iter()
-        .map(PathBuf::from)
-        .chain(std::env::split_paths(&inherited));
-    // A directory with a `:` in it cannot be named in the list; it is
-    // then left to the executable's `RPATH`.
-    std::env::join_paths(paths).unwrap_or(inherited)
 }
 
 /// Runs `command` to its end, and gives what it printed and how it
