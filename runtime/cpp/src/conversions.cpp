@@ -303,11 +303,11 @@ void detail::fail_conversion(std::string_view why, std::source_location where) {
     fail(codes::invalid_conversion, std::string{why}, where);
 }
 
-str detail::text_of(i64 value) {
+str detail::number_text(i64 value) {
     return std::to_string(value);
 }
 
-str detail::text_of(f64 value) {
+str detail::number_text(f64 value) {
     if (std::isnan(value)) {
         return "nan";
     }

@@ -11,6 +11,11 @@
 // it for one. So a list is a type of this library until hgraph hashes a
 // value through a trait of its own.
 //
+// An enum is a C++ enumeration of its members (TYPE-7), and names itself
+// through `hgl_enum`, which the compiler writes beside it (`EnumNames`): the
+// library names it, prints its members and registers it with hgraph, an
+// atomic, through that alone.
+//
 // What a temporal value publishes in one cycle, its `delta<T>` (TYPE-16), is
 // an ordinary value too: `delta_t<T>`. It is T itself for a scalar and for
 // a nullable one, a tuple of optionals for a tuple, and `list_delta` for a
@@ -25,6 +30,7 @@
 #include <hgraph/util/date_time.h>
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -32,8 +38,10 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace hglrt {
@@ -69,6 +77,36 @@ using tenor = hgraph::Tenor;
 template <class T>
 struct list : std::vector<T> {
     using std::vector<T>::vector;
+};
+
+/// What names an enum of HGL (TYPE-7): its type, by its name qualified with
+/// its module's path as a test's is (TST-15), `demo.trade::Side` or
+/// `core::CmpResult`; and each member, its value and its name, in the order
+/// declared. An enum `E` gives it through a function `hgl_enum(E)`, which
+/// takes any value of `E` and is found by argument-dependent lookup: the
+/// compiler writes one beside each enum of a program, in its namespace,
+///
+///     constexpr ::hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept {
+///         return {"demo.trade::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}};
+///     }
+///
+/// and it is all an enum needs to be a value of the library: its HGL name
+/// (`type_name`), its text (TYPE-7: "`Type.member` names one", testing.h's
+/// `text_of`), and its schema, with which hgraph holds it, a list of it and a
+/// recording of it.
+template <class E, std::size_t N>
+struct EnumNames {
+    /// The enum's name, qualified with its module's path.
+    std::string_view type;
+    /// Each member and its name, as HGL writes it.
+    std::pair<E, std::string_view> members[N];
+};
+
+/// An enumeration the library can name: one whose `hgl_enum` gives its
+/// `EnumNames`.
+template <class E>
+concept named_enum = std::is_enum_v<E> && requires(E value) {
+    { hgl_enum(value).type } -> std::convertible_to<std::string_view>;
 };
 
 template <class L>
@@ -249,6 +287,8 @@ std::string type_name() {
             ((parts += (I == 0 ? "" : ", ") + type_name<std::tuple_element_t<I, T>>()), ...);
             return "tuple<" + parts + ">";
         }(std::make_index_sequence<std::tuple_size_v<T>>{});
+    } else if constexpr (named_enum<T>) {
+        return std::string{hgl_enum(T{}).type};
     } else if constexpr (requires { T::hgl_name; }) {
         // A type the compiler writes (a struct, a node's state) names itself.
         return std::string{T::hgl_name};
@@ -258,6 +298,24 @@ std::string type_name() {
 }
 
 } // namespace hglrt
+
+namespace hglrt::detail {
+/// The member `value` of an enum as the language names one (TYPE-7:
+/// "`Type.member` names one"): `Side.buy`, its type's name without its
+/// module's path. A value that is no member, which no program makes, is
+/// written as a call of the enum's name with its number would make it.
+template <named_enum E>
+std::string member_text(E value) {
+    const auto names = hgl_enum(value);
+    const std::string_view type = names.type.substr(names.type.rfind(':') + 1);
+    for (const auto& [member, name] : names.members) {
+        if (member == value) {
+            return std::string{type} + "." + std::string{name};
+        }
+    }
+    return std::string{type} + "(" + std::to_string(static_cast<std::underlying_type_t<E>>(value)) + ")";
+}
+} // namespace hglrt::detail
 
 template <class T>
 struct std::hash<hglrt::list<T>> {
@@ -272,5 +330,17 @@ struct hgraph::scalar_descriptor<hglrt::list<T>> {
     [[nodiscard]] static const ValueTypeMetaData* value_meta() {
         static const std::string name = "hgl." + hglrt::type_name<hglrt::list<T>>();
         return TypeRegistry::instance().register_scalar<hglrt::list<T>>(name);
+    }
+};
+
+/// An enum is registered with hgraph as an atomic, under `hgl.` and its HGL
+/// name, the first time hgraph asks for its schema: its members' order is
+/// the enumeration's, and its hash and equality the enumeration's own.
+template <hglrt::named_enum E>
+struct hgraph::scalar_descriptor<E> {
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta() {
+        static const std::string name = "hgl." + hglrt::type_name<E>();
+        return TypeRegistry::instance().register_scalar<E>(name);
     }
 };
