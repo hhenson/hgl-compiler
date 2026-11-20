@@ -1291,6 +1291,7 @@ fn composite_forms_not_written_yet_are_reported() {
             "struct Mark<T> : Marked { tag: list<T> = [] }\n",
             "const fn read(box: Maybe<i64?>) -> i64? => box.value\n",
             "const fn marked() -> Mark<delta<i64?>> => Mark<delta<i64?>>()\n",
+            "const fn whole(change: delta<Maybe<atomic<list<i64>>>>) -> bool => change.value == null\n",
             "test noded {\n",
             "    assert Node(value: 1).value == 1\n",
             "}\n",
@@ -1313,6 +1314,9 @@ fn composite_forms_not_written_yet_are_reported() {
             // TYPE-3: `Mark<delta<i64?>>` is no `Mark<i64?>`, which would be
             // one C++ struct.
             "m.hgl:33:10 the cpp target does not write the type `Mark<delta<i64?>>` yet",
+            // TYPE-16: an atomic's delta is the whole value, which the
+            // template, given the value the atomic holds, would not have.
+            "m.hgl:34:16 the cpp target does not write the type `delta<Maybe<atomic<list<i64>>>>` yet",
         ]
     );
     assert_eq!(emitted.blocked("noded").as_deref(), Some(holds_itself));

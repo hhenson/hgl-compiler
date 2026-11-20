@@ -150,8 +150,11 @@ fn template_arguments(
 /// are not, and such an application is not written yet:
 ///
 /// * An argument that holds a nullable's delta, `delta<i64?>`, which is
-///   an optional in C++ as `i64?` is: the two applications would be one
-///   C++ struct, though TYPE-3 tells them apart by their arguments.
+///   an optional in C++ as `i64?` is, or an atomic, `atomic<list<i64>>`,
+///   which is the value it holds in C++: the two applications would be
+///   one C++ struct, though TYPE-3 tells them apart by their arguments,
+///   and an atomic's delta is the whole value (TYPE-16), which the
+///   template's would not be.
 /// * A field written `T?` whose `T` is given a nullable, `i64?`: its type
 ///   is `i64?` (TYPE-14: the suffix makes no nullable of a nullable),
 ///   where the template's would be an optional of an optional.
@@ -160,19 +163,19 @@ fn template_keeps(
     members: &[hgl_analyser::Member],
     arguments: &[GenericArgument],
 ) -> bool {
-    fn holds_nullable_delta(ty: &Type) -> bool {
+    fn erased_in_cpp(ty: &Type) -> bool {
         match ty {
-            Type::Delta(of) => matches!(**of, Type::Nullable(_)) || holds_nullable_delta(of),
-            Type::Named { arguments, .. } => arguments.iter().any(|argument| {
-                matches!(argument, GenericArgument::Type(inner) if holds_nullable_delta(inner))
-            }),
-            Type::Nullable(inner)
-            | Type::List { element: inner, .. }
-            | Type::Set(inner)
-            | Type::Atomic(inner) => holds_nullable_delta(inner),
-            Type::Dict { key, value } => holds_nullable_delta(key) || holds_nullable_delta(value),
-            Type::Tuple(positions) => positions.iter().any(holds_nullable_delta),
-            Type::Result { value, error } => holds_nullable_delta(value) || holds_nullable_delta(error),
+            Type::Atomic(_) => true,
+            Type::Delta(of) => matches!(**of, Type::Nullable(_)) || erased_in_cpp(of),
+            Type::Named { arguments, .. } => arguments.iter().any(
+                |argument| matches!(argument, GenericArgument::Type(inner) if erased_in_cpp(inner)),
+            ),
+            Type::Nullable(inner) | Type::List { element: inner, .. } | Type::Set(inner) => {
+                erased_in_cpp(inner)
+            }
+            Type::Dict { key, value } => erased_in_cpp(key) || erased_in_cpp(value),
+            Type::Tuple(positions) => positions.iter().any(erased_in_cpp),
+            Type::Result { value, error } => erased_in_cpp(value) || erased_in_cpp(error),
             _ => false,
         }
     }
@@ -214,7 +217,7 @@ fn template_keeps(
     }
     if arguments
         .iter()
-        .any(|argument| matches!(argument, GenericArgument::Type(ty) if holds_nullable_delta(ty)))
+        .any(|argument| matches!(argument, GenericArgument::Type(ty) if erased_in_cpp(ty)))
     {
         return false;
     }
