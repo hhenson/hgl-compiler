@@ -67,6 +67,15 @@ void raises_out_of_range() {
     (void)hglrt::add__i64_i64(std::numeric_limits<i64>::max(), 1);
 }
 
+/// The text of a failure whose message holds a NUL and the other control
+/// characters (LEX-24 admits `\u{0}` in a string).
+const std::string controls("before \0\x01\x0b\x0c\x1b\x1f\x7f\n\r after", 22);
+
+void raises_with_controls() {
+    hglrt::testing::statement();
+    hglrt::raise(hglrt::make_error("said " + controls, "user.code"));
+}
+
 // Tests held to a time limit (TST-17).
 
 /// Where the statement of `runs_past_its_limit` that is running at its
@@ -113,6 +122,8 @@ void runs_within_its_limit() {
 const hglrt::testing::Registration registered_passes{"host.cases::passes", &passes};
 const hglrt::testing::Registration registered_fails{"host.cases::fails_an_assertion", &fails_an_assertion};
 const hglrt::testing::Registration registered_raises{"host.cases::raises_out_of_range", &raises_out_of_range};
+const hglrt::testing::Registration registered_controls{"host.cases::raises_with_controls",
+                                                       &raises_with_controls};
 const hglrt::testing::Registration registered_past{"host.cases::runs_past_its_limit", &runs_past_its_limit};
 const hglrt::testing::Registration registered_after{"host.cases::starts_a_run_after_its_limit",
                                                     &starts_a_run_after_its_limit};
@@ -380,6 +391,42 @@ TEST_CASE("the host runs the tests named and writes what became of each") {
     std::vector<char*> malformed{program.data(), file.data(), unlimited.data()};
     CHECK(hglrt::testing::main(3, malformed.data()) == 2);
     CHECK_FALSE(std::filesystem::exists(results));
+}
+
+TEST_CASE("a failure's text is one results line, whatever characters it holds") {
+    const std::filesystem::path results = "hglrt-host-controls.txt";
+    std::string program = "tests";
+    std::string file = results.string();
+    std::string name = "host.cases::raises_with_controls";
+    std::vector<char*> argv{program.data(), file.data(), name.data()};
+    REQUIRE(hglrt::testing::main(static_cast<int>(argv.size()), argv.data()) == 0);
+    const std::vector<std::string> lines = lines_of(results);
+    REQUIRE(lines.size() == 2);
+    // A line feed and a carriage return are escaped, and every other
+    // character is written as it is: a NUL ends no line.
+    const std::string written("before \0\x01\x0b\x0c\x1b\x1f\x7f\\n\\r after", 24);
+    CHECK(lines[1].starts_with("failed 0 "));
+    CHECK(lines[1].find(" user.code: said " + written + ", raised at ") != std::string::npos);
+}
+
+TEST_CASE("a time limit too long for the host's clock is one that cannot pass (TST-17)") {
+    const std::filesystem::path results = "hglrt-host-limits.txt";
+    std::string program = "tests";
+    std::string file = results.string();
+    // 2^63 - 1 microseconds, about 317 years, and about 32 years.
+    std::vector<std::string> names{"host.cases::passes@9223372036854775807",
+                                   "host.cases::passes@10000000000000000",
+                                   "host.cases::passes@1000000000000000"};
+    std::vector<char*> argv{program.data(), file.data()};
+    for (std::string& name : names) {
+        argv.push_back(name.data());
+    }
+    REQUIRE(hglrt::testing::detail::main_with_grace(static_cast<int>(argv.size()), argv.data(), 200) == 0);
+    const std::vector<std::string> lines = lines_of(results);
+    REQUIRE(lines.size() == 6);
+    for (std::size_t test = 0; test < 3; ++test) {
+        CHECK(lines[2 * test + 1] == "passed " + std::to_string(test));
+    }
 }
 
 TEST_CASE("a test past its time limit has its runs stopped, and has failed (TST-17)") {

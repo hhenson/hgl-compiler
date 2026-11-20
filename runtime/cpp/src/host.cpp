@@ -34,7 +34,9 @@ std::map<std::string, Body, std::less<>>& registered() {
 }
 
 /// `text` as one line of the results file: a backslash, a line feed and a
-/// carriage return as `\\`, `\n` and `\r`, as the runner reads them.
+/// carriage return as `\\`, `\n` and `\r`, as the runner reads them, and
+/// every other character as it is, a NUL and the other control characters
+/// among them: the runner ends a line at a line feed alone.
 std::string escaped(std::string_view text) {
     std::string out;
     out.reserve(text.size());
@@ -111,6 +113,24 @@ Outcome unbounded(Body body) {
     return Outcome{};
 }
 
+/// Waits on `ended` with `lock` until `done()` holds or `limit` has passed,
+/// whichever is first, and gives whether `done()` holds. A limit too long for
+/// the steady clock to count from now is one that cannot pass: the wait is
+/// then for `done()` alone.
+template <class Done>
+bool waited(std::condition_variable& ended, std::unique_lock<std::mutex>& lock,
+            std::chrono::microseconds limit, Done done) {
+    using clock = std::chrono::steady_clock;
+    const clock::time_point now = clock::now();
+    // The longest wait the clock can count from now, in whole microseconds.
+    const auto room = std::chrono::floor<std::chrono::microseconds>(clock::time_point::max() - now);
+    if (limit >= room) {
+        ended.wait(lock, done);
+        return true;
+    }
+    return ended.wait_until(lock, now + std::chrono::duration_cast<clock::duration>(limit), done);
+}
+
 /// Runs `body` on a thread of its own, and waits for it no longer than
 /// `limit` (TST-17): then the runs of the test are asked to stop, and the
 /// test is given `grace` more to end. It has failed whatever it then does.
@@ -141,7 +161,7 @@ Outcome bounded(Body body, std::chrono::microseconds limit, std::chrono::millise
         shared->ended.notify_all();
     });
     std::unique_lock lock(shared->mutex);
-    if (shared->ended.wait_for(lock, limit, [&] { return shared->done; })) {
+    if (waited(shared->ended, lock, limit, [&] { return shared->done; })) {
         lock.unlock();
         test.join();
         detail::runs_watched(false);
@@ -201,11 +221,12 @@ int detail::main_with_grace(int argc, char** argv, long grace_milliseconds) {
         return 2;
     }
     bool written = true;
-    // Each line is flushed as it is written, so that what was recorded is
-    // there however the process ends.
+    // Each line is written whole, a NUL in it among the rest, and flushed as
+    // it is written, so that what was recorded is there however the process
+    // ends.
     const auto say = [&](const std::string& line) {
-        written = std::fputs(line.c_str(), results) >= 0 && std::fputc('\n', results) != EOF &&
-                  std::fflush(results) == 0 && written;
+        written = std::fwrite(line.data(), 1, line.size(), results) == line.size() &&
+                  std::fputc('\n', results) != EOF && std::fflush(results) == 0 && written;
     };
     for (std::size_t number = 0; number < tests.size(); ++number) {
         const Named& test = tests[number];
