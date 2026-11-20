@@ -290,8 +290,7 @@ TEST_CASE("a date takes the months first, to the last day of a shorter month, an
     CHECK(plus(year{2024} / 1 / 31, months(1)) == year{2024} / 2 / 29);
     CHECK(plus(year{2026} / 3 / 15, months(-27)) == year{2023} / 12 / 15);
     CHECK(plus(year{2026} / 3 / 1, days(-1)) == year{2026} / 2 / 28);
-    // The ends of the date range: a result, or the date the months give,
-    // outside it is out of range.
+    // The ends of the date range: a result outside it is out of range.
     CHECK(plus(year{9999} / 12 / 30, days(1)) == year{9999} / 12 / 31);
     CHECK(code_raised([] { (void)hglrt::fn_moved(year{9999} / 12 / 31, days(1)); }) ==
           "numeric.out_of_range");
@@ -307,11 +306,40 @@ TEST_CASE("a date takes the months first, to the last day of a shorter month, an
           "numeric.out_of_range");
     CHECK(code_raised([] { (void)hglrt::fn_moved(year{2026} / 1 / 1, days(least)); }) ==
           "numeric.out_of_range");
-    CHECK(code_raised([] { (void)hglrt::fn_moved(year{9999} / 12 / 31, months(1, -40)); }) ==
-          "numeric.out_of_range");
     CHECK(hglrt::fn_moved(year{1} / 1 / 1, months(119'987, 30)) == year{9999} / 12 / 31);
     // A tenor of business days has neither months nor days.
     CHECK(hglrt::fn_moved(year{2026} / 1 / 3, business(5)) == year{2026} / 1 / 3);
+}
+
+TEST_CASE("only the result of a date moved by a tenor is held to the date range (TEN-4)") {
+    // TEN-4 (hhenson/hgl_core#86): "Only the result is held to the range: the
+    // date the months give may lie outside it where the days bring the
+    // result back within it." Core's case: 10000-01-15 less 30 days, and
+    // 0000-12-15 and 30 days.
+    CHECK(plus(year{9999} / 12 / 15, hglrt::sub__tenor_tenor(months(1), days(30))) == year{9999} / 12 / 16);
+    CHECK(plus(year{1} / 1 / 15, hglrt::sub__tenor_tenor(days(30), months(1))) == year{1} / 1 / 14);
+    CHECK(code_raised([] { (void)plus(year{9999} / 12 / 15, months(1)); }) == "numeric.out_of_range");
+    CHECK(code_raised([] { (void)minus(year{1} / 1 / 15, months(1)); }) == "numeric.out_of_range");
+    // 10000-01-31 less 40 days; the last day of 0000-02, a leap year's, and a
+    // day.
+    CHECK(hglrt::fn_moved(year{9999} / 12 / 31, months(1, -40)) == year{9999} / 12 / 22);
+    CHECK(hglrt::fn_moved(year{1} / 3 / 31, months(-13, 307)) == year{1} / 1 / 1);
+    // Counts far past the range, which the days bring back: 400 years are
+    // 146097 days, so many cycles of them on and back are the date itself.
+    constexpr i64 cycles = 60'000'000'000'000;
+    CHECK(hglrt::fn_moved(year{2000} / 3 / 1, months(12 * 400 * cycles, -146'097 * cycles)) ==
+          year{2000} / 3 / 1);
+    CHECK(hglrt::fn_moved(year{2000} / 3 / 1, months(-12 * 400 * cycles, 146'097 * cycles)) ==
+          year{2000} / 3 / 1);
+    // And counts whose result no day count brings back: out of range, and
+    // nothing overflows on the way.
+    for (const tenor& far :
+         {months(most, least), months(most, most), months(least, most), months(least, least)}) {
+        CHECK(code_raised([&] { (void)hglrt::fn_moved(year{2026} / 1 / 1, far); }) == "numeric.out_of_range");
+        CHECK(code_raised([&] { (void)hglrt::fn_moved(year{9999} / 12 / 31, far); }) ==
+              "numeric.out_of_range");
+        CHECK(code_raised([&] { (void)hglrt::fn_moved(year{1} / 1 / 1, far); }) == "numeric.out_of_range");
+    }
 }
 
 TEST_CASE("a count of business days starts from a business day (TEN-5, TEN-6)") {
