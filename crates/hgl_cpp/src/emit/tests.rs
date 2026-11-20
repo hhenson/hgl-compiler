@@ -20,8 +20,9 @@
 //! | `assert left == right` of two traces (TST-4) | `::hglrt::testing::expect_same(left, right)`, the left one evaluated first; `!=` is `expect_different`; either as a value is `::hglrt::testing::same` |
 //! | A trace given to a `const fn` (TST-16) | `::hglrt::testing::publications(trace)`, its publications as a list |
 //!
-//! An eval with a configuration (RUN-1), and one of a value function,
-//! are not written yet, and are reported.
+//! An eval of a value function is its lifted node's (`lifting`), given
+//! the replays as its inputs, and written ahead of the test. An eval
+//! with a configuration (RUN-1) is not written yet, and is reported.
 
 use hgl_analyser::hir::{Cell, Expr, ExprKind, Stmt};
 use hgl_analyser::{Argument as GenericArgument, Type};
@@ -30,6 +31,7 @@ use hgl_lower::instances::{core_function, run_wiring, trace_payload};
 use super::Emitter;
 use super::forms::Family;
 use super::graphs::WIRING;
+use super::lifting::Given;
 use super::names::{self, identifier};
 use super::nodes::{Context, Kind, Placed};
 use super::statements::{Scope, statement_at};
@@ -101,10 +103,6 @@ impl Emitter<'_> {
             program.modules[module].declarations[declaration].kind
                 == hgl_analyser::DeclarationKind::Function(hgl_analyser::Role::Temporal)
         });
-        if !temporal {
-            // TST-5: "a selected value helper uses ordinary lifting".
-            return self.missing(call.at, "an eval of a value function");
-        }
         let Some(wiring) = run_wiring(program, call, &value.ty) else {
             return self.missing(call.at, "an eval of this");
         };
@@ -117,6 +115,7 @@ impl Emitter<'_> {
         // CEVAL-1: "core's `replay` wired to each temporal input of the
         // target", each given the trace written for it (CEVAL-2).
         let mut given: Vec<(usize, String)> = Vec::new();
+        let mut replayed: Vec<Given> = Vec::new();
         let mut context = Context::new(Kind::Entry, scope.body.locals.len());
         for (position, argument) in arguments.iter().enumerate() {
             if !matches!(argument.value.kind, ExprKind::Trace(_)) {
@@ -147,12 +146,31 @@ impl Emitter<'_> {
             text.push_str(&format!(
                 "{indent}const ::hgraph::Port<{schema}> {port} = {replay}({WIRING}, {library}::replay_items({trace}, start_));\n"
             ));
-            given.push((position, port));
+            given.push((position, port.clone()));
+            replayed.push(Given {
+                position,
+                written: port,
+                input: Some(ty),
+            });
         }
         let mut target = String::new();
         self.in_context(&mut context, |emitter| {
-            target = emitter.temporal_call(scope, call, &given);
+            target = if temporal {
+                emitter.temporal_call(scope, call, &given)
+            } else {
+                // TST-8: "A selected value helper uses ordinary lifting":
+                // a lifted node, given the replays as its inputs, which is
+                // written ahead of the test.
+                emitter.lifted(scope, call, &replayed, wiring.result.as_ref())
+            };
         });
+        // A node written already, where the eval is written again, is
+        // not written twice.
+        for node in context.lifted {
+            if !self.ahead.contains(&node) {
+                self.ahead.push(node);
+            }
+        }
         // CEVAL-1: "and the target's result as the entry's", recorded by
         // core's `record` under the run's key (CRUN-8).
         let mode = if *real_time {

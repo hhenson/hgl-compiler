@@ -12,16 +12,15 @@
 //! | `let x = f(a)`, a connection | `const ::hgraph::Port<S> x = ...;` |
 //! | `return x` (FN-7) | `return x;`: the connection the graph gives |
 //! | A call of a temporal function | its wiring function, `w_::f(wiring_, a)`; a generic one's instance's |
-//! | A lifted call, `value + 1` (FN-6) | a node of its own, a struct `lifted_00_` in the graph's struct whose `eval` calls the value function: each argument that is a connection an input, required valid (FN-11), and each other configuration, an `hgraph::Scalar` |
+//! | A lifted call, `value + 1` (FN-6); `capture` (ERR-7) | the lifting family's (`lifting`) |
 //! | An ordinary value where a connection is expected (FN-3) | its temporal form's constant, `::hglrt::constant<T>(wiring_, value)` |
 //!
 //! Not written yet, and reported: `if`, `switch` and `for` over
-//! connections (CTRL-7), a `var` connection, a lifted input with a
-//! default or a null (FN-11), a call that leaves out a temporal input
-//! (UNIT-8), a temporal candidate of an operator, `inject global_state`
-//! in a graph (FN-9), and an application's run statement.
+//! connections (CTRL-7), a `var` connection, a call that leaves out a
+//! temporal input (UNIT-8), `inject global_state` in a graph (FN-9), and
+//! an application's run statement.
 
-use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Local, Stmt, ValueCategory};
+use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Stmt, ValueCategory};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Signature, Type};
 use hgl_lower::calls::{LeftOut, left_out};
 
@@ -29,7 +28,7 @@ use super::Emitter;
 use super::calls::{changes, may_fail};
 use super::forms::Family;
 use super::names::{self, identifier};
-use super::nodes::{Context, Kind, OUT, Placed, Role, nested};
+use super::nodes::{Context, Kind, Placed, Role, nested};
 use super::statements::Scope;
 use super::values::INDENT;
 
@@ -282,195 +281,6 @@ impl Emitter<'_> {
         all.extend(written.into_iter().flatten());
         format!("{called}({})", all.join(", "))
     }
-
-    /// The lifted call `value` (FN-6: "A selected value helper ... with
-    /// temporal arguments in composition is lifted: temporal arguments
-    /// become inputs; scalar arguments and omitted defaults bind as
-    /// configuration"), wired: a node written for it in the graph's
-    /// struct, given each connection as an input and each other argument
-    /// as configuration, in the order they are written. Its `eval` calls
-    /// the function with the payload of each input and the value of
-    /// each configuration, and publishes what it gives: "Each admitted
-    /// evaluation publishes its result, including an equal result." One
-    /// that gives nothing is a sink.
-    fn lifted(&mut self, scope: &mut Scope, value: &Expr) -> String {
-        let ExprKind::Call {
-            callee,
-            arguments,
-            form,
-            ..
-        } = &value.kind
-        else {
-            return self.missing(value.at, "this lifted call");
-        };
-        let program = self.program;
-        let Some((module, declaration)) = callee.declaration() else {
-            return self.missing(value.at, "this lifted call");
-        };
-        let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
-        else {
-            return self.missing(value.at, "this lifted call");
-        };
-        let mut locals: Vec<Local> = Vec::new();
-        let mut roles: Vec<Role> = Vec::new();
-        let mut parameters: Vec<String> = Vec::new();
-        let mut wired: Vec<String> = vec![WIRING.to_string()];
-        let mut synthetic: Vec<Argument> = Vec::new();
-        // For each argument, the name of its scalar where it is one.
-        let mut labels: Vec<Option<String>> = Vec::new();
-        let mut unique = false;
-        for argument in arguments {
-            let Some(index) = argument
-                .parameter
-                .filter(|&index| index < signature.parameters.len())
-            else {
-                return self.missing(argument.value.at, "an argument given to a pack");
-            };
-            let parameter = &signature.parameters[index];
-            if locals.iter().any(|local| local.name == parameter.name) {
-                return self.missing(argument.value.at, "this lifted call");
-            }
-            let ty = argument.value.ty.clone();
-            let name = identifier(&parameter.name);
-            let label = names::string(&parameter.name);
-            if argument.value.is_connection() {
-                // FN-11: "A lifted argument with a declared default does
-                // not require a valid input ... an argument whose value
-                // contract admits null does not require a valid input".
-                if parameter.has_default || matches!(parameter.ty, Type::Nullable(_)) {
-                    return self.missing(
-                        argument.value.at,
-                        "a lifted input that binds a default or a null",
-                    );
-                }
-                let Some(schema) = self.temporal_schema(&ty, argument.value.at) else {
-                    return "0".to_string();
-                };
-                parameters.push(format!("::hgraph::In<{label}, {schema}> {name}"));
-                roles.push(Role::Input);
-                wired.push(self.wiring_form(scope, &argument.value));
-                labels.push(None);
-            } else {
-                let Some(written) = self.written_type(&ty, argument.value.at) else {
-                    return "0".to_string();
-                };
-                parameters.push(format!("::hgraph::Scalar<{label}, {written}> {name}"));
-                roles.push(Role::Config);
-                // The configuration is given as the type its scalar is,
-                // a literal among it.
-                let configured = self.expression(scope, &argument.value);
-                unique |= super::nodes::holds_f64(program, &ty, 0);
-                wired.push(format!("static_cast<{written}>({configured})"));
-                labels.push(Some(parameter.name.clone()));
-            }
-            synthetic.push(Argument {
-                parameter: argument.parameter,
-                value: Expr {
-                    kind: ExprKind::Local(locals.len()),
-                    ty: ty.clone(),
-                    at: argument.value.at,
-                    category: ValueCategory::Value,
-                },
-            });
-            locals.push(Local {
-                name: parameter.name.clone(),
-                at: argument.value.at,
-                kind: LocalKind::Parameter,
-                ty,
-                category: ValueCategory::Value,
-            });
-        }
-        let gives = signature.result.is_some();
-        if gives {
-            let Some(schema) = self.temporal_schema(&value.ty, value.at) else {
-                return "0".to_string();
-            };
-            parameters.push(format!("::hgraph::Out<{schema}> {OUT}"));
-        }
-        let call = Expr {
-            kind: ExprKind::Call {
-                callee: callee.clone(),
-                arguments: synthetic,
-                form: *form,
-                lifted: false,
-            },
-            ty: value.ty.clone(),
-            at: value.at,
-            category: ValueCategory::Value,
-        };
-        let statement = if gives {
-            Stmt::Return {
-                value: Some(call),
-                at: value.at,
-            }
-        } else {
-            Stmt::Expr(call)
-        };
-        let body = Body {
-            locals,
-            statements: vec![statement],
-        };
-        let mut context = Context::new(Kind::Lifted, roles.len());
-        context.roles = roles;
-        context.result = gives.then(|| value.ty.clone());
-        let mut lifted_scope = Scope::cold(program, &body);
-        let mut statements = String::new();
-        self.in_context(&mut context, |emitter| {
-            emitter.statements(&mut lifted_scope, &body.statements, 2, &mut statements);
-        });
-        let number = self.temporary();
-        let name = names::temporary("lifted", number);
-        let callee_name = &program.modules[module].declarations[declaration].name;
-        let graph = &program.modules[self.module].path;
-        let line = self.line_of(value.at);
-        let text = format!(
-            "// The call of `{callee_name}` on line {line}, lifted (FN-6).\n\
-             struct {name}\n{{\n\
-             {INDENT}static constexpr auto name = {};\n\
-             {INDENT}static void eval({})\n{INDENT}{{\n{statements}{INDENT}}}\n}};\n",
-            names::string(&format!("{graph}:{callee_name}")),
-            parameters
-                .iter()
-                .map(|parameter| format!("[[maybe_unused]] {parameter}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        if let Some(context) = self.temporal.as_mut() {
-            context.lifted.push(text);
-        }
-        // EXPR-2: the arguments in the order written, each held first
-        // where more than one may fail or one runs statements.
-        let failing = arguments
-            .iter()
-            .filter(|argument| may_fail(&argument.value))
-            .count();
-        let mut steps = String::new();
-        if failing > 1 || arguments.iter().any(|argument| changes(&argument.value)) {
-            for given in wired.iter_mut().skip(1) {
-                let name = names::temporary("argument", self.temporary());
-                steps.push_str(&format!("const auto {name} = {given}; "));
-                *given = name;
-            }
-        }
-        let held = |wiring: String| {
-            if steps.is_empty() {
-                wiring
-            } else {
-                format!("[&] {{ {steps}return {wiring}; }}()")
-            }
-        };
-        if unique {
-            let arguments: Vec<(Option<String>, String)> =
-                labels.into_iter().zip(wired.into_iter().skip(1)).collect();
-            let schema = if gives {
-                self.temporal_schema(&value.ty, value.at)
-            } else {
-                None
-            };
-            return held(super::nodes::unique(&name, schema.as_deref(), &arguments));
-        }
-        held(format!("::hgraph::wire<{name}>({})", wired.join(", ")))
-    }
 }
 
 /// The graphs' family: the statements of a graph, and its connections.
@@ -567,7 +377,6 @@ impl Family for Graphs {
             ExprKind::Local(local) if emitter.role(*local) == Role::Connection => {
                 Some(identifier(&scope.body.locals[*local].name))
             }
-            ExprKind::Call { .. } if value.is_lifted() => Some(emitter.lifted(scope, value)),
             ExprKind::Call { callee, .. } => {
                 let (module, declaration) = callee.declaration()?;
                 let declared = &emitter.program.modules[module].declarations[declaration];
@@ -575,9 +384,11 @@ impl Family for Graphs {
                     DeclarationKind::Function(Phase::Temporal) => {
                         Some(emitter.temporal_call(scope, value, &[]))
                     }
-                    DeclarationKind::Implementation(Phase::Temporal, _) => Some(
-                        emitter.missing(value.at, "a call of a temporal candidate of an operator"),
-                    ),
+                    // GEN-5: a temporal candidate is the node or the graph
+                    // its call selects, wired as a temporal function is.
+                    DeclarationKind::Implementation(Phase::Temporal, _) => {
+                        Some(emitter.temporal_call(scope, value, &[]))
+                    }
                     _ => None,
                 }
             }

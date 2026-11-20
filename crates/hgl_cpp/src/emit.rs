@@ -21,9 +21,10 @@
 //! dispatch point, looks each form up in: `scalars` (a scalar's temporal
 //! form), `endpoints` (a hook's reads, endpoint operations and
 //! capabilities), `nodes` (a node's hooks), `sources` (a source's body),
-//! `graphs` (a graph's wiring and lifted calls), `tests` (evals and
-//! traces). A construct lane adds its family as a module here and one
-//! entry in `forms::FAMILIES`.
+//! `graphs` (a graph's wiring), `lifting` (lifted calls, `capture`, the
+//! temporal forms of `error` and `result`, a `?` in a `when`), `tests`
+//! (evals and traces). A construct lane adds its family as a module here
+//! and one entry in `forms::FAMILIES`.
 
 use hgl_analyser::{DeclarationKind, Program};
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
@@ -37,6 +38,7 @@ mod endpoints;
 mod expressions;
 mod forms;
 mod graphs;
+mod lifting;
 mod names;
 mod nodes;
 mod scalars;
@@ -188,7 +190,6 @@ impl Emitter<'_> {
     /// Writes declaration `index` of the module into the piece.
     fn declaration(&mut self, index: usize) {
         let declared = &self.program.modules[self.module].declarations[index];
-        let at = declared.at;
         match declared.kind {
             DeclarationKind::Function(hgl_analyser::Role::Value) => self.value_function(index),
             DeclarationKind::Function(hgl_analyser::Role::Temporal) => {
@@ -203,8 +204,10 @@ impl Emitter<'_> {
             DeclarationKind::Implementation(hgl_analyser::Role::Value, _) => {
                 self.value_function(index);
             }
+            // GEN-4: a temporal candidate is a node or a graph of its
+            // module, as a temporal function is.
             DeclarationKind::Implementation(hgl_analyser::Role::Temporal, _) => {
-                self.unsupported(at, "a temporal candidate of an operator");
+                self.temporal_function(index);
             }
             // An operator names its candidates and is no code of its
             // own. A native function or candidate is the runtime

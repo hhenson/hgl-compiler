@@ -363,6 +363,78 @@ fn temporal_code_is_written() {
     assert!(units.contains(&"modules/core.cpp"), "{units:?}");
 }
 
+/// Lifting and capture (`demo.lifting`): a lifted call whose input binds
+/// its parameter's default until it publishes (FN-6, FN-11), an outputless
+/// helper lifted to a sink, an eval of a value function (TST-8), captures
+/// of a node, a graph and a lifted call with their `.value` and `.error`
+/// (ERR-7), a write that stands before a failure (ERR-8), a `?` in a
+/// `when` (ERR-5) and an error's context (ERR-4).
+/// Everything is written, and each test can be run, against the runtime
+/// library `hgl` carries.
+#[test]
+fn lifting_code_is_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.lifting.hgl",
+            include_str!("fixtures/demo.lifting.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.lifting", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.lifting.cpp")
+        .unwrap()
+        .text;
+    // FN-11: an input whose parameter has a default is not required valid,
+    // and binds the default where it is not.
+    assert!(unit.contains("::hgraph::InputValidity::Unchecked> input_00_"));
+    assert!(unit.contains("::hglrt::fn_valid(input_00_) ? ::hgraph::Int{::hglrt::checked_value(input_00_)} : ::hgraph::Int{2}"));
+    // ERR-7: a capture is hgraph's `try_except_` of a graph of its own.
+    assert!(unit.contains("::hglrt::capture<captured_"));
+}
+
+/// hgraph issue 1866: a capture whose configuration holds an `f64` is
+/// reported, as hgraph would take two boundaries whose configurations are
+/// `0.0` and `-0.0` for one, and wires no `try_except_` as a node of its
+/// own.
+#[test]
+fn a_capture_given_an_f64_configuration_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn shifted(value: f64, const by: f64) -> f64 {\n",
+                "    when { return value + by }\n",
+                "}\n",
+                "\n",
+                "fn captured(value: f64) -> f64 {\n",
+                "    return capture(shifted, value, -0.0).value\n",
+                "}\n",
+                "\n",
+                "test shifts {\n",
+                "    assert eval(captured(value: [1.0])) == [1.0]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("shifts").as_deref(),
+        Some(
+            "m.hgl:8:36 the cpp target does not write a `capture` given an `f64` configuration (hgraph issue 1866) yet"
+        )
+    );
+}
+
 /// A temporal form the target does not write yet is reported through the
 /// dispatch point, where it is written, and blocks what reaches it: a
 /// temporal value of a type no family writes, and a capability no family

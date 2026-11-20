@@ -121,6 +121,7 @@ if(BUILD_TESTING)
     add_executable(hglrt_tests
         tests/main.cpp
         tests/capabilities_tests.cpp
+        tests/capture_tests.cpp
         tests/checked_tests.cpp
         tests/conversion_tests.cpp
         tests/endpoint_tests.cpp
