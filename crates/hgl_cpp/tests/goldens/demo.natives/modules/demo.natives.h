@@ -3,6 +3,17 @@
 
 #include <hglrt/hglrt.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef a
+#undef b
+#undef demo
+#undef natives
+#undef ratio
+#undef same
+#undef text
+#undef value
+#undef whole
+
 namespace hgl::demo::natives::m_
 {
 

@@ -3,6 +3,22 @@
 
 #include <hglrt/hglrt.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef a
+#undef add_one
+#undef b
+#undef count_publications
+#undef counted_ticks
+#undef demo
+#undef first_of
+#undef noted
+#undef scaled
+#undef stamped
+#undef temporal
+#undef ticks
+#undef value
+#undef values
+
 namespace hgl::demo::temporal::m_
 {
 

@@ -138,8 +138,38 @@ impl Emitter<'_> {
                 right,
             } if is_null(left) || is_null(right) => {
                 let tested = if is_null(left) { right } else { left };
+                let equal = *operator == BinaryOperator::Equal;
+                let (is, is_not) = if equal {
+                    ("true", "false")
+                } else {
+                    ("false", "true")
+                };
+                // `null == null`.
+                if is_null(tested) {
+                    return is.to_string();
+                }
+                // ERR-12: a binding a test has proved is not null is read
+                // as its payload's type; it is tested as the optional it
+                // is declared.
+                if let ExprKind::Local(local) = tested.kind
+                    && matches!(scope.body.locals[local].ty, Type::Nullable(_))
+                {
+                    scope.read = true;
+                    let name = identifier(&scope.body.locals[local].name);
+                    return if equal {
+                        format!("(!{name}.has_value())")
+                    } else {
+                        format!("{name}.has_value()")
+                    };
+                }
+                // A value of a type that is no `T?` is never null; it is
+                // still evaluated, for what it does.
+                if !matches!(tested.ty, Type::Nullable(_)) {
+                    let tested = self.expression(scope, tested);
+                    return format!("(static_cast<void>({tested}), {is_not})");
+                }
                 let tested = self.expression(scope, tested);
-                if *operator == BinaryOperator::Equal {
+                if equal {
                     format!("(!({tested}).has_value())")
                 } else {
                     format!("({tested}).has_value()")

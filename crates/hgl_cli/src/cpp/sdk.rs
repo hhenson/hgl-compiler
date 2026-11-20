@@ -62,7 +62,7 @@ const DESCRIPTION: &str = "description.json";
 
 /// A version of what is made for a toolchain: raised when what this
 /// driver makes changes, so that what an older `hgl` made is not used.
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 
 /// Everything the cpp target builds with, as it was found.
 #[derive(Debug, Clone)]
@@ -384,6 +384,9 @@ set_target_properties(hglrt PROPERTIES
   INTERFACE_LINK_LIBRARIES "hgraph::runtime;hgraph::wiring")
 add_executable(hgl_probe probe.cpp)
 target_compile_features(hgl_probe PRIVATE cxx_std_23)
+# Strict C++23, not GNU's dialect: generated code is written for any
+# platform's compiler and headers.
+set_target_properties(hgl_probe PROPERTIES CXX_EXTENSIONS OFF)
 target_link_libraries(hgl_probe PRIVATE hglrt)
 "#;
 
