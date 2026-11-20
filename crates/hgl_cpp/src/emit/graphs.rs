@@ -7,7 +7,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | `fn add_one(value: i64) -> i64 { return value + 1 }` | a struct `n_::add_one` with `static ::hgraph::Port<TS<Int>> compose(::hgraph::Wiring& wiring_, ::hgraph::Port<TS<Int>> value)`, and a wiring function `w_::add_one` that calls it |
+//! | `fn add_one(value: i64) -> i64 { return value + 1 }` | a struct `n_::add_one::impl_` with `static ::hgraph::Port<TS<Int>> compose(::hgraph::Wiring& wiring_, ::hgraph::Port<TS<Int>> value)`, and a wiring function `w_::add_one` that calls it |
 //! | A temporal parameter; a `const` one | an `hgraph::Port` of its temporal form; the value, as a value function takes it |
 //! | `let x = f(a)`, a connection | `const ::hgraph::Port<S> x = ...;` |
 //! | `return x` (FN-7) | `return x;`: the connection the graph gives |
@@ -29,7 +29,7 @@ use super::Emitter;
 use super::calls::{changes, may_fail};
 use super::forms::Family;
 use super::names::{self, identifier};
-use super::nodes::{Context, Kind, OUT, Placed, Role, nested};
+use super::nodes::{Context, IMPLEMENTATION, Kind, OUT, Placed, Role, nested};
 use super::statements::Scope;
 use super::values::INDENT;
 
@@ -92,7 +92,7 @@ impl Emitter<'_> {
         });
         let placed = Placed::of(program, self.module, index, instance);
         let qualified = placed.qualified(program, self.module);
-        let mut text = format!("// {shown}\nstruct {}\n{{\n", placed.name);
+        let mut text = format!("// {shown}\nstruct {IMPLEMENTATION}\n{{\n");
         for lifted in &context.lifted {
             for line in lifted.lines() {
                 text.push_str(&format!("{INDENT}{line}\n"));

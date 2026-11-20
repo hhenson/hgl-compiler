@@ -344,17 +344,36 @@ fn temporal_code_is_written() {
         .unwrap()
         .text;
     for instance in [
-        "::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_i64>",
-        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_i64>",
-        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_datetime>",
+        "::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_i64::impl_>",
+        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_i64::impl_>",
+        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_datetime::impl_>",
     ] {
         assert!(core.contains(instance), "{instance} in\n{core}");
     }
     // hgraph issue 1866: a node whose configuration holds an `f64` is a
     // node of its own, `replay<f64>` among them; one with none is
     // interned, above.
-    assert!(core.contains("add_unique_node(typeid(::hgl::core::m_::n_::i_::replay::of_f64)"));
-    assert!(!core.contains("::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_f64>"));
+    assert!(
+        core.contains("add_unique_node(typeid(::hgl::core::m_::n_::i_::replay::of_f64::impl_)")
+    );
+    assert!(!core.contains("::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_f64::impl_>"));
+    // A temporal function's struct is `impl_`, in a namespace of the
+    // function's name: one named as a member of it, `name` or `compose`,
+    // is no member of the same name as its class.
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.temporal.cpp")
+        .unwrap()
+        .text;
+    for function in ["name", "compose"] {
+        assert!(
+            unit.contains(&format!("namespace n_::{function}\n{{\n// {function}(")),
+            "{function} in\n{unit}"
+        );
+        assert!(!unit.contains(&format!("struct {function}\n")), "{unit}");
+    }
     let executable = &emitted.output.executables[0];
     let units: Vec<&str> = executable
         .units
@@ -553,7 +572,7 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
     // Both defaults call `one`, and each may fail: each is held, `by`
     // before `plus`, before the wiring function is called.
     let twice = unit
-        .split("struct twice")
+        .split("namespace n_::twice")
         .nth(1)
         .expect("the graph `twice`");
     assert!(

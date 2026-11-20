@@ -10,8 +10,10 @@
 #undef add_one
 #undef adds_one
 #undef an_outputless_target_runs
+#undef any_name_is_written
 #undef b
 #undef clock
+#undef compose
 #undef core
 #undef count
 #undef count_publications
@@ -24,6 +26,7 @@
 #undef lhs
 #undef log_debug
 #undef logger
+#undef name
 #undef noted
 #undef opening
 #undef record
@@ -43,10 +46,10 @@
 namespace hgl::demo::temporal::m_
 {
 
-namespace n_
+namespace n_::add_one
 {
 // add_one(value: i64) -> i64 (graph), module demo.temporal, line 7
-struct add_one
+struct impl_
 {
     // The call of `add_` on line 8, lifted (FN-6).
     struct lifted_00_
@@ -64,20 +67,20 @@ struct add_one
         return ::hgraph::wire<lifted_00_>(wiring_, value, static_cast<::hgraph::Int>(1));
     }
 };
-}  // namespace n_
+}  // namespace n_::add_one
 namespace w_
 {
 // add_one(value: i64) -> i64 (graph), module demo.temporal, line 7
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> add_one(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgl::demo::temporal::m_::n_::add_one::compose(wiring_, value);
+    return ::hgl::demo::temporal::m_::n_::add_one::impl_::compose(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::scaled
 {
 // scaled(value: f64) -> f64 (graph), module demo.temporal, line 12
-struct scaled
+struct impl_
 {
     // The call of `mul_` on line 13, lifted (FN-6).
     struct lifted_00_
@@ -107,20 +110,20 @@ struct scaled
     }();
     }
 };
-}  // namespace n_
+}  // namespace n_::scaled
 namespace w_
 {
 // scaled(value: f64) -> f64 (graph), module demo.temporal, line 12
 ::hgraph::Port<::hgraph::TS<::hgraph::Float>> scaled(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Float>> value)
 {
-    return ::hgl::demo::temporal::m_::n_::scaled::compose(wiring_, value);
+    return ::hgl::demo::temporal::m_::n_::scaled::impl_::compose(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::count_publications
 {
 // count_publications(value: i64) -> i64 (node), module demo.temporal, line 17
-struct count_publications
+struct impl_
 {
     static constexpr auto name = "demo.temporal::count_publications";
 
@@ -150,17 +153,17 @@ struct count_publications
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::count_publications
 }  // namespace hgl::demo::temporal::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::temporal::m_::n_::count_publications::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::temporal::m_::n_::count_publications::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::temporal::m_::n_::count_publications::state_type_>("hgl:demo.temporal::count_publications.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::temporal::m_::n_::count_publications::impl_::state_type_>("hgl:demo.temporal::count_publications.state");
     }
 };
 
@@ -171,14 +174,14 @@ namespace w_
 // count_publications(value: i64) -> i64 (node), module demo.temporal, line 17
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count_publications(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::count_publications>(wiring_, value);
+    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::count_publications::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::first_of
 {
 // first_of(a: i64, b: i64) -> i64 (node), module demo.temporal, line 27
-struct first_of
+struct impl_
 {
     static constexpr auto name = "demo.temporal::first_of";
 
@@ -198,20 +201,20 @@ struct first_of
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::first_of
 namespace w_
 {
 // first_of(a: i64, b: i64) -> i64 (node), module demo.temporal, line 27
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> first_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> a, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> b)
 {
-    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::first_of>(wiring_, a, b);
+    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::first_of::impl_>(wiring_, a, b);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::ticks
 {
 // ticks(const values: list<i64>) -> i64 (source), module demo.temporal, line 33
-struct ticks
+struct impl_
 {
     static constexpr auto name = "demo.temporal::ticks";
     // SOURCE-2: "The first evaluation begins the body".
@@ -277,17 +280,17 @@ struct ticks
         kept_.frame_.reset();
     }
 };
-}  // namespace n_
+}  // namespace n_::ticks
 }  // namespace hgl::demo::temporal::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::temporal::m_::n_::ticks::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::temporal::m_::n_::ticks::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::temporal::m_::n_::ticks::state_type_>("hgl:demo.temporal::ticks.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::temporal::m_::n_::ticks::impl_::state_type_>("hgl:demo.temporal::ticks.state");
     }
 };
 
@@ -298,14 +301,14 @@ namespace w_
 // ticks(const values: list<i64>) -> i64 (source), module demo.temporal, line 33
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> ticks(::hgraph::Wiring& wiring_, const ::hglrt::list<::hgraph::Int>& values)
 {
-    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::ticks>(wiring_, values);
+    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::ticks::impl_>(wiring_, values);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::counted_ticks
 {
 // counted_ticks(const values: list<i64>) -> i64 (graph), module demo.temporal, line 40
-struct counted_ticks
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values)
     {
@@ -313,20 +316,20 @@ struct counted_ticks
         return ::hgl::demo::temporal::m_::w_::first_of(wiring_, counted, ::hglrt::constant<::hgraph::Int>(wiring_, 5));
     }
 };
-}  // namespace n_
+}  // namespace n_::counted_ticks
 namespace w_
 {
 // counted_ticks(const values: list<i64>) -> i64 (graph), module demo.temporal, line 40
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counted_ticks(::hgraph::Wiring& wiring_, const ::hglrt::list<::hgraph::Int>& values)
 {
-    return ::hgl::demo::temporal::m_::n_::counted_ticks::compose(wiring_, values);
+    return ::hgl::demo::temporal::m_::n_::counted_ticks::impl_::compose(wiring_, values);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::stamped
 {
 // stamped(value: i64) -> datetime (node), module demo.temporal, line 46
-struct stamped
+struct impl_
 {
     static constexpr auto name = "demo.temporal::stamped";
 
@@ -340,20 +343,20 @@ struct stamped
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::stamped
 namespace w_
 {
 // stamped(value: i64) -> datetime (node), module demo.temporal, line 46
 ::hgraph::Port<::hgraph::TS<::hgraph::DateTime>> stamped(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::stamped>(wiring_, value);
+    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::stamped::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::noted
 {
 // noted(value: i64) (node), module demo.temporal, line 52
-struct noted
+struct impl_
 {
     static constexpr auto name = "demo.temporal::noted";
 
@@ -366,13 +369,59 @@ struct noted
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::noted
 namespace w_
 {
 // noted(value: i64) (node), module demo.temporal, line 52
 void noted(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    ::hgraph::wire<::hgl::demo::temporal::m_::n_::noted>(wiring_, value);
+    ::hgraph::wire<::hgl::demo::temporal::m_::n_::noted::impl_>(wiring_, value);
+}
+}  // namespace w_
+
+namespace n_::name
+{
+// name(value: i64) -> i64 (node), module demo.temporal, line 58
+struct impl_
+{
+    static constexpr auto name = "demo.temporal::name";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        // when, line 59 (TIME-3)
+        {
+            out_.set(::hglrt::checked_value(value));
+            return;
+        }
+    }
+};
+}  // namespace n_::name
+namespace w_
+{
+// name(value: i64) -> i64 (node), module demo.temporal, line 58
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> name(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::name::impl_>(wiring_, value);
+}
+}  // namespace w_
+
+namespace n_::compose
+{
+// compose(value: i64) -> i64 (graph), module demo.temporal, line 62
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+    {
+        return ::hgl::demo::temporal::m_::w_::name(wiring_, value);
+    }
+};
+}  // namespace n_::compose
+namespace w_
+{
+// compose(value: i64) -> i64 (graph), module demo.temporal, line 62
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hgl::demo::temporal::m_::n_::compose::impl_::compose(wiring_, value);
 }
 }  // namespace w_
 
@@ -482,6 +531,19 @@ void a_run_is_bounded()
         const auto left_03_ = seen;
         const auto right_04_ = ::hglrt::testing::Dense<::hgraph::Int>{2, 3};
         ::hglrt::testing::expect_same(left_03_, right_04_);
+    }();
+}
+
+void any_name_is_written()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{4}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::temporal::m_::w_::compose(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{4};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }
 

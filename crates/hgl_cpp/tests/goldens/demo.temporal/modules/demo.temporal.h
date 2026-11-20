@@ -7,10 +7,12 @@
 #undef a
 #undef add_one
 #undef b
+#undef compose
 #undef count_publications
 #undef counted_ticks
 #undef demo
 #undef first_of
+#undef name
 #undef noted
 #undef scaled
 #undef stamped
@@ -68,6 +70,18 @@ namespace w_
 {
 // noted(value: i64) (node), module demo.temporal, line 52
 void noted(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
+}  // namespace w_
+
+namespace w_
+{
+// name(value: i64) -> i64 (node), module demo.temporal, line 58
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> name(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
+}  // namespace w_
+
+namespace w_
+{
+// compose(value: i64) -> i64 (graph), module demo.temporal, line 62
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
 }  // namespace w_
 
 }  // namespace hgl::demo::temporal::m_
