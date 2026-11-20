@@ -2149,6 +2149,7 @@ is not its own.
 | --- | --- |
 | A type's temporal form | `schema` (hgraph's schema, `TS<Int>`), `read` (a hook's read of the payload), `publish` (a `return`'s or `out =`'s publication), `delta` (`delta_value`, plain or into a `result`), `constant` (a value wired as a connection) |
 | A type's trace cell | `cell` |
+| A run of statements | `statements`: a run written whole, each statement with what follows it |
 | A statement | `statement`: of a hook, a source's body or a graph |
 | An expression | `expression`: of a hook, a source's body, a test or value code |
 | A wiring form | `wiring`: an expression of a graph that is a connection, as the port it gives |

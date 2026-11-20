@@ -13,6 +13,7 @@
 //! | --- | --- |
 //! | a type's temporal form | [`Family::schema`], hgraph's schema of a temporal value of the type; [`Family::read`], a hook's read of its payload; [`Family::publish`], a publication of a value of it; [`Family::delta`], its `delta_value`; [`Family::constant`], a value of it wired as a connection (FN-3) |
 //! | a type's trace cell | [`Family::cell`], one cell of a trace written out (TST-5) |
+//! | a run of statements | [`Family::statements`], a run of them, each with what follows it |
 //! | a statement | [`Family::statement`], a statement of a hook, a source's body or a graph |
 //! | an expression | [`Family::expression`], an expression of a hook, a source's body, a test or value code |
 //! | a wiring form | [`Family::wiring`], an expression of a graph that is a connection, as the `hgraph::Port` it gives |
@@ -93,6 +94,24 @@ pub(super) trait Family: Sync {
         _value: &Expr,
     ) -> Option<String> {
         None
+    }
+
+    /// Writes `statements`, a run of statements `depth` levels in (a
+    /// body's, a branch's, a loop's), into `text`, where the run is the
+    /// family's: true where it did. A family that writes a run sees what
+    /// follows each statement, which a `return` in a branch selected at
+    /// runtime needs (CTRL-14: "the continuation's otherwise"); it
+    /// writes each statement that is not its own with
+    /// `Emitter::statement`.
+    fn statements(
+        &self,
+        _emitter: &mut Emitter<'_>,
+        _scope: &mut Scope<'_>,
+        _statements: &[Stmt],
+        _depth: usize,
+        _text: &mut String,
+    ) -> bool {
+        false
     }
 
     /// Writes `statement`, `depth` levels in, into `text`, where it is
@@ -225,6 +244,21 @@ impl Emitter<'_> {
             Some(cell) => cell,
             None => self.missing(value.at, &format!("a trace of `{ty}`")),
         }
+    }
+
+    /// Writes the run `statements` where a family writes it
+    /// ([`Family::statements`]): true where one did. The value code's
+    /// writer writes the rest, a statement at a time.
+    pub(super) fn form_statements(
+        &mut self,
+        scope: &mut Scope,
+        statements: &[Stmt],
+        depth: usize,
+        text: &mut String,
+    ) -> bool {
+        FAMILIES
+            .iter()
+            .any(|family| family.statements(self, scope, statements, depth, text))
     }
 
     /// Writes `statement` where a family writes it ([`Family::statement`]):

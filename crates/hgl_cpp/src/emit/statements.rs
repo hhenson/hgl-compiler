@@ -113,6 +113,10 @@ impl Emitter<'_> {
         depth: usize,
         text: &mut String,
     ) {
+        // A run a family writes whole is the dispatch point's (`forms`).
+        if self.form_statements(scope, statements, depth, text) {
+            return;
+        }
         for statement in statements {
             self.statement(scope, statement, depth, text);
         }
