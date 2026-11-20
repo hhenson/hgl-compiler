@@ -1,6 +1,16 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include <hglrt/host.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef a_capture_keeps_the_child_live
+#undef a_default_binds_until_its_input_publishes
+#undef a_failure_and_a_returned_error_are_told_apart
+#undef a_raised_error_keeps_its_provenance
+#undef a_sink_fails_and_a_capture_of_it_publishes_the_error
+#undef an_earlier_write_stands
+#undef demo
+#undef lifting
+
 namespace hgl::demo::lifting::m_::t_
 {
 void a_default_binds_until_its_input_publishes();

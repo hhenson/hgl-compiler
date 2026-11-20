@@ -3,6 +3,42 @@
 
 #include <hglrt/hglrt.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef attempt
+#undef by
+#undef check
+#undef checked
+#undef checked_errors
+#undef demo
+#undef describe
+#undef error
+#undef factor
+#undef failure
+#undef first
+#undef guarded
+#undef guarded_values
+#undef handled
+#undef kept_time
+#undef lifting
+#undef offset
+#undef outcome
+#undef outcomes
+#undef provenance
+#undef raise_again
+#undef raised
+#undef repeat
+#undef repeated
+#undef returned
+#undef sample
+#undef scaled
+#undef scaled_by
+#undef shifted
+#undef shifted_values
+#undef taken
+#undef value
+#undef write_then_fail
+#undef written_values
+
 namespace hgl::demo::lifting::m_
 {
 

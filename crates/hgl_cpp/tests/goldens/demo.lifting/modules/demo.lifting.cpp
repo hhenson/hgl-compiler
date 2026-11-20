@@ -2,6 +2,64 @@
 #include "demo.lifting.h"
 #include "core.h"
 
+// Names this file writes, which no macro of a header above takes.
+#undef ZeroPolicy
+#undef a_capture_keeps_the_child_live
+#undef a_default_binds_until_its_input_publishes
+#undef a_failure_and_a_returned_error_are_told_apart
+#undef a_raised_error_keeps_its_provenance
+#undef a_sink_fails_and_a_capture_of_it_publishes_the_error
+#undef again
+#undef an_earlier_write_stands
+#undef attempt
+#undef boundary
+#undef by
+#undef check
+#undef checked
+#undef checked_errors
+#undef code
+#undef core
+#undef demo
+#undef describe
+#undef earliest_start
+#undef error
+#undef factor
+#undef fail
+#undef failure
+#undef first
+#undef guarded
+#undef guarded_values
+#undef handled
+#undef inner
+#undef kept_time
+#undef lifting
+#undef message
+#undef never
+#undef offset
+#undef original
+#undef outcome
+#undef outcomes
+#undef outer
+#undef provenance
+#undef quotient
+#undef raise_again
+#undef raised
+#undef record
+#undef repeat
+#undef repeated
+#undef replay
+#undef returned
+#undef sample
+#undef scaled
+#undef scaled_by
+#undef shifted
+#undef shifted_values
+#undef taken
+#undef tenfold
+#undef value
+#undef write_then_fail
+#undef written_values
+
 namespace hgl::demo::lifting::m_
 {
 
@@ -94,7 +152,7 @@ struct describe
             if (::hglrt::fn_valid(failure))
             {
                 [[maybe_unused]] const std::optional<::hgraph::Str> code = (::hglrt::checked_value(failure)).code;
-                if ((!(code).has_value()))
+                if ((!code.has_value()))
                 {
                     out_.set(::hgraph::Str{"uncoded"});
                     return;
@@ -545,7 +603,7 @@ struct kept_time
         {
             [[maybe_unused]] const std::optional<::hgraph::ErrorContext> original = (::hglrt::checked_value(first)).context;
             [[maybe_unused]] const std::optional<::hgraph::ErrorContext> again = (::hglrt::checked_value(repeated)).context;
-            if (((!(original).has_value()) || (!(again).has_value())))
+            if (((!original.has_value()) || (!again.has_value())))
             {
                 out_.set(::hgl::core::m_::never());
                 return;

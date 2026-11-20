@@ -17,6 +17,10 @@
 //! | an expression | [`Family::expression`], an expression of a hook, a source's body, a test or value code |
 //! | a wiring form | [`Family::wiring`], an expression of a graph that is a connection, as the `hgraph::Port` it gives |
 //!
+//! `docs/architecture.md`, "Temporal forms: what a construct lane
+//! reads", says each method's contract, the context a family reads
+//! (`nodes::Context`), and how a family is added.
+//!
 //! [`FAMILIES`] lists them, and each lookup asks them in that order: the
 //! first that answers writes the form. A construct lane adds a family by
 //! adding its file under `emit/` (its `mod` line in `emit.rs`) and one

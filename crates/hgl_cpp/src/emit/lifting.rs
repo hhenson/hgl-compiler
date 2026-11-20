@@ -518,7 +518,10 @@ impl Emitter<'_> {
                 steps.push_str(&format!("const auto {held} = {written}; "));
                 *written = held;
             }
-            return format!("[&] {{ {steps}return {captured}({}); }}()", outer.join(", "));
+            return format!(
+                "[&] {{ {steps}return {captured}({}); }}()",
+                outer.join(", ")
+            );
         }
         format!("{captured}({})", outer.join(", "))
     }
