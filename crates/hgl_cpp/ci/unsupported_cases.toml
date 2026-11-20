@@ -20,6 +20,7 @@
     "core_implementation::a_rule_rolls_to_a_business_day",
     "core_implementation::a_tenor_is_its_counts",
     "core_implementation::a_tenors_text_has_its_largest_units",
+    "core_implementation::an_assignment_outside_a_list_is_an_error",
     "core_implementation::an_f64_is_written_as_the_shortest_text_that_reads_back",
     "core_implementation::an_f64_that_is_no_i64_fails",
     "core_implementation::an_integer_and_a_flag_are_written",
@@ -32,6 +33,7 @@
     "core_implementation::reverse_scaling",
     "core_implementation::text_is_read_as_a_float",
     "core_implementation::text_is_read_as_an_integer",
+    "core_implementation::text_repeated_below_zero_times_is_an_error",
     "core_implementation::the_order_is_count_by_count",
     "core_implementation::the_other_conversions",
 ]
@@ -63,6 +65,7 @@
     "conformance::a_reader_is_not_valid_while_its_target_holds_no_value",
     "conformance::a_reader_is_undisturbed_by_a_designation_given_again",
     "conformance::a_reader_waits_for_a_target_that_has_not_published",
+    "conformance::a_recording_of_a_window_holds_its_arrivals_and_replays_the_same_window",
     "conformance::a_ref_parameter_does_not_wake_its_node_for_its_target",
     "conformance::a_ref_result_follows_the_element_it_designates",
     "conformance::a_relay_samples_its_ref_parameter_when_it_runs",
@@ -100,11 +103,10 @@
     "conformance::a_whole_i64_list_with_a_gap_fails",
     "conformance::a_whole_set_replaces_the_previous_members",
     "conformance::a_whole_struct_is_a_trace_cell",
-    "conformance::a_window_delta_has_what_arrived_and_what_left",
     "conformance::a_window_emptied_by_exits_stays_valid",
-    "conformance::a_window_is_recorded_with_its_exits_and_replayed_by_what_arrived",
     "conformance::a_window_is_valid_before_its_minimum_and_all_valid_at_it",
     "conformance::a_window_of_a_duration_falls_back_under_its_minimum",
+    "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
     "conformance::a_zero_duration_asked_of_the_scheduler_fails",
     "conformance::a_zero_duration_in_start_wakes_the_alarm_at_the_first_evaluation",
     "conformance::a_zero_duration_in_start_wakes_the_first_evaluation",
@@ -113,7 +115,7 @@
     "conformance::an_active_invalidation_wakes_the_node_without_a_data_tick",
     "conformance::an_active_only_handler_queries_its_input",
     "conformance::an_alarm_cannot_hide_an_input_tick",
-    "conformance::an_arrival_at_a_full_window_of_ticks_has_the_value_it_pushes_out",
+    "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",
     "conformance::an_atomic_quote_wakes_its_bid_projection",
     "conformance::an_early_return_skips_the_continuation",
     "conformance::an_empty_dictionary_delta_ticks_only_where_it_makes_the_dictionary_valid",
@@ -216,6 +218,7 @@
     "core_implementation::zoned_datetimes_compared_as_utc_are_equal_by_instant",
 ]
 "this expression" = [
+    "core_implementation::a_read_outside_a_list_is_an_error",
     "core_implementation::an_f64_is_rounded_as_asked",
 ]
 "this literal" = [

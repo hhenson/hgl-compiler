@@ -2,9 +2,9 @@ module demo.windows
 
 enum Side { buy, sell }
 
-# TYPE-11: a window of ticks, of three at most and ready at one. TIME-7: a
-# result of a window "takes a V, which arrives", so a node publishes one
-# value to it.
+# TYPE-11: a window of ticks, of three at most and ready at one. TYPE-16:
+# its delta is "V: the value that arrived", so a node publishes one value
+# to it, and its trace is each value that arrived.
 fn collect(price: f64) -> rolling_window<f64, 3, 1> {
     when { return price }
 }
@@ -29,22 +29,10 @@ fn latest(price: f64) -> rolling_window<f64, 1> {
     when { return price }
 }
 
-# TYPE-11: a window's value, read in a hook, is the `list<V>` it holds,
-# oldest first: the newest value is its last.
-const fn newest_price(values: list<f64>) -> f64 {
-    var last: f64 = 0.0
-    for value in values { last = value }
-    return last
-}
-
-const fn newest_side(values: list<Side>) -> Side {
-    var last: Side = .buy
-    for value in values { last = value }
-    return last
-}
-
+# TYPE-16: what a window input published in this cycle is the value that
+# arrived (END-3).
 fn arrived(prices: rolling_window<f64, 3, 1>) -> f64 {
-    when { return newest_price(prices) }
+    when { return delta_value(prices) }
 }
 
 # TIME-1: a window is invalid until a value arrives, and ready at its
@@ -63,10 +51,6 @@ fn arrived_at(prices: rolling_window<i64, 2, 1>, probe: bool) -> datetime? {
     when valid([]) { return last_modified(prices) }
 }
 
-fn counted(value: i64) -> rolling_window<i64, 2, 1> {
-    when { return value }
-}
-
 # A window of an enum, and one made by a generic function: its value's
 # type and its size are the call's.
 fn sides(side: Side) -> rolling_window<Side, 2, 1> {
@@ -74,44 +58,44 @@ fn sides(side: Side) -> rolling_window<Side, 2, 1> {
 }
 
 fn last_side(chosen: rolling_window<Side, 2, 1>) -> Side {
-    when { return newest_side(chosen) }
+    when { return delta_value(chosen) }
 }
 
 fn windowed<T, const N: i64>(value: T) -> rolling_window<T, N, 1> {
     when { return value }
 }
 
-fn newest<T, const N: i64>(values: rolling_window<T, N, 1>) -> list<T> {
-    when { return values }
+fn newest<T, const N: i64>(values: rolling_window<T, N, 1>) -> T {
+    when { return delta_value(values) }
 }
 
 # A graph wires a window from the node that publishes it to one that reads
 # it, of one type.
 fn relayed(price: f64) -> f64 => arrived(collect(price))
 fn relayed_side(side: Side) -> Side => last_side(sides(side))
-fn relayed_generic(value: i64) -> list<i64> => newest(windowed<i64, 4>(value))
-fn kept(price: f64) -> f64 => arrived(gathered(price))
-fn ready_flow(price: f64, probe: bool) -> bool => ready(collect(price), probe)
-fn arriving_flow(value: i64, probe: bool) -> bool => arriving(counted(value), probe)
-fn arrived_at_flow(value: i64, probe: bool) -> datetime? => arrived_at(counted(value), probe)
+fn relayed_generic(value: i64) -> i64 => newest(windowed<i64, 4>(value))
+fn kept(price: f64) -> rolling_window<f64, 3, 1> => gathered(price)
 
 test a_window_publishes_each_value_that_arrives {
-    # Four values arrive at a window of three at most: the newest is read
-    # at each.
-    assert eval(relayed(price: [1.0, _, 2.0, 3.0, 4.0])) == [1.0, _, 2.0, 3.0, 4.0]
+    # Four values arrive at a window of three at most: the fourth is
+    # published as the others are.
+    assert eval(collect(price: [1.0, 2.0, _, 3.0, 4.0])) == [1.0, 2.0, _, 3.0, 4.0]
     assert eval(kept(price: [-1.0, 2.0, -3.0])) == [_, 2.0, -3.0]
+    assert eval(arrived(prices: [1.0, 2.0, _, 3.0, 4.0])) == [1.0, 2.0, _, 3.0, 4.0]
+    assert eval(relayed(price: [1.0, _, 2.0, 3.0, 4.0])) == [1.0, _, 2.0, 3.0, 4.0]
     assert eval(relayed_side(side: [.buy, .sell, .sell])) == [.buy, .sell, .sell]
-    assert eval(relayed_generic(value: [1, 2, 3, 4, 5])) ==
-        [[1], [1, 2], [1, 2, 3], [1, 2, 3, 4], [2, 3, 4, 5]]
+    assert eval(relayed_generic(value: [1, 2, 3, 4, 5])) == [1, 2, 3, 4, 5]
+    assert eval(windowed<i64, 4>(value: [1, 2])) == [1, 2]
+    assert eval(latest(price: [1.0, 2.0])) == [1.0, 2.0]
 }
 
 test a_window_of_one_tick_is_ready_at_its_first_value {
     let t = earliest_start
-    assert eval(ready_flow(price: [_, 1.0, _, 2.0], probe: [true, true, true, true])) ==
+    assert eval(ready(prices: [_, 1.0, _, 2.0], probe: [true, true, true, true])) ==
         [false, true, true, true]
-    assert eval(arriving_flow(value: [_, 1, _, 2], probe: [true, true, true, true])) ==
+    assert eval(arriving(prices: [_, 1, _, 2], probe: [true, true, true, true])) ==
         [false, true, false, true]
-    assert eval(arrived_at_flow(value: [_, 1, _, 2], probe: [true, true, true, true])) ==
+    assert eval(arrived_at(prices: [_, 1, _, 2], probe: [true, true, true, true])) ==
         [null, t + 1us, t + 1us, t + 3us]
 }
 
@@ -120,15 +104,22 @@ test a_window_of_one_tick_is_ready_at_its_first_value {
 # has a minimum of one tick, so it is ready at its first value; TIME-9:
 # "`valid` of a collection is true where any element, field or entry is
 # valid", and `all_valid` "where every one is". TYPE-16: a struct's delta
-# has a property for each field, the window's a window's delta, which this
-# target does not write: only the field that is no window is published.
+# has a property for each field, the window's "V: the value that arrived".
 struct Book {
     prices: rolling_window<f64, 3, 1>
     last: f64
 }
 
 fn booked(price: f64) -> Book {
-    when { return delta<Book>(last: price) }
+    when {
+        if price < 0.0 { return delta<Book>(last: price) }
+        return delta<Book>(prices: price, last: price)
+    }
+}
+
+fn priced(price: f64) -> Book {
+    inject out
+    when { out = delta<Book>(prices: price) }
 }
 
 fn book_valid(book: Book, probe: bool) -> bool {
@@ -139,17 +130,34 @@ fn book_all_valid(book: Book, probe: bool) -> bool {
     when valid([]) { return all_valid(book) }
 }
 
-# A field that is no window is read in a hook.
+# A field that is no window is read in a hook; the window's change is its
+# delta's property.
 fn book_last(book: Book) -> f64 {
     when valid(book.last) { return book.last }
+}
+
+fn book_change(book: Book) -> f64? {
+    when { return delta_value(book).prices }
+}
+
+fn slots(slot: i64, price: f64) -> list<rolling_window<f64, 2, 1>, 2> {
+    when { return delta<list<rolling_window<f64, 2, 1>, 2>>(updated: [slot: price]) }
 }
 
 fn some_slot(both: list<rolling_window<f64, 2, 1>, 2>, probe: bool) -> bool {
     when valid([]) { return valid(both) && !all_valid(both) }
 }
 
-fn some_key(prices: dict<str, rolling_window<f64, 2, 1>>, probe: bool) -> bool {
-    when valid([]) { return valid(prices) }
+fn keyed(key: str, price: f64) -> dict<str, rolling_window<f64, 2, 1>> {
+    when { return delta<dict<str, rolling_window<f64, 2, 1>>>(updated: [key: price]) }
+}
+
+fn key_a_change(prices: dict<str, rolling_window<f64, 2, 1>>) -> f64? {
+    when { return get(delta_value(prices).updated, "a") }
+}
+
+fn paired(price: f64) -> tuple<rolling_window<f64, 2, 1>, f64> {
+    when { return (price, price + 1.0) }
 }
 
 fn pair_second(pair: tuple<rolling_window<f64, 2, 1>, f64>) -> f64 {
@@ -159,25 +167,30 @@ fn pair_second(pair: tuple<rolling_window<f64, 2, 1>, f64>) -> f64 {
 fn book_flow(price: f64, probe: bool) -> bool => book_valid(booked(price), probe)
 fn book_all_flow(price: f64, probe: bool) -> bool => book_all_valid(booked(price), probe)
 fn last_flow(price: f64) -> f64 => book_last(booked(price))
+fn change_flow(price: f64) -> f64? => book_change(booked(price))
+fn priced_flow(price: f64, probe: bool) -> bool => book_valid(priced(price), probe)
+fn slot_flow(slot: i64, price: f64, probe: bool) -> bool => some_slot(slots(slot, price), probe)
+fn key_flow(key: str, price: f64) -> f64? => key_a_change(keyed(key, price))
+fn pair_flow(price: f64) -> f64 => pair_second(paired(price))
 # A graph wires a field's window, and an element's, to a window input.
-fn field_flow(book: Book) -> f64 => arrived(book.prices)
-fn element_flow(both: list<rolling_window<f64, 2, 1>, 2>) -> f64 => arrived_two(both[1])
+fn field_flow(price: f64) -> f64 => arrived(booked(price).prices)
+fn element_flow(slot: i64, price: f64) -> f64 => arrived_two(slots(slot, price)[1])
 
 fn arrived_two(prices: rolling_window<f64, 2, 1>) -> f64 {
-    when { return sum_of(prices) }
-}
-
-const fn sum_of(values: list<f64>) -> f64 {
-    var sum: f64 = 0.0
-    for value in values { sum += value }
-    return sum
+    when { return delta_value(prices) }
 }
 
 test a_window_within_a_value_is_its_child {
-    # The field that is no window is published, and the window is not.
     assert eval(book_flow(price: [_, -1.0, 2.0], probe: [true, true, true])) == [false, true, true]
-    assert eval(book_all_flow(price: [-1.0, 2.0], probe: [true, true])) == [false, false]
+    assert eval(book_all_flow(price: [-1.0, 2.0], probe: [true, true])) == [false, true]
     assert eval(last_flow(price: [-1.0, 2.0])) == [-1.0, 2.0]
+    assert eval(change_flow(price: [-1.0, 2.0])) == [null, 2.0]
+    assert eval(priced_flow(price: [_, 1.0], probe: [true, true])) == [false, true]
+    assert eval(slot_flow(slot: [0, 1], price: [1.0, 2.0], probe: [true, true])) == [true, false]
+    assert eval(key_flow(key: ["a", "b", "a"], price: [1.0, 2.0, 3.0])) == [1.0, null, 3.0]
+    assert eval(pair_flow(price: [1.0, 2.0])) == [2.0, 3.0]
+    assert eval(field_flow(price: [1.0, -1.0, 2.0])) == [1.0, _, 2.0]
+    assert eval(element_flow(slot: [0, 1, 1], price: [1.0, 2.0, 3.0])) == [_, 2.0, 3.0]
 }
 
 # TYPE-11, END-9: a window's value, read in a hook, is a `list<V>` of the

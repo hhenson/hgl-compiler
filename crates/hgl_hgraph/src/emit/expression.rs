@@ -204,7 +204,13 @@ impl Emitter<'_> {
                     // (`language_delta`).
                     EndpointOperation::DeltaValue => {
                         let ty = endpoint.ty.clone();
-                        self.language_delta(&ty, format!("{input}.delta_value"), value.at)
+                        if duration_window(&ty) {
+                            // A window of a duration's (`window_delta`).
+                            self.natives = true;
+                            format!("_core.window_delta({input})")
+                        } else {
+                            self.language_delta(&ty, format!("{input}.delta_value"), value.at)
+                        }
                     }
                     // END-6: an invalid endpoint has no timestamp, even
                     // if it held a value before being invalidated.
@@ -241,6 +247,46 @@ impl Emitter<'_> {
             // `all_valid` ... gives an `err` of an `error` with that code
             // where its place takes a `result<list<V>, error>`" (ERR-14).
             ExprKind::CheckedWindow(read) => self.window_result(function, read, value.at),
+            // ERR-14: `delta_value` read where the place takes a
+            // `result`: `ok` of the delta, or an `err` coded
+            // `value.unset_read` where the endpoint has none in the
+            // cycle. "An endpoint that has not ticked in the cycle has
+            // none. Of those that tick, only a window of a duration has a
+            // tick with no delta": of a direct input or `out` of any
+            // other type it is `ok` of the delta read as a plain one is
+            // where the endpoint is modified, core's `record` among them,
+            // and that `err` elsewhere. A child's, a window of a
+            // duration's, one that holds such a window, and core's
+            // `removed_value` are reported.
+            ExprKind::CheckedDelta(read) => {
+                let direct = match &read.kind {
+                    ExprKind::Endpoint {
+                        operation: EndpointOperation::DeltaValue,
+                        inputs: Some(inputs),
+                    } if inputs.len() == 1 => Some(&function.locals[inputs[0]]),
+                    _ => None,
+                };
+                let written = direct.filter(|endpoint| {
+                    !windows_in(self.program, endpoint.ty.omission_removed())
+                        .iter()
+                        .any(duration_window)
+                });
+                let Some(endpoint) = written else {
+                    self.unsupported(
+                        value.at,
+                        "`delta_value` of a child or of a window of a duration, or \
+                         `removed_value`, read where a `result` is taken (ERR-14)",
+                    );
+                    return "None".to_string();
+                };
+                let input = endpoint_name(endpoint);
+                let read = self.expression(function, read);
+                self.natives = true;
+                format!(
+                    "(_core.Ok({read}) if {input}.modified else _core.Err(_core.Error(\
+                     \"the endpoint has not ticked in the cycle\", code=\"value.unset_read\")))"
+                )
+            }
             // TIME-9: `scheduled()` as a bool, where it sets no
             // subscription (TIME-3: "Selectors under negation or
             // disjunction leave the default in place"): what woke the
@@ -507,13 +553,6 @@ impl Emitter<'_> {
                             "None".to_string()
                         }
                     };
-                }
-                // TYPE-16: a window's delta has `added` and `removed`,
-                // which hgraph's `TSW` does not give (`WINDOW_DELTA`).
-                if matches!(&base.ty, Type::Delta(of) if matches!(**of, Type::RollingWindow { .. }))
-                {
-                    self.unsupported(value.at, WINDOW_DELTA);
-                    return "None".to_string();
                 }
                 let delta = DeltaOf::of(&base.ty);
                 // TYPE-16: a nullable's delta has one property, `value`,
@@ -1364,8 +1403,14 @@ impl Emitter<'_> {
             // END-8: a child's delta is read as a direct input's of its
             // type is (`language_delta`).
             EndpointOperation::DeltaValue => {
-                let shape = self.child_shape(&child.ty);
-                self.language_delta(&child.ty, format!("_core.child_delta({port}{shape})"), at)
+                // A window of a duration's, of a child that is valid
+                // (`window_delta`).
+                if duration_window(&child.ty) {
+                    format!("_core.checked_child({port}, _core.window_delta)")
+                } else {
+                    let shape = self.child_shape(&child.ty);
+                    self.language_delta(&child.ty, format!("_core.child_delta({port}{shape})"), at)
+                }
             }
             EndpointOperation::LastModified => {
                 let shape = self.child_shape(&child.ty);
@@ -1759,12 +1804,6 @@ impl Emitter<'_> {
         // published null", and `delta<i64?>(value: 7)` a published 7.
         // It is hgraph's own delta of such a value: `Null`, or the
         // value.
-        // TYPE-16: a window's delta, `delta<rolling_window<i64, 3>>(added:
-        // 5)`, is not written (`WINDOW_DELTA`).
-        if matches!(&value.ty, Type::Delta(of) if matches!(**of, Type::RollingWindow { .. })) {
-            self.unsupported(value.at, WINDOW_DELTA);
-            return "None".to_string();
-        }
         let delta = DeltaOf::of(&value.ty);
         if let Some(DeltaOf::Nullable) = delta {
             return match arguments.first() {

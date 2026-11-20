@@ -42,9 +42,6 @@ test a_value_functions_generic_given_a_window_is_its_list {
 # a window's value, "read in a hook ... is a `list<V>`": a field, an
 # element, a field of an element and an entry of `out` that is a window
 # is read as its list, which fails where the window is not all valid.
-# What is published to a window within a value is a window's delta
-# (TYPE-16), which this target does not write: these nodes publish the
-# parts that are no window, and are written, not run.
 struct Tally {
     prices: rolling_window<i64, 3, 1>
     last: i64
@@ -54,7 +51,7 @@ fn capped_field(price: i64) -> Tally {
     inject out
     when {
         if all_valid(out) && total(out.prices) > 5 { return }
-        return delta<Tally>(last: price)
+        return delta<Tally>(prices: price, last: price)
     }
 }
 
@@ -65,7 +62,7 @@ fn capped_bound(price: i64) -> Tally {
             let held: list<i64> = out.prices
             if total(held) > 5 { return }
         }
-        return delta<Tally>(last: price)
+        return delta<Tally>(prices: price, last: price)
     }
 }
 
@@ -77,15 +74,15 @@ fn capped_loop(price: i64) -> Tally {
             for value in out.prices { sum += value }
         }
         if sum > 5 { return }
-        return delta<Tally>(last: price)
+        return delta<Tally>(prices: price, last: price)
     }
 }
 
 fn first_kept(price: i64) -> Tally {
     inject out
     when {
-        if all_valid(out) { return delta<Tally>(last: out.prices[0]) }
-        return delta<Tally>(last: price)
+        if all_valid(out) { return delta<Tally>(prices: price, last: out.prices[0]) }
+        return delta<Tally>(prices: price, last: price)
     }
 }
 
@@ -93,7 +90,7 @@ fn capped_slots(slot: i64, price: i64) -> list<rolling_window<i64, 3, 1>, 2> {
     inject out
     when {
         if all_valid(out) && total(out[slot]) > 3 { return }
-        return delta<list<rolling_window<i64, 3, 1>, 2>>(removed: [slot])
+        return delta<list<rolling_window<i64, 3, 1>, 2>>(updated: [slot: price])
     }
 }
 
@@ -101,7 +98,7 @@ fn capped_rows(price: i64) -> list<Tally, 1> {
     inject out
     when {
         if all_valid(out) && total(out[0].prices) > 3 { return }
-        return delta<list<Tally, 1>>(updated: [0: delta<Tally>(last: price)])
+        return delta<list<Tally, 1>>(updated: [0: delta<Tally>(prices: price, last: price)])
     }
 }
 
@@ -109,10 +106,13 @@ fn capped_keys(key: str, price: i64) -> dict<str, rolling_window<i64, 3, 1>> {
     inject out
     when {
         if valid(out) && total(out[key]) > 3 { return }
-        return delta<dict<str, rolling_window<i64, 3, 1>>>(removed: [key])
+        return delta<dict<str, rolling_window<i64, 3, 1>>>(updated: [key: price])
     }
 }
 
+fn key_change(prices: dict<str, rolling_window<i64, 3, 1>>) -> i64? {
+    when { return get(delta_value(prices).updated, "a") }
+}
 
 struct Book {
     prices: rolling_window<i64, 3, 2>
@@ -123,7 +123,7 @@ fn early_out(price: i64) -> Book {
     inject out
     when {
         if all_valid(out) && total(out.prices) > 100 { return }
-        return delta<Book>(last: price)
+        return delta<Book>(prices: price, last: price)
     }
 }
 
@@ -133,15 +133,28 @@ fn loop_last(price: i64) -> i64 => capped_loop(price).last
 fn kept_last(price: i64) -> i64 => first_kept(price).last
 fn slot_total(slot: i64, price: i64) -> i64 => total(capped_slots(slot, price)[0])
 fn row_last(price: i64) -> i64 => capped_rows(price)[0].last
+fn key_flow(key: str, price: i64) -> i64? => key_change(capped_keys(key, price))
 fn early_last(price: i64) -> i64 => early_out(price).last
 
+test a_window_child_of_out_is_read_as_its_list {
+    assert eval(field_last(price: [1, 2, 3, 4])) == [1, 2, 3, _]
+    assert eval(bound_last(price: [1, 2, 3, 4])) == [1, 2, 3, _]
+    assert eval(loop_last(price: [1, 2, 3, 4])) == [1, 2, 3, _]
+    assert eval(kept_last(price: [1, 2, 3, 4, 5])) == [1, 1, 1, 1, 2]
+    assert eval(slot_total(slot: [0, 1, 0, 0, 0], price: [1, 5, 2, 3, 4])) == [1, _, 3, 6, _]
+    assert eval(row_last(price: [1, 2, 3, 4])) == [1, 2, 3, _]
+    assert eval(key_flow(key: ["a", "a", "a", "a"], price: [1, 2, 3, 4])) == [1, 2, 3, _]
+    assert raises("value.unset_read") { eval(early_last(price: [1, 2])) }
+}
 
 # ---- A window's list indexed (TIME-9, TYPE-11) ----
 
 # A window is no collection (TIME-9): `book.prices[0]` is a position of
 # the list the window is read as, which `valid(book.prices)` admits, and
-# which fails where the window is not all valid. These are written, and
-# not run: nothing here publishes to the window.
+# which fails where the window is not all valid.
+fn booked(price: i64) -> Book {
+    when { return delta<Book>(prices: price, last: price) }
+}
 
 fn first_price(book: Book) -> i64 {
     when all_valid(book.prices) { return book.prices[0] }
@@ -149,4 +162,12 @@ fn first_price(book: Book) -> i64 {
 
 fn early_first_price(book: Book) -> i64 {
     when valid(book.prices) { return book.prices[0] }
+}
+
+fn first_flow(price: i64) -> i64 => first_price(booked(price))
+fn early_first_flow(price: i64) -> i64 => early_first_price(booked(price))
+
+test a_windows_list_within_a_value_is_indexed {
+    assert eval(first_flow(price: [1, 2, 3, 4])) == [_, 1, 1, 2]
+    assert raises("value.unset_read") { eval(early_first_flow(price: [1, 2])) }
 }

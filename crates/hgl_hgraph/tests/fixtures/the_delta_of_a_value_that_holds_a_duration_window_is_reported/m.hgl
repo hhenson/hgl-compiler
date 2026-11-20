@@ -16,6 +16,6 @@ fn slots(both: list<rolling_window<i64, 3s>, 2>) -> list<rolling_window<i64, 3s>
 fn counted(ticks: Ticks) -> Ticks {
     when { return delta_value(ticks) }
 }
-fn prices(quotes: Quotes) -> delta<rolling_window<i64, 3s, 1s>> {
+fn prices(quotes: Quotes) -> result<i64, error> {
     when valid(quotes.prices) { return delta_value(quotes.prices) }
 }

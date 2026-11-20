@@ -77,6 +77,7 @@ impl<'a> Typer<'a> {
                 );
             }
         }
+        self.plain_cycle_reads(&statements);
         Some(Body {
             locals: self.locals,
             statements,
@@ -625,10 +626,8 @@ impl<'a> Typer<'a> {
     /// relay a set with `return delta_value(input)`. A result of
     /// `atomic<V>` is published whole, as a V (TYPE-9: "`atomic<V>`
     /// stops expansion at a complete ordinary V"). TIME-7: "A result of
-    /// `rolling_window<V, Max, Min>` takes a V, which arrives, or a delta
-    /// of the window (TYPE-11)": a V is its complete value here, and the
-    /// window's own delta, `delta<rolling_window<V, Max, Min>>`, its
-    /// delta.
+    /// `rolling_window<V, Max, Min>` takes a V, which arrives, and nothing
+    /// else (TYPE-11)", and, proposed, a nullable V's delta.
     ///
     /// A value written out takes its type from its place (EXPR-5), and
     /// the place here is one or the other: `(1.0, null)` is no
@@ -637,8 +636,25 @@ impl<'a> Typer<'a> {
     /// where it reads clean; otherwise the complete value's reading
     /// stands, with what it reports.
     pub(super) fn published(&mut self, node: &SyntaxNode, result: &Type, what: &str) -> Expr {
+        if let Type::RollingWindow {
+            value: arriving, ..
+        } = result
+        {
+            let value = self.expression(node, Some(arriving));
+            // TIME-7, proposed: "one of a nullable V takes its delta as
+            // well, `delta<f64?>(value: 1.0)` or `delta<f64?>()`, as the
+            // arrival it holds".
+            let delta = Type::delta(result.clone());
+            if matches!(**arriving, Type::Nullable(_))
+                && !self.admits(arriving, &value.ty)
+                && self.admits(&delta, &value.ty)
+            {
+                return value;
+            }
+            return self.fit(value, arriving, &format!("what arrives at {what}"));
+        }
         let whole = match result {
-            Type::Atomic(value) | Type::RollingWindow { value, .. } => (**value).clone(),
+            Type::Atomic(value) => (**value).clone(),
             other => other.clone(),
         };
         let delta = Type::delta(result.clone());
@@ -793,17 +809,19 @@ impl<'a> Typer<'a> {
         self.is_reference(local) || (Some(local) == self.out && self.signature.reference)
     }
 
-    /// Reports, at `at`, a read in a hook of the value of `local`, an
-    /// endpoint whose value is not read (`designates`), or of its
-    /// `delta_value` where `delta` is true; `child` is the child of it
-    /// read, as written, where one is. FN-16: "A read of the value or
-    /// of the `delta_value` of one rejects when the program is compiled.
-    /// Proposed: that read rejects with the code `ref.read`".
+    /// Reports, at `at`, a read in a hook of `local`, an endpoint whose
+    /// value is not read (`designates`): of its value, its
+    /// `delta_value` or its `removed_value`, as `read` says; `child` is
+    /// the child of it read, as written, where one is. FN-16: "A read of
+    /// the value or of the `delta_value` of one rejects when the program
+    /// is compiled ... That read rejects with the code `ref.read`", and,
+    /// proposed, "`removed_value` (TYPE-11) is set aside as `delta_value`
+    /// is ... a read of it there rejects with `ref.read`".
     pub(super) fn ref_read(
         &mut self,
         local: LocalId,
         child: Option<&str>,
-        delta: bool,
+        read: RefRead,
         at: Location,
     ) {
         let name = &self.locals[local].name;
@@ -812,7 +830,11 @@ impl<'a> Typer<'a> {
         } else {
             "`out` of a `ref` result".to_string()
         };
-        let read = if delta { "`delta_value`" } else { "value" };
+        let read = match read {
+            RefRead::Value => "value",
+            RefRead::Delta => "`delta_value`",
+            RefRead::Removed => "`removed_value`",
+        };
         let message = match child {
             Some(child) => {
                 format!("`{child}` is a child of {what}, an endpoint whose {read} is not read")
@@ -859,4 +881,16 @@ impl<'a> Typer<'a> {
             )),
         );
     }
+}
+
+/// What a read of an endpoint whose value is not read reads (FN-16):
+/// its value, its `delta_value`, or a window's `removed_value`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RefRead {
+    /// Its value.
+    Value,
+    /// Its `delta_value`.
+    Delta,
+    /// A window's `removed_value`.
+    Removed,
 }

@@ -199,6 +199,7 @@ pub fn contains(category: Category, code: &str) -> bool {
 /// codes, where the compiler sees the value.
 pub const EXECUTION_CODES: &[&str] = &[
     "value.missing_key",
+    "value.index_out_of_range",
     "value.unset_read",
     "value.capability",
     "value.byte_range",

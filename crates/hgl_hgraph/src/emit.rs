@@ -1515,6 +1515,15 @@ impl<'a> Emitter<'a> {
                 body,
                 at,
             } if function.mode == Mode::Test => {
+                // A failure this target gives with no code, or not at
+                // all, is not asserted: EXPR-3 and EXPR-7's index outside
+                // a list, `value.index_out_of_range`, and core's OPS-1
+                // text repeated a count below zero, `numeric.out_of_range`
+                // (`uncoded_failure`).
+                if let Some(form) = uncoded_failure(code, body) {
+                    self.unsupported(*at, form);
+                    return;
+                }
                 self.harness = true;
                 self.line(depth, "try:");
                 self.block(function, body, depth + 1);
@@ -1724,4 +1733,34 @@ fn at_of(statement: &Stmt, locals: &[Local]) -> Location {
 /// up starts with `_`, and a program's own never does.
 fn designated_name(input: &Local) -> String {
     format!("_ref_{}", name(&input.name))
+}
+
+/// What an `assert raises(code)` of `body` asserts that this target does
+/// not give, where it asserts one: a failure coded
+/// `value.index_out_of_range` (EXPR-3, EXPR-7), which the provider's
+/// index outside a list has no code for, and core's OPS-1 text repeated a
+/// count below zero, `numeric.out_of_range`, which the provider does not
+/// write (`mul__str_i64`). The text is repeated by a call that gives a
+/// `str` of a `str` and an `i64`, in either order.
+fn uncoded_failure(code: &str, body: &[Stmt]) -> Option<&'static str> {
+    if code == "value.index_out_of_range" {
+        return Some("a failure coded `value.index_out_of_range` (EXPR-3, EXPR-7)");
+    }
+    if code != "numeric.out_of_range" {
+        return None;
+    }
+    let text = |ty: &Type| *ty == Type::Scalar(Scalar::Str);
+    let count = |ty: &Type| *ty == Type::Scalar(Scalar::I64);
+    let mut repeated = false;
+    hgl_analyser::hir::walk_statements(body, &mut |value| {
+        if let ExprKind::Call { arguments, .. } = &value.kind
+            && text(&value.ty)
+            && let [first, second] = arguments.as_slice()
+            && ((text(&first.value.ty) && count(&second.value.ty))
+                || (count(&first.value.ty) && text(&second.value.ty)))
+        {
+            repeated = true;
+        }
+    });
+    repeated.then_some("text repeated a count below zero, `numeric.out_of_range` (OPS-1)")
 }

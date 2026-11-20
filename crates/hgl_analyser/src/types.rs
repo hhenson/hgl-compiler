@@ -289,37 +289,6 @@ impl Type {
         }
     }
 
-    /// True when this type is a window or holds one, but within the
-    /// argument of a `delta`: TYPE-12, "A dictionary's value and the
-    /// argument of `delta` are any type", so `delta<rolling_window<i64,
-    /// 3>>` is an ordinary value and `list<rolling_window<i64, 3>>` is
-    /// not.
-    pub(crate) fn holds_window(&self) -> bool {
-        match self {
-            Type::RollingWindow { .. } => true,
-            Type::Delta(_) => false,
-            Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
-                Argument::Type(argument) => argument.holds_window(),
-                Argument::Constant(_) => false,
-            }),
-            Type::Tuple(elements) => elements.iter().any(Type::holds_window),
-            Type::List { element: inner, .. }
-            | Type::Set(inner)
-            | Type::Endpoint(inner)
-            | Type::Atomic(inner)
-            | Type::Trace { cell: inner, .. }
-            | Type::Nullable(inner) => inner.holds_window(),
-            Type::Dict { key, value } => key.holds_window() || value.holds_window(),
-            Type::Result { value, error } => value.holds_window() || error.holds_window(),
-            Type::Scalar(_)
-            | Type::Parameter { .. }
-            | Type::Signal
-            | Type::Error
-            | Type::ErrorContext
-            | Type::Unknown => false,
-        }
-    }
-
     /// What `atomic<payload>` is. TYPE-9: "`atomic<V>` stops expansion
     /// at a complete ordinary V. For non-composite S, `atomic<S>`
     /// normalizes to S before matching, recursively."
@@ -380,12 +349,11 @@ impl Type {
     ///
     /// For most T it is another type the language has, and that type is
     /// what this returns: `f64` for `f64`, `tuple<f64?, i64?>` for
-    /// `tuple<f64, i64>`. "A nullable's, a list's, a set's, a
-    /// dictionary's, a struct's, and a window's delta is a type of its
-    /// own", `Type::Delta`. So is the delta of a type not yet known, a
-    /// generic parameter's: "In a generic declaration it stays as written
-    /// until T is known", and it is formed again, here, when the
-    /// parameter is replaced.
+    /// `tuple<f64, i64>`. A nullable's, a list's, a set's, a
+    /// dictionary's and a struct's delta is a type of its own, `Type::Delta`. So is the delta of a type not
+    /// yet known, a generic parameter's: "In a generic declaration it
+    /// stays as written until T is known", and it is formed again, here,
+    /// when the parameter is replaced.
     pub fn delta(of: Type) -> Type {
         let optional = |ty: Type| match ty {
             Type::Nullable(_) => ty,
@@ -406,6 +374,14 @@ impl Type {
             }
             // "`atomic<V>`: V: an atomic publishes whole".
             Type::Atomic(value) => *value,
+            // "`rolling_window<V, Max, Min>`: V: the value that arrived.
+            // Proposed: for a nullable V, `delta<V>`, the optional of the
+            // row for `V?`, so that a null that arrives is told from no
+            // change (TYPE-11)".
+            Type::RollingWindow { value, .. } => match *value {
+                nullable @ Type::Nullable(_) => Type::delta(nullable),
+                value => value,
+            },
             // "each position's delta, null where it did not change".
             Type::Tuple(elements) => Type::Tuple(
                 elements
@@ -424,13 +400,10 @@ impl Type {
                 }
                 inner => Type::Delta(Box::new(Type::Nullable(Box::new(inner)))),
             },
-            // A type of its own, a window's among them: "`rolling_window<V,
-            // Max, Min>`: A type of its own, with the properties `added`
-            // ... and `removed`" (TYPE-16); one not yet known; and one that
-            // has no delta, a `signal`, which is reported where it is
-            // written (`delta.unsupported_shape`).
+            // A type of its own; one not yet known; and one that has no
+            // delta, a `signal`, which is reported where it is written
+            // (`delta.unsupported_shape`).
             Type::Set(_)
-            | Type::RollingWindow { .. }
             | Type::List { .. }
             | Type::Dict { .. }
             | Type::Named {

@@ -213,14 +213,9 @@ fn stopped(held: rolling_window<i64, 3, 2>) -> i64 {
 
 fn stop_flow(reading: i64) -> i64 => stopped(readings(reading))
 
-# A window's record reads its delta (TYPE-16), which this target does not
-# write: each window is read in a graph.
-fn capped_total(price: i64) -> i64 => total(capped(price))
-fn early_out_total(price: i64) -> i64 => total(early_out(price))
-
 test a_windows_out_and_its_read_in_stop_are_lists {
-    assert eval(capped_total(price: [1, 2, 3, 4, 5])) == [_, 3, 6]
-    assert raises("value.unset_read") { eval(early_out_total(price: [1, 2])) }
+    assert eval(capped(price: [1, 2, 3, 4, 5])) == [1, 2, 3, _, _]
+    assert raises("value.unset_read") { eval(early_out(price: [1, 2])) }
     assert eval(stop_flow(reading: [1, 2])) == [1, 1]
     assert raises("value.unset_read") { eval(stop_flow(reading: [1])) }
 }
@@ -229,16 +224,13 @@ test a_windows_out_and_its_read_in_stop_are_lists {
 
 # TIME-9: `all_valid` of a struct asks each field's own `valid`, one level
 # deep: a window field is valid at its first value, short of its minimum.
-# What is published to a window within a value is a window's delta
-# (TYPE-16), which this target does not write: these nodes publish the
-# parts that are no window, and the reads are written, not run.
 struct Book {
     prices: rolling_window<i64, 3, 2>
     last: i64
 }
 
 fn booked(price: i64) -> Book {
-    when { return delta<Book>(last: price) }
+    when { return delta<Book>(prices: price, last: price) }
 }
 
 fn book_readiness(probe: bool, book: Book) -> list<bool, 3> {
@@ -262,7 +254,7 @@ fn book_prices_flow(price: i64) -> list<i64> => book_prices(booked(price))
 fn early_book_flow(price: i64) -> list<i64> => early_book_prices(booked(price))
 
 fn slots(slot: i64, price: i64) -> list<rolling_window<i64, 2>, 2> {
-    when { return delta<list<rolling_window<i64, 2>, 2>>(removed: [slot]) }
+    when { return delta<list<rolling_window<i64, 2>, 2>>(updated: [slot: price]) }
 }
 
 # TIME-1: "Elsewhere, `parts[i]`, it is checked when it runs": a child that
@@ -283,7 +275,7 @@ fn first_slot_flow(slot: i64, price: i64) -> list<i64> => first_slot(slots(slot,
 # is compiled and at one known when it runs; a struct's window field
 # within a list's element read when it runs.
 fn keyed(key: str, price: i64) -> dict<str, rolling_window<i64, 2>> {
-    when { return delta<dict<str, rolling_window<i64, 2>>>(removed: [key]) }
+    when { return delta<dict<str, rolling_window<i64, 2>>>(updated: [key: price]) }
 }
 
 fn entry_a(prices: dict<str, rolling_window<i64, 2>>) -> list<i64> {
@@ -303,7 +295,7 @@ struct Row {
 }
 
 fn rowed(slot: i64, price: i64) -> list<Row, 2> {
-    when { return delta<list<Row, 2>>(removed: [slot]) }
+    when { return delta<list<Row, 2>>(updated: [slot: delta<Row>(prices: price)]) }
 }
 
 fn row_prices(rows: list<Row, 2>, at: i64) -> list<i64> {
@@ -314,6 +306,37 @@ fn entry_flow(key: str, price: i64) -> list<i64> => entry_a(keyed(key, price))
 fn early_entry_flow(key: str, price: i64) -> list<i64> => early_entry_a(keyed(key, price))
 fn entry_at_flow(key: str, price: i64, at: str) -> list<i64> => entry_at(keyed(key, price), at)
 fn row_flow(slot: i64, price: i64, at: i64) -> list<i64> => row_prices(rowed(slot, price), at)
+
+test a_window_within_a_value_is_read_as_its_list {
+    assert eval(book_flow(probe: [true, true, true], price: [_, 1, 2])) ==
+        [[false, false, false], [true, true, false], [true, true, true]]
+    assert eval(book_prices_flow(price: [1, 2, 3])) == [_, [1, 2], [1, 2, 3]]
+    assert eval(slot_flow(slot: [0, 0, 1, 1], price: [1, 2, 3, 4], at: [_, 0, _, 1])) ==
+        [_, [1, 2], _, [3, 4]]
+    assert eval(first_slot_flow(slot: [0, 0, 1], price: [1, 2, 3])) == [_, [1, 2], [1, 2]]
+    assert eval(entry_flow(key: ["b", "a", "a", "a"], price: [1, 2, 3, 4])) ==
+        [_, _, [2, 3], [3, 4]]
+    assert eval(entry_at_flow(key: ["a", "a", "b"], price: [1, 2, 3], at: [_, "a", _])) ==
+        [_, [1, 2], _]
+    assert eval(row_flow(slot: [1, 1, 0], price: [1, 2, 3], at: [_, 1, _])) == [_, [1, 2], _]
+}
+
+test a_window_within_a_value_read_before_it_is_all_valid_fails {
+    assert raises("value.unset_read") { eval(early_book_flow(price: [1, 2])) }
+    assert raises("value.unset_read") {
+        eval(slot_flow(slot: [0, 0], price: [1, 2], at: [0, _]))
+    }
+    assert raises("value.unset_read") {
+        eval(slot_flow(slot: [0, 0], price: [1, 2], at: [1, _]))
+    }
+    assert raises("value.unset_read") { eval(early_entry_flow(key: ["a"], price: [1])) }
+    assert raises("value.unset_read") {
+        eval(entry_at_flow(key: ["a", "a"], price: [1, 2], at: ["b", _]))
+    }
+    assert raises("value.unset_read") {
+        eval(row_flow(slot: [1, 1], price: [1, 2], at: [1, _]))
+    }
+}
 
 # ---- A window of a duration (TYPE-11, END-9) ----
 

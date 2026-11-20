@@ -130,8 +130,8 @@ transpiler: partial
 - hgraph: `+` and `-` of two durations, `-x` of one, and a duration times an `i64` or an `f64`; a `datetime` or a `civil_datetime` with a duration added or taken away, and one less another; a `date` less a `date`; a `date` and a `time`; a `date` with a duration added or taken away, a `civil_datetime`; `+` of two strings
 - A duration divided by an `i64` or an `f64`, and by a duration with `/` and `//`
 - A `zoned_datetime` with a duration added or taken away: its instant moved, its zone kept
-- A string times an `i64`, in either order: the text that many times
-- Left, reported where it is met: a string times a count below zero, which the contract does not settle
+- A string times an `i64`, in either order: the text that many times, none for a count of zero
+- Left: a string times a count below zero, `numeric.out_of_range`, which the provider reports as the graph runs as not written; an assertion that it raises is reported (TST-10)
 
 ## OPS-2
 
@@ -346,7 +346,8 @@ transpiler: done
 analyser: partial
 
 - `delta_value(x)` is a `delta<T>` for an input of T, and for a child of one (END-8), the value itself for a scalar
-- For a nullable scalar it is the optional TYPE-16 gives it, and for a window the window's delta (END-9)
+- For a nullable scalar it is the optional TYPE-16 gives it, and for a window the V that arrived
+- Where its place takes `result<delta<T>, error>` it is of that result (`CheckedDelta`, the language's ERR-14), of any endpoint, a generic body's `T` among them, as core's `record` reads it
 - A child's `delta_value` needs the child's admission (TIME-1)
 - Left: proof that `x` is valid and modified
 
@@ -427,13 +428,15 @@ transpiler: partial
 analyser: partial
 
 - `all_valid` takes a window, and its value is read in a hook, and given to a value function in composition, as a `list<V>` (TYPE-11, FN-12)
-- `delta_value(x)` of a window is its delta, `added` and `removed` (TYPE-16), read at each tick, before the window is all valid as after; a window's result takes a V, or the window's delta (TYPE-11)
+- `delta_value(x)` of a window is the V that arrived, read before it is all valid as after; of a window of a duration it is read where a `result` is taken, and a plain read is `payload.unguarded` (TYPE-11)
+- `removed_value(x)` is core's declaration, given a window, read where a `result<V, error>` is taken, and a plain read is `payload.unguarded` for every window
 
 transpiler: partial
 
 - hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own; in one of a duration a value leaves one smallest step after its age is the maximum, and the window ticks for the exit, modified with nothing published (END-2), as hgraph 0.9.8's `TSW` does; a minimum of zero is held by the first value, and an empty window is not all valid; one emptied by exits stays valid; proposed: `last_modified` is the exit's time
-- Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`), or gives that `err` where its place expects a `result<list<V>, error>` (`_core.window_result`); a lifted value function whose parameter has a default is not invoked where the window is valid and not all valid (FN-11); core's window cases pass but those of a window's delta, listed in `crates/hgl_hgraph/ci/unsupported_cases.toml`
-- Left, reported: a window of a value that is no scalar or enum (TYPE-11), and invalidating one (END-4); a window's delta, read, made or published, and so a window's replay and record (CEVAL-3, CEVAL-4), which hgraph's `TSW`, giving the value that arrived and nothing at an exit, does not give
+- `delta_value(x)` of a window of ticks is the `TSW`'s, the value that arrived, read plain or where a `result` is taken
+- Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`), or gives that `err` where its place expects a `result<list<V>, error>` (`_core.window_result`); a lifted value function whose parameter has a default is not invoked where the window is valid and not all valid (FN-11); core's window cases pass but those of `removed_value` and of a window of a duration's delta read where a `result` is taken, listed in `crates/hgl_hgraph/ci/unsupported_cases.toml`
+- Left, reported: a window of a value that is no scalar or enum (TYPE-11), and invalidating one (END-4); `removed_value`, and `delta_value` of a window of a duration read where a `result` is taken, which hgraph's `TSW` gives as `None` at an exit alone
 
 ## END-10
 
@@ -568,17 +571,17 @@ transpiler: done
 
 ## CEVAL-3
 
-transpiler: partial
+transpiler: done
 
 - hgraph: core's `replay` is a source written from its own body: each entry at its time, equal values among them, and nothing for a silent slot; a set's entry is its delta, and a nullable's a published null or a value
-- Left, reported: a window's replay, whose entries are window deltas (TYPE-11)
+- A window's entries are its arrivals, each a V the replayed window takes, which takes its values out itself
 
 ## CEVAL-4
 
 transpiler: partial
 
-- hgraph: core's `record` is a node written from its own body: its recording starts empty, takes the evaluation time and the delta of each publication, and is put in the store under its key at stop, an empty one included
-- Left, reported: a window's record, which reads the window's delta at each publication and each exit (END-9)
+- hgraph: core's `record` is a node written from its own body: its recording starts empty, takes the evaluation time and the delta of each publication, read where a `result` is taken and `ok` of hgraph's delta (END-3), and is put in the store under its key at stop, an empty one included
+- Left, reported: the record of a window of a duration, which skips a tick at which a value only leaves (END-9)
 
 ## CEVAL-5
 
@@ -676,7 +679,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: a run's output, an eval's and an application's, is what is under `"run.output"` in its store once it has stopped, a tuple for each publication; an entry with no result has none
-- Left, reported: the output of an entry whose result is a window, a tuple for each publication and each exit (END-9)
+- Left, reported: the output of an entry whose result is a window of a duration, which `record` reads into a `result` (CEVAL-4)
 
 runner: planned
 
