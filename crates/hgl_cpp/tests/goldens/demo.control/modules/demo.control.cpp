@@ -238,7 +238,7 @@ struct count_inside_branch
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 33";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 return ::hgl::demo::control::m_::w_::count_publications(wiring_, value);
             }
@@ -248,7 +248,7 @@ struct count_inside_branch
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 33";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 return ::hglrt::never<::hgraph::TS<::hgraph::Int>>(wiring_);
             }
@@ -292,7 +292,7 @@ struct count_outside_branch
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 54";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count)
             {
                 return count;
             }
@@ -302,7 +302,7 @@ struct count_outside_branch
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 54";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count)
             {
                 return ::hglrt::never<::hgraph::TS<::hgraph::Int>>(wiring_);
             }
@@ -347,7 +347,7 @@ struct bypass_ratio
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 66";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Float>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Float>> divisor)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Float>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Float>> divisor)
             {
                 return divisor;
             }
@@ -357,7 +357,7 @@ struct bypass_ratio
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 66";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Float>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Float>> divisor)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Float>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Float>> divisor)
             {
                 return ::hgl::demo::control::m_::w_::halved(wiring_, divisor);
             }
@@ -401,7 +401,7 @@ struct switch_input
         struct branch_00_
         {
             static constexpr auto name = "demo.control:switch on line 80";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> fallback, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> selected)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> fallback, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> selected)
             {
                 selected = left;
                 return selected;
@@ -412,7 +412,7 @@ struct switch_input
         struct branch_01_
         {
             static constexpr auto name = "demo.control:switch on line 80";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> fallback, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> selected)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> fallback, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> selected)
             {
                 selected = right;
                 return selected;
@@ -423,7 +423,7 @@ struct switch_input
         struct branch_02_
         {
             static constexpr auto name = "demo.control:switch on line 80";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> fallback, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> selected)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> fallback, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> selected)
             {
                 selected = fallback;
                 return selected;
@@ -470,7 +470,7 @@ struct sample_selection
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 99";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right)
             {
                 return left;
             }
@@ -480,7 +480,7 @@ struct sample_selection
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 99";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right)
             {
                 return right;
             }
@@ -525,7 +525,7 @@ struct guarded
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 114";
-            static void compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static void compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 ::hgl::demo::control::m_::w_::overflow_on_large(wiring_, value);
             }
@@ -535,7 +535,7 @@ struct guarded
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 114";
-            static void compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static void compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
             }
         };
@@ -579,7 +579,7 @@ struct three_way
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 127";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> z)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> z)
             {
                 return y;
             }
@@ -589,7 +589,7 @@ struct three_way
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 127";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> z)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> z)
             {
                 return z;
             }
@@ -613,7 +613,7 @@ struct three_way
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 127";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> b, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> z)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> b, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> z)
             {
                 return x;
             }
@@ -623,7 +623,7 @@ struct three_way
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 127";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> b, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> z)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> b, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> z)
             {
                 return switch_01_::wire_(wiring_, b, y, z);
             }
@@ -689,7 +689,7 @@ struct scaled
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 142";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor, [[maybe_unused]] ::hgraph::Scalar<"offset", ::hgraph::Int> offset)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor, [[maybe_unused]] ::hgraph::Scalar<"offset", ::hgraph::Int> offset)
             {
                 return ::hgraph::wire<lifted_02_>(wiring_, ::hgraph::wire<lifted_01_>(wiring_, value, static_cast<::hgraph::Int>(factor.value())), static_cast<::hgraph::Int>(offset.value()));
             }
@@ -699,7 +699,7 @@ struct scaled
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 142";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor, [[maybe_unused]] ::hgraph::Scalar<"offset", ::hgraph::Int> offset)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor, [[maybe_unused]] ::hgraph::Scalar<"offset", ::hgraph::Int> offset)
             {
                 return ::hglrt::never<::hgraph::TS<::hgraph::Int>>(wiring_);
             }
@@ -744,7 +744,7 @@ struct adjusted
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 154";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> chosen)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> chosen)
             {
                 chosen = ::hgl::demo::control::m_::w_::count_publications(wiring_, price);
                 return chosen;
@@ -755,7 +755,7 @@ struct adjusted
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 154";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> chosen)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> chosen)
             {
                 return chosen;
             }
@@ -823,7 +823,7 @@ struct either
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 167";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
             {
                 [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> chosen{};
                 chosen = ::hgraph::wire<lifted_01_>(wiring_, price, static_cast<::hgraph::Int>(1));
@@ -835,7 +835,7 @@ struct either
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 167";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
             {
                 [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> chosen{};
                 chosen = ::hgraph::wire<lifted_02_>(wiring_, price, static_cast<::hgraph::Int>(1));
@@ -894,7 +894,7 @@ struct routed
         struct branch_00_
         {
             static constexpr auto name = "demo.control:switch on line 177";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 return value;
             }
@@ -904,7 +904,7 @@ struct routed
         struct branch_01_
         {
             static constexpr auto name = "demo.control:switch on line 177";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 return ::hgl::demo::control::m_::w_::count_publications(wiring_, value);
             }
@@ -914,7 +914,7 @@ struct routed
         struct branch_02_
         {
             static constexpr auto name = "demo.control:switch on line 177";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 {
                 }
@@ -960,7 +960,7 @@ struct large
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 191";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 return ::hgl::demo::control::m_::w_::count_publications(wiring_, value);
             }
@@ -970,7 +970,7 @@ struct large
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 191";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 return value;
             }
@@ -1036,7 +1036,7 @@ struct chosen_by_config
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 202";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 return value;
             }
@@ -1046,7 +1046,7 @@ struct chosen_by_config
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 202";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 return ::hgraph::wire<lifted_01_>(wiring_, value, static_cast<::hgraph::Int>(1));
             }
@@ -1130,7 +1130,7 @@ struct early
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 217";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 return value;
             }
@@ -1140,7 +1140,7 @@ struct early
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 217";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
             {
                 [[maybe_unused]] const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> v = ::hgraph::wire<lifted_01_>(wiring_, value, static_cast<::hgraph::Int>(5));
                 return ::hgraph::wire<lifted_02_>(wiring_, v, static_cast<::hgraph::Int>(2));
@@ -1207,7 +1207,7 @@ struct unmatched
         struct branch_00_
         {
             static constexpr auto name = "demo.control:switch on line 228";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> out)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> out)
             {
                 out = ::hgraph::wire<lifted_01_>(wiring_, value, static_cast<::hgraph::Int>(1));
                 return out;
@@ -1218,7 +1218,7 @@ struct unmatched
         struct branch_01_
         {
             static constexpr auto name = "demo.control:switch on line 228";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> out)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> out)
             {
                 out = ::hgraph::wire<lifted_02_>(wiring_, value, static_cast<::hgraph::Int>(2));
                 return out;
@@ -1229,7 +1229,7 @@ struct unmatched
         struct branch_02_
         {
             static constexpr auto name = "demo.control:switch on line 228";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> out)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> out)
             {
                 return ::hglrt::unmatched<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>(wiring_, key_);
             }
@@ -1286,7 +1286,7 @@ struct gated_product
         struct branch_00_
         {
             static constexpr auto name = "demo.control:if on line 244";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> running, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> running, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor)
             {
                 running = ::hgraph::wire<lifted_01_>(wiring_, running, static_cast<::hgraph::Int>(factor.value()));
                 return running;
@@ -1297,7 +1297,7 @@ struct gated_product
         struct branch_01_
         {
             static constexpr auto name = "demo.control:if on line 244";
-            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> running, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor)
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> running, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor)
             {
                 return running;
             }

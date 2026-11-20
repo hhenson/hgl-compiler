@@ -464,16 +464,16 @@ fn control_flow_runs_on_the_sdk() {
 /// has a value no case has, with no code, and says the value.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
-fn an_unmatched_selector_fails_the_run() {
+fn an_unmatched_connection_selector_fails_the_run() {
     if !sdk_named() {
         return;
     }
-    let root = scratch("unmatched");
+    let root = scratch("unmatched_connection");
     let file = write(
         &root,
-        "src/demo.unmatched.hgl",
+        "src/demo.routed.hgl",
         concat!(
-            "module demo.unmatched\n",
+            "module demo.routed\n",
             "\n",
             "fn routed(route: str, value: i64) -> i64 {\n",
             "    var out = value\n",
@@ -492,7 +492,7 @@ fn an_unmatched_selector_fails_the_run() {
     let stdout = text(&output.stdout);
     let rows: Vec<&str> = stdout.lines().collect();
     assert_eq!(
-        rows[0], "FAILED   executable  demo.unmatched::another_value",
+        rows[0], "FAILED   executable  demo.routed::another_value",
         "{stdout}"
     );
     assert!(

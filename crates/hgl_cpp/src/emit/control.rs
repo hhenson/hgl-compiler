@@ -649,7 +649,7 @@ impl Emitter<'_> {
         }
         // The child's parameters: the key, where the body reads it, the
         // member's connection, then what it takes.
-        let mut parameters = vec![format!("::hgraph::Wiring& {WIRING}")];
+        let mut parameters = vec![format!("[[maybe_unused]] ::hgraph::Wiring& {WIRING}")];
         if let Some(key) = key {
             let Some(schema) = self.temporal_schema(&locals[key].ty, locals[key].at) else {
                 return;
@@ -1261,7 +1261,7 @@ impl Emitter<'_> {
         let mut fallback = None;
         for (position, branch) in branches.iter().enumerate() {
             let graph = names::temporary("branch", position);
-            let mut parameters = vec![format!("::hgraph::Wiring& {WIRING}")];
+            let mut parameters = vec![format!("[[maybe_unused]] ::hgraph::Wiring& {WIRING}")];
             let takes_key = matches!(branch.key, Key::Unmatched);
             if takes_key {
                 parameters.push(format!("::hgraph::Port<{key_schema}> key_"));
