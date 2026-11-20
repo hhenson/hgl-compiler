@@ -29,10 +29,10 @@
 namespace hgl::demo::activity::m_
 {
 
-namespace n_
+namespace n_::gated
 {
 // gated(mode: Mode, data: i64) -> i64 (node), module demo.activity, line 13
-struct gated
+struct impl_
 {
     static constexpr auto name = "demo.activity::gated";
 
@@ -64,20 +64,20 @@ struct gated
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::gated
 namespace w_
 {
 // gated(mode: Mode, data: i64) -> i64 (node), module demo.activity, line 13
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> gated(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgl::demo::activity::m_::Mode>> mode, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> data)
 {
-    return ::hgraph::wire<::hgl::demo::activity::m_::n_::gated>(wiring_, mode, data);
+    return ::hgraph::wire<::hgl::demo::activity::m_::n_::gated::impl_>(wiring_, mode, data);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::mode_of
 {
 // mode_of(value: i64) -> Mode (node), module demo.activity, line 23
-struct mode_of
+struct impl_
 {
     static constexpr auto name = "demo.activity::mode_of";
 
@@ -95,20 +95,20 @@ struct mode_of
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::mode_of
 namespace w_
 {
 // mode_of(value: i64) -> Mode (node), module demo.activity, line 23
 ::hgraph::Port<::hgraph::TS<::hgl::demo::activity::m_::Mode>> mode_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::activity::m_::n_::mode_of>(wiring_, value);
+    return ::hgraph::wire<::hgl::demo::activity::m_::n_::mode_of::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::bindings
 {
 // bindings(driving: i64, sampled: i64) -> bool (node), module demo.activity, line 32
-struct bindings
+struct impl_
 {
     static constexpr auto name = "demo.activity::bindings";
 
@@ -122,53 +122,53 @@ struct bindings
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::bindings
 namespace w_
 {
 // bindings(driving: i64, sampled: i64) -> bool (node), module demo.activity, line 32
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> bindings(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> driving, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> sampled)
 {
-    return ::hgraph::wire<::hgl::demo::activity::m_::n_::bindings>(wiring_, driving, sampled);
+    return ::hgraph::wire<::hgl::demo::activity::m_::n_::bindings::impl_>(wiring_, driving, sampled);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::same_twice
 {
 // same_twice(value: i64) -> bool (graph), module demo.activity, line 36
-struct same_twice
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
     {
         return ::hgl::demo::activity::m_::w_::bindings(wiring_, value, value);
     }
 };
-}  // namespace n_
+}  // namespace n_::same_twice
 namespace w_
 {
 // same_twice(value: i64) -> bool (graph), module demo.activity, line 36
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> same_twice(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgl::demo::activity::m_::n_::same_twice::compose(wiring_, value);
+    return ::hgl::demo::activity::m_::n_::same_twice::impl_::compose(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::listening
 {
 // listening(data: i64) -> i64 (graph), module demo.activity, line 39
-struct listening
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> data)
     {
         return ::hgl::demo::activity::m_::w_::gated(wiring_, ::hglrt::constant<::hgl::demo::activity::m_::Mode>(wiring_, ::hgl::demo::activity::m_::Mode::listen), data);
     }
 };
-}  // namespace n_
+}  // namespace n_::listening
 namespace w_
 {
 // listening(data: i64) -> i64 (graph), module demo.activity, line 39
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> listening(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> data)
 {
-    return ::hgl::demo::activity::m_::n_::listening::compose(wiring_, data);
+    return ::hgl::demo::activity::m_::n_::listening::impl_::compose(wiring_, data);
 }
 }  // namespace w_
 
@@ -181,13 +181,17 @@ void a_passive_input_wakes_no_node()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgl::demo::activity::m_::Mode>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1demo_1activity_1_1Mode_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgl::demo::activity::m_::Mode>{::hgl::demo::activity::m_::Mode::listen, ::hgl::demo::activity::m_::Mode::ignore, std::nullopt, ::hgl::demo::activity::m_::Mode::ignore, ::hgl::demo::activity::m_::Mode::listen, std::nullopt}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 2, 3, std::nullopt, 4}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_02_ = input_00_; const auto argument_03_ = input_01_; return ::hgl::demo::activity::m_::w_::gated(wiring_, argument_02_, argument_03_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_06_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgl::demo::activity::m_::Mode>{::hgl::demo::activity::m_::Mode::listen, ::hgl::demo::activity::m_::Mode::ignore, std::nullopt, ::hgl::demo::activity::m_::Mode::ignore, ::hgl::demo::activity::m_::Mode::listen, std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 2, 3, std::nullopt, 4};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgl::demo::activity::m_::Mode>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_1demo_1activity_1_1Mode_(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::activity::m_::w_::gated(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, std::nullopt, ::hglrt::neg__i64(3), std::nullopt, 4};
-        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, std::nullopt, ::hglrt::neg__i64(3), std::nullopt, 4};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 
