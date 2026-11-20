@@ -2102,7 +2102,7 @@ cpp` runs over any program to its end.
 | An enum (TYPE-7); one of core's the library declares | An `enum class` of the module's; the library's, `::hglrt::ZeroPolicy` |
 | Another module's enum, named | Declared opaque in the header, `enum class Side;`, whose unit includes the header that defines it: no header includes another module's, as an instance (written in its declaration's module) may name an enum of a module that imports that one |
 | `T?`, `tuple<A, B>`, `list<T>`, `list<T, N>` | `std::optional<T>`, `std::tuple<A, B>`, `hglrt::list<T>`, `std::array<T, N>` |
-| `error`, `result<T, error>`, `?` (ERR-2 to ERR-5) | `hglrt::error`, `hglrt::result<T>`; the result held before its statement, the function left with its failure; a `?` whose operand runs statements, after a read in its statement, is reported |
+| `error`, `result<T, error>`, `?` (ERR-2 to ERR-5) | `hglrt::error`, `hglrt::result<T>`; the result held before its statement, the function left with its failure; a `?` only where it is the first thing its statement evaluates, and reported anywhere else |
 | A constant (UNIT-13) | A function giving a reference to one `static` value, made where it is first read; a read of one whose value may fail is one that may fail, which a `?` after it is not run before |
 | `let`, `var` (EXPR-3) | `const T` or `const T&` as the copy rule says (`hgl_lower::copies`), `T` |
 | `if`, `switch`, `while`, `for` over a list (CTRL-6, CTRL-10, CTRL-12) | `if`, a chain of `if`s on the selector held once, `while`, a range `for` over the list or a copy of it |

@@ -53,10 +53,9 @@ pub(super) struct Scope<'b> {
     /// written of the statement being written: a `?` after it would be
     /// run before it if it were written before the statement (EXPR-13).
     pub(super) acted: bool,
-    /// True once a local or a constant has been read of the statement
-    /// being written: a `?` after it whose operand runs statements could
-    /// change what it read, and would do so before it if it were written
-    /// before the statement.
+    /// True once a local, a constant or a place has been read of the
+    /// statement being written: a `?` after it would be run before the
+    /// read if it were written before the statement.
     pub(super) read: bool,
     /// True while the call that is the whole of a statement is written,
     /// until it starts: only it may assign places (FN-15).
@@ -501,7 +500,10 @@ impl Emitter<'_> {
     /// own before the statement where `holds` is true.
     fn place_held(&mut self, scope: &mut Scope, place: &Expr, holds: bool) -> Option<String> {
         match &place.kind {
-            ExprKind::Local(local) => Some(identifier(&scope.body.locals[*local].name)),
+            ExprKind::Local(local) => {
+                scope.read = true;
+                Some(identifier(&scope.body.locals[*local].name))
+            }
             ExprKind::Index { base, index } => match &base.ty {
                 Type::Tuple(_) => {
                     let ExprKind::Literal(hgl_analyser::hir::Value::Int(position)) = index.kind

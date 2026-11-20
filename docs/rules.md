@@ -106,8 +106,8 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A call of core's native candidates and functions, the library's | NATIVE-7, OPS-4 |
 
 Not written yet, and reported: a call that gives a `var` parameter a
-place beside an argument that runs statements (FN-15), a `?` whose
-operand runs statements after a read in its statement (ERR-5), an
+place beside an argument that runs statements (FN-15), a `?` after
+anything its statement reads or runs before it (ERR-5), an
 enum's member made from a value (TYPE-7), a pack, a struct, a set, a
 dictionary, a window, a delta, `timezone`, `zoned_time`, and anything
 temporal.

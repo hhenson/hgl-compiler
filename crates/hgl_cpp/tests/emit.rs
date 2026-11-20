@@ -539,11 +539,11 @@ fn a_place_beside_an_argument_that_runs_statements_is_reported() {
     );
 }
 
-/// ERR-5, EXPR-2: a `?` is run before its statement, so one whose operand
-/// runs statements, after a read in its statement, would change what was
-/// read before it was read; it is reported, and not written.
+/// ERR-5, EXPR-2: a `?` is run before its statement, so one after a read
+/// in its statement would run before the read, and could change what it
+/// reads; it is reported, and not written.
 #[test]
-fn a_propagation_of_statements_after_a_read_is_reported() {
+fn a_propagation_after_a_read_is_reported() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
@@ -561,9 +561,7 @@ fn a_propagation_of_statements_after_a_read_is_reported() {
     )]);
     assert_eq!(
         emitted.reported,
-        [
-            "m.hgl:6:23 the cpp target does not write a `?` of statements, after a read in its statement yet"
-        ]
+        ["m.hgl:6:23 the cpp target does not write a `?` after a read in its statement yet"]
     );
 }
 
@@ -608,5 +606,30 @@ fn a_propagation_in_a_compound_assignment_to_an_element_is_reported() {
     assert_eq!(
         emitted.reported,
         ["m.hgl:5:17 the cpp target does not write a `?` here yet"]
+    );
+}
+
+/// EXPR-2: a `var` argument's place is read first, and an element's
+/// lookup is checked; a `?` in a later argument is reported.
+#[test]
+fn a_propagation_after_a_var_place_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
+            "const fn bump(var count: i64, by: i64) {\n",
+            "    count += by\n",
+            "}\n",
+            "const fn grown() -> result<list<i64>, error> {\n",
+            "    var items = [1]\n",
+            "    bump(items[2], checked(11)?)\n",
+            "    return ok(items)\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        ["m.hgl:8:20 the cpp target does not write a `?` after a read in its statement yet"]
     );
 }

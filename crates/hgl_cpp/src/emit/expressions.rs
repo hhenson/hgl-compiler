@@ -408,18 +408,18 @@ impl Emitter<'_> {
 
     /// `operand?` (ERR-5): the result is held under a name of its own
     /// before the statement, and a failure leaves the function with its
-    /// error; the expression is the success's payload. Only where it is
-    /// run before anything else in its statement that may fail, and in
-    /// a function that gives a result; and, where its operand runs
-    /// statements, which may change a place, before anything in its
-    /// statement reads a local or a constant (EXPR-2).
+    /// error; the expression is the success's payload. Only in a
+    /// function that gives a result, and where it is the first thing its
+    /// statement evaluates: nothing before it in the statement has been
+    /// run that may fail, or read a local, a constant or a place, which
+    /// it would otherwise run before (EXPR-2, EXPR-13).
     fn propagated(&mut self, scope: &mut Scope, operand: &Expr, at: Location) -> String {
         let gives_result = matches!(scope.result, Some(Type::Result { .. }));
         if scope.conditional > 0 || scope.acted || !gives_result || scope.testing {
             return self.missing(at, "a `?` here");
         }
-        if scope.read && changes(operand) {
-            return self.missing(at, "a `?` of statements, after a read in its statement");
+        if scope.read {
+            return self.missing(at, "a `?` after a read in its statement");
         }
         let written = self.expression(scope, operand);
         let held = names::temporary("propagated", self.temporary());
