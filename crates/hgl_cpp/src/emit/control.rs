@@ -515,7 +515,11 @@ impl Emitter<'_> {
                             body: continued(&case.body, rest),
                         })
                         .collect(),
-                    default: Some(continued(default.as_deref().unwrap_or(&[]), rest)),
+                    // CTRL-6: with no `default`, a selector no case has
+                    // fails, and nothing follows.
+                    default: default
+                        .as_deref()
+                        .map(|statements| continued(statements, rest)),
                     at: *at,
                 };
                 self.statement(scope, &again, depth, text);

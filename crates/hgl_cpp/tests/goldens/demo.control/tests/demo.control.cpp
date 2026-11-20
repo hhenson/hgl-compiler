@@ -1,6 +1,28 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include <hglrt/host.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef a_branch_in_an_unrolled_loop_is_configured_for_its_pass
+#undef a_branch_reads_ordinary_values
+#undef a_branch_runs_once_with_the_values_held_when_it_starts
+#undef a_conditional_child_restarts_only_after_leaving_its_branch
+#undef a_let_of_a_returning_if_returns_or_goes_on
+#undef a_lifted_condition_selects
+#undef a_probe_reads_a_selected_producer_that_stayed_quiet
+#undef a_return_under_a_wiring_time_if_has_its_continuation
+#undef a_switch_forwards_the_selected_connection
+#undef a_switch_returns_from_a_case_or_goes_on
+#undef a_switch_with_no_default_runs_a_case_each_value_has
+#undef a_var_keeps_its_binding_where_the_branch_does_not_assign_it
+#undef a_var_with_no_value_is_given_one_by_each_branch
+#undef a_wiring_time_if_composes_one_branch
+#undef an_early_return_skips_the_continuation
+#undef an_else_if_chain_selects_in_order
+#undef an_outer_producer_keeps_its_lifetime_across_branches
+#undef an_outputless_branch_runs_only_while_selected
+#undef control
+#undef demo
+
 namespace hgl::demo::control::m_::t_
 {
 void a_conditional_child_restarts_only_after_leaving_its_branch();

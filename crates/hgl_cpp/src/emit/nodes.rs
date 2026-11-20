@@ -7,7 +7,7 @@
 //! | --- | --- |
 //! | `fn count(value: i64) -> i64 { ... }` | a struct `n_::count` of the module's namespace, with static `eval`, and `start` and `stop` where it needs them; and a wiring function `w_::count(wiring_, value)`, which its module's header declares, that adds the node to a graph |
 //! | A temporal parameter; a `const` one | `::hgraph::In<"value", TS<...>>`, its activity and its validity the node's (TIME-4); `::hgraph::Scalar<"key", T>` |
-//! | `state` and `cache` (TIME-6) | members of the node's one `state_type`, held by hgraph as the node's `State`, each given its first value as the node starts, then bound by reference in each hook |
+//! | `state` and `cache` (TIME-6) | members of the node's one `state_type_`, held by hgraph as the node's `State`, each given its first value as the node starts, then bound by reference in each hook |
 //! | `inject clock`, `logger`, `global_state` (TIME-8) | the hgraph view of the hook, and the library's capability made from it at the top of the hook (`endpoints`) |
 //! | `when` handlers (TIME-3) | tested in source order in `eval`, each guarded by what it asks beyond the node's own validity |
 //! | `return value`, `out = value` (TIME-7, FN-7) | the value published to the node's output, `out_`, as its temporal form publishes; a `return` then leaves the evaluation |
@@ -400,7 +400,7 @@ impl Emitter<'_> {
         ));
         if held {
             text.push_str(&format!(
-                "\n{INDENT}// The node's `state` and `cache` (TIME-6).\n{INDENT}struct state_type\n{INDENT}{{\n{members}{INDENT}}};\n"
+                "\n{INDENT}// The node's `state` and `cache` (TIME-6).\n{INDENT}struct state_type_\n{INDENT}{{\n{members}{INDENT}}};\n"
             ));
         }
         let configs: Vec<String> = parameters
@@ -409,7 +409,7 @@ impl Emitter<'_> {
             .filter(|(_, parameter)| parameter.constant)
             .map(|(written, _)| written.clone())
             .collect();
-        let state_parameter = format!("::hgraph::State<state_type> {STATE}");
+        let state_parameter = format!("::hgraph::State<state_type_> {STATE}");
         // `start`: the state's first values, then the hook's statements
         // (TIME-5: "Start follows initialization").
         if held || start.is_some() {
@@ -418,7 +418,7 @@ impl Emitter<'_> {
             let mut written = String::new();
             if held {
                 hook.push(state_parameter.clone());
-                written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type{{}});\n"));
+                written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type_{{}});\n"));
             }
             written.push_str(&prologue(body, &states));
             let Some(made) = self.capabilities(body, &injected, statements, &mut hook) else {
@@ -528,7 +528,7 @@ impl Emitter<'_> {
             whole.push_str(&registration(
                 program,
                 self.module,
-                &format!("{qualified}::state_type"),
+                &format!("{qualified}::state_type_"),
                 &format!("{}.state", placed.display(program, self.module)),
             ));
         }
@@ -902,7 +902,9 @@ fn prologue(body: &Body, states: &[(usize, Option<&Expr>)]) -> String {
     let indent = INDENT.repeat(2);
     let mut text = String::new();
     if !states.is_empty() {
-        text.push_str(&format!("{indent}state_type& {KEPT} = {STATE}.modify();\n"));
+        text.push_str(&format!(
+            "{indent}state_type_& {KEPT} = {STATE}.modify();\n"
+        ));
         for (local, _) in states {
             let name = identifier(&body.locals[*local].name);
             text.push_str(&format!(

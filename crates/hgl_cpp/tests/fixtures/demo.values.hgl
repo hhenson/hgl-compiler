@@ -139,6 +139,45 @@ const fn replaced_first() -> list<i64> {
     return items
 }
 
+# EXPR-2: a place's list is looked up before its index, where both may
+# fail: as an assignment's place, and as a `var` argument.
+const fn placed_at(divisor: i64) -> list<list<i64>> {
+    var rows = [[10]]
+    rows[2][1 // divisor] = 0
+    return rows
+}
+
+const fn bumped_at(divisor: i64) -> list<list<i64>> {
+    var rows = [[10]]
+    bump(rows[2][1 // divisor], 1)
+    return rows
+}
+
+# EXPR-2: a place's indices are evaluated in the order written, an
+# earlier one before a later one's block runs.
+const fn indices_in_order() -> list<list<i64>> {
+    var rows = [[1, 2], [3, 4]]
+    var i = 0
+    rows[i][{
+        i = 1
+        0
+    }] = 5
+    return rows
+}
+
+# ERR-12, TYPE-14: a null test of a binding a test has refined, of a
+# value that is no `T?`, and of `null` itself.
+const fn present(a: i64?) -> bool {
+    if a == null {
+        return false
+    }
+    return a != null
+}
+
+const fn never_null(a: i64) -> bool => a == null
+
+const fn null_is_null() -> bool => null == null
+
 # EXPR-3: a place's index is evaluated before the value assigned.
 const fn index_first() -> list<i64> {
     var items = [10, 20]
@@ -272,6 +311,12 @@ test tuples_and_constants {
     assert limit == 10 && step == 5s
 }
 
+test null_tests_of_any_value {
+    assert present(3) && !present(null)
+    assert !never_null(1)
+    assert null_is_null()
+}
+
 test results_propagate {
     assert is_ok(doubled(3))
     assert is_err(doubled(11))
@@ -283,6 +328,7 @@ test evaluation_follows_the_order_written {
     assert read_first() == 1
     assert list_first() == 20
     assert index_first() == [10, 1]
+    assert indices_in_order() == [[5, 2], [3, 4]]
     assert index_once() == ([10, 25, 30], 1)
     assert held_text() == "text"
     assert tuple_first() == (1, 0)
@@ -315,6 +361,15 @@ test an_overflow_fails_with_its_code {
 test a_place_is_checked_before_its_value {
     assert raises("value.index_out_of_range") {
         let replaced = replaced_first()
+    }
+}
+
+test a_place_fails_at_its_list_first {
+    assert raises("value.index_out_of_range") {
+        let assigned = placed_at(0)
+    }
+    assert raises("value.index_out_of_range") {
+        let given = bumped_at(0)
     }
 }
 

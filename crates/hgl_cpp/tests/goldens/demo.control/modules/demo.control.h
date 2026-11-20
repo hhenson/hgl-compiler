@@ -3,6 +3,55 @@
 
 #include <hglrt/hglrt.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef a
+#undef adjusted
+#undef b
+#undef bypass
+#undef bypass_ratio
+#undef chosen_by_config
+#undef control
+#undef count_inside_branch
+#undef count_outside_branch
+#undef count_publications
+#undef demo
+#undef divisor
+#undef early
+#undef either
+#undef enabled
+#undef factor
+#undef factors
+#undef fallback
+#undef gated_by_config
+#undef gated_product
+#undef guarded
+#undef halved
+#undef large
+#undef left
+#undef mixed
+#undef open
+#undef overflow_on_large
+#undef price
+#undef probe
+#undef right
+#undef rising
+#undef route
+#undef routed
+#undef sample_on_probe
+#undef sample_selection
+#undef scaled
+#undef sized
+#undef switch_input
+#undef three_way
+#undef unmatched
+#undef use_left
+#undef value
+#undef watched
+#undef wide
+#undef x
+#undef y
+#undef z
+
 namespace hgl::demo::control::m_
 {
 

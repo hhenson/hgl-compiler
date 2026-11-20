@@ -2,6 +2,90 @@
 #include "demo.control.h"
 #include "core.h"
 
+// Names this file writes, which no macro of a header above takes.
+#undef ZeroPolicy
+#undef a
+#undef a_branch_in_an_unrolled_loop_is_configured_for_its_pass
+#undef a_branch_reads_ordinary_values
+#undef a_branch_runs_once_with_the_values_held_when_it_starts
+#undef a_conditional_child_restarts_only_after_leaving_its_branch
+#undef a_let_of_a_returning_if_returns_or_goes_on
+#undef a_lifted_condition_selects
+#undef a_probe_reads_a_selected_producer_that_stayed_quiet
+#undef a_return_under_a_wiring_time_if_has_its_continuation
+#undef a_switch_forwards_the_selected_connection
+#undef a_switch_returns_from_a_case_or_goes_on
+#undef a_switch_with_no_default_runs_a_case_each_value_has
+#undef a_var_keeps_its_binding_where_the_branch_does_not_assign_it
+#undef a_var_with_no_value_is_given_one_by_each_branch
+#undef a_wiring_time_if_composes_one_branch
+#undef adjusted
+#undef an_early_return_skips_the_continuation
+#undef an_else_if_chain_selects_in_order
+#undef an_outer_producer_keeps_its_lifetime_across_branches
+#undef an_outputless_branch_runs_only_while_selected
+#undef b
+#undef bypass
+#undef bypass_ratio
+#undef checked
+#undef chosen
+#undef chosen_by_config
+#undef control
+#undef core
+#undef count
+#undef count_inside_branch
+#undef count_outside_branch
+#undef count_publications
+#undef counted
+#undef demo
+#undef divisor
+#undef early
+#undef either
+#undef enabled
+#undef factor
+#undef factors
+#undef fallback
+#undef gated_by_config
+#undef gated_product
+#undef guarded
+#undef halved
+#undef ieee
+#undef large
+#undef left
+#undef lhs
+#undef mixed
+#undef never
+#undef offset
+#undef open
+#undef out
+#undef overflow_on_large
+#undef price
+#undef probe
+#undef record
+#undef replay
+#undef rhs
+#undef right
+#undef rising
+#undef route
+#undef routed
+#undef running
+#undef sample_on_probe
+#undef sample_selection
+#undef scaled
+#undef selected
+#undef sized
+#undef switch_input
+#undef three_way
+#undef unmatched
+#undef use_left
+#undef v
+#undef value
+#undef watched
+#undef wide
+#undef x
+#undef y
+#undef z
+
 namespace hgl::demo::control::m_
 {
 
@@ -13,22 +97,22 @@ struct count_publications
     static constexpr auto name = "demo.control::count_publications";
 
     // The node's `state` and `cache` (TIME-6).
-    struct state_type
+    struct state_type_
     {
         ::hgraph::Int count{};
     };
 
-    static void start([[maybe_unused]] ::hgraph::State<state_type> state_)
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
     {
-        state_.set(state_type{});
-        state_type& kept_ = state_.modify();
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
         count = 0;
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::State<state_type> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        state_type& kept_ = state_.modify();
+        state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
         // when, line 10 (TIME-3)
         {
@@ -43,12 +127,12 @@ struct count_publications
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::control::m_::n_::count_publications::state_type>
+struct hgraph::scalar_descriptor<::hgl::demo::control::m_::n_::count_publications::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::control::m_::n_::count_publications::state_type>("hgl:demo.control::count_publications.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::control::m_::n_::count_publications::state_type_>("hgl:demo.control::count_publications.state");
     }
 };
 
