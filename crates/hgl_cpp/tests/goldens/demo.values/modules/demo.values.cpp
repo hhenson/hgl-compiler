@@ -140,7 +140,7 @@ void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int 
 namespace i_::first
 {
 // first<T>(values: list<T>) -> T (`const fn`), the instance `i64`, module demo.values, line 74
-::hgraph::Int i64([[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values)
+::hgraph::Int of_i64([[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values)
 {
     return ::hglrt::item(values, 0);
 }
@@ -149,7 +149,7 @@ namespace i_::first
 namespace i_::first
 {
 // first<T>(values: list<T>) -> T (`const fn`), the instance `str`, module demo.values, line 74
-::hgraph::Str str([[maybe_unused]] const ::hglrt::list<::hgraph::Str>& values)
+::hgraph::Str of_str([[maybe_unused]] const ::hglrt::list<::hgraph::Str>& values)
 {
     return ::hglrt::item(values, 0);
 }
@@ -199,9 +199,9 @@ void defaults_and_nulls()
 void generics_by_instance()
 {
     ::hglrt::testing::statement();
-    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::i_::first::i64(::hglrt::list<::hgraph::Int>{4, 5}), 4, 0.0, 0.0));
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::i_::first::of_i64(::hglrt::list<::hgraph::Int>{4, 5}), 4, 0.0, 0.0));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check(::hglrt::eq__T_T<::hgraph::Str>(::hgl::demo::values::m_::i_::first::str(::hglrt::list<::hgraph::Str>{::hgraph::Str{"a"}, ::hgraph::Str{"b"}}), ::hgraph::Str{"a"}));
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hgraph::Str>(::hgl::demo::values::m_::i_::first::of_str(::hglrt::list<::hgraph::Str>{::hgraph::Str{"a"}, ::hgraph::Str{"b"}}), ::hgraph::Str{"a"}));
 }
 
 void tuples_and_constants()

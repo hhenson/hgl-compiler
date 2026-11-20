@@ -203,6 +203,9 @@ impl Emitter<'_> {
             if written.iter().any(|(given, ..)| *given == index) {
                 continue;
             }
+            if parameter.pack.is_some() {
+                return self.missing(at, "a call of a function with a pack");
+            }
             match left_out(program, (module, declaration), index, parameter) {
                 Some(LeftOut::Default(default)) => {
                     // A default that calls its own function with that

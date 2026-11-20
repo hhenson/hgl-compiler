@@ -56,13 +56,13 @@ void bump(::hgraph::Int& count, ::hgraph::Int by);
 namespace i_::first
 {
 // first<T>(values: list<T>) -> T (`const fn`), the instance `i64`, module demo.values, line 74
-::hgraph::Int i64(const ::hglrt::list<::hgraph::Int>& values);
+::hgraph::Int of_i64(const ::hglrt::list<::hgraph::Int>& values);
 }  // namespace i_::first
 
 namespace i_::first
 {
 // first<T>(values: list<T>) -> T (`const fn`), the instance `str`, module demo.values, line 74
-::hgraph::Str str(const ::hglrt::list<::hgraph::Str>& values);
+::hgraph::Str of_str(const ::hglrt::list<::hgraph::Str>& values);
 }  // namespace i_::first
 
 }  // namespace hgl::demo::values::m_

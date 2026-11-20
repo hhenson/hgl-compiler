@@ -246,8 +246,8 @@ pub(crate) fn testing(name: &str) -> String {
 /// candidate of an operator is in `c_`, where the candidates of one
 /// operator are C++ overloads of its name, `c_::add_1_` (GEN-4). An
 /// instance of a generic declaration (GEN-2) is named by its suffix in a
-/// namespace of its declaration's own under `i_`: `i_::spread::f64`,
-/// `c_::i_::add_1_::Weekdays`. `c_` and `i_` have the form the target's
+/// namespace of its declaration's own under `i_`: `i_::spread::of_f64`,
+/// `c_::i_::add_1_::of_Weekdays`. `c_` and `i_` have the form the target's
 /// own names have, which no HGL name gives.
 pub(super) fn placed(
     program: &Program,
@@ -261,9 +261,17 @@ pub(super) fn placed(
     match (candidate, instance) {
         (false, None) => (None, name),
         (true, None) => (Some("c_".to_string()), name),
-        (false, Some(suffix)) => (Some(format!("i_::{name}")), identifier(suffix)),
-        (true, Some(suffix)) => (Some(format!("c_::i_::{name}")), identifier(suffix)),
+        (false, Some(suffix)) => (Some(format!("i_::{name}")), instance_name(suffix)),
+        (true, Some(suffix)) => (Some(format!("c_::i_::{name}")), instance_name(suffix)),
     }
+}
+
+/// The name of the instance whose suffix is `suffix` (`hgl_lower`'s:
+/// its generic arguments, each character that is no letter or digit as
+/// `_`): `of_` and the suffix, as [`identifier`] writes it, `of_f64`,
+/// `of_3`. A suffix may start with a digit, which no C++ name does.
+fn instance_name(suffix: &str) -> String {
+    identifier(&format!("of_{suffix}"))
 }
 
 /// A function of the program, or an instance of one, as a call names

@@ -247,6 +247,15 @@ impl Emitter<'_> {
                 self.missing(value.at, "a comparison of traces")
             }
             ExprKind::Trace(_) => self.missing(value.at, "a trace"),
+            // A struct, a set and a dictionary are not written yet: each
+            // is reported by its type.
+            ExprKind::Construct { .. } | ExprKind::Sequence(_) | ExprKind::Pairs(_) => {
+                self.missing(value.at, &format!("the type `{}`", value.ty))
+            }
+            // TYPE-7: `Side(1)`, `Side("buy")`.
+            ExprKind::EnumFrom { .. } => {
+                self.missing(value.at, "an enum's member made from a value")
+            }
             _ => self.missing(value.at, "this expression"),
         }
     }

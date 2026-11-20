@@ -17,7 +17,7 @@
 //! held under a name of its own, and a failure leaves the function with
 //! it (`Scope::before`).
 
-use hgl_analyser::hir::{Body, Case, Expr, ExprKind, Stmt};
+use hgl_analyser::hir::{Body, Case, Expr, ExprKind, LabelValue, Stmt};
 use hgl_analyser::{LocalKind, Program, Signature, Type};
 use hgl_lower::copies::Copies;
 use hgl_lower::graphs::may_return;
@@ -25,7 +25,7 @@ use hgl_lower::graphs::may_return;
 use super::Emitter;
 use super::names::{self, identifier};
 use super::types::by_value;
-use super::values::{INDENT, copies_of};
+use super::values::INDENT;
 
 /// What the code of one body is written with.
 pub(super) struct Scope<'b> {
@@ -61,7 +61,7 @@ impl<'b> Scope<'b> {
     pub(super) fn of(program: &Program, body: &'b Body, signature: &Signature) -> Scope<'b> {
         Scope {
             body,
-            copies: copies_of(program, body),
+            copies: Copies::of(program, body),
             result: signature.result.clone(),
             testing: false,
             before: Vec::new(),
@@ -77,7 +77,7 @@ impl<'b> Scope<'b> {
     pub(super) fn cold(program: &Program, body: &'b Body) -> Scope<'b> {
         Scope {
             body,
-            copies: copies_of(program, body),
+            copies: Copies::of(program, body),
             result: None,
             testing: false,
             before: Vec::new(),
@@ -372,6 +372,12 @@ impl Emitter<'_> {
                     }
                     self.statements(scope, statements, depth + 2, text);
                     text.push_str(&format!("{inner}}}\n"));
+                } else if !first && self.every_value(&selector.ty, cases) {
+                    // The labels name every value the selector can hold,
+                    // so no other is reached: C++ is told so.
+                    text.push_str(&format!("{inner}else\n{inner}{{\n"));
+                    text.push_str(&format!("{inner}{INDENT}std::unreachable();\n"));
+                    text.push_str(&format!("{inner}}}\n"));
                 }
                 text.push_str(&format!("{indent}}}\n"));
             }
@@ -417,6 +423,31 @@ impl Emitter<'_> {
                 }
             }
             _ => self.statement(scope, &Stmt::Expr(branch.clone()), depth, text),
+        }
+    }
+
+    /// True where the labels of `cases` name every value of `ty`: each
+    /// member of an enum, or both of `bool`'s (CTRL-6).
+    fn every_value(&self, ty: &Type, cases: &[Case]) -> bool {
+        let values: Vec<&LabelValue> = cases
+            .iter()
+            .filter_map(|case| case.value.as_ref())
+            .collect();
+        match ty {
+            Type::Scalar(hgl_analyser::Scalar::Bool) => {
+                values.contains(&&LabelValue::Bool(true))
+                    && values.contains(&&LabelValue::Bool(false))
+            }
+            Type::Named {
+                module,
+                declaration,
+                ..
+            } => match self.program.modules[*module].details.get(*declaration) {
+                Some(hgl_analyser::Detail::Enum(read)) => (0..read.members.len())
+                    .all(|member| values.contains(&&LabelValue::Member(member))),
+                _ => false,
+            },
+            _ => false,
         }
     }
 

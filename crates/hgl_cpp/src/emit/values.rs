@@ -21,10 +21,9 @@
 //! it is read") is a function that gives a reference to one value, made
 //! the first time it is read.
 
-use hgl_analyser::hir::{Body, Expr};
+use hgl_analyser::hir::Body;
 use hgl_analyser::{Detail, Signature, Type};
 use hgl_diagnostics::Location;
-use hgl_lower::copies::Copies;
 
 use super::Emitter;
 use super::names::{self, identifier};
@@ -199,7 +198,7 @@ impl Emitter<'_> {
             statements: Vec::new(),
         };
         let mut scope = Scope::cold(program, &empty);
-        let value = self.value_of(&mut scope, value);
+        let value = self.expression(&mut scope, value);
         if !scope.before.is_empty() {
             self.unsupported(at, "a constant whose value propagates a failure");
             return;
@@ -210,12 +209,6 @@ impl Emitter<'_> {
         self.piece.text = format!(
             "{comment}const {written}& {name}()\n{{\n{INDENT}static const {written} value = {value};\n{INDENT}return value;\n}}\n"
         );
-    }
-
-    /// `value`, written as a value of the type its place expects: the
-    /// expression, as `expressions` writes it.
-    pub(super) fn value_of(&mut self, scope: &mut Scope, value: &Expr) -> String {
-        self.expression(scope, value)
     }
 }
 
@@ -254,9 +247,4 @@ fn kind_of(kind: hgl_analyser::DeclarationKind) -> &'static str {
         hgl_analyser::DeclarationKind::Implementation(..) => "candidate `impl const fn`",
         _ => "`const fn`",
     }
-}
-
-/// What the copy rule says of `body`: see [`Copies::of`].
-pub(super) fn copies_of(program: &hgl_analyser::Program, body: &Body) -> Copies {
-    Copies::of(program, body)
 }
