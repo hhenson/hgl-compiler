@@ -1,0 +1,176 @@
+module demo.hgraph097_wave3
+
+# A window of a duration (TYPE-11, core's END-9), as hhenson/hgl_spec#146
+# and hhenson/hgl_core#73 have it and hgraph 0.9.7 does
+# (hhenson/hgraph#1818): "one that arrived at t is held at t + Max and
+# leaves one smallest step later (RUN-3), whether or not a value arrives
+# then. The window ticks for that exit: it wakes the window's readers and
+# satisfies `modified` as a publication does (TIME-3)."
+
+# ---- An exit wakes a reader (TYPE-11, END-9) ----
+
+# Values at 0us and 1us in a window of 3us, all valid at a span of 1us.
+# Each is held through an age of 3us and gone at 4us: 1 leaves at 4us and
+# 2 at 5us, each exit a tick that wakes `readiness`, which nothing else
+# wakes. "When the last value leaves, the window is empty", and,
+# proposed, "one emptied by exits stays valid".
+fn collected(reading: i64) -> rolling_window<i64, 3us, 1us> {
+    when { return reading }
+}
+
+fn readiness(held: rolling_window<i64, 3us, 1us>) -> list<bool, 2> {
+    when valid([]) { return [valid(held), all_valid(held)] }
+}
+
+fn observed(reading: i64) -> list<bool, 2> => readiness(collected(reading))
+
+# `modified` and `last_modified` of the window, read at each step.
+fn changes(probe: bool, held: rolling_window<i64, 3us, 1us>) -> bool {
+    when modified(probe) { return modified(held) }
+}
+
+fn changed_at(probe: bool, held: rolling_window<i64, 3us, 1us>) -> datetime? {
+    when modified(probe) { return last_modified(held) }
+}
+
+fn change_flow(probe: bool, reading: i64) -> bool => changes(probe, collected(reading))
+fn changed_at_flow(probe: bool, reading: i64) -> datetime? =>
+    changed_at(probe, collected(reading))
+
+test an_exit_wakes_a_reader_though_nothing_arrives {
+    let t = earliest_start
+    # `all_valid` falls back as 1 leaves: 2 alone spans less than 1us.
+    assert eval(observed(reading: [1, 2])) ==
+        [[true, false], [true, true], _, _, [true, false], [true, false]]
+    assert eval(change_flow(probe: [true, true, true, true, true, true, true], reading: [1, 2])) ==
+        [true, true, false, false, true, true, false]
+    assert eval(changed_at_flow(
+        probe: [true, true, true, true, true, true, true],
+        reading: [1, 2],
+    )) == [t, t + 1us, t + 1us, t + 1us, t + 4us, t + 5us, t + 5us]
+}
+
+# ---- A window that falls under its minimum (TYPE-11, ERR-14) ----
+
+# "a window of a duration ... may stop being all valid at an exit". Values
+# at 0us, 1us and 2us: all valid from 1us; 1 leaves at 4us and the two
+# left span 1us; 2 leaves at 5us, and 3 alone is under the minimum.
+fn checked(held: rolling_window<i64, 3us, 1us>) -> result<list<i64>, error> {
+    when { return held }
+}
+
+const fn outcome(read: result<list<i64>, error>) -> str {
+    if is_ok(read) { return "ok" }
+    let code = read.error.code
+    if code == null { return "no code" }
+    return code
+}
+
+const fn values_of(read: result<list<i64>, error>) -> list<i64> {
+    if is_ok(read) { return read.value }
+    return []
+}
+
+fn checked_outcome(reading: i64) -> str => outcome(checked(collected(reading)))
+fn checked_values(reading: i64) -> list<i64> => values_of(checked(collected(reading)))
+
+test a_window_under_its_minimum_after_an_exit_is_not_read {
+    assert eval(checked_outcome(reading: [1, 2, 3])) ==
+        ["value.unset_read", "ok", "ok", _, "ok", "value.unset_read", "value.unset_read"]
+    assert eval(checked_values(reading: [1, 2, 3])) ==
+        [[], [1, 2], [1, 2, 3], _, [2, 3], [], []]
+}
+
+# ---- A minimum of `0s`, and the list read after an exit ----
+
+# "A minimum of `0s` is held by the first value, and an empty window is
+# not all valid, whatever its minimum." Values at 0us, 1us and 3us in a
+# window of 3us: 1 leaves at 4us, 2 at 5us and 4 at 7us, which leaves the
+# window empty.
+fn from_zero(reading: i64) -> rolling_window<i64, 3us, 0us> {
+    when { return reading }
+}
+
+fn zero_readiness(held: rolling_window<i64, 3us, 0us>) -> list<bool, 2> {
+    when valid([]) { return [valid(held), all_valid(held)] }
+}
+
+fn held_values(held: rolling_window<i64, 3us, 0us>) -> list<i64> {
+    when all_valid(held) { return held }
+}
+
+const fn total(values: list<i64>) -> i64 {
+    var sum: i64 = 0
+    for value in values { sum += value }
+    return sum
+}
+
+fn zero_flow(reading: i64) -> list<bool, 2> => zero_readiness(from_zero(reading))
+fn values_flow(reading: i64) -> list<i64> => held_values(from_zero(reading))
+fn total_flow(reading: i64) -> i64 => total(from_zero(reading))
+
+test a_zero_minimum_is_all_valid_from_the_first_value {
+    assert eval(zero_flow(reading: [1, 2, _, 4])) ==
+        [[true, true], [true, true], _, [true, true], [true, true], [true, true], _,
+         [true, false]]
+}
+
+test the_list_read_after_an_exit_is_what_is_left {
+    # A hook reads it where the window is all valid; a lifted helper is
+    # given it there (FN-12), and not once the last value has left.
+    assert eval(values_flow(reading: [1, 2, _, 4])) == [[1], [1, 2], _, [1, 2, 4], [2, 4], [4]]
+    assert eval(total_flow(reading: [1, 2, _, 4])) == [1, 3, _, 7, 6, 4]
+}
+
+# ---- The delta read where a value leaves (TYPE-11, TYPE-16) ----
+
+# TYPE-11, proposed: "where a value leaves and none arrives, `delta_value`
+# of the window, which is the value that arrived (TYPE-16), has no value,
+# and its read fails with `value.unset_read`". Values at 0us, 1us and
+# 3us: 1 leaves at 4us.
+fn arrived(reading: i64, held: rolling_window<i64, 3us, 1us>) -> i64 {
+    when modified(reading) { return delta_value(held) }
+}
+
+fn read_at_exit(held: rolling_window<i64, 3us, 1us>) -> i64 {
+    when { return delta_value(held) }
+}
+
+fn arrived_flow(reading: i64) -> i64 => arrived(reading, collected(reading))
+fn exit_flow(reading: i64) -> i64 => read_at_exit(collected(reading))
+
+# A window of a duration as a struct's field: an exit wakes a reader of
+# the child, whose delta is read as the window's.
+struct Quotes {
+    prices: rolling_window<i64, 3us, 1us>
+    last: i64
+}
+
+fn quoted(reading: i64) -> Quotes {
+    when { return delta<Quotes>(prices: reading, last: reading) }
+}
+
+fn child_readiness(quotes: Quotes) -> list<bool, 2> {
+    when valid([]) { return [valid(quotes.prices), all_valid(quotes.prices)] }
+}
+
+fn child_arrived(quotes: Quotes) -> i64 {
+    when modified(quotes.last) && valid(quotes.prices) { return delta_value(quotes.prices) }
+}
+
+fn child_at_exit(quotes: Quotes) -> i64 {
+    when valid(quotes.prices) { return delta_value(quotes.prices) }
+}
+
+fn child_flow(reading: i64) -> list<bool, 2> => child_readiness(quoted(reading))
+fn child_arrived_flow(reading: i64) -> i64 => child_arrived(quoted(reading))
+fn child_exit_flow(reading: i64) -> i64 => child_at_exit(quoted(reading))
+
+test the_delta_where_a_value_leaves_and_none_arrives_has_no_value {
+    assert eval(arrived_flow(reading: [1, 2, _, 4])) == [1, 2, _, 4]
+    assert raises("value.unset_read") { eval(exit_flow(reading: [1, 2])) }
+    assert eval(child_flow(reading: [1, 2])) ==
+        [[true, false], [true, true], _, _, [true, false], [true, false]]
+    assert eval(child_arrived_flow(reading: [1, 2, _, 4])) == [1, 2, _, 4]
+    assert raises("value.unset_read") { eval(child_exit_flow(reading: [1, 2])) }
+}

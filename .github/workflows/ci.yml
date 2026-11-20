@@ -104,7 +104,7 @@ jobs:
         with:
           python-version: "3.14"
       # The hgraph the target is written against (docs/architecture.md).
-      - run: python -m pip install hgraph==0.9.5
+      - run: python -m pip install hgraph==0.9.7
       - run: echo "HGL_HGRAPH_PYTHON=$(which python)" >> "$GITHUB_ENV"
       - run: cargo --version
       - run: cargo test -p hgl_hgraph -p hgl_cli --locked -- --ignored

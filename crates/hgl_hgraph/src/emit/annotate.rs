@@ -218,7 +218,7 @@ impl Emitter<'_> {
     /// TYPE-16's `dict<i64, delta<V>>`.
     ///
     /// TYPE-10: "`list<T>` denotes a growing shape": hgraph's unbounded
-    /// `TSL`, `Size[-1]` (hgraph 0.9.5), a child for each position it
+    /// `TSL`, `Size[-1]` (hgraph 0.9.7), a child for each position it
     /// holds, each temporalized in turn, valid on its own, whose tick is
     /// a `TSLDelta` of each position that changed, those that lost their
     /// value and the new size where it moved: TYPE-16's list delta.
@@ -231,7 +231,7 @@ impl Emitter<'_> {
     ) -> Option<String> {
         match size.map(|size| &size.value) {
             // TYPE-10 allows a list of no position, and TIME-9 has a
-            // published empty list valid, but hgraph 0.9.3's `TSL` of
+            // published empty list valid, but hgraph 0.9.7's `TSL` of
             // none publishes nothing ("unresolved element type").
             Some(ConstantValue::Int(0)) => {
                 self.unsupported(at, &format!("the type `{ty}`"));
@@ -267,12 +267,13 @@ impl Emitter<'_> {
     ///
     /// hgraph's `TSW` is valid at its first value and all valid at its
     /// minimum, a count of values or the span of their arrival times, as
-    /// TYPE-11 and core's END-9 have it; a value leaves a window of a
-    /// duration only as another arrives, and its exit is no tick. TYPE-11:
-    /// "a minimum of `0s` being read as Max". hgraph 0.9.5's `TSW` reads
-    /// a minimum of zero as zero, all valid at its first value (its
-    /// `to_window` reads it as the maximum), so the maximum is written
-    /// for it.
+    /// TYPE-11 and core's END-9 have it. TYPE-11, as hhenson/hgl_spec#146
+    /// has it: in one of a duration "one that arrived at t is held at t +
+    /// Max and leaves one smallest step later (RUN-3), whether or not a
+    /// value arrives then. The window ticks for that exit", and "A minimum
+    /// of `0s` is held by the first value, and an empty window is not all
+    /// valid": hgraph 0.9.7's `TSW` does each (hhenson/hgraph#1818), so
+    /// each size is written as the program writes it.
     ///
     /// hgraph's window holds values that are scalars to it, so V is a
     /// scalar or an enum here. A window of a nullable, of a struct and
@@ -293,11 +294,6 @@ impl Emitter<'_> {
             return None;
         }
         let value = self.annotation(value, false, at)?;
-        // A minimum of `0s` is the maximum (TYPE-11).
-        let minimum = minimum.map(|minimum| match minimum.value {
-            ConstantValue::Duration(0) => maximum,
-            _ => minimum,
-        });
         let mut sizes = Vec::new();
         for size in std::iter::once(maximum).chain(minimum) {
             let written = match &size.value {
