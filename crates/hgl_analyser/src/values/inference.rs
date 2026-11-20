@@ -12,7 +12,7 @@ use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
 use super::evals::{holds_trace, publications};
 use super::expressions::{holds_block, takes_its_type};
-use super::fit::whole;
+use super::fit::{not_null, whole};
 use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
 use crate::hir::{self, Expr};
@@ -846,6 +846,35 @@ pub(super) fn infer(
             infer(error, actual_error, generics, found);
         }
         _ => {}
+    }
+}
+
+/// What the output a call requests says of a callee's declared result
+/// `result`, for [`infer`] to match the result with. `requested` is the
+/// type the call's place expects, or the one the generic arguments the
+/// call writes make of an operator's result; `written` is true where it
+/// is the type the call writes for an operator's result that is its
+/// type parameter and nothing more.
+///
+/// A result that is nullable itself is matched with what is requested
+/// as it is. GEN-2: "What the call writes, or its place expects, is not
+/// widened", and core's CAP-6: `get<V>(global_state, key)` is "of the
+/// type the call writes", so a type written is taken whole, `?` and
+/// all: `get<i64?>(global_state, key)` gives core's candidate the
+/// `i64?` written.
+///
+/// Otherwise a `T` is a value of a `T?` (TYPE-14), and a result that is
+/// not nullable is asked to be what is under the `?` of a nullable
+/// place: `repeat(3)` given to a `list<str>?` is a `list<str>`. What a
+/// nullable place says of a result that is a type parameter and nothing
+/// more, the `V` of `let saved: i64? = get(global_state, key)`, is not
+/// decided (hhenson/hgl_spec#165, open): it is taken here to be what is
+/// under the `?`, an `i64`.
+pub(super) fn asked_of_result<'t>(result: &Type, requested: &'t Type, written: bool) -> &'t Type {
+    match result {
+        Type::Nullable(_) => requested,
+        Type::Parameter { .. } if written => requested,
+        _ => not_null(Some(requested)).unwrap_or(requested),
     }
 }
 
