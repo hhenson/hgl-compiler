@@ -2,10 +2,10 @@
 #include "host_state.h"
 
 #include <hglrt/host.h>
+#include <hglrt/traces.h>
 
 #include <charconv>
 #include <chrono>
-#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -81,16 +81,6 @@ std::optional<Named> named(std::string_view argument) {
         return std::nullopt;
     }
     return Named{argument.substr(0, mark), std::chrono::microseconds{microseconds}};
-}
-
-/// A time limit as a person reads it, as the compiler's driver writes one:
-/// `1m`, `90s`, `0.5s`.
-std::string seconds(std::chrono::microseconds limit) {
-    const double whole = static_cast<double>(limit.count()) / 1e6;
-    if (whole >= 60.0 && std::fmod(whole, 60.0) == 0.0) {
-        return std::format("{}m", static_cast<std::int64_t>(whole / 60.0));
-    }
-    return std::format("{}s", whole);
 }
 
 /// What became of a test: none where it passed, and otherwise the line of
@@ -172,7 +162,10 @@ Outcome bounded(Body body, std::chrono::microseconds limit, std::chrono::millise
     }
     // The statement running when the limit passed.
     const std::uint_least32_t line = detail::running_line.load();
-    const std::string said = "timed out: it was still running after its limit of " + seconds(limit);
+    // The limit as the language writes a duration, as `@timeout(5s)` has it
+    // (LEX-11), and as a trace's text does.
+    const std::string said =
+        "timed out: it was still running after its limit of " + detail::scalar_text(limit);
     lock.unlock();
     detail::stop_runs();
     lock.lock();

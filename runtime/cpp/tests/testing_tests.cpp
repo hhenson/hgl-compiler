@@ -430,7 +430,7 @@ TEST_CASE("a time limit too long for the host's clock is one that cannot pass (T
 }
 
 TEST_CASE("a test past its time limit has its runs stopped, and has failed (TST-17)") {
-    // The run in real time is stopped at the limit of 0.1s and ends as at
+    // The run in real time is stopped at the limit of 100ms and ends as at
     // its end; the test goes on to its end, and has failed; the next test
     // is not stopped.
     const auto [status, lines] =
@@ -441,7 +441,7 @@ TEST_CASE("a test past its time limit has its runs stopped, and has failed (TST-
     REQUIRE(lines.size() == 6);
     CHECK(lines[0] == "start 0");
     CHECK(lines[1] == "failed 0 " + std::to_string(limited_at.line()) +
-                          " timed out: it was still running after its limit of 0.1s");
+                          " timed out: it was still running after its limit of 100ms");
     CHECK(lines[2] == "start 1");
     CHECK(lines[3] == "passed 1");
     CHECK(lines[4] == "start 2");
@@ -454,7 +454,7 @@ TEST_CASE("a run a test starts after its limit is stopped as it starts (TST-17)"
     CHECK(status == 0);
     REQUIRE(lines.size() == 4);
     CHECK(lines[1].starts_with("failed 0 "));
-    CHECK(lines[1].ends_with(" timed out: it was still running after its limit of 0.05s"));
+    CHECK(lines[1].ends_with(" timed out: it was still running after its limit of 50ms"));
     CHECK(lines[3] == "passed 1");
 }
 
@@ -464,7 +464,7 @@ TEST_CASE("a test that cannot be stopped ends the process at its limit and grace
     REQUIRE(lines.size() == 2);
     CHECK(lines[0] == "start 0");
     CHECK(lines[1].starts_with("failed 0 "));
-    CHECK(lines[1].ends_with(" timed out: it was still running after its limit of 0.05s"));
+    CHECK(lines[1].ends_with(" timed out: it was still running after its limit of 50ms"));
 }
 
 TEST_CASE("a run in real time starts at the host clock's present (CRUN-2, RUN-3)") {
