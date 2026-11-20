@@ -119,6 +119,7 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
 | `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
 | A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
+| A window of a scalar, of a tick count or of a duration: a publication to one, `all_valid`, its value read in a hook or given to a lifted helper where it is all valid, its delta and `removed_value` in the form their place takes, its trace, record and replay | TYPE-11, TYPE-16, END-3, END-9, ERR-14, FN-12, TIME-7, TST-16 |
 
 Not written yet, and reported: a `?` after anything its statement reads
 or runs before it (ERR-5), a `switch` case's binding read after the
@@ -126,15 +127,16 @@ or runs before it (ERR-5), a `switch` case's binding read after the
 parameter (a bit, no `bool&`), a struct that holds itself (TYPE-6), a
 field's default that runs statements, a field of an abstract struct
 assigned, a dictionary written with keys that may be one, a dictionary's
-entry given to a `var` parameter, a window, and of temporal code: a
-temporal value of any but a scalar, `ref` (FN-16), `inject scheduler` and
-`alarm` (CAP-4, CAP-5), `all_valid`, `activate`, `passivate`,
-`scheduled()`, `if`, `switch` and `for` over connections (CTRL-7),
-`capture` (ERR-7), a lifted input with a default or a null (FN-11), a
-source with declarations or hooks, an eval's configuration that is no
-`RunConfig(...)` written in it (RUN-1), an eval of a value function
-(TST-5), and an application. A call of a function with a pack, core's
-`all_` and `any_`, has no callee the analyser reads.
+entry given to a `var` parameter, a window of any but a scalar, and of
+temporal code: a temporal value of any but a scalar, `ref` (FN-16),
+`inject scheduler` and `alarm` (CAP-4, CAP-5), `all_valid` of any but a
+window, `activate`, `passivate`, `scheduled()`, `if`, `switch` and `for`
+over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
+default or a null (FN-11), a source with declarations or hooks, an
+eval's configuration that is no `RunConfig(...)` written in it (RUN-1),
+an eval of a value function (TST-5), and an application. A call of a
+function with a pack, core's `all_` and `any_`, has no callee the
+analyser reads.
 
 ## The C++ target's runtime library
 
@@ -173,3 +175,4 @@ the chapters' entries stay the hgraph target's.
 | Tests registered by name and run as named, from an entry unit that includes no hgraph header; `assert`; `assert raises`; a test held to a time limit, failed once past it and its runs stopped | TST-2, TST-10, TST-11, TST-15, TST-17 | `host.h`, `testing.h` | `testing_tests.cpp` |
 | Traces of scalars, nullables, tuples and lists, written dense and timed, each cell whole or a delta; their comparison with an eval's recording and the values its result held, and where two first differ; what one written out replays to an input and gives a `const fn` | TST-4, TST-5, TST-6, TST-7, TST-9, TST-16, CEVAL-2, TYPE-16 | `traces.h`, `testing.h` | `traces_tests.cpp`, `testing_tests.cpp` |
 | A run's bounds, the run in simulation and in real time, its store and its recording; an eval and its failure | CRUN-1, CRUN-2, CRUN-3, CRUN-7, CRUN-8, CEVAL-1, CEVAL-4, CEVAL-5, CEVAL-6, RUN-3 | `testing.h` | `testing_tests.cpp`, `sources_tests.cpp` |
+| A window of a tick count and of a duration, hgraph's `TSW` and `TSWDuration`: a publication to one; `all_valid`; its value read checked, where hgraph reads the values held below the minimum (`hgraph_window_read.cpp`, hgraph alone); its delta, the value that arrived, none at an exit alone, plain and where a `result` is taken; `removed_value` where a `result` is taken; values leaving by age, and `last_modified` at an exit | TYPE-11, END-3, END-9, ERR-14 | `windows.h` | `window_tests.cpp`, `hgraph_window_read.cpp` |

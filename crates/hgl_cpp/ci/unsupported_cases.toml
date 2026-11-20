@@ -125,15 +125,6 @@
 "a temporal value of `result<list<i64>, error>`" = [
     "conformance::a_result_accepts_the_read_of_a_window_before_it_is_all_valid",
 ]
-"a temporal value of `rolling_window<i64, 3, 2>`" = [
-    "conformance::reading_a_window_before_it_is_all_valid_fails",
-]
-"a temporal value of `rolling_window<i64, 3us, 0s>`" = [
-    "conformance::a_zero_minimum_is_held_by_the_first_value",
-]
-"a temporal value of `rolling_window<i64, 3us, 1us>`" = [
-    "conformance::a_value_leaves_a_window_of_a_duration_with_a_tick",
-]
 "a temporal value of `set<i64>`" = [
     "conformance::a_set_given_the_members_it_holds_is_no_tick",
     "conformance::a_whole_set_replaces_the_previous_members",
@@ -166,6 +157,9 @@
 ]
 "a trace of `list<i64, 2>`" = [
     "conformance::a_fixed_list_delta_reports_the_position_in_updated",
+]
+"a trace of `list<i64>`" = [
+    "conformance::a_recording_of_a_window_holds_its_arrivals_and_replays_the_same_window",
 ]
 "a trace of `list<str, 2>`" = [
     "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
@@ -204,9 +198,6 @@
     "conformance::an_input_tick_alone_is_not_a_scheduler_wake",
     "conformance::cancelling_the_later_tag_preserves_the_earlier_wake",
     "conformance::the_wall_clock_option_changes_nothing_in_simulation",
-]
-"the type `rolling_window<i64, 3us, 0s>`" = [
-    "conformance::a_recording_of_a_window_holds_its_arrivals_and_replays_the_same_window",
 ]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph

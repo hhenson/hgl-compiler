@@ -394,7 +394,13 @@ impl Emitter<'_> {
                 let Some(schema) = self.temporal_schema(&ty, argument.value.at) else {
                     return "0".to_string();
                 };
-                parameters.push(format!("::hgraph::In<{label}, {schema}> {name}"));
+                // FN-12: what the input asks beyond `valid` before the
+                // helper is invoked, as its temporal form says.
+                let admitted = self
+                    .lifted_admission(&ty)
+                    .map(|validity| format!(", {validity}"))
+                    .unwrap_or_default();
+                parameters.push(format!("::hgraph::In<{label}, {schema}{admitted}> {name}"));
                 roles.push(Role::Input);
                 wired.push(self.wiring_form(scope, &argument.value));
                 labels.push(None);
@@ -411,11 +417,18 @@ impl Emitter<'_> {
                 wired.push(format!("static_cast<{written}>({configured})"));
                 labels.push(Some(parameter.name.clone()));
             }
+            // What the helper is given is what a read of the input gives,
+            // which is not the input's own type for every form.
+            let read = if argument.value.is_connection() {
+                self.read_type(&ty)
+            } else {
+                ty.clone()
+            };
             synthetic.push(Argument {
                 parameter: argument.parameter,
                 value: Expr {
                     kind: ExprKind::Local(locals.len()),
-                    ty: ty.clone(),
+                    ty: read,
                     at: argument.value.at,
                     category: ValueCategory::Value,
                 },

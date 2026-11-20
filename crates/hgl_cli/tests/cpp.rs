@@ -469,6 +469,36 @@ fn temporal_code_runs_on_the_sdk() {
     );
 }
 
+/// Windows on the SDK (`demo.windows`): of a tick count and of a
+/// duration, values leaving one by age, their reads checked when they
+/// run, a lifted helper given one, and a window recorded and replayed
+/// (TYPE-11; core's END-9).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn windows_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("windows");
+    let file = write(
+        &root,
+        "src/demo.windows.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.windows.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// `demo.composites`, structs, sets, dictionaries and deltas as values
 /// (TYPE-3 to TYPE-6, TYPE-14, TYPE-16, EXPR-3, ERR-6, CTRL-12): every
 /// test of it passes on the SDK, and under the sanitizers where
