@@ -566,3 +566,24 @@ fn a_propagation_of_statements_after_a_read_is_reported() {
         ]
     );
 }
+
+/// UNIT-13, EXPR-2: a constant's value is made where it is first read, so
+/// a read of one whose value may fail is something that may fail: a `?`
+/// after it in its statement would run first, and is reported.
+#[test]
+fn a_propagation_after_a_constant_that_may_fail_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const broken: i64 = [1][2]\n",
+            "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
+            "const fn pick(a: i64, b: i64) -> i64 => a\n",
+            "const fn both() -> result<i64, error> => ok(pick(broken, checked(11)?))\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        ["m.hgl:5:58 the cpp target does not write a `?` here yet"]
+    );
+}

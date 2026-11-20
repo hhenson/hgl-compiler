@@ -61,11 +61,18 @@ impl Emitter<'_> {
                 }
             }
             // UNIT-13: "The constant has that one value wherever it is
-            // read".
+            // read". Its value is made where it is first read, so a read
+            // of one whose value may fail is something that may fail: a
+            // `?` after it is not run before it (EXPR-2).
             ExprKind::Constant {
                 module,
                 declaration,
             } => {
+                if let Some(Some(value)) = self.program.modules[*module].constants.get(*declaration)
+                    && may_fail(value)
+                {
+                    scope.acted = true;
+                }
                 self.piece.reach.uses.insert((*module, *declaration, None));
                 format!(
                     "{}()",
