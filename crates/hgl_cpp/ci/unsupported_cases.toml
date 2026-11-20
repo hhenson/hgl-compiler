@@ -118,15 +118,6 @@
 "a temporal value of `result<list<i64>, error>`" = [
     "conformance::a_result_accepts_the_read_of_a_window_before_it_is_all_valid",
 ]
-"a temporal value of `rolling_window<i64, 3, 2>`" = [
-    "conformance::reading_a_window_before_it_is_all_valid_fails",
-]
-"a temporal value of `rolling_window<i64, 3us, 0s>`" = [
-    "conformance::a_zero_minimum_is_held_by_the_first_value",
-]
-"a temporal value of `rolling_window<i64, 3us, 1us>`" = [
-    "conformance::a_value_leaves_a_window_of_a_duration_with_a_tick",
-]
 "a temporal value of `set<i64>`" = [
     "conformance::a_set_given_the_members_it_holds_is_no_tick",
     "conformance::a_whole_set_replaces_the_previous_members",
@@ -155,6 +146,9 @@
 ]
 "a trace of `list<i64, 2>`" = [
     "conformance::a_fixed_list_delta_reports_the_position_in_updated",
+]
+"a trace of `list<i64>`" = [
+    "conformance::a_recording_of_a_window_holds_its_arrivals_and_replays_the_same_window",
 ]
 "a trace of `tuple<i64, str>`" = [
     "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",
@@ -212,9 +206,6 @@
     "core_implementation::business_days_start_from_a_business_day",
     "core_implementation::months_end_at_the_months_last_day",
     "core_implementation::only_the_result_of_a_move_is_held_to_the_range",
-]
-"the type `rolling_window<i64, 3us, 0s>`" = [
-    "conformance::a_recording_of_a_window_holds_its_arrivals_and_replays_the_same_window",
 ]
 "the type `set<i64>`" = [
     "conformance::set_writes_coalesce",

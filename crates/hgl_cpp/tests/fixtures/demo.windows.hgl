@@ -1,0 +1,201 @@
+module demo.windows
+
+# The windows the cpp target writes (TYPE-11; core's END-9): a window of
+# a tick count and one of a duration, published to, read whole, by
+# `valid` and `all_valid`, by their delta and `removed_value`, given to
+# a lifted helper, recorded and replayed. Each result is a scalar. Its
+# goldens are under `tests/goldens/demo.windows`.
+
+# The total of the values a window holds.
+const fn total(readings: list<i64>) -> i64 {
+    var sum: i64 = 0
+    for reading in readings { sum += reading }
+    return sum
+}
+
+# A result's value as text, or its error's code.
+const fn value_or_code(outcome: result<i64, error>) -> str {
+    if is_ok(outcome) { return convert<str>(outcome.value) }
+    let code = outcome.error.code
+    if code == null { return "no code" }
+    return code
+}
+
+# Whether a read of a window whole gave its values, or its error's code.
+const fn read_or_code(outcome: result<list<i64>, error>) -> str {
+    if is_ok(outcome) { return convert<str>(total(outcome.value)) }
+    let code = outcome.error.code
+    if code == null { return "no code" }
+    return code
+}
+
+# A window of three values at most and two at least.
+fn collect(reading: i64) -> rolling_window<i64, 3, 2> {
+    when { return reading }
+}
+
+# A window of 3us at most and 1us at least.
+fn collect_recent(reading: i64) -> rolling_window<i64, 3us, 1us> {
+    when { return reading }
+}
+
+# A window of 3us at most with a minimum of zero.
+fn collect_any(reading: i64) -> rolling_window<i64, 3us, 0s> {
+    when { return reading }
+}
+
+fn validity(probe: bool, readings: rolling_window<i64, 3, 2>) -> bool {
+    when modified(probe) && valid([]) { return valid(readings) }
+}
+
+fn readiness(probe: bool, readings: rolling_window<i64, 3, 2>) -> bool {
+    when modified(probe) && valid([]) { return all_valid(readings) }
+}
+
+fn observe_validity(probe: bool, reading: i64) -> bool => validity(probe, collect(reading))
+
+fn observe_readiness(probe: bool, reading: i64) -> bool => readiness(probe, collect(reading))
+
+# END-9: "`valid(x)` of one returns true once it holds a value, and
+# `all_valid(x)` where it holds at least its minimum".
+test valid_before_all_valid {
+    assert eval(observe_validity(probe: [true, true, true], reading: [_, 1, 2])) == [false, true, true]
+    assert eval(observe_readiness(probe: [true, true, true], reading: [_, 1, 2])) == [false, false, true]
+}
+
+fn total_when_ready(readings: rolling_window<i64, 3, 2>) -> i64 {
+    when all_valid(readings) { return total(readings) }
+}
+
+fn total_when_valid(readings: rolling_window<i64, 3, 2>) -> i64 {
+    when { return total(readings) }
+}
+
+fn ready_total(reading: i64) -> i64 => total_when_ready(collect(reading))
+
+fn early_total(reading: i64) -> i64 => total_when_valid(collect(reading))
+
+# TYPE-11: "A read of it before the window is `all_valid` fails with
+# `value.unset_read`", and it is read oldest first.
+test a_read_before_all_valid_fails {
+    assert eval(ready_total(reading: [1, 2, 3, 4])) == [_, 3, 6, 9]
+    assert raises("value.unset_read") {
+        eval(early_total(reading: [1, 2]))
+    }
+}
+
+fn checked_total(readings: rolling_window<i64, 3, 2>) -> str {
+    when {
+        let held: result<list<i64>, error> = readings
+        return read_or_code(held)
+    }
+}
+
+fn observe_checked(reading: i64) -> str => checked_total(collect(reading))
+
+# TYPE-11: "or gives an `err` of an `error` with that code where its
+# place takes a `result<list<V>, error>`".
+test a_read_into_a_result_gives_an_error {
+    assert eval(observe_checked(reading: [1, 2, 3])) == ["value.unset_read", "3", "6"]
+}
+
+fn lifted_total(reading: i64) -> i64 => total(collect(reading))
+
+# FN-12: "A window is passed only where it is `all_valid`".
+test a_lifted_helper_waits_for_all_valid {
+    assert eval(lifted_total(reading: [1, 2, 3, 4])) == [_, 3, 6, 9]
+}
+
+fn arrival(readings: rolling_window<i64, 3, 2>) -> i64 {
+    when modified(readings) { return delta_value(readings) }
+}
+
+fn departure(readings: rolling_window<i64, 3, 2>) -> str {
+    when modified(readings) { return value_or_code(removed_value(readings)) }
+}
+
+fn observe_arrival(reading: i64) -> i64 => arrival(collect(reading))
+
+fn observe_departure(reading: i64) -> str => departure(collect(reading))
+
+# END-9: a window of ticks drops its oldest only at an arrival, and
+# `removed_value` is that value.
+test a_full_window_of_ticks_pushes_out_its_oldest {
+    assert eval(observe_arrival(reading: [1, 2, 3, 4])) == [1, 2, 3, 4]
+    assert eval(observe_departure(reading: [1, 2, 3, 4])) ==
+        ["value.unset_read", "value.unset_read", "value.unset_read", "1"]
+}
+
+fn recent_readiness(readings: rolling_window<i64, 3us, 1us>) -> bool {
+    when modified(readings) { return all_valid(readings) }
+}
+
+fn recent_arrival(readings: rolling_window<i64, 3us, 1us>) -> str {
+    when modified(readings) { return value_or_code(delta_value(readings)) }
+}
+
+fn recent_departure(readings: rolling_window<i64, 3us, 1us>) -> str {
+    when modified(readings) { return value_or_code(removed_value(readings)) }
+}
+
+fn observe_recent_readiness(reading: i64) -> bool => recent_readiness(collect_recent(reading))
+
+fn observe_recent_arrival(reading: i64) -> str => recent_arrival(collect_recent(reading))
+
+fn observe_recent_departure(reading: i64) -> str => recent_departure(collect_recent(reading))
+
+# END-9: in a window of a duration "a value is still held when its age is
+# the maximum, and leaves one smallest step later ... The window ticks
+# for that exit", where it has no delta, and `removed_value` is the value
+# that left.
+test a_value_leaves_a_window_of_a_duration {
+    assert eval(observe_recent_readiness(reading: [1, 2])) == [false, true, _, _, false, false]
+    assert eval(observe_recent_arrival(reading: [1, 2, _, _, _, 3])) ==
+        ["1", "2", _, _, "value.unset_read", "3", _, _, _, "value.unset_read"]
+    assert eval(observe_recent_departure(reading: [1, 2, _, _, _, 3])) ==
+        ["value.unset_read", "value.unset_read", _, _, "1", "2", _, _, _, "3"]
+}
+
+# A window of 4us at most and 2us at least.
+fn collect_spanned(reading: i64) -> rolling_window<i64, 4us, 2us> {
+    when { return reading }
+}
+
+fn spanned_readiness(probe: bool, readings: rolling_window<i64, 4us, 2us>) -> bool {
+    when modified(probe) && valid([]) { return all_valid(readings) }
+}
+
+fn recent_validity(readings: rolling_window<i64, 3us, 1us>) -> bool {
+    when modified(readings) { return valid(readings) }
+}
+
+fn observe_spanned(probe: bool, reading: i64) -> bool => spanned_readiness(probe, collect_spanned(reading))
+
+fn observe_recent_validity(reading: i64) -> bool => recent_validity(collect_recent(reading))
+
+# END-9: "So `all_valid(x)` becomes true only at an arrival, and may become
+# false at an exit", and "A window emptied by exits stays valid".
+test a_window_of_a_duration_falls_back_and_stays_valid {
+    assert eval(observe_spanned(
+        probe:   [true, true, true, true, true, true],
+        reading: [   1,    2,    3,    _,    _,    _],
+    )) == [false, false, true, true, true, false]
+    assert eval(observe_recent_validity(reading: [1])) == [true, _, _, _, true]
+}
+
+fn total_at_tick(readings: rolling_window<i64, 3us, 0s>) -> i64 {
+    when modified(readings) {
+        if all_valid(readings) { return total(readings) }
+        return -1
+    }
+}
+
+fn observe_total(reading: i64) -> i64 => total_at_tick(collect_any(reading))
+
+# TST-16: a recording of a window holds its arrivals; CEVAL-3: replayed,
+# they make the same window, whose values leave it by age.
+test a_window_is_recorded_and_replayed {
+    assert eval(collect_any(reading: [1, 2])) == [1, 2]
+    assert eval(observe_total(reading: [1, 2])) == [1, 3, _, _, 2, -1]
+    assert eval(total_at_tick(readings: [1, 2])) == [1, 3, _, _, 2, -1]
+}

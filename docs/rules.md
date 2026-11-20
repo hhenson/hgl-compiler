@@ -111,16 +111,17 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
 | `eval` with no configuration, dense and timed traces, their comparison, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| A window of a scalar, of a tick count or of a duration: a publication to one, `all_valid`, its value read in a hook or given to a lifted helper where it is all valid, its delta and `removed_value` in the form their place takes, its trace, record and replay | TYPE-11, TYPE-16, END-3, END-9, ERR-14, FN-12, TIME-7, TST-16 |
 
 Not written yet, and reported: a call that gives a `var` parameter a
 place beside an argument that runs statements (FN-15), a `?` after
 anything its statement reads or runs before it (ERR-5), a
 `switch` case's binding read after the `switch` (UNIT-12), an enum's
 member made from a value (TYPE-7), a pack, a struct, a set, a
-dictionary, a window, a delta of any but a scalar, `timezone`,
+dictionary, a window of any but a scalar, a delta of any but a scalar, `timezone`,
 `zoned_time`, and of temporal code: a temporal value of any but a
 scalar, `ref` (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
-`all_valid`, `activate`, `passivate`, `scheduled()`, `if`, `switch` and
+`all_valid` of any but a window, `activate`, `passivate`, `scheduled()`, `if`, `switch` and
 `for` over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
 default or a null (FN-11), a source with declarations or hooks, an eval
 with a configuration or of a value function (RUN-1, TST-5), and an
@@ -162,3 +163,4 @@ the chapters' entries stay the hgraph target's.
 | Tests registered by name and run as named, from an entry unit that includes no hgraph header; `assert`; `assert raises`; a test held to a time limit, failed once past it and its runs stopped | TST-2, TST-10, TST-11, TST-15, TST-17 | `host.h`, `testing.h` | `testing_tests.cpp` |
 | Traces of scalars, nullables, tuples and lists, written dense and timed, each cell whole or a delta; their comparison with an eval's recording and the values its result held, and where two first differ; what one written out replays to an input and gives a `const fn` | TST-4, TST-5, TST-6, TST-7, TST-9, TST-16, CEVAL-2, TYPE-16 | `traces.h`, `testing.h` | `traces_tests.cpp`, `testing_tests.cpp` |
 | A run's bounds, the run in simulation and in real time, its store and its recording; an eval and its failure | CRUN-1, CRUN-2, CRUN-3, CRUN-7, CRUN-8, CEVAL-1, CEVAL-4, CEVAL-5, CEVAL-6, RUN-3 | `testing.h` | `testing_tests.cpp`, `sources_tests.cpp` |
+| A window of a tick count and of a duration, hgraph's `TSW` and `TSWDuration`: a publication to one; `all_valid`; its value read checked, where hgraph reads the values held below the minimum (`hgraph_window_read.cpp`, hgraph alone); its delta, the value that arrived, none at an exit alone, plain and where a `result` is taken; `removed_value` where a `result` is taken; values leaving by age, and `last_modified` at an exit | TYPE-11, END-3, END-9, ERR-14 | `windows.h` | `window_tests.cpp`, `hgraph_window_read.cpp` |
