@@ -52,7 +52,7 @@ one executable for each test module or application
 | Scalars | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `ZonedDateTime` and `Tenor`. Tenor literals keep their calendar or business-day form |
 | Struct | A generated struct with HGL's equality. As a temporal value, a nominal bundle whose whole value is the struct |
 | Enum, tuple, optional, list, fixed list, result | `enum class`, `std::tuple`, `std::optional`, `std::vector`, `std::array`, `std::expected` |
-| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key's identity is `==`, but that every NaN is one key |
+| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key is told apart by `==` of its type |
 | Abstract struct | A class that holds any struct that inherits from it, read through a function of each field's name |
 | `delta<T>` | As a value: an optional, `hglrt::list_delta`, `set_delta`, `dict_delta`, a struct's own delta struct, a tuple. A struct's and a tuple's are read from and published to hgraph's bundle field by field (`hglrt/structs.h`) |
 | Temporal struct, tuple, nullable | A struct is hgraph's `NativeTSB<S>` (an `hgraph::native_bundle<S>` written beside the aggregate), or its `NominalTSB` of each field's own form where a field is optional; a tuple an `UnNamedTSB` of its positions; `atomic<S>` a `TS<S>`; a nullable `TS<Optional<T>>`. A field is a child endpoint, in a hook and in a graph (EXPR-7) |

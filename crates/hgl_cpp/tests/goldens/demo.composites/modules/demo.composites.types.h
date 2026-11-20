@@ -9,11 +9,18 @@
 #undef Box
 #undef Empty
 #undef Flags
+#undef Holder
 #undef Line
+#undef Memo
+#undef Noted
+#undef Outcome
+#undef Pair
 #undef Point
 #undef Round
 #undef Shape
 #undef Side
+#undef Sided
+#undef Sized
 #undef Tagged
 #undef buy
 #undef composites
@@ -22,8 +29,10 @@
 #undef end
 #undef first
 #undef id
+#undef kept
 #undef lhs
 #undef members
+#undef n
 #undef name
 #undef note
 #undef on
@@ -43,18 +52,40 @@
 
 namespace hgl::demo::composites::m_
 {
+
+// enum Side (TYPE-7)
+enum class Side
+{
+    buy,
+    sell,
+};
+constexpr ::hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept
+{
+    return {"demo.composites::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}};
+}
+
 struct Point;
 struct Line;
 struct Book;
 template <class T_>
 struct Box;
 struct Empty;
+template <::hgl::demo::composites::m_::Side side>
+struct Sided;
+struct Outcome;
 struct Flags;
 class Base;
 class Shape;
 struct Round;
 template <class T_>
 struct Tagged;
+class Noted;
+struct Memo;
+template <class T_>
+class Holder;
+template <::hgraph::Int n>
+class Sized;
+struct Pair;
 namespace d_
 {
 struct Point;
@@ -63,12 +94,22 @@ struct Book;
 template <class T_>
 struct Box;
 struct Empty;
+template <::hgl::demo::composites::m_::Side side>
+struct Sided;
+struct Outcome;
 struct Flags;
 struct Base;
 struct Shape;
 struct Round;
 template <class T_>
 struct Tagged;
+struct Noted;
+struct Memo;
+template <class T_>
+struct Holder;
+template <::hgraph::Int n>
+struct Sized;
+struct Pair;
 }  // namespace d_
 }  // namespace hgl::demo::composites::m_
 
@@ -96,6 +137,16 @@ template <>
 struct hglrt::delta_of<::hgl::demo::composites::m_::Empty>
 {
     using type = ::hgl::demo::composites::m_::d_::Empty;
+};
+template <::hgl::demo::composites::m_::Side side>
+struct hglrt::delta_of<::hgl::demo::composites::m_::Sided<side>>
+{
+    using type = ::hgl::demo::composites::m_::d_::Sided<side>;
+};
+template <>
+struct hglrt::delta_of<::hgl::demo::composites::m_::Outcome>
+{
+    using type = ::hgl::demo::composites::m_::d_::Outcome;
 };
 template <>
 struct hglrt::delta_of<::hgl::demo::composites::m_::Flags>
@@ -132,20 +183,44 @@ struct hglrt::parents<::hgl::demo::composites::m_::Tagged<T_>>
 {
     using type = std::tuple<::hgl::demo::composites::m_::Shape, ::hgl::demo::composites::m_::Base>;
 };
+template <>
+struct hglrt::delta_of<::hgl::demo::composites::m_::Noted>
+{
+    using type = ::hgl::demo::composites::m_::d_::Noted;
+};
+template <>
+struct hglrt::delta_of<::hgl::demo::composites::m_::Memo>
+{
+    using type = ::hgl::demo::composites::m_::d_::Memo;
+};
+template <>
+struct hglrt::parents<::hgl::demo::composites::m_::Memo>
+{
+    using type = std::tuple<::hgl::demo::composites::m_::Noted>;
+};
+template <class T_>
+struct hglrt::delta_of<::hgl::demo::composites::m_::Holder<T_>>
+{
+    using type = ::hgl::demo::composites::m_::d_::Holder<T_>;
+};
+template <::hgraph::Int n>
+struct hglrt::delta_of<::hgl::demo::composites::m_::Sized<n>>
+{
+    using type = ::hgl::demo::composites::m_::d_::Sized<n>;
+};
+template <>
+struct hglrt::delta_of<::hgl::demo::composites::m_::Pair>
+{
+    using type = ::hgl::demo::composites::m_::d_::Pair;
+};
+template <>
+struct hglrt::parents<::hgl::demo::composites::m_::Pair>
+{
+    using type = std::tuple<::hgl::demo::composites::m_::Sized<2>, ::hgl::demo::composites::m_::Holder<std::array<::hgraph::Int, 2>>>;
+};
 
 namespace hgl::demo::composites::m_
 {
-
-// enum Side (TYPE-7)
-enum class Side
-{
-    buy,
-    sell,
-};
-constexpr ::hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept
-{
-    return {"demo.composites::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}};
-}
 
 // struct Point (TYPE-3), module demo.composites, line 17
 struct Point
@@ -258,7 +333,47 @@ struct Empty
 };
 }  // namespace d_
 
-// struct Flags (TYPE-3), module demo.composites, line 37
+// struct Sided (TYPE-3), module demo.composites, line 38
+template <::hgl::demo::composites::m_::Side side>
+struct Sided
+{
+    ::hgraph::Int count;
+
+    friend bool operator==(const Sided&, const Sided&) = default;
+};
+
+namespace d_
+{
+// delta<Sided> (TYPE-16)
+template <::hgl::demo::composites::m_::Side side>
+struct Sided
+{
+    std::optional<::hgraph::Int> count;
+
+    friend bool operator==(const Sided&, const Sided&) = default;
+};
+}  // namespace d_
+
+// struct Outcome (TYPE-3), module demo.composites, line 43
+struct Outcome
+{
+    std::expected<::hgraph::Int, ::hgraph::Str> kept;
+
+    friend bool operator==(const Outcome&, const Outcome&) = default;
+};
+
+namespace d_
+{
+// delta<Outcome> (TYPE-16)
+struct Outcome
+{
+    std::optional<std::expected<::hgraph::Int, ::hgraph::Str>> kept;
+
+    friend bool operator==(const Outcome&, const Outcome&) = default;
+};
+}  // namespace d_
+
+// struct Flags (TYPE-3), module demo.composites, line 47
 struct Flags
 {
     ::hglrt::list<::hgraph::Bool> on;
@@ -279,7 +394,7 @@ struct Flags
 };
 }  // namespace d_
 
-// abstract struct Base (TYPE-3), module demo.composites, line 44
+// abstract struct Base (TYPE-3), module demo.composites, line 54
 class Base
 {
   public:
@@ -318,7 +433,7 @@ struct Base
 };
 }  // namespace d_
 
-// abstract struct Shape (TYPE-3), module demo.composites, line 48
+// abstract struct Shape (TYPE-3), module demo.composites, line 58
 class Shape
 {
   public:
@@ -364,7 +479,7 @@ struct Shape
 };
 }  // namespace d_
 
-// struct Round (TYPE-3), module demo.composites, line 52
+// struct Round (TYPE-3), module demo.composites, line 62
 struct Round
 {
     ::hgraph::Int id;
@@ -387,7 +502,7 @@ struct Round
 };
 }  // namespace d_
 
-// struct Tagged (TYPE-3), module demo.composites, line 56
+// struct Tagged (TYPE-3), module demo.composites, line 66
 template <class T_>
 struct Tagged
 {
@@ -409,6 +524,168 @@ struct Tagged
     std::optional<::hglrt::delta_t<T_>> tag;
 
     friend bool operator==(const Tagged&, const Tagged&) = default;
+};
+}  // namespace d_
+
+// abstract struct Noted (TYPE-3), module demo.composites, line 71
+class Noted
+{
+  public:
+    struct of_ : ::hglrt::held_value
+    {
+        [[nodiscard]] virtual const std::optional<::hgraph::Str>& note() const = 0;
+    };
+    template <class S>
+    struct as_ final : ::hglrt::held_as<of_, S>
+    {
+        using ::hglrt::held_as<of_, S>::held_as;
+        [[nodiscard]] const std::optional<::hgraph::Str>& note() const override { return this->held_.note; }
+    };
+
+    Noted() = default;
+    template <class S>
+        requires ::hglrt::inherits<S, Noted>
+    Noted(S value) : held_{std::make_shared<const as_<S>>(std::move(value))}
+    {
+    }
+
+    [[nodiscard]] const std::optional<::hgraph::Str>& note() const { return held_->note(); }
+    friend bool operator==(const Noted& lhs, const Noted& rhs) { return lhs.held_->equal_(*rhs.held_); }
+
+    std::shared_ptr<const of_> held_;
+};
+
+namespace d_
+{
+// delta<Noted> (TYPE-16)
+struct Noted
+{
+    std::optional<std::optional<::hgraph::Str>> note;
+
+    friend bool operator==(const Noted&, const Noted&) = default;
+};
+}  // namespace d_
+
+// struct Memo (TYPE-3), module demo.composites, line 75
+struct Memo
+{
+    std::optional<::hgraph::Str> note;
+
+    friend bool operator==(const Memo&, const Memo&) = default;
+};
+
+namespace d_
+{
+// delta<Memo> (TYPE-16)
+struct Memo
+{
+    std::optional<std::optional<::hgraph::Str>> note;
+
+    friend bool operator==(const Memo&, const Memo&) = default;
+};
+}  // namespace d_
+
+// abstract struct Holder (TYPE-3), module demo.composites, line 78
+template <class T_>
+class Holder
+{
+  public:
+    struct of_ : ::hglrt::held_value
+    {
+        [[nodiscard]] virtual const T_& value() const = 0;
+    };
+    template <class S>
+    struct as_ final : ::hglrt::held_as<of_, S>
+    {
+        using ::hglrt::held_as<of_, S>::held_as;
+        [[nodiscard]] const T_& value() const override { return this->held_.value; }
+    };
+
+    Holder() = default;
+    template <class S>
+        requires ::hglrt::inherits<S, Holder>
+    Holder(S value) : held_{std::make_shared<const as_<S>>(std::move(value))}
+    {
+    }
+
+    [[nodiscard]] const T_& value() const { return held_->value(); }
+    friend bool operator==(const Holder& lhs, const Holder& rhs) { return lhs.held_->equal_(*rhs.held_); }
+
+    std::shared_ptr<const of_> held_;
+};
+
+namespace d_
+{
+// delta<Holder> (TYPE-16)
+template <class T_>
+struct Holder
+{
+    std::optional<::hglrt::delta_t<T_>> value;
+
+    friend bool operator==(const Holder&, const Holder&) = default;
+};
+}  // namespace d_
+
+// abstract struct Sized (TYPE-3), module demo.composites, line 82
+template <::hgraph::Int n>
+class Sized
+{
+  public:
+    struct of_ : ::hglrt::held_value
+    {
+        [[nodiscard]] virtual const std::array<::hgraph::Int, n>& value() const = 0;
+        [[nodiscard]] virtual ::hgl::demo::composites::m_::Holder<std::array<::hgraph::Int, n>> as_0_() const = 0;
+    };
+    template <class S>
+    struct as_ final : ::hglrt::held_as<of_, S>
+    {
+        using ::hglrt::held_as<of_, S>::held_as;
+        [[nodiscard]] const std::array<::hgraph::Int, n>& value() const override { return this->held_.value; }
+        [[nodiscard]] ::hgl::demo::composites::m_::Holder<std::array<::hgraph::Int, n>> as_0_() const override { return ::hgl::demo::composites::m_::Holder<std::array<::hgraph::Int, n>>(this->held_); }
+    };
+
+    Sized() = default;
+    template <class S>
+        requires ::hglrt::inherits<S, Sized>
+    Sized(S value) : held_{std::make_shared<const as_<S>>(std::move(value))}
+    {
+    }
+
+    [[nodiscard]] const std::array<::hgraph::Int, n>& value() const { return held_->value(); }
+    operator ::hgl::demo::composites::m_::Holder<std::array<::hgraph::Int, n>>() const { return held_->as_0_(); }
+    friend bool operator==(const Sized& lhs, const Sized& rhs) { return lhs.held_->equal_(*rhs.held_); }
+
+    std::shared_ptr<const of_> held_;
+};
+
+namespace d_
+{
+// delta<Sized> (TYPE-16)
+template <::hgraph::Int n>
+struct Sized
+{
+    std::optional<::hglrt::list_delta<std::array<::hgraph::Int, n>>> value;
+
+    friend bool operator==(const Sized&, const Sized&) = default;
+};
+}  // namespace d_
+
+// struct Pair (TYPE-3), module demo.composites, line 84
+struct Pair
+{
+    std::array<::hgraph::Int, 2> value;
+
+    friend bool operator==(const Pair&, const Pair&) = default;
+};
+
+namespace d_
+{
+// delta<Pair> (TYPE-16)
+struct Pair
+{
+    std::optional<::hglrt::list_delta<std::array<::hgraph::Int, 2>>> value;
+
+    friend bool operator==(const Pair&, const Pair&) = default;
 };
 }  // namespace d_
 
@@ -556,6 +833,46 @@ struct std::hash<::hgl::demo::composites::m_::d_::Empty>
 {
     std::size_t operator()(const ::hgl::demo::composites::m_::d_::Empty& value) const { return ::hglrt::key_hash_of(value); }
 };
+template <::hgl::demo::composites::m_::Side side>
+struct hglrt::fields<::hgl::demo::composites::m_::Sided<side>>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::Sided<side>::count};
+};
+template <::hgl::demo::composites::m_::Side side>
+struct hglrt::fields<::hgl::demo::composites::m_::d_::Sided<side>>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::d_::Sided<side>::count};
+};
+template <::hgl::demo::composites::m_::Side side>
+struct std::hash<::hgl::demo::composites::m_::Sided<side>>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::Sided<side>& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <::hgl::demo::composites::m_::Side side>
+struct std::hash<::hgl::demo::composites::m_::d_::Sided<side>>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::d_::Sided<side>& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct hglrt::fields<::hgl::demo::composites::m_::Outcome>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::Outcome::kept};
+};
+template <>
+struct hglrt::fields<::hgl::demo::composites::m_::d_::Outcome>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::d_::Outcome::kept};
+};
+template <>
+struct std::hash<::hgl::demo::composites::m_::Outcome>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::Outcome& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct std::hash<::hgl::demo::composites::m_::d_::Outcome>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::d_::Outcome& value) const { return ::hglrt::key_hash_of(value); }
+};
 template <>
 struct hglrt::fields<::hgl::demo::composites::m_::Flags>
 {
@@ -666,4 +983,110 @@ template <class T_>
 struct std::hash<::hgl::demo::composites::m_::d_::Tagged<T_>>
 {
     std::size_t operator()(const ::hgl::demo::composites::m_::d_::Tagged<T_>& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct hglrt::fields<::hgl::demo::composites::m_::d_::Noted>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::d_::Noted::note};
+};
+template <>
+struct std::hash<::hgl::demo::composites::m_::Noted>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::Noted& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct std::hash<::hgl::demo::composites::m_::d_::Noted>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::d_::Noted& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct hglrt::fields<::hgl::demo::composites::m_::Memo>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::Memo::note};
+};
+template <>
+struct hglrt::fields<::hgl::demo::composites::m_::d_::Memo>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::d_::Memo::note};
+};
+template <>
+struct std::hash<::hgl::demo::composites::m_::Memo>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::Memo& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct std::hash<::hgl::demo::composites::m_::d_::Memo>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::d_::Memo& value) const { return ::hglrt::key_hash_of(value); }
+};
+// TYPE-9: `Memo` as hgraph's nominal bundle, its fields as `fields` names them.
+template <>
+struct hgraph::native_bundle<::hgl::demo::composites::m_::Memo>
+{
+    using schema = ::hgraph::NominalBundle<"demo.composites", "Memo", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<>, ::hgraph::Field<"note", ::hgraph::Optional<::hgraph::Str>>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::composites::m_::Memo>::members;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::Memo>
+{
+    static constexpr std::string_view name = "demo.composites::Memo";
+    static constexpr std::array<std::string_view, 1> fields{"note"};
+    static constexpr bool delta = false;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::d_::Memo>
+{
+    static constexpr std::string_view name = "delta<demo.composites::Memo>";
+    static constexpr std::array<std::string_view, 1> fields{"note"};
+    static constexpr bool delta = true;
+};
+template <class T_>
+struct hglrt::fields<::hgl::demo::composites::m_::d_::Holder<T_>>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::d_::Holder<T_>::value};
+};
+template <class T_>
+struct std::hash<::hgl::demo::composites::m_::Holder<T_>>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::Holder<T_>& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <class T_>
+struct std::hash<::hgl::demo::composites::m_::d_::Holder<T_>>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::d_::Holder<T_>& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <::hgraph::Int n>
+struct hglrt::fields<::hgl::demo::composites::m_::d_::Sized<n>>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::d_::Sized<n>::value};
+};
+template <::hgraph::Int n>
+struct std::hash<::hgl::demo::composites::m_::Sized<n>>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::Sized<n>& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <::hgraph::Int n>
+struct std::hash<::hgl::demo::composites::m_::d_::Sized<n>>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::d_::Sized<n>& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct hglrt::fields<::hgl::demo::composites::m_::Pair>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::Pair::value};
+};
+template <>
+struct hglrt::fields<::hgl::demo::composites::m_::d_::Pair>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::d_::Pair::value};
+};
+template <>
+struct std::hash<::hgl::demo::composites::m_::Pair>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::Pair& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct std::hash<::hgl::demo::composites::m_::d_::Pair>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::d_::Pair& value) const { return ::hglrt::key_hash_of(value); }
 };

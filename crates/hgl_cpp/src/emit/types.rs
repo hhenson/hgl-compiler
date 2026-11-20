@@ -13,8 +13,8 @@
 //! | `tuple<A, B>` | `std::tuple<A, B>` |
 //! | `list<T>`, `list<T, N>` | the library's `hglrt::list<T>`, a `std::vector<T>` hgraph can hash; `std::array<T, N>` |
 //! | `error`, `result<T, error>` | the library's `hglrt::error`, hgraph's `CanonicalError`; `hglrt::result<T>`, a `std::expected<T, error>` (ERR-2, ERR-4) |
-//! | A struct, a set, a dictionary, a delta | `composites`' |
 //! | An error's `.context` (ERR-4) | hgraph's `ErrorContext` |
+//! | A struct, a set, a dictionary, a delta | `composites`' |
 //!
 //! Every other type is not written yet: a window, a trace and anything
 //! temporal.
@@ -57,6 +57,9 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
             }
             _ => return None,
         },
+        // TYPE-16: "`delta<f64>` is `f64`": a scalar publishes whole, and
+        // its delta is itself.
+        Type::Delta(inner) if matches!(**inner, Type::Scalar(_)) => cpp_type(program, inner)?,
         Type::Nullable(inner) => {
             format!("std::optional<{}>", cpp_type_in(program, inner, generic)?)
         }

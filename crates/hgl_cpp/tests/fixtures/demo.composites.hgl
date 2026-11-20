@@ -34,6 +34,16 @@ struct Box<T> {
 
 struct Empty {}
 
+# A struct's generic parameter of an enum's type.
+struct Sided<const side: Side> {
+    count: i64 = 0
+}
+
+# A field of a result whose failure is no `error`.
+struct Outcome {
+    kept: result<i64, str>
+}
+
 struct Flags {
     on: list<bool>
     first: bool
@@ -56,6 +66,24 @@ struct Round : Shape {
 struct Tagged<T> : Shape {
     tag: T
 }
+
+# An abstract struct with an optional field.
+abstract struct Noted {
+    note: str? = null
+}
+
+struct Memo : Noted {}
+
+# A parent's arguments, a list's size among them, given through two levels.
+abstract struct Holder<T> {
+    value: T
+}
+
+abstract struct Sized<const n: i64> : Holder<list<i64, n>> {}
+
+struct Pair : Sized<2> {}
+
+const fn held(holder: Holder<list<i64, 2>>) -> list<i64, 2> => holder.value
 
 # GEN-4: a candidate of an operator over a struct.
 impl const fn add_(lhs: Point, rhs: Point) -> Point => Point(x: lhs.x + rhs.x, y: lhs.y + rhs.y)
@@ -203,6 +231,16 @@ const fn listed() -> delta<list<i64>> => delta<list<i64>>(updated: [0: 4], remov
 
 const fn nudged() -> delta<Point> => delta<Point>(x: 1.0)
 
+# A list's delta whose properties are held in the order written, one
+# running statements.
+const fn listed_in_order() -> delta<list<i64>> {
+    var at = 0
+    return delta<list<i64>>(removed: [at], updated: [{
+        at = 2
+        at
+    }: 9])
+}
+
 const fn pair_change() -> delta<tuple<f64, i64>> => (1.0, null)
 
 # TYPE-7: an enum's member made from its number or its name.
@@ -245,6 +283,9 @@ test structs_are_values {
     assert point + Point(x: 3.0) == Point(x: 4.0, y: 2.0)
     assert first_x() == 1.0
     assert Empty() == Empty()
+    assert Outcome(kept: ok(1)) == Outcome(kept: ok(1))
+    assert Outcome(kept: err("no")) != Outcome(kept: ok(1))
+    assert Sided<Side.sell>(count: 2).count == 2
 }
 
 test fields_default_and_nest {
@@ -276,6 +317,7 @@ test generic_and_abstract_structs {
     assert base_id(as_base(round)) == 1
     assert base_id(round) == 1
     assert as_shapes([round])[0].name == "shape"
+    assert held(Pair(value: [1, 2])) == [1, 2]
 }
 
 test arguments_are_evaluated_in_the_order_written {
@@ -306,8 +348,6 @@ test dictionaries_read_add_and_loop {
     assert counted(["x", "y", "x"]) == ["x": 2, "y": 1]
     assert bumped(book, "b") == ["a": 1, "b": 3]
     assert doubled_all(["a": 1]) == ["a": 2, "extra": 0]
-    let again: dict<str, i64> = ["a": 1, "a": 2]
-    assert again == ["a": 2]
     let shelf = Book(owner: "o", prices: ["a": 5])
     assert price_of(shelf, "a") == 5
     assert first_price([shelf]) == 5
@@ -346,6 +386,25 @@ test a_failing_value_adds_no_key {
     assert rows == [["a": 1]]
 }
 
+# EXPR-2: a dictionary's place is checked before its key is evaluated.
+test a_dictionarys_place_comes_before_its_key {
+    var rows: list<dict<str, i64>> = [["a": 1]]
+    var seen = 0
+    assert raises("value.index_out_of_range") {
+        rows[5][{
+            seen = 1
+            "b"
+        }] = 1
+    }
+    assert seen == 0
+    let names: dict<str, str> = ["a": "b"]
+    assert raises("value.index_out_of_range") {
+        rows[5][names["missing"]] = 1
+    }
+    rows[0][names["a"]] = 2
+    assert rows == [["a": 1, "b": 2]]
+}
+
 test deltas_are_values {
     assert arrived(joined("a")) == ["a"]
     assert joined("a").removed == []
@@ -356,6 +415,7 @@ test deltas_are_values {
     assert listed().updated == [0: 4]
     assert listed().removed == [1]
     assert listed().size_modified == null
+    assert listed_in_order().removed == [0] && listed_in_order().updated == [2: 9]
     assert nudged().x == 1.0
     assert nudged().y == null
     assert pair_change() == (1.0, null)
@@ -368,6 +428,12 @@ test enums_zones_and_nullables {
     assert opening() == @09:30[Europe/London]
     assert opening() != @09:30[UTC]
     assert is_one(1)
+    # The left operand runs first, and replaces what the right one reads.
+    var noted: Noted = Memo(note: "a")
+    assert {
+        noted = Memo(note: "b")
+        "b"
+    } == noted.note
     assert !is_one(2)
     assert !is_one(null)
 }
@@ -387,4 +453,14 @@ test bits_are_held_as_they_were_read {
 
 test a_var_place_is_taken_where_the_call_is_made {
     assert bump_after_growth() == [1, 30]
+    # EXPR-2: the list's place is checked before a later index runs.
+    var rows = [[1]]
+    var seen = 0
+    assert raises("value.index_out_of_range") {
+        bump(rows[5][{
+            seen = 1
+            0
+        }], 1)
+    }
+    assert seen == 0
 }

@@ -225,7 +225,10 @@ std::size_t hash_of(const T& value) {
         return value.has_value() ? detail::combined(1, hash_of(*value)) : 0;
     } else if constexpr (detail::is_list<T>::value || detail::is_fixed_list<T>::value) {
         std::size_t seed = value.size();
-        for (const auto& element : value) {
+        // Each element as the list's value type: libc++ gives an element
+        // of a `const std::vector<bool>` as a reference to its bit, which this
+        // binds as a `bool`.
+        for (const typename T::value_type& element : value) {
             seed = detail::combined(seed, hash_of(element));
         }
         return seed;

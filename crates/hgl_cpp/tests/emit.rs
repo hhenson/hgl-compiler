@@ -699,7 +699,8 @@ fn activity_and_enums_are_written() {
         assert!(unit.contains(written), "{written} in\n{unit}");
     }
     // The library names an enum through what the compiler writes beside
-    // it, and registers it with hgraph so (`values.h`).
+    // it, in its module's types header, and registers it with hgraph so
+    // (`values.h`).
     let header = &emitted
         .output
         .files
@@ -2182,8 +2183,10 @@ fn composite_values_are_written() {
 /// What the target does not write of the composites yet is reported
 /// where it is written, and nothing is miswritten: a struct that holds
 /// itself (TYPE-6), a field's default that runs statements of its own,
-/// a field of an abstract struct assigned, a dictionary's entry given to
-/// a `var` parameter.
+/// a field of an abstract struct assigned, a dictionary written with keys
+/// that may be one, which the pinned text does not say what it holds, a
+/// dictionary's entry given to a `var` parameter, and an application of a
+/// generic struct that its C++ template would not be.
 #[test]
 fn composite_forms_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -2210,12 +2213,21 @@ fn composite_forms_not_written_yet_are_reported() {
             "const fn bump(var count: i64, by: i64) {\n",
             "    count = by\n",
             "}\n",
+            "const fn twice(name: str) -> dict<str, i64> => [name: 1, \"b\": 2]\n",
             "const fn given(book: dict<str, i64>) -> dict<str, i64> {\n",
             "    var changed = book\n",
             "    bump(changed[\"a\"], 1)\n",
             "    return changed\n",
             "}\n",
             "const fn made() -> i64 => Made().value\n",
+            "struct Maybe<T> { value: T? }\n",
+            "abstract struct Marked {}\n",
+            "struct Mark<T> : Marked { tag: list<T> = [] }\n",
+            "const fn read(box: Maybe<i64?>) -> i64? => box.value\n",
+            "const fn marked() -> Mark<delta<i64?>> => Mark<delta<i64?>>()\n",
+            "const fn whole(change: delta<Maybe<atomic<list<i64>>>>) -> bool => change.value == null\n",
+            "struct Snapshot<T> { value: atomic<T> }\n",
+            "const fn snapped(change: delta<Snapshot<list<i64>?>>) -> list<i64>? => change.value\n",
             "test noded {\n",
             "    assert Node(value: 1).value == 1\n",
             "}\n",
@@ -2227,17 +2239,31 @@ fn composite_forms_not_written_yet_are_reported() {
         [
             holds_itself,
             "m.hgl:16:5 the cpp target does not write an assignment to this place yet",
-            "m.hgl:24:10 the cpp target does not write this place given to a `var` parameter yet",
+            "m.hgl:22:48 the cpp target does not write a dictionary written with keys that may be one yet",
+            "m.hgl:25:10 the cpp target does not write this place given to a `var` parameter yet",
             // Where the default is written, which a construction that
             // leaves the field out reaches.
             "m.hgl:7:18 the cpp target does not write a default that runs statements yet",
+            // TYPE-14: `T?` of an `i64?` is an `i64?`, where the template's
+            // field would be an optional of one.
+            "m.hgl:32:15 the cpp target does not write the type `Maybe<i64?>` yet",
+            // TYPE-3: `Mark<delta<i64?>>` is no `Mark<i64?>`, which would be
+            // one C++ struct.
+            "m.hgl:33:10 the cpp target does not write the type `Mark<delta<i64?>>` yet",
+            // TYPE-16: an atomic's delta is the whole value, which the
+            // template, given the value the atomic holds, would not have.
+            "m.hgl:34:16 the cpp target does not write the type `delta<Maybe<atomic<list<i64>>>>` yet",
+            // A nullable given a parameter an atomic holds: its delta's
+            // property is the nullable whole.
+            "m.hgl:36:18 the cpp target does not write the type `delta<Snapshot<list<i64>?>>` yet",
         ]
     );
     assert_eq!(emitted.blocked("noded").as_deref(), Some(holds_itself));
 }
 
-/// A module's struct that holds another module's, and an instance of a
-/// generic function of the other module over it: each header includes
+/// A module's struct that holds another module's, a struct with a generic
+/// parameter of another module's enum, and an instance of a generic
+/// function of the other module over a struct: each header includes
 /// the types header of the module whose types it names, and no types
 /// header includes a module's header (GEN-2, UNIT-6).
 #[test]
@@ -2248,7 +2274,17 @@ fn a_struct_of_another_module_is_named_through_its_types_header() {
             concat!(
                 "module demo.b\n",
                 "export struct Inner { value: i64 }\n",
+                "export enum Mood { calm, keen }\n",
                 "export const fn same<T>(value: T) -> T => value\n",
+            ),
+        ),
+        (
+            "demo.c.hgl",
+            concat!(
+                "module demo.c\n",
+                "use demo.b::{Mood}\n",
+                "struct Moody<const mood: Mood> { count: i64 = 0 }\n",
+                "const fn counted(moody: Moody<Mood.keen>) -> i64 => moody.count\n",
             ),
         ),
         (
@@ -2275,4 +2311,6 @@ fn a_struct_of_another_module_is_named_through_its_types_header() {
     assert!(file("modules/demo.b.h").contains("#include \"demo.a.types.h\""));
     assert!(file("modules/demo.a.h").contains("#include \"demo.a.types.h\""));
     assert!(!file("modules/demo.b.types.h").contains("demo.a"));
+    // A generic parameter of another module's enum.
+    assert!(file("modules/demo.c.types.h").contains("#include \"demo.b.types.h\""));
 }

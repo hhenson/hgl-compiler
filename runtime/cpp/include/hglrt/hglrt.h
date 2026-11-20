@@ -4,10 +4,10 @@
 // The library holds what the generated code calls and hgraph does not have:
 // core's native declarations written in C++ (scalar.h, temporal.h, text.h,
 // conversions.h, tenors.h, lists.h, endpoints.h, capabilities.h), HGL's failures
-// (failure.h), sets, dictionaries and what a struct tells the library
+// (failure.h), a capture and the temporal values of errors and results
+// (capture.h), sets, dictionaries and what a struct tells the library
 // (collections.h), the temporal forms of a nullable scalar (nullables.h) and
-// of a struct and a tuple (structs.h), a capture and the temporal values of
-// errors and results (capture.h), the reads checked when they run
+// of a struct and a tuple (structs.h), the reads checked when they run
 // (checked.h), constants and sources (sources.h) with the coroutine type of a
 // source's body (generator.h), what tells a node's wakes apart and what a
 // source's body is lent (timing.h), windows (windows.h), what a `ref`

@@ -25,6 +25,7 @@
 
 namespace hgl::demo::structs::m_
 {
+
 struct MarketQuote;
 struct NotedQuote;
 struct Inner;
