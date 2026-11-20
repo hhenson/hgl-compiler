@@ -3660,8 +3660,8 @@ const TIMERS_WAVE3: (&str, &str) = fixture!("demo.timers_wave3.hgl");
 /// it is true in a cycle where no temporal input was modified": `True`
 /// in the body of the handler whose header selects it, and elsewhere
 /// that no input is modified as `modified(input)` asks it, so that an
-/// invalidation is none, and a `ref` parameter is modified where its
-/// designation changed; `True` in a node with no input. TIME-8: a
+/// invalidation is none, and a `ref` parameter is modified where it is
+/// given a designation (END-10); `True` in a node with no input. TIME-8: a
 /// duration whose value the target does not work out is checked by the
 /// provider's function, `_starting=`, once every argument is evaluated
 /// (EXPR-2): the call fails where it is not more than zero, but for a

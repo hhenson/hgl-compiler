@@ -358,7 +358,7 @@ transpiler: partial
 - A removed position the list does not hold lost no value, and is ignored: nothing fails and nothing is lost (the owner's decision on hhenson/hgl_spec#124, as for a dictionary's absent key)
 - An entry at or past a `size_modified` written with it contradicts the delta and fails the write as the graph runs, with no execution code (the owner's decision on hhenson/hgl_spec#124: "a failure"); a constant one is not yet rejected when compiled (TYPE-16)
 - A dictionary's delta removes a key with `REMOVE_IF_EXISTS`, so one it does not hold is ignored, and is no failure, a delta read from an input and published again among them (`_core.entries_published`); a set ignores a member it does not hold
-- A delta that names no change, of a dictionary, a set or an unsized list, ticks only where it makes the endpoint valid, empty and modified, and its `delta_value` is then that delta (END-3, TIME-7), by a node, a source and a trace's cell, at the top, within a dictionary, a struct, a tuple or a fixed list, and beside an unsized list in a struct or a tuple; one of a struct, a tuple or a fixed list sets no child and is never a tick; so, as END-3 has it, agreed, is one whose every entry is an ignored removal. hgraph ticks a `TSD` and a `TSS` for neither, and `clear` makes one that is not valid valid; it ticks what holds one given such a change, so the provider leaves that child out (`_core.entries_published`); `invalidate(out)` of a dictionary or a set empties it first, as hgraph keeps its keys and members (`_core.invalidated`)
+- A delta that names no change, of a dictionary, a set or an unsized list, ticks only where it makes the endpoint valid, empty and modified, and its `delta_value` is then that delta (END-3, TIME-7), by a node, a source and a trace's cell, at the top, within a dictionary, a struct, a tuple or a fixed list, and beside an unsized list in a struct or a tuple; one of a struct, a tuple or a fixed list sets no child and is never a tick; so, as END-3 has it, agreed, is one whose every entry is an ignored removal. A trace's cell written whole is replayed as the delta that publishing it records (`_core.whole_delta`). hgraph ticks a `TSD` and a `TSS` for neither, and `clear` makes one that is not valid valid; it ticks what holds one given such a change, so the provider leaves that child out (`_core.entries_published`); `invalidate(out)` of a dictionary or a set empties it first, as hgraph keeps its keys and members (`_core.invalidated`)
 - hgraph 0.9.8's bundle given a tuple ticks where any position is given, a change that a valid child is left as it was by among them, and fails the run for a dictionary's `REMOVE_IF_EXISTS` in it: a tuple that holds an unsized list is published as a `dict` of the positions it gives, as a struct is (`_core.published_into`)
 - A dictionary or a set in a struct or a tuple that holds an unsized list is published as a node's delta of one is, by a node and by a source, the provider told where (`entries=`): an entry whose change names nothing, where it is valid, is left out
 - Left: a dictionary's or a set's assigned to an entry of `out`; an unsized list's delta inside a dictionary's or a list's delta, which is reported (TYPE-16)
@@ -368,7 +368,7 @@ transpiler: partial
 transpiler: partial
 
 - hgraph: `invalidate(out)` clears the output; one that holds an unsized list, a dictionary or a set, at any depth of a struct, a tuple and a fixed list, empties each first (`_core.invalidated`), since hgraph's `TSL` keeps its positions and its `TSD` and `TSS` their keys and members, which the next delta read would name removed and a delta that names no change would leave in what it makes valid (TIME-7: "it makes the value valid and empty")
-- `invalidate(out)` of a `ref` result (FN-16, proposed: `out` of one takes the endpoint operations) leaves it designating nothing: the invalidation, for which hgraph 0.9.8 unbinds an ordinary reader and wakes it with its input not valid, and a `ref` parameter given it is not valid, and modified; the last action of the evaluation decides (`_core.Designation`)
+- `invalidate(out)` of a `ref` result (FN-16, proposed: `out` of one takes the endpoint operations) leaves it designating nothing: the invalidation, for which hgraph 0.9.8 unbinds an ordinary reader and wakes it with its input not valid, and a `ref` parameter given it is not valid; the last action of the evaluation decides (`_core.Designation`); invalidated again while it is not valid, it wakes no reader, as hgraph has it
 - An active input's transition to invalid wakes the node
 - In a body or handler guard, `modified(input)` is false on invalidation, whether the input is active or passive
 - Repeated scalar invalidation is silent and a scalar producer's last action decides its final validity
@@ -384,6 +384,7 @@ transpiler: partial
 - A passive input retains its value
 - Its publication can satisfy a handler when another input schedules the node
 - A delta that names no change, written where a dictionary, a set or an unsized list is valid, is no publication: "it marks nothing modified, moves no `last_modified` (END-6), and notifies no subscriber" (END-3, TIME-7)
+- Nor is a collection given whole that changes nothing, a set given the members it holds or an empty list or dictionary given to a valid empty one; a dictionary's entries and a list's positions given again are publications: hgraph 0.9.8's `TSD` and `TSS` publish so, and the provider makes an empty list given to one that is not valid tick (TIME-7); core's three cases pass
 - Left: coalescing across structural shapes
 
 ## END-6
@@ -442,8 +443,7 @@ analyser: done
 
 transpiler: partial
 
-- hgraph: a `ref` parameter is a `REF` input, modified where its designation changes; a reader of a `ref` result follows what it designates, a re-binding upstream included (the provider's `Designation`, through an active `REF` input), and the node is not woken by that endpoint's ticks; a designation the result held before the evaluation is not published again, after any number of writes
-- Proposed, and as hgraph has it: `modified`, `valid` and `last_modified` of a `ref` parameter ask of its designation
+- hgraph: a `ref` parameter is a `REF` input, passive to its target, and modified where it is given a designation, which wakes a node active on it; `valid` of it is whether a reference is present; a reader of a `ref` result observes what it designates; a whole `ref` parameter returned is sampled, and the result keeps it until the node writes again; an ordinary input or a child path returned is followed through an active hidden `REF` input, a re-binding upstream included, and the node is not woken by that endpoint's ticks (the provider's `Designation`); core's reference cases pass
 - Left, reported: what FN-16's entry lists
 
 ## CAP-1
