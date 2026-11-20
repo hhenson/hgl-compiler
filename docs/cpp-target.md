@@ -2,8 +2,10 @@
 
 **Status: proposed design.** The compiler's native target writes C++ against
 [hgraph](https://github.com/hhenson/hgraph)'s graph, node, type and runtime
-layers. It replaces the Python target, which is frozen: kept passing as the
-reference until this target runs the same cases, then deleted. A runtime in
+layers. It replaces the Python target, which gets no further work: it
+stays as it is until this target runs the cases, and is then deleted. A
+case of a rule it does not follow is listed for it
+(`crates/hgl_hgraph/ci/unsupported_cases.toml`). A runtime in
 Rust ([hgl-runtime](https://github.com/hhenson/hgl-runtime)) follows later,
 with this target as its reference for behaviour and for speed.
 
@@ -96,16 +98,28 @@ saving ([hgraph 1838](https://github.com/hhenson/hgraph/issues/1838)).
 
 ## What hgraph is asked for
 
+The SDK is hgraph 0.9.10.
+
 | Issue | Asked | Until then |
 | --- | --- | --- |
 | [1833](https://github.com/hhenson/hgraph/issues/1833) | `switch_` and `map_` wiring outside the operator library | `libhglrt` carries the glue |
-| [1822](https://github.com/hhenson/hgraph/issues/1822), [1827](https://github.com/hhenson/hgraph/issues/1827) | Eight collection behaviours as the specification has them | `libhglrt` adapts each, as the Python provider does |
-| [1831](https://github.com/hhenson/hgraph/issues/1831) | Two reference behaviours left after 0.9.8: a reference written again ticks, and a list of references given a re-pointed list does not | The same |
+| [1822](https://github.com/hhenson/hgraph/issues/1822), [1827](https://github.com/hhenson/hgraph/issues/1827) | The growing list's first empty publication and its validity, a shrink under a map or an index, invalidation emptying a collection, and tuple deltas, as the specification has them | `libhglrt` adapts each |
+| [1848](https://github.com/hhenson/hgraph/issues/1848) | A generator that yields a time already past skips it and goes on | The source driver of `libhglrt` skips it |
 | [1834](https://github.com/hhenson/hgraph/issues/1834) | A C++ struct as a bundle's whole value | Field by field |
-| [1835](https://github.com/hhenson/hgraph/issues/1835) | Canonical errors from `try_except_<G>` | The node is built directly |
-| [1836](https://github.com/hhenson/hgraph/issues/1836) | A `tenor` scalar | A type of `libhglrt` |
-| [1837](https://github.com/hhenson/hgraph/issues/1837) | `add_node` keeping a builder's scalars | The deferred form |
+| [1838](https://github.com/hhenson/hgraph/issues/1838) | A lighter front end for generated code | A precompiled header |
 | [1839](https://github.com/hhenson/hgraph/issues/1839) | A runtime library without Arrow | Arrow is installed with the SDK |
+
+Delivered: `add_node` keeps a builder's own scalars
+([1837](https://github.com/hhenson/hgraph/issues/1837)) and
+`try_except_<G>` takes options for canonical errors
+([1835](https://github.com/hhenson/hgraph/issues/1835)), both in 0.9.9;
+a `tenor` scalar ([1836](https://github.com/hhenson/hgraph/issues/1836))
+in 0.9.10. Nothing is asked
+on references: a `REF` output holds the reference it was given, which is
+the specification's rule for a returned `ref` parameter. Where the pinned
+specification and hgraph differ, this target builds the specification's
+rule, and the difference goes to the specification's issue tracker to be
+decided there, not here.
 
 ## Progress and acceptance
 
@@ -113,9 +127,9 @@ The measure is cases passing on this target: core's runtime cases (182 today)
 and the tests of the fixture programs (about 370 in about 100 programs), all
 of which are HGL with their own expectations and need no change. A case this
 target cannot yet write is listed with its reason, as `unsupported_cases.toml`
-lists them today; a case that passes and is listed fails the check. The
-Python target runs the same cases in the same CI run while it exists; where
-the two disagree, the specification decides which is wrong.
+lists them today; a case that passes and is listed fails the check. A
+case's own expectation is the judge: the Python target is not kept in
+step with rules that change, and is no reference for them.
 
 ## Order of work
 
