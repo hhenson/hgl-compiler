@@ -22,7 +22,8 @@ use hgl_analyser::{DeclarationKind, Detail, Program, Signature, Type};
 /// headers define besides are not here: each file `#undef`s the plain
 /// names it writes after its last `#include` (`assemble`), and units
 /// are compiled as strict C++23, in which the compiler predefines none
-/// (`linux`) and keeps no GNU keyword (`typeof`).
+/// (`linux`) and keeps no GNU keyword (`typeof`). And `hgl_enum`, by
+/// which the runtime library finds an enum's names beside it (`types`).
 const RESERVED: &[&str] = &[
     "alignas",
     "alignof",
@@ -76,6 +77,7 @@ const RESERVED: &[&str] = &[
     "for",
     "friend",
     "goto",
+    "hgl_enum",
     "if",
     "import",
     "indeterminate",
