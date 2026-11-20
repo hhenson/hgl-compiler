@@ -13,8 +13,7 @@
 #include <hglrt/temporal.h>
 #include <hglrt/values.h>
 
-#include <hgraph/types/graph_wiring.h>
-#include <hgraph/types/static_node.h>
+#include <hgraph/types/generated.h>
 
 #include <optional>
 #include <source_location>
@@ -115,6 +114,11 @@ void resume(Source<T>& source, datetime now, const Scheduler& scheduler, Step&& 
                  where);
         }
         source.previous = target;
+        // SOURCE-3: "A past absolute target is skipped". This driver skips it
+        // itself: hgraph's `NodeScheduler` drops a wake asked for at a time
+        // that is not after the evaluation time, with nothing said, and the
+        // source would then wait for it for ever (hgraph's own skip, issue
+        // 1848, is its Python generator's).
         if (target < now) {
             continue;
         }

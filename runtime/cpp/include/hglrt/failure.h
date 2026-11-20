@@ -44,7 +44,11 @@ namespace codes {
 /// A read needs a value that is not there: a payload, a child that is not
 /// valid, a whole that is not all valid (TIME-1, ERR-14).
 inline constexpr std::string_view unset_read = "value.unset_read";
-/// A result outside its type's range (NUM-2, OPS-10).
+/// An index outside an ordinary list, below zero or at or past its size,
+/// where a read or an assignment evaluates it (EXPR-3, EXPR-7).
+inline constexpr std::string_view index_out_of_range = "value.index_out_of_range";
+/// A result outside its type's range (NUM-2, OPS-10), and text repeated a
+/// count below zero (OPS-1).
 inline constexpr std::string_view out_of_range = "numeric.out_of_range";
 /// A zero divisor under `.fail`, or `?` on the `err` of one under `.error`
 /// (NUM-3, NUM-9).
@@ -58,6 +62,9 @@ inline constexpr std::string_view mixed_units = "tenor.mixed_units";
 inline constexpr std::string_view negative_duration = "yield.negative_duration";
 /// A source's `yield` at a time that is not after the one before (SOURCE-3).
 inline constexpr std::string_view non_increasing_time = "yield.non_increasing_time";
+/// A wake asked of a scheduler or an alarm with a duration that is not more
+/// than zero, or one below zero in `start` (TIME-8, CAP-4, CAP-5).
+inline constexpr std::string_view non_positive_duration = "schedule.non_positive_duration";
 /// A run's configuration with both an `end` and a `length` (CRUN-2).
 inline constexpr std::string_view end_and_length = "run.end_and_length";
 } // namespace codes

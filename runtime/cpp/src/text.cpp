@@ -1,4 +1,5 @@
 // Core's native scalar operators of text (text.h).
+#include <hglrt/failure.h>
 #include <hglrt/text.h>
 
 #include <cstddef>
@@ -14,9 +15,9 @@ str add__str_str(const str& lhs, const str& rhs) {
     return out;
 }
 
-str mul__str_i64(const str& lhs, i64 rhs) {
+str mul__str_i64(const str& lhs, i64 rhs, std::source_location where) {
     if (rhs < 0) {
-        throw std::domain_error("hglrt: core's contract gives no rule for text repeated a count below zero");
+        fail(codes::out_of_range, "text is repeated a count below zero", where);
     }
     if (lhs.empty() || rhs == 0) {
         return str{};

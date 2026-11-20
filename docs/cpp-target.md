@@ -17,7 +17,7 @@ with this target as its reference for behaviour and for speed.
 | Nothing from either engine's standard library | Owner | Operators are HGL's: core's HGL sources compiled, and core's 155 native declarations written in C++ here. Nothing under hgraph's `include/hgraph/lib/` is used, its test helpers included |
 | The integration point is hgraph's graph, node, type and runtime layers, with its structural nodes (`map_`, `switch_`, `reduce`, nested graphs, capture) | Owner | Generated code needs `libhgraph_runtime` and `libhgraph_wiring` only |
 | What hgraph lacks is added to hgraph, from a specified issue | Owner | No adaptation layer is designed. Where a behaviour differs from the specification, the difference is raised on hgraph, and a workaround here is temporary and names its issue |
-| GCC 15 or later on Linux; no `manylinux` build | Owner | C++23 and its standard library are assumed |
+| GCC 15 or later on Linux, with no `manylinux` build; macOS too, and Windows later (2026-11-20) | Owner | C++23 and each platform's standard library are assumed: Linux builds with GCC 15 or later and libstdc++, macOS with Apple clang 21 or later and the system's libc++. What one of them lacks is written once in `libhglrt` and used on every platform, not chosen by platform: Apple's libc++ has no `<generator>`, so a source's body is an `hglrt::generator` |
 
 A trial transcription of four programs (scalar, keyed children, a struct with
 generic functions and a failure, a stateful `switch`) matched the Python
@@ -57,7 +57,7 @@ one executable for each test module or application
 | Graph | A function over `Wiring&` and typed ports, calling `wire<Node>`. Identical value nodes are interned by hgraph |
 | `if`, `switch`, `for` over connections | hgraph's `switch_` and `map_` wiring of compiled children (`types/subgraph_wiring.h`), each child a compiled sub-graph with its captures |
 | Lifted call | A generated node that calls the instance |
-| Source | A node with no input that schedules itself. The body is a C++23 coroutine (`std::generator` of a time and a payload) held in the node's state, made in `start` and destroyed in `stop`: `yield` inside loops and branches is written as it reads, with the body's locals in the coroutine's frame. A trial ran one on hgraph: the trace was right, a failure inside the body was the node's failure, and the frame was freed after a finished and after a failed run |
+| Source | A node with no input that schedules itself. The body is a C++23 coroutine, an `hglrt::generator` of a time and a payload (`<hglrt/generator.h>`: `std::generator`'s shape, written once for every platform because Apple clang 21's standard library has no `std::generator`), held in the node's state, made in `start` and destroyed in `stop`: `yield` inside loops and branches is written as it reads, with the body's locals in the coroutine's frame. A trial ran one on hgraph: the trace was right, a failure inside the body was the node's failure, and the frame was freed after a finished and after a failed run |
 | `ref` parameter and result | hgraph's `REF` input and output. Returning a whole `ref` parameter publishes the reference that input holds when the `return` runs, and no more: a `REF` output keeps what it was given, which is the specification's rule since hhenson/hgl_spec#147. Returning an ordinary input or a child of one designates that endpoint, which is followed through a re-binding: the node is active on that binding, publishes the new designation there and runs no handler for it (FN-16). A designation the result holds already is not published again (TIME-10) |
 | Failure | Thrown as hgraph's `ExecutionFailure` carrying `CanonicalError` (code, message, node, phase, time). `capture` is `try_except_node` with canonical errors. `assert raises` finds the failure in the exception it catches |
 | Test | Core's `replay` and `record` are compiled like any module. The compiler writes each eval's entry graph, runs the executor in simulation and reads the recording from the run's store |
@@ -79,13 +79,19 @@ C++ does not check what Rust would. Three rules stand in for it.
 
 ## Building and turnaround
 
-Measured on the trial, at `-O0`:
+Measured at `-O0` with GCC 15 on the SDK built without Arrow and
+`libhglrt` on hgraph's front end for generated code (in brackets: on the
+SDK with Arrow and `graph_wiring.h`, as before):
 
 | Step | Time |
 | --- | --- |
-| One unit against a precompiled header of hgraph's includes | 1.5 to 2.0 s, and about 0.1 s for each node |
-| Link with `lld` (GNU `ld`: 0.12 s) | 0.015 s |
-| Edit to result | 1.8 s |
+| The precompiled header of `<hglrt/hglrt.h>` | 5.0 s, 254 MB (6.0 s, 300 MB) |
+| A unit of nodes, graphs and an eval, against it | 1.55 s (1.75 s) |
+| The same unit with no precompiled header | 2.8 s (3.2 s) |
+| A module's unit of value functions and a test, against it; with none | 0.57 s (0.81 s); 1.48 s (2.27 s) |
+| A test executable's entry unit: `hglrt.h` against it; `host.h` alone, with none | 0.57 s (0.81 s); 0.06 s |
+| Edit to result, `hgl test --target cpp` of a small module | 0.65 s (0.95 s) |
+| Link with `lld` (GNU `ld`: 0.12 s), on the trial | 0.015 s |
 | Whole suite (about 135 modules), 12 jobs, estimated from the trial | 40 to 55 s (the Python target: about a minute) |
 | Whole suite on a four-core CI runner, estimated | about 100 s |
 
@@ -93,22 +99,22 @@ The driver keeps these by: one unit for each module; `libhglrt` and core's
 instances built once for an SDK; a precompiled header of the fixed include
 set; one executable for each test module with its cases chosen when it
 runs; `ninja` for what changed; `lld`. A rejection case never builds.
-hgraph's lighter front end for generated code (`types/generated.h`) is
-the cheapest further saving; the times above are measured without it.
+A unit with no precompiled header still takes about twice as long as one
+against it, so the header stays.
 
 ## What hgraph is asked for
 
-The SDK is hgraph 0.9.12. Nothing is asked of hgraph now. What was asked
+The SDK is hgraph 0.9.13. Nothing is asked of hgraph now. What was asked
 is in it, and each is taken up where the order of work reaches it:
 
 | Issue | In hgraph | Here |
 | --- | --- | --- |
 | [1833](https://github.com/hhenson/hgraph/issues/1833) | `switch_` and `map_` wiring of compiled children with no operator registration (`types/subgraph_wiring.h`) | The control-flow work wires with them; `libhglrt` carries no glue |
 | [1822](https://github.com/hhenson/hgraph/issues/1822), [1827](https://github.com/hhenson/hgraph/issues/1827) | The growing list's first empty publication and its validity, a shrink under a map or an index, invalidation emptying a collection, and tuple deltas | The collections work builds on the engine as it is; an adaptation is written only where a core case shows a difference, and names its issue |
-| [1848](https://github.com/hhenson/hgraph/issues/1848) | A generator that yields a time already past skips it and goes on | The source driver's own skip goes when its tests pass without it |
+| [1848](https://github.com/hhenson/hgraph/issues/1848) | A generator that yields a time already past skips it and goes on | That is hgraph's Python generator; a C++ node's `NodeScheduler` drops a wake at a past time, so the source driver of `libhglrt` keeps its own skip (SOURCE-3) |
 | [1834](https://github.com/hhenson/hgraph/issues/1834) | A C++ aggregate as a nominal bundle's whole value | A struct is written and read whole |
-| [1838](https://github.com/hhenson/hgraph/issues/1838) | A lighter front end for generated code (`types/generated.h`) | Generated units include it; the precompiled header stays only where it still pays |
-| [1839](https://github.com/hhenson/hgraph/issues/1839) | A runtime and wiring library without Arrow (`HGRAPH_WITH_ARROW=OFF`) | The SDK is to be built so, and Arrow leaves the dependency prefix |
+| [1838](https://github.com/hhenson/hgraph/issues/1838) | A lighter front end for generated code (`types/generated.h`) | `libhglrt`'s headers, and so generated units, include it; the precompiled header still pays |
+| [1839](https://github.com/hhenson/hgraph/issues/1839) | A runtime and wiring library without Arrow (`HGRAPH_WITH_ARROW=OFF`) | The SDK is built so: 14 MB where it was 54, its prefix fmt, spdlog and simdjson; a test of `libhglrt` fails where Arrow or hgraph's standard library is included or linked |
 | [1837](https://github.com/hhenson/hgraph/issues/1837), [1835](https://github.com/hhenson/hgraph/issues/1835), [1836](https://github.com/hhenson/hgraph/issues/1836) | `add_node` keeps a builder's own scalars; `try_except_<G>` takes options for canonical errors; a `tenor` scalar | In use |
 
 Nothing is asked on references: a `REF` output holds the reference it
@@ -116,6 +122,16 @@ was given, which is the specification's rule for a returned `ref`
 parameter. Where the pinned specification and hgraph differ, this target
 builds the specification's rule, and the difference goes to the
 specification's issue tracker to be decided there, not here.
+
+The scheduler is such a case (CAP-4), and `libhglrt` builds core's rule
+over hgraph's `NodeScheduler`, as the Python-writing target does: hgraph
+keeps the wake it delivers until the node has run, so in that evaluation
+it counts as pending, `un_schedule()` cancels it, and `is_scheduled_now`
+is false after `reset`; it keeps no wake under the empty tag; and it keeps
+a wall-clock wake at a time before the evaluation time for the next
+cycle. hgraph's alarm, which the target's is, drops a wake still to come
+where an input's tick evaluates the node first, which CAP-5's "best
+effort" admits.
 
 ## Progress and acceptance
 

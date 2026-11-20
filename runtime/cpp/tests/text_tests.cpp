@@ -33,9 +33,20 @@ TEST_CASE("text is repeated a count of times (OPS-1)") {
     CHECK(hglrt::mul__str_i64("ab", 1) == "ab");
     CHECK(hglrt::mul__str_i64("", std::numeric_limits<i64>::max()).empty());
     CHECK(hglrt::mul__str_i64("é", 3) == "ééé");
-    // Core's contract has no rule for a count below zero, or for text no
-    // string can hold: neither is an HGL failure.
-    CHECK_THROWS_AS((void)hglrt::mul__str_i64("ab", -1), std::domain_error);
+    // "a count below zero is an HGL error with code `numeric.out_of_range`",
+    // of empty text too, raised where it is called.
+    for (const str& text : {str{"ab"}, str{}}) {
+        for (const i64 count : {i64{-1}, std::numeric_limits<i64>::min()}) {
+            try {
+                (void)hglrt::mul__str_i64(text, count);
+                FAIL("nothing was raised");
+            } catch (const hglrt::Failure& failure) {
+                CHECK(failure.error().code == "numeric.out_of_range");
+                CHECK(std::string{failure.where().file_name()}.ends_with("text_tests.cpp"));
+            }
+        }
+    }
+    // Text no string can hold is no HGL failure.
     CHECK_THROWS_AS((void)hglrt::mul__str_i64("ab", std::numeric_limits<i64>::max()), std::length_error);
 }
 

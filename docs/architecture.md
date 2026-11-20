@@ -2214,7 +2214,11 @@ not have. It is
 a skeleton that the target's first step fills. It is built on hgraph's
 runtime and wiring libraries alone (`hgraph::runtime`, `hgraph::wiring`):
 `hgraph::core` would bring hgraph's standard library, which no generated
-code uses.
+code uses. Its headers take hgraph's front end for generated code,
+`<hgraph/types/generated.h>` (static nodes, `wire<Node>` with complete
+positional arguments, compiled children), and not `graph_wiring.h`, whose
+operator dispatch, named arguments and type resolution generated code does
+not use.
 
 | Header (`include/hglrt/`) | Holds | Rules |
 | --- | --- | --- |
@@ -2227,8 +2231,11 @@ code uses.
 | `text.h` | Core's natives of `str`: concatenation and repetition | OPS-1 |
 | `conversions.h` | Every `convert` of core's: those that cannot fail, and those that can under `invalid`; core's `Rounding` and `InvalidPolicy` | OPS-4, OPS-6 to OPS-8 |
 | `tenors.h` | Core's natives of `tenor`, which is hgraph's `Tenor` (counts and form alone): its arithmetic, order and text, and the parts core's calendar candidates use, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-9 |
-| `lists.h`, `capabilities.h` | `append`, `extend`; the global store's `get`, `has`, `put` | LIST-1 to LIST-3, CAP-6 |
+| `lists.h` | `append`, `extend` | LIST-1 to LIST-3 |
+| `endpoints.h` | Core's nine operations on an endpoint, each a template over the hgraph view it is given; `delta_value` plain and where a `result` is taken (`fn_delta_value_checked`); `endpoint_read`, through which a temporal form says how its delta is read, a scalar's and a nullable scalar's written | TIME-9, END-1 to END-10, ERR-14 |
+| `capabilities.h` | `Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`, each made from its hook's hgraph view, a member function for each property; `log`, `schedule` four ways, `un_schedule`, `reset`, the store's `get`, `has`, `put`; core's `LogLevel` | CAP-1 to CAP-6, TIME-8 |
 | `sources.h` | `constant`, a node that publishes a value once at the start; `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
+| `generator.h` | `generator<T>`, the coroutine type of a source's body: `std::generator<T>`'s shape for a value type (a move-only view whose input iterator resumes the body to its next `co_yield`, and throws again what it lets out), which not every standard library has | SOURCE-1 |
 | `host.h` | What the entry unit of a test executable needs, and no hgraph header: registration and `main`, which holds a test to its time limit | TST-14, TST-15, TST-17 |
 | `traces.h` | Traces, dense and timed, of scalars, nullables, tuples and lists, each cell whole or a delta; their comparison and where two first differ; replay items and what a `const fn` is given; the text of a value | TST-4 to TST-7, TST-9, TST-16, CEVAL-2 |
 | `testing.h` | The rest of the test host: `check`, `raises`, `expect_same`, a run in simulation or in real time, its recording, and the values its result held | TST-2 to TST-11, TST-17, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
@@ -2256,6 +2263,19 @@ time-zone provider for the process, as hgraph's own codecs do: a value
 function is given no run's store, which a provider of the run's would be
 in.
 
+An endpoint operation is given the view the hook has, `In<"price",
+TS<i64>>`, `Out<TS<i64>>` or a child of one, and is named as an exported
+native is, `fn_valid`. A capability is made at the top of the hook that
+injects it, once, from the view hgraph gives that hook:
+`hglrt::Scheduler scheduler{view, hglrt::Hook::evaluation}`. The
+scheduler made in an evaluation takes the wakes due then from hgraph's
+`NodeScheduler`, which keeps them until the node has run, so that what
+is pending is what is still to come and `is_scheduled_now` stays true
+after `un_schedule` or `reset` (CAP-4); a tag goes to hgraph after a mark,
+since hgraph keeps no wake under the empty tag. An evaluation with no wake
+due and no input modified is no wake: hgraph evaluates the node at a
+wake that was cancelled. The alarm is hgraph's `SingleShotScheduler`.
+
 A list is `hglrt::list<T>` and not a bare `std::vector<T>` because hgraph
 hashes a value it holds as configuration, a source's items, through
 `std::hash`, which no program may give a `std::vector`.
@@ -2269,9 +2289,9 @@ last statement the test marked with `statement()`. A test held to a time
 limit (TST-17) is named `NAME@MICROSECONDS`: it runs on a thread of its
 own, and at its limit its runs are asked to stop, as a host stops a run in
 real time, and it has failed; one that has not ended five seconds later
-ends the process, with the status 3. Its entry unit includes `host.h`
+ends the process, with the status 3. Its entry unit can include `host.h`
 alone, which compiles in 0.06 s where `hglrt.h` through the precompiled
-header takes 0.86 s (GCC 15, `-O0`).
+header takes 0.57 s (GCC 15, `-O0`).
 
 Built with CMake, once for each SDK. A build is given:
 
@@ -2282,7 +2302,7 @@ Built with CMake, once for each SDK. A build is given:
 | `BUILD_TESTING` | The unit tests (default on) |
 | `HGLRT_SANITIZE` | The library and its tests under the address and undefined-behaviour sanitizers, which what links it inherits (default off) |
 
-and gives `libhglrt.so`, the target `hglrt::hglrt`, and a CMake package of
+and gives `libhglrt.so` (`libhglrt.dylib` on macOS), the target `hglrt::hglrt`, and a CMake package of
 it (`-Dhglrt_DIR=` the build directory, or its install prefix). The unit
 tests use [doctest](https://github.com/doctest/doctest): hgraph's own use
 Catch2, which its SDK does not install, and doctest is the smallest
@@ -2293,24 +2313,44 @@ release is fetched. The library's own C++ is built with `-Wall -Wextra
 #### The SDK
 
 `scripts/provision-hgraph-sdk.sh TAG DIR` builds hgraph's shared C++ SDK
-at the tag `TAG` and installs it into `DIR`, as hgraph's CI job
-`native-shared-install` builds it: Release, shared libraries, no Python,
-against the dependency prefix `HGL_HGRAPH_DEPS`. It differs from that job
-in leaving out hgraph's tests and extensions, and in giving the SDK's
-libraries the prefix's library directory as their run path, where that job
-sets `LD_LIBRARY_PATH`. Where the prefix does not exist the script makes it
-with micromamba from conda-forge, with the packages hgraph's job installs
-(Arrow 25 with Compute and Acero, fmt, spdlog, simdjson, CMake, Ninja), at
-fixed versions. The compiler is the caller's: GCC 15 or later. The SDK is
-54 MB; its runtime library needs `libarrow` at run time, though no
-generated code includes an Arrow header
-([hgraph 1839](https://github.com/hhenson/hgraph/issues/1839)).
+at the tag `TAG`, 0.9.12 or later, and installs it into `DIR`, as hgraph's
+CI builds its runtime without Arrow: Release, shared libraries,
+`HGRAPH_WITH_ARROW=OFF` ([hgraph 1839](https://github.com/hhenson/hgraph/issues/1839)),
+which leaves out Frame, Series, the table codecs, the standard library,
+Python and the extensions, against the dependency prefix
+`HGL_HGRAPH_DEPS`. Arrow's packages are kept from being found, and the
+date/tz library is always hgraph's own pinned release, fetched and built
+into its runtime library, so that what the SDK is does not turn on what
+else a prefix holds. The SDK's libraries are given the prefix's library
+directory as their run path. Where the prefix does not exist the script
+makes it with micromamba from conda-forge: fmt, spdlog and simdjson, with
+CMake and Ninja, at fixed versions, with micromamba given a home directory
+of its own, so that nothing outside the prefix and a temporary directory
+is written. The compiler is the caller's: GCC 15 or later on Linux, Apple
+clang 21 or later on macOS (`clang++`, the default there); the script runs
+under macOS's own bash 3.2. `DIR/hgl-sdk.txt` says the tag, its commit,
+`arrow=off`, the compiler and the prefix; an SDK of the tag built
+otherwise is not taken for one. The SDK is 14 MB (54 MB with Arrow), and
+its runtime and wiring libraries need fmt and spdlog alone; it builds in
+28 to 33 s with 12 jobs here (77 s with Arrow). On a macOS machine (Apple
+Silicon, Apple clang 21) it is 12 MB and builds in 34 s with 12 jobs, 56 s
+with the prefix made and hgraph cloned. On macOS conda-forge's fmt,
+spdlog and simdjson bring conda-forge's own libc++ into a process beside
+the system's, which the SDK and everything built against it link; it
+re-exports the system's libc++abi, so exceptions and type information
+have one runtime, and an exception thrown in fmt is caught by type
+elsewhere.
 
 CI's job `cpp` makes the prefix and the SDK with the script and caches
 both with `actions/cache`, under a key of the tag, the script and the
 runner's image, so that a run with that key builds neither. It then builds
 `runtime/cpp` and runs its unit tests, and does both again under the
-sanitizers. It runs on GitHub's Ubuntu 26.04 image, whose GCC 15.2 is
+sanitizers. The test `hglrt_takes_no_stdlib` fails where the library takes
+anything of hgraph's standard library or of Arrow: a header of either that
+the public headers bring in at any depth (their include set, preprocessed),
+a source that includes one, or a library that `libhglrt`, its tests or
+hgraph's runtime and wiring libraries need, read with `readelf` (with
+`otool -L` on macOS); an SDK built with Arrow fails it. It runs on GitHub's Ubuntu 26.04 image, whose GCC 15.2 is
 Ubuntu's own: nothing is installed for it, it is the compiler a developer
 on that release has, and neither a container (which the cache and the
 checkout would run inside) nor a compiler in the conda prefix (which adds
@@ -2399,8 +2439,8 @@ The C++ target's runtime library, `runtime/cpp`:
 | Dependency | For |
 | --- | --- |
 | hgraph's C++ SDK, its runtime and wiring libraries | the graph, node, type and runtime layers the library and generated code are built on |
-| Arrow 25 with Compute and Acero, fmt, spdlog, simdjson, date | hgraph's own dependencies: fmt's and spdlog's headers are in hgraph's, and its runtime library needs Arrow when it runs |
-| GCC 15 or later | C++23, and the libstdc++ the SDK links |
+| fmt, spdlog, simdjson | hgraph's own dependencies without Arrow: fmt's and spdlog's headers are in hgraph's, and its runtime library needs both when it runs. Its date/tz library is its own pinned release, built into it |
+| GCC 15 or later on Linux, Apple clang 21 or later on macOS | C++23, and the standard library the SDK links: libstdc++, or the system's libc++ |
 | CMake, Ninja | building the SDK and the library |
 | micromamba, conda-forge | making the dependency prefix where there is none |
 | doctest | the library's unit tests |
