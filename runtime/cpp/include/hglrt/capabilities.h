@@ -1,28 +1,246 @@
-// Core's native capability operations (`hgl/native/capabilities.hgl`), the
-// ones of the global store (CAP-6): `get`, `has` and `put`, over hgraph's
-// `GlobalStateView`, the store of the run a node is in.
+// Core's capabilities (`hgl/native/capabilities.hgl`; core's CAP-1 to
+// CAP-6, the language's TIME-8): the native types `Logger`, `Clock`,
+// `Scheduler`, `Alarm` and `GlobalState`, and the native operations on them.
 //
-// CAP-6: "The global store is a run-wide store of ordinary values under
-// string keys ... `get<V>(global_state, key)` is the value under `key`, of
-// the type the call writes or its place expects; an absent key fails the
-// node. `has(global_state, key)` is whether the key holds a value.
-// `put(global_state, key, value)` puts one there. A key keeps the type of its
-// first value: a `put` of another type is rejected where the two are in one
-// program, and fails otherwise. Reading or writing the store wakes no node."
-// The catalogue has no code for either failure, so each has none.
+// CAP-1: "Each capability but `out` has a native type of core's module ...
+// Core constructs none in HGL. A property is read as an ordinary value and is
+// not assigned." Each type here is made from the hgraph view a node's hook
+// is given for it, which the generated code declares as a parameter of the
+// hook and makes the type from at the top of the hook, once:
+//
+//   | HGL         | made from                                       |
+//   | ----------- | ----------------------------------------------- |
+//   | Logger      | `hgraph::LoggerView`                            |
+//   | Clock       | `hgraph::EvaluationClockView`                   |
+//   | Scheduler   | `hgraph::NodeScheduler` and the hook (`Hook`)   |
+//   | Alarm       | `hgraph::SingleShotScheduler` and the hook      |
+//   | GlobalState | `hgraph::GlobalStateView`, of a node's hook or  |
+//   |             | of a graph's `Wiring::global_state()` (FN-9)    |
+//
+// Each property core declares is a `const` member function of its name,
+// `clock.evaluation_time()`. A capability is not retained (TIME-8): each
+// type borrows its view, and lives no longer than the hook it is made in.
+// The operations are named as the compiler names a native: an exported one
+// `fn_` and its name (`fn_log`), a candidate of an operator its name and the
+// types of its parameters (`schedule_Alarm_duration`).
 #pragma once
 
 #include <hglrt/failure.h>
 #include <hglrt/values.h>
 
 #include <hgraph/runtime/global_state.h>
+#include <hgraph/types/generated.h>
 #include <hgraph/types/value/value.h>
 
+#include <optional>
 #include <source_location>
 #include <string>
 #include <string_view>
 
 namespace hglrt {
+
+/// The hook a capability is used in (TIME-5): what may be asked of a
+/// scheduler or an alarm depends on it (TIME-8: "A wake asked for with a
+/// `duration` takes one more than zero, but in `start`, which takes zero
+/// too").
+enum class Hook { start, evaluation, stop };
+
+// ---- The logger (CAP-2) ------------------------------------------------------
+
+/// Core's `LogLevel`, its members in core's order (CAP-2: "`debug`, `info`,
+/// `warning`, or `error`").
+enum class LogLevel { debug, info, warning, error };
+
+/// `Logger` (CAP-2), what `inject logger` binds: the run's logger, as the
+/// hook's `hgraph::LoggerView` gives it.
+class Logger {
+  public:
+    explicit Logger(hgraph::LoggerView view) noexcept : view_(view) {}
+
+    /// `logger.level` (CAP-2: "the logger's current level"): the least level
+    /// a record must be at to be written. hgraph's trace level is below
+    /// `debug`, and is `debug`; its levels above `error`, and a logger that
+    /// writes nothing, are `error`.
+    [[nodiscard]] LogLevel level() const noexcept;
+
+    /// The hgraph view it is made from.
+    [[nodiscard]] const hgraph::LoggerView& view() const noexcept { return view_; }
+
+  private:
+    hgraph::LoggerView view_;
+};
+
+/// `log(logger: Logger, level: LogLevel, message: str)` (CAP-2): "writes one
+/// record of `message` at `level`", through hgraph's logger, as it is: a
+/// brace in it is text. A record below the logger's level is dropped.
+void fn_log(const Logger& logger, LogLevel level, std::string_view message);
+
+// ---- The clock (CAP-3) -------------------------------------------------------
+
+/// `Clock` (CAP-3), what `inject clock` binds: the engine's clock, as the
+/// hook's `hgraph::EvaluationClockView` gives it. "It has no operation."
+class Clock {
+  public:
+    explicit Clock(hgraph::EvaluationClockView view) noexcept : view_(view) {}
+
+    /// `clock.evaluation_time`: the time of the current cycle. In `start`
+    /// it is the run's start time, and in `stop` the last cycle's.
+    [[nodiscard]] datetime evaluation_time() const noexcept { return view_.evaluation_time(); }
+    /// `clock.now`: the engine's estimate of the wall clock's time.
+    [[nodiscard]] datetime now() const noexcept { return view_.now(); }
+    /// `clock.cycle_time`: the time spent in the current cycle so far.
+    [[nodiscard]] duration cycle_time() const noexcept { return view_.cycle_time(); }
+    /// `clock.next_cycle_evaluation_time`: the earliest time a cycle after
+    /// this one could have.
+    [[nodiscard]] datetime next_cycle_evaluation_time() const noexcept {
+        return view_.next_cycle_evaluation_time();
+    }
+
+    /// The hgraph view it is made from.
+    [[nodiscard]] const hgraph::EvaluationClockView& view() const noexcept { return view_; }
+
+  private:
+    hgraph::EvaluationClockView view_;
+};
+
+// ---- The scheduler (CAP-4) ---------------------------------------------------
+
+/// `Scheduler` (CAP-4), what `inject scheduler` binds: the node's own
+/// scheduler, hgraph's `NodeScheduler`, in the hook `hook`.
+///
+/// CAP-4 has a wake pending until it is delivered: `is_scheduled` is "True
+/// while a wake is pending". hgraph keeps the wake it delivers until the
+/// node has run, so that in the node's own evaluation it would still be the
+/// earliest: `un_schedule` would cancel it, `is_scheduled` count it and
+/// `next_scheduled_time` give the current time. So a scheduler made in an
+/// evaluation takes every wake due then as it is made, and keeps that one
+/// was due: `is_scheduled_now` "stays true for the rest of that evaluation
+/// after `un_schedule` or `reset` in it" (CAP-4, TIME-9). hgraph re-arms
+/// the node for what is still pending once it has run, as it does after
+/// every wake. The Python-writing target's scheduler does the same.
+///
+/// hgraph marks the node for the earliest wake asked of it, and a wake
+/// cancelled (`un_schedule`, `reset`) or replaced under its tag leaves the
+/// mark: the node is evaluated then with no wake due and, but where an
+/// input ticks then too, no input modified. That evaluation is no wake
+/// (TIME-3: "A wake by the scheduler or alarm wakes the handlers ..."), so
+/// the generated code runs no handler in it.
+class Scheduler {
+  public:
+    Scheduler(hgraph::NodeScheduler view, Hook hook);
+
+    /// `scheduler.next_scheduled_time` (CAP-4): the time of the earliest
+    /// pending wake, and null with none.
+    [[nodiscard]] std::optional<datetime> next_scheduled_time() const noexcept;
+    /// `scheduler.is_scheduled` (CAP-4): whether a wake is pending.
+    [[nodiscard]] bool is_scheduled() const noexcept { return view_.is_scheduled(); }
+    /// `scheduler.is_scheduled_now` (CAP-4): "whether a wake asked of the
+    /// scheduler is due in the current evaluation, whether or not an input
+    /// has ticked in it", which the language's `scheduled()` is (TIME-9). In
+    /// `start` and `stop`, which are no evaluation, whether a wake is due at
+    /// the hook's time, as hgraph has it: in `start`, one asked for with
+    /// `0s` is.
+    [[nodiscard]] bool is_scheduled_now() const noexcept;
+
+    /// The hgraph scheduler it is made from.
+    [[nodiscard]] const hgraph::NodeScheduler& view() const noexcept { return view_; }
+    /// The hook it is used in.
+    [[nodiscard]] Hook hook() const noexcept { return hook_; }
+
+  private:
+    hgraph::NodeScheduler view_;
+    Hook hook_;
+    bool due_now_ = false;
+};
+
+/// `schedule(capability: Scheduler, at: duration, tag: str? = null,
+/// on_wall_clock: bool = false)` (CAP-4): asks for a wake `at` after the
+/// current evaluation time, on the engine's clock or, where `on_wall_clock`
+/// is true and the engine runs in real time, after the wall clock's time,
+/// as hgraph counts one. TIME-8: "A wake asked for with a `duration` takes
+/// one more than zero, but in `start`, which takes zero too ... A duration
+/// that is not admitted, a negative one in `start` included, ... fails the
+/// call as the program runs, with `schedule.non_positive_duration`". A wake
+/// asked for under a tag replaces the pending wake of that tag. A tag is
+/// any text, the empty one included: null is no tag (CAP-4: "a `str?` that
+/// is null when omitted"), and hgraph keeps no wake under the empty tag, so
+/// each is given to hgraph after a mark of its own.
+void schedule_Scheduler_duration_str__bool(const Scheduler& capability, duration at,
+                                           const std::optional<str>& tag = std::nullopt,
+                                           bool on_wall_clock = false,
+                                           std::source_location where = std::source_location::current());
+
+/// `schedule(capability: Scheduler, at: datetime, tag: str? = null,
+/// on_wall_clock: bool = false)` (CAP-4): asks for a wake at `at`. "One
+/// asked for at a `datetime` before the current evaluation time is
+/// dropped: there is no wake, and no failure", on either clock. One at the
+/// current evaluation time is a wake at the start in `start`, and is
+/// dropped in an evaluation, where no cycle can still run then (CRUN-3), as
+/// hgraph drops it.
+void schedule_Scheduler_datetime_str__bool(const Scheduler& capability, datetime at,
+                                           const std::optional<str>& tag = std::nullopt,
+                                           bool on_wall_clock = false);
+
+/// `un_schedule(scheduler: Scheduler, tag: str? = null)` (CAP-4): "cancel a
+/// pending wake": with no tag the earliest, with one the wake asked for
+/// under it, where there is one.
+void fn_un_schedule(const Scheduler& scheduler, const std::optional<str>& tag = std::nullopt);
+
+/// `reset(scheduler: Scheduler)` (CAP-4): cancels every pending wake.
+void fn_reset(const Scheduler& scheduler);
+
+// ---- The alarm (CAP-5) -------------------------------------------------------
+
+/// `Alarm` (CAP-5), what `inject alarm` binds: "a cheaper scheduler: best
+/// effort, with nothing tracked, moved, or cancelled", hgraph's
+/// `SingleShotScheduler`, in the hook `hook`. It has no property. Each wake
+/// asked of it marks the node to be evaluated then, and "asking again keeps
+/// the earliest". It is best effort as hgraph's is: an evaluation of the
+/// node before its wake, at an input's tick, takes the place of that wake,
+/// which does not come unless it is asked for again.
+class Alarm {
+  public:
+    Alarm(hgraph::SingleShotScheduler view, Hook hook) noexcept : view_(view), hook_(hook) {}
+
+    /// The hgraph scheduler it is made from.
+    [[nodiscard]] const hgraph::SingleShotScheduler& view() const noexcept { return view_; }
+    /// The hook it is used in.
+    [[nodiscard]] Hook hook() const noexcept { return hook_; }
+
+  private:
+    hgraph::SingleShotScheduler view_;
+    Hook hook_;
+};
+
+/// `schedule(capability: Alarm, at: duration)` (CAP-5): asks for a wake `at`
+/// after the current evaluation time. "What may be asked of it is what
+/// CAP-4 says may be asked of the scheduler, alike: a `duration` more than
+/// zero, or zero in `start`"; another fails with
+/// `schedule.non_positive_duration` (TIME-8).
+void schedule_Alarm_duration(const Alarm& capability, duration at,
+                             std::source_location where = std::source_location::current());
+
+/// `schedule(capability: Alarm, at: datetime)` (CAP-5): asks for a wake at
+/// `at`; "a `datetime` before the current evaluation time is dropped", and
+/// one at it as the scheduler drops one.
+void schedule_Alarm_datetime(const Alarm& capability, datetime at);
+
+// ---- The global store (CAP-6) ------------------------------------------------
+
+/// `GlobalState` (CAP-6), what `inject global_state` binds: the run's store,
+/// "a run-wide store of ordinary values under string keys", as hgraph's
+/// `GlobalStateView` gives it to a node's hook and, where a graph is built,
+/// to its wiring (FN-9). It has no property.
+class GlobalState {
+  public:
+    explicit GlobalState(hgraph::GlobalStateView view) noexcept : view_(view) {}
+
+    /// The hgraph view it is made from.
+    [[nodiscard]] const hgraph::GlobalStateView& view() const noexcept { return view_; }
+
+  private:
+    hgraph::GlobalStateView view_;
+};
 
 namespace detail {
 /// Fails a read of the store under `key`, which holds nothing.
@@ -32,20 +250,28 @@ namespace detail {
 [[noreturn]] void store_type(std::string_view key, std::source_location where);
 } // namespace detail
 
+// CAP-6: "`get<V>(global_state, key)` is the value under `key`, of the type
+// the call writes or its place expects; an absent key fails the node.
+// `has(global_state, key)` is whether the key holds a value.
+// `put(global_state, key, value)` puts one there. A key keeps the type of its
+// first value: a `put` of another type is rejected where the two are in one
+// program, and fails otherwise. Reading or writing the store wakes no node."
+// The catalogue has no code for either failure, so each has none.
+
 /// `has(store: GlobalState, const key: str) -> bool`: whether `key` holds a
 /// value (CAP-6).
-bool has_GlobalState_str(hgraph::GlobalStateView store, std::string_view key);
+bool has_GlobalState_str(const GlobalState& store, std::string_view key);
 
 /// `get<V>(store: GlobalState, const key: str) -> V`: a copy of the value
 /// under `key`, which is of the type `V` the call gives (CAP-6). An absent
 /// key fails, and so does a value of another type.
 template <class V>
-V get_GlobalState_str(hgraph::GlobalStateView store, std::string_view key,
+V get_GlobalState_str(const GlobalState& store, std::string_view key,
                       std::source_location where = std::source_location::current()) {
-    if (!store.contains(key)) {
+    if (!store.view().contains(key)) {
         detail::store_missing(key, where);
     }
-    const V* held = store.get(key).template try_as<V>();
+    const V* held = store.view().get(key).template try_as<V>();
     if (held == nullptr) {
         detail::store_type(key, where);
     }
@@ -55,14 +281,14 @@ V get_GlobalState_str(hgraph::GlobalStateView store, std::string_view key,
 /// `put<V>(store: GlobalState, const key: str, value: V)`: puts a copy of
 /// `value` under `key`, which keeps the type of its first value (CAP-6).
 template <class V>
-void put_GlobalState_str_V(hgraph::GlobalStateView store, std::string_view key, const V& value,
+void put_GlobalState_str_V(const GlobalState& store, std::string_view key, const V& value,
                            std::source_location where = std::source_location::current()) {
-    if (store.contains(key) && store.get(key).template try_as<V>() == nullptr) {
+    if (store.view().contains(key) && store.view().get(key).template try_as<V>() == nullptr) {
         detail::store_type(key, where);
     }
     // hgraph holds a value of a type it has a schema for.
     (void)hgraph::scalar_descriptor<V>::value_meta();
-    store.set(key, hgraph::Value{value});
+    store.view().set(key, hgraph::Value{value});
 }
 
 } // namespace hglrt

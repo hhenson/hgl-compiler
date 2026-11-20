@@ -39,7 +39,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_CXX_COMPILER_VERSION VE
         "libhglrt needs Apple clang 21 or later; ${CMAKE_CXX_COMPILER} is Apple clang ${CMAKE_CXX_COMPILER_VERSION}")
 endif()
 
-# hgraph's package finds Arrow, fmt, spdlog and simdjson in the dependency
+# hgraph's package finds fmt, spdlog and simdjson in the dependency
 # prefix, and would fetch a missing one: none may be missing.
 list(PREPEND CMAKE_PREFIX_PATH "${HGL_HGRAPH_SDK}" "${HGL_HGRAPH_DEPS}")
 set(HGRAPH_FETCH_MISSING_DEPENDENCIES OFF CACHE BOOL "hgraph's dependencies come from HGL_HGRAPH_DEPS")
@@ -123,9 +123,11 @@ if(BUILD_TESTING)
         tests/capabilities_tests.cpp
         tests/checked_tests.cpp
         tests/conversion_tests.cpp
+        tests/endpoint_tests.cpp
         tests/failure_tests.cpp
         tests/generator_tests.cpp
         tests/scalar_tests.cpp
+        tests/scheduler_tests.cpp
         tests/sources_tests.cpp
         tests/temporal_tests.cpp
         tests/tenor_tests.cpp
