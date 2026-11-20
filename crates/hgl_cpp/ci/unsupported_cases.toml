@@ -172,6 +172,7 @@
     "conformance::switching_keys_follows_the_new_child",
     "conformance::the_first_node_to_start_is_the_last_to_stop",
     "conformance::the_last_write_decides_validity",
+    "conformance::the_wall_clock_option_changes_nothing_in_simulation",
     "conformance::two_counters_in_one_graph_keep_separate_state",
     "conformance::two_inputs_wake_their_consumer_once",
     "conformance::two_instances_start_with_independent_cache_lists",

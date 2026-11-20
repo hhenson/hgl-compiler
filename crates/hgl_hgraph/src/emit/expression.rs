@@ -267,8 +267,10 @@ impl Emitter<'_> {
             // none. Of those that tick, only a window of a duration has a
             // tick with no delta": of a direct input or `out` of any
             // other type it is `ok` of the delta read as a plain one is
-            // where the endpoint is modified, core's `record` among them,
-            // and that `err` elsewhere. A child's, a window of a
+            // where the endpoint published, modified and valid as
+            // `modified` is written (hgraph marks modified the cycle that
+            // invalidates an input), core's `record` among them, and that
+            // `err` elsewhere. A child's, a window of a
             // duration's, one that holds such a window, and core's
             // `removed_value` are reported.
             ExprKind::CheckedDelta(read) => {
@@ -296,7 +298,8 @@ impl Emitter<'_> {
                 let read = self.expression(function, read);
                 self.natives = true;
                 format!(
-                    "(_core.Ok({read}) if {input}.modified else _core.Err(_core.Error(\
+                    "(_core.Ok({read}) if ({input}.modified and {input}.valid) else \
+                     _core.Err(_core.Error(\
                      \"the endpoint has not ticked in the cycle\", code=\"value.unset_read\")))"
                 )
             }

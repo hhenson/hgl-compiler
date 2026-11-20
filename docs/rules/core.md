@@ -493,6 +493,7 @@ transpiler: partial
 - `schedule` with a `duration` or a `datetime`, a tag and `on_wall_clock`, `un_schedule` with a tag or without, and `reset` are hgraph's; a tag is kept with a mark before it, so the empty tag is a tag
 - A wake asked for at a `datetime` before the current evaluation time is dropped, with no failure; a zero duration in `start` wakes the node's first evaluation
 - A duration not more than zero, but a zero in `start`, fails the call with `schedule.non_positive_duration` where the compiler does not see it (TIME-8, `_starting=`): hgraph 0.9.8 drops a zero or negative duration asked for in an evaluation, and a negative one in `start`, with no failure
+- In simulation `on_wall_clock` changes nothing, the wake timed on evaluation time as hgraph times it, and core's case of it passes; in real time the wake is hgraph's on the wall clock, and that one already due comes in the next cycle is checked by no case
 - Left, reported: a duration that may be zero asked for in a value function given the scheduler (TIME-8)
 - Every node with no temporal input is given one that never wakes it, since hgraph takes no node without an input
 

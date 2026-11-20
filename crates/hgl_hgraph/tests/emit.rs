@@ -3865,7 +3865,7 @@ fn a_window_is_hgraphs_tsw() {
     core.assert_writes(&[
         format!("def _inst_replay__rolling_window_f64__3__1_(items: _py.object) -> {ticks}:"),
         format!("def _inst_record__rolling_window_f64__3__1_(input: {ticks}, "),
-        "        change = (_core.Ok(input.delta_value) if input.modified else \
+        "        change = (_core.Ok(input.delta_value) if (input.modified and input.valid) else \
          _core.Err(_core.Error(\"the endpoint has not ticked in the cycle\", \
          code=\"value.unset_read\")))\n"
             .to_string(),
