@@ -18,8 +18,9 @@ str add__str_str(const str& lhs, const str& rhs);
 /// the text repeated that many times, the empty text for a count of zero; a
 /// count below zero is an HGL error with code `numeric.out_of_range`." Core's
 /// HGL candidate takes the operands the other way round. A count whose text
-/// no string can hold is an internal fault of the library, an
-/// `std::length_error`, and no HGL failure (ERR-1).
+/// is longer than a string can be is an internal fault of the library, an
+/// `std::length_error`, and one whose text no memory holds is an
+/// `std::bad_alloc`: neither is an HGL failure (ERR-1).
 str mul__str_i64(const str& lhs, i64 rhs, std::source_location where = std::source_location::current());
 
 } // namespace hglrt

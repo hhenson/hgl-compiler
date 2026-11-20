@@ -95,6 +95,15 @@ f64 mul__i64_f64(i64 lhs, f64 rhs);
 /// template argument.
 enum class ZeroPolicy { ieee, nan, error, fail };
 
+/// The names of core's `ZeroPolicy` (values.h, `EnumNames`).
+constexpr EnumNames<ZeroPolicy, 4> hgl_enum(ZeroPolicy) noexcept {
+    return {"core::ZeroPolicy",
+            {{ZeroPolicy::ieee, "ieee"},
+             {ZeroPolicy::nan, "nan"},
+             {ZeroPolicy::error, "error"},
+             {ZeroPolicy::fail, "fail"}}};
+}
+
 namespace detail {
 /// What a division whose plain result is `T` gives under `zero`: under
 /// `.error`, `result<T, error>` (NUM-9), and otherwise `T`.
@@ -383,6 +392,15 @@ bool ge__T_T(const T& lhs, const T& rhs) {
 /// The members of core's enum `CmpResult` (OPS-3), in its order: what
 /// `<=>` gives.
 enum class CmpResult { less, equivalent, greater, unordered };
+
+/// The names of core's `CmpResult` (values.h, `EnumNames`).
+constexpr EnumNames<CmpResult, 4> hgl_enum(CmpResult) noexcept {
+    return {"core::CmpResult",
+            {{CmpResult::less, "less"},
+             {CmpResult::equivalent, "equivalent"},
+             {CmpResult::greater, "greater"},
+             {CmpResult::unordered, "unordered"}}};
+}
 
 /// `compare_<T>(lhs: T, rhs: T) -> CmpResult` (OPS-3, NUM-6): "A NaN operand
 /// yields `unordered`; equivalent numeric values, including opposite signed

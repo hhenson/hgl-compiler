@@ -6,6 +6,7 @@
 #include <array>
 #include <limits>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -20,6 +21,37 @@ struct Endpoint {
     [[nodiscard]] bool valid() const { return is_valid; }
     [[nodiscard]] hglrt::i64 value() const { return held; }
 };
+
+/// A list made for a read, which ends with the statement it is made in, as
+/// a call's result does: `names()[0]`.
+hglrt::list<hglrt::str> names() {
+    return {"a name long enough that its text is on the heap", "b"};
+}
+
+// `item` of a list that ends with its statement gives the element itself,
+// and not a reference into the list: a `const` reference the C++ target
+// binds to it (a `let`) keeps it. Of a list that outlives the read it gives
+// a reference, which an assignment writes through.
+using hglrt::i64;
+using hglrt::item;
+using hglrt::list;
+using hglrt::str;
+static_assert(std::is_same_v<decltype(item(std::declval<list<str>>(), i64{0})), str>);
+static_assert(std::is_same_v<decltype(item(std::declval<const list<str>>(), i64{0})), str>);
+static_assert(std::is_same_v<decltype(item(std::declval<std::array<str, 2>>(), i64{0})), str>);
+static_assert(std::is_same_v<decltype(item(std::declval<const std::array<str, 2>>(), i64{0})), str>);
+static_assert(std::is_same_v<decltype(item(std::declval<const list<str>&>(), i64{0})), const str&>);
+static_assert(std::is_same_v<decltype(item(std::declval<list<str>&>(), i64{0})), str&>);
+static_assert(std::is_same_v<decltype(item(std::declval<const std::array<str, 2>&>(), i64{0})), const str&>);
+static_assert(std::is_same_v<decltype(item(std::declval<std::array<str, 2>&>(), i64{0})), str&>);
+// A `list<bool>` is a `std::vector<bool>`, which holds bits: a read gives
+// the `bool` itself on every standard library, whatever proxy its vector's
+// `operator[]` gives, and a place the vector's own reference to its bit.
+static_assert(std::is_same_v<decltype(item(std::declval<const list<bool>&>(), i64{0})), bool>);
+static_assert(std::is_same_v<decltype(item(std::declval<list<bool>>(), i64{0})), bool>);
+static_assert(std::is_same_v<decltype(item(std::declval<const list<bool>>(), i64{0})), bool>);
+static_assert(
+    std::is_same_v<decltype(item(std::declval<list<bool>&>(), i64{0})), std::vector<bool>::reference>);
 
 } // namespace
 
@@ -89,4 +121,32 @@ TEST_CASE(
     CHECK(code_of([&] { hglrt::item(fixed, -1) = 0; }) == "value.index_out_of_range");
     const std::vector<hglrt::str> empty;
     CHECK(code_of([&] { (void)hglrt::item(empty, 0); }) == "value.index_out_of_range");
+}
+
+TEST_CASE("an element of a list that ends with its statement outlives it (EXPR-7)") {
+    // `let first = names()[0]`: under the address sanitizer a reference
+    // into the list would be read after the list is freed.
+    const auto& first = hglrt::item(names(), 0);
+    CHECK(first == "a name long enough that its text is on the heap");
+    const auto& last =
+        hglrt::item(std::array<hglrt::str, 2>{"x", "a second name long enough to be on the heap"}, 1);
+    CHECK(last == "a second name long enough to be on the heap");
+    // A list of bool's element, read and written.
+    hglrt::list<bool> flags{true, false};
+    const auto& read = hglrt::item(std::as_const(flags), 0);
+    CHECK(read);
+    hglrt::item(flags, 1) = true;
+    CHECK(flags == hglrt::list<bool>{true, true});
+    hglrt::item(flags, 0) = false;
+    CHECK(read);
+    CHECK_FALSE(hglrt::item(hglrt::list<bool>{false}, 0));
+    const hglrt::list<bool> fixed{true};
+    CHECK(hglrt::item(std::move(fixed), 0));
+    // Its index is checked as any other's.
+    try {
+        (void)hglrt::item(names(), 2);
+        FAIL("nothing was raised");
+    } catch (const hglrt::Failure& failure) {
+        CHECK(failure.error().code == "value.index_out_of_range");
+    }
 }
