@@ -112,6 +112,8 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
 | `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
 | A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
+| `inject global_state` in a graph, and `get`, `has`, `put` on it where the graph is built, once each, in the order written | FN-9, CAP-6, CRUN-7 |
+| An application: its statements setting the run's store before its run statement, in the order written; its run statement, `eval` in simulation and `run` in real time, with the entry's arguments and its `RunConfig` held in the order written; its entry unit and executable | UNIT-14, RUN-1, RUN-3, EXPR-2 |
 
 Not written yet, and reported: a call that gives a `var` parameter a
 place beside an argument that runs statements (FN-15), a `?` after
@@ -125,8 +127,8 @@ scalar, `ref` (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
 `all_valid`, `activate`, `passivate`, `scheduled()`, `if`, `switch` and
 `for` over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
 default or a null (FN-11), a source with declarations or hooks, an
-eval's configuration that is no `RunConfig(...)` written in it (RUN-1),
-an eval of a value function (TST-5), and an application.
+eval's or an application's configuration that is no `RunConfig(...)`
+written in it (RUN-1), and an eval of a value function (TST-5).
 
 ## The C++ target's runtime library
 
@@ -164,3 +166,4 @@ the chapters' entries stay the hgraph target's.
 | Tests registered by name and run as named, from an entry unit that includes no hgraph header; `assert`; `assert raises`; a test held to a time limit, failed once past it and its runs stopped | TST-2, TST-10, TST-11, TST-15, TST-17 | `host.h`, `testing.h` | `testing_tests.cpp` |
 | Traces of scalars, nullables, tuples and lists, written dense and timed, each cell whole or a delta; their comparison with an eval's recording and the values its result held, and where two first differ; what one written out replays to an input and gives a `const fn` | TST-4, TST-5, TST-6, TST-7, TST-9, TST-16, CEVAL-2, TYPE-16 | `traces.h`, `testing.h` | `traces_tests.cpp`, `testing_tests.cpp` |
 | A run's bounds, the run in simulation and in real time, its store and its recording; an eval and its failure | CRUN-1, CRUN-2, CRUN-3, CRUN-7, CRUN-8, CEVAL-1, CEVAL-4, CEVAL-5, CEVAL-6, RUN-3 | `testing.h` | `testing_tests.cpp`, `sources_tests.cpp` |
+| An application's run: its store set before its graph is built, its output as text; its host, from an entry unit that includes no hgraph header, writing what became of the run, and stopping a run in real time asked down standard input or by an interrupt, as at its end; a simulation asked to stop, and a second interrupt, ending at once | UNIT-14, RUN-1, RUN-3, RUN-4, CRUN-1, CRUN-6, CRUN-7, CRUN-8 | `application.h`, `application_host.h` | `application_tests.cpp` |
