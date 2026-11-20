@@ -5,7 +5,8 @@
 // core's native declarations written in C++ (scalar.h, temporal.h, text.h,
 // conversions.h, tenors.h, lists.h, endpoints.h, capabilities.h), HGL's failures
 // (failure.h), sets, dictionaries and what a struct tells the library
-// (collections.h), the reads checked when they run (checked.h), constants and
+// (collections.h), the temporal forms of a list and of a tuple
+// (list_endpoints.h), the reads checked when they run (checked.h), constants and
 // sources (sources.h) with the coroutine type of a source's body
 // (generator.h), and the test host (testing.h). It is built on
 // hgraph's runtime and wiring libraries alone: nothing of hgraph's standard
@@ -19,6 +20,7 @@
 #include <hglrt/endpoints.h>
 #include <hglrt/failure.h>
 #include <hglrt/generator.h>
+#include <hglrt/list_endpoints.h>
 #include <hglrt/lists.h>
 #include <hglrt/scalar.h>
 #include <hglrt/sources.h>

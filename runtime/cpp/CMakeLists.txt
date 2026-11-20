@@ -54,6 +54,7 @@ add_library(hglrt SHARED
     src/conversions.cpp
     src/failure.cpp
     src/host.cpp
+    src/list_endpoints.cpp
     src/scalar.cpp
     src/temporal.cpp
     src/tenors.cpp
@@ -128,6 +129,7 @@ if(BUILD_TESTING)
         tests/endpoint_tests.cpp
         tests/failure_tests.cpp
         tests/generator_tests.cpp
+        tests/list_endpoints_tests.cpp
         tests/scalar_tests.cpp
         tests/scheduler_tests.cpp
         tests/sources_tests.cpp
