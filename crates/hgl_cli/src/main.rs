@@ -34,6 +34,7 @@
 //! exits with status 1 and a diagnostic like any other rejection.
 
 mod check_json;
+mod native;
 mod replace;
 
 use std::collections::HashSet;
@@ -196,6 +197,10 @@ struct EmitArgs {
     #[arg(long, value_enum, default_value_t = Target::Hgraph)]
     target: Target,
 
+    /// Select native executable test roots by name. May be repeated.
+    #[arg(long = "test", value_name = "NAME")]
+    tests: Vec<String>,
+
     /// The directory to write into. It is made when it is not there,
     /// and a file already in it with a written file's name is replaced.
     #[arg(long, value_name = "DIR")]
@@ -294,6 +299,9 @@ fn chosen_application(program: &Program, named: Option<&str>) -> Result<String, 
 enum Target {
     /// Python wiring for hgraph.
     Hgraph,
+    /// Rust wiring and callbacks for the native HGraph engine.
+    #[value(alias = "hgraph_native")]
+    HgraphNative,
 }
 
 /// The path of core's module (UNIT-11).
@@ -806,7 +814,12 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
         println!("nothing written: the program is rejected");
         return report(&sources, diagnostics);
     }
+    if !arguments.tests.is_empty() && matches!(arguments.target, Target::Hgraph) {
+        eprintln!("hgl: emit --test selects native Rust workspace roots");
+        return ExitCode::from(EXIT_FAILED);
+    }
     let (name, files) = match arguments.target {
+        Target::HgraphNative => return native::status(native::emit(&program, &sources, arguments)),
         Target::Hgraph => (
             hgl_hgraph::TARGET,
             hgl_hgraph::transpile(&program, &mut diagnostics).files,
@@ -853,6 +866,7 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
 /// a field of the configuration; `replace` writes each into the run
 /// statement and the program is checked again.
 fn run(arguments: &RunArgs) -> ExitCode {
+    let started = std::time::Instant::now();
     let limits = arguments.limits.limits();
     let Parsed {
         mut sources,
@@ -868,7 +882,6 @@ fn run(arguments: &RunArgs) -> ExitCode {
         println!("not run: the program is rejected");
         return report(&sources, diagnostics);
     }
-    let Target::Hgraph = arguments.target;
     let chosen = match chosen_application(&program, arguments.application.as_deref()) {
         Ok(path) => path,
         Err(status) => return status,
@@ -971,6 +984,11 @@ fn run(arguments: &RunArgs) -> ExitCode {
             );
             return ExitCode::from(EXIT_REJECTED);
         }
+    }
+    if matches!(arguments.target, Target::HgraphNative) {
+        return native::status(native::application(
+            &program, &sources, arguments, &chosen, started,
+        ));
     }
     // What the target does not write yet is no error of the program:
     // it matters where the application needs it.
@@ -1101,14 +1119,20 @@ fn test(arguments: &TestArgs) -> ExitCode {
         integration: arguments.integration,
     };
     // The target the tests run on, and where it writes the program.
-    let mut on_hgraph = arguments.target.map(|Target::Hgraph| OnHgraph {
+    let mut python = OnHgraph {
         sources: &sources,
         python: interpreter(&arguments.python),
         keep: arguments.keep.as_deref(),
+    };
+    let mut native = native::Native {
+        sources: &sources,
+        keep: arguments.keep.as_deref(),
+        roots: &arguments.roots,
+    };
+    let executor: Option<&mut dyn Executor> = arguments.target.map(|target| match target {
+        Target::Hgraph => &mut python as &mut dyn Executor,
+        Target::HgraphNative => &mut native as &mut dyn Executor,
     });
-    let executor = on_hgraph
-        .as_mut()
-        .map(|executor| executor as &mut dyn Executor);
     let report = hgl_runner::run(&sources, &parsed, &front_end, &selection, executor);
 
     // TST-14: invalid metadata and errors in the surviving source stop

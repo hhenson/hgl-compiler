@@ -359,6 +359,10 @@ transpiler: partial
 - A dictionary or a set in a struct or a tuple that holds an unsized list is published as a node's delta of one is, by a node and by a source, the provider told where (`entries=`): an entry whose change names nothing, where it is valid, is left out
 - Left: a dictionary's or a set's assigned to an entry of `out`; an unsized list's delta inside a dictionary's or a list's delta, which is reported (TYPE-16)
 
+optimiser: partial
+
+- Scalar delta reads, whole scalar publications and single-key dictionary updates and removals are explicit. Other delta shapes remain.
+
 ## END-4
 
 transpiler: partial
@@ -558,6 +562,10 @@ transpiler: done
 
 - hgraph: present dense cells and timed pairs give replay one entry per publication at its absolute instant
 - A placeholder adds no entry and an empty replay schedules nothing.
+
+optimiser: partial
+
+- Dense scalar inputs lower to typed replay events at their original offsets. Timed test inputs and collection replays remain.
 
 ## CEVAL-3
 

@@ -57,6 +57,10 @@ transpiler: partial
 - `modified([])` read as a bool is `True` in the body of a handler whose header selects it, at a wake that lands with an input's tick too; elsewhere, in another body or under a negation or a disjunction, it is that no temporal input is modified as `modified(input)` asks it, `(not ((a.modified and a.valid) or ...))`, so an invalidation is none and a `ref` parameter is modified where its designation changed, and `True` in a node with no input
 - Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])` in `start` or `stop`, which are no cycle of the node, and is reported; `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
 
+optimiser: partial
+
+- A single default or explicit modified-input handler carries its analysed validity and subscription masks. Multiple handlers and scheduler conditions remain.
+
 ## TIME-4
 
 analyser: partial

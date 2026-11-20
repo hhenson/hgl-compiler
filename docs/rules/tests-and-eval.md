@@ -91,6 +91,10 @@ runner: planned
 
 - Dense traces: positions, `_` placeholders, a result ending at its last publication
 
+optimiser: partial
+
+- Dense scalar trace assertions lower to exact offset/value pairs. Other payloads remain.
+
 ## TST-7
 
 analyser: partial

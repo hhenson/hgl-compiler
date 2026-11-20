@@ -1,7 +1,6 @@
 # Architecture
 
-Status: the lexer, the parser, the analyser, the test runner and the
-hgraph transpiler are implemented, the last three in part:
+The compiler includes the lexer, parser, analyser, shared graph lowering, test runner and two HGraph emitters.
 [rules.md](rules.md) says what each leaves. Everything marked *planned* is
 a plan, not a contract; it changes as stages are built.
 
@@ -15,11 +14,18 @@ tokens
 syntax tree ---------> formatter (planned) ---------> source text
     |  hgl_analyser
 analysed program ----> error reporting (`check`)
-    |  optimiser (planned)
-analysed program
-    |  one transpiler per target (`hgl_hgraph`)
+    |  hgl_lower (shared scalar and keyed graph lowering)
+lowered program
+    |  one transpiler per target
 target output
 ```
+
+The Python and Rust emitters consume the same graph and callback operations for
+supported scalar and keyed evaluations. Python retains its analysed-program
+emitter for other declarations. Golden fixtures exercise the lowering directly.
+The native driver emits a Cargo workspace, builds it, and launches the resulting
+executable after a successful build.
+[Native backend plan](hgraph-native.md#lower-once-for-both-targets)
 
 Rules for every stage:
 
@@ -42,10 +48,14 @@ Rules for every stage:
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases handed to a target to run |
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit`, `hgl run` |
 | formatter | Syntax tree to source text | planned |
-| optimiser | Analysed program to analysed program | planned |
-| `hgl_hgraph` | The hgraph target: the analysed program to Python wiring, and its tests run on a Python that has hgraph | in part: see "hgraph" below |
+| `hgl_lower` | Analysed program to a target-independent lowered program | shared input for the scalar and keyed slices |
+| `hgl_hgraph` | Python wiring for HGraph | shared lowering for supported roots and the existing analysed-program path for other forms |
+| `hgraph_native` | Rust wiring for HGraph | application and node library for the scalar and keyed slices |
 
-A crate is created when its stage is built, not before.
+The `hgraph_native` transpiler writes a Rust application and node library from
+`hgl_lower`. Cargo builds the generated workspace. The standalone
+`runtime/hgraph_native` facade links to an installed C bridge or uses CMake
+to build it against HGraph’s prepared-builder SDK.
 [rules.md](rules.md) lists each rule of the specification against the stage
 that implements it.
 
@@ -1491,8 +1501,8 @@ names one (LEX-12, LEX-25):
 
 ## Transpilers
 
-A transpiler is a crate that depends on the analysed-program crate and the
-diagnostics crate, and on no other transpiler. `hgl emit --target NAME
+Both emitters consume shared lowering for supported roots. The Python emitter
+also uses the analysed program for forms still being migrated. `hgl emit --target NAME
 --out DIR` selects one by name and writes what it gives. The front end
 does not change, and no stage before a transpiler knows a target.
 
@@ -2068,7 +2078,9 @@ that adds a file to core fails it until the list has the file.
 4. Transpiler for hgraph (in part); `hgl test` running tests
    on it (done for what the target writes); the forms the rest of
    core's conformance cases need.
-5. Wider language coverage; optimiser passes; a second transpiler.
+5. The scalar and keyed slices share lowering and run through Python and Rust.
+   Extend coverage as the two targets reach fixture and diagnostic parity.
+   [Native delivery plan](hgraph-native.md) · [HGraph provider regressions](hgraph-adaptations.md)
 
 ## Specification pin
 

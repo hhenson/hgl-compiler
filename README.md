@@ -15,10 +15,10 @@ format    Lexer -> Parser -> Formatter
 check     Lexer -> Parser -> Analyser -> Error reporting
 ```
 
-Each stage is a separate crate with one input and one output. Transpilers
-consume only the analysed program, so targets can be added without touching
-the front end. The first target is the
-[hgraph](https://github.com/hhenson/hgraph) runtime.
+The Python and Rust transpilers consume shared lowering for the scalar and keyed
+graph slices. The Rust target constructs prepared builders and runs them on native
+HGraph. The Python target also supports the existing analysed-program path.
+[HGraph](https://github.com/hhenson/hgraph) · [Native backend plan](docs/hgraph-native.md)
 
 ## State
 
@@ -29,11 +29,15 @@ the front end. The first target is the
 | Formatter | planned |
 | Analyser, error reporting | first passes: modules, parts, declarations, imports, test scopes and the names used in signatures and bodies (`hgl check`); types, phases and constants planned |
 | Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics, for every catalogued code the compiler reports (`hgl test`); tests run on hgraph (`hgl test --target hgraph`), where the target writes what they need |
-| Optimiser | planned |
-| Transpiler | hgraph, first slice: scalar nodes, value functions, operator candidates with a body, enums, structs as ordinary values, results and errors, graphs that call nodes and lift value functions and symbols over connections, and tests with dense evals, as Python wiring (`hgl emit`); an application run on hgraph (`hgl run`) |
+| Optimiser | shared lowering of scalar and keyed graphs, with golden tests |
+| Transpiler | hgraph, first slice: scalar nodes, value functions, operator candidates with a body, enums, structs as ordinary values, results and errors, graphs that call nodes and lift value functions and symbols over connections, and tests with dense evals, as Python wiring (`hgl emit`); an application run on hgraph (`hgl run`). Native Rust supports the scalar and keyed slices |
 
 Design, crate layout and planned order: [docs/architecture.md](docs/architecture.md).
 Each rule and the stage that implements it: [docs/rules.md](docs/rules.md).
+
+The native Rust slice supports the scalar and keyed builder cases. Its SDK setup,
+generated workspace and measured turnaround are documented in the
+[native runner guide](experiments/hgraph-native/hgl-turnaround.md).
 
 ## Use
 
@@ -48,6 +52,7 @@ cargo run -- test path/to/sources --rejections-only
 cargo run -- test path/to/sources --integration
 cargo run -- run path/to/sources --application demo.app --python path/to/python
 cargo run -- run path/to/sources --arg upto=5 --config length=10s
+cargo run -- test --target hgraph-native --test replay_preserves_equal_ticks spec/hgl_core/tests/conformance/scalar_eval.hgl
 cargo doc --workspace --no-deps --open
 ```
 

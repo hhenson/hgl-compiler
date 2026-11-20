@@ -264,9 +264,11 @@ dependencies = [
  "hgl_diagnostics",
  "hgl_hgraph",
  "hgl_lexer",
+ "hgl_lower",
  "hgl_parser",
  "hgl_runner",
  "hgl_source",
+ "hgraph_native",
  "serde_json",
  "tempfile",
  "walkdir",
@@ -287,6 +289,7 @@ dependencies = [
  "hgl_analyser",
  "hgl_diagnostics",
  "hgl_lexer",
+ "hgl_lower",
  "hgl_parser",
  "hgl_source",
 ]
@@ -296,6 +299,17 @@ name = "hgl_lexer"
 version = "0.1.0"
 dependencies = [
  "hgl_diagnostics",
+ "hgl_source",
+]
+
+[[package]]
+name = "hgl_lower"
+version = "0.1.0"
+dependencies = [
+ "hgl_analyser",
+ "hgl_diagnostics",
+ "hgl_lexer",
+ "hgl_parser",
  "hgl_source",
 ]
 
@@ -323,6 +337,13 @@ dependencies = [
 [[package]]
 name = "hgl_source"
 version = "0.1.0"
+
+[[package]]
+name = "hgraph_native"
+version = "0.1.0"
+dependencies = [
+ "hgl_lower",
+]
 
 [[package]]
 name = "indexmap"

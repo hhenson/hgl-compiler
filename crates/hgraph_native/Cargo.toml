@@ -1,0 +1,13 @@
+[package]
+name = "hgraph_native"
+description = "Render lowered HGL graphs as Rust builder and node crates."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hgl_lower.workspace = true
+
+[lints]
+workspace = true

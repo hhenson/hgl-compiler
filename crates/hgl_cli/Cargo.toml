@@ -12,7 +12,13 @@ repository.workspace = true
 name = "hgl"
 path = "src/main.rs"
 
+[features]
+# Integration suite for a provisioned native SDK and Python HGraph.
+native-sdk-tests = []
+
 [dependencies]
+hgl_lower.workspace = true
+hgraph_native.workspace = true
 serde_json.workspace = true
 hgl_source.workspace = true
 hgl_diagnostics.workspace = true

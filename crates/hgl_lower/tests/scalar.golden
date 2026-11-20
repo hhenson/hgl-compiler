@@ -1,0 +1,13 @@
+assertion 1 @701..780
+  %0 replay Integer [(0, Int(7)), (2, Int(7)), (3, Int(7))]
+  %1 conformance::count_publications [Node(0)] : [Integer] -> Some(Integer)
+    start Set(Literal(Int(0)))
+    eval Admit([0], [0], [Set(Add(State, Literal(Int(1)))), Publish(State)])
+  record Node(1)
+  expect [(0, 1), (2, 2), (3, 3)]
+assertion 2 @785..843
+  %0 replay Integer [(0, Int(7)), (2, Int(7)), (3, Int(9))]
+  %1 conformance::pass_i64 [Node(0)] : [Integer] -> Some(Integer)
+    eval Admit([0], [0], [Publish(Delta(0, Integer))])
+  record Node(1)
+  expect [(0, 7), (2, 7), (3, 9)]

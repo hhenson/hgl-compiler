@@ -49,9 +49,12 @@ fn an_accepted_program_is_written() {
     assert!(module.contains(
         "def pass_(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n    return value.delta_value\n"
     ));
+    // CEVAL-2: the common plan replays offsets 0 and 2, preserving the silent cycle.
+    assert!(module.contains("_harness.evaluate(_lowered_0_0,"));
+    assert!(module.contains("_hgl_4core._inst_replay__i64"));
+    assert!(module.contains("_hgl_4core._inst_record__i64"));
     assert!(
-        module
-            .contains("    if not (_harness.same(_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7, None, 9]), [7, None, 9])):\n        raise _py.AssertionError()\n")
+        module.contains("(_dt.timedelta(microseconds=0), 7), (_dt.timedelta(microseconds=2), 9)")
     );
     assert!(out.join("_hgl").join("_harness.py").is_file());
     // The harness imports the provider, which is written with it, and

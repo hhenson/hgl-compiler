@@ -69,6 +69,10 @@ transpiler: partial
 - A list is its positions (`convert` to a `TSD`), a set's members are the keys, and a connection from outside is given whole (`pass_through`)
 - Left: a key or a member read other than as the argument of a temporal parameter (`map_` gives it as a port), and a list of nullables
 
+optimiser: partial
+
+- Dictionary sink children have distinct key and value boundary slots. Other collection shapes, returning children and temporal captures remain.
+
 ## CTRL-8
 
 analyser: partial
@@ -157,6 +161,10 @@ transpiler: partial
 - hgraph: a `switch` over a connection is `switch_` with a graph for each case, and `_hg.DEFAULT` for its `default`; over an ordinary value, Python's `if` on the selector
 - A `for` over ordinary data and over a connection of `list<T, N>`, and a `while`, are Python's loops, which compose the body on each pass; over a connection of `list<T>`, `set<T>` or `dict<K, V>` `map_` (CTRL-7)
 - Left: what CTRL-7 and CTRL-14 leave
+
+optimiser: partial
+
+- The dictionary slice binds its string key and integer element to a child graph. Other graph loops remain.
 
 ## SOURCE-1
 

@@ -1,0 +1,9 @@
+[package]
+name = "hgl_native_runtime"
+version = "0.1.0"
+edition = "2024"
+links = "hgl_bridge"
+publish = false
+
+[lib]
+path = "lib.rs"

@@ -46,6 +46,7 @@ use annotate::*;
 mod publish;
 use publish::*;
 
+mod lowered;
 mod node;
 use node::*;
 
@@ -1002,8 +1003,14 @@ impl<'a> Emitter<'a> {
                     self.line(0, "");
                     self.line(0, "");
                     self.line(0, &format!("def {}():", test_function(&test.name)));
-                    let function = Function::of(self.program, body, None, Mode::Test);
-                    self.block(&function, &body.statements, 1);
+                    if let Ok(cases) = hgl_lower::test(program, module, index)
+                        && self.can_render_lowered(&cases)
+                    {
+                        self.lowered_test(index, &cases);
+                    } else {
+                        let function = Function::of(self.program, body, None, Mode::Test);
+                        self.block(&function, &body.statements, 1);
+                    }
                 }
                 // The analyser gave the test no body to write.
                 None => self.unsupported(test.at, "this test"),
@@ -1070,7 +1077,10 @@ impl<'a> Emitter<'a> {
                 let function = Function::cold(Mode::Test);
                 let line = self.text.matches('\n').count();
                 self.piece.statements.push((line, run.at));
-                let mut written = self.run_statement(&function, run);
+                let mut written = match hgl_lower::application(program, module) {
+                    Ok(graph) => self.lowered_application(&graph, run.at),
+                    Err(_) => self.run_statement(&function, run),
+                };
                 if seeded {
                     // Given last, by a name no parameter has.
                     let call = written.strip_suffix(')').unwrap_or(&written).to_string();

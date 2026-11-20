@@ -1,0 +1,6 @@
+[workspace]
+members = ["facade", "nodes", "app"]
+resolver = "3"
+
+[profile.dev.package.facade]
+opt-level = 3

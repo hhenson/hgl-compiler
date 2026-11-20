@@ -4,6 +4,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["runtime/hgraph_native"]
 
 # Values each crate inherits with `field.workspace = true`.
 [workspace.package]
@@ -25,6 +26,8 @@ hgl_lexer = { path = "crates/hgl_lexer" }
 hgl_parser = { path = "crates/hgl_parser" }
 hgl_analyser = { path = "crates/hgl_analyser" }
 hgl_runner = { path = "crates/hgl_runner" }
+hgl_lower = { path = "crates/hgl_lower" }
+hgraph_native = { path = "crates/hgraph_native" }
 hgl_hgraph = { path = "crates/hgl_hgraph" }
 clap = { version = "4.6", features = ["derive"] }
 codespan-reporting = "0.13"

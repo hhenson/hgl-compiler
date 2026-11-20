@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.25)
+project(hgl_bridge LANGUAGES CXX)
+find_package(hgraph CONFIG REQUIRED)
+add_library(hgl_bridge SHARED bridge.cpp)
+target_compile_features(hgl_bridge PRIVATE cxx_std_23)
+target_link_libraries(hgl_bridge PRIVATE hgraph::core)
+set_target_properties(hgl_bridge PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)

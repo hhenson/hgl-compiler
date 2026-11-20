@@ -1,0 +1,121 @@
+pair,scenario,language,build_ms,linker_ms_within_build,scalar_launch_and_verify_ms,keyed_launch_and_verify_ms,rebuilt_units
+1,unchanged,cpp,1.396,0.0,13.0242,12.527,
+1,unchanged,rust,17.3008,0.0,17.3536,14.5896,
+2,unchanged,rust,17.2149,0.0,16.2237,14.0328,
+2,unchanged,cpp,1.314,0.0,12.688,12.9523,
+3,unchanged,cpp,1.2143,0.0,12.4535,12.3061,
+3,unchanged,rust,17.1084,0.0,17.2025,14.152,
+4,unchanged,rust,17.3671,0.0,16.9989,14.6037,
+4,unchanged,cpp,1.365,0.0,13.0526,12.5202,
+5,unchanged,cpp,1.1855,0.0,12.2893,12.2427,
+5,unchanged,rust,17.2157,0.0,17.3725,14.6323,
+6,unchanged,rust,17.5346,0.0,16.4898,14.2547,
+6,unchanged,cpp,1.3175,0.0,12.8868,12.3659,
+7,unchanged,cpp,1.1546,0.0,12.0853,12.1126,
+7,unchanged,rust,17.4095,0.0,17.004,14.0455,
+8,unchanged,rust,17.2898,0.0,16.9921,14.5273,
+8,unchanged,cpp,1.3506,0.0,12.9744,12.5024,
+9,unchanged,cpp,1.1507,0.0,12.4607,13.2332,
+9,unchanged,rust,18.5185,0.0,18.4935,15.5232,
+10,unchanged,rust,18.4054,0.0,17.7815,14.9228,
+10,unchanged,cpp,1.3654,0.0,13.4224,12.5974,
+11,unchanged,cpp,1.1083,0.0,12.4109,12.3066,
+11,unchanged,rust,17.9852,0.0,17.9411,19.4342,
+12,unchanged,rust,23.3478,0.0,22.2286,18.7357,
+12,unchanged,cpp,1.3877,0.0,13.4778,13.379,
+13,unchanged,cpp,1.2253,0.0,12.1771,12.2157,
+13,unchanged,rust,17.7382,0.0,19.2981,17.539,
+14,unchanged,rust,18.8524,0.0,17.861,14.8321,
+14,unchanged,cpp,1.4288,0.0,13.361,12.8384,
+15,unchanged,cpp,1.2286,0.0,12.4857,12.3054,
+15,unchanged,rust,17.5569,0.0,16.977,14.3702,
+1,wiring,cpp,80.6881,4.701,17.5054,14.8999,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+1,wiring,rust,60.8513,11.962,22.1757,16.281,rust_case
+2,wiring,rust,64.0763,11.449,18.6675,15.3025,rust_case
+2,wiring,cpp,81.7151,4.791,17.9812,14.6012,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+3,wiring,cpp,80.2226,4.792,17.1753,14.2009,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+3,wiring,rust,57.3911,11.367,21.1005,16.0148,rust_case
+4,wiring,rust,58.2707,11.386,22.4842,17.4,rust_case
+4,wiring,cpp,86.5355,4.876,18.3946,14.4911,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+5,wiring,cpp,79.5327,4.5,17.2706,14.2301,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+5,wiring,rust,57.8517,11.745,20.6168,15.0704,rust_case
+6,wiring,rust,58.5605,11.776,18.5507,15.2159,rust_case
+6,wiring,cpp,84.3846,4.756,17.5507,14.4998,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+7,wiring,cpp,79.465,4.565,17.4253,14.6247,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+7,wiring,rust,59.0294,11.584,18.1717,14.3716,rust_case
+8,wiring,rust,60.0167,11.654,18.1985,14.6651,rust_case
+8,wiring,cpp,81.1251,4.795,17.7735,14.1499,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+9,wiring,cpp,79.6266,4.392,16.3889,12.8737,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+9,wiring,rust,56.9487,11.506,21.847,16.4809,rust_case
+10,wiring,rust,58.8475,11.624,20.2006,14.3921,rust_case
+10,wiring,cpp,80.2101,4.543,16.9754,13.922,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+11,wiring,cpp,79.2797,4.315,16.4588,13.055,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+11,wiring,rust,59.4968,11.527,17.6031,14.3629,rust_case
+12,wiring,rust,58.9657,11.394,18.1807,14.6011,rust_case
+12,wiring,cpp,79.7591,4.442,16.5248,13.0314,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+13,wiring,cpp,79.6145,4.622,16.414,13.1615,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+13,wiring,rust,58.1017,11.447,18.1472,15.426,rust_case
+14,wiring,rust,57.7486,12.085,20.6268,14.9623,rust_case
+14,wiring,cpp,80.409,4.514,16.9706,13.7731,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+15,wiring,cpp,79.1007,4.356,16.3949,13.283,CMakeFiles/cpp_case.dir/cpp/app.cpp.o cpp_case
+15,wiring,rust,57.4449,11.306,20.6302,14.871,rust_case
+1,body,cpp,84.7122,4.483,16.8657,13.8856,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+1,body,rust,70.1986,11.53,18.2451,14.865,nodes rust_case
+2,body,rust,70.762,11.623,19.3015,14.7818,nodes rust_case
+2,body,cpp,84.4473,4.582,16.7371,14.1586,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+3,body,cpp,86.2205,4.577,16.3489,13.958,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+3,body,rust,70.1002,11.435,18.2905,14.6404,nodes rust_case
+4,body,rust,69.0717,11.08,19.6905,14.5992,nodes rust_case
+4,body,cpp,84.0702,4.436,16.5854,14.1628,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+5,body,cpp,84.0721,4.483,16.6616,14.2185,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+5,body,rust,71.5081,11.457,18.4718,15.1041,nodes rust_case
+6,body,rust,73.1161,11.262,18.2987,15.5157,nodes rust_case
+6,body,cpp,83.7799,4.29,16.4959,14.1822,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+7,body,cpp,85.1087,4.611,16.4818,13.8754,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+7,body,rust,71.0711,13.165,19.1116,14.9177,nodes rust_case
+8,body,rust,70.647,11.676,18.1453,14.8707,nodes rust_case
+8,body,cpp,87.2778,4.686,17.3257,14.2095,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+9,body,cpp,84.1841,4.452,16.0067,13.5285,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+9,body,rust,69.9448,11.53,20.1367,15.01,nodes rust_case
+10,body,rust,70.0721,11.449,19.8544,14.8822,nodes rust_case
+10,body,cpp,84.5533,4.515,15.9288,13.1864,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+11,body,cpp,83.5411,4.497,16.068,13.2397,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+11,body,rust,70.0137,11.713,20.4967,15.3858,nodes rust_case
+12,body,rust,72.3058,11.819,18.3791,14.8378,nodes rust_case
+12,body,cpp,84.5313,4.481,16.9481,14.1821,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+13,body,cpp,83.9668,4.543,16.6517,14.1005,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+13,body,rust,71.6993,11.828,19.8385,14.9659,nodes rust_case
+14,body,rust,72.855,11.277,18.0276,14.7949,nodes rust_case
+14,body,cpp,83.4536,4.328,16.0256,12.9256,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+15,body,cpp,84.1961,4.714,16.4755,13.2824,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o libcpp_nodes.a cpp_case
+15,body,rust,73.4257,13.235,18.3298,15.1261,nodes rust_case
+1,signature,cpp,85.5125,4.565,16.8134,14.0926,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+1,signature,rust,76.9542,13.113,18.4748,15.0469,nodes rust_case
+2,signature,rust,75.609,11.671,18.4811,14.6892,nodes rust_case
+2,signature,cpp,86.6331,4.763,16.6358,14.1564,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+3,signature,cpp,84.4602,4.489,16.7746,13.9317,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+3,signature,rust,73.7034,12.314,19.4037,14.836,nodes rust_case
+4,signature,rust,74.9193,11.23,18.2806,14.6465,nodes rust_case
+4,signature,cpp,84.7211,4.449,16.4803,13.6641,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+5,signature,cpp,86.8496,4.762,16.6454,14.0586,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+5,signature,rust,76.2006,11.355,18.5163,15.5403,nodes rust_case
+6,signature,rust,76.0824,11.651,18.0261,14.9159,nodes rust_case
+6,signature,cpp,84.7916,4.293,16.9108,13.7561,
+7,signature,cpp,84.9311,4.56,16.594,13.9537,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+7,signature,rust,76.6782,13.217,18.0415,14.7037,nodes rust_case
+8,signature,rust,74.3646,11.524,19.4029,15.1462,nodes rust_case
+8,signature,cpp,85.0845,4.376,16.6364,13.9808,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+9,signature,cpp,85.7761,4.377,16.8187,14.3246,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+9,signature,rust,74.8679,11.133,18.5964,14.9486,nodes rust_case
+10,signature,rust,74.0038,11.655,19.7738,15.0226,nodes rust_case
+10,signature,cpp,85.3945,4.445,16.7618,13.9123,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+11,signature,cpp,85.352,4.742,16.6839,13.8541,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+11,signature,rust,75.7367,11.489,18.2903,14.8473,nodes rust_case
+12,signature,rust,73.4327,11.374,18.0981,14.7913,nodes rust_case
+12,signature,cpp,85.282,4.556,16.5173,13.8252,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+13,signature,cpp,84.2738,4.308,16.7788,14.4327,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+13,signature,rust,73.7688,11.692,20.105,15.4393,nodes rust_case
+14,signature,rust,76.4922,13.088,18.4267,15.0764,nodes rust_case
+14,signature,cpp,85.2799,4.528,16.6458,13.9111,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+15,signature,cpp,84.5438,4.466,16.7549,14.1662,CMakeFiles/cpp_nodes.dir/cpp/nodes.cpp.o CMakeFiles/cpp_case.dir/cpp/app.cpp.o libcpp_nodes.a cpp_case
+15,signature,rust,75.6298,11.793,19.1595,15.0902,nodes rust_case
