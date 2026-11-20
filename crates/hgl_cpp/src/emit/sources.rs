@@ -19,7 +19,7 @@ use hgl_analyser::{LocalKind, Signature};
 use super::Emitter;
 use super::forms::Family;
 use super::names::{self, identifier};
-use super::nodes::{Context, Kind, OUT, Placed, nested, registration};
+use super::nodes::{Context, IMPLEMENTATION, Kind, OUT, Placed, nested, registration};
 use super::statements::{Scope, statement_at};
 use super::values::INDENT;
 use crate::runtime;
@@ -36,7 +36,9 @@ impl Family for Sources {
         depth: usize,
         text: &mut String,
     ) -> bool {
-        if emitter.kind() != Some(Kind::Source) {
+        // A `return` written inside a value, the block a lambda gives
+        // (`expressions`), is the value's own: `conditional` marks it.
+        if emitter.kind() != Some(Kind::Source) || scope.conditional > 0 {
             return false;
         }
         let indent = INDENT.repeat(depth);
@@ -145,7 +147,7 @@ impl Emitter<'_> {
         eval.push(format!("::hgraph::Out<{schema}> {OUT}"));
         let text = format!(
             "// {shown}\n\
-             struct {name}\n{{\n\
+             struct {IMPLEMENTATION}\n{{\n\
              {INDENT}static constexpr auto name = {display};\n\
              {INDENT}// SOURCE-2: \"The first evaluation begins the body\".\n\
              {INDENT}static constexpr bool schedule_on_start = true;\n\
@@ -195,7 +197,6 @@ impl Emitter<'_> {
              {INDENT}{INDENT}kept_.frame_.reset();\n\
              {INDENT}}}\n\
              }};\n",
-            name = placed.name,
             display = names::string(&placed.display(program, self.module)),
             taken = taken.join(", "),
             start = start.join(", "),

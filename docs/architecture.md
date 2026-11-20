@@ -2117,7 +2117,7 @@ test --target cpp` runs over any program to its end.
 | A tuple or a list with an entry after the first that runs statements; an element read whose list and index both may fail, or either runs statements | Each entry held as a value of its own type first, in order; the list held, then the index (`expressions::held_read`), the element a value of its own |
 | Named test | A function of `hgl::demo::calc::m_::t_`; each statement told to the library's test host first, `::hglrt::testing::statement()`; `assert` is `::hglrt::testing::check`, `assert raises` `::hglrt::testing::raises` of a lambda (TST-10) |
 | The tests of a module | `tests/demo.calc.cpp`: a `hglrt::testing::Registration` of each by its identity, and a `main` that is `hglrt::testing::main`; one executable |
-| Temporal function `count` (FN-2), and each instance of a generic one (GEN-2) | A struct `n_::count` of the module's namespace, in its unit, and a wiring function `w_::count(wiring_, ...)`, declared in its header, which adds it to a graph: a call names the wiring function, so that no other unit instantiates hgraph's templates of it; an instance's are `n_::i_::record::of_i64`, `w_::i_::record::of_i64` |
+| Temporal function `count` (FN-2), and each instance of a generic one (GEN-2) | A struct `n_::count::impl_` of the module's namespace, in its unit (`impl_` in a namespace of the function's name, so that no member, `name` or `compose`, is named as its struct), and a wiring function `w_::count(wiring_, ...)`, declared in its header, which adds it to a graph: a call names the wiring function, so that no other unit instantiates hgraph's templates of it; an instance's are `n_::i_::record::of_i64::impl_`, `w_::i_::record::of_i64` |
 | A node (FN-2, TIME-3 to TIME-8) | A static node of hgraph's front end (`<hgraph/types/generated.h>`): `eval`, and `start` and `stop` where it needs them, each given hgraph's views. A temporal parameter is an `hgraph::In` of its temporal form, `Passive` where no handler subscribes to it and `Unchecked` where not every executed handler requires it (TIME-4, `hgl_lower::nodes`); a `const` one an `hgraph::Scalar`; the result `hgraph::Out`, `out_` |
 | `state`, `cache` (TIME-5, TIME-6) | Members of the node's one `state_type_`, which hgraph holds as the node's `State`, registered with its type registry; each is given its first value in `start`, before the hook's statements, and bound by reference in each hook |
 | `when` (TIME-3) | Tested in source order in `eval`, each guarded by what it asks beyond what the node requires: `::hglrt::fn_valid` of an input it alone requires, `::hglrt::fn_modified` of a `modified` selector, and the rest of its condition. One that `scheduled()` or `modified([])` selects is never run in a node that injects no timer, and is not written |
@@ -2164,14 +2164,14 @@ module `demo.m`, a node, a source or a graph, is two things:
 
 | Part | Where | What |
 | --- | --- | --- |
-| Its struct, `::hgl::demo::m::m_::n_::f` | The module's unit | A static node (`eval`, `start`, `stop`) or a graph (`compose`), and for a node with `state` or `cache` its `state_type_`, registered with hgraph by a specialization of `hgraph::scalar_descriptor` at the global namespace: the piece closes the module's namespace around it (`nodes::registration`) |
-| Its wiring function, `::hgl::demo::m::m_::w_::f(::hgraph::Wiring& wiring_, ...)` | Declared in the header, defined in the unit | Takes a temporal parameter as an `hgraph::Port` of its temporal form and a `const` one as a value function takes it, gives the result's `Port` (or nothing), and is `return ::hgraph::wire<n_::f>(wiring_, ...)` for a node, `n_::f::compose(wiring_, ...)` for a graph |
+| Its struct, `::hgl::demo::m::m_::n_::f::impl_` (`nodes::IMPLEMENTATION`, in a namespace of the function's name, so that no member is named as the struct) | The module's unit | A static node (`eval`, `start`, `stop`) or a graph (`compose`), and for a node with `state` or `cache` its `state_type_`, registered with hgraph by a specialization of `hgraph::scalar_descriptor` at the global namespace: the piece closes the module's namespace around it (`nodes::registration`) |
+| Its wiring function, `::hgl::demo::m::m_::w_::f(::hgraph::Wiring& wiring_, ...)` | Declared in the header, defined in the unit | Takes a temporal parameter as an `hgraph::Port` of its temporal form and a `const` one as a value function takes it, gives the result's `Port` (or nothing), and is `return ::hgraph::wire<n_::f::impl_>(wiring_, ...)` for a node, `n_::f::impl_::compose(wiring_, ...)` for a graph |
 
 Every call of a temporal function, in a graph or an eval's entry, is a
 call of its wiring function (`graphs::temporal_call`), so no other
 unit instantiates hgraph's templates of a node, and a node's struct and
 state never leave its unit. A generic one is written for each instance
-`hgl_lower::instances` collects, `n_::i_::f::of_i64` and
+`hgl_lower::instances` collects, `n_::i_::f::of_i64::impl_` and
 `w_::i_::f::of_i64`. A node whose configuration holds an `f64` (at any
 depth, `nodes::holds_f64`) is wired with `Wiring::add_unique_node`
 (`nodes::unique`) and not `hgraph::wire`, until hgraph tells `0.0` from
@@ -2313,22 +2313,33 @@ is not used yet.
 | --- | --- |
 | `HGL_HGRAPH_SDK` | hgraph's C++ SDK, its install prefix: required, with no default |
 | `HGL_HGRAPH_DEPS` | The prefix of the libraries the SDK was built against: required, with no default |
-| `CXX` | The compiler; otherwise the first of `g++-17`, `g++-16`, `g++-15`, `g++` on the `PATH` that is GCC 15 or later |
+| `CXX` | The compiler, of the platform's family: GCC 15 or later on Linux, Apple clang 21 or later on macOS. Otherwise, on Linux, the first of `g++-17`, `g++-16`, `g++-15`, `g++` on the `PATH` that is GCC 15 or later, and on macOS `clang++`. A compiler is known by the macros it defines (`-dM -E`), not by its name |
 | `HGL_CPP_FLAGS` | Flags added to every compile and link, the runtime library's too: `-O2`, `-g`, the sanitizers |
 | `HGL_NATIVE_CACHE` | Where builds are kept; otherwise `hgl/native` in the user's cache directory |
 | `CMAKE_BUILD_PARALLEL_LEVEL` | How many jobs a build, and the executables run, take at once |
 
 A toolchain is prepared once and kept under the cache in
 `toolchains/<hash>`, the hash of the SDK's and the dependencies' paths
-and the SDK's own files, the compiler and its version, the linker, the
-flags and the runtime library's sources, under a lock: the runtime
+and the SDK's own files, the compiler, its family and version and what
+it reads from the environment (`MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`
+on macOS), the linker, the flags and the runtime library's sources,
+under a lock: the runtime
 library is configured, built and installed with CMake; a small CMake
 project of the driver's own, a program linked with it, is configured,
 and CMake's file API describes how CMake compiles and links it, which
 is the description every generated unit is built with
-(`description.json`); and the library's header is precompiled with it.
-Links add `-Wl,--disable-new-dtags`, so that the SDK's libraries find
-their dependencies, and `-fuse-ld=lld` where `ld.lld` is on the `PATH`.
+(`description.json`); and the library's header is precompiled with it,
+beside it as `hgl_pch.h.gch` for GCC and `hgl_pch.h.pch` for clang.
+What differs between the two families is said in one place, `Family` in
+`crates/hgl_cli/src/cpp/sdk.rs`. On Linux, links add
+`-Wl,--disable-new-dtags`, so that the SDK's libraries find their
+dependencies, and `-fuse-ld=lld` where `ld.lld` is on the `PATH`; an
+executable is run with the libraries' directories in `LD_LIBRARY_PATH`.
+On macOS, links are Apple's, and an executable finds every library
+through CMake's run paths (`-rpath`), which macOS's loader reads for
+each library on the way; it is run with no variable, as
+`DYLD_LIBRARY_PATH` naming the dependency prefix would load
+conda-forge's libc++ in place of the system's.
 
 A program is built in `programs/<hash>` of its source roots, or the
 directory `--keep` names, under a lock held until its last executable
@@ -2354,7 +2365,8 @@ The crate's tests compare the C++ written for three programs, `demo.calc`,
 `crates/hgl_cpp/tests/goldens/` (`HGL_UPDATE_GOLDENS=1 cargo test -p
 hgl_cpp --test emit` writes them again; core's module is left out of
 them) and check what blocks what. `crates/hgl_cli/tests/cpp.rs` checks
-the driver: what is said with no SDK, `emit` and `run`; and, given an
+the driver: what is said with no SDK and with a compiler not of the
+platform's family, `emit` and `run`; and, given an
 SDK, the whole route, that a failed build runs no older executable,
 that `demo.values` and `demo.temporal` pass, and where a failure is reported, with `cargo
 test -p hgl_cli --test cpp -- --ignored`, which the `cpp` job of the CI
@@ -2608,8 +2620,9 @@ the job the way the design needs is dropped.
 | `which` | `hgl_cli` | the programs the cpp target builds with, found on the `PATH` |
 
 The cpp target's build driver runs programs, not crates: GCC 15 or
-later, `ninja`, `cmake` (once for each SDK) and `ld.lld` where it is on
-the `PATH`; see "cpp" under "Transpilers".
+later on Linux or Apple clang 21 or later on macOS, `ninja`, `cmake`
+(once for each SDK) and, on Linux, `ld.lld` where it is on the `PATH`;
+see "cpp" under "Transpilers".
 
 The C++ target's runtime library, `runtime/cpp`:
 

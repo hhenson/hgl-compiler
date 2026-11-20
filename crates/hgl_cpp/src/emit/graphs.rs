@@ -7,7 +7,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | `fn add_one(value: i64) -> i64 { return value + 1 }` | a struct `n_::add_one` with `static ::hgraph::Port<TS<Int>> compose(::hgraph::Wiring& wiring_, ::hgraph::Port<TS<Int>> value)`, and a wiring function `w_::add_one` that calls it |
+//! | `fn add_one(value: i64) -> i64 { return value + 1 }` | a struct `n_::add_one::impl_` with `static ::hgraph::Port<TS<Int>> compose(::hgraph::Wiring& wiring_, ::hgraph::Port<TS<Int>> value)`, and a wiring function `w_::add_one` that calls it |
 //! | A temporal parameter; a `const` one | an `hgraph::Port` of its temporal form; the value, as a value function takes it |
 //! | `let x = f(a)`, a connection | `const ::hgraph::Port<S> x = ...;` |
 //! | `return x` (FN-7) | `return x;`: the connection the graph gives |
@@ -29,7 +29,7 @@ use super::Emitter;
 use super::calls::{changes, may_fail};
 use super::forms::Family;
 use super::names::{self, identifier};
-use super::nodes::{Context, Kind, OUT, Placed, Role, nested};
+use super::nodes::{Context, IMPLEMENTATION, Kind, OUT, Placed, Role, nested};
 use super::statements::Scope;
 use super::values::INDENT;
 
@@ -92,7 +92,7 @@ impl Emitter<'_> {
         });
         let placed = Placed::of(program, self.module, index, instance);
         let qualified = placed.qualified(program, self.module);
-        let mut text = format!("// {shown}\nstruct {}\n{{\n", placed.name);
+        let mut text = format!("// {shown}\nstruct {IMPLEMENTATION}\n{{\n");
         for lifted in &context.lifted {
             for line in lifted.lines() {
                 text.push_str(&format!("{INDENT}{line}\n"));
@@ -158,6 +158,20 @@ impl Emitter<'_> {
         scope: &mut Scope,
         value: &Expr,
         given: &[(usize, String)],
+    ) -> String {
+        self.temporal_call_held(scope, value, given, &[])
+    }
+
+    /// [`Emitter::temporal_call`], where `defaults` are the values already
+    /// held for some of the parameters the call leaves out, by their
+    /// positions among the function's parameters: an eval's, which holds
+    /// them before its run's configuration (EXPR-2).
+    pub(super) fn temporal_call_held(
+        &mut self,
+        scope: &mut Scope,
+        value: &Expr,
+        given: &[(usize, String)],
+        defaults: &[(usize, String)],
     ) -> String {
         let ExprKind::Call {
             callee:
@@ -228,9 +242,20 @@ impl Emitter<'_> {
                 // UNIT-8: "an omitted temporal input is never valid".
                 return self.missing(value.at, "a call that leaves out a temporal input");
             }
+            if let Some((_, held)) = defaults.iter().find(|(at, _)| *at == index) {
+                written[index] = Some(held.clone());
+                continue;
+            }
             written[index] = Some(
                 match left_out(program, (module, declaration), index, parameter) {
                     Some(LeftOut::Default(default)) => {
+                        // The analyser keeps a default as a value with no
+                        // locals of its own, so a block in it that runs
+                        // statements cannot be written, as a value call's
+                        // cannot (`calls`).
+                        if changes(default) {
+                            return self.missing(default.at, "a default that runs statements");
+                        }
                         let cold = Body {
                             locals: Vec::new(),
                             statements: Vec::new(),
@@ -240,6 +265,10 @@ impl Emitter<'_> {
                         if !defaults.before.is_empty() {
                             return self.missing(default.at, "a default that propagates a failure");
                         }
+                        // EXPR-2: a default is evaluated after the
+                        // arguments written, in the order of the
+                        // parameters, and counts in what is held.
+                        failing += usize::from(may_fail(default));
                         written
                     }
                     Some(LeftOut::Null) => "std::nullopt".to_string(),
@@ -266,7 +295,20 @@ impl Emitter<'_> {
             for index in order {
                 let name = names::temporary("argument", self.temporary());
                 let held = written[index].replace(name.clone()).unwrap_or_default();
-                steps.push_str(&format!("const auto {name} = {held}; "));
+                // A `const` parameter's value is held as its HGL type, so
+                // that what a later argument changes, an element of a
+                // `list<bool>` read through its proxy among it, is not
+                // what it holds; a port as it is.
+                let parameter = &signature.parameters[index];
+                let ty = if parameter.constant {
+                    match self.written_type(&parameter.ty, parameter.at) {
+                        Some(ty) => ty,
+                        None => return "0".to_string(),
+                    }
+                } else {
+                    "auto".to_string()
+                };
+                steps.push_str(&format!("const {ty} {name} = {held}; "));
             }
             let mut all = vec![WIRING.to_string()];
             all.extend(written.into_iter().flatten());
@@ -305,6 +347,18 @@ impl Emitter<'_> {
         else {
             return self.missing(value.at, "this lifted call");
         };
+        // FN-6: "scalar arguments and omitted defaults bind as
+        // configuration", where the graph is built: a parameter the call
+        // leaves out is bound so by the lifting work, and not written in
+        // the node's `eval` here.
+        let given = |index: usize| {
+            arguments
+                .iter()
+                .any(|argument| argument.parameter == Some(index))
+        };
+        if (0..signature.parameters.len()).any(|index| !given(index)) {
+            return self.missing(value.at, "a lifted call that leaves out a parameter");
+        }
         let mut locals: Vec<Local> = Vec::new();
         let mut roles: Vec<Role> = Vec::new();
         let mut parameters: Vec<String> = Vec::new();
@@ -515,11 +569,14 @@ impl Family for Graphs {
                 }
                 true
             }
-            // FN-7: "A composition return selects a connection".
+            // FN-7: "A composition return selects a connection". A
+            // `return` written inside a value, the block a lambda gives
+            // (`expressions`), is the value's own, which `conditional`
+            // marks.
             Stmt::Return {
                 value: Some(value),
                 at,
-            } => {
+            } if scope.conditional == 0 => {
                 let Some(result) = emitter
                     .temporal
                     .as_ref()

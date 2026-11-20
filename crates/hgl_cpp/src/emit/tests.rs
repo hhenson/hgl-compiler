@@ -26,6 +26,7 @@
 
 use hgl_analyser::hir::{Cell, Expr, ExprKind, Stmt};
 use hgl_analyser::{Argument as GenericArgument, Type};
+use hgl_lower::calls::{LeftOut, left_out};
 use hgl_lower::instances::{core_function, run_wiring, trace_payload};
 
 use super::Emitter;
@@ -104,9 +105,39 @@ impl Emitter<'_> {
         // one runs statements, each is held first, in that order, before
         // the run that reads them; a trace's cells are read where the
         // entry is wired otherwise.
+        // The defaults of the `const` parameters the call leaves out, which
+        // are evaluated after the arguments written (EXPR-2).
+        let left: Vec<&Expr> = callee
+            .declaration()
+            .and_then(|(module, declaration)| {
+                match program.modules[module].details.get(declaration) {
+                    Some(hgl_analyser::Detail::Callable(signature)) => Some(
+                        signature
+                            .parameters
+                            .iter()
+                            .enumerate()
+                            .filter(|(index, parameter)| {
+                                parameter.constant
+                                    && !arguments
+                                        .iter()
+                                        .any(|argument| argument.parameter == Some(*index))
+                            })
+                            .filter_map(|(index, parameter)| {
+                                match left_out(program, (module, declaration), index, parameter) {
+                                    Some(LeftOut::Default(default)) => Some(default),
+                                    _ => None,
+                                }
+                            })
+                            .collect(),
+                    ),
+                    _ => None,
+                }
+            })
+            .unwrap_or_default();
         let held = arguments
             .iter()
             .map(|argument| &argument.value)
+            .chain(left.iter().copied())
             .chain(config.as_deref())
             .filter(|part| may_fail(part))
             .count()
@@ -123,6 +154,16 @@ impl Emitter<'_> {
         let mut given: Vec<(usize, String)> = Vec::new();
         let mut context = Context::new(Kind::Entry, scope.body.locals.len());
         for (position, argument) in arguments.iter().enumerate() {
+            // A trace that is no trace written out, a `let` of one or an
+            // eval's, is replayed from what it holds: not written yet.
+            if matches!(argument.value.ty, Type::Trace { .. })
+                && !matches!(argument.value.kind, ExprKind::Trace(_))
+            {
+                return self.missing(
+                    argument.value.at,
+                    "a trace given to an eval that is no trace written out",
+                );
+            }
             if !matches!(argument.value.kind, ExprKind::Trace(_)) {
                 // A `const` parameter's configuration, held as a value; a
                 // value given to a temporal one is wired as a constant
@@ -137,7 +178,12 @@ impl Emitter<'_> {
                         written = emitter.expression(scope, &argument.value);
                     });
                     let name = names::temporary("argument", self.temporary());
-                    steps.push_str(&format!("{indent}const auto {name} = {written};\n"));
+                    // Held as its HGL type, so that a later part does not
+                    // change it through a proxy (`graphs::temporal_call`).
+                    let Some(ty) = self.written_type(&argument.value.ty, argument.value.at) else {
+                        return "0".to_string();
+                    };
+                    steps.push_str(&format!("{indent}const {ty} {name} = {written};\n"));
                     given.push((position, name));
                 }
                 continue;
@@ -174,9 +220,51 @@ impl Emitter<'_> {
             ));
             given.push((position, port));
         }
+        // EXPR-2: "the arguments written, then the defaults of those left
+        // out", and the configuration after the call: where the parts are
+        // held, each `const` parameter's default is held too, in the
+        // order of the parameters, before the configuration.
+        let mut defaults: Vec<(usize, String)> = Vec::new();
+        if held && let Some((module, declaration)) = callee.declaration() {
+            let parameters = match program.modules[module].details.get(declaration) {
+                Some(hgl_analyser::Detail::Callable(signature)) => signature.parameters.clone(),
+                _ => Vec::new(),
+            };
+            for (index, parameter) in parameters.iter().enumerate() {
+                let written = arguments
+                    .iter()
+                    .any(|argument| argument.parameter == Some(index));
+                if written || !parameter.constant {
+                    continue;
+                }
+                let Some(LeftOut::Default(default)) =
+                    left_out(program, (module, declaration), index, parameter)
+                else {
+                    continue;
+                };
+                if changes(default) {
+                    return self.missing(default.at, "a default that runs statements");
+                }
+                let cold = hgl_analyser::hir::Body {
+                    locals: Vec::new(),
+                    statements: Vec::new(),
+                };
+                let mut cold_scope = Scope::cold(program, &cold);
+                let written = self.expression(&mut cold_scope, default);
+                if !cold_scope.before.is_empty() {
+                    return self.missing(default.at, "a default that propagates a failure");
+                }
+                let name = names::temporary("argument", self.temporary());
+                let Some(ty) = self.written_type(&default.ty, default.at) else {
+                    return "0".to_string();
+                };
+                steps.push_str(&format!("{indent}const {ty} {name} = {written};\n"));
+                defaults.push((index, name));
+            }
+        }
         let mut target = String::new();
         self.in_context(&mut context, |emitter| {
-            target = emitter.temporal_call(scope, call, &given);
+            target = emitter.temporal_call_held(scope, call, &given, &defaults);
         });
         // RUN-1: the run's configuration, core's `RunConfig`, gives its
         // bounds (CRUN-2), and an integration test's `run` its mode.
@@ -386,9 +474,10 @@ impl Family for Tests {
             local,
             value: Some(value),
         } = statement
-            && matches!(scope.body.locals[*local].ty, Type::Trace { .. })
+            && let Some(declared) = scope.body.locals.get(*local)
+            && matches!(declared.ty, Type::Trace { .. })
         {
-            let name = identifier(&scope.body.locals[*local].name);
+            let name = identifier(&declared.name);
             let written = emitter.expression(scope, value);
             text.push_str(&format!(
                 "{}[[maybe_unused]] const auto {name} = {written};\n",
