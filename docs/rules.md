@@ -110,7 +110,8 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | `is_active`, `activate` and `passivate` of a direct input in a handler, `is_active` in `stop` too | TIME-9, END-5 |
 | A temporal value of an enum: read, published, replayed, recorded, wired as a constant | TYPE-7, TYPE-16 |
 | `inject clock`, `logger`, `global_state`, and a property of each | TIME-8, CAP-1, CAP-2, CAP-3 |
-| A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
+| A source, and its `state`, `cache`, `inject`, `start` and `stop` | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
+| `inject scheduler` and `inject alarm` in a node; `schedule`, `un_schedule`, `reset`; what woke the node, which decides the handlers it runs; `scheduled()` and `modified([])` read as a `bool` | TIME-3, TIME-8, TIME-9, CAP-4, CAP-5 |
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
 | `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
 | A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
@@ -127,10 +128,10 @@ of a `list<bool>` given to a `var` parameter (a bit, no `bool&`), an enum's
 member made from a value (TYPE-7), a pack, a struct, a set, a
 dictionary, a window of any but a scalar, a delta of any but a scalar, `timezone`,
 `zoned_time`, and of temporal code: a temporal value of any but a
-scalar or an enum, a designation of a child of an input (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
-`all_valid` of any but a window, a change of an input's activity in `stop` (END-5), `scheduled()`, `if`, `switch` and
+scalar or an enum, a designation of a child of an input (FN-16),
+`all_valid` of any but a window, a change of an input's activity in `stop` (END-5), `if`, `switch` and
 `for` over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
-default or a null (FN-11), a source with declarations or hooks, an
+default or a null (FN-11), an
 eval's or an application's configuration that is no `RunConfig(...)`
 written in it (RUN-1), and an eval of a value function (TST-5).
 
@@ -167,6 +168,7 @@ the chapters' entries stay the hgraph target's.
 | What a `ref` parameter designates: the reference its `REF` input holds, present from the start where it is given a connection, or none, which an ordinary reader of the result it is published to observes | FN-16, TIME-10, END-10 | `references.h` | `references_tests.cpp` |
 | An enum as a value of the library and of the test host: its HGL name, its members' text, its schema with hgraph; core's `CmpResult`, `ZeroPolicy`, `Rounding`, `InvalidPolicy`, `LogLevel` | TYPE-7, TST-4, TST-5, OPS-3 | `values.h`, `traces.h` | `traces_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
+| Whether an input ticked in an evaluation, published or lost its value, by which a node with a timer tells its wakes apart; a capability lent to a source's body for one resumption | TIME-3, TIME-9, END-4, SOURCE-1, TIME-8 | `timing.h` | `timing_tests.cpp` |
 | A source's body as a coroutine, `generator<T>`: run on to each `yield` as it is resumed, in loops and branches, giving what it yields; what it lets out thrown again where it was resumed; its frame and the locals in it destroyed wherever it stopped | SOURCE-1 | `generator.h` | `generator_tests.cpp` |
 | Tests registered by name and run as named, from an entry unit that includes no hgraph header; `assert`; `assert raises`; a test held to a time limit, failed once past it and its runs stopped | TST-2, TST-10, TST-11, TST-15, TST-17 | `host.h`, `testing.h` | `testing_tests.cpp` |
 | Traces of scalars, nullables, tuples and lists, written dense and timed, each cell whole or a delta; their comparison with an eval's recording and the values its result held, and where two first differ; what one written out replays to an input and gives a `const fn` | TST-4, TST-5, TST-6, TST-7, TST-9, TST-16, CEVAL-2, TYPE-16 | `traces.h`, `testing.h` | `traces_tests.cpp`, `testing_tests.cpp` |

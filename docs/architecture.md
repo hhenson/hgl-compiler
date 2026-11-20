@@ -2086,9 +2086,10 @@ passing. The backend owns this list alongside its target tests.
 The second target, designed in [cpp-target.md](cpp-target.md): C++ against
 hgraph's graph, node, type and runtime layers, linked with `libhglrt`,
 the runtime library in `runtime/cpp`. It writes value code whole, value
-functions and the tests of them, and the temporal code of scalars:
-nodes, graphs, sources and the evals of them; the run's store where a
-graph is built, and applications. It reports every other
+functions and the tests of them, and the temporal code of scalars and
+enums: nodes, graphs, sources and the evals of them; windows; `ref`
+parameters and results; schedulers and alarms; an input's activity; the
+run's store where a graph is built, and applications. It reports every other
 form, as the hgraph target reports what it does not write, so that `hgl
 test --target cpp` runs over any program to its end.
 
