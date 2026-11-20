@@ -340,7 +340,13 @@ impl Emitter<'_> {
                 let Some(schema) = self.temporal_schema(&ty, argument.value.at) else {
                     return "0".to_string();
                 };
-                parameters.push(format!("::hgraph::In<{label}, {schema}> {name}"));
+                // FN-12: what the input asks beyond `valid` before the
+                // helper is invoked, as its temporal form says.
+                let admitted = self
+                    .lifted_admission(&ty)
+                    .map(|validity| format!(", {validity}"))
+                    .unwrap_or_default();
+                parameters.push(format!("::hgraph::In<{label}, {schema}{admitted}> {name}"));
                 roles.push(Role::Input);
                 wired.push(self.wiring_form(scope, &argument.value));
                 labels.push(None);

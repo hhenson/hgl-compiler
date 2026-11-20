@@ -157,7 +157,7 @@ impl Emitter<'_> {
         let Some(record) = self.core_instance("record", result, call.at) else {
             return "0".to_string();
         };
-        let Some(written) = self.written_type(result, call.at) else {
+        let Some(written) = self.payload_type(result, call.at) else {
             return "0".to_string();
         };
         text.push_str(&format!(
@@ -208,7 +208,7 @@ impl Emitter<'_> {
         };
         let library = names::testing("");
         let library = library.trim_end_matches("::");
-        let Some(written) = self.written_type(ty, value.at) else {
+        let Some(written) = self.payload_type(ty, value.at) else {
             return "0".to_string();
         };
         // TST-6: a dense trace; TST-7: a timed one, each cell with its key.
