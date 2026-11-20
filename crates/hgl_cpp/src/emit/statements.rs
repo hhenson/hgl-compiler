@@ -53,6 +53,11 @@ pub(super) struct Scope<'b> {
     /// written of the statement being written: a `?` after it would be
     /// run before it if it were written before the statement (EXPR-13).
     pub(super) acted: bool,
+    /// True once a local or a constant has been read of the statement
+    /// being written: a `?` after it whose operand runs statements could
+    /// change what it read, and would do so before it if it were written
+    /// before the statement.
+    pub(super) read: bool,
     /// True while the call that is the whole of a statement is written,
     /// until it starts: only it may assign places (FN-15).
     pub(super) statement_call: bool,
@@ -73,6 +78,7 @@ impl<'b> Scope<'b> {
             before: Vec::new(),
             conditional: 0,
             acted: false,
+            read: false,
             statement_call: false,
             read_as: None,
         }
@@ -90,6 +96,7 @@ impl<'b> Scope<'b> {
             before: Vec::new(),
             conditional: 0,
             acted: false,
+            read: false,
             statement_call: false,
             read_as: None,
         }
@@ -123,6 +130,7 @@ impl Emitter<'_> {
         let mut written = String::new();
         let outer_before = std::mem::take(&mut scope.before);
         let outer_acted = std::mem::replace(&mut scope.acted, false);
+        let outer_read = std::mem::replace(&mut scope.read, false);
         self.statement_text(scope, statement, depth, &mut written);
         for written in std::mem::replace(&mut scope.before, outer_before) {
             for line in written.lines() {
@@ -130,6 +138,7 @@ impl Emitter<'_> {
             }
         }
         scope.acted = outer_acted;
+        scope.read = outer_read;
         text.push_str(&written);
     }
 

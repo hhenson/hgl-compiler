@@ -538,3 +538,31 @@ fn a_place_beside_an_argument_that_runs_statements_is_reported() {
         ]
     );
 }
+
+/// ERR-5, EXPR-2: a `?` is run before its statement, so one whose operand
+/// runs statements, after a read in its statement, would change what was
+/// read before it was read; it is reported, and not written.
+#[test]
+fn a_propagation_of_statements_after_a_read_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
+            "const fn pick(a: i64, b: i64) -> i64 => a\n",
+            "const fn first() -> result<i64, error> {\n",
+            "    var x = 1\n",
+            "    return ok(pick(x, {\n",
+            "        x = 2\n",
+            "        checked(5)\n",
+            "    }?))\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:6:23 the cpp target does not write a `?` of statements, after a read in its statement yet"
+        ]
+    );
+}

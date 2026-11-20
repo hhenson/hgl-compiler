@@ -42,7 +42,11 @@ impl Emitter<'_> {
         if let Some((place, written)) = &scope.read_as
             && place == value
         {
+            scope.read = true;
             return written.clone();
+        }
+        if matches!(value.kind, ExprKind::Local(_) | ExprKind::Constant { .. }) {
+            scope.read = true;
         }
         match &value.kind {
             ExprKind::Literal(literal) => self.literal(literal, &value.ty, value.at),
@@ -378,11 +382,16 @@ impl Emitter<'_> {
     /// before the statement, and a failure leaves the function with its
     /// error; the expression is the success's payload. Only where it is
     /// run before anything else in its statement that may fail, and in
-    /// a function that gives a result.
+    /// a function that gives a result; and, where its operand runs
+    /// statements, which may change a place, before anything in its
+    /// statement reads a local or a constant (EXPR-2).
     fn propagated(&mut self, scope: &mut Scope, operand: &Expr, at: Location) -> String {
         let gives_result = matches!(scope.result, Some(Type::Result { .. }));
         if scope.conditional > 0 || scope.acted || !gives_result || scope.testing {
             return self.missing(at, "a `?` here");
+        }
+        if scope.read && changes(operand) {
+            return self.missing(at, "a `?` of statements, after a read in its statement");
         }
         let written = self.expression(scope, operand);
         let held = names::temporary("propagated", self.temporary());
