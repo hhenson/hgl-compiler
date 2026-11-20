@@ -3,7 +3,8 @@
 #include <hglrt/temporal.h>
 
 #include <format>
-#include <utility>
+#include <optional>
+#include <string>
 
 namespace hglrt {
 

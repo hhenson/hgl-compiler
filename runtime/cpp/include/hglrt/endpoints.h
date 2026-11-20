@@ -16,16 +16,23 @@
 // What an endpoint publishes in a cycle, `delta<T>` (TYPE-16), is read from
 // hgraph's delta by `endpoint_read`, the one place a temporal form says how
 // it is read: a scalar's is written here, and each construct lane adds its
-// form's (see `endpoint_read` below).
+// form's (see `endpoint_read` below). `delta_value` takes its form from its
+// place (ERR-14): `fn_delta_value` is the plain read, and
+// `fn_delta_value_checked` the read where the place takes
+// `result<delta<T>, error>`, which is `hglrt::result` (failure.h), a
+// `std::expected` of the delta and an HGL `error`.
 #pragma once
 
 #include <hglrt/checked.h>
+#include <hglrt/failure.h>
 #include <hglrt/values.h>
 
 #include <hgraph/types/generated.h>
 
+#include <expected>
 #include <optional>
 #include <source_location>
+#include <string>
 #include <type_traits>
 
 namespace hglrt {
@@ -45,7 +52,17 @@ using schema_of = typename std::remove_cvref_t<E>::schema;
 ///     from what the view published this cycle (END-3, TYPE-16), for
 ///     `delta_value`; and,
 ///   - for a collection or a window, a static `all_valid(view)` (END-7,
-///     END-9), for `all_valid`.
+///     END-9), for `all_valid`; and,
+///   - for a form whose endpoint may tick with no delta, a static
+///     `has_delta(view)`, whether it has one in the cycle. ERR-14: "Only a
+///     window of a duration has a tick with no delta, one in which a value
+///     only leaves it". A form without it has a delta wherever the endpoint
+///     is modified.
+///
+/// A window's specialization may hold more that its own natives read, what
+/// left it in the cycle for `removed_value` among them; those natives are
+/// the windows work's, beside these, and named as these are
+/// (`fn_removed_value_checked`).
 ///
 /// `valid`, `modified` and `last_modified` are the view's own for every
 /// form (hgraph: "True when this view or at least one structural child has
@@ -118,23 +135,59 @@ bool fn_all_valid(const E& endpoint) {
 /// published in the current cycle, an equal value included. END-2: "An
 /// input is not modified without being valid", and END-4: "An explicit
 /// `modified(input)` guard is false on that transition", the cycle it is
-/// invalidated in, so it is false for an endpoint that is not valid.
+/// invalidated in, so it is false for an endpoint that is not valid, as
+/// hgraph's own is for a scalar.
 template <class E>
 bool fn_modified(const E& endpoint) {
     return endpoint.valid() && endpoint.modified();
 }
 
-/// `delta_value<T>(input: endpoint<T>) -> delta<T>` (END-3): what the
-/// endpoint published in the current cycle, as the form's `endpoint_read`
-/// gives it. END-3: "The checker must prove `x` is valid and modified at
-/// the call"; an endpoint that is not valid has no payload to read, which
-/// fails the read with `value.unset_read` (TIME-1).
+/// The C++ type of the delta of the endpoint view `E`, `delta<T>`.
+template <class E>
+using endpoint_delta_t = typename endpoint_read<schema_of<E>>::delta_type;
+
+/// Whether the endpoint `endpoint` has a delta in the current cycle: it is
+/// modified, and its form says it has one (`endpoint_read::has_delta`).
+template <class E>
+bool has_delta(const E& endpoint) {
+    if (!fn_modified(endpoint)) {
+        return false;
+    }
+    if constexpr (requires { endpoint_read<schema_of<E>>::has_delta(endpoint); }) {
+        return endpoint_read<schema_of<E>>::has_delta(endpoint);
+    } else {
+        return true;
+    }
+}
+
+/// `delta_value<T>(input: endpoint<T>) -> delta<T>` (END-3), read where its
+/// place is no `result`: what the endpoint published in the current cycle,
+/// as the form's `endpoint_read` gives it. ERR-14: "elsewhere it gives the
+/// delta, and the read fails with that code where there is none", the code
+/// `value.unset_read`: where the endpoint is not modified in the cycle, not
+/// valid among it, or ticks with no delta. END-3: "The checker must prove
+/// `x` is valid and modified at the call".
 template <class E>
     requires requires(const E& endpoint) { endpoint_read<schema_of<E>>::delta(endpoint); }
-typename endpoint_read<schema_of<E>>::delta_type
-fn_delta_value(const E& endpoint, std::source_location where = std::source_location::current()) {
-    if (!endpoint.valid()) {
-        unset_read("the delta of an endpoint that is not valid is read", where);
+endpoint_delta_t<E> fn_delta_value(const E& endpoint,
+                                   std::source_location where = std::source_location::current()) {
+    if (!has_delta(endpoint)) {
+        unset_read("the delta of an endpoint that has none in the cycle is read", where);
+    }
+    return endpoint_read<schema_of<E>>::delta(endpoint);
+}
+
+/// `delta_value<T>(input: endpoint<T>)` where its place expects
+/// `result<delta<T>, error>` (ERR-14): "`ok` of the delta, or `err` coded
+/// `value.unset_read` where the endpoint has no delta in the cycle". For
+/// every form but a window of a duration it is `ok` wherever the endpoint
+/// is modified, so core's `record` reads every delta so.
+template <class E>
+    requires requires(const E& endpoint) { endpoint_read<schema_of<E>>::delta(endpoint); }
+result<endpoint_delta_t<E>> fn_delta_value_checked(const E& endpoint) {
+    if (!has_delta(endpoint)) {
+        return std::unexpected(make_error("the delta of an endpoint that has none in the cycle is read",
+                                          std::string{codes::unset_read}));
     }
     return endpoint_read<schema_of<E>>::delta(endpoint);
 }

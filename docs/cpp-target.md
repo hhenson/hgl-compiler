@@ -123,6 +123,16 @@ parameter. Where the pinned specification and hgraph differ, this target
 builds the specification's rule, and the difference goes to the
 specification's issue tracker to be decided there, not here.
 
+The scheduler is such a case (CAP-4), and `libhglrt` builds core's rule
+over hgraph's `NodeScheduler`, as the Python-writing target does: hgraph
+keeps the wake it delivers until the node has run, so in that evaluation
+it counts as pending, `un_schedule()` cancels it, and `is_scheduled_now`
+is false after `reset`; it keeps no wake under the empty tag; and it keeps
+a wall-clock wake at a time before the evaluation time for the next
+cycle. hgraph's alarm, which the target's is, drops a wake still to come
+where an input's tick evaluates the node first, which CAP-5's "best
+effort" admits.
+
 ## Progress and acceptance
 
 The measure is cases passing on this target: core's runtime cases (182 today)

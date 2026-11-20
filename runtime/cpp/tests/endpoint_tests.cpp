@@ -11,6 +11,9 @@
 
 #include <chrono>
 #include <optional>
+#include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -28,7 +31,7 @@ hgraph::Port<hgraph::TS<i64>> replayed(hgraph::Wiring& wiring, const Dense<i64>&
 }
 
 /// What a node saw of an endpoint in one evaluation: the evaluation's time,
-/// and `valid`, `modified`, `delta_value` where it is modified, and
+/// and `valid`, `modified`, `delta_value` where it has a delta, and
 /// `last_modified` of the endpoint.
 template <class Delta>
 struct Seen {
@@ -41,13 +44,31 @@ struct Seen {
     friend bool operator==(const Seen&, const Seen&) = default;
 };
 
-/// What `endpoint` shows at `at`.
+/// The code of the HGL failure `call` raises, or none.
+template <class Call>
+std::optional<std::string> code_raised(Call&& call) {
+    try {
+        call();
+    } catch (const hglrt::Failure& failure) {
+        return failure.error().code.value_or("(no code)");
+    }
+    return std::nullopt;
+}
+
+/// What `endpoint` shows at `at`. Its delta is read in both forms (ERR-14):
+/// where the place takes a `result`, `ok` of the delta or an `err` coded
+/// `value.unset_read`, and elsewhere the delta, or a failure of that code.
 template <class E>
 auto seen_of(datetime at, const E& endpoint) {
-    using Delta = typename hglrt::endpoint_read<hglrt::schema_of<E>>::delta_type;
+    using Delta = hglrt::endpoint_delta_t<E>;
+    const hglrt::result<Delta> checked = hglrt::fn_delta_value_checked(endpoint);
     std::optional<Delta> delta;
-    if (hglrt::fn_modified(endpoint)) {
-        delta = hglrt::fn_delta_value(endpoint);
+    if (checked.has_value()) {
+        delta = *checked;
+        CHECK(hglrt::fn_delta_value(endpoint) == *checked);
+    } else {
+        CHECK(checked.error().code == "value.unset_read");
+        CHECK(code_raised([&] { (void)hglrt::fn_delta_value(endpoint); }) == "value.unset_read");
     }
     return Seen<Delta>{at, hglrt::fn_valid(endpoint), hglrt::fn_modified(endpoint), delta,
                        hglrt::fn_last_modified(endpoint)};
@@ -278,5 +299,46 @@ static_assert(takes_delta_value<Input> && takes_delta_value<Output>);
 // Activity is a direct input's, and invalidation an output's.
 static_assert(takes_activate<Input> && !takes_activate<Output>);
 static_assert(takes_invalidate<Output> && !takes_invalidate<Input>);
+// The result form is the library's `result` of the delta (ERR-14).
+static_assert(std::is_same_v<decltype(hglrt::fn_delta_value_checked(std::declval<const Input&>())),
+                             hglrt::result<i64>>);
+
+/// The schema of a form whose endpoint may tick with no delta, as a window
+/// of a duration does where a value only leaves it.
+struct Fading {};
+
+/// A view of a `Fading` endpoint, valid and modified, which holds `held`
+/// and has a delta where `arrived`.
+struct FadingView {
+    using schema = Fading;
+    i64 held;
+    bool arrived;
+
+    [[nodiscard]] bool valid() const { return true; }
+    [[nodiscard]] bool modified() const { return true; }
+};
+
+} // namespace
+
+/// How a `Fading` endpoint is read: its delta is what it holds, where one
+/// arrived (`has_delta`).
+template <>
+struct hglrt::endpoint_read<Fading> {
+    using delta_type = i64;
+
+    static i64 delta(const FadingView& view) { return view.held; }
+    static bool has_delta(const FadingView& view) { return view.arrived; }
+};
+
+namespace {
+
+TEST_CASE("a form says where its endpoint ticks with no delta, which both reads see (ERR-14)") {
+    CHECK(hglrt::fn_delta_value_checked(FadingView{5, true}) == hglrt::result<i64>{5});
+    CHECK(hglrt::fn_delta_value(FadingView{5, true}) == 5);
+    const hglrt::result<i64> none = hglrt::fn_delta_value_checked(FadingView{5, false});
+    REQUIRE_FALSE(none.has_value());
+    CHECK(none.error().code == "value.unset_read");
+    CHECK(code_raised([] { (void)hglrt::fn_delta_value(FadingView{5, false}); }) == "value.unset_read");
+}
 
 } // namespace

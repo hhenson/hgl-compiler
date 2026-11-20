@@ -2210,7 +2210,9 @@ not use.
 | `text.h` | Core's natives of `str`: concatenation and repetition | OPS-1 |
 | `conversions.h` | Every `convert` of core's: those that cannot fail, and those that can under `invalid`; core's `Rounding` and `InvalidPolicy` | OPS-4, OPS-6 to OPS-8 |
 | `tenors.h` | Core's natives of `tenor`, which is hgraph's `Tenor` (counts and form alone): its arithmetic, order and text, and the parts core's calendar candidates use, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-9 |
-| `lists.h`, `capabilities.h` | `append`, `extend`; the global store's `get`, `has`, `put` | LIST-1 to LIST-3, CAP-6 |
+| `lists.h` | `append`, `extend` | LIST-1 to LIST-3 |
+| `endpoints.h` | Core's nine operations on an endpoint, each a template over the hgraph view it is given; `delta_value` plain and where a `result` is taken (`fn_delta_value_checked`); `endpoint_read`, through which a temporal form says how its delta is read, a scalar's and a nullable scalar's written | TIME-9, END-1 to END-10, ERR-14 |
+| `capabilities.h` | `Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`, each made from its hook's hgraph view, a member function for each property; `log`, `schedule` four ways, `un_schedule`, `reset`, the store's `get`, `has`, `put`; core's `LogLevel` | CAP-1 to CAP-6, TIME-8 |
 | `sources.h` | `constant`, a node that publishes a value once at the start; `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
 | `host.h` | What the entry unit of a test executable needs, and no hgraph header: registration and `main`, which holds a test to its time limit | TST-14, TST-15, TST-17 |
 | `traces.h` | Traces, dense and timed, of scalars, nullables, tuples and lists, each cell whole or a delta; their comparison and where two first differ; replay items and what a `const fn` is given; the text of a value | TST-4 to TST-7, TST-9, TST-16, CEVAL-2 |
@@ -2238,6 +2240,19 @@ datetime moved by a duration takes its zone's offset from hgraph's
 time-zone provider for the process, as hgraph's own codecs do: a value
 function is given no run's store, which a provider of the run's would be
 in.
+
+An endpoint operation is given the view the hook has, `In<"price",
+TS<i64>>`, `Out<TS<i64>>` or a child of one, and is named as an exported
+native is, `fn_valid`. A capability is made at the top of the hook that
+injects it, once, from the view hgraph gives that hook:
+`hglrt::Scheduler scheduler{view, hglrt::Hook::evaluation}`. The
+scheduler made in an evaluation takes the wakes due then from hgraph's
+`NodeScheduler`, which keeps them until the node has run, so that what
+is pending is what is still to come and `is_scheduled_now` stays true
+after `un_schedule` or `reset` (CAP-4); a tag goes to hgraph after a mark,
+since hgraph keeps no wake under the empty tag. An evaluation with no wake
+due and no input modified is no wake: hgraph evaluates the node at a
+wake that was cancelled. The alarm is hgraph's `SingleShotScheduler`.
 
 A list is `hglrt::list<T>` and not a bare `std::vector<T>` because hgraph
 hashes a value it holds as configuration, a source's items, through
