@@ -340,11 +340,10 @@ test a_window_within_a_value_read_before_it_is_all_valid_fails {
 
 # ---- A window of a duration (TYPE-11, END-9) ----
 
-# TYPE-11's illustration, as hhenson/hgl_spec#146 has it, which hgraph
-# 0.9.7 does (hhenson/hgraph#1818): "one that arrived at t is held at t +
-# Max and leaves one smallest step later (RUN-3), whether or not a value
-# arrives then. The window ticks for that exit": 1.0, of 0s, leaves at
-# 3s + 1us.
+# TYPE-11's illustration, which hgraph 0.9.7 follows (hhenson/hgraph#1818):
+# "one that arrived at t is held at t + Max and leaves one smallest step
+# later (RUN-3), whether or not a value arrives then. The window ticks for
+# that exit": 1.0, of 0s, leaves at 3s + 1us.
 # `all_valid`: "values whose arrival times, from the oldest held to the
 # newest, span at least Min".
 fn collect(price: f64) -> rolling_window<f64, 3s, 2s> {
@@ -397,9 +396,9 @@ test a_window_of_a_duration_read_before_its_span_fails {
     assert raises("value.unset_read") { eval(duration_list_flow(price: [0s: 1.0, 1s: 2.0])) }
 }
 
-# TYPE-11 (hhenson/hgl_spec#146): "A minimum of `0s` is held by the
-# first value, and an empty window is not all valid, whatever its
-# minimum", and "Omitted minimum equals maximum".
+# TYPE-11: "A minimum of `0s` is held by the first value, and an empty
+# window is not all valid, whatever its minimum", and "Omitted minimum
+# equals maximum".
 fn collect_from_zero(price: f64) -> rolling_window<f64, 3s, 0s> {
     when { return price }
 }

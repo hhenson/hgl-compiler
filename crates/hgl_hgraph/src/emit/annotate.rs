@@ -267,13 +267,13 @@ impl Emitter<'_> {
     ///
     /// hgraph's `TSW` is valid at its first value and all valid at its
     /// minimum, a count of values or the span of their arrival times, as
-    /// TYPE-11 and core's END-9 have it. TYPE-11, as hhenson/hgl_spec#146
-    /// has it: in one of a duration "one that arrived at t is held at t +
-    /// Max and leaves one smallest step later (RUN-3), whether or not a
-    /// value arrives then. The window ticks for that exit", and "A minimum
-    /// of `0s` is held by the first value, and an empty window is not all
-    /// valid": hgraph 0.9.7's `TSW` does each (hhenson/hgraph#1818), so
-    /// each size is written as the program writes it.
+    /// TYPE-11 and core's END-9 have it. TYPE-11: in one of a duration
+    /// "one that arrived at t is held at t + Max and leaves one smallest
+    /// step later (RUN-3), whether or not a value arrives then. The window
+    /// ticks for that exit", and "A minimum of `0s` is held by the first
+    /// value, and an empty window is not all valid": hgraph 0.9.7's `TSW`
+    /// does each (hhenson/hgraph#1818), so each size is written as the
+    /// program writes it.
     ///
     /// hgraph's window holds values that are scalars to it, so V is a
     /// scalar or an enum here. A window of a nullable, of a struct and

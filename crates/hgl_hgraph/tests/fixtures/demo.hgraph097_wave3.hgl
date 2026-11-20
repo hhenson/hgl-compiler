@@ -1,7 +1,6 @@
 module demo.hgraph097_wave3
 
-# A window of a duration (TYPE-11, core's END-9), as hhenson/hgl_spec#146
-# and hhenson/hgl_core#73 have it and hgraph 0.9.7 does
+# A window of a duration (TYPE-11, core's END-9), as hgraph 0.9.7 has it
 # (hhenson/hgraph#1818): "one that arrived at t is held at t + Max and
 # leaves one smallest step later (RUN-3), whether or not a value arrives
 # then. The window ticks for that exit: it wakes the window's readers and

@@ -49,7 +49,7 @@ transpiler: partial
 
 - hgraph: handlers run in source order
 - Omitting `modified` subscribes to every input and adds no publication condition
-- A window of a duration that a value leaves wakes its node and satisfies `modified` as a publication does (hhenson/hgl_spec#146): hgraph 0.9.7's `TSW` ticks for the exit
+- A window of a duration that a value leaves wakes its node and satisfies `modified` as a publication does: hgraph 0.9.7's `TSW` ticks for the exit
 - Explicit `modified()` and `modified(a, b)` require a current publication on any selected input, even when the selected inputs cover the entire node
 - A handler with `scheduled()` or `modified([])` is under one guard, that the node's scheduler or alarm woke it (TIME-9), and a header that is `scheduled()` alone requires no input valid
 - In a node that injects one, a handler with no `modified` selector is guarded by an input's wake: one published or was invalidated

@@ -1545,9 +1545,9 @@ def window_values(port):
 
 def window_delta(port):
     """`delta_value` of a window of a duration (the language's TYPE-11,
-    TYPE-16): the value that arrived in this cycle. TYPE-11, proposed
-    (hhenson/hgl_spec#146; core's END-9, hhenson/hgl_core#73): "where a
-    value leaves and none arrives, `delta_value` of the window,
+    TYPE-16): the value that arrived in this cycle. TYPE-11, proposed, as
+    core's END-9 has it too: "where a value leaves and none arrives,
+    `delta_value` of the window,
     which is the value that arrived (TYPE-16), has no value, and its read
     fails with `value.unset_read`". hgraph 0.9.7's `TSW` ticks for an exit
     and gives no delta for it, `None`, which no value it holds is: a

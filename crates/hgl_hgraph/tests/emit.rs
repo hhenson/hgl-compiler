@@ -6374,12 +6374,11 @@ fn a_constant_under_any_is_written_whole() {
     }
 }
 
-/// TYPE-11 (hhenson/hgl_spec#146): in a window of a duration "a value is
-/// held while its age is at most Max ... and leaves one smallest step
-/// later (RUN-3), whether or not a value arrives then. The window ticks
-/// for that exit", as hgraph 0.9.7's `TSW` does (hhenson/hgraph#1818):
-/// its sizes are written as the program writes them, "A minimum of `0s`
-/// is held by the first value".
+/// TYPE-11: in a window of a duration "a value is held while its age is
+/// at most Max ... and leaves one smallest step later (RUN-3), whether or
+/// not a value arrives then. The window ticks for that exit", as hgraph
+/// 0.9.7's `TSW` does (hhenson/hgraph#1818): its sizes are written as the
+/// program writes them, "A minimum of `0s` is held by the first value".
 /// "Proposed: where a value leaves and none arrives, `delta_value` of the
 /// window ... has no value, and its read fails with `value.unset_read`":
 /// the provider's `window_delta`, of an input and of a child. The
@@ -6401,12 +6400,11 @@ fn a_duration_windows_exit_and_its_delta_are_written() {
     ]);
 }
 
-/// TYPE-11 (hhenson/hgl_spec#146) says a window of a duration's own
-/// delta has no value where a value leaves and none arrives; what the
-/// delta of a struct or a list that holds one is then, it does not say,
-/// and hgraph gives the field none, as for one that did not change: it
-/// is reported. One of a window of ticks is written, and so is the
-/// child's own delta.
+/// TYPE-11 says a window of a duration's own delta has no value where a
+/// value leaves and none arrives (proposed); what the delta of a struct
+/// or a list that holds one is then, it does not say, and hgraph gives
+/// the field none, as for one that did not change: it is reported. One
+/// of a window of ticks is written, and so is the child's own delta.
 #[test]
 fn the_delta_of_a_value_that_holds_a_duration_window_is_reported() {
     let emitted = emit(&[fixture!(

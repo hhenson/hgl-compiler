@@ -336,6 +336,7 @@ transpiler: done
 
 - hgraph: a publication marks the input modified for its cycle, an equal one included; an idle cycle leaves it unmodified with its value; an input bound to a node's output observes that output
 - `modified(x)`, as a guard, admits a read of `x` as `valid(x)` does (TIME-4): the read stands under `(x.modified and x.valid)`
+- A window of a duration is modified at an exit with nothing published (END-9), as hgraph 0.9.7's `TSW` is
 - An input of a node in a branch started while the program runs, bound to an endpoint already valid, is modified in the cycle the branch starts and wakes its node, as hgraph samples an input it binds: of an `if`, a `switch` and a dictionary's child (CTRL-2, CTRL-7); core's conditional case passes
 - Not written as a rule, since the pinned text leaves it out: a `ref` parameter, a collection's children, and `delta_value` and `last_modified` of such an input as its branch starts
 
@@ -427,7 +428,7 @@ analyser: partial
 
 transpiler: partial
 
-- hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own; in one of a duration a value leaves one smallest step after its age is the maximum, and the window ticks for the exit, modified with nothing published (END-2), as hgraph 0.9.7's `TSW` does; a minimum of zero is held by the first value, and an empty window is not all valid; proposed: one emptied by exits stays valid, and `last_modified` is the exit's time: END-9 as hhenson/hgl_core#73 has it, which the pinned text does not carry yet; its window cases pass when run by hand
+- hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own; in one of a duration a value leaves one smallest step after its age is the maximum, and the window ticks for the exit, modified with nothing published (END-2), as hgraph 0.9.7's `TSW` does; a minimum of zero is held by the first value, and an empty window is not all valid; proposed: one emptied by exits stays valid, and `last_modified` is the exit's time
 - Proposed: `delta_value(x)` where a value leaves and none arrives fails with `value.unset_read` (`_core.window_delta`)
 - Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`), or gives that `err` where its place expects a `result<list<V>, error>` (`_core.window_result`); a lifted value function whose parameter has a default is not invoked where the window is valid and not all valid (FN-11); core's window cases pass
 - Left, reported: a window of a value that is no scalar or enum (TYPE-11), and invalidating one (END-4)

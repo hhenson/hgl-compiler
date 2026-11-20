@@ -521,12 +521,11 @@ impl Emitter<'_> {
     /// tail positions in `removed`", as hgraph 0.9.7's unbounded `TSL`
     /// reads it.
     pub(super) fn language_delta(&mut self, ty: &Type, delta: String, at: Location) -> String {
-        // TYPE-11, proposed (hhenson/hgl_spec#146): "where a value leaves
-        // and none arrives, `delta_value` of the window ... has no value"
-        // (`window_delta`). What the delta of a value that holds one is
-        // then, a struct's field among them, it does not say, and hgraph
-        // gives that field none, as for one that did not change: it is
-        // reported.
+        // TYPE-11, proposed: "where a value leaves and none arrives,
+        // `delta_value` of the window ... has no value" (`window_delta`).
+        // What the delta of a value that holds one is then, a struct's
+        // field among them, it does not say, and hgraph gives that field
+        // none, as for one that did not change: it is reported.
         if windows_in(self.program, ty).iter().any(duration_window) {
             self.unsupported(at, "the delta of a value that holds a window of a duration");
         }
