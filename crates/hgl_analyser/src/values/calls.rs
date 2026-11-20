@@ -733,10 +733,11 @@ impl<'a> Typer<'a> {
         // it holds (`inferred_from`); one that the call's place, or what
         // the call writes, binds to a type that holds a window rejects.
         // A window's delta is an ordinary value (TYPE-12: "the argument
-        // of `delta` [is] any type"), and is taken. FN-1's exception, "in a native value function, one of
-        // `endpoint<T>` (TIME-9)", takes the endpoint and not its
-        // payload, and is the whole type of its parameter (TYPE-12): a
-        // generic that stands only there is in no ordinary position.
+        // of `delta` [is] any type"), and is taken. FN-1's exception,
+        // "in a native value function, one of `endpoint<T>` (TIME-9)",
+        // takes the endpoint and not its payload, and is the whole type
+        // of its parameter (TYPE-12): a generic that stands only there is
+        // in no ordinary position.
         let ordinary = |at: Location| {
             signature
                 .result

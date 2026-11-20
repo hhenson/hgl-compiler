@@ -27,7 +27,7 @@ impl<'a> Typer<'a> {
     /// property `value`, a `delta<V>?`: null for a published null"; "A
     /// struct: ... a property for each field `name: F`, of the same
     /// name and of type `delta<F>?`: null where the field did not
-    /// change".
+    /// change"; and a window's `added` and `removed` (TYPE-11).
     fn delta_properties(&self, of: &Type) -> Option<Vec<(String, Type)>> {
         match of {
             Type::Set(_) => Some(vec![
@@ -325,9 +325,10 @@ impl<'a> Typer<'a> {
     /// rejected (`delta.overlap`)." A set's `added`, a dictionary's and
     /// a list's `updated`, are the first property, and `removed` the
     /// second. "A window's delta holds values, not members, and is not
-    /// malformed where they are equal", and is not looked at. What is compared is each entry written as a literal; one
-    /// that is not is known only as the graph runs, which "makes no
-    /// check". The later of the two entries is reported.
+    /// malformed where they are equal", and is not looked at. What is
+    /// compared is each entry written as a literal; one that is not is
+    /// known only as the graph runs, which "makes no check". The later of
+    /// the two entries is reported.
     fn delta_overlap(&mut self, ty: &Type, written: &[(usize, SyntaxNode, Type)]) {
         let Type::Delta(of) = ty else {
             return;
