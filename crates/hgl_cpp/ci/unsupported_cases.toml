@@ -60,10 +60,6 @@
     "conformance::a_default_does_not_stand_for_a_window_below_its_minimum",
     "conformance::a_lifted_default_returns_after_invalidation",
 ]
-"a node configured with an enum" = [
-    "conformance::a_reset_removes_all_wakes_from_an_inputless_node",
-    "conformance::cancelling_the_later_tag_preserves_the_earlier_wake",
-]
 "a temporal value of `MarketQuote`" = [
     "conformance::a_struct_is_all_valid_once_every_field_is",
     "conformance::a_struct_is_valid_once_one_field_is",

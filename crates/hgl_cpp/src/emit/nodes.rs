@@ -322,9 +322,6 @@ impl Emitter<'_> {
                     // TIME-9: the scheduler or the alarm, which wakes the
                     // node beside its inputs (`scheduling`).
                     if let Some(timer) = Timer::of(name) {
-                        if !self.timed_node(signature, *at) {
-                            return;
-                        }
                         context.timer = Some(timer);
                         timed.push(*local);
                     }

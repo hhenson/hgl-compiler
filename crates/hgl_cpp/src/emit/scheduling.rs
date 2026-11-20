@@ -20,10 +20,6 @@
 //! | A source's `eval` | each capability the body reads lent to it while it runs, `::hglrt::Lending` |
 //! | A source's `stop` (SOURCE-1: it "always runs when the node ends, whatever state the generator is in") | the body destroyed, then the hook's statements |
 //!
-//! Not written yet, and reported: a node a timer wakes that is
-//! configured with an enum, which hgraph holds only once the compiler
-//! writes the enum's `hgl_enum` (`values.h`).
-//!
 //! hgraph evaluates a node with a scheduler at a wake that was cancelled:
 //! no wake is due in that evaluation and, but where an input ticks then
 //! too, none ticked, so it runs no handler. Its alarm, which drops a wake
@@ -31,8 +27,7 @@
 //! effort as CAP-5 has it (`capabilities.h`).
 
 use hgl_analyser::hir::{Body, EndpointOperation, Expr, ExprKind, Hook, Stmt};
-use hgl_analyser::{DeclarationKind, LocalKind, Program, Signature, Type};
-use hgl_diagnostics::Location;
+use hgl_analyser::{LocalKind, Signature};
 use hgl_lower::nodes::{Handler, Timer};
 
 use super::Emitter;
@@ -276,26 +271,6 @@ pub(super) struct Hooked {
 }
 
 impl Emitter<'_> {
-    /// Whether the node of `signature`, which a timer wakes, is written:
-    /// one that is not is reported at `at`. Not yet one with a `const`
-    /// parameter that holds an enum: hgraph holds a configuration of a type
-    /// it registers, and the runtime library registers an enum by the
-    /// `hgl_enum` the compiler writes beside it (`values.h`), which it
-    /// does not write yet. Such a node would not compile, and its unit with
-    /// it; this falls away once `hgl_enum` is written.
-    pub(super) fn timed_node(&mut self, signature: &Signature, at: Location) -> bool {
-        let program = self.program;
-        if signature
-            .parameters
-            .iter()
-            .any(|parameter| parameter.constant && holds_enum(program, &parameter.ty, 0))
-        {
-            self.unsupported(at, "a node configured with an enum");
-            return false;
-        }
-        true
-    }
-
     /// What the declarations and hooks of the source of `signature` and
     /// `body` add to its node (SOURCE-1): "One with an `inject`, a
     /// `cache`, a `state`, a `start`, or a `stop` has its declarations,
@@ -498,32 +473,5 @@ impl Emitter<'_> {
             ));
         }
         Some(configs)
-    }
-}
-
-/// True where a value of `ty` holds an enum: is one, or holds one in a
-/// tuple, a list, a set, a dictionary, an optional, a result or a field
-/// of a struct, at any depth up to the analyser's bound of a type's depth.
-fn holds_enum(program: &Program, ty: &Type, depth: usize) -> bool {
-    if depth > 32 {
-        return true;
-    }
-    let inner = |ty: &Type| holds_enum(program, ty, depth + 1);
-    match ty {
-        Type::Named {
-            module,
-            declaration,
-            ..
-        } if program.modules[*module].declarations[*declaration].kind == DeclarationKind::Enum => {
-            true
-        }
-        Type::Named { .. } => hgl_lower::types::fields_of(program, ty)
-            .is_some_and(|fields| fields.iter().any(|(_, field)| inner(field))),
-        Type::Tuple(positions) => positions.iter().any(inner),
-        Type::List { element, .. } | Type::Set(element) => inner(element),
-        Type::Dict { key, value } => inner(key) || inner(value),
-        Type::Nullable(payload) | Type::Delta(payload) | Type::Atomic(payload) => inner(payload),
-        Type::Result { value, error } => inner(value) || inner(error),
-        _ => false,
     }
 }
