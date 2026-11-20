@@ -68,17 +68,20 @@ void check_index(i64 index, std::size_t size, std::source_location where);
 /// ends with the read's statement (`names()[0]`), the element itself, moved
 /// out of the list, so that nothing refers into a list that is gone: a
 /// `const` reference bound to it, which a `let` is (docs/cpp-target.md),
-/// keeps it.
+/// keeps it. Each gives what the vector's own `operator[]` gives: of a
+/// `list<bool>`, a `std::vector<bool>` that holds bits, the `bool` itself to
+/// read and the vector's reference to its bit as a place.
 template <class T>
-const T& item(const std::vector<T>& values, i64 index,
-              std::source_location where = std::source_location::current()) {
+typename std::vector<T>::const_reference item(const std::vector<T>& values, i64 index,
+                                              std::source_location where = std::source_location::current()) {
     detail::check_index(index, values.size(), where);
     return values[static_cast<std::size_t>(index)];
 }
 
 /// `values[index]` as a place, which an assignment writes (EXPR-3, FN-15).
 template <class T>
-T& item(std::vector<T>& values, i64 index, std::source_location where = std::source_location::current()) {
+typename std::vector<T>::reference item(std::vector<T>& values, i64 index,
+                                        std::source_location where = std::source_location::current()) {
     detail::check_index(index, values.size(), where);
     return values[static_cast<std::size_t>(index)];
 }

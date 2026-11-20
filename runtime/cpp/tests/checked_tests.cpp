@@ -44,6 +44,11 @@ static_assert(std::is_same_v<decltype(item(std::declval<const list<str>&>(), i64
 static_assert(std::is_same_v<decltype(item(std::declval<list<str>&>(), i64{0})), str&>);
 static_assert(std::is_same_v<decltype(item(std::declval<const std::array<str, 2>&>(), i64{0})), const str&>);
 static_assert(std::is_same_v<decltype(item(std::declval<std::array<str, 2>&>(), i64{0})), str&>);
+// A `list<bool>` is a `std::vector<bool>`, which holds bits: a read gives
+// the `bool` itself, and a place the vector's own reference to its bit.
+static_assert(std::is_same_v<decltype(item(std::declval<const list<bool>&>(), i64{0})), bool>);
+static_assert(
+    std::is_same_v<decltype(item(std::declval<list<bool>&>(), i64{0})), std::vector<bool>::reference>);
 
 } // namespace
 
@@ -123,6 +128,13 @@ TEST_CASE("an element of a list that ends with its statement outlives it (EXPR-7
     const auto& last =
         hglrt::item(std::array<hglrt::str, 2>{"x", "a second name long enough to be on the heap"}, 1);
     CHECK(last == "a second name long enough to be on the heap");
+    // A list of bool's element, read and written.
+    hglrt::list<bool> flags{true, false};
+    const auto& read = hglrt::item(std::as_const(flags), 0);
+    CHECK(read);
+    hglrt::item(flags, 1) = true;
+    CHECK(flags == hglrt::list<bool>{true, true});
+    CHECK_FALSE(hglrt::item(hglrt::list<bool>{false}, 0));
     // Its index is checked as any other's.
     try {
         (void)hglrt::item(names(), 2);
