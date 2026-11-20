@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -27,28 +28,25 @@ void same_form(const tenor& lhs, const tenor& rhs, std::string_view what, std::s
     fail(codes::out_of_range, "a count of a tenor is outside the signed 64-bit range", where);
 }
 
-i64 summed(i64 lhs, i64 rhs, std::source_location where) {
-    i64 out = 0;
-    if (__builtin_add_overflow(lhs, rhs, &out)) {
+/// `computed`, a count made with checked arithmetic, where it is one, and
+/// otherwise a failure at `where`.
+i64 in_range(std::optional<i64> computed, std::source_location where) {
+    if (!computed.has_value()) {
         count_out_of_range(where);
     }
-    return out;
+    return *computed;
+}
+
+i64 summed(i64 lhs, i64 rhs, std::source_location where) {
+    return in_range(detail::checked_add(lhs, rhs), where);
 }
 
 i64 subtracted(i64 lhs, i64 rhs, std::source_location where) {
-    i64 out = 0;
-    if (__builtin_sub_overflow(lhs, rhs, &out)) {
-        count_out_of_range(where);
-    }
-    return out;
+    return in_range(detail::checked_sub(lhs, rhs), where);
 }
 
 i64 scaled(i64 lhs, i64 rhs, std::source_location where) {
-    i64 out = 0;
-    if (__builtin_mul_overflow(lhs, rhs, &out)) {
-        count_out_of_range(where);
-    }
-    return out;
+    return in_range(detail::checked_mul(lhs, rhs), where);
 }
 
 /// The text of one unit pair of a tenor (TEN-9): `count` in `larger` units
@@ -72,6 +70,13 @@ std::string units(i64 count, std::uint64_t each, char larger, char smaller) {
 
 [[noreturn]] void date_out_of_range(std::source_location where) {
     fail(codes::out_of_range, "a date result is outside the years 1 to 9999", where);
+}
+
+/// `value` divided by `by`, which is above zero, rounded toward negative
+/// infinity.
+i128 floor_divided(i128 value, i128 by) {
+    const i128 whole = value / by;
+    return value % by < 0 ? whole - 1 : whole;
 }
 
 } // namespace
@@ -165,28 +170,31 @@ std::optional<i64> fn_business_days(const tenor& value) {
 
 date fn_moved(date day, const tenor& by, std::source_location where) {
     using namespace std::chrono;
+    // TEN-4: "Only the result is held to the range: the date the months give
+    // may lie outside it where the days bring the result back within it."
+    // The months and then the days are taken in 128 bits, which hold the
+    // date any count of either gives, and the result alone is checked.
+    //
     // The months first, counted from the year 0 so that a floor division
-    // gives the year: 128 bits hold any count of them.
+    // gives the year.
     const i128 month_index = static_cast<i128>(static_cast<int>(day.year())) * 12 +
                              (static_cast<unsigned>(day.month()) - 1) + by.months();
-    i128 year_number = month_index / 12;
-    i128 month_number = month_index % 12;
-    if (month_number < 0) {
-        month_number += 12;
-        --year_number;
-    }
-    if (year_number < 1 || year_number > 9999) {
-        date_out_of_range(where);
-    }
-    const year_month whole{year{static_cast<int>(year_number)},
-                           month{static_cast<unsigned>(month_number) + 1}};
+    const i128 year_number = floor_divided(month_index, 12);
+    const auto month_number = static_cast<unsigned>(month_index - year_number * 12) + 1;
+    // The Gregorian calendar repeats every 400 years, which are 146097 days:
+    // the year is taken as the one of its place in the cycle of the years
+    // 2000 to 2399, where `std::chrono` has its months' lengths, and the
+    // cycles between the two are counted in days.
+    const i128 cycles = floor_divided(year_number - 2000, 400);
+    const year_month whole{year{static_cast<int>(year_number - cycles * 400)}, month{month_number}};
     // The same day of that month, or its last where it has no such day.
     const unsigned last_day = static_cast<unsigned>((whole / last).day());
     const sys_days start{whole / std::min(static_cast<unsigned>(day.day()), last_day)};
     // Then the days.
+    constexpr i128 cycle_days = 146'097;
     constexpr i128 first_day = sys_days{year{1} / January / 1}.time_since_epoch().count();
     constexpr i128 latest_day = sys_days{year{9999} / December / 31}.time_since_epoch().count();
-    const i128 moved = static_cast<i128>(start.time_since_epoch().count()) + by.days();
+    const i128 moved = static_cast<i128>(start.time_since_epoch().count()) + cycles * cycle_days + by.days();
     if (moved < first_day || moved > latest_day) {
         date_out_of_range(where);
     }

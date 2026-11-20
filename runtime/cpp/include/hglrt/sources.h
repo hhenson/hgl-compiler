@@ -14,9 +14,12 @@
 #include <hglrt/values.h>
 
 #include <hgraph/types/generated.h>
+#include <hgraph/types/metadata/type_realization.h>
 
 #include <optional>
 #include <source_location>
+#include <span>
+#include <typeinfo>
 #include <utility>
 #include <variant>
 
@@ -38,11 +41,29 @@ struct Constant {
 
 /// FN-3: "An ordinary value of type T is accepted where composition expects
 /// a connection of T, and is wired as a constant, one publication when the
-/// graph starts." Two constants of one type and value are one node, as
-/// hgraph interns identical nodes.
+/// graph starts." Each constant is a node of its own, which hgraph does not
+/// intern (`Wiring::add_unique_node`): hgraph takes two nodes for one where
+/// their scalar configurations are equal under `==`, which holds of `0.0`
+/// and `-0.0`, and of a list or a tuple that holds either, though NUM-2 keeps
+/// them apart ("preserves IEEE special values, including signed zero"), so
+/// that one constant would publish the other's value. A constant publishes
+/// once, at the start: two of one value give each reader the same
+/// publication in the same cycle, and no reader can tell two nodes from one.
 template <class T>
 hgraph::Port<hgraph::TS<T>> constant(hgraph::Wiring& wiring, const T& value) {
-    return hgraph::wire<Constant<T>>(wiring, value);
+    using Signature = hgraph::StaticNodeSignature<Constant<T>>;
+    // The node's scalar configuration, as `hgraph::wire` makes it.
+    hgraph::Value scalars{
+        hgraph::value_type_for_wiring(Signature::scalar_schema(), wiring.realization_options())};
+    {
+        auto configured = scalars.as_bundle().begin_mutation();
+        configured["value"].set(value);
+    }
+    hgraph::NodeBuilder builder;
+    builder.implementation<Constant<T>>();
+    return hgraph::Port<hgraph::TS<T>>{
+        wiring, wiring.add_unique_node(typeid(Constant<T>), std::move(builder),
+                                       std::span<const hgraph::WiringPortRef>{}, std::move(scalars))};
 }
 
 // ---- Sources (SOURCE-1 to SOURCE-4) --------------------------------------

@@ -2278,9 +2278,9 @@ not use.
 | Header (`include/hglrt/`) | Holds | Rules |
 | --- | --- | --- |
 | `hglrt.h` | The one header generated code includes: all below | |
-| `values.h` | HGL's scalars as hgraph's types (`i64`, `f64`, `bool`, `str`, `bytes`, `date`, `time`, `datetime`, `duration`, `civil_datetime`, `zoned_datetime`, `tenor`); `list<T>`, a `std::vector<T>` with a hash, registered with hgraph as an atomic; `delta_t<T>`, a scalar's, a nullable's, a tuple's and a list's delta (`list_delta`) | TYPE-1, TYPE-2, TYPE-4, TYPE-16 |
+| `values.h` | HGL's scalars as hgraph's types (`i64`, `f64`, `bool`, `str`, `bytes`, `date`, `time`, `datetime`, `duration`, `civil_datetime`, `zoned_datetime`, `tenor`); `list<T>`, a `std::vector<T>` with a hash, registered with hgraph as an atomic; `delta_t<T>`, a scalar's, a nullable's, a tuple's and a list's delta (`list_delta`); an enum's names, `EnumNames`, which the enum gives through `hgl_enum` (found by argument-dependent lookup) and by which the library names it, prints its members (`Side.buy`) and registers it with hgraph as an atomic | TYPE-1, TYPE-2, TYPE-4, TYPE-7, TYPE-16 |
 | `failure.h` | `error` (hgraph's `CanonicalError`), `result<T>` (`std::expected`); `Failure`, hgraph's `ExecutionFailure` with the place it was raised at; `fail`, `fail_uncoded`, `raise`; the catalogued codes it raises | ERR-1, ERR-2, ERR-4, ERR-5, ERR-8 |
-| `checked.h` | Reads checked when they run: `unset_read`, `checked_value`, `checked_result`, `item` | TIME-1, ERR-14, EXPR-3 |
+| `checked.h` | Reads checked when they run: `unset_read`, `checked_value`, `checked_result`, `item` (a reference into a list that outlives the read, the element itself of one that ends with its statement) | TIME-1, ERR-14, EXPR-3 |
 | `scalar.h` | Core's natives of numbers and the ordered types: checked `i64` arithmetic, `f64` and mixed arithmetic, every division of numbers under each zero policy, exact numeric equality with tolerances, order and `compare_`, the Boolean forms; core's `ZeroPolicy` and `CmpResult` | NUM-1 to NUM-12, OPS-2, OPS-3, OPS-5 |
 | `temporal.h` | Core's natives of durations and instants: a duration's arithmetic, rounded and checked; a `datetime`, `civil_datetime`, `date` or `zoned_datetime` moved by a duration, and the duration between two; `date + time`; zoned equality | OPS-1, OPS-2, OPS-10, NUM-12 |
 | `text.h` | Core's natives of `str`: concatenation and repetition | OPS-1 |
@@ -2289,11 +2289,11 @@ not use.
 | `lists.h` | `append`, `extend` | LIST-1 to LIST-3 |
 | `endpoints.h` | Core's nine operations on an endpoint, each a template over the hgraph view it is given; `delta_value` plain and where a `result` is taken (`fn_delta_value_checked`); `endpoint_read`, through which a temporal form says how its delta is read, a scalar's and a nullable scalar's written | TIME-9, END-1 to END-10, ERR-14 |
 | `capabilities.h` | `Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`, each made from its hook's hgraph view, a member function for each property; `log`, `schedule` four ways, `un_schedule`, `reset`, the store's `get`, `has`, `put`; core's `LogLevel` | CAP-1 to CAP-6, TIME-8 |
-| `sources.h` | `constant`, a node that publishes a value once at the start; `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
+| `sources.h` | `constant`, a node that publishes a value once at the start, each a node of its own (hgraph would intern two whose values are equal under `==`, `0.0` and `-0.0` among them); `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
 | `generator.h` | `generator<T>`, the coroutine type of a source's body: `std::generator<T>`'s shape for a value type (a move-only view whose input iterator resumes the body to its next `co_yield`, and throws again what it lets out), which not every standard library has | SOURCE-1 |
 | `host.h` | What the entry unit of a test executable needs, and no hgraph header: registration and `main`, which holds a test to its time limit | TST-14, TST-15, TST-17 |
 | `traces.h` | Traces, dense and timed, of scalars, nullables, tuples and lists, each cell whole or a delta; their comparison and where two first differ; replay items and what a `const fn` is given; the text of a value | TST-4 to TST-7, TST-9, TST-16, CEVAL-2 |
-| `testing.h` | The rest of the test host: `check`, `raises`, `expect_same`, a run in simulation or in real time, its recording, and the values its result held | TST-2 to TST-11, TST-17, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
+| `testing.h` | The rest of the test host: `check`, `raises`, `expect_same`, a run in simulation or in real time, from no earlier than the earliest start to no later than the latest end (one with no end ends there), its recording, and the values its result held | TST-2 to TST-11, TST-17, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
 
 A native is a function named as the emitter names the candidate
 (`hgl_cpp`, `names::native_candidate`): the operator's name and the type
@@ -2307,8 +2307,8 @@ template whose first argument is the type converted to,
 `convert_i64<f64>`, the `T` of `convert<T>(value)`; one that can fail
 takes `invalid` after it, `convert_str<i64, InvalidPolicy::fail>`. Core's
 enums that the natives take or give (`ZeroPolicy`, `CmpResult`,
-`Rounding`, `InvalidPolicy`) are the library's, their members in core's
-order. One that can fail takes the place it is called from, a defaulted
+`Rounding`, `InvalidPolicy`, `LogLevel`) are the library's, their members
+in core's order. One that can fail takes the place it is called from, a defaulted
 `std::source_location`, which its failure carries: the HGL file and line
 where the generated code sets them with `#line`. hgraph keeps that place
 for a failure of `start` or `stop`, which it nests; one of an evaluation
@@ -2330,6 +2330,15 @@ after `un_schedule` or `reset` (CAP-4); a tag goes to hgraph after a mark,
 since hgraph keeps no wake under the empty tag. An evaluation with no wake
 due and no input modified is no wake: hgraph evaluates the node at a
 wake that was cancelled. The alarm is hgraph's `SingleShotScheduler`.
+
+An enum is named by `hgl_enum`, found by argument-dependent lookup, which
+each of core's enums the library declares has, and which the compiler
+writes for each enum of a program, in the enum's namespace and right
+after it: `constexpr ::hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept
+{ return {"demo.trade::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}};
+}`, the type's name qualified with its module's path, and each member
+with its HGL name. It is all an enum needs: its HGL name, its text
+(`Side.buy`) and its hgraph schema come from it.
 
 A list is `hglrt::list<T>` and not a bare `std::vector<T>` because hgraph
 hashes a value it holds as configuration, a source's items, through
