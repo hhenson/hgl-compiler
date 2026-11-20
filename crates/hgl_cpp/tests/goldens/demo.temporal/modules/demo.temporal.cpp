@@ -31,6 +31,7 @@
 #undef scaled
 #undef sources_and_constants
 #undef stamped
+#undef start
 #undef temporal
 #undef the_clock_is_read
 #undef ticks
