@@ -389,6 +389,11 @@ pub mod codes {
     /// A call leaves a generic parameter of its callee unresolved
     /// (GEN-2, GEN-8).
     pub const GENERIC_UNRESOLVED: &str = "generic.unresolved";
+    /// A call makes instances of generic declarations past what this
+    /// compiler follows (GEN-13: "an implementation has a bound on the
+    /// instances of one declaration, and rejects the program where they
+    /// pass it"). The catalogue's row is proposed.
+    pub const INSTANCE_LIMIT: &str = "generic.instance_limit";
     /// A call gives a generic value parameter of its callee no
     /// compile-time constant (GEN-8).
     pub const GENERIC_ARGUMENT_CONSTANT: &str = "generic.argument_constant";
@@ -512,11 +517,6 @@ pub mod codes {
         /// constant failures reject"). Local: the catalogue has no row
         /// for it.
         pub const CONSTANT_FAILURE: &str = "constant.failure";
-        /// A call makes more instances of generic functions than this
-        /// compiler follows to tell the `requires` they hold (GEN-3).
-        /// What is past that many is not told, and not taken to hold.
-        /// Local: the language sets no limit.
-        pub const INSTANCE_LIMIT: &str = "generic.instance_limit";
         /// `scheduled()` in a value function, a graph or a test, which is
         /// no node and has no schedule of its own (FN-9, TIME-9). Local:
         /// the catalogue's `inject.no_scheduler` names a node alone.
@@ -530,14 +530,13 @@ pub mod codes {
         pub const READING_LIMIT: &str = "reading.limit";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 9] = [
+        pub const ALL: [&str; 8] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
             YIELD_IN_VALUE,
             SWITCH_LABEL_CONSTANT,
             CONSTANT_FAILURE,
-            INSTANCE_LIMIT,
             SCHEDULED_OUTSIDE_NODE,
             READING_LIMIT,
         ];

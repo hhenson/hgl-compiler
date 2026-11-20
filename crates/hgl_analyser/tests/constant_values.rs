@@ -1185,7 +1185,7 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
 
 /// The instances a call makes are followed only where they reach a
 /// `requires`, and no further than this compiler follows: what is past
-/// that is not told, which is reported (local `generic.instance_limit`)
+/// that is not told, which is reported (`generic.instance_limit`, proposed)
 /// and not taken to hold (GEN-3). Two calls of itself at each level, with
 /// new arguments each time, make instances without end.
 #[test]

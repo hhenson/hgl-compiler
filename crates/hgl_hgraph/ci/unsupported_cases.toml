@@ -6,3 +6,6 @@
 # under a reason that names the missing rule. A listed case must fail by
 # not being rejected: one that is rejected fails the check.
 [rejections]
+"instances of one declaration that never end when the program is compiled, past the implementation's bound (GEN-13)" = [
+    "conformance::rejections/generic_instances.hgl::climbed",
+]

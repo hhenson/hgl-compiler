@@ -109,6 +109,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "generic.kind_unresolved"),
     (Category::Type, "generic.argument_kind"),
     (Category::Type, "generic.unresolved"),
+    (Category::Type, "generic.instance_limit"),
     (Category::Type, "generic.argument_constant"),
     (Category::Constraint, "requires.unmet"),
     (Category::Type, "struct.parent"),
