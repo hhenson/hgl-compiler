@@ -36,7 +36,7 @@ use hgl_lower::types::inherited;
 
 use super::Emitter;
 use super::calls::{changes, may_fail};
-use super::expressions::{held_read, integer_literal};
+use super::expressions::{held_read, integer_literal, reads_an_element};
 use super::names::{self, identifier, module_namespace};
 use super::statements::{Scope, refers};
 use super::types::{cpp_type, cpp_type_in, enum_name};
@@ -1204,34 +1204,58 @@ impl Emitter<'_> {
     /// `book[key]` as a place (EXPR-3): "A key the dictionary has not is
     /// added" where `adds`, the place the assignment writes whole;
     /// otherwise the key must be there, as a compound assignment reads
-    /// the place first. `base` is the dictionary's place, written; the key
-    /// is held before the statement where `holds` is true.
+    /// the place first. `base` is the dictionary's place, `listed` it
+    /// written. EXPR-2: the dictionary's place, then the key. Where the
+    /// key is held before the statement (`holds`), a dictionary's place
+    /// that is read checked (an element or an entry) is checked there
+    /// first; where it is not, and both that place and the key may fail,
+    /// the entry is made by a lambda that takes them in that order, as a
+    /// list's element is (`statements::place_held`).
     pub(super) fn dict_place(
         &mut self,
         scope: &mut Scope,
-        base: String,
+        (base, listed): (&Expr, String),
         index: &Expr,
         holds: bool,
         adds: bool,
     ) -> Option<String> {
-        let written = self.expression(scope, index);
-        let key = if holds
+        let function = format!(
+            "::{}::{}",
+            runtime::NAMESPACE,
+            if adds { "entry" } else { "entry_at" }
+        );
+        let held = holds
             && !matches!(
                 index.kind,
                 ExprKind::Literal(_) | ExprKind::EnumMember { .. }
-            ) {
-            let ty = self.named_type(&index.ty)?;
-            let held = names::temporary("key", self.temporary());
-            scope.before.push(format!("const {ty} {held} = {written};"));
-            held
-        } else {
-            written
-        };
-        let function = if adds { "entry" } else { "entry_at" };
-        Some(format!(
-            "::{}::{function}({base}, {key})",
-            runtime::NAMESPACE
-        ))
+            );
+        if held && reads_an_element(base) {
+            scope.before.push(format!("static_cast<void>({listed});"));
+        }
+        let written = self.expression(scope, index);
+        let key_type = self.named_type(&index.ty)?;
+        if held {
+            let key = names::temporary("key", self.temporary());
+            scope
+                .before
+                .push(format!("const {key_type} {key} = {written};"));
+            return Some(format!("{function}({listed}, {key})"));
+        }
+        if !holds && reads_an_element(base) && may_fail(index) {
+            // A reference to the entry, or the place that adds it, which
+            // holds its dictionary by reference and its key as a value.
+            let result = match &base.ty {
+                _ if adds => String::new(),
+                Type::Dict { value, .. } => format!(" -> {}&", self.named_type(value)?),
+                _ => return None,
+            };
+            let book = names::temporary("book", self.temporary());
+            let key = names::temporary("key", self.temporary());
+            return Some(format!(
+                "[&](){result} {{ auto& {book} = {listed}; const {key_type} {key} = {written}; return {function}({book}, {key}); }}()"
+            ));
+        }
+        Some(format!("{function}({listed}, {written})"))
     }
 
     /// The C++ place a field of the struct `base` is (EXPR-3), `base`

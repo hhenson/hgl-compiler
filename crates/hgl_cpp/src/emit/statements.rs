@@ -625,8 +625,8 @@ impl Emitter<'_> {
                 // EXPR-3: "A key the dictionary has not is added"
                 // (`composites`).
                 Type::Dict { .. } if scope.assigning.is_some() => {
-                    let base = self.place_held(scope, base, holds)?;
-                    self.dict_place(scope, base, index, holds, adds)
+                    let listed = self.place_held(scope, base, holds)?;
+                    self.dict_place(scope, (base, listed), index, holds, adds)
                 }
                 _ => None,
             },

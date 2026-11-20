@@ -15,6 +15,7 @@
 #undef Sided
 #undef Tagged
 #undef ZeroPolicy
+#undef a_dictionarys_place_comes_before_its_key
 #undef a_failing_value_adds_no_key
 #undef a_missing_key_fails
 #undef a_struct_holding_nan_is_not_equal_to_itself
@@ -77,6 +78,7 @@
 #undef moved_in
 #undef name
 #undef named
+#undef names
 #undef next
 #undef none
 #undef note
@@ -97,6 +99,7 @@
 #undef rounds
 #undef rows
 #undef same
+#undef seen
 #undef sell
 #undef sets_have_no_order
 #undef seven
@@ -633,6 +636,42 @@ void a_failing_value_adds_no_key()
     });
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>>(rows, ::hglrt::list<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}})}));
+}
+
+void a_dictionarys_place_comes_before_its_key()
+{
+    ::hglrt::testing::statement();
+    [[maybe_unused]] ::hglrt::list<::hglrt::dict<::hgraph::Str, ::hgraph::Int>> rows = ::hglrt::list<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}})};
+    ::hglrt::testing::statement();
+    [[maybe_unused]] ::hgraph::Int seen = 0;
+    ::hglrt::testing::statement();
+    ::hglrt::testing::raises("value.index_out_of_range", [&] {
+        static_cast<void>(::hglrt::item(rows, 5));
+        const ::hgraph::Str key_00_ = [&]() -> ::hgraph::Str {
+            seen = 1;
+            return ::hgraph::Str{"b"};
+        }();
+        static_cast<void>(::hglrt::entry(::hglrt::item(rows, 5), key_00_));
+        ::hglrt::entry(::hglrt::item(rows, 5), key_00_) = 1;
+    });
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(seen, 0, 0.0, 0.0));
+    ::hglrt::testing::statement();
+    [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Str> names = ::hglrt::dict_of<::hgraph::Str, ::hgraph::Str>({{::hgraph::Str{"a"}, ::hgraph::Str{"b"}}});
+    ::hglrt::testing::statement();
+    ::hglrt::testing::raises("value.index_out_of_range", [&] {
+        static_cast<void>(::hglrt::item(rows, 5));
+        const ::hgraph::Str key_01_ = ::hglrt::entry_at(names, ::hgraph::Str{"missing"});
+        static_cast<void>(::hglrt::entry(::hglrt::item(rows, 5), key_01_));
+        ::hglrt::entry(::hglrt::item(rows, 5), key_01_) = 1;
+    });
+    ::hglrt::testing::statement();
+    static_cast<void>(::hglrt::item(rows, 0));
+    const ::hgraph::Str key_02_ = ::hglrt::entry_at(names, ::hgraph::Str{"a"});
+    static_cast<void>(::hglrt::entry(::hglrt::item(rows, 0), key_02_));
+    ::hglrt::entry(::hglrt::item(rows, 0), key_02_) = 2;
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>>(rows, ::hglrt::list<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}, {::hgraph::Str{"b"}, 2}})}));
 }
 
 void deltas_are_values()

@@ -186,12 +186,13 @@ HGLRT_NO_DANGLING V& entry_at(dict<K, V>& book, const std::type_identity_t<K>& k
 /// `book[key]` as the place an assignment writes whole (EXPR-3): "A key the
 /// dictionary has not is added". The key is added, or its value replaced,
 /// where the value is assigned, and not before: naming the place changes
-/// nothing, so a value that fails leaves the dictionary as it was. It lives
+/// nothing, so a value that fails leaves the dictionary as it was. It holds
+/// its dictionary by reference and its key as a value of its own, and lives
 /// only in the statement that assigns it.
 template <class K, class V>
 class entry_place {
   public:
-    entry_place(dict<K, V>& book, const K& key) : book_(book), key_(key) {}
+    entry_place(dict<K, V>& book, K key) : book_(book), key_(std::move(key)) {}
 
     /// Gives the key `value`, adding the key where the dictionary has not.
     entry_place& operator=(V value) {
@@ -201,7 +202,7 @@ class entry_place {
 
   private:
     dict<K, V>& book_;
-    const K& key_;
+    K key_;
 };
 
 /// The place `book[key]` an assignment writes whole (`entry_place`).

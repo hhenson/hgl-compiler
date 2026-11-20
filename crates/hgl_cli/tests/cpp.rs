@@ -464,7 +464,7 @@ fn composite_values_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 13 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 14 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

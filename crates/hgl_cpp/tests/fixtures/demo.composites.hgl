@@ -360,6 +360,25 @@ test a_failing_value_adds_no_key {
     assert rows == [["a": 1]]
 }
 
+# EXPR-2: a dictionary's place is checked before its key is evaluated.
+test a_dictionarys_place_comes_before_its_key {
+    var rows: list<dict<str, i64>> = [["a": 1]]
+    var seen = 0
+    assert raises("value.index_out_of_range") {
+        rows[5][{
+            seen = 1
+            "b"
+        }] = 1
+    }
+    assert seen == 0
+    let names: dict<str, str> = ["a": "b"]
+    assert raises("value.index_out_of_range") {
+        rows[5][names["missing"]] = 1
+    }
+    rows[0][names["a"]] = 2
+    assert rows == [["a": 1, "b": 2]]
+}
+
 test deltas_are_values {
     assert arrived(joined("a")) == ["a"]
     assert joined("a").removed == []
