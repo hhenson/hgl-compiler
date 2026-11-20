@@ -2162,9 +2162,10 @@ The crate's tests compare the C++ written for the slice with goldens
 under `crates/hgl_cpp/tests/goldens/` (`HGL_UPDATE_GOLDENS=1 cargo test
 -p hgl_cpp --test emit` writes them again) and check what blocks what.
 `crates/hgl_cli/tests/cpp.rs` checks the driver: what is said with no
-SDK, `emit` and `run`; and, given an SDK and an `hgl` built with the
-runtime library, the whole route and that a failed build runs no older
-executable, with `cargo test -p hgl_cli --test cpp -- --ignored`.
+SDK, `emit` and `run`; and, given an SDK, the whole route and that a
+failed build runs no older executable, with `cargo test -p hgl_cli
+--test cpp -- --ignored`, which the `cpp` job of the CI workflow runs,
+with `check_core.py --target cpp`.
 
 The target's progress is counted in cases: core's runtime cases, and
 later the fixture programs' tests. Each case the target does not run is

@@ -2,8 +2,8 @@
 //! a user would.
 //!
 //! The tests that build and run C++ need hgraph's C++ SDK, which the
-//! environment variables `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name,
-//! and an `hgl` built with the C++ runtime library. They are ignored
+//! environment variables `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name.
+//! They are ignored
 //! unless asked for: `cargo test -p hgl_cli --test cpp -- --ignored`
 //! runs them, as the CI job for C++ does. The CI job for hgraph runs
 //! every ignored test of this crate with no C++ SDK; there they say so
