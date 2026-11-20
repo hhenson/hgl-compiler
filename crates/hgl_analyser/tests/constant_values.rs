@@ -1112,29 +1112,36 @@ fn an_enum_construction_takes_an_integer_or_a_string() {
 
 // ---- The review of #218 ----
 
-/// GEN-3: "A call of a function whose `requires` does not hold with the
-/// generic arguments the call resolves is rejected." A call that passes
-/// on a generic value parameter of its own, `one_only<Y>`, resolves its
-/// arguments where a call gives `Y` a value: the `requires` is told
-/// there, at any depth, in a value function, a graph, an operator's
-/// candidate and one a named operator requirement is answered by, of a
-/// type as of a value. "Not told"
-/// is never "holds": one still not told where every argument is given,
-/// as of a constant this compiler does not work out, is rejected.
+/// GEN-7: a generic body "is judged once, where it is declared, by what
+/// its `requires` states, and never again for the generic arguments a
+/// call of it gives" (hhenson/hgl_spec#144: so is a call in it of another
+/// generic function). A call that passes on a generic value parameter of
+/// its own, `one_only<Y>`, holds where the body states enough: `requires
+/// Y == 1.0` binds `Y` (GEN-3), and a membership whose every member makes
+/// the callee's `requires` hold, at any depth, in a value function, a
+/// graph, an operator's candidate and one a named operator requirement is
+/// answered by, of a type as of a value. A call of the body is then held
+/// to the body's own `requires` (GEN-3: "A call of a function whose
+/// `requires` does not hold with the generic arguments the call resolves
+/// is rejected"). A struct a type the body writes applies is told for
+/// each instance. Where the body states nothing, or a membership with a
+/// member the callee does not admit, it rejects where it is declared.
+/// "Not told" is never "holds": a constant this compiler does not work
+/// out is rejected.
 #[test]
 fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
     let shared = concat!(
         "const fn one_only<const X: f64>(v: f64) -> f64 requires X == 1.0 => v * X\n",
-        "const fn outer<const Y: f64>(v: f64) -> f64 => one_only<Y>(v)\n",
-        "const fn outer2<const Z: f64>(v: f64) -> f64 => outer<Z>(v)\n",
-        "fn temporal_outer<const Y: f64>(v: f64) -> f64 => one_only<Y>(v)\n",
+        "const fn outer<const Y: f64>(v: f64) -> f64 requires Y == 1.0 => one_only<Y>(v)\n",
+        "const fn outer2<const Z: f64>(v: f64) -> f64 requires Z == 1.0 => outer<Z>(v)\n",
+        "fn temporal_outer<const Y: f64>(v: f64) -> f64 requires Y == 1.0 => one_only<Y>(v)\n",
         "const fn int_only<const X: i64>(v: i64) -> i64 requires X == 1 => v * X\n",
-        "const fn int_outer<const Y: i64>(v: i64) -> i64 => int_only<Y>(v)\n",
+        "const fn int_outer<const Y: i64>(v: i64) -> i64 requires Y in {1} => int_only<Y>(v)\n",
         "const fn two() -> f64 => 2.0\n",
         "const C: f64 = two()\n",
         "struct FBox<const X: f64> { v: i64 }\n",
         "const fn not_two<T>(x: T) -> i64 requires !(T == FBox<2.0>) => 1\n",
-        "const fn wrap<const X: f64>(fb: FBox<X>) -> i64 => not_two(fb)\n",
+        "const fn wrap<const X: f64>(fb: FBox<X>) -> i64 requires X in {1.0, 3.0} => not_two(fb)\n",
     );
     expect(
         &format!(
@@ -1155,7 +1162,7 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
              const fn only_two<T>(x: T) -> i64 requires T == FBox<2.0> => 1\n\
              const fn g() -> i64 => only_two(FBox<C>(v: 1))\n\
              operator unwrap<T>(boxed: T) -> i64\n\
-             impl const fn unwrap<const X: f64>(boxed: FBox<X>) -> i64 => only_two(boxed)\n\
+             impl const fn unwrap<const X: f64>(boxed: FBox<X>) -> i64 requires X == 2.0 => only_two(boxed)\n\
              const fn h() -> i64 => unwrap(FBox<1.0>(v: 1))\n\
              const fn k() -> i64 => unwrap(FBox<2.0>(v: 1))\n\
              struct Only<T> requires T == FBox<2.0> {{ v: i64 }}\n\
@@ -1174,34 +1181,55 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
             "17 requires.unmet",
             "18 requires.unmet",
             "20 requires.unmet",
-            "23 requires.unmet",
+            // No candidate of `unwrap` is for `FBox<1.0>` (GEN-6).
+            "23 operator.no_candidate",
             // The result's type and the construction each apply it.
             "27 requires.unmet",
             "27 requires.unmet",
             "30 requires.unmet",
         ],
     );
+    // Rejected where they are declared: nothing stated, a member the
+    // callee does not admit, in a value function and a graph, and a
+    // candidate that states nothing.
+    expect(
+        &format!(
+            "{shared}const fn bare<const Y: f64>(v: f64) -> f64 => one_only<Y>(v)\n\
+             const fn wider<const Y: f64>(v: f64) -> f64 requires Y in {{1.0, 2.0}} => one_only<Y>(v)\n\
+             fn temporal_bare<const Y: f64>(v: f64) -> f64 => one_only<Y>(v)\n\
+             const fn wrapped<const X: f64>(fb: FBox<X>) -> i64 => not_two(fb)\n"
+        ),
+        &[
+            "13 requires.unmet",
+            "14 requires.unmet",
+            "15 requires.unmet",
+            "16 requires.unmet",
+        ],
+    );
 }
 
-/// The instances a call makes are followed only where they reach a
-/// `requires`, or a generic argument worked out from the body's own
-/// parameters, whose evaluation may fail there (ERR-9), and no further
-/// than this compiler follows: what is past that is not told, which is
-/// reported (`generic.instance_limit`, proposed in GEN-13) and not taken to hold
-/// (GEN-3). Two calls of itself at each level, with new arguments each
-/// time, make instances without end.
+/// GEN-13: "Where the instances of one declaration never end when the
+/// program is compiled, the program rejects ... an implementation has a
+/// bound on the instances of one declaration, and rejects the program
+/// where they pass it" (`generic.instance_limit`, proposed). Every body
+/// that passes its generic parameters on is followed, each instance once,
+/// and no further than this compiler follows: two calls of itself at each
+/// level, with new arguments each time, make instances without end. A
+/// call in a generic body of another generic function is judged where
+/// the body is declared, by what the body states (GEN-7;
+/// hhenson/hgl_spec#144): `grow` states nothing of `N` that makes `need`'s
+/// `requires` hold, and is rejected there.
 #[test]
 fn the_instances_a_call_makes_are_followed_within_a_bound() {
     let shared = concat!(
         "const fn need<const N: i64>(v: i64) -> i64 requires N in {1, 2, 3} => v\n",
-        "const fn grow<const N: i64>(v: i64) -> i64 => need<N>(v) + grow<N * 2>(v) + grow<N * 2 + 1>(v)\n",
         "const fn free<const N: i64>(v: i64) -> i64 => free<N * 2>(v) + free<N * 2 + 1>(v)\n",
         "const fn every<const N: i64>(v: i64) -> i64 requires N == N => v\n",
         "const fn spin<const N: i64>(v: i64) -> i64 => every<N>(v) + spin<N * 2>(v) + spin<N * 2 + 1>(v)\n",
     );
     expect(
         &format!("{shared}const fn a() -> i64 => free<1>(1)\n"),
-        &["7 generic.instance_limit"],
+        &["6 generic.instance_limit"],
     );
     // An instance whose arguments grow is followed no further than they
     // may be held: `S + S` doubles a string at each level.
@@ -1211,7 +1239,7 @@ fn the_instances_a_call_makes_are_followed_within_a_bound() {
              const fn doubled<const S: str>(v: i64) -> i64 => same_text<S>(v) + doubled<S + S>(v)\n\
              const fn a() -> i64 => doubled<\"x\">(1)\n"
         ),
-        &["9 generic.instance_limit"],
+        &["8 generic.instance_limit"],
     );
     // One instance made from many calls is followed once: four thousand
     // and more calls of `wrap<1>` are one instance of it, whose
@@ -1220,29 +1248,35 @@ fn the_instances_a_call_makes_are_followed_within_a_bound() {
         .map(|index| format!("const fn c{index}() -> i64 => wrap<1>(1)\n"))
         .collect();
     expect(
-        &format!("{shared}const fn wrap<const N: i64>(v: i64) -> i64 => need<N>(v)\n{calls}"),
+        &format!(
+            "{shared}const fn wrap<const N: i64>(v: i64) -> i64 requires N == 1 => need<N>(v)\n{calls}"
+        ),
         &[],
     );
-    // A `requires` not told for a constant not worked out beside a
-    // parameter the call passes on is told for each instance: `B` may
-    // settle it whatever `C` is.
+    // A `requires` beside a constant not worked out is told by what the
+    // body binds: `B` settles it whatever `C` is.
     expect(
         &format!(
             "{shared}const fn two() -> f64 => 2.0\n\
              const C: f64 = two()\n\
              const fn either<const A: f64, const B: f64>(v: i64) -> i64 requires A == 1.0 || B == 2.0 => v\n\
-             const fn pass<const X: f64>(v: i64) -> i64 => either<C, X>(v)\n\
+             const fn pass<const X: f64>(v: i64) -> i64 requires X == 2.0 => either<C, X>(v)\n\
              const fn a() -> i64 => pass<2.0>(1)\n\
              const fn b() -> i64 => pass<3.0>(1)\n"
         ),
-        &["12 requires.unmet"],
+        &["11 requires.unmet"],
     );
     expect(
         &format!(
-            "{shared}const fn a() -> i64 => grow<1>(1)\n\
+            "{shared}const fn grow<const N: i64>(v: i64) -> i64 => need<N>(v) + grow<N * 2>(v) + grow<N * 2 + 1>(v)\n\
+             const fn a() -> i64 => grow<1>(1)\n\
              const fn b() -> i64 => spin<1>(1)\n"
         ),
-        &["7 requires.unmet", "8 generic.instance_limit"],
+        &[
+            "6 requires.unmet",
+            "7 generic.instance_limit",
+            "8 generic.instance_limit",
+        ],
     );
 }
 
@@ -1252,7 +1286,8 @@ fn the_instances_a_call_makes_are_followed_within_a_bound() {
 /// comparison. "under negation/disjunction it only tests
 /// already-resolved data": a type equality has the same three answers as
 /// a constant's: `!(T == FBox<2.0>)` is not told of an `FBox<X>` while
-/// `X` is not given (where it is, see
+/// `X` is not given, and a body that calls `not_two` so states what
+/// tells it, `requires X in {1.0, 3.0}` (GEN-7; see
 /// `a_requires_is_told_where_a_passed_on_parameter_is_given`).
 #[test]
 fn a_requires_compares_two_options_and_a_type_in_three_answers() {
@@ -1263,7 +1298,7 @@ fn a_requires_compares_two_options_and_a_type_in_three_answers() {
         "const fn modes<const A: Mode, const B: Mode>(v: i64) -> i64 requires A == B => v\n",
         "const fn within<const N: i64, const M: i64>(v: i64) -> i64 requires N in {M, 5} => v\n",
         "const fn not_two<T>(x: T) -> i64 requires !(T == FBox<2.0>) => 1\n",
-        "const fn outer<const X: f64>(fb: FBox<X>) -> i64 => not_two(fb)\n",
+        "const fn outer<const X: f64>(fb: FBox<X>) -> i64 requires X in {1.0, 3.0} => not_two(fb)\n",
     );
     expect(
         &format!(

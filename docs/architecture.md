@@ -1231,10 +1231,13 @@ A function and a struct with no generic parameter are held to a
 `requires` they state too. What cannot be told where a generic body
 passes on a parameter of its own is told once the typed program is
 whole, for each instance a call that gives every argument makes, at any
-depth (`requirements::instances_hold`), and reported at that call. So
-is a generic argument worked out from the body's own generic
-parameters, rejected (`generic.argument_constant`) where its
-evaluation fails there. A call of an operator in a generic body whose
+depth (`requirements::instances_hold`), and reported at that call: of a
+struct a type in a generic declaration applies, and a generic argument
+worked out from the body's own generic parameters, rejected
+(`generic.argument_constant`) where its evaluation fails there. A call
+of another generic function in a generic body is judged where the body
+is declared, by what its `requires` states (GEN-7,
+hhenson/hgl_spec#144), and is not judged again for each instance. A call of an operator in a generic body whose
 candidate the body's own parameters would select is judged once, where
 the body is declared, under what its `requires` states (GEN-7): a named
 operator requirement makes it the required operation; a membership

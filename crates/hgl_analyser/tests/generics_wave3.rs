@@ -280,9 +280,12 @@ fn an_option_a_generic_parameter_gives_is_judged_by_its_requirements() {
 /// and whose evaluation fails there, an `i64` out of range or a division
 /// of two `i64` by zero, is rejected where the instance is made, as the
 /// same argument written in place is (`generic.argument_constant`): with
-/// no `requires` anywhere, through another instance, in a struct's
-/// construction, and before the callee's `requires`, which is then not
-/// told. Where it works out, nothing is reported.
+/// no `requires` anywhere, through another instance, and in a struct's
+/// construction. A call whose callee states a `requires` is judged where
+/// the body is declared, by what the body states (GEN-7;
+/// hhenson/hgl_spec#144), and there the argument fails for a member the
+/// body admits before the callee's `requires` is told: `grows_big` under
+/// `M in {4}`. Where it works out, nothing is reported.
 #[test]
 fn a_generic_argument_that_fails_in_an_instance_rejects() {
     let checked = module(concat!(
@@ -290,8 +293,8 @@ fn a_generic_argument_that_fails_in_an_instance_rejects() {
         "const fn grows<const M: i64>(v: i64) -> i64 => times<(M * 4611686018427387904)>(v)\n",
         "const fn divs<const M: i64>(v: i64) -> i64 => times<(10 // M)>(v)\n",
         "const fn only_eight<const K: i64>(v: i64) -> i64 requires K == 8 => v * K\n",
-        "const fn grows_big<const M: i64>(v: i64) -> i64 => only_eight<(M * 4611686018427387904)>(v)\n",
-        "const fn grows_req<const M: i64>(v: i64) -> i64 => only_eight<(M * 2)>(v)\n",
+        "const fn grows_big<const M: i64>(v: i64) -> i64 requires M in {4} => only_eight<(M * 4611686018427387904)>(v)\n",
+        "const fn grows_req<const M: i64>(v: i64) -> i64 requires M == 4 => only_eight<(M * 2)>(v)\n",
         "const fn relay<const N: i64>(v: i64) -> i64 => grows<N>(v)\n",
         "struct Sized<const N: i64> { v: i64 }\n",
         "const fn boxed<const M: i64>(v: i64) -> i64 {\n",
@@ -313,9 +316,9 @@ fn a_generic_argument_that_fails_in_an_instance_rejects() {
     assert_eq!(
         checked.summary(),
         [
+            "m.hgl:6:70 type/generic.argument_constant GEN-8",
             "m.hgl:14:24 type/generic.argument_constant GEN-8",
             "m.hgl:16:24 type/generic.argument_constant GEN-8",
-            "m.hgl:18:24 type/generic.argument_constant GEN-8",
             "m.hgl:19:24 constraint/requires.unmet GEN-3",
             "m.hgl:21:24 type/generic.argument_constant GEN-8",
             "m.hgl:22:24 type/generic.argument_constant GEN-8",
@@ -361,7 +364,7 @@ fn a_constant_in_a_requires_is_read_by_its_name() {
         "impl const fn step(value: i64, const mode: Mode) -> i64 requires mode == FAST => value + 10\n",
         "impl const fn step(value: i64, const mode: Mode) -> i64 requires mode == .slow => value + 1\n",
         "const fn typed<T>(v: T) -> i64 requires T == C => 1\n",
-        "const fn pass<const M: i64>(v: i64) -> i64 => named_eq<M>(v)\n",
+        "const fn pass<const M: i64>(v: i64) -> i64 requires M == C => named_eq<M>(v)\n",
         "const fn a() -> i64 => named_eq<3>(1)\n",
         "const fn b() -> i64 => named_eq<4>(1)\n",
         "const fn c() -> i64 => named_left<3>(1) + named_left<2>(1)\n",
@@ -409,7 +412,7 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
     // `turn<0>` again: `size` instances in all.
     let turning = |size: usize| {
         format!(
-            "const fn need<const N: i64>(v: i64) -> i64 requires !(N == 100000) => v\n\
+            "const fn need<const N: i64>(v: i64) -> i64 => v\n\
              const fn turn<const N: i64>(v: i64) -> i64 =>\n    \
                  if v <= 0 {{ need<N>(v) }} else {{ turn<((N + 1) % {size})>(v - 1) }}\n\
              const fn a() -> i64 => turn<0>(3)\n"
@@ -422,7 +425,7 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
     assert_eq!(module(&turning(hgl_analyser::INSTANCES)).summary(), NONE);
     // `turn` and `back` call each other, each making as many instances.
     let both = format!(
-        "const fn need<const N: i64>(v: i64) -> i64 requires !(N == 100000) => v\n\
+        "const fn need<const N: i64>(v: i64) -> i64 => v\n\
          const fn turn<const N: i64>(v: i64) -> i64 =>\n    \
              if v <= 0 {{ need<N>(v) }} else {{ back<N>(v - 1) }}\n\
          const fn back<const N: i64>(v: i64) -> i64 => turn<((N + 1) % {})>(v)\n\
@@ -434,7 +437,7 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
     // too: `list<i64, ((N + 1) % 4096)>` that comes back to `list<i64,
     // 0>` is the root's instance again.
     let typed = format!(
-        "const fn need<const N: i64>(v: i64) -> i64 requires !(N == 100000) => v\n\
+        "const fn need<const N: i64>(v: i64) -> i64 => v\n\
          const fn turn<T, const N: i64>(v: i64, held: T) -> i64 =>\n    \
              if v <= 0 {{ need<N>(v) }} else {{ turn<list<i64, ((N + 1) % {size})>, ((N + 1) % {size})>(v - 1, []) }}\n\
          const fn a() -> i64 => turn<list<i64, 0>, 0>(3, [])\n",
@@ -447,7 +450,7 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
         ["m.hgl:5:24 type/generic.instance_limit GEN-13"]
     );
     let climb = module(concat!(
-        "const fn small<const K: i64>(v: i64) -> i64 requires !(K == 1000000) => v + K\n",
+        "const fn small<const K: i64>(v: i64) -> i64 => v + K\n",
         "const fn climb<const N: i64>(v: i64) -> i64 =>\n",
         "    if v <= 0 { small<N>(v) } else { climb<N + 1>(v - 1) }\n",
         "const fn a() -> i64 => climb<0>(3)\n",
@@ -698,4 +701,70 @@ fn a_candidate_that_outranks_every_one_not_told_is_known() {
         called(&checked, body(&checked, "wrap")),
         ["kind(list<T>) <U>"]
     );
+}
+
+/// GEN-7: a generic body "is judged once, where it is declared, by what
+/// its `requires` states, and never again for the generic arguments a
+/// call of it gives". hhenson/hgl_spec#144: a call in it of another
+/// generic function whose `requires` the body's own stated requirements
+/// do not make known to hold rejects where the body is declared; it is
+/// admitted where the body states enough. So `outer<Y> => inner(v)`, with
+/// `inner` under `X in {i64, f64}`, rejects unless `outer` states that
+/// membership or a subset of it; a superset rejects, naming the member
+/// `inner` does not admit. A value parameter passed on needs the value:
+/// `one_only<Y>` under `X == 1.0` holds under `requires Y == 1.0`, and not
+/// under `Y == 2.0`. A named operator requirement is answered by the
+/// body's own (GEN-16). With two parameters, every combination of their
+/// members. In a graph as in a value function. A call of the body itself
+/// is then held to the body's `requires` (GEN-3).
+#[test]
+fn a_call_of_another_generic_function_is_judged_by_what_the_body_states() {
+    let checked = module(concat!(
+        "const fn inner<X>(v: X) -> X requires X in {i64, f64} => v\n",
+        "const fn outer<Y>(v: Y) -> Y => inner(v)\n",
+        "const fn stated<Y>(v: Y) -> Y requires Y in {i64, f64} => inner(v)\n",
+        "const fn subset<Y>(v: Y) -> Y requires Y in {i64} => inner(v)\n",
+        "const fn superset<Y>(v: Y) -> Y requires Y in {i64, f64, str} => inner(v)\n",
+        "const fn one_only<const X: f64>(v: f64) -> f64 requires X == 1.0 => v * X\n",
+        "const fn valued<const Y: f64>(v: f64) -> f64 requires Y == 1.0 => one_only<Y>(v)\n",
+        "const fn other<const Y: f64>(v: f64) -> f64 requires Y == 2.0 => one_only<Y>(v)\n",
+        "const fn added<X>(v: X) -> X requires add_(X, X) -> X => v + v\n",
+        "const fn adds<Y>(v: Y) -> Y requires add_(Y, Y) -> Y => added(v)\n",
+        "const fn unadded<Y>(v: Y) -> Y => added(v)\n",
+        "const fn pair<A, B>(x: A, y: B) -> A requires A in {i64} && B in {str} => x\n",
+        "const fn pairs<P, Q>(p: P, q: Q) -> P requires P in {i64} && Q in {str} => pair(p, q)\n",
+        "const fn gaps<P, Q>(p: P, q: Q) -> P requires P in {i64} && Q in {str, bool} => pair(p, q)\n",
+        "fn wired<Y>(v: Y) -> Y => inner(v)\n",
+        "const fn a() -> i64 => stated(1) + subset(2) + adds(3)\n",
+        "const fn b() -> f64 => valued<1.0>(2.0)\n",
+        "const fn c() -> str => stated(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:33 constraint/requires.unmet GEN-7",
+            "m.hgl:6:66 constraint/requires.unmet GEN-7",
+            "m.hgl:9:66 constraint/requires.unmet GEN-7",
+            // No candidate of `add_` takes a `Y` the body says nothing of:
+            // the requirement does not hold.
+            "m.hgl:12:35 constraint/requires.unmet GEN-3",
+            "m.hgl:15:81 constraint/requires.unmet GEN-7",
+            "m.hgl:16:27 constraint/requires.unmet GEN-7",
+            "m.hgl:19:24 constraint/requires.unmet GEN-3",
+        ],
+        "{}",
+        checked.report
+    );
+    for named in [
+        "for `Y` = `str`",
+        "`P` = `i64` and `Q` = `bool`",
+        "under what the `requires` of `outer` states",
+        "does not hold for this call with what the `requires` of `other` binds",
+    ] {
+        assert!(
+            checked.report.contains(named),
+            "{named}: {}",
+            checked.report
+        );
+    }
 }

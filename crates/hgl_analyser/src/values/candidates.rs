@@ -1078,7 +1078,9 @@ pub(super) enum Settled {
 /// each generic parameter, each as an instance would give the
 /// parameters: for `T in {i64, f64}` and `U in {str}`, `(i64, str)` and
 /// `(f64, str)`. None where there is no membership.
-fn combinations(memberships: &[(Location, Vec<Argument>)]) -> Vec<Vec<(Location, Argument)>> {
+pub(super) fn combinations(
+    memberships: &[(Location, Vec<Argument>)],
+) -> Vec<Vec<(Location, Argument)>> {
     if memberships.is_empty() {
         return Vec::new();
     }

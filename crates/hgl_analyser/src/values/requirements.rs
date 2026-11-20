@@ -356,25 +356,180 @@ impl<'a> Typer<'a> {
             return;
         }
         let program = self.program;
-        // One that names a generic parameter of the declaration being
-        // read may yet be told where a call gives it: `either<C, X>` with
-        // `requires A == 1.0 || B == 2.0` holds for `X` 2.0 whatever `C`
-        // is. It is told for each instance ([`instances_hold`]).
         let own: Vec<Location> = self
             .signature
             .generics
             .iter()
             .map(|generic| generic.at)
             .collect();
+        // A struct applied with a generic parameter of the declaration
+        // being read is told for each instance ([`instances_hold`]).
+        let function =
+            program.modules[callee.0].declarations[callee.1].kind != DeclarationKind::Struct;
         match held {
             Some(false) => self
                 .diagnostics
                 .emit(unmet(program, callee, at, &condition)),
+            // GEN-7: a generic body "is judged once, where it is declared,
+            // by what its `requires` states, and never again for the
+            // generic arguments a call of it gives" (hhenson/hgl_spec#144:
+            // so is a call in it of another generic function).
+            None if function && passes_on(generics, &own) => {
+                if let Some(report) = self.unmet_under_stated(at, callee, generics, &condition) {
+                    self.diagnostics.emit(report);
+                }
+            }
             None if unvalued && !passes_on(generics, &own) => self
                 .diagnostics
                 .emit(untold(program, callee, at, &condition)),
             _ => {}
         }
+    }
+
+    /// Each member of `combination`, by the generic parameter it is of:
+    /// `` `T` = `str` ``.
+    fn members_named(&self, combination: &[(Location, Argument)]) -> Vec<String> {
+        combination
+            .iter()
+            .map(|(at, member)| {
+                let parameter = self
+                    .signature
+                    .generics
+                    .iter()
+                    .find(|generic| generic.at == *at)
+                    .map_or("_", |generic| generic.name.as_str());
+                let member = match member {
+                    Argument::Type(ty) => ty.to_string(),
+                    Argument::Constant(constant) => constant.text.clone(),
+                };
+                format!("`{parameter}` = `{member}`")
+            })
+            .collect()
+    }
+
+    /// The rejection of a call at `at`, in the generic body being read, of
+    /// `callee` with `generics`, which pass on the body's own generic
+    /// parameters, where what the body's `requires` states of those does
+    /// not make the callee's `requires`, `condition`, known to hold.
+    /// `None` where it does.
+    ///
+    /// GEN-7: "It is judged once, where it is declared, by what its
+    /// `requires` states" (hhenson/hgl_spec#144: a call of another generic
+    /// function whose `requires` the body's own stated requirements do not
+    /// make known to hold rejects where the body is declared). What the
+    /// body states: an equality that binds a parameter (GEN-3), and a
+    /// membership, every member of which, and every combination of them
+    /// for two parameters, must make the callee's `requires` hold. So under
+    /// `requires Y in {i64, f64}` a call of `inner<X>` under `requires X in
+    /// {i64, f64}` holds, and under a superset it does not; under
+    /// `requires Y == 1.0` one of `one_only` under `requires X == 1.0`
+    /// holds. A named operator requirement the callee states is answered
+    /// by the body's own (GEN-16).
+    fn unmet_under_stated(
+        &mut self,
+        at: Location,
+        callee: (usize, usize),
+        generics: &[Argument],
+        condition: &SyntaxNode,
+    ) -> Option<hgl_diagnostics::Diagnostic> {
+        let program = self.program;
+        let own: Vec<Location> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let memberships: Vec<(Location, Vec<Argument>)> = self
+            .memberships()
+            .into_iter()
+            .filter(|(parameter, _)| passes_on(generics, &[*parameter]))
+            .collect();
+        let mut combinations = super::candidates::combinations(&memberships);
+        if memberships.is_empty() {
+            combinations.push(Vec::new());
+        }
+        let bound = self.bound.clone();
+        let name = &program.modules[callee.0].declarations[callee.1].name;
+        let body = &self.declaration.name;
+        for combination in combinations.iter().take(crate::INSTANCES + 1) {
+            let given: Vec<(Location, &Argument)> = bound
+                .iter()
+                .chain(combination)
+                .map(|(at, argument)| (*at, argument))
+                .collect();
+            let placed_generics: Vec<Argument> = generics
+                .iter()
+                .map(|argument| given_in(argument, &given, &own))
+                .collect();
+            // ERR-9: "Failure during argument evaluation precedes later
+            // admission checks": a generic argument worked out from the
+            // body's parameters that fails for what the body admits.
+            let made = Made {
+                callee,
+                generics: generics.to_vec(),
+                answers: Vec::new(),
+                required: None,
+                at,
+            };
+            if let Some(report) = argument_fails(program, &made, &given, &own) {
+                return Some(if combination.is_empty() {
+                    report
+                } else {
+                    report.with_note(format!(
+                        "for {}, which the `requires` of `{body}` admits",
+                        self.members_named(combination).join(" and ")
+                    ))
+                });
+            }
+            let held = self
+                .requires_told(callee, &placed_generics)
+                .map(|(_, held, _)| held);
+            if held == Some(Some(true)) {
+                continue;
+            }
+            let members = self.members_named(combination);
+            let message = match (held, members.is_empty()) {
+                (Some(Some(false)), false) => format!(
+                    "the `requires` of `{name}` does not hold for this call for {}, which the \
+                     `requires` of `{body}` admits",
+                    members.join(" and ")
+                ),
+                (_, false) => format!(
+                    "the `requires` of `{name}` is not known to hold for this call for {}, which \
+                     the `requires` of `{body}` admits",
+                    members.join(" and ")
+                ),
+                (Some(Some(false)), true) => format!(
+                    "the `requires` of `{name}` does not hold for this call with what the \
+                     `requires` of `{body}` binds"
+                ),
+                (_, true) => format!(
+                    "the `requires` of `{name}` is not known to hold for this call under what the \
+                     `requires` of `{body}` states"
+                ),
+            };
+            let declared_in = &program.modules[callee.0];
+            let declared = &declared_in.declarations[callee.1];
+            return Some(
+                error(
+                    Category::Constraint,
+                    codes::REQUIRES_UNMET,
+                    at,
+                    message,
+                    "GEN-7",
+                )
+                .with_related(
+                    Location::new(declared_in.files[declared.file].file, condition.span()),
+                    "the condition that is not known to hold",
+                )
+                .with_note(format!(
+                    "a generic body is judged once, where it is declared, by what its \
+                         `requires` states (GEN-7): state of `{body}`'s generic parameters what \
+                         makes this hold"
+                )),
+            );
+        }
+        None
     }
 
     /// Reports a `requires` that does not hold, or is not told for a
@@ -1563,7 +1718,15 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                         // is made, though both a type the body writes and
                         // a construction give it (ERR-9: "Do not demand
                         // cascaded diagnostics").
-                        if let Some(report) = argument_fails(program, call, &map, &declared) {
+                        // One rejected where the body is declared is not
+                        // reported again (ERR-9).
+                        let rejected_there = diagnostics
+                            .as_slice()
+                            .iter()
+                            .any(|earlier| earlier.primary == call.at);
+                        if let Some(report) = argument_fails(program, call, &map, &declared)
+                            .filter(|_| !rejected_there)
+                        {
                             for &root in &from {
                                 let mut report = report.clone();
                                 report.primary = root;
@@ -1746,7 +1909,12 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     exhausted = true;
                     break;
                 }
-                if required(program, callee).is_some() {
+                // GEN-7: a call of a function or a candidate in a generic
+                // body was judged where the body is declared, under what
+                // it states. A struct applied there is told here.
+                let applied = program.modules[callee.0].declarations[callee.1].kind
+                    == DeclarationKind::Struct;
+                if applied && required(program, callee).is_some() {
                     let (module, declaration) = callee;
                     let unit = &program.modules[module];
                     let (bindings, written, arguments) = &tables[module];

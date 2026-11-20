@@ -826,8 +826,10 @@ fn an_application_that_does_not_meet_a_structs_requires_is_rejected() {
 /// GEN-7: "A generic body is checked under its stated requirements". A
 /// call there whose types name the body's own generic parameter meets a
 /// named operator requirement where the body states it, and does not
-/// where it states none. A membership of such a parameter is not told:
-/// it is no one type.
+/// where it states none. A membership the body does not state is not
+/// known to hold either, and the call rejects where the body is declared
+/// (GEN-7: "It is judged once, where it is declared, by what its
+/// `requires` states"; hhenson/hgl_spec#144).
 #[test]
 fn a_call_in_a_generic_body_meets_what_the_body_states() {
     let checked = module(concat!(
@@ -839,7 +841,10 @@ fn a_call_in_a_generic_body_meets_what_the_body_states() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:5:40 constraint/requires.unmet GEN-3"]
+        [
+            "m.hgl:5:40 constraint/requires.unmet GEN-3",
+            "m.hgl:6:38 constraint/requires.unmet GEN-7",
+        ]
     );
 }
 

@@ -6504,7 +6504,7 @@ fn the_instances_one_call_makes_are_written_up_to_one_bound() {
     let turning = |size: usize| {
         format!(
             "module m\n\
-             const fn need<const N: i64>(v: i64) -> i64 requires !(N == 100000) => v + N\n\
+             const fn need<const N: i64>(v: i64) -> i64 => v + N\n\
              const fn turn<const N: i64>(v: i64) -> i64 =>\n    \
                  if v <= 0 {{ need<N>(v) }} else {{ turn<((N + 1) % {size})>(v - 1) }}\n\
              test a {{ assert turn<0>(3) == 3 }}\n"
