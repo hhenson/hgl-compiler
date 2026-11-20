@@ -2128,15 +2128,18 @@ call that leaves an argument out gives it is `hgl_lower::calls`'s.
 What the target takes of the runtime library ("The C++ runtime
 library" below): its CMake project, configured with `HGL_HGRAPH_SDK`,
 `HGL_HGRAPH_DEPS` and `BUILD_TESTING=OFF`, built and installed;
-`hglrt/hglrt.h`, the fixed include set; core's natives in `hglrt`, a
-native being defined where its name followed by `(` is in a header under
-`include/`; and its test host, `hglrt::testing`. An executable is run as
-`EXE RESULTS NAME...`, and the results are the hgraph driver's protocol
-(`start N`, `passed N`, `failed N LINE TEXT`, `unloaded N TEXT`), read by
-the same code, `hgl_hgraph::read_results`, with LINE a line of the
-module's unit. The host takes no time limit, so a test held to one
-(TST-17) is run in a process of its own, which the driver ends at the
-limit.
+`hglrt/hglrt.h`, the fixed include set, and `hglrt/host.h`, the test
+host's light header, which an entry unit includes alone; core's natives
+in `hglrt`, a native being defined where its name followed by `(` is in a
+header under `include/`, and core's enums its natives take where it
+declares an `enum class` of the name; and its test host,
+`hglrt::testing`. An executable is run as `EXE RESULTS NAME...`, and the
+results are the hgraph driver's protocol (`start N`, `passed N`, `failed
+N LINE TEXT`, `unloaded N TEXT`), read by the same code,
+`hgl_hgraph::read_results`, with LINE a line of the module's unit. The
+driver runs a test held to a time limit (TST-17) in a process of its
+own, which it ends at the limit; the host's own limit, `NAME@MICROSECONDS`,
+is not used yet.
 
 #### The build driver
 
@@ -2197,8 +2200,9 @@ later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
 which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists all
-182 of core's runtime cases.
+target's list, and `--write-list` writes from a run. Today it lists 166
+of core's 191 runtime cases: 159 evals, 6 that need a struct, and one
+that gives an eval's trace to a `const fn` (TST-16).
 
 ### The C++ runtime library
 
