@@ -40,7 +40,7 @@ use crate::runtime;
 pub(super) const OUT: &str = "out_";
 
 /// The name of the view of a node's state.
-const STATE: &str = "state_";
+pub(super) const STATE: &str = "state_";
 
 /// The name of the node's state as a hook changes it.
 const KEPT: &str = "kept_";
@@ -61,6 +61,10 @@ pub(super) struct Context {
     /// The nodes of a graph's lifted calls written so far, each a struct
     /// written in the graph's own (`graphs`).
     pub(super) lifted: Vec<String>,
+    /// The signature of the node whose hook is written, where it is one:
+    /// the modes of its parameters and its result, which a family reads
+    /// (FN-16, `references`).
+    pub(super) signature: Option<Signature>,
 }
 
 impl Context {
@@ -71,6 +75,7 @@ impl Context {
             roles: vec![Role::Plain; locals],
             result: None,
             lifted: Vec::new(),
+            signature: None,
         }
     }
 }
@@ -182,10 +187,9 @@ impl Emitter<'_> {
     ) {
         let module = &self.program.modules[self.module];
         let at = module.declarations[index].at;
-        // FN-16: a `ref` result designates an endpoint, which the
-        // references work writes.
-        if signature.reference {
-            self.unsupported(at, "a `ref` result");
+        // FN-16: a `ref` parameter or result, which `references` writes,
+        // or reports where it does not.
+        if !self.references_written(signature, phase, module.is_source(index), at) {
             return;
         }
         if let Some(parameter) = signature
@@ -194,14 +198,6 @@ impl Emitter<'_> {
             .find(|parameter| parameter.pack.is_some())
         {
             self.unsupported(parameter.at, "a pack");
-            return;
-        }
-        if let Some(parameter) = signature
-            .parameters
-            .iter()
-            .find(|parameter| parameter.reference)
-        {
-            self.unsupported(parameter.at, "a `ref` parameter");
             return;
         }
         // The body's locals start with its parameters, in order.
@@ -272,6 +268,7 @@ impl Emitter<'_> {
         let placed_at = program.modules[self.module].declarations[index].at;
         let mut context = Context::new(Kind::Hook(Hook::When), body.locals.len());
         context.result = signature.result.clone();
+        context.signature = Some(signature.clone());
         let mut inputs = Vec::new();
         for (local, role) in context.roles.iter_mut().enumerate() {
             if is_input(&body.locals, Some(signature), local) {
@@ -366,13 +363,22 @@ impl Emitter<'_> {
         } else {
             required_inputs(&inputs, &running)
         };
-        // The node's parameters as hgraph's views, in the order of the
-        // signature: the order `wire` gives them in.
-        let Some(parameters) = self.node_parameters(signature, body, &active, &valid) else {
+        // FN-16: the ordinary inputs a `ref` result designates, which the
+        // node follows (`references`), and the validity that leaves the
+        // node's own.
+        let Some(designated) = self.designated_inputs(signature, body, &injected) else {
             return;
         };
+        let valid = designated.validity(valid);
+        // The node's parameters as hgraph's views, in the order of the
+        // signature: the order `wire` gives them in; then the inputs it
+        // follows the designations of.
+        let Some(mut parameters) = self.node_parameters(signature, body, &active, &valid) else {
+            return;
+        };
+        parameters.extend(designated.parameters());
         let output = match &signature.result {
-            Some(result) => match self.temporal_schema(result, placed_at) {
+            Some(result) => match self.endpoint_schema(result, signature.reference, placed_at) {
                 Some(schema) => Some(format!("::hgraph::Out<{schema}> {OUT}")),
                 None => return,
             },
@@ -390,7 +396,8 @@ impl Emitter<'_> {
                 identifier(&declared.name)
             ));
         }
-        let held = !states.is_empty();
+        members.push_str(&designated.members());
+        let held = !states.is_empty() || designated.holds();
         let placed = Placed::of(program, self.module, index, instance);
         let qualified = placed.qualified(program, self.module);
         let mut text = format!("// {shown}\nstruct {}\n{{\n", placed.name);
@@ -476,6 +483,7 @@ impl Emitter<'_> {
             return;
         };
         written.push_str(&made);
+        written.push_str(&self.designation_prologue(&designated, body, &inputs, &active));
         context.kind = Kind::Hook(Hook::When);
         for (handler, at) in running.iter().zip(&places) {
             if !self.handler(
@@ -568,7 +576,7 @@ impl Emitter<'_> {
                 written.push(format!("::hgraph::Scalar<{label}, {ty}> {name}"));
                 continue;
             }
-            let schema = self.temporal_schema(&parameter.ty, parameter.at)?;
+            let schema = self.endpoint_schema(&parameter.ty, parameter.reference, parameter.at)?;
             let mut policies = String::new();
             if !active.contains(&local) {
                 policies.push_str(", ::hgraph::InputActivity::Passive");
@@ -772,6 +780,12 @@ impl Emitter<'_> {
             }
             given.push(name);
         }
+        // FN-16: each input a `ref` result designates is given again, to
+        // the input the node follows its re-binding through.
+        for port in self.designated_ports(signature, body) {
+            wired_arguments.push((None, port.clone()));
+            given.push(port);
+        }
         let schema = match &signature.result {
             Some(result) => Some(self.temporal_schema(result, placed.at)?),
             None => None,
@@ -803,6 +817,8 @@ impl Emitter<'_> {
             }
             _ => format!("{wired}({})", given.join(", ")),
         };
+        // FN-16: "a `ref` result is a connection of T to whoever reads it".
+        let called = self.result_port(signature, schema.as_deref(), called);
         let declaration = nested(&placed.wiring, &format!("// {shown}\n{prototype};\n"));
         let definition = nested(
             &placed.wiring,

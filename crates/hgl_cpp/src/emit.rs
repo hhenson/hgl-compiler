@@ -39,6 +39,7 @@ mod forms;
 mod graphs;
 mod names;
 mod nodes;
+mod references;
 mod scalars;
 mod sources;
 mod statements;
