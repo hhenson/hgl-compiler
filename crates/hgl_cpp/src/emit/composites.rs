@@ -130,6 +130,9 @@ fn template_arguments(
     {
         return None;
     }
+    if !template_keeps(&read.generics, &read.members, arguments) {
+        return None;
+    }
     let written: Option<Vec<String>> = arguments
         .iter()
         .map(|argument| match argument {
@@ -140,6 +143,92 @@ fn template_arguments(
         })
         .collect();
     Some(format!("<{}>", written?.join(", ")))
+}
+
+/// True where the C++ template of a generic struct, applied to the C++
+/// types of `arguments`, is the struct HGL's application is. Two cases
+/// are not, and such an application is not written yet:
+///
+/// * An argument that holds a nullable's delta, `delta<i64?>`, which is
+///   an optional in C++ as `i64?` is: the two applications would be one
+///   C++ struct, though TYPE-3 tells them apart by their arguments.
+/// * A field written `T?` whose `T` is given a nullable, `i64?`: its type
+///   is `i64?` (TYPE-14: the suffix makes no nullable of a nullable),
+///   where the template's would be an optional of an optional.
+fn template_keeps(
+    generics: &[GenericParameter],
+    members: &[hgl_analyser::Member],
+    arguments: &[GenericArgument],
+) -> bool {
+    fn holds_nullable_delta(ty: &Type) -> bool {
+        match ty {
+            Type::Delta(of) => matches!(**of, Type::Nullable(_)) || holds_nullable_delta(of),
+            Type::Named { arguments, .. } => arguments.iter().any(|argument| {
+                matches!(argument, GenericArgument::Type(inner) if holds_nullable_delta(inner))
+            }),
+            Type::Nullable(inner)
+            | Type::List { element: inner, .. }
+            | Type::Set(inner)
+            | Type::Atomic(inner) => holds_nullable_delta(inner),
+            Type::Dict { key, value } => holds_nullable_delta(key) || holds_nullable_delta(value),
+            Type::Tuple(positions) => positions.iter().any(holds_nullable_delta),
+            Type::Result { value, error } => holds_nullable_delta(value) || holds_nullable_delta(error),
+            _ => false,
+        }
+    }
+    /// The generic parameters `ty` writes `T?` of, at any depth.
+    fn made_nullable(ty: &Type, found: &mut Vec<Location>) {
+        match ty {
+            Type::Nullable(inner) => {
+                if let Type::Parameter { at, .. } = &**inner {
+                    found.push(*at);
+                }
+                made_nullable(inner, found);
+            }
+            Type::Named { arguments, .. } => {
+                for argument in arguments {
+                    if let GenericArgument::Type(inner) = argument {
+                        made_nullable(inner, found);
+                    }
+                }
+            }
+            Type::List { element: inner, .. }
+            | Type::Set(inner)
+            | Type::Delta(inner)
+            | Type::Atomic(inner) => made_nullable(inner, found),
+            Type::Dict { key, value }
+            | Type::Result {
+                value: key,
+                error: value,
+            } => {
+                made_nullable(key, found);
+                made_nullable(value, found);
+            }
+            Type::Tuple(positions) => {
+                for position in positions {
+                    made_nullable(position, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument, GenericArgument::Type(ty) if holds_nullable_delta(ty)))
+    {
+        return false;
+    }
+    let mut nullable_of = Vec::new();
+    for member in members {
+        made_nullable(&member.ty, &mut nullable_of);
+    }
+    !nullable_of.iter().any(|at| {
+        generics
+            .iter()
+            .position(|generic| generic.at == *at)
+            .and_then(|position| arguments.get(position))
+            .is_some_and(|argument| matches!(argument, GenericArgument::Type(Type::Nullable(_))))
+    })
 }
 
 /// A constant generic argument of a struct (GEN-8) as a C++ template

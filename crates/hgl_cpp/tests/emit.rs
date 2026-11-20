@@ -1250,8 +1250,9 @@ fn composite_values_are_written() {
 /// where it is written, and nothing is miswritten: a struct that holds
 /// itself (TYPE-6), a field's default that runs statements of its own,
 /// a field of an abstract struct assigned, a dictionary written with keys
-/// that may be one, which the pinned text does not say what it holds, and
-/// a dictionary's entry given to a `var` parameter.
+/// that may be one, which the pinned text does not say what it holds, a
+/// dictionary's entry given to a `var` parameter, and an application of a
+/// generic struct that its C++ template would not be.
 #[test]
 fn composite_forms_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -1285,6 +1286,11 @@ fn composite_forms_not_written_yet_are_reported() {
             "    return changed\n",
             "}\n",
             "const fn made() -> i64 => Made().value\n",
+            "struct Maybe<T> { value: T? }\n",
+            "abstract struct Marked {}\n",
+            "struct Mark<T> : Marked { tag: list<T> = [] }\n",
+            "const fn read(box: Maybe<i64?>) -> i64? => box.value\n",
+            "const fn marked() -> Mark<delta<i64?>> => Mark<delta<i64?>>()\n",
             "test noded {\n",
             "    assert Node(value: 1).value == 1\n",
             "}\n",
@@ -1301,6 +1307,12 @@ fn composite_forms_not_written_yet_are_reported() {
             // Where the default is written, which a construction that
             // leaves the field out reaches.
             "m.hgl:7:18 the cpp target does not write a default that runs statements yet",
+            // TYPE-14: `T?` of an `i64?` is an `i64?`, where the template's
+            // field would be an optional of one.
+            "m.hgl:32:15 the cpp target does not write the type `Maybe<i64?>` yet",
+            // TYPE-3: `Mark<delta<i64?>>` is no `Mark<i64?>`, which would be
+            // one C++ struct.
+            "m.hgl:33:10 the cpp target does not write the type `Mark<delta<i64?>>` yet",
         ]
     );
     assert_eq!(emitted.blocked("noded").as_deref(), Some(holds_itself));
