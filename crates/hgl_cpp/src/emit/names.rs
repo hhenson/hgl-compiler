@@ -1,0 +1,332 @@
+//! Writes every C++ name the generated code gives: modules' namespaces,
+//! declarations, tests, parameters and locals, and the names of the
+//! runtime library's natives. Part of the transpiler, the last stage.
+//!
+//! An HGL name becomes a C++ one through [`identifier`] alone, which
+//! gives no two HGL names one C++ name, never a name C++ reserves or a
+//! macro of the included headers is known to take, and the same name on
+//! every run. The target's own names, the namespaces `m_` and `t_`,
+//! have a form [`identifier`] gives no HGL name.
+
+use hgl_analyser::{Program, Signature, Type};
+
+/// The words C++ keeps for itself, its alternative tokens, the names it
+/// gives a meaning in some places (`final`, `module`, `import`), and
+/// the lowercase macros the generated code's headers define or the
+/// compiler predefines in its GNU mode (`linux`, `unix`), in the order
+/// of the alphabet. No plain identifier is one of them.
+const RESERVED: &[&str] = &[
+    "alignas",
+    "alignof",
+    "and",
+    "and_eq",
+    "asm",
+    "assert",
+    "atomic_cancel",
+    "atomic_commit",
+    "atomic_noexcept",
+    "auto",
+    "bitand",
+    "bitor",
+    "bool",
+    "break",
+    "case",
+    "catch",
+    "char",
+    "char16_t",
+    "char32_t",
+    "char8_t",
+    "class",
+    "co_await",
+    "co_return",
+    "co_yield",
+    "compl",
+    "concept",
+    "const",
+    "const_cast",
+    "consteval",
+    "constexpr",
+    "constinit",
+    "continue",
+    "contract_assert",
+    "decltype",
+    "default",
+    "delete",
+    "do",
+    "double",
+    "dynamic_cast",
+    "else",
+    "enum",
+    "errno",
+    "explicit",
+    "export",
+    "extern",
+    "false",
+    "final",
+    "float",
+    "for",
+    "friend",
+    "goto",
+    "i386",
+    "if",
+    "import",
+    "inline",
+    "int",
+    "linux",
+    "long",
+    "major",
+    "makedev",
+    "minor",
+    "module",
+    "mutable",
+    "namespace",
+    "new",
+    "noexcept",
+    "not",
+    "not_eq",
+    "nullptr",
+    "offsetof",
+    "operator",
+    "or",
+    "or_eq",
+    "override",
+    "post",
+    "pre",
+    "private",
+    "protected",
+    "public",
+    "reflexpr",
+    "register",
+    "reinterpret_cast",
+    "requires",
+    "return",
+    "setjmp",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "static_assert",
+    "static_cast",
+    "stderr",
+    "stdin",
+    "stdout",
+    "struct",
+    "switch",
+    "synchronized",
+    "template",
+    "this",
+    "thread_local",
+    "throw",
+    "trait",
+    "transaction_safe",
+    "transaction_safe_dynamic",
+    "true",
+    "try",
+    "typedef",
+    "typeid",
+    "typename",
+    "union",
+    "unix",
+    "unsigned",
+    "using",
+    "va_arg",
+    "va_copy",
+    "va_end",
+    "va_start",
+    "virtual",
+    "void",
+    "volatile",
+    "wchar_t",
+    "while",
+    "xor",
+    "xor_eq",
+];
+
+/// An HGL name (LEX-1: an ASCII letter or `_`, then letters, digits and
+/// `_`) as a C++ identifier.
+///
+/// A name is written as it is where it is *plain*: it starts with a
+/// letter, ends with a letter or a digit, has no `__`, holds a
+/// lowercase letter, and is none of [`RESERVED`]. Every other name is
+/// written with each `_` as `_1`, and `_` after it: `_kept` is
+/// `_1kept_`, `EOF` is `EOF_`, `int` is `int_`, `add_` is `add_1_`.
+///
+/// No two names give one identifier: a plain name never ends with `_`
+/// and every other one does, and `_1` gives back the `_` it stands for.
+/// No identifier has `__` in it, which C++ reserves; one that starts
+/// with `_` is written only inside the target's namespaces, where C++
+/// reserves no such name. A name with no lowercase letter is no plain
+/// one, since a macro's name is written so (`EOF`, `NULL`). The
+/// target's own names, `m_` and `t_`, have the form `identifier` gives
+/// `m` and `t` where they were not plain; they are, so no name gives
+/// either.
+pub(crate) fn identifier(written: &str) -> String {
+    let plain = written.starts_with(|first: char| first.is_ascii_alphabetic())
+        && !written.ends_with('_')
+        && !written.contains("__")
+        && written
+            .chars()
+            .any(|character| character.is_ascii_lowercase())
+        && !RESERVED.contains(&written);
+    if plain {
+        written.to_string()
+    } else {
+        format!("{}_", written.replace('_', "_1"))
+    }
+}
+
+/// The C++ namespace module `path` is written in, qualified from the
+/// global one: `demo.calc` is `::hgl::demo::calc::m_`. Each part of the
+/// path is an [`identifier`], and the module's own declarations are in
+/// `m_`, apart from the modules under it: a declaration `calc` of
+/// module `demo` is `::hgl::demo::m_::calc`, and module `demo.calc` is
+/// `::hgl::demo::calc::m_`.
+pub(crate) fn module_namespace(path: &str) -> String {
+    let parts: Vec<String> = path.split('.').map(identifier).collect();
+    format!("::hgl::{}::m_", parts.join("::"))
+}
+
+/// The C++ namespace the named tests of module `path` are written in,
+/// qualified from the global one: `::hgl::demo::calc::m_::t_`. A test
+/// and a declaration may have one name (TST-1 keeps the two apart).
+pub(crate) fn test_namespace(path: &str) -> String {
+    format!("{}::t_", module_namespace(path))
+}
+
+/// A type as part of a native function's name: `i64` as it is, and any
+/// other character than a letter or a digit as `_`. The runtime
+/// library's natives are named so, as the hgraph target names its
+/// provider's.
+fn mangled(ty: &Type) -> String {
+    ty.to_string()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// The name the runtime library gives a native candidate of core
+/// (NATIVE-7): the candidate's name, then the types of its parameters,
+/// each after a `_`. `add_(i64, i64)` is `add__i64_i64`.
+pub(super) fn native_candidate(name: &str, signature: &Signature) -> String {
+    let types: Vec<String> = signature
+        .parameters
+        .iter()
+        .map(|parameter| mangled(&parameter.ty))
+        .collect();
+    format!("{name}_{}", types.join("_"))
+}
+
+/// The name the runtime library gives a native function of core
+/// (NATIVE-7): `fn_` and its name, `fn_log`.
+pub(super) fn native_function(name: &str) -> String {
+    format!("fn_{name}")
+}
+
+/// A native as the generated code calls it, qualified from the global
+/// namespace: `::hglrt::add__i64_i64`.
+pub(super) fn native(name: &str) -> String {
+    format!("::{}::{name}", crate::runtime::NAMESPACE)
+}
+
+/// A value function of the program as a call names it, qualified from
+/// the global namespace: `::hgl::demo::calc::m_::total`.
+pub(super) fn function(program: &Program, module: usize, declaration: usize) -> String {
+    let declared = &program.modules[module];
+    format!(
+        "{}::{}",
+        module_namespace(&declared.path),
+        identifier(&declared.declarations[declaration].name)
+    )
+}
+
+/// A string as a C++ narrow string literal, for text the target writes
+/// itself: a test's identity.
+pub(crate) fn string(text: &str) -> String {
+    let mut out = String::from("\"");
+    for character in text.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            printable if printable.is_ascii_graphic() || printable == ' ' => out.push(printable),
+            // Any other character as its UTF-8 bytes, each in octal,
+            // which no character after it can extend.
+            other => {
+                let mut bytes = [0; 4];
+                for byte in other.encode_utf8(&mut bytes).bytes() {
+                    out.push_str(&format!("\\{byte:03o}"));
+                }
+            }
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{identifier, module_namespace, string};
+
+    /// A plain name is written as it is.
+    #[test]
+    fn a_plain_name_is_kept() {
+        for name in ["total", "count_publications", "x1", "camelCase", "m", "t"] {
+            assert_eq!(identifier(name), name);
+        }
+    }
+
+    /// Every other name ends with `_`, has each `_` as `_1`, and has no
+    /// `__`.
+    #[test]
+    fn a_name_that_is_not_plain_is_escaped() {
+        assert_eq!(identifier("_kept"), "_1kept_");
+        assert_eq!(identifier("add_"), "add_1_");
+        assert_eq!(identifier("a__b"), "a_1_1b_");
+        assert_eq!(identifier("int"), "int_");
+        assert_eq!(identifier("linux"), "linux_");
+        assert_eq!(identifier("EOF"), "EOF_");
+        assert_eq!(identifier("N"), "N_");
+        assert_eq!(identifier("MAX_SIZE"), "MAX_1SIZE_");
+        for name in ["_kept", "add_", "a__b", "int", "EOF", "_", "__", "_1_"] {
+            assert!(!identifier(name).contains("__"), "{name}");
+        }
+    }
+
+    /// No two names give one identifier, the target's own `m_` and `t_`
+    /// among them.
+    #[test]
+    fn no_two_names_give_one_identifier() {
+        let names = [
+            "a", "a_", "a_1", "a_1_", "a__", "_a", "a__1", "m", "m_", "t", "t_", "int", "int_",
+            "N", "N_", "_1", "__1", "_", "x_y", "x_1y", "x__y",
+        ];
+        let mut given: Vec<String> = names.iter().map(|name| identifier(name)).collect();
+        given.push("m_".to_string());
+        given.push("t_".to_string());
+        let mut unique = given.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), given.len(), "{given:?}");
+    }
+
+    /// A module's namespace is under `hgl`, with its own declarations in
+    /// `m_`.
+    #[test]
+    fn a_module_is_a_namespace_of_its_own() {
+        assert_eq!(module_namespace("demo.calc"), "::hgl::demo::calc::m_");
+        assert_eq!(module_namespace("a._b"), "::hgl::a::_1b_::m_");
+        assert_eq!(module_namespace("a_.b"), "::hgl::a_1_::b::m_");
+    }
+
+    #[test]
+    fn a_string_is_a_literal() {
+        assert_eq!(string("demo.calc::sums"), "\"demo.calc::sums\"");
+        assert_eq!(string("a\"b\\c\né"), "\"a\\\"b\\\\c\\n\\303\\251\"");
+    }
+}

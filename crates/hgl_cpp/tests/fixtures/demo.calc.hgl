@@ -1,0 +1,21 @@
+module demo.calc
+
+# NUM-2: the sum of two `i64`, checked by the runtime library.
+const fn total(a: i64, b: i64) -> i64 => a + b
+
+const fn twice(value: i64) -> i64 {
+    let doubled = total(value, value)
+    return doubled
+}
+
+test sums {
+    assert total(2, 3) == 5
+    let large = twice(21)
+    assert large == 42
+}
+
+test overflows {
+    # The sum is past the largest `i64`: the call fails with
+    # `numeric.out_of_range`, and the test with it.
+    assert total(9223372036854775807, 1) == 0
+}

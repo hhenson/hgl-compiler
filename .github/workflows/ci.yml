@@ -111,3 +111,8 @@ jobs:
       - run: python -m unittest discover -s crates/hgl_hgraph/ci
       - run: cargo build --locked --bin hgl
       - run: python crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core
+      # The cpp target's list of the cases it does not run yet
+      # (crates/hgl_cpp/ci/unsupported_cases.toml). While it runs none it
+      # needs no C++ SDK; this step moves to the job that has one when a
+      # case runs.
+      - run: python crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core --target cpp
