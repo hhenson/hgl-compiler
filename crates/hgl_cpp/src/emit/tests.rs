@@ -160,6 +160,18 @@ impl Emitter<'_> {
         let Some(written) = self.written_type(result, call.at) else {
             return "0".to_string();
         };
+        // TST-5: a cell written whole, of a T whose delta is no T, is
+        // compared "with the value the result holds once its cycle has
+        // published": the entry keeps that value beside the recording
+        // (`hglrt::testing::hold_result`).
+        let delta = super::types::cpp_type(program, &Type::delta(result.clone()));
+        if delta.is_some_and(|delta| delta != written) {
+            let held = names::temporary("result", self.temporary());
+            text.push_str(&format!(
+                "{indent}const auto {held} = {target};\n{indent}{record}({WIRING}, {held}, ::hgraph::Str{{{library}::run_output}});\n{indent}{library}::hold_result({WIRING}, {held});\n{INDENT}}}"
+            ));
+            return format!("{library}::evaluate<{written}>({text}{mode})");
+        }
         text.push_str(&format!(
             "{indent}{record}({WIRING}, {target}, ::hgraph::Str{{{library}::run_output}});\n{INDENT}}}"
         ));
