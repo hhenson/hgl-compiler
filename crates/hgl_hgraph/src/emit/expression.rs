@@ -944,13 +944,7 @@ impl Emitter<'_> {
     /// no field and no local (UNIT-7), so it means the same wherever it
     /// is written.
     fn field_default(&mut self, default: FieldRef, at: Location) -> String {
-        let program = self.program;
-        let value = program.modules[default.module]
-            .defaults
-            .get(default.declaration)
-            .and_then(|defaults| defaults.get(default.field))
-            .and_then(Option::as_ref);
-        let Some(value) = value else {
+        let Some(value) = field_default(self.program, default) else {
             self.unsupported(at, "a default of a field left out here");
             return "None".to_string();
         };

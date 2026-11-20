@@ -279,27 +279,14 @@ impl<'a> Function<'a> {
     /// True when `local` is a temporal input of the node being written:
     /// a parameter that is not `const`.
     fn is_input(&self, local: usize) -> bool {
-        let declared = &self.locals[local];
-        declared.kind == LocalKind::Parameter
-            && self.signature.is_some_and(|signature| {
-                signature
-                    .parameters
-                    .iter()
-                    .any(|parameter| parameter.name == declared.name && !parameter.constant)
-            })
+        is_input(self.locals, self.signature, local)
     }
 
     /// True when `local` is a temporal input of the node being written
     /// that is marked `ref` (FN-16): an endpoint whose value is not
     /// read, hgraph's `REF` input.
     fn is_reference(&self, local: usize) -> bool {
-        let declared = &self.locals[local];
-        declared.kind == LocalKind::Parameter
-            && self.signature.is_some_and(|signature| {
-                signature.parameters.iter().any(|parameter| {
-                    parameter.name == declared.name && !parameter.constant && parameter.reference
-                })
-            })
+        is_reference(self.locals, self.signature, local)
     }
 
     /// True when `local` is an endpoint the node writes as hgraph's `REF`:
@@ -318,8 +305,7 @@ impl<'a> Function<'a> {
 
     /// True when `local` is the node's `inject out` (TIME-7).
     fn is_out(&self, local: usize) -> bool {
-        let declared = &self.locals[local];
-        declared.kind == LocalKind::Inject && declared.name == "out"
+        is_out(self.locals, local)
     }
 
     /// The type of what the port `value` reads in a hook holds: an

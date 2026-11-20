@@ -112,11 +112,7 @@ impl Emitter<'_> {
                     if injected == "out" {
                         has_out = true;
                     } else if let Some(written) = capability(injected) {
-                        let injects = match injected.as_str() {
-                            "scheduler" => Some(Timer::Scheduler),
-                            "alarm" => Some(Timer::Alarm),
-                            _ => None,
-                        };
+                        let injects = Timer::of(injected);
                         if injects.is_some() && timer.is_some() {
                             // Core's CAP-5: "A node injects it in place
                             // of `scheduler`".
@@ -176,26 +172,10 @@ impl Emitter<'_> {
             parameters.push(output.clone());
         }
         // TIME-4: what the handlers ask together.
-        let active: Vec<usize> = inputs
-            .iter()
-            .copied()
-            .filter(|input| {
-                handlers
-                    .iter()
-                    .any(|handler| handler.subscribed.contains(input))
-            })
-            .collect();
+        let active = subscribed_inputs(&inputs, &handlers);
         // TIME-4: only validity requirements shared by all handlers may
         // prevent the whole node from evaluating.
-        let valid: Vec<usize> = inputs
-            .iter()
-            .copied()
-            .filter(|input| {
-                handlers
-                    .iter()
-                    .all(|handler| handler.required.contains(input))
-            })
-            .collect();
+        let valid = required_inputs(&inputs, &handlers);
         let has_state = !states.is_empty();
         if has_state {
             lifecycle.push("_state: _hg.STATE = None".to_string());
@@ -1163,11 +1143,25 @@ pub(super) fn capability(injected: &str) -> Option<(&'static str, &'static str)>
 /// alarm it injects.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Timer {
-    /// `inject scheduler`: `scheduled()` is its `is_scheduled_now`.
+    /// `inject scheduler`: `scheduled()` is due where a wake it was
+    /// asked for is due.
     Scheduler,
     /// `inject alarm`: `scheduled()` "holds where the node is evaluated
     /// and no temporal input has ticked".
     Alarm,
+}
+
+impl Timer {
+    /// The timer an `inject` of the capability `injected` gives a node:
+    /// `scheduler` and `alarm` (core's CAP-4, CAP-5), and `None` for any
+    /// other capability.
+    fn of(injected: &str) -> Option<Timer> {
+        match injected {
+            "scheduler" => Some(Timer::Scheduler),
+            "alarm" => Some(Timer::Alarm),
+            _ => None,
+        }
+    }
 }
 
 /// One `when` of a node: what its header asks, and its body.
@@ -1224,6 +1218,70 @@ impl<'a> Handler<'a> {
             body,
         }
     }
+}
+
+/// The inputs among `inputs` that a handler among `handlers` subscribes
+/// to. TIME-4: "Aggregate subscriptions cover every handler."
+fn subscribed_inputs(inputs: &[usize], handlers: &[Handler]) -> Vec<usize> {
+    inputs
+        .iter()
+        .copied()
+        .filter(|input| {
+            handlers
+                .iter()
+                .any(|handler| handler.subscribed.contains(input))
+        })
+        .collect()
+}
+
+/// The inputs among `inputs` that every handler among `handlers`
+/// requires to be valid. TIME-4: "Node-wide validity includes only
+/// requirements common to executable handlers; other guards stay
+/// per-handler."
+fn required_inputs(inputs: &[usize], handlers: &[Handler]) -> Vec<usize> {
+    inputs
+        .iter()
+        .copied()
+        .filter(|input| {
+            handlers
+                .iter()
+                .all(|handler| handler.required.contains(input))
+        })
+        .collect()
+}
+
+/// True when `local`, among a function's `locals`, is a temporal input
+/// of it: a parameter of its `signature` that is not `const` (FN-3). A
+/// test or a module's store, which have no signature, has none.
+pub(super) fn is_input(locals: &[Local], signature: Option<&Signature>, local: usize) -> bool {
+    let declared = &locals[local];
+    declared.kind == LocalKind::Parameter
+        && signature.is_some_and(|signature| {
+            signature
+                .parameters
+                .iter()
+                .any(|parameter| parameter.name == declared.name && !parameter.constant)
+        })
+}
+
+/// True when `local`, among a function's `locals`, is a temporal input
+/// of it that is marked `ref` (FN-16): an endpoint whose value is not
+/// read.
+pub(super) fn is_reference(locals: &[Local], signature: Option<&Signature>, local: usize) -> bool {
+    let declared = &locals[local];
+    declared.kind == LocalKind::Parameter
+        && signature.is_some_and(|signature| {
+            signature.parameters.iter().any(|parameter| {
+                parameter.name == declared.name && !parameter.constant && parameter.reference
+            })
+        })
+}
+
+/// True when `local`, among a node's `locals`, is its `inject out`
+/// (TIME-7).
+pub(super) fn is_out(locals: &[Local], local: usize) -> bool {
+    let declared = &locals[local];
+    declared.kind == LocalKind::Inject && declared.name == "out"
 }
 
 /// True when `statements` hold a `yield`, at any depth: in a loop, a

@@ -27,8 +27,8 @@ impl<'a> Emitter<'a> {
     /// literal or a constant (UNIT-13), and elsewhere fails the call as
     /// the program runs."
     ///
-    /// In a hook a duration whose value this target works out
-    /// (`known_duration`) and that is admitted there is given as it is;
+    /// In a hook a duration whose value is worked out
+    /// ([`known_duration`]) and that is admitted there is given as it is;
     /// for any other the provider's function checks it (`_wake_delay`),
     /// once every argument of the call is evaluated (EXPR-2), and fails
     /// the call where it is not admitted. One that is worked out
@@ -54,7 +54,7 @@ impl<'a> Emitter<'a> {
             let parameter = signature.parameters.get(argument.parameter?)?;
             (parameter.ty == Type::Scalar(Scalar::Duration)).then_some(&argument.value)
         })?;
-        let known = self.known_duration(given, &mut HashMap::new());
+        let known = known_duration(self.program, given, &mut HashMap::new());
         match function.mode {
             Mode::Node | Mode::Stop | Mode::Lifecycle => {
                 let starting = function.mode == Mode::Lifecycle;
@@ -72,84 +72,6 @@ impl<'a> Emitter<'a> {
                 }
                 None
             }
-        }
-    }
-
-    /// The value of `value` in microseconds, where it is a duration this
-    /// target works out from how it is written: a literal, a constant
-    /// followed to what it is written as, and core's `-value`, `+` and
-    /// `-` of two of them and `*` of one by an `i64` literal (OPS-1), with
-    /// checked arithmetic. `None` for any other: a local, a call of
-    /// another function, one that overflows. The analyser has rejected a
-    /// constant that depends on itself (`constant.cycle`), so a chain of
-    /// constants ends. `known` holds what each constant, by its module
-    /// and declaration, came to, so that one named many times, `D0 + D0`,
-    /// is worked out once.
-    fn known_duration(
-        &self,
-        value: &Expr,
-        known: &mut HashMap<(usize, usize), Option<i64>>,
-    ) -> Option<i64> {
-        let program = self.program;
-        match &value.kind {
-            ExprKind::Literal(Value::Duration(micros)) => Some(*micros),
-            ExprKind::Constant {
-                module,
-                declaration,
-            } => {
-                if let Some(value) = known.get(&(*module, *declaration)) {
-                    return *value;
-                }
-                let value = match program.modules[*module].constants.get(*declaration) {
-                    Some(Some(constant)) => self.known_duration(constant, known),
-                    _ => None,
-                };
-                known.insert((*module, *declaration), value);
-                value
-            }
-            ExprKind::Call {
-                callee, arguments, ..
-            } => {
-                let (module, declaration) = callee.declaration()?;
-                if Some(module) != program.core() {
-                    return None;
-                }
-                // An operand that is a duration, or an `i64` literal.
-                let mut operand =
-                    |argument: &Argument| match (&argument.value.ty, &argument.value.kind) {
-                        (Type::Scalar(Scalar::Duration), _) => self
-                            .known_duration(&argument.value, known)
-                            .map(Operand::Duration),
-                        (Type::Scalar(Scalar::I64), ExprKind::Literal(Value::Int(count))) => {
-                            Some(Operand::Count(*count))
-                        }
-                        _ => None,
-                    };
-                // In the order of the parameters, however they are
-                // written: `sub_(rhs: a, lhs: b)` is `b - a`.
-                let mut ordered: Vec<&Argument> = arguments.iter().collect();
-                ordered.sort_by_key(|argument| argument.parameter);
-                let operands: Option<Vec<Operand>> =
-                    ordered.into_iter().map(&mut operand).collect();
-                let name = program.modules[module].declarations[declaration]
-                    .name
-                    .as_str();
-                match (name, operands?.as_slice()) {
-                    ("neg_", [Operand::Duration(micros)]) => micros.checked_neg(),
-                    ("add_", [Operand::Duration(lhs), Operand::Duration(rhs)]) => {
-                        lhs.checked_add(*rhs)
-                    }
-                    ("sub_", [Operand::Duration(lhs), Operand::Duration(rhs)]) => {
-                        lhs.checked_sub(*rhs)
-                    }
-                    ("mul_", [Operand::Duration(micros), Operand::Count(count)])
-                    | ("mul_", [Operand::Count(count), Operand::Duration(micros)]) => {
-                        micros.checked_mul(*count)
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
         }
     }
 
@@ -363,15 +285,7 @@ impl<'a> Emitter<'a> {
         index: usize,
         parameter: &Parameter,
     ) -> Option<String> {
-        let temporal = self.program.modules[callee.0].declarations[callee.1]
-            .kind
-            .role()
-            == Some(Role::Temporal);
-        if !temporal
-            || parameter.constant
-            || parameter.has_default
-            || !matches!(parameter.ty, Type::Nullable(_))
-        {
+        if !left_out_never_valid(self.program, callee, parameter) {
             return self.left_out(callee, index, parameter);
         }
         let ty = self
@@ -493,33 +407,24 @@ impl<'a> Emitter<'a> {
         index: usize,
         parameter: &Parameter,
     ) -> Option<String> {
-        let program = self.program;
-        let defaults = program.modules[callee.0]
-            .defaults
-            .get(callee.1)
-            .map_or(&[][..], Vec::as_slice);
-        if let Some(Some(default)) = defaults.get(index) {
-            // A default that calls its own function with that same
-            // argument left out would be written inside itself
-            // without end.
-            let key = (callee.0, callee.1, index);
-            if self.expanding.contains(&key) {
-                self.unsupported(default.at, "a default that leaves itself out");
-                return Some("None".to_string());
+        match left_out(self.program, callee, index, parameter)? {
+            LeftOut::Default(default) => {
+                // A default that calls its own function with that same
+                // argument left out would be written inside itself
+                // without end.
+                let key = (callee.0, callee.1, index);
+                if self.expanding.contains(&key) {
+                    self.unsupported(default.at, "a default that leaves itself out");
+                    return Some("None".to_string());
+                }
+                // A default is read with no local in scope.
+                let cold = Function::cold(Mode::Value);
+                self.expanding.push(key);
+                let value = self.expression(&cold, default);
+                self.expanding.pop();
+                Some(value)
             }
-            // A default is read with no local in scope.
-            let cold = Function::cold(Mode::Value);
-            self.expanding.push(key);
-            let value = self.expression(&cold, default);
-            self.expanding.pop();
-            Some(value)
-        } else if matches!(parameter.ty, Type::Nullable(_)) {
-            // UNIT-8: "A parameter whose type is written `T?` needs
-            // no default to be omitted: it is taken to have a
-            // default of `null`".
-            Some("None".to_string())
-        } else {
-            None
+            LeftOut::Null => Some("None".to_string()),
         }
     }
 
@@ -1416,6 +1321,141 @@ pub(super) fn called(value: &Expr) -> Option<(usize, usize, &[Argument])> {
     };
     let (module, declaration) = callee.declaration()?;
     Some((module, declaration, arguments))
+}
+
+/// The value of `value` in microseconds, where it is a duration whose
+/// value is worked out from how it is written: a literal, a constant
+/// followed to what it is written as, and core's `-value`, `+` and
+/// `-` of two of them and `*` of one by an `i64` literal (OPS-1), with
+/// checked arithmetic. `None` for any other: a local, a call of
+/// another function, one that overflows. The analyser has rejected a
+/// constant that depends on itself (`constant.cycle`), so a chain of
+/// constants ends. `known` holds what each constant, by its module
+/// and declaration, came to, so that one named many times, `D0 + D0`,
+/// is worked out once.
+pub(super) fn known_duration(
+    program: &Program,
+    value: &Expr,
+    known: &mut HashMap<(usize, usize), Option<i64>>,
+) -> Option<i64> {
+    match &value.kind {
+        ExprKind::Literal(Value::Duration(micros)) => Some(*micros),
+        ExprKind::Constant {
+            module,
+            declaration,
+        } => {
+            if let Some(value) = known.get(&(*module, *declaration)) {
+                return *value;
+            }
+            let value = match program.modules[*module].constants.get(*declaration) {
+                Some(Some(constant)) => known_duration(program, constant, known),
+                _ => None,
+            };
+            known.insert((*module, *declaration), value);
+            value
+        }
+        ExprKind::Call {
+            callee, arguments, ..
+        } => {
+            let (module, declaration) = callee.declaration()?;
+            if Some(module) != program.core() {
+                return None;
+            }
+            // An operand that is a duration, or an `i64` literal.
+            let mut operand = |argument: &Argument| match (&argument.value.ty, &argument.value.kind)
+            {
+                (Type::Scalar(Scalar::Duration), _) => {
+                    known_duration(program, &argument.value, known).map(Operand::Duration)
+                }
+                (Type::Scalar(Scalar::I64), ExprKind::Literal(Value::Int(count))) => {
+                    Some(Operand::Count(*count))
+                }
+                _ => None,
+            };
+            // In the order of the parameters, however they are
+            // written: `sub_(rhs: a, lhs: b)` is `b - a`.
+            let mut ordered: Vec<&Argument> = arguments.iter().collect();
+            ordered.sort_by_key(|argument| argument.parameter);
+            let operands: Option<Vec<Operand>> = ordered.into_iter().map(&mut operand).collect();
+            let name = program.modules[module].declarations[declaration]
+                .name
+                .as_str();
+            match (name, operands?.as_slice()) {
+                ("neg_", [Operand::Duration(micros)]) => micros.checked_neg(),
+                ("add_", [Operand::Duration(lhs), Operand::Duration(rhs)]) => lhs.checked_add(*rhs),
+                ("sub_", [Operand::Duration(lhs), Operand::Duration(rhs)]) => lhs.checked_sub(*rhs),
+                ("mul_", [Operand::Duration(micros), Operand::Count(count)])
+                | ("mul_", [Operand::Count(count), Operand::Duration(micros)]) => {
+                    micros.checked_mul(*count)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// What a call that leaves a parameter out gives it (UNIT-8), where it
+/// is not a temporal input that is then never valid
+/// ([`left_out_never_valid`]).
+pub(super) enum LeftOut<'p> {
+    /// Its default, read with no local in scope (UNIT-7).
+    Default(&'p Expr),
+    /// `null`. UNIT-8: "A parameter whose type is written `T?` needs no
+    /// default to be omitted: it is taken to have a default of `null`".
+    Null,
+}
+
+/// What parameter `index` of the function `callee`, a module and a
+/// declaration of it, is given when a call leaves it out: its default,
+/// or `null` for one written `T?` with none (UNIT-8). `None` for a
+/// parameter that cannot be left out.
+pub(super) fn left_out<'p>(
+    program: &'p Program,
+    callee: (usize, usize),
+    index: usize,
+    parameter: &Parameter,
+) -> Option<LeftOut<'p>> {
+    let defaults = program.modules[callee.0]
+        .defaults
+        .get(callee.1)
+        .map_or(&[][..], Vec::as_slice);
+    if let Some(Some(default)) = defaults.get(index) {
+        Some(LeftOut::Default(default))
+    } else if matches!(parameter.ty, Type::Nullable(_)) {
+        Some(LeftOut::Null)
+    } else {
+        None
+    }
+}
+
+/// True where a call of the function `callee`, a module and a
+/// declaration of it, that leaves `parameter` out binds it to an input
+/// that is never valid: a temporal input written `T?` with no default.
+/// UNIT-8: "an omitted temporal input is never valid". Any other
+/// parameter takes what [`left_out`] gives it.
+pub(super) fn left_out_never_valid(
+    program: &Program,
+    callee: (usize, usize),
+    parameter: &Parameter,
+) -> bool {
+    let temporal =
+        program.modules[callee.0].declarations[callee.1].kind.role() == Some(Role::Temporal);
+    temporal
+        && !parameter.constant
+        && !parameter.has_default
+        && matches!(parameter.ty, Type::Nullable(_))
+}
+
+/// The default of the field `default` of a struct, which a construction
+/// that leaves the field out gives it (TYPE-5), read with no local in
+/// scope (UNIT-7). `None` where the analysed program has none for it.
+pub(super) fn field_default(program: &Program, default: FieldRef) -> Option<&Expr> {
+    program.modules[default.module]
+        .defaults
+        .get(default.declaration)
+        .and_then(|defaults| defaults.get(default.field))
+        .and_then(Option::as_ref)
 }
 
 /// An operand of core's arithmetic on durations, as `known_duration`
