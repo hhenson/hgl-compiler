@@ -63,6 +63,12 @@ void check_index(i64 index, std::size_t size, std::source_location where);
 /// `values[index]` (EXPR-7): the element of a list at an `i64` position. An
 /// index outside the list, a negative one among them, fails with
 /// `value.index_out_of_range` (EXPR-3).
+///
+/// Of a list that outlives the read, a reference to the element; of one that
+/// ends with the read's statement (`names()[0]`), the element itself, moved
+/// out of the list, so that nothing refers into a list that is gone: a
+/// `const` reference bound to it, which a `let` is (docs/cpp-target.md),
+/// keeps it.
 template <class T>
 const T& item(const std::vector<T>& values, i64 index,
               std::source_location where = std::source_location::current()) {
@@ -73,6 +79,23 @@ const T& item(const std::vector<T>& values, i64 index,
 /// `values[index]` as a place, which an assignment writes (EXPR-3, FN-15).
 template <class T>
 T& item(std::vector<T>& values, i64 index, std::source_location where = std::source_location::current()) {
+    detail::check_index(index, values.size(), where);
+    return values[static_cast<std::size_t>(index)];
+}
+
+/// `values[index]` of a list that ends with the read's statement: the
+/// element, moved out of it.
+template <class T>
+T item(std::vector<T>&& values, i64 index, std::source_location where = std::source_location::current()) {
+    detail::check_index(index, values.size(), where);
+    return std::move(values[static_cast<std::size_t>(index)]);
+}
+
+/// `values[index]` of a `const` list that ends with the read's statement:
+/// a copy of the element.
+template <class T>
+T item(const std::vector<T>&& values, i64 index,
+       std::source_location where = std::source_location::current()) {
     detail::check_index(index, values.size(), where);
     return values[static_cast<std::size_t>(index)];
 }
@@ -88,6 +111,23 @@ const T& item(const std::array<T, N>& values, i64 index,
 /// `values[index]` of a fixed list as a place.
 template <class T, std::size_t N>
 T& item(std::array<T, N>& values, i64 index, std::source_location where = std::source_location::current()) {
+    detail::check_index(index, N, where);
+    return values[static_cast<std::size_t>(index)];
+}
+
+/// `values[index]` of a fixed list that ends with the read's statement: the
+/// element, moved out of it.
+template <class T, std::size_t N>
+T item(std::array<T, N>&& values, i64 index, std::source_location where = std::source_location::current()) {
+    detail::check_index(index, N, where);
+    return std::move(values[static_cast<std::size_t>(index)]);
+}
+
+/// `values[index]` of a `const` fixed list that ends with the read's
+/// statement: a copy of the element.
+template <class T, std::size_t N>
+T item(const std::array<T, N>&& values, i64 index,
+       std::source_location where = std::source_location::current()) {
     detail::check_index(index, N, where);
     return values[static_cast<std::size_t>(index)];
 }
