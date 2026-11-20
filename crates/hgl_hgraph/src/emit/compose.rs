@@ -85,6 +85,7 @@ impl Emitter<'_> {
                     kind: ExprKind::Literal(Value::Null),
                     ty: value.ty.clone(),
                     at: value.at,
+                    category: ValueCategory::Value,
                 };
                 for (position, branch) in [Some(&**then), otherwise.as_deref()]
                     .into_iter()
@@ -159,7 +160,7 @@ impl Emitter<'_> {
                     },
                 at,
                 ..
-            }) if self.connects(function, condition) => {
+            }) if condition.is_connection() => {
                 // Each branch's statements; an `else if` is the one
                 // statement of the `else`.
                 let then_owned = alternative_statements(Some(then));
@@ -275,7 +276,7 @@ impl Emitter<'_> {
                     Some(then_statements),
                     other.map(|(statements, _)| statements),
                 ];
-                if self.connects(function, condition) {
+                if condition.is_connection() {
                     // A `return` in a branch whose value a `let` or a
                     // `var` is given, in its statements or in its value,
                     // leaves the graph, not the branch's graph (CTRL-5:
@@ -356,10 +357,9 @@ impl Emitter<'_> {
                 // "a branch that is a connection makes it a connection
                 // of `T` that never ticks where the branch is not
                 // composed", and an ordinary value a `T?`.
-                let connection = then_value.is_some_and(|value| self.connects(function, value))
-                    || other.is_some_and(|(_, value)| {
-                        value.is_some_and(|value| self.connects(function, value))
-                    });
+                let connection = then_value.is_some_and(|value| value.is_connection())
+                    || other
+                        .is_some_and(|(_, value)| value.is_some_and(|value| value.is_connection()));
                 let absent = if connection {
                     match self.annotation(&whole.ty, true, *at) {
                         Some(annotation) => format!("_hg.nothing({annotation})"),
@@ -456,6 +456,7 @@ impl Emitter<'_> {
                                             kind: ExprKind::Literal(Value::Null),
                                             ty: whole.ty.clone(),
                                             at: *at,
+                                            category: ValueCategory::Value,
                                         }),
                                         at: *at,
                                     };
@@ -497,7 +498,7 @@ impl Emitter<'_> {
                 cases,
                 default,
                 at,
-            } if self.connects(function, selector) => {
+            } if selector.is_connection() => {
                 if self.label_not_valued(cases) || self.labels_repeat(cases) {
                     return Branched::Ended;
                 }
@@ -963,6 +964,7 @@ impl Emitter<'_> {
                         kind: ExprKind::Local(*var),
                         ty: function.locals[*var].ty.clone(),
                         at,
+                        category: function.locals[*var].category,
                     }),
                     at,
                 }),
@@ -1560,14 +1562,10 @@ impl Emitter<'_> {
         } = captured_call_of(program, call)?;
         let node = self.is_node(callee);
         // FN-6: "A selected value helper ... with temporal arguments in
-        // composition is lifted". ERR-7: a value function given no
-        // connection composes nothing, which the analyser rejects
-        // (`capture.phase`).
-        let lifted = declared.kind.role() == Some(Role::Value)
-            && bodied
-            && arguments
-                .iter()
-                .any(|argument| self.connects(function, &argument.value));
+        // composition is lifted", as the analyser records it. ERR-7: a
+        // value function given no connection composes nothing, which
+        // the analyser rejects (`capture.phase`).
+        let lifted = call.is_lifted() && bodied;
         let constants = signature
             .parameters
             .iter()
@@ -1600,8 +1598,8 @@ impl Emitter<'_> {
             self.kept_configuration(callee, generics, signature)
         };
         let child = if lifted {
-            let (values, bound) = self.bound(function, signature, arguments, |emitter, value| {
-                emitter.connects(function, value).then(|| value.ty.clone())
+            let (values, bound) = self.bound(function, signature, arguments, |_, value| {
+                value.is_connection().then(|| value.ty.clone())
             });
             let result = signature.result.as_ref().map(|_| &call.ty);
             let node = self.lifted(

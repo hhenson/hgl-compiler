@@ -11,7 +11,7 @@ use hgl_parser::SyntaxKind;
 use super::Typer;
 use super::arguments::Takes;
 use crate::declared::{agree, names_one_of, substitute_within};
-use crate::hir::{BinaryOperator, Callee, Expr, ExprKind, UnaryOperator, Value};
+use crate::hir::{BinaryOperator, Callee, Expr, ExprKind, UnaryOperator, Value, ValueCategory};
 use crate::program::DeclarationKind;
 use crate::syntax::has_token;
 use crate::types::{Argument, Detail, GenericKind, Scalar, Type};
@@ -47,6 +47,7 @@ impl<'a> Typer<'a> {
                 kind: ExprKind::CheckedChild { read, result: true },
                 ty: expected.clone(),
                 at,
+                category: ValueCategory::Unsettled,
             };
         }
         // ERR-14: "... and so does ... a read of a window's value before
@@ -66,6 +67,7 @@ impl<'a> Typer<'a> {
                 kind: ExprKind::CheckedWindow(Box::new(value)),
                 ty: expected.clone(),
                 at,
+                category: ValueCategory::Unsettled,
             };
         }
         if is_integer_literal(&value) && accepts_float(expected) {
@@ -74,6 +76,7 @@ impl<'a> Typer<'a> {
                 kind: ExprKind::Widen(Box::new(value)),
                 ty: Type::Scalar(Scalar::F64),
                 at,
+                category: ValueCategory::Unsettled,
             };
         }
         self.conforms(&value.ty, expected, value.at, what);

@@ -389,6 +389,7 @@ impl<'a> Typer<'a> {
             callee: Callee::Unread,
             arguments,
             form: Form::Named,
+            lifted: false,
         };
         (kind, Type::Unknown)
     }
@@ -610,6 +611,7 @@ impl<'a> Typer<'a> {
                 callee,
                 arguments,
                 form: Form::Named,
+                lifted: false,
             };
             self.finished_call(&kind, evaluating);
             return (kind, ty);
@@ -805,6 +807,7 @@ impl<'a> Typer<'a> {
             callee,
             arguments,
             form: Form::Named,
+            lifted: false,
         };
         self.finished_call(&kind, evaluating);
         (kind, ty)

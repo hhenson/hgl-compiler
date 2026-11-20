@@ -38,7 +38,7 @@ one executable for each test module or application
 
 | Part | Where | What it owns |
 | --- | --- | --- |
-| `hgl_lower` | `crates/hgl_lower` | What both targets decide the same way, moved out of `hgl_hgraph` unchanged: the copy rule, instance collection and canonical names, what blocks a piece, eval wiring, the child-graph analyses, HGL type facts. The analyser exports what it already works out and does not record: whether an expression is a connection, which calls are lifted, what is a source |
+| `hgl_lower` | `crates/hgl_lower` | What both targets decide the same way, moved out of `hgl_hgraph` unchanged: the copy rule, instance collection and canonical names, what blocks a piece, eval wiring, the child-graph analyses, HGL type facts. The analyser records what it works out on the analysed program: whether each expression is a connection (`hir::Expr::category`), which calls are lifted (the call's `lifted`), what is a source (`Module::is_source`) |
 | `hgl_cpp` | `crates/hgl_cpp` | C++ for types, value functions, nodes, graphs, tests and applications. No semantic decision that `hgl_lower` or the analyser can make |
 | `libhglrt` | `runtime/cpp` | Core's native declarations; checked reads and failures; sources and wakes; the test and application host (traces, comparison, outcomes); glue for `switch` and `map` until hgraph has it |
 | Build driver | `crates/hgl_cli` | Finds the SDK, writes the build, compiles what changed, links, runs. A failed build never runs an older executable |

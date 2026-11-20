@@ -248,7 +248,7 @@ impl Emitter<'_> {
         };
         let below =
             matches!(value.ty, Type::Named { kind: NamedKind::Struct, .. } if value.ty != *ty);
-        if function.mode != Mode::Graph || !below || !self.connects(function, value) {
+        if function.mode != Mode::Graph || !below || !value.is_connection() {
             return written;
         }
         let fields: Vec<String> = match self.program.modules[*module].details.get(*declaration) {

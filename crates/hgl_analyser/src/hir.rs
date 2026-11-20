@@ -173,7 +173,8 @@ pub enum ValueCategory {
     /// candidate a value (GEN-5), and which it is is selected where the
     /// graph's generic parameters are known. And a `var` of a graph
     /// declared with no value, until an assignment gives it one
-    /// (EXPR-3).
+    /// (EXPR-3). An expression is one while the analyser reads its
+    /// body, until it records what it is ([`Expr::category`]).
     Unsettled,
 }
 
@@ -403,6 +404,27 @@ pub struct Expr {
     pub ty: Type,
     /// Where it is written.
     pub at: Location,
+    /// Whether it is a connection or an ordinary value where it stands
+    /// (FN-3: "There a temporal parameter, and the result of a temporal
+    /// or lifted call, is a connection"). The analyser records it on
+    /// every expression of the program once the body it stands in is
+    /// read, and on an instance's body with the instance's callees in
+    /// place ([`crate::Program::instance`]); a stage after the analyser
+    /// reads it here and works none of it out again.
+    pub category: ValueCategory,
+}
+
+impl Expr {
+    /// True where the expression is a connection ([`Expr::category`]).
+    pub fn is_connection(&self) -> bool {
+        self.category == ValueCategory::Connection
+    }
+
+    /// True for a call that is lifted (FN-6): see the `lifted` of
+    /// [`ExprKind::Call`].
+    pub fn is_lifted(&self) -> bool {
+        matches!(self.kind, ExprKind::Call { lifted: true, .. })
+    }
 }
 
 /// What an expression is.
@@ -539,6 +561,20 @@ pub enum ExprKind {
         arguments: Vec<Argument>,
         /// How the call is written.
         form: Form,
+        /// True where the call is lifted (FN-6: "A selected value
+        /// helper, a `const fn` or a value candidate of an operator,
+        /// with temporal arguments in composition is lifted"): it is
+        /// written in a graph's body, it calls a value function or a
+        /// value candidate that marks no parameter `var` (FN-15: "A
+        /// function or a candidate that declares one is not lifted"),
+        /// and an argument is a connection. The arguments that are
+        /// connections are the node's inputs, and the rest its
+        /// configuration. Recorded with [`Expr::category`]. An
+        /// operation the declaration requires (GEN-7) is not, as its
+        /// candidate is not known: an instance's body has the
+        /// candidate in its place, and says. An eval's call is not
+        /// either: the eval wires its target (TST-8).
+        lifted: bool,
     },
     /// A struct made from its fields: `Quote(bid: 1.0, ask: 2.0)`. The
     /// expression's type is the struct, with its generic arguments.
