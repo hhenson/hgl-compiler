@@ -416,6 +416,37 @@ fn a_temporal_form_not_written_yet_is_reported() {
     assert_eq!(emitted.blocked("a_scalar"), None);
 }
 
+/// TST-5: a trace given to an eval that is no trace written out, a `let`
+/// of an eval's, is reported where it is given, and not wired as a
+/// constant of its payload.
+#[test]
+fn a_trace_held_in_a_let_given_to_an_eval_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn pass(value: i64) -> i64 {\n",
+                "    when { return value }\n",
+                "}\n",
+                "\n",
+                "test again {\n",
+                "    let seen = eval(pass(value: [1]))\n",
+                "    assert eval(pass(value: seen)) == [1]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("again").as_deref(),
+        Some(
+            "m.hgl:9:29 the cpp target does not write a trace given to an eval that is no trace written out yet"
+        )
+    );
+}
+
 /// A temporal call that leaves out `const` parameters (UNIT-8): where
 /// more than one default may fail, each is held in the order of the
 /// parameters (EXPR-2); a default that runs statements is reported, as a
