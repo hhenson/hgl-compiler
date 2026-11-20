@@ -421,8 +421,8 @@ fn arguments_that_may_fail_are_evaluated_in_order() {
     let pair = "::hgl::demo::order::m_::pair";
     assert!(
         unit.contains(&format!(
-            "return [&] {{ const auto& argument_00_ = {one}; \
-             const auto& argument_01_ = {one}; \
+            "return [&] {{ const auto argument_00_ = {one}; \
+             const auto argument_01_ = {one}; \
              return {pair}(argument_00_, argument_01_); }}();"
         )),
         "{unit}"

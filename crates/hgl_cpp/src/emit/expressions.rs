@@ -70,6 +70,7 @@ impl Emitter<'_> {
                 else {
                     return self.missing(value.at, "this member");
                 };
+                self.note_enum(*module, *declaration);
                 format!(
                     "{}::{}",
                     enum_name(self.program, *module, *declaration),

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <hglrt/hglrt.h>
+#include "core.h"
 
 namespace hgl::demo::natives::m_
 {

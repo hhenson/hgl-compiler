@@ -37,8 +37,8 @@ use hgl_lower::copies::place_of;
 
 use super::Emitter;
 use super::names::{self, identifier};
-use super::statements::Scope;
-use super::types::{cpp_type, enum_name};
+use super::statements::{Scope, refers};
+use super::types::enum_name;
 use hgl_analyser::hir::Body;
 
 impl Emitter<'_> {
@@ -163,9 +163,9 @@ impl Emitter<'_> {
         // Each parameter's argument: the one written for it, or what
         // `hgl_lower` says one left out is given (UNIT-8), a default read
         // with nothing in scope (UNIT-7). Each is the parameter's
-        // position, what is written for it, whether it may fail, and
-        // whether it is a place.
-        let mut written: Vec<(usize, String, bool, bool)> = Vec::new();
+        // position, what is written for it, whether it may fail, and how
+        // it is held where it is evaluated before the call.
+        let mut written: Vec<(usize, String, bool, Held)> = Vec::new();
         for argument in arguments {
             let Some(index) = argument
                 .parameter
@@ -179,26 +179,28 @@ impl Emitter<'_> {
                     return self
                         .missing(argument.value.at, "this place given to a `var` parameter");
                 };
-                written.push((index, place, may_fail(&argument.value), true));
+                written.push((index, place, may_fail(&argument.value), Held::Place));
                 continue;
             }
             let value = self.expression(scope, &argument.value);
             let read = scope
                 .copies
                 .places(program, &scope.body.locals, &argument.value);
-            let value = if read.iter().any(|place| given_places.contains(place)) {
+            let (value, held) = if read.iter().any(|place| given_places.contains(place)) {
                 // A copy, which the call's change of the place leaves as
                 // it was (FN-15).
-                let Some(ty) = cpp_type(program, &parameter.ty) else {
+                let Some(ty) = self.named_type(&parameter.ty) else {
                     return self.missing(at, &format!("the type `{}`", parameter.ty));
                 };
-                format!("{ty}({value})")
+                (format!("{ty}({value})"), Held::Value)
+            } else if refers(&argument.value) {
+                (value, Held::Reference)
             } else {
-                value
+                (value, Held::Value)
             };
-            written.push((index, value, may_fail(&argument.value), false));
+            written.push((index, value, may_fail(&argument.value), held));
         }
-        let mut defaulted: Vec<(usize, String, bool, bool)> = Vec::new();
+        let mut defaulted: Vec<(usize, String, bool, Held)> = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
             if written.iter().any(|(given, ..)| *given == index) {
                 continue;
@@ -226,13 +228,13 @@ impl Emitter<'_> {
                     if !defaults.before.is_empty() {
                         return self.missing(default.at, "a default that propagates a failure");
                     }
-                    defaulted.push((index, value, may_fail(default), false));
+                    defaulted.push((index, value, may_fail(default), Held::Value));
                 }
                 // UNIT-8: "A parameter whose type is written `T?` needs no
                 // default to be omitted: it is taken to have a default of
                 // `null`".
                 Some(LeftOut::Null) => {
-                    defaulted.push((index, "std::nullopt".to_string(), false, false))
+                    defaulted.push((index, "std::nullopt".to_string(), false, Held::Value))
                 }
                 None => {
                     return self
@@ -248,7 +250,7 @@ impl Emitter<'_> {
         // order, before the call; a lambda called where the call is
         // gives them a block to be in.
         let mut given: Vec<String> = vec![String::new(); signature.parameters.len()];
-        let ordered: Vec<(usize, String, bool, bool)> =
+        let ordered: Vec<(usize, String, bool, Held)> =
             written.into_iter().chain(defaulted).collect();
         if ordered.iter().filter(|(_, _, fails, _)| *fails).count() <= 1 {
             for (index, value, _, _) in ordered {
@@ -256,15 +258,20 @@ impl Emitter<'_> {
             }
             return format!("{called}({})", given.join(", "));
         }
+        // A place is held by a reference to it, and what something else
+        // holds by a `const` reference; any other value as it is, so that
+        // nothing it is part of is gone before the call: `[7][0]` is an
+        // element of a list that ends with its statement.
         let mut steps = String::new();
-        for (index, value, _, place) in ordered {
-            let held = names::temporary("argument", self.temporary());
-            if place {
-                steps.push_str(&format!("auto& {held} = {value}; "));
-            } else {
-                steps.push_str(&format!("const auto& {held} = {value}; "));
-            }
-            given[index] = held;
+        for (index, value, _, held) in ordered {
+            let name = names::temporary("argument", self.temporary());
+            let declared = match held {
+                Held::Place => "auto&",
+                Held::Reference => "const auto&",
+                Held::Value => "const auto",
+            };
+            steps.push_str(&format!("{declared} {name} = {value}; "));
+            given[index] = name;
         }
         format!("[&] {{ {steps}return {called}({}); }}()", given.join(", "))
     }
@@ -305,7 +312,7 @@ impl Emitter<'_> {
                 self.unsupported(at, &shown);
                 return None;
             };
-            let Some(gives) = cpp_type(program, gives) else {
+            let Some(gives) = self.named_type(gives) else {
                 self.unsupported(at, &format!("the type `{gives}`"));
                 return None;
             };
@@ -327,8 +334,13 @@ impl Emitter<'_> {
         let mut arguments: Vec<String> = first.to_vec();
         for argument in generics {
             let written = match argument {
-                GenericArgument::Type(ty) => cpp_type(self.program, ty),
+                GenericArgument::Type(ty) => self.named_type(ty),
                 GenericArgument::Constant(constant) => {
+                    if let ConstantValue::Member(member) = &constant.value
+                        && let Some(of) = &member.of
+                    {
+                        self.note_enum(of.declared.0, of.declared.1);
+                    }
                     constant_value(self.program, &constant.value)
                 }
             };
@@ -368,6 +380,19 @@ impl Emitter<'_> {
             )
         })
     }
+}
+
+/// How an argument evaluated before its call (EXPR-2) is held until the
+/// call is made.
+#[derive(Clone, Copy)]
+enum Held {
+    /// A place given to a `var` parameter: a reference to it.
+    Place,
+    /// What a local, a constant or a part of one holds, which outlives
+    /// the call: a `const` reference to it.
+    Reference,
+    /// Any other value: a value of its own.
+    Value,
 }
 
 /// A constant, a generic value argument (GEN-8), as a C++ constant

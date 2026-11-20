@@ -135,11 +135,52 @@ impl Emitter<'_> {
     /// The C++ type of `ty`, or, for one not written yet, the reason
     /// reported at `at` and `None`.
     pub(super) fn written_type(&mut self, ty: &Type, at: Location) -> Option<String> {
-        let written = cpp_type(self.program, ty);
+        let written = self.named_type(ty);
         if written.is_none() {
             self.unsupported(at, &format!("the type `{ty}`"));
         }
         written
+    }
+
+    /// The C++ type of `ty`, as [`cpp_type`] gives it, noting each other
+    /// module whose type it names: the piece's header includes theirs.
+    pub(super) fn named_type(&mut self, ty: &Type) -> Option<String> {
+        let written = cpp_type(self.program, ty)?;
+        self.note_types(ty);
+        Some(written)
+    }
+
+    /// Notes each module other than this one whose enum `ty` names, at
+    /// any depth, and that the runtime library does not declare.
+    pub(super) fn note_types(&mut self, ty: &Type) {
+        match ty {
+            Type::Named {
+                module,
+                declaration,
+                ..
+            } => self.note_enum(*module, *declaration),
+            Type::Nullable(inner) | Type::List { element: inner, .. } => self.note_types(inner),
+            Type::Tuple(positions) => {
+                for position in positions {
+                    self.note_types(position);
+                }
+            }
+            Type::Result { value, error } => {
+                self.note_types(value);
+                self.note_types(error);
+            }
+            _ => {}
+        }
+    }
+
+    /// Notes the module of enum `declaration` of `module`, where it is
+    /// another module's and declared by no library.
+    pub(super) fn note_enum(&mut self, module: usize, declaration: usize) {
+        let name = &self.program.modules[module].declarations[declaration].name;
+        let library = Some(module) == self.program.core() && runtime::declares_enum(name);
+        if module != self.module && !library {
+            self.piece.types.insert(module);
+        }
     }
 
     /// Writes the declaration of a struct, an enum or a native type

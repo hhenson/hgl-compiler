@@ -73,6 +73,9 @@ pub(crate) struct Piece {
     /// For a test, where each of its statements starts: the line of
     /// its text, counted from 0, and the place in the source.
     pub(crate) statements: Vec<(usize, Location)>,
+    /// The other modules whose types it names, an enum's among them: the
+    /// header that declares it includes theirs.
+    pub(crate) types: std::collections::BTreeSet<usize>,
 }
 
 /// Writes module `index` of `program`, reporting each form it does not

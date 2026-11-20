@@ -490,7 +490,7 @@ impl Emitter<'_> {
 /// True where `value` reads what something else holds, as it is: a
 /// local, an element or a position of one, a constant. A `let` of it may
 /// be a reference; any other value is made where it is read.
-fn refers(value: &Expr) -> bool {
+pub(super) fn refers(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Local(_) | ExprKind::Constant { .. } => true,
         ExprKind::Index { base, .. } => refers(base),

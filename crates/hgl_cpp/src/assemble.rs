@@ -135,10 +135,22 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .map(|(module, _, _)| *module)
             .filter(|&used| used != index)
             .collect();
+        // The other modules whose types its pieces name: its header
+        // includes theirs. Modules import no cycle (UNIT-3,
+        // `import.cycle`), so no header includes itself.
+        let typed: BTreeSet<usize> = defined
+            .iter()
+            .flat_map(|piece| &piece.types)
+            .copied()
+            .filter(|&used| used != index)
+            .collect();
         let mut header = format!(
             "{WRITTEN}\n#pragma once\n\n#include <{}>\n",
             runtime::HEADER
         );
+        for &used in &typed {
+            header.push_str(&format!("#include \"{}.h\"\n", program.modules[used].path));
+        }
         let mut unit = format!("{WRITTEN}\n#include \"{path}.h\"\n");
         for &used in &included {
             unit.push_str(&format!("#include \"{}.h\"\n", program.modules[used].path));
@@ -147,19 +159,14 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         if !defined.is_empty() {
             let namespace = module_namespace(path);
             let declared = namespace.trim_start_matches("::");
-            header.push_str(&format!("\nnamespace {declared}\n{{\n"));
+            header.push_str(&declarations(declared, &defined));
             unit.push_str(&format!("\nnamespace {declared}\n{{\n"));
             for piece in &defined {
-                if !piece.declaration.is_empty() {
-                    header.push('\n');
-                    header.push_str(&piece.declaration);
-                }
                 if !piece.text.is_empty() {
                     unit.push('\n');
                     unit.push_str(&piece.text);
                 }
             }
-            header.push_str(&format!("\n}}  // namespace {declared}\n"));
             unit.push_str(&format!("\n}}  // namespace {declared}\n"));
         }
         if !tests.is_empty() {
@@ -302,6 +309,23 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         applications,
     };
     (output, blocking)
+}
+
+/// The declarations of `pieces`, in the namespace `namespace`; nothing
+/// where none declares anything.
+fn declarations(namespace: &str, pieces: &[&Piece]) -> String {
+    if pieces.iter().all(|piece| piece.declaration.is_empty()) {
+        return String::new();
+    }
+    let mut text = format!("\nnamespace {namespace}\n{{\n");
+    for piece in pieces {
+        if !piece.declaration.is_empty() {
+            text.push('\n');
+            text.push_str(&piece.declaration);
+        }
+    }
+    text.push_str(&format!("\n}}  // namespace {namespace}\n"));
+    text
 }
 
 /// The entry unit of module `index`'s tests: their declarations, a

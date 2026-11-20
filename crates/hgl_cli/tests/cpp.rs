@@ -387,3 +387,44 @@ fn a_failure_is_reported_at_its_statement() {
         "{stdout}"
     );
 }
+
+/// A module whose declarations name another's enum: its header includes
+/// the other's, which declares the enum (TYPE-7).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_module_that_names_anothers_enum_is_built() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("enums");
+    write(
+        &root,
+        "src/demo.left.hgl",
+        concat!("module demo.left\n", "export enum Side { up, down }\n",),
+    );
+    write(
+        &root,
+        "src/demo.right.hgl",
+        concat!(
+            "module demo.right\n",
+            "use demo.left::{Side}\n",
+            "const fn flip(side: Side) -> Side => if side == .up { .down } else { .up }\n",
+            "test it_finds_the_enum {\n",
+            "    assert flip(.up) == .down\n",
+            "}\n",
+        ),
+    );
+    let source = argument(&root.join("src"));
+    let output = hgl_in(&["test", &source, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("passed   executable  demo.right::it_finds_the_enum"),
+        "{stdout}"
+    );
+}

@@ -97,6 +97,9 @@ const fn bump(var count: i64, by: i64) {
 test conditions_choose {
     assert sign(-5) == -1 && sign(0) == 0 && sign(7) == 1
     assert larger(2, 9) == 9 && larger(9, 2) == 9
+    # EXPR-2: both arguments may fail, so each is held before the call,
+    # an element of a list as a value of its own.
+    assert larger([7][0], sign(1)) == 7
 }
 
 test a_switch_compares_by_value {

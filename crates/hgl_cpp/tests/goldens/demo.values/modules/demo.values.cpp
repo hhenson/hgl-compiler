@@ -163,9 +163,11 @@ namespace hgl::demo::values::m_::t_
 void conditions_choose()
 {
     ::hglrt::testing::statement();
-    ::hglrt::testing::check((([&] { const auto& argument_00_ = ::hgl::demo::values::m_::sign(::hglrt::neg__i64(5)); const auto& argument_01_ = ::hglrt::neg__i64(1); const auto& argument_02_ = 0.0; const auto& argument_03_ = 0.0; return ::hglrt::eq__i64_i64_f64_f64(argument_00_, argument_01_, argument_02_, argument_03_); }() && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::sign(0), 0, 0.0, 0.0)) && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::sign(7), 1, 0.0, 0.0)));
+    ::hglrt::testing::check((([&] { const auto argument_00_ = ::hgl::demo::values::m_::sign(::hglrt::neg__i64(5)); const auto argument_01_ = ::hglrt::neg__i64(1); const auto argument_02_ = 0.0; const auto argument_03_ = 0.0; return ::hglrt::eq__i64_i64_f64_f64(argument_00_, argument_01_, argument_02_, argument_03_); }() && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::sign(0), 0, 0.0, 0.0)) && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::sign(7), 1, 0.0, 0.0)));
     ::hglrt::testing::statement();
     ::hglrt::testing::check((::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::larger(2, 9), 9, 0.0, 0.0) && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::larger(9, 2), 9, 0.0, 0.0)));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64([&] { const auto argument_04_ = ::hglrt::item(::hglrt::list<::hgraph::Int>{7}, 0); const auto argument_05_ = ::hgl::demo::values::m_::sign(1); return ::hgl::demo::values::m_::larger(argument_04_, argument_05_); }(), 7, 0.0, 0.0));
 }
 
 void a_switch_compares_by_value()
