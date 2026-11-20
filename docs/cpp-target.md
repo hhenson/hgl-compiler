@@ -98,7 +98,7 @@ saving ([hgraph 1838](https://github.com/hhenson/hgraph/issues/1838)).
 
 ## What hgraph is asked for
 
-The SDK is hgraph 0.9.9.
+The SDK is hgraph 0.9.10.
 
 | Issue | Asked | Until then |
 | --- | --- | --- |
@@ -106,14 +106,15 @@ The SDK is hgraph 0.9.9.
 | [1822](https://github.com/hhenson/hgraph/issues/1822), [1827](https://github.com/hhenson/hgraph/issues/1827) | The growing list's first empty publication and its validity, a shrink under a map or an index, invalidation emptying a collection, and tuple deltas, as the specification has them | `libhglrt` adapts each |
 | [1848](https://github.com/hhenson/hgraph/issues/1848) | A generator that yields a time already past skips it and goes on | The source driver of `libhglrt` skips it |
 | [1834](https://github.com/hhenson/hgraph/issues/1834) | A C++ struct as a bundle's whole value | Field by field |
-| [1836](https://github.com/hhenson/hgraph/issues/1836) | A `tenor` scalar: merged, in the release after 0.9.9 | A type of `libhglrt` |
 | [1838](https://github.com/hhenson/hgraph/issues/1838) | A lighter front end for generated code | A precompiled header |
 | [1839](https://github.com/hhenson/hgraph/issues/1839) | A runtime library without Arrow | Arrow is installed with the SDK |
 
-In 0.9.9: `add_node` keeps a builder's own scalars
-([1837](https://github.com/hhenson/hgraph/issues/1837)), and
+Delivered: `add_node` keeps a builder's own scalars
+([1837](https://github.com/hhenson/hgraph/issues/1837)) and
 `try_except_<G>` takes options for canonical errors
-([1835](https://github.com/hhenson/hgraph/issues/1835)). Nothing is asked
+([1835](https://github.com/hhenson/hgraph/issues/1835)), both in 0.9.9;
+a `tenor` scalar ([1836](https://github.com/hhenson/hgraph/issues/1836))
+in 0.9.10. Nothing is asked
 on references: a `REF` output holds the reference it was given, which is
 the specification's rule for a returned `ref` parameter. Where the pinned
 specification and hgraph differ, this target builds the specification's
