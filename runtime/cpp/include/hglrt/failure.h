@@ -49,6 +49,8 @@ inline constexpr std::string_view out_of_range = "numeric.out_of_range";
 /// A zero divisor under `.fail`, or `?` on the `err` of one under `.error`
 /// (NUM-3, NUM-9).
 inline constexpr std::string_view division_by_zero = "numeric.division_by_zero";
+/// A conversion that cannot be made (OPS-7, OPS-8).
+inline constexpr std::string_view invalid_conversion = "convert.invalid";
 /// A source's `yield` after a negative duration (SOURCE-2).
 inline constexpr std::string_view negative_duration = "yield.negative_duration";
 /// A source's `yield` at a time that is not after the one before (SOURCE-3).

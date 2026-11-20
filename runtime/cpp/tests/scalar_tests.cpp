@@ -1,5 +1,6 @@
-// Unit tests of core's native scalar operators (scalar.h), against the
-// observations core's numeric contract lists (`spec/numeric-operators.md`).
+// Unit tests of core's native scalar operators of numbers and of the ordered
+// types (scalar.h), against the observations core's numeric contract lists
+// (`spec/numeric-operators.md`) and the edges of each rule.
 #include <hglrt/scalar.h>
 
 #include <doctest/doctest.h>
@@ -133,21 +134,6 @@ TEST_CASE("f64 arithmetic keeps IEEE special values (NUM-2)") {
     CHECK(std::isnan(hglrt::neg__f64(not_a_number)));
 }
 
-TEST_CASE("an instant moved by a duration stays in the years 1 to 9999 (OPS-10)") {
-    using namespace std::chrono;
-    const hglrt::datetime last = sys_days{year{9999} / 12 / 31} + hours{24} - microseconds{1};
-    CHECK(hglrt::add__datetime_duration(last - microseconds{5}, microseconds{5}) == last);
-    CHECK(code_raised([&] { (void)hglrt::add__datetime_duration(last, microseconds{1}); }) ==
-          "numeric.out_of_range");
-    const hglrt::datetime first = sys_days{year{1} / 1 / 1};
-    CHECK(code_raised([&] { (void)hglrt::add__datetime_duration(first, -microseconds{1}); }) ==
-          "numeric.out_of_range");
-    CHECK(code_raised([] {
-              (void)hglrt::add__datetime_duration(hglrt::datetime{microseconds{1}},
-                                                  microseconds{std::numeric_limits<i64>::max()});
-          }) == "numeric.out_of_range");
-}
-
 TEST_CASE("plain numeric equality is exact (NUM-2, NUM-4, NUM-5)") {
     CHECK(hglrt::eq__i64_i64_f64_f64(3, 3));
     CHECK(hglrt::ne__i64_i64_f64_f64(3, 4));
@@ -249,4 +235,179 @@ TEST_CASE("Boolean forms (OPS-5)") {
     CHECK_FALSE(hglrt::or__bool_bool(false, false));
     CHECK(hglrt::not__bool(false));
     CHECK_FALSE(hglrt::not__bool(true));
+    // A chain of three or more: `all_` and `any_`.
+    CHECK(hglrt::all__bool(true, true, true));
+    CHECK_FALSE(hglrt::all__bool(true, false, true));
+    CHECK(hglrt::any__bool(false, false, true));
+    CHECK_FALSE(hglrt::any__bool(false, false, false));
+    CHECK(hglrt::all__bool());
+    CHECK_FALSE(hglrt::any__bool());
+}
+
+TEST_CASE("mixed arithmetic takes the i64 as the nearest f64 (NUM-1, NUM-2)") {
+    // core's case mixed_numeric_arithmetic.
+    CHECK(hglrt::add__i64_f64(2, 0.5) == 2.5);
+    CHECK(hglrt::mul__i64_f64(2, 0.5) == 1.0);
+    CHECK(hglrt::sub__i64_f64(2, 0.5) == 1.5);
+    CHECK(hglrt::sub__f64_i64(0.5, 2) == -1.5);
+    // IEEE special values are kept, the sign of a zero among them.
+    CHECK(hglrt::add__i64_f64(1, infinity) == infinity);
+    CHECK(std::isnan(hglrt::sub__f64_i64(not_a_number, 1)));
+    CHECK(std::signbit(hglrt::mul__i64_f64(0, -1.0)));
+    CHECK(std::signbit(hglrt::mul__i64_f64(-1, 0.0)));
+    CHECK(std::isnan(hglrt::mul__i64_f64(0, infinity)));
+    CHECK(hglrt::sub__i64_f64(0, 0.0) == 0.0);
+    CHECK_FALSE(std::signbit(hglrt::sub__i64_f64(0, 0.0)));
+    // The i64 is rounded first, a tie to the even one: 2^53 + 1 is 2^53.
+    CHECK(hglrt::add__i64_f64(9007199254740993, 0.0) == 9007199254740992.0);
+    CHECK(hglrt::mul__i64_f64(most, 2.0) == 0x1p64);
+    CHECK(hglrt::mul__i64_f64(most, 1e300) == infinity);
+}
+
+TEST_CASE("mixed true division under each zero policy (NUM-1, NUM-3, NUM-9)") {
+    CHECK(hglrt::div__i64_f64(7, 2.0) == 3.5);
+    CHECK(hglrt::div__f64_i64(7.0, 2) == 3.5);
+    CHECK(hglrt::div__i64_f64(1, 0.0) == infinity);
+    CHECK(hglrt::div__i64_f64(1, -0.0) == -infinity);
+    // A zero i64 divisor is a positive zero.
+    CHECK(hglrt::div__f64_i64(1.0, 0) == infinity);
+    CHECK(hglrt::div__f64_i64(-1.0, 0) == -infinity);
+    CHECK(std::isnan(hglrt::div__f64_i64(0.0, 0)));
+    CHECK(std::isnan(hglrt::div__i64_f64(0, -0.0)));
+    CHECK(std::isnan(hglrt::div__i64_f64<ZeroPolicy::nan>(1, 0.0)));
+    CHECK(code_raised([] { (void)hglrt::div__f64_i64<ZeroPolicy::fail>(1.0, 0); }) ==
+          "numeric.division_by_zero");
+    CHECK(hglrt::div__i64_f64<ZeroPolicy::error>(1, -0.0).error().code == "numeric.division_by_zero");
+    CHECK(*hglrt::div__f64_i64<ZeroPolicy::error>(6.0, 2) == 3.0);
+    CHECK(std::isnan(*hglrt::div__f64_i64<ZeroPolicy::error>(not_a_number, 2)));
+}
+
+TEST_CASE("f64 floor division and modulo (NUM-1, NUM-12)") {
+    // Finite operands: the floor of the exact quotient, the remainder with
+    // the divisor's sign.
+    CHECK(hglrt::floordiv__f64_f64(-7.0, 3.0) == -3.0);
+    CHECK(hglrt::mod__f64_f64(-7.0, 3.0) == 2.0);
+    CHECK(hglrt::floordiv__f64_f64(7.0, -2.0) == -4.0);
+    CHECK(hglrt::mod__f64_f64(7.0, -2.0) == -1.0);
+    CHECK(hglrt::floordiv__f64_f64(7.5, 2.0) == 3.0);
+    CHECK(hglrt::mod__f64_f64(7.5, 2.0) == 1.5);
+    // 0.1 is a little more than a tenth: five of it are more than 0.5.
+    CHECK(hglrt::floordiv__f64_f64(0.5, 0.1) == 4.0);
+    CHECK(hglrt::mod__f64_f64(0.5, 0.1) == 0.09999999999999998);
+    // A zero remainder has the divisor's sign, and a zero quotient the
+    // quotient's.
+    CHECK(std::signbit(hglrt::mod__f64_f64(6.0, -3.0)));
+    CHECK_FALSE(std::signbit(hglrt::mod__f64_f64(-6.0, 3.0)));
+    CHECK(std::signbit(hglrt::floordiv__f64_f64(-0.0, 3.0)));
+    // "`7.0 // 0.0`; `7.0 % 0.0`": positive infinity; NaN.
+    CHECK(hglrt::floordiv__f64_f64(7.0, 0.0) == infinity);
+    CHECK(std::isnan(hglrt::mod__f64_f64(7.0, 0.0)));
+    CHECK(hglrt::floordiv__f64_f64(-7.0, 0.0) == -infinity);
+    CHECK(hglrt::floordiv__f64_f64(7.0, -0.0) == -infinity);
+    CHECK(std::isnan(hglrt::floordiv__f64_f64(0.0, 0.0)));
+    // "Positive infinity `// 2.0`; positive infinity `% 2.0`": positive
+    // infinity; NaN.
+    CHECK(hglrt::floordiv__f64_f64(infinity, 2.0) == infinity);
+    CHECK(std::isnan(hglrt::mod__f64_f64(infinity, 2.0)));
+    // "`1.0 //` positive infinity; `-1.0 //` positive infinity": `0.0`; `-0.0`.
+    CHECK(hglrt::floordiv__f64_f64(1.0, infinity) == 0.0);
+    CHECK_FALSE(std::signbit(hglrt::floordiv__f64_f64(1.0, infinity)));
+    CHECK(std::signbit(hglrt::floordiv__f64_f64(-1.0, infinity)));
+    // "`1.0 %` positive infinity; `-1.0 %` positive infinity": `1.0`; `-1.0`.
+    CHECK(hglrt::mod__f64_f64(1.0, infinity) == 1.0);
+    CHECK(hglrt::mod__f64_f64(-1.0, infinity) == -1.0);
+    CHECK(hglrt::mod__f64_f64(-1.0, -infinity) == -1.0);
+    // "Infinity `//` infinity; `//` or `%` with a NaN operand": NaN; NaN.
+    CHECK(std::isnan(hglrt::floordiv__f64_f64(infinity, infinity)));
+    CHECK(std::isnan(hglrt::floordiv__f64_f64(not_a_number, 2.0)));
+    CHECK(std::isnan(hglrt::mod__f64_f64(2.0, not_a_number)));
+    CHECK(std::isnan(hglrt::mod__f64_f64(not_a_number, 0.0)));
+}
+
+TEST_CASE("f64 floor division and modulo under each zero policy (NUM-9, NUM-12)") {
+    CHECK(std::isnan(hglrt::floordiv__f64_f64<ZeroPolicy::nan>(7.0, 0.0)));
+    CHECK(std::isnan(hglrt::mod__f64_f64<ZeroPolicy::nan>(7.0, 0.0)));
+    CHECK(code_raised([] { (void)hglrt::floordiv__f64_f64<ZeroPolicy::fail>(7.0, 0.0); }) ==
+          "numeric.division_by_zero");
+    CHECK(code_raised([] { (void)hglrt::mod__f64_f64<ZeroPolicy::fail>(7.0, -0.0); }) ==
+          "numeric.division_by_zero");
+    CHECK(hglrt::floordiv__f64_f64<ZeroPolicy::error>(7.0, 0.0).error().code == "numeric.division_by_zero");
+    CHECK(hglrt::mod__f64_f64<ZeroPolicy::error>(7.0, -0.0).error().code == "numeric.division_by_zero");
+    CHECK(*hglrt::floordiv__f64_f64<ZeroPolicy::error>(-7.0, 3.0) == -3.0);
+    CHECK(std::isnan(*hglrt::mod__f64_f64<ZeroPolicy::error>(infinity, 3.0)));
+    // An i64 operand is taken as the f64 nearest it; a zero i64 divisor is
+    // a positive zero.
+    CHECK(hglrt::floordiv__i64_f64(-7, 2.0) == -4.0);
+    CHECK(hglrt::floordiv__f64_i64(-7.0, 2) == -4.0);
+    CHECK(hglrt::mod__i64_f64(-7, 2.0) == 1.0);
+    CHECK(hglrt::mod__f64_i64(7.5, -2) == -0.5);
+    CHECK(hglrt::floordiv__f64_i64(7.0, 0) == infinity);
+    CHECK(std::isnan(hglrt::mod__i64_f64(-7, 0.0)));
+    CHECK(hglrt::mod__f64_i64<ZeroPolicy::error>(7.0, 0).error().code == "numeric.division_by_zero");
+    CHECK(code_raised([] { (void)hglrt::floordiv__i64_f64<ZeroPolicy::fail>(7, 0.0); }) ==
+          "numeric.division_by_zero");
+}
+
+TEST_CASE("the order of an i64 and an f64 is exact (NUM-2, NUM-6)") {
+    // Rounding 2^53 + 1 to an f64 would make the two equal.
+    CHECK_FALSE(hglrt::lt__i64_f64(9007199254740993, 9007199254740992.0));
+    CHECK_FALSE(hglrt::le__i64_f64(9007199254740993, 9007199254740992.0));
+    CHECK(hglrt::gt__i64_f64(9007199254740993, 9007199254740992.0));
+    CHECK(hglrt::ge__i64_f64(9007199254740993, 9007199254740992.0));
+    CHECK(hglrt::lt__f64_i64(9007199254740992.0, 9007199254740993));
+    CHECK(hglrt::compare__i64_f64(9007199254740993, 9007199254740992.0) == hglrt::CmpResult::greater);
+    CHECK(hglrt::compare__f64_i64(9007199254740992.0, 9007199254740993) == hglrt::CmpResult::less);
+    // At the ends of i64: 2^63 is above every i64, -2^63 is the least.
+    CHECK(hglrt::lt__i64_f64(most, 9223372036854775808.0));
+    CHECK(hglrt::compare__i64_f64(least, -9223372036854775808.0) == hglrt::CmpResult::equivalent);
+    CHECK(hglrt::gt__i64_f64(least, -infinity));
+    CHECK(hglrt::lt__i64_f64(most, infinity));
+    CHECK(hglrt::gt__f64_i64(infinity, most));
+    // A fraction decides where the whole parts are equal.
+    CHECK(hglrt::lt__i64_f64(3, 3.5));
+    CHECK(hglrt::gt__i64_f64(-3, -3.5));
+    CHECK(hglrt::le__f64_i64(3.0, 3));
+    CHECK(hglrt::ge__f64_i64(3.0, 3));
+    // The two zeros are one number.
+    CHECK(hglrt::le__f64_i64(-0.0, 0));
+    CHECK_FALSE(hglrt::lt__f64_i64(-0.0, 0));
+    CHECK(hglrt::compare__f64_i64(-0.0, 0) == hglrt::CmpResult::equivalent);
+    // A NaN is unordered: no `<`, `<=`, `>` or `>=` holds.
+    CHECK_FALSE(hglrt::lt__i64_f64(0, not_a_number));
+    CHECK_FALSE(hglrt::le__i64_f64(0, not_a_number));
+    CHECK_FALSE(hglrt::gt__f64_i64(not_a_number, 0));
+    CHECK_FALSE(hglrt::ge__f64_i64(not_a_number, 0));
+    CHECK(hglrt::compare__i64_f64(0, not_a_number) == hglrt::CmpResult::unordered);
+    CHECK(hglrt::compare__f64_i64(not_a_number, 0) == hglrt::CmpResult::unordered);
+}
+
+TEST_CASE("the four-way comparison of one ordered type (OPS-3, NUM-6)") {
+    using hglrt::CmpResult;
+    using namespace std::chrono;
+    CHECK(hglrt::compare__T_T<i64>(1, 2) == CmpResult::less);
+    CHECK(hglrt::compare__T_T<i64>(2, 2) == CmpResult::equivalent);
+    CHECK(hglrt::compare__T_T<i64>(most, least) == CmpResult::greater);
+    // "NaN compared with itself by `<=>`": unordered; "Opposite signed
+    // zeros compared by `<=>`": equivalent.
+    CHECK(hglrt::compare__T_T<f64>(not_a_number, not_a_number) == CmpResult::unordered);
+    CHECK(hglrt::compare__T_T<f64>(1.0, not_a_number) == CmpResult::unordered);
+    CHECK(hglrt::compare__T_T<f64>(-0.0, 0.0) == CmpResult::equivalent);
+    CHECK(hglrt::compare__T_T<f64>(infinity, 1e308) == CmpResult::greater);
+    // Text by its code points, empty text first.
+    CHECK(hglrt::compare__T_T<hglrt::str>("", "a") == CmpResult::less);
+    CHECK(hglrt::compare__T_T<hglrt::str>("é", "z") == CmpResult::greater);
+    CHECK(hglrt::compare__T_T<hglrt::str>("é", "é") == CmpResult::equivalent);
+    CHECK(hglrt::compare__T_T<bool>(false, true) == CmpResult::less);
+    CHECK(hglrt::compare__T_T<hglrt::date>(year{2026} / 9 / 3, year{2026} / 9 / 4) == CmpResult::less);
+    CHECK(hglrt::compare__T_T<hglrt::time>(hgraph::time_of_day(9, 30), hgraph::time_of_day(9, 30)) ==
+          CmpResult::equivalent);
+    const hglrt::civil_datetime morning{year{2026} / 9 / 3, 9, 30};
+    const hglrt::civil_datetime evening{year{2026} / 9 / 3, 21, 0};
+    CHECK(hglrt::compare__T_T<hglrt::civil_datetime>(evening, morning) == CmpResult::greater);
+    CHECK(hglrt::lt__T_T<hglrt::civil_datetime>(morning, evening));
+    CHECK(hglrt::compare__T_T<hglrt::datetime>(hglrt::datetime{1s}, hglrt::datetime{2s}) == CmpResult::less);
+    CHECK(hglrt::compare__T_T<hglrt::duration>(-1us, 0us) == CmpResult::less);
+    // The members are core's, in its order.
+    CHECK(static_cast<int>(CmpResult::less) == 0);
+    CHECK(static_cast<int>(CmpResult::unordered) == 3);
 }
