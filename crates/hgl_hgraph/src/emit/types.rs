@@ -341,13 +341,12 @@ pub(super) fn holds_growing_list(program: &Program, ty: &Type) -> bool {
 
 /// True where a whole value of `ty` is published through the port of
 /// the output it goes to: where it holds an unsized list or a set as a
-/// part at any depth, itself among them (`holds_growing_list`). TIME-7,
-/// as the specification's `main` has it (hhenson/hgl_spec#124): "A value
-/// published whole, the same again or empty, is no delta, and ticks as
-/// any publication does", which hgraph's unbounded `TSL` does not for an
-/// empty list and its `TSS` does not for a set that keeps its members:
-/// the provider makes each tick through its own port (`_whole_list`,
-/// `_whole_set`).
+/// part at any depth, itself among them (`holds_growing_list`). TIME-7:
+/// "A value published whole, the same again or empty, is no delta, and
+/// ticks as any publication does", which hgraph's unbounded `TSL` does
+/// not for an empty list and its `TSS` does not for a set that keeps its
+/// members: the provider makes each tick through its own port
+/// (`_whole_list`, `_whole_set`).
 pub(super) fn published_through_port(program: &Program, ty: &Type) -> bool {
     fn holds_set(program: &Program, ty: &Type, depth: usize) -> bool {
         if depth > HELD_DEPTH {
@@ -499,11 +498,10 @@ pub(super) fn emptied_shape(program: &Program, ty: &Type) -> Option<String> {
 ///
 /// Within a dictionary's values a struct, a tuple and a fixed list are
 /// each written out whether or not they hold one, `("fields", {})` for a
-/// struct of fields that publish whole: TIME-7, as the specification's
-/// `main` has it (hhenson/hgl_spec#124), "A struct, a tuple and a
-/// `list<V, N>` are valid where a child is (TIME-9), and such a delta of
-/// one, `delta<Quote>()`, sets no child: it changes no validity, and is
-/// never a tick". hgraph's `TSD` ticks for a key given one, where its
+/// struct of fields that publish whole: TIME-7, "A struct, a tuple and
+/// a `list<V, N>` are valid where a child is (TIME-9), and such a delta
+/// of one, `delta<Quote>()`, sets no child: it changes no validity, and
+/// is never a tick". hgraph's `TSD` ticks for a key given one, where its
 /// bundle and its `TSL` do not, and the provider leaves it out of the
 /// dictionary's delta (`_pruned`).
 pub(super) fn entries_shape(program: &Program, ty: &Type) -> Option<String> {

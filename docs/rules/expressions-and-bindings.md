@@ -56,7 +56,7 @@ analyser: partial
 
 analyser: partial
 
-- A value fits the type its place expects, in a value function, a hook and a graph; an integer literal is an `f64` where one is expected, and a value that has a type is not converted; `null`, a tuple and a sequence take the expected type, and so does a child read checked when it runs (ERR-14)
+- A value fits the type its place expects, in a value function, a hook and a graph; an integer literal is an `f64` where one is expected, the `f64` of its value (UNIT-13: `let x: f64 = 1` binds `1.0`), and a value that has a type is not converted; `null`, a tuple and a sequence take the expected type, and so does a child read checked when it runs (ERR-14)
 - Left: const expression restrictions
 
 ## EXPR-6

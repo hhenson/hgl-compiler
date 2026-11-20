@@ -418,9 +418,7 @@ test a_lifted_default_is_bound_only_where_the_input_is_not_valid {
 # ignored, and is no failure, as one that names a member a set does not
 # hold is." Core's END-3 has the same.
 #
-# TIME-7, as the specification's `main` has it (the owner's decision on
-# hhenson/hgl_spec#124, written there by hhenson/hgl_spec#141, after this
-# compiler's pin): "A delta that names no change, `delta<set<i64>>()`,
+# TIME-7: "A delta that names no change, `delta<set<i64>>()`,
 # `delta<dict<str, i64>>()` or `delta<list<i64>>()`, ticks only where it
 # changes validity. Where a `list<V>`, a dictionary or a set is not valid,
 # never published or invalidated, it makes the value valid and empty, and
@@ -430,9 +428,12 @@ test a_lifted_default_is_bound_only_where_the_input_is_not_valid {
 # entry is ignored, the removal of a key, a member or a position that is
 # not held (TYPE-16), names no change".
 
-# TIME-7's worked example, for a set, a dictionary and a list: 0 writes a
-# delta that names no change, 1 a whole empty value, 2 a delta that adds,
-# and 3 invalidates.
+# TIME-7's worked example (`examples.empty_deltas`, its `woken` and
+# `watched` here `members_woken` and `members_watched`), for a set, and
+# as it says "A `list<i64>` written `delta<list<i64>>()`, and a
+# `dict<str, i64>` written `delta<dict<str, i64>>()`, tick alike", for a
+# dictionary and a list: 0 writes a delta that names no change, 1 a
+# whole empty value, 2 a delta that adds, and 3 invalidates.
 fn publish_members(step: i64) -> set<i64> {
     inject out
     when {
@@ -537,9 +538,9 @@ test an_empty_list_delta_ticks_only_where_it_makes_the_list_valid {
     assert eval(readings_counted(step: [2, 3, 0])) == [1, _, 0]
 }
 
-# From a trace's cell: one that names no change wakes no reader where the
-# input is valid, and makes it valid where it is not (TST-6 on the
-# specification's `main`).
+# From a trace's cell, TST-5: "A cell that is a delta naming no change
+# is a tick only where it makes the value valid, as such a `return` is
+# (TIME-7): given to a valid input it wakes no reader".
 fn relay_book(entries: dict<str, i64>) -> dict<str, i64> {
     when { return delta_value(entries) }
 }

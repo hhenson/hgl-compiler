@@ -1,9 +1,7 @@
 module demo.empty_delta_fixes_wave3
 
-# TIME-7, as the specification's `main` has it (the owner's decision on
-# hhenson/hgl_spec#124, written there by hhenson/hgl_spec#141, after this
-# compiler's pin): "A delta that names no change ... ticks only where it
-# changes validity. Where a `list<V>`, a dictionary or a set is not valid,
+# TIME-7: "A delta that names no change ... ticks only where it changes
+# validity. Where a `list<V>`, a dictionary or a set is not valid,
 # never published or invalidated, it makes the value valid and empty, and
 # ticks. Where it is valid the delta changes nothing, and is no tick ... A
 # struct, a tuple and a `list<V, N>` are valid where a child is (TIME-9),

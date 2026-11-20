@@ -71,9 +71,11 @@ transpiler: partial
 - hgraph: a cell written whole is `_harness.whole(value)`, and a tuple's `_harness.whole(value, shape=...)`, how hgraph's bundle takes each position (`bundled`): an input publishes a null position as a published null
 - An expectation's is compared with the value the result holds after its cycle, read from the result's port (`_hold`), and one written as a delta with the delta recorded
 - An unsized list's whole cell replays as the `TSLDelta` that replaces what the input held, the tail it has not removed (`_core.whole_delta`); core's `record` records hgraph's `TSLDelta`
-- A whole cell is replayed as a whole value (`_core.Whole`), which ticks as any publication does where it changes nothing (TIME-7 on the specification's `main`, hhenson/hgl_spec#124): a set's as its members, cleared first, and a dictionary's or a list's that changes nothing made to tick; a set's given to a `const fn` that changes nothing is a delta that names nothing
+- A whole cell is replayed as a whole value (`_core.Whole`), which ticks as any publication does where it changes nothing (TIME-7, TST-5): a set's as its members, cleared first, and a dictionary's or a list's that changes nothing made to tick; a set's given to a `const fn` that changes nothing is a delta that names nothing
 - The value held follows the owner's decision on hhenson/hgl_spec#126, ahead of the pinned text: a struct, a tuple or a list is whole only where each part is valid, an optional part that is not being null; where a required part is not valid there is no whole value, and no cell written whole equals it: it is read as a part is (`part_value`)
 - A tuple's cell written as its delta is that tuple of its positions, published and compared as recorded
+- A cell that is a delta naming no change is a tick only where it makes the input valid, so given to a valid input it wakes no reader, and a cycle whose node writes only such a delta where its result is valid records nothing, `_` in the expectation (TIME-7)
+- Not settled: an expectation's cell written as such a delta, at a cycle where the result is valid, is compared as a tick, which the cycle does not make: TST-5 does not say whether that cell is `_`
 - Left: a whole cell of a tuple with a position that is composite, a list or a struct, which is reported, as a struct's with a composite field is
 
 ## TST-6

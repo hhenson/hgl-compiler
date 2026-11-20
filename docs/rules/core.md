@@ -354,14 +354,16 @@ transpiler: partial
 - A removed position the list does not hold lost no value, and is ignored: nothing fails and nothing is lost (the owner's decision on hhenson/hgl_spec#124, as for a dictionary's absent key)
 - An entry at or past a `size_modified` written with it contradicts the delta and fails the write as the graph runs, with no execution code (the owner's decision on hhenson/hgl_spec#124: "a failure"); a constant one is not yet rejected when compiled (TYPE-16)
 - A dictionary's delta removes a key with `REMOVE_IF_EXISTS`, so one it does not hold is ignored, and is no failure, a delta read from an input and published again among them (`_core.entries_published`); a set ignores a member it does not hold
-- A delta that names no change, of a dictionary, a set or an unsized list, ticks only where it makes the value valid and empty (TIME-7 on the specification's `main`, the owner's decision on hhenson/hgl_spec#124, after the pin), by a node, a source and a trace's cell, at the top and within a dictionary, a struct, a tuple or a fixed list; so, as proposed there, does one whose every entry is an ignored removal. hgraph ticks a `TSD` and a `TSS` for neither, and `clear` makes one that is not valid valid; it ticks what holds one given such a change, so the provider leaves that child out (`_core.entries_published`); `invalidate(out)` of a dictionary or a set empties it first, as hgraph keeps its keys and members (`_core.invalidated`)
-- Left: one within a value that holds an unsized list, and a dictionary's or a set's assigned to an entry of `out`
+- A delta that names no change, of a dictionary, a set or an unsized list, ticks only where it makes the endpoint valid, empty and modified, and its `delta_value` is then that delta (END-3, TIME-7), by a node, a source and a trace's cell, at the top, within a dictionary, a struct, a tuple or a fixed list, and beside an unsized list in a struct or a tuple; one of a struct, a tuple or a fixed list sets no child and is never a tick; so, as END-3 proposes, is one whose every entry is an ignored removal. hgraph ticks a `TSD` and a `TSS` for neither, and `clear` makes one that is not valid valid; it ticks what holds one given such a change, so the provider leaves that child out (`_core.entries_published`); `invalidate(out)` of a dictionary or a set empties it first, as hgraph keeps its keys and members (`_core.invalidated`)
+- hgraph 0.9.5's bundle given a tuple ticks where any position is given, a change that a valid child is left as it was by among them, and fails the run for a dictionary's `REMOVE_IF_EXISTS` in it: a tuple that holds an unsized list is published as a `dict` of the positions it gives, as a struct is (`_core.published_into`)
+- A dictionary or a set in a struct or a tuple that holds an unsized list is published as a node's delta of one is, by a node and by a source, the provider told where (`entries=`): an entry whose change names nothing, where it is valid, is left out
+- Left: a dictionary's or a set's assigned to an entry of `out`; an unsized list's delta inside a dictionary's or a list's delta, which is reported (TYPE-16)
 
 ## END-4
 
 transpiler: partial
 
-- hgraph: `invalidate(out)` clears the output; one that holds an unsized list, a dictionary or a set, at any depth of a struct, a tuple and a fixed list, empties each first (`_core.invalidated`), since hgraph's `TSL` keeps its positions and its `TSD` and `TSS` their keys and members, which the next delta read would name removed and a delta that names no change would leave in what it makes valid (TIME-7 on the specification's `main`, hhenson/hgl_spec#124)
+- hgraph: `invalidate(out)` clears the output; one that holds an unsized list, a dictionary or a set, at any depth of a struct, a tuple and a fixed list, empties each first (`_core.invalidated`), since hgraph's `TSL` keeps its positions and its `TSD` and `TSS` their keys and members, which the next delta read would name removed and a delta that names no change would leave in what it makes valid (TIME-7: "it makes the value valid and empty")
 - `invalidate(out)` of a `ref` result (FN-16, proposed: `out` of one takes the endpoint operations) leaves it designating nothing: hgraph's empty reference, which unbinds a reader, then the invalidation, so a `ref` parameter given it is not valid, and modified; the last action of the evaluation decides (`_core.Designation`)
 - An active input's transition to invalid wakes the node
 - In a body or handler guard, `modified(input)` is false on invalidation, whether the input is active or passive
@@ -377,7 +379,7 @@ transpiler: partial
 - `is_active(input)` reads the receiving input's current activity, including while invalid
 - A passive input retains its value
 - Its publication can satisfy a handler when another input schedules the node
-- A delta that names no change, written where a dictionary, a set or an unsized list is valid, is no publication: nothing modified, no subscriber woken (TIME-7 on the specification's `main`, END-3)
+- A delta that names no change, written where a dictionary, a set or an unsized list is valid, is no publication: "it marks nothing modified, moves no `last_modified` (END-6), and notifies no subscriber" (END-3, TIME-7)
 - Left: coalescing across structural shapes
 
 ## END-6

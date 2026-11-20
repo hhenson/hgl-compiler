@@ -45,7 +45,8 @@ analyser: partial
 analyser: partial
 
 - A label is a compile-time constant of the selector's type (local `switch.label_constant`, UNIT-13), read by the one reader (`constant`) and compared as the selector's `==` compares them (`ConstantValue::equals`): a literal however written, an enum member however written, a constant followed to its value, and a constant expression of those
-- A repeated value is rejected (`switch.duplicate_label`), and an enum's coverage by such labels stands for a `default`
+- A repeated value is rejected (`switch.duplicate_label`), `case 1:` beside `case 0x1:` among them, and an enum's coverage by such labels stands for a `default`
+- Two labels are duplicates where `==` of the selector's type holds for them, as CTRL-6 proposes; a selector is a `bool`, an `i64`, a `str` or an enum (CTRL-12), whose `==` is their sameness as constants (UNIT-13)
 - Left: a label whose value is not worked out, a generic value parameter's or one of a candidate of the program's own, whose repeat is not judged (the hgraph target reports one in an instance)
 
 transpiler: done
@@ -171,7 +172,7 @@ transpiler: partial
 
 - hgraph: a source is a Python generator that holds its statements, a node that resumes it, and a graph that wakes the node once as it starts; a `cache` and a `state` are fields of the node's state, given their values in its `start`, which then runs the source's `start`; the source's `stop` is the node's, and runs when the node ends whatever the generator has done
 - A capability is put in the node's state for the evaluation the generator is resumed in; a source injects no other than `clock`, `logger` and `global_state` (the analyser's `source.statement`)
-- A `yield` to a dictionary or a set, or to what holds one, is held to TIME-7 (on the specification's `main`, hhenson/hgl_spec#124) as a node's `return` is, in one place (`_core._entries_written`): a delta that names no change ticks only where it makes one valid, and a whole set, the same again or empty, ticks (`_core._whole_set`)
+- A `yield` to a dictionary or a set, or to what holds one, is held to TIME-7 as a node's `return` is, in one place (`_core._published_through`): a delta that names no change ticks only where it makes one valid, and a whole set, the same again or empty, ticks (`_core._whole_set`)
 - Left: recording a `state`
 
 ## SOURCE-2

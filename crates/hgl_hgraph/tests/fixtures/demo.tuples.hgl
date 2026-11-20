@@ -310,10 +310,9 @@ fn tags_of(tag: i64) -> set<i64> => tagged(tag).tags
 test a_whole_struct_publishes_each_field {
     assert eval(order_total_of(bid: [1, 2], size: [3, _])) == [5, 6]
     assert eval(order_ask_of(bid: [1, _, 2], size: [3, 4, _])) == [2, 2, 3]
-    # TIME-7 on the specification's `main` (hhenson/hgl_spec#124): "A
-    # value published whole, the same again or empty, is no delta, and
-    # ticks as any publication does": the set published again with the
-    # members it holds ticks, and its delta names none.
+    # TIME-7: "A value published whole, the same again or empty, is no
+    # delta, and ticks as any publication does": the set published again
+    # with the members it holds ticks, and its delta names none.
     assert eval(tags_of(tag: [1, 2, 2])) == [
         delta<set<i64>>(added: [1]),
         delta<set<i64>>(added: [2], removed: [1]),
