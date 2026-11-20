@@ -72,3 +72,119 @@ test a_modified_test_guards_the_read_of_the_input_it_names {
         ["silent", "null", "value"]
     assert eval(quoted_bid(bid: [_, 1.5, _], probe: [true, true, true])) == [-1.0, 1.5, -1.0]
 }
+
+# ---- A window's value where a `result` is taken (ERR-14, TYPE-11) ----
+
+fn collected(reading: i64) -> rolling_window<i64, 3, 2> {
+    when { return reading }
+}
+
+# TYPE-11: "A read of it before the window is `all_valid` fails with
+# `value.unset_read`, or gives an `err` of an `error` with that code where
+# its place takes a `result<list<V>, error>`, as a child's read checked
+# when it runs does (ERR-14)." Returned, bound and given to a function.
+fn checked_readings(readings: rolling_window<i64, 3, 2>) -> result<list<i64>, error> {
+    when { return readings }
+}
+
+const fn outcome_code(outcome: result<list<i64>, error>) -> str {
+    if is_ok(outcome) { return "ok" }
+    let code = outcome.error.code
+    if code == null { return "no code" }
+    return code
+}
+
+const fn outcome_values(outcome: result<list<i64>, error>) -> list<i64> {
+    if is_ok(outcome) { return outcome.value }
+    return []
+}
+
+fn bound_outcome(readings: rolling_window<i64, 3, 2>) -> str {
+    when {
+        let outcome: result<list<i64>, error> = readings
+        return outcome_code(outcome)
+    }
+}
+
+fn given_outcome(readings: rolling_window<i64, 3, 2>) -> str {
+    when { return outcome_code(readings) }
+}
+
+fn window_outcome(reading: i64) -> str => outcome_code(checked_readings(collected(reading)))
+fn window_values(reading: i64) -> list<i64> => outcome_values(checked_readings(collected(reading)))
+fn bound_flow(reading: i64) -> str => bound_outcome(collected(reading))
+fn given_flow(reading: i64) -> str => given_outcome(collected(reading))
+
+# A struct's field that is a window, named when compiled, and a fixed
+# list's position read when it runs, which gives the `err` of a child
+# that is not valid too (ERR-14).
+struct Book {
+    prices: rolling_window<i64, 3, 2>
+    last: i64
+}
+
+fn booked(price: i64) -> Book {
+    when { return delta<Book>(prices: price, last: price) }
+}
+
+fn checked_book(book: Book) -> result<list<i64>, error> {
+    when valid(book.prices) { return book.prices }
+}
+
+fn slots(slot: i64, price: i64) -> list<rolling_window<i64, 2>, 2> {
+    when { return delta<list<rolling_window<i64, 2>, 2>>(updated: [slot: price]) }
+}
+
+fn checked_slot(both: list<rolling_window<i64, 2>, 2>, at: i64) -> result<list<i64>, error> {
+    when modified(at) { return both[at] }
+}
+
+fn book_outcome(price: i64) -> str => outcome_code(checked_book(booked(price)))
+fn slot_outcome(slot: i64, price: i64, at: i64) -> str =>
+    outcome_code(checked_slot(slots(slot, price), at))
+
+test a_window_read_where_a_result_is_taken_gives_an_err_before_it_is_all_valid {
+    assert eval(window_outcome(reading: [1, 2, 3])) == ["value.unset_read", "ok", "ok"]
+    assert eval(window_values(reading: [1, 2, 3])) == [[], [1, 2], [1, 2, 3]]
+    assert eval(bound_flow(reading: [1, 2])) == ["value.unset_read", "ok"]
+    assert eval(given_flow(reading: [1, 2])) == ["value.unset_read", "ok"]
+    assert eval(book_outcome(price: [1, 2])) == ["value.unset_read", "ok"]
+    assert eval(slot_outcome(slot: [0, 0, 1], price: [1, 2, 3], at: [1, 0, 1])) ==
+        ["value.unset_read", "ok", "value.unset_read"]
+}
+
+# ---- A lifted parameter's default and a window below its minimum (FN-11, FN-12) ----
+
+# FN-11: "A struct, a tuple, a fixed list or a window is supplied only
+# where it is `all_valid` as well, whatever its default or null contract
+# (FN-12): one that is valid and not all valid binds no fallback, its
+# default included, and the helper is not invoked." The default binds for
+# an input that is not valid.
+const fn total_or_zero(readings: list<i64> = []) -> i64 {
+    var total = 0
+    for value in readings { total += value }
+    return total
+}
+
+const fn offset_total(offset: i64, readings: list<i64> = []) -> i64 {
+    var total = offset
+    for value in readings { total += value }
+    return total
+}
+
+const fn offset_or_negated(offset: i64, readings: list<i64>?) -> i64 {
+    if readings == null { return -offset }
+    var total = offset
+    for value in readings { total += value }
+    return total
+}
+
+fn defaulted_total(reading: i64) -> i64 => total_or_zero(collected(reading))
+fn offset_flow(offset: i64, reading: i64) -> i64 => offset_total(offset, collected(reading))
+fn nullable_flow(offset: i64, reading: i64) -> i64 => offset_or_negated(offset, collected(reading))
+
+test a_default_does_not_stand_for_a_window_below_its_minimum {
+    assert eval(defaulted_total(reading: [1, 2, 3])) == [_, 3, 6]
+    assert eval(offset_flow(offset: [10, _, _, 20], reading: [_, 1, 2, _])) == [10, _, 13, 23]
+    assert eval(nullable_flow(offset: [10, _, _, 20], reading: [_, 1, 2, _])) == [-10, _, 13, 23]
+}

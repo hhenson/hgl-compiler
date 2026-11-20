@@ -9,7 +9,28 @@
 
 mod common;
 
-use common::module;
+use common::{Checked, body, module};
+use hgl_analyser::hir::{Expr, ExprKind, Stmt};
+
+/// The value the first `return` with a value of the hook of `name`
+/// gives.
+fn returned<'a>(checked: &'a Checked, name: &str) -> &'a Expr {
+    let Some(Stmt::Hook { body, .. }) = body(checked, name)
+        .statements
+        .iter()
+        .find(|statement| matches!(statement, Stmt::Hook { .. }))
+    else {
+        panic!("`{name}` has a hook");
+    };
+    body.iter()
+        .find_map(|statement| match statement {
+            Stmt::Return {
+                value: Some(value), ..
+            } => Some(value),
+            _ => None,
+        })
+        .expect("the hook returns a value")
+}
 
 /// TIME-8: "A duration that is not admitted, a negative one in `start`
 /// included, rejects where the compiler sees its value, a literal or a
@@ -277,4 +298,69 @@ fn a_signal_parameter_is_not_marked_ref() {
             "m.hgl:16:27 type/type.not_ordinary TYPE-12",
         ]
     );
+}
+
+/// ERR-14: "A read of a collection's child that is checked when it runs
+/// ... takes its form from its place (EXPR-5) ... and so does ... a read
+/// of a window's value before it is `all_valid`, T being the `list<V>` it
+/// reads as (TYPE-11)." TYPE-11: "A read of it before the window is
+/// `all_valid` fails with `value.unset_read`, or gives an `err` of an
+/// `error` with that code where its place takes a
+/// `result<list<V>, error>`". An input's window, `out`'s, a child named
+/// when compiled and one known when it runs, read where a `result` is
+/// returned, bound or given; a `result` of another error type is still
+/// no place for it, and a window read where its list is taken is the
+/// list.
+#[test]
+fn a_window_read_where_a_result_is_taken_is_checked() {
+    let checked = module(concat!(
+        "struct Held {\n",
+        "    prices: rolling_window<f64, 2>\n",
+        "}\n",
+        "const fn code_of(outcome: result<list<i64>, error>) -> bool => is_ok(outcome)\n",
+        "fn checked_readings(readings: rolling_window<i64, 3, 2>) -> result<list<i64>, error> {\n",
+        "    when { return readings }\n",
+        "}\n",
+        "fn bound(readings: rolling_window<i64, 3, 2>) -> bool {\n",
+        "    when {\n",
+        "        let outcome: result<list<i64>, error> = readings\n",
+        "        return code_of(readings)\n",
+        "    }\n",
+        "}\n",
+        "fn field(held: Held) -> result<list<f64>, error> {\n",
+        "    when all_valid(held) { return held.prices }\n",
+        "}\n",
+        "fn slot(rows: list<rolling_window<i64, 2>, 2>, at: i64) -> result<list<i64>, error> {\n",
+        "    when { return rows[at] }\n",
+        "}\n",
+        "fn own(reading: i64) -> rolling_window<i64, 3, 2> {\n",
+        "    inject out\n",
+        "    state seen: bool = false\n",
+        "    when {\n",
+        "        let before: result<list<i64>, error> = out\n",
+        "        seen = is_ok(before)\n",
+        "        return reading\n",
+        "    }\n",
+        "}\n",
+        "fn plain(readings: rolling_window<i64, 3, 2>) -> list<i64> {\n",
+        "    when { return readings }\n",
+        "}\n",
+        "fn other_error(readings: rolling_window<i64, 3, 2>) -> result<list<i64>, str> {\n",
+        "    when { return readings }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:34:19 type/type.mismatch EXPR-5"]);
+    for name in ["checked_readings", "field"] {
+        let read = returned(&checked, name);
+        assert!(matches!(read.kind, ExprKind::CheckedWindow(_)), "{read:?}");
+    }
+    let read = returned(&checked, "checked_readings");
+    assert_eq!(read.ty.to_string(), "result<list<i64>, error>");
+    let read = returned(&checked, "slot");
+    assert!(
+        matches!(read.kind, ExprKind::CheckedChild { result: true, .. }),
+        "{read:?}"
+    );
+    let read = returned(&checked, "plain");
+    assert!(matches!(read.kind, ExprKind::Local(_)), "{read:?}");
 }

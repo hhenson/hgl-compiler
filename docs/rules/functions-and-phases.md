@@ -113,13 +113,14 @@ transpiler: partial
 
 - hgraph: an input whose parameter has a default is not required valid, and the default is bound while it is not; every other input is required valid
 - A struct, a tuple and a fixed list are supplied only where they are `all_valid` too: one valid and not all valid binds no fallback, and the helper is not invoked
+- So is a window, to a parameter with a default or of `list<V>?`: the default or the null binds where the window is not valid, and where it is valid and not all valid the helper is not invoked, "its default included"
 - Left: null bound for an input that admits null, which waits on nullable scalars
 
 ## FN-12
 
 analyser: partial
 
-- A window's connection is given to a value function's parameter in composition as the `list<V>` it holds, which binds its generic parameters: the `T` of `list<T>` is V, and a bare `T` is `list<V>` (TYPE-11, FN-1)
+- A window's connection is given to a value function's parameter in composition as the `list<V>` it holds, which binds its generic parameters: the `T` of `list<T>` is V, and a bare `T` is `list<V>` (TYPE-11, FN-1); a `list<V>?` takes it too, "whatever its default or null contract" (FN-11)
 - Left: which aggregates need `all_valid` (FN-11)
 
 transpiler: partial
@@ -127,8 +128,7 @@ transpiler: partial
 - hgraph: a lifted helper is one invocation with the whole value; a fixed list given to one is required `valid`, as any list is
 - A position of an unsized list that holds no value is passed as TIME-1's table reads it, NaN for an `f64` and null for a `V?`, and fails the invocation otherwise (`value.unset_read`)
 - A struct, a tuple and a fixed list are required all valid (TIME-9), an optional child not asked and passed as null
-- A window is required valid, the helper invoked only where it is all valid, with the `list<V>` it holds
-- Left, reported: a window given to a parameter with a default, which FN-11 does not say what binds where the window is valid and not all valid
+- A window is required valid, the helper invoked only where it is all valid, with the `list<V>` it holds; one given to a parameter with a default or of `list<V>?` is not required valid, binds that fallback where it is not valid, and invokes nothing where it is valid and not all valid (FN-11)
 - Left, reported: a window that a value function's generic parameter stands for in an instance of a generic declaration, checked once (GEN-7)
 
 ## FN-13

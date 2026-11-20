@@ -426,7 +426,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own, with a minimum of zero written as the maximum; a value leaves a window of a duration as the next arrives, and its exit is no tick
-- Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`); core's window cases pass
+- Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`), or gives that `err` where its place expects a `result<list<V>, error>` (`_core.window_result`); a lifted value function whose parameter has a default is not invoked where the window is valid and not all valid (FN-11); core's window cases pass
 - Left, reported: a window of a value that is no scalar or enum (TYPE-11), and invalidating one (END-4)
 
 ## END-10

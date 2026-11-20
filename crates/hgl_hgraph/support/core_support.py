@@ -1432,6 +1432,18 @@ def window_values(port):
     return list(values.tolist() if hasattr(values, "tolist") else values)
 
 
+def window_result(port):
+    """A window's value read where its place takes `result<list<V>, error>`
+    (the language's TYPE-11, ERR-14): "A read of it before the window is
+    `all_valid` fails with `value.unset_read`, or gives an `err` of an
+    `error` with that code where its place takes a
+    `result<list<V>, error>`". Otherwise `ok` of the values held, oldest
+    first, as `window_values` reads them."""
+    if not port.all_valid:
+        return Err(Error("the window is read before it holds its minimum", code="value.unset_read"))
+    return Ok(window_values(port))
+
+
 def _bound(port):
     """What the `REF` input `port` designates: the reference it holds, or
     `None` where it designates nothing."""
