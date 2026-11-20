@@ -14,23 +14,6 @@ use hgl_analyser::{Argument, Detail};
 /// No findings.
 const NONE: [&str; 0] = [];
 
-/// The position of module `m` in the program, and of its declaration
-/// `name` among its declarations.
-fn declaration_of(checked: &Checked, name: &str) -> (usize, usize) {
-    let module = checked
-        .program
-        .modules
-        .iter()
-        .position(|module| module.path == "m")
-        .expect("module m exists");
-    let declaration = checked.program.modules[module]
-        .declarations
-        .iter()
-        .position(|declared| declared.name == name)
-        .expect("the declaration exists");
-    (module, declaration)
-}
-
 /// What each call in `body` calls, in the order the calls are met: the
 /// function or the candidate by its name and its parameters' types,
 /// `kind_of(i64)`, then its generic arguments in angle brackets where it
@@ -135,152 +118,128 @@ fn instance_called_by(checked: &Checked, caller: &Body) -> Body {
         .1
 }
 
-/// GEN-3: "A positive conjunctive equality may bind one unresolved
-/// generic from known data; under negation/disjunction it only tests
-/// already-resolved data." In `wrap<U>`, `!(T == i64)` of the candidate
-/// `kind_of<T>` is not told while `U` is not given: it is neither held
-/// nor refused there, and the generic body selects no candidate. Each
-/// instance does, with its own types (GEN-5: "Select exactly one
-/// most-specific admitted candidate. Concrete types outrank
-/// variables"): `wrap(5)` calls `kind_of(value: i64)`, and `wrap(true)`
-/// the candidate for any other type. So does an instance reached through
-/// another, `relay`'s; each of two such calls in one body; one in a
-/// graph, whose candidate is lifted (FN-6); and a symbol, `<`, whose
-/// candidate in core is for a `T` among the ordered types. What the call
-/// gives is the operator's `i64` in the generic body too, so `+` over
-/// two of them is core's candidate there.
+/// GEN-7: "A generic body is checked under its stated requirements;
+/// choosing a specialization does not authorize unrelated operations."
+/// GEN-3: "under negation/disjunction it only tests already-resolved
+/// data": `!(T == i64)` of the candidate `kind_of<T>` is not told of a
+/// `U` not given, so no candidate is known to admit `kind_of(value)` in
+/// `wrap<U>`, which states nothing of it, and the call is rejected where
+/// `wrap` is declared (GEN-5: "No match rejects"), in a value function and
+/// in a graph, as `a < b` over a `T` is. GEN-16: under `requires
+/// kind_of(U) -> i64`, "its body calls it under that requirement", and a
+/// call of `wrap_req` gives the requirement its candidate: `wrap_req(5)`
+/// the one for `i64` and `wrap_req(true)` the other (GEN-5: "Concrete
+/// types outrank variables"), through a caller that states it again
+/// too; and a call for whose types a requirement does not hold is
+/// `requires.unmet` (GEN-3). A membership, `T in {i64, f64}`, names no
+/// operation: `a < b` under it rejects as without it (whether a
+/// membership authorises an operation each of its types has is not
+/// settled by the pinned text).
 #[test]
-fn a_candidate_a_type_parameter_selects_is_selected_for_each_instance() {
+fn a_call_in_a_generic_body_is_judged_by_its_stated_requirements() {
     let checked = module(concat!(
         "operator kind_of<T>(value: T) -> i64\n",
         "impl const fn kind_of(value: i64) -> i64 => 1\n",
         "impl const fn kind_of<T>(value: T) -> i64 requires !(T == i64) => 2\n",
+        "const fn less<T>(a: T, b: T) -> bool => a < b\n",
         "const fn wrap<U>(value: U) -> i64 => kind_of(value)\n",
-        "const fn twice<U>(value: U) -> i64 => kind_of(value) + kind_of(value)\n",
-        "const fn relay<V>(value: V) -> i64 => wrap(value)\n",
         "fn wired<U>(value: U) -> i64 => kind_of(value)\n",
-        "const fn less<T>(a: T, b: T) -> bool => a < b\n",
-        "const fn ordered() -> bool => less(1, 2)\n",
-        "const fn whole() -> i64 => wrap(5)\n",
-        "const fn other() -> i64 => wrap(true)\n",
+        "const fn wrap_req<U>(value: U) -> i64 requires kind_of(U) -> i64 => kind_of(value)\n",
+        "const fn less_num<T>(a: T, b: T) -> bool requires T in {i64, f64} => a < b\n",
+        "const fn relay<V>(value: V) -> i64 requires kind_of(V) -> i64 => wrap_req(value)\n",
+        "operator only_ints<T>(value: T) -> i64\n",
+        "impl const fn only_ints(value: i64) -> i64 => 1\n",
+        "const fn needs<U>(value: U) -> i64 requires only_ints(U) -> i64 => only_ints(value)\n",
+        "const fn whole() -> i64 => wrap_req(5)\n",
+        "const fn other() -> i64 => wrap_req(true)\n",
         "const fn relayed() -> i64 => relay(5)\n",
-        "const fn both() -> i64 => twice(\"s\")\n",
-        "fn graph(x: i64) -> i64 => wired(x)\n",
-    ));
-    assert_eq!(checked.summary(), NONE, "{}", checked.report);
-    // As it is declared, no candidate is selected: the operator's `i64`
-    // is what the call gives, and core's `+` takes two of them.
-    assert_eq!(called(&checked, body(&checked, "wrap")), ["none"]);
-    assert_eq!(
-        called(&checked, body(&checked, "twice")),
-        ["add_(i64, i64)", "none", "none"]
-    );
-    let instance = |caller: &str| instance_called_by(&checked, body(&checked, caller));
-    assert_eq!(called(&checked, &instance("whole")), ["kind_of(i64)"]);
-    assert_eq!(called(&checked, &instance("other")), ["kind_of(T) <bool>"]);
-    assert_eq!(
-        called(&checked, &instance("both")),
-        ["add_(i64, i64)", "kind_of(T) <str>", "kind_of(T) <str>"]
-    );
-    assert_eq!(called(&checked, body(&checked, "less")), ["none"]);
-    assert_eq!(called(&checked, &instance("ordered")), ["lt_(T, T) <i64>"]);
-    // `relay(5)` makes `relay<i64>`, whose call of `wrap` makes
-    // `wrap<i64>`.
-    let relayed = instance("relayed");
-    assert_eq!(called(&checked, &relayed), ["wrap(U) <i64>"]);
-    assert_eq!(
-        called(&checked, &instance_called_by(&checked, &relayed)),
-        ["kind_of(i64)"]
-    );
-    // In a graph the value candidate is lifted, and is the one selected.
-    let (module, declaration) = declaration_of(&checked, "wired");
-    let (_, wired) = checked
-        .program
-        .instance(
-            module,
-            declaration,
-            &[Argument::Type(hgl_analyser::Type::Scalar(
-                hgl_analyser::Scalar::I64,
-            ))],
-            &[],
-        )
-        .expect("`wired` has a body");
-    assert_eq!(called(&checked, &wired), ["kind_of(i64)"]);
-}
-
-/// GEN-6: "A candidate states in `requires` the values of a generic value
-/// parameter it is for, by comparing it with constants ... A call admits
-/// the candidate only where that holds for the parameter's value at the
-/// call, a default included." GEN-5: "No match rejects; tied
-/// most-specific candidates are ambiguous." In `go<const M: Mode>`,
-/// `step(v, mode: M)` is told for each instance and rejected where the
-/// instance is made: `go<.medium>(1)` makes one no candidate admits, as
-/// `step(1, mode: .medium)` written in place is; `go<.both>(1)` one two
-/// candidates admit equally; `relay<.medium>(1)` one through another
-/// instance; `later(1)` one through `M`'s default; and two calls of one
-/// instance are each reported. A candidate whose result is not what the
-/// place asks for admits none either (GEN-5: "the requested output
-/// before inputs"): core's `div_` with `zero: .error` gives a `result`
-/// where an `f64` is returned. Core's `<` takes no `list<i64>`. Where the
-/// instance selects, nothing is reported.
-#[test]
-fn a_call_no_one_candidate_admits_in_an_instance_rejects() {
-    let checked = module(concat!(
-        "enum Mode { slow, fast, medium, both }\n",
-        "operator step(value: i64, const mode: Mode = .slow) -> i64\n",
-        "impl const fn step(value: i64, const mode: Mode) -> i64 requires mode in {.slow, .both} => value + 1\n",
-        "impl const fn step(value: i64, const mode: Mode) -> i64 requires mode in {.fast, .both} => value + 10\n",
-        "const fn go<const M: Mode>(v: i64) -> i64 => step(v, mode: M)\n",
-        "const fn relay<const N: Mode>(v: i64) -> i64 => go<N>(v)\n",
-        "const fn later<const M: Mode = .medium>(v: i64) -> i64 => step(v, mode: M)\n",
-        "const fn ratio<const Z: ZeroPolicy>(a: f64, b: f64) -> f64 => div_(a, b, zero: Z)\n",
-        "const fn less<T>(a: T, b: T) -> bool => a < b\n",
-        "const fn slow() -> i64 => go<.slow>(1)\n",
-        "const fn fast() -> i64 => relay<.fast>(1)\n",
-        "const fn medium() -> i64 => go<.medium>(1)\n",
-        "const fn direct() -> i64 => step(1, mode: .medium)\n",
-        "const fn both() -> i64 => go<.both>(1)\n",
-        "const fn deep() -> i64 => relay<.medium>(1)\n",
-        "const fn defaulted() -> i64 => later(1)\n",
-        "const fn again() -> i64 => go<.medium>(1) + go<.medium>(1)\n",
-        "const fn nan() -> f64 => ratio<.nan>(1.0, 0.0)\n",
-        "const fn checked() -> f64 => ratio<.error>(1.0, 0.0)\n",
-        "const fn ordered() -> bool => less(1, 2)\n",
-        "const fn lists() -> bool => less([1], [2])\n",
+        "const fn ints() -> i64 => needs(1)\n",
+        "const fn bools() -> i64 => needs(true)\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:13:29 operator/operator.no_candidate GEN-5",
-            "m.hgl:14:29 operator/operator.no_candidate GEN-5",
-            "m.hgl:15:27 operator/operator.ambiguous GEN-5",
-            "m.hgl:16:27 operator/operator.no_candidate GEN-5",
-            "m.hgl:17:32 operator/operator.no_candidate GEN-5",
-            "m.hgl:18:28 operator/operator.no_candidate GEN-5",
-            "m.hgl:18:45 operator/operator.no_candidate GEN-5",
-            "m.hgl:20:30 operator/operator.no_candidate GEN-5",
-            "m.hgl:22:29 operator/operator.no_candidate GEN-5",
+            "m.hgl:5:43 operator/operator.no_candidate OPS-2",
+            "m.hgl:6:38 operator/operator.no_candidate GEN-5",
+            "m.hgl:7:33 operator/operator.no_candidate GEN-5",
+            "m.hgl:9:72 operator/operator.no_candidate OPS-2",
+            "m.hgl:18:28 constraint/requires.unmet GEN-3",
         ],
         "{}",
         checked.report
     );
-    // Each points at the call in the generic body it is about.
-    let medium = checked
-        .findings
-        .iter()
-        .find(|finding| finding.at == "m.hgl:13:29")
-        .expect("the instance's call is reported");
-    assert!(
-        medium.message.contains("operator `step`"),
-        "{}",
-        medium.message
+    // The body selects nothing: the call is of the operation it
+    // requires, which each call of it answers.
+    assert_eq!(called(&checked, body(&checked, "wrap_req")), ["required"]);
+    let instance = |caller: &str| instance_called_by(&checked, body(&checked, caller));
+    assert_eq!(called(&checked, &instance("whole")), ["kind_of(i64)"]);
+    assert_eq!(called(&checked, &instance("other")), ["kind_of(T) <bool>"]);
+    // `relay(5)` makes `relay<i64>`, whose call of `wrap_req` makes
+    // `wrap_req<i64>`.
+    let relayed = instance("relayed");
+    assert_eq!(called(&checked, &relayed), ["wrap_req(U) <i64>"]);
+    assert_eq!(
+        called(&checked, &instance_called_by(&checked, &relayed)),
+        ["kind_of(i64)"]
     );
-    assert!(
-        checked
-            .report
-            .contains("`step` is called here, with the generic arguments this call gives"),
+}
+
+/// GEN-6: "A call admits the candidate only where that holds for the
+/// parameter's value at the call, a default included." In a generic
+/// body the value of an option given a generic value parameter of the
+/// body is that parameter's, known there only through what the body's
+/// `requires` says of it. GEN-3: "A positive conjunctive equality may
+/// bind one unresolved generic from known data": under `requires M ==
+/// .slow`, `step(v, mode: M)` is the `.slow` candidate's call, and so is
+/// core's division under `requires Z == .nan`; a call of `bound` with
+/// another value is `requires.unmet`. Where the body states nothing of
+/// the parameter, no candidate is known to admit the call, and it is
+/// rejected where the body is declared (GEN-7; GEN-5: "No match
+/// rejects"), whatever values a caller gives and whatever default the
+/// parameter has: `go`, `later`, and core's division in `ratio`. A
+/// membership, `M in {.slow, .fast}`, binds nothing: whether it
+/// authorises a call that each of its values selects is not settled by
+/// the pinned text, and it rejects as the bare case does. Written in
+/// place, `step(1, mode: .medium)` is rejected as it was.
+#[test]
+fn an_option_a_generic_parameter_gives_is_judged_by_its_requirements() {
+    let checked = module(concat!(
+        "enum Mode { slow, fast, medium }\n",
+        "operator step(value: i64, const mode: Mode = .slow) -> i64\n",
+        "impl const fn step(value: i64, const mode: Mode) -> i64 requires mode == .slow => value + 1\n",
+        "impl const fn step(value: i64, const mode: Mode) -> i64 requires mode == .fast => value + 10\n",
+        "const fn go<const M: Mode>(v: i64) -> i64 => step(v, mode: M)\n",
+        "const fn later<const M: Mode = .slow>(v: i64) -> i64 => step(v, mode: M)\n",
+        "const fn among<const M: Mode>(v: i64) -> i64 requires M in {.slow, .fast} => step(v, mode: M)\n",
+        "const fn bound<const M: Mode>(v: i64) -> i64 requires M == .slow => step(v, mode: M)\n",
+        "const fn ratio<const Z: ZeroPolicy>(a: f64, b: f64) -> f64 => div_(a, b, zero: Z)\n",
+        "const fn quiet<const Z: ZeroPolicy>(a: f64, b: f64) -> f64 requires Z == .nan => div_(a, b, zero: Z)\n",
+        "const fn slow() -> i64 => bound<.slow>(1)\n",
+        "const fn fast() -> i64 => bound<.fast>(1)\n",
+        "const fn nan() -> f64 => quiet<.nan>(1.0, 0.0)\n",
+        "const fn direct() -> i64 => step(1, mode: .medium)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:46 operator/operator.no_candidate GEN-5",
+            "m.hgl:7:57 operator/operator.no_candidate GEN-5",
+            "m.hgl:8:78 operator/operator.no_candidate GEN-5",
+            "m.hgl:10:63 operator/operator.no_candidate GEN-5",
+            "m.hgl:13:27 constraint/requires.unmet GEN-3",
+            "m.hgl:15:29 operator/operator.no_candidate GEN-5",
+        ],
         "{}",
         checked.report
+    );
+    // Selected where the body is read, with the value bound.
+    assert_eq!(
+        called(&checked, body(&checked, "bound")),
+        ["step(i64, Mode)"]
+    );
+    assert_eq!(
+        called(&checked, body(&checked, "quiet")),
+        ["div_(f64, f64) <Z>"]
     );
 }
 
@@ -458,118 +417,4 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
         message.contains("instances of `climb` this call makes do not end within the 4096"),
         "{message}"
     );
-}
-
-/// EXPR-5: "An integer literal is an `f64` where one is expected." GEN-5:
-/// "A candidate that takes each integer literal as the `i64` it is
-/// outranks one for which a literal is widened to an `f64`", and one that
-/// widens it is admitted where none takes it as it is. A call selected
-/// for each instance keeps its literals: in `go<const M: Mode>`,
-/// `scale(2, mode: M)` widens the `2` for the one candidate, which takes
-/// an `f64`, at `go<.slow>()`, as `scale(2, mode: .slow)` written in
-/// place does; and `pick(2, mode: M)` takes it as the `i64` it is where a
-/// candidate does.
-#[test]
-fn a_call_selected_for_each_instance_keeps_its_literals() {
-    let checked = module(concat!(
-        "enum Mode { slow, fast }\n",
-        "operator scale(value: f64, const mode: Mode) -> f64\n",
-        "impl const fn scale(value: f64, const mode: Mode) -> f64 requires mode == .slow => value\n",
-        "operator pick<V>(value: V, const mode: Mode) -> i64\n",
-        "impl const fn pick(value: f64, const mode: Mode) -> i64 requires mode == .slow => 1\n",
-        "impl const fn pick(value: i64, const mode: Mode) -> i64 requires mode == .slow => 2\n",
-        "const fn go<const M: Mode>() -> f64 => scale(2, mode: M)\n",
-        "const fn which<const M: Mode>() -> i64 => pick(2, mode: M)\n",
-        "const fn direct() -> f64 => scale(2, mode: .slow)\n",
-        "const fn slow() -> f64 => go<.slow>()\n",
-        "const fn picked() -> i64 => which<.slow>()\n",
-    ));
-    assert_eq!(checked.summary(), NONE, "{}", checked.report);
-    let instance = |caller: &str| instance_called_by(&checked, body(&checked, caller));
-    assert_eq!(called(&checked, &instance("slow")), ["scale(f64, Mode)"]);
-    assert_eq!(called(&checked, &instance("picked")), ["pick(i64, Mode)"]);
-}
-
-/// A call selected for each instance is held there to what any call is
-/// held to once its candidate is selected, as the same call written in
-/// place is: FN-15, a `var` parameter takes a place, so `poke(1, mode:
-/// M)` at `go<.slow>()`, whose candidate's `value` is `var`, rejects as
-/// `poke(1, mode: .slow)` does. ERR-9, GEN-8: a generic option it gives
-/// and works out from the body's own parameters, `K: (M *
-/// 4611686018427387904)`, is worked out for the instance before any
-/// candidate is admitted, and rejects where it fails (`go<4, .slow>`);
-/// `go<1, .slow>` selects.
-#[test]
-fn a_call_selected_for_each_instance_is_held_to_its_candidate() {
-    let checked = module(concat!(
-        "enum Mode { slow, fast }\n",
-        "operator poke(value: i64, const mode: Mode) -> i64\n",
-        "impl const fn poke(var value: i64, const mode: Mode) -> i64 requires mode == .slow {\n",
-        "    value = value + 1\n",
-        "    return value\n",
-        "}\n",
-        "const fn go<const M: Mode>() -> i64 => poke(1, mode: M)\n",
-        "const fn direct() -> i64 => poke(1, mode: .slow)\n",
-        "const fn a() -> i64 => go<.slow>()\n",
-        "operator step(value: i64, const mode: Mode) -> i64\n",
-        "impl const fn step<const K: i64>(value: i64, const mode: Mode) -> i64 requires mode == .slow => value + K\n",
-        "const fn far<const M: i64, const S: Mode>(v: i64) -> i64 => step(v, K: (M * 4611686018427387904), mode: S)\n",
-        "const fn b() -> i64 => far<4, .slow>(1)\n",
-        "const fn c() -> i64 => far<1, .slow>(1)\n",
-    ));
-    let codes: Vec<String> = checked.summary();
-    assert_eq!(codes.len(), 3, "{}", checked.report);
-    // The call written in place, and the instance, are rejected alike.
-    let direct = codes[0].split(' ').nth(1).expect("a code").to_string();
-    assert!(codes[0].starts_with("m.hgl:9:"), "{codes:?}");
-    assert_eq!(
-        codes[1..],
-        [
-            format!("m.hgl:10:24 {direct} FN-15"),
-            "m.hgl:14:24 type/generic.argument_constant GEN-8".to_string(),
-        ],
-        "{}",
-        checked.report
-    );
-}
-
-/// A call selected for each instance is read for the instance as it is
-/// written in the body, and only the reading that stands is selected.
-/// GEN-8: "An operator's takes part in the output requested, in GEN-2's
-/// order: what the call writes, then what its place expects, then its
-/// arguments": `echo<f64>(1, mode: M)` gives the `f64` it writes, whose
-/// candidate takes the `1` as an `f64` (EXPR-5). An argument read first
-/// with nothing expected of it and then as its place's type, the `[pick(
-/// mode: M)]` given to `consume`'s `list<f64>`, is selected as the reading
-/// that stands asks: the `f64` candidate, and no tie with the `i64` one.
-/// GEN-13: a generic value parameter is of its type in the instance:
-/// `[N]` in `go<T, const N: T>` is a `list<bool>` in `go<bool, true>`.
-#[test]
-fn a_call_selected_for_each_instance_is_read_as_it_stands() {
-    let checked = module(concat!(
-        "enum Mode { slow, fast }\n",
-        "operator echo<T>(value: T, const mode: Mode) -> T\n",
-        "impl const fn echo(value: f64, const mode: Mode) -> f64 requires mode == .slow => value\n",
-        "const fn written<const M: Mode>() -> f64 => echo<f64>(1, mode: M)\n",
-        "operator pick<T>(const mode: Mode) -> T\n",
-        "impl const fn pick(const mode: Mode) -> i64 requires mode == .slow => 1\n",
-        "impl const fn pick(const mode: Mode) -> f64 requires mode == .slow => 1.5\n",
-        "operator consume<V>(values: V) -> i64\n",
-        "impl const fn consume(values: list<f64>) -> i64 => 1\n",
-        "const fn read<const M: Mode>() -> i64 => consume([pick(mode: M)])\n",
-        "operator count<T>(values: list<T>) -> i64\n",
-        "impl const fn count<T>(values: list<T>) -> i64 requires !(T == i64) => 1\n",
-        "const fn valued<T, const N: T>() -> i64 => count([N])\n",
-        "const fn a() -> f64 => written<.slow>()\n",
-        "const fn b() -> i64 => read<.slow>()\n",
-        "const fn c() -> i64 => valued<bool, true>()\n",
-    ));
-    assert_eq!(checked.summary(), NONE, "{}", checked.report);
-    let instance = |caller: &str| instance_called_by(&checked, body(&checked, caller));
-    assert_eq!(called(&checked, &instance("a")), ["echo(f64, Mode)"]);
-    assert_eq!(
-        called(&checked, &instance("b")),
-        ["consume(list<f64>)", "pick(Mode)"]
-    );
-    assert_eq!(called(&checked, &instance("c")), ["count(list<T>) <bool>"]);
 }

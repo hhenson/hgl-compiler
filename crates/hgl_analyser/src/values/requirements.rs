@@ -9,7 +9,7 @@ use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
-use super::candidates::{AtInstance, Given, Key, Wanted};
+use super::candidates::{Given, Key, Wanted};
 use super::fit::{open, whole};
 use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, unreadable};
@@ -59,6 +59,78 @@ impl<'a> Typer<'a> {
                 self.requires_met(written.at, *struct_, arguments);
             }
         }
+    }
+
+    /// The generic value parameters of the declaration being read that
+    /// its `requires` binds, each where it is declared with the constant
+    /// it is bound to ([`Typer::bound`]).
+    ///
+    /// GEN-3: "A positive conjunctive equality may bind one unresolved
+    /// generic from known data; under negation/disjunction it only tests
+    /// already-resolved data." An equality of a generic value parameter
+    /// with a constant, `M == .slow` or `.slow == M`, alone or joined to
+    /// the rest by `&&`, binds the parameter to the constant's value as
+    /// one of the parameter's type; one under `!` or `||`, and a
+    /// membership, binds nothing.
+    pub(super) fn bindings(&self) -> Vec<(Location, Argument)> {
+        let Some(clause) = child(&self.declaration.syntax, SyntaxKind::RequiresClause) else {
+            return Vec::new();
+        };
+        let mut relations = Vec::new();
+        if let Some(condition) = clause.children().next() {
+            conjoined_relations(&condition, &mut relations);
+        }
+        let own: Vec<Location> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let mut bound: Vec<(Location, Argument)> = Vec::new();
+        for relation in relations {
+            if !has_token(&relation, SyntaxKind::EqEq) {
+                continue;
+            }
+            let operands: Vec<SyntaxNode> = relation.children().collect();
+            let [left, right] = operands.as_slice() else {
+                continue;
+            };
+            // The generic value parameter a lone name is.
+            let parameter = |operand: &SyntaxNode| {
+                (operand.kind() == SyntaxKind::NamedType)
+                    .then(|| operand.text().to_string().trim().to_string())
+                    .and_then(|name| {
+                        self.signature.generics.iter().find(|generic| {
+                            generic.name == name && matches!(generic.kind, GenericKind::Value(_))
+                        })
+                    })
+            };
+            let (generic, constant) = match (parameter(left), parameter(right)) {
+                (Some(generic), None) => (generic, right),
+                (None, Some(generic)) => (generic, left),
+                _ => continue,
+            };
+            let GenericKind::Value(ty) = &generic.kind else {
+                continue;
+            };
+            let Ok(value) = self.read_constant(constant, Some(ty)) else {
+                continue;
+            };
+            if !crate::constant::worked_out(&value)
+                || value.names_one_of(&own)
+                || bound.iter().any(|(at, _)| *at == generic.at)
+            {
+                continue;
+            }
+            bound.push((
+                generic.at,
+                Argument::Constant(Constant {
+                    text: constant.text().to_string().trim().to_string(),
+                    value,
+                }),
+            ));
+        }
+        bound
     }
 
     /// The types an operator's requirement admits for its result, with
@@ -1037,6 +1109,25 @@ fn required_calls(node: &SyntaxNode, calls: &mut Vec<SyntaxNode>) {
     }
 }
 
+/// The relations of a condition that hold wherever the condition does:
+/// the condition itself, and each side of an `&&` (GEN-15).
+fn conjoined_relations(node: &SyntaxNode, relations: &mut Vec<SyntaxNode>) {
+    match node.kind() {
+        SyntaxKind::ConstraintRelation => relations.push(node.clone()),
+        SyntaxKind::ConstraintParen => {
+            if let Some(inner) = node.children().next() {
+                conjoined_relations(&inner, relations);
+            }
+        }
+        SyntaxKind::ConstraintBinary if has_token(node, SyntaxKind::AmpAmp) => {
+            for side in node.children() {
+                conjoined_relations(&side, relations);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The set of each requirement `name in {...}` in `node`: the relation
 /// itself, the sides of an `&&`, and those in parentheses. Each must
 /// hold, so the name is in every one of them.
@@ -1195,19 +1286,9 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     }
     // The declarations whose calls reach a `requires` with what they
     // are given: an instance of any other makes none to tell.
-    // A body with a call whose candidate each instance selects reaches
-    // one wherever it is called: the candidate's.
-    let mut reaching: std::collections::HashSet<(usize, usize)> = program
-        .modules
-        .iter()
-        .enumerate()
-        .flat_map(|(index, module)| {
-            (0..module.declarations.len())
-                .filter(|&position| module.selects_per_instance(position))
-                .map(move |position| (index, position))
-        })
-        .chain(computing)
-        .collect();
+    // A body that works out a generic argument from its own parameters
+    // is followed for the instances it makes, whose evaluation may fail.
+    let mut reaching: std::collections::HashSet<(usize, usize)> = computing;
     loop {
         let more: Vec<(usize, usize)> = passed
             .iter()
@@ -1278,15 +1359,9 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 past_the_limit(&from, made.callee, program, diagnostics);
                 break;
             }
-            let inner = passed.get(&made.callee).map_or(&[][..], Vec::as_slice);
-            let selecting = program.modules.get(made.callee.0).map_or(&[][..], |unit| {
-                unit.selecting
-                    .get(made.callee.1)
-                    .map_or(&[][..], Vec::as_slice)
-            });
-            if inner.is_empty() && selecting.is_empty() {
+            let Some(inner) = passed.get(&made.callee) else {
                 continue;
-            }
+            };
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
@@ -1358,133 +1433,6 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     at: call.at,
                 });
             }
-            // GEN-5: a call whose candidate a generic parameter of the
-            // body selects is selected here, with this instance's types
-            // ([`Typer::select_at_instance`]).
-            if !selecting.is_empty() {
-                let (module, declaration) = made.callee;
-                let unit = &program.modules[module];
-                // GEN-13: the body is read as the instance has it, each
-                // generic value parameter of its type there.
-                let signature = match unit.details.get(declaration) {
-                    Some(Detail::Callable(signature)) => {
-                        super::candidates::in_instance(signature, &map)
-                    }
-                    _ => empty.clone(),
-                };
-                let (bindings, written, arguments) = &tables[module];
-                let sink = std::cell::RefCell::new(Vec::new());
-                let mut typer = super::Typer::bare(
-                    program,
-                    unit,
-                    &unit.declarations[declaration],
-                    &signature,
-                    super::Tables {
-                        bindings,
-                        written,
-                        calls: arguments,
-                        selecting: &sink,
-                    },
-                    diagnostics,
-                );
-                typer.instance = declared
-                    .iter()
-                    .copied()
-                    .zip(made.generics.iter().cloned())
-                    .collect();
-                // The body's locals, which the calls' arguments read, of
-                // their types in this instance.
-                if let Some(Some(body)) = unit.bodies.get(declaration) {
-                    typer.locals = body
-                        .locals
-                        .iter()
-                        .map(|local| hir::Local {
-                            ty: placed(substitute_within(&local.ty, &map), &declared),
-                            ..local.clone()
-                        })
-                        .collect();
-                    typer.assigned = vec![true; body.locals.len()];
-                }
-                // The last put at each place: the reading of the call
-                // that stands.
-                let standing = selecting
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, call)| {
-                        !selecting[index + 1..]
-                            .iter()
-                            .any(|later| later.at == call.at)
-                    })
-                    .map(|(_, call)| call);
-                for call in standing {
-                    let name = &program.modules[call.operator.module].declarations
-                        [call.operator.declaration]
-                        .name;
-                    // What is rejected of the call in this instance is
-                    // reported at each call that makes the instance, with
-                    // the call in the body, and where it points there,
-                    // beside it.
-                    let rejected =
-                        |typer: &mut super::Typer, reports: Vec<hgl_diagnostics::Diagnostic>| {
-                            for report in reports {
-                                for &root in &from {
-                                    let mut report = report.clone();
-                                    let within = report.primary;
-                                    report.primary = root;
-                                    let mut report = report.with_related(
-                                        call.name,
-                                        format!(
-                                            "`{name}` is called here, with the generic arguments \
-                                         this call gives the function it calls"
-                                        ),
-                                    );
-                                    if within != call.name {
-                                        report = report.with_related(within, "here, in that call");
-                                    }
-                                    if !typer.diagnostics.as_slice().contains(&report) {
-                                        typer.diagnostics.emit(report);
-                                    }
-                                }
-                            }
-                        };
-                    // ERR-9: "Failure during argument evaluation precedes
-                    // later admission checks."
-                    if let Some(report) = typer.option_fails(call) {
-                        rejected(&mut typer, vec![report]);
-                        continue;
-                    }
-                    match typer.select_at_instance(call, None) {
-                        AtInstance::Selected(chosen, given) => {
-                            let (module, declaration, generics) =
-                                (chosen.module, chosen.declaration, chosen.generics.clone());
-                            // What the call is held to once its candidate
-                            // is selected (`Typer::called`): a `var`
-                            // parameter's place among them (FN-15).
-                            let mark = typer.diagnostics.len();
-                            typer.called(call.operator, chosen, given, (call.form, call.name));
-                            let reports = typer.diagnostics.as_slice()[mark..].to_vec();
-                            typer.diagnostics.truncate(mark);
-                            let fails = !reports.is_empty();
-                            rejected(&mut typer, reports);
-                            if fails {
-                                continue;
-                            }
-                            let answers = typer.answers(module, declaration, &generics);
-                            calls.push(Resolved {
-                                callee: (module, declaration),
-                                generics,
-                                answers,
-                                at: call.name,
-                            });
-                        }
-                        // GEN-5: "No match rejects; tied most-specific
-                        // candidates are ambiguous", at each call that
-                        // makes the instance.
-                        AtInstance::Rejected(report) => rejected(&mut typer, vec![report]),
-                        AtInstance::Untold => {}
-                    }
-                }
-            }
             for Resolved {
                 callee,
                 generics,
@@ -1501,7 +1449,6 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     let (module, declaration) = callee;
                     let unit = &program.modules[module];
                     let (bindings, written, arguments) = &tables[module];
-                    let sink = std::cell::RefCell::new(Vec::new());
                     let mut typer = super::Typer::bare(
                         program,
                         unit,
@@ -1511,7 +1458,6 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                             bindings,
                             written,
                             calls: arguments,
-                            selecting: &sink,
                         },
                         diagnostics,
                     );

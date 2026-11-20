@@ -329,22 +329,17 @@ impl<'a> Typer<'a> {
         // source result type during source checking." An option a
         // candidate's condition reads is given here as no constant this
         // pass reads: which candidates admit the call cannot be told,
-        // and the call is not judged. GEN-3: where that is for a generic
-        // parameter of the declaration being read, each instance of it
-        // selects the candidate ([`Typer::select_per_instance`]).
-        if untold {
-            let named = Location::new(self.file, name.span());
-            let written = list.parent().map_or(named, |call| self.at(&call));
-            let gives = self.select_per_instance(
-                operator,
-                &given,
-                (&wanted, requested.as_ref()),
-                (Form::Named, written, named),
-            );
-            return (
-                self.unselected(given, Form::Named),
-                gives.unwrap_or(Type::Unknown),
-            );
+        // and the call is not judged. GEN-7: "A generic body is checked
+        // under its stated requirements". Where that is for a generic
+        // parameter of the declaration being read, which its `requires`
+        // does not settle, no candidate is known to admit the call, and
+        // it is rejected here, where the body is declared.
+        let unsettled = untold && self.names_own_generics(&given, &wanted);
+        if untold && !unsettled {
+            return (self.unselected(given, Form::Named), Type::Unknown);
+        }
+        if unsettled {
+            selected.clear();
         }
         // An argument could not be tried once the function's readings
         // were used up (`REREADS`): the call is then not judged.
@@ -361,12 +356,15 @@ impl<'a> Typer<'a> {
             if selected.len() > 1 && expected.is_some_and(open) {
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
-            let diagnostic = self.no_one_candidate(
+            let mut diagnostic = self.no_one_candidate(
                 (name.text(), at),
                 public,
                 (&given, &wanted),
                 (!candidates.is_empty(), &selected),
             );
+            if unsettled {
+                diagnostic = diagnostic.with_note(UNSETTLED);
+            }
             self.diagnostics.emit(diagnostic);
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
@@ -730,6 +728,14 @@ impl<'a> Typer<'a> {
         }
     }
 }
+
+/// The note on a call in a generic body that no candidate is known to
+/// admit: whether one does depends on a generic parameter of the body,
+/// which its `requires` does not settle (GEN-7).
+pub(super) const UNSETTLED: &str = "which candidate admits this depends on a generic parameter of \
+     the declaration it is written in, which its `requires` does not settle: a generic body \
+     is checked under its stated requirements (GEN-7), so state the operation it calls, \
+     `requires name(T) -> R`, or the parameter's value, `requires M == .value`";
 
 /// The names a call of an operator may give beside the operator's own
 /// parameters: those its candidates declare as generic value

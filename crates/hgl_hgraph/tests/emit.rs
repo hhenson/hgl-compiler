@@ -6374,16 +6374,14 @@ fn a_constant_under_any_is_written_whole() {
 /// (`the_generated_tests_pass_on_hgraph`).
 const GENERICS_FIXES_WAVE3: (&str, &str) = fixture!("demo.generics_fixes_wave3.hgl");
 
-/// GEN-3: "under negation/disjunction it only tests already-resolved
-/// data": `!(T == i64)` is not told of a `U` not given, so the body of
-/// `wrap<U>` selects no candidate of `kind_of`. GEN-5: "Select exactly
-/// one most-specific admitted candidate. Concrete types outrank
-/// variables." Each instance is written with the candidate it selects:
-/// for an `i64` the concrete one, for any other the generic one; in an
-/// instance reached through another; in a graph, lifted (FN-6); and for
-/// core's `<`, whose candidate is for the ordered types.
+/// GEN-7: "A generic body is checked under its stated requirements".
+/// GEN-16: the body of `wrap<U>` calls `kind_of`, which it requires, and
+/// each instance is written with the candidate that answers the
+/// requirement at its call: for an `i64` the concrete one, for any other
+/// the generic one (GEN-5: "Concrete types outrank variables"); in an
+/// instance reached through another; and in a graph, lifted (FN-6).
 #[test]
-fn a_candidate_a_type_parameter_selects_is_written_for_each_instance() {
+fn a_requirement_is_written_with_its_answer_for_each_instance() {
     let emitted = emit_clean(&[GENERICS_FIXES_WAVE3]);
     let python = emitted.module("demo.generics_fixes_wave3");
     python.assert_writes(&[
@@ -6392,24 +6390,21 @@ fn a_candidate_a_type_parameter_selects_is_written_for_each_instance() {
         "def _inst_twice__f64(value):\n    return _core.add__i64_i64(lhs=_impl_kind_of_T(value=value), rhs=_impl_kind_of_T(value=value))",
         "def _inst_relay__i64(value):\n    return _inst_wrap__i64(value=value)",
         "(value: _hg.TS[_py.bool]) -> _hg.TS[_py.int]:\n    return _impl_kind_of_T(value=value.value)",
-        "def _inst_less__str(a, b):\n    return _core.lt__T_T(lhs=a, rhs=b)",
     ]);
 }
 
 /// GEN-6: "A call admits the candidate only where that holds for the
-/// parameter's value at the call, a default included." Core's division
-/// given its `zero` option by a generic value parameter is written for
-/// each instance with the option's value, the enclosing function's
-/// default among them.
+/// parameter's value at the call". GEN-3: "A positive conjunctive
+/// equality may bind one unresolved generic from known data". Core's
+/// division given its `zero` option by a generic value parameter the
+/// body's `requires` binds is written with the bound value.
 #[test]
-fn an_option_a_generic_parameter_gives_is_written_for_each_instance() {
+fn an_option_a_bound_generic_parameter_gives_is_written_with_its_value() {
     let emitted = emit_clean(&[GENERICS_FIXES_WAVE3]);
     let python = emitted.module("demo.generics_fixes_wave3");
     python.assert_writes(&[
-        "def _inst_ratio__core__ZeroPolicy_ieee(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"ieee\")",
-        "def _inst_ratio__core__ZeroPolicy_nan(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")",
-        "def _inst_checked__core__ZeroPolicy_error(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"error\")",
-        "def _inst_quietly__core__ZeroPolicy_nan(a, b):\n    return _inst_ratio__core__ZeroPolicy_nan(a=a, b=b)",
+        "return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")",
+        "return _core.div__f64_f64(lhs=a, rhs=b, zero=\"error\")",
     ]);
 }
 

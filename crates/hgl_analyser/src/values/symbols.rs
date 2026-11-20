@@ -627,28 +627,16 @@ impl<'a> Typer<'a> {
             among: self.result_among(operator, public, &[], &own_generics),
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
-        // GEN-3: which candidates admit it cannot be told for a generic
-        // parameter of the declaration being read: each instance of it
-        // selects the candidate ([`Typer::select_per_instance`]). The
-        // symbol's expression is the one its first operand is part of.
-        if untold {
-            let written = given
-                .iter()
-                .find(|given| matches!(given.key, Key::Position(0)))
-                .and_then(|given| given.node.parent())
-                .map_or(symbol.at, |node| self.at(&node));
-            let gives = self.select_per_instance(
-                operator,
-                &given,
-                (&wanted, None),
-                (symbol.form, written, symbol.at),
-            );
-            let ty = match gives {
-                Some(ty) if !matches!(ty, Type::Unknown) => ty,
-                _ => symbol.unjudged,
-            };
-            return (self.unselected(given, symbol.form), ty);
+        // GEN-7: "A generic body is checked under its stated
+        // requirements". Where which candidates admit the symbol cannot be
+        // told for a generic parameter of the declaration being read,
+        // which its `requires` does not settle, none is known to admit
+        // it, and it is rejected here, where the body is declared.
+        let unsettled = untold && self.names_own_generics(&given, &wanted);
+        if unsettled {
+            selected.clear();
         }
+        let untold = untold && !unsettled;
         // Which candidates admit the call cannot be told, or an entry
         // could not be tried once the function's readings were used up
         // (`REREADS`): the symbol is then not judged.
@@ -746,6 +734,11 @@ impl<'a> Typer<'a> {
                 let candidate = &program.modules[chosen.module].declarations[chosen.declaration];
                 diagnostic = diagnostic.with_related(candidate.at, "this candidate");
             }
+            diagnostic
+        };
+        let diagnostic = if unsettled {
+            diagnostic.with_note(super::operators::UNSETTLED)
+        } else {
             diagnostic
         };
         self.diagnostics.emit(diagnostic);

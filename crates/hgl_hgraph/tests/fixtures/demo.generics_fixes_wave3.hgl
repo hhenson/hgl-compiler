@@ -7,18 +7,17 @@ operator kind_of<T>(value: T) -> i64
 impl const fn kind_of(value: i64) -> i64 => 1
 impl const fn kind_of<T>(value: T) -> i64 requires !(T == i64) => 2
 
-# GEN-3: "under negation/disjunction it only tests already-resolved
-# data": `!(T == i64)` is not told of `U` while `U` is not given. Each
-# instance selects its own candidate (GEN-5: "Concrete types outrank
-# variables"), through another instance too, in a graph, and for a
-# symbol: core's `<` is for a `T` among the ordered types.
-const fn wrap<U>(value: U) -> i64 => kind_of(value)
-const fn twice<U>(value: U) -> i64 => kind_of(value) + kind_of(value)
-const fn relay<V>(value: V) -> i64 => wrap(value)
-fn wired<U>(value: U) -> i64 => kind_of(value)
-const fn less<T>(a: T, b: T) -> bool => a < b
+# GEN-7: "A generic body is checked under its stated requirements".
+# GEN-16: under `requires kind_of(U) -> i64` the body calls the operation
+# it requires, and each call of it gives the candidate that answers the
+# requirement for its types (GEN-5: "Concrete types outrank variables"),
+# through another instance too, and in a graph.
+const fn wrap<U>(value: U) -> i64 requires kind_of(U) -> i64 => kind_of(value)
+const fn twice<U>(value: U) -> i64 requires kind_of(U) -> i64 => kind_of(value) + kind_of(value)
+const fn relay<V>(value: V) -> i64 requires kind_of(V) -> i64 => wrap(value)
+fn wired<U>(value: U) -> i64 requires kind_of(U) -> i64 => kind_of(value)
 
-test a_type_parameter_selects_a_candidate_for_each_instance {
+test a_requirement_is_answered_for_each_instance {
     assert wrap(5) == 1
     assert wrap(true) == 2
     assert wrap("s") == 2
@@ -28,24 +27,21 @@ test a_type_parameter_selects_a_candidate_for_each_instance {
     assert relay(false) == 2
     assert eval(wired(value: [5, 6])) == [1, 1]
     assert eval(wired(value: [true])) == [2]
-    assert less(1, 2)
-    assert !less("b", "a")
 }
 
 # GEN-6: "A call admits the candidate only where that holds for the
-# parameter's value at the call, a default included." Core's division
-# selects by its `zero` option, which a generic value parameter gives.
-const fn ratio<const Z: ZeroPolicy>(a: f64, b: f64) -> f64 => div_(a, b, zero: Z)
-const fn checked<const Z: ZeroPolicy>(a: f64, b: f64) -> result<f64, error> => div_(a, b, zero: Z)
-const fn quietly<const Z: ZeroPolicy = .nan>(a: f64, b: f64) -> f64 => ratio<Z>(a, b)
+# parameter's value at the call". GEN-3: "A positive conjunctive
+# equality may bind one unresolved generic from known data": core's
+# division selects by its `zero` option, which a generic value parameter
+# the body's `requires` binds gives.
+const fn quiet<const Z: ZeroPolicy>(a: f64, b: f64) -> f64 requires Z == .nan => div_(a, b, zero: Z)
+const fn checked<const Z: ZeroPolicy>(a: f64, b: f64) -> result<f64, error> requires Z == .error =>
+    div_(a, b, zero: Z)
 
-test an_option_a_generic_parameter_gives_selects_for_each_instance {
-    assert ratio<.ieee>(1.0, 4.0) == 0.25
-    assert ratio<.ieee>(1.0, 0.0) > 1.0e300
-    let nan = ratio<.nan>(1.0, 0.0)
+test an_option_a_bound_generic_parameter_gives_selects {
+    assert quiet<.nan>(1.0, 4.0) == 0.25
+    let nan = quiet<.nan>(1.0, 0.0)
     assert nan != nan
-    let failed = quietly(1.0, 0.0)
-    assert failed != failed
     assert is_err(checked<.error>(1.0, 0.0))
     assert is_ok(checked<.error>(1.0, 2.0))
 }

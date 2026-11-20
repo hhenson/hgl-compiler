@@ -1230,12 +1230,12 @@ A function and a struct with no generic parameter are held to a
 passes on a parameter of its own is told once the typed program is
 whole, for each instance a call that gives every argument makes, at any
 depth (`requirements::instances_hold`), and reported at that call. So
-is a call of an operator whose candidate the body's own generic
-parameters select (`values::Selecting`): each instance selects it with
-its types, rejects where none or two most-specific candidates admit
-it, and `Program::instance` gives the instance the call of the one it
-selects; and a generic argument worked out from them, rejected
-(`generic.argument_constant`) where its evaluation fails there. Only
+is a generic argument worked out from the body's own generic
+parameters, rejected (`generic.argument_constant`) where its
+evaluation fails there. A call of an operator in a generic body whose
+candidate the body's own parameters would select, and which its
+`requires` does not settle, is rejected where the body is declared
+(GEN-7): a body is judged once, under what it states. Only
 the calls that reach one of those are followed, each instance once
 however many calls make it, and at most `hgl_analyser::INSTANCES`
 (4096) instances of one declaration from one call, whose arguments are
