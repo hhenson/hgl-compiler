@@ -1,0 +1,25 @@
+module m
+const fn entry_at(entries: list<i64>, position: i64) -> i64 => entries[position]
+const fn repeated(text: str, count: i64) -> str => text * count
+test indexed {
+    assert raises("value.index_out_of_range") { entry_at([1, 2], 2) }
+}
+test repeated_below_zero {
+    assert raises("numeric.out_of_range") { repeated("ab", -1) }
+    assert raises("numeric.out_of_range") { "ab" * -1 }
+}
+test other_codes {
+    assert raises("numeric.out_of_range") { entry_at([1], 0) * 9223372036854775807 * 2 }
+}
+test moved_at_the_edge {
+    assert @9999-12-15 + (1M - 30D) == @9999-12-16
+}
+test moved_within {
+    assert @2026-01-31 + 1M == @2026-02-28
+}
+const fn kept(day: date, by: tenor) -> date => day
+const fn echoed(text: str, count: i64) -> str => text
+test not_a_move {
+    assert kept(@9999-12-15, 1M) == @9999-12-15
+    assert raises("numeric.out_of_range") { echoed("ab", 9223372036854775807 + 1) }
+}

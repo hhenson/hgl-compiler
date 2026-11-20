@@ -1,6 +1,22 @@
 # Each key completes the hgraph emitter's diagnostic "the hgraph target
 # does not write ... yet". A case is allowed only for the listed reason.
 
+"`delta_value` of a child or of a window of a duration, or `removed_value`, read where a `result` is taken (ERR-14)" = [
+    "conformance::a_recording_of_a_window_holds_its_arrivals_and_replays_the_same_window",
+    "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
+    "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",
+]
+"a failure coded `value.index_out_of_range` (EXPR-3, EXPR-7)" = [
+    "core_implementation::a_read_outside_a_list_is_an_error",
+    "core_implementation::an_assignment_outside_a_list_is_an_error",
+]
+"a move of a date in the first or last year of the range, which only its result is held to (TEN-4)" = [
+    "core_implementation::only_the_result_of_a_move_is_held_to_the_range",
+]
+"text repeated a count below zero, `numeric.out_of_range` (OPS-1)" = [
+    "core_implementation::text_repeated_below_zero_times_is_an_error",
+]
+
 # Rejection cases the compiler does not yet reject, each
 # `suite::file::declaration` with the file under the suite's directory,
 # under a reason that names the missing rule. A listed case must fail by

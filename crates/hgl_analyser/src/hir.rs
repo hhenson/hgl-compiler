@@ -501,6 +501,16 @@ pub enum ExprKind {
     /// an index known only when it runs is a
     /// [`ExprKind::CheckedChild`]. The expression is of the result.
     CheckedWindow(Box<Expr>),
+    /// A read of what an endpoint published in the cycle, its
+    /// `delta_value`, or of what a window lost in it, its
+    /// `removed_value`, where its place expects `result<T, error>`, T
+    /// what the read gives (ERR-14, TIME-9): `ok` of that, or `err` of an
+    /// `error` whose code is `value.unset_read` where the endpoint has
+    /// none in the cycle. Only a window of a duration that a value leaves
+    /// with none arriving has no delta at a tick (TYPE-11). The read is
+    /// an [`ExprKind::Endpoint`], an [`ExprKind::ChildEndpoint`] or the
+    /// call of core's `removed_value`; the expression is of the result.
+    CheckedDelta(Box<Expr>),
     /// `{ statements }`: a block. Its value is that of its last
     /// statement, when that is an expression (CTRL-10).
     Block {
@@ -1123,6 +1133,7 @@ impl Expr {
             | ExprKind::ChildEndpointOf(inner)
             | ExprKind::CheckedChild { read: inner, .. }
             | ExprKind::CheckedWindow(inner)
+            | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes(visit),
             ExprKind::Binary { left, right, .. }
             | ExprKind::Index {
@@ -1221,6 +1232,7 @@ impl Expr {
             | ExprKind::ChildEndpointOf(inner)
             | ExprKind::CheckedChild { read: inner, .. }
             | ExprKind::CheckedWindow(inner)
+            | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_mut(visit),
             ExprKind::Binary { left, right, .. }
             | ExprKind::Index {
