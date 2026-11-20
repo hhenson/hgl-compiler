@@ -112,7 +112,8 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
 }
 
 /// `hgl emit --target cpp` writes each module's header and unit, core's
-/// among them, and an entry unit for its tests; a program with a form
+/// among them with core's types header, and an entry unit for its tests;
+/// a program with a form
 /// the target does not write yet is not written.
 #[test]
 fn emit_writes_a_unit_a_header_and_an_entry() {
@@ -137,9 +138,10 @@ fn emit_writes_a_unit_a_header_and_an_entry() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert_eq!(
         text(&output.stdout),
-        format!("wrote 5 files for cpp to {}\n", argument(&out))
+        format!("wrote 6 files for cpp to {}\n", argument(&out))
     );
     for file in [
+        "modules/core.types.h",
         "modules/core.h",
         "modules/core.cpp",
         "modules/demo.flags.h",
@@ -424,6 +426,83 @@ fn temporal_code_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// `demo.composites`, structs, sets, dictionaries and deltas as values
+/// (TYPE-3 to TYPE-6, TYPE-14, TYPE-16, EXPR-3, ERR-6, CTRL-12): every
+/// test of it passes on the SDK, and under the sanitizers where
+/// `HGL_CPP_FLAGS` names them, as the CI job for C++ runs it again.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn composite_values_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("composites");
+    let file = write(
+        &root,
+        "src/demo.composites.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.composites.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 12 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// Two modules, one of whose structs holds the other's, with an instance
+/// of the other's generic function over it: each is built, and its tests
+/// pass (GEN-2, UNIT-6).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_struct_that_holds_another_modules_is_built() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("struct-modules");
+    write(
+        &root,
+        "src/demo.inner.hgl",
+        concat!(
+            "module demo.inner\n",
+            "export struct Inner { value: i64 }\n",
+            "export const fn same<T>(value: T) -> T => value\n",
+        ),
+    );
+    write(
+        &root,
+        "src/demo.outer.hgl",
+        concat!(
+            "module demo.outer\n",
+            "use demo.inner::{Inner, same}\n",
+            "struct Outer { inner: Inner }\n",
+            "test each_names_the_other {\n",
+            "    let outer = Outer(inner: Inner(value: 4))\n",
+            "    assert same(outer) == outer && same(outer).inner.value == 4\n",
+            "}\n",
+        ),
+    );
+    let source = argument(&root.join("src"));
+    let output = hgl_in(&["test", &source, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("passed   executable  demo.outer::each_names_the_other"),
         "{stdout}"
     );
 }

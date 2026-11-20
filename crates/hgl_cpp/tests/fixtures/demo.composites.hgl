@@ -1,0 +1,372 @@
+module demo.composites
+
+# Structs, sets, dictionaries and deltas as values, and tests of them, as
+# the cpp target writes them (TYPE-3 to TYPE-6, TYPE-14, TYPE-16, EXPR-3,
+# ERR-6, CTRL-12).
+
+enum Side { buy, sell = 5 }
+
+# UNIT-6: a struct may name a type declared after it.
+struct Line {
+    start: Point
+    end: Point = Point(x: 1.0)
+    class: i64 = 3
+    note: str? = null
+}
+
+struct Point {
+    x: f64
+    y: f64 = 0.0
+}
+
+struct Book {
+    owner: str
+    tags: set<str> = []
+    prices: dict<str, i64> = []
+    side: Side? = null
+    points: list<Point> = []
+}
+
+struct Box<T> {
+    value: T
+    count: i64 = 0
+}
+
+struct Empty {}
+
+# TYPE-3: a struct is a value where an abstract struct it inherits from is
+# expected, through any number of parents.
+abstract struct Base {
+    id: i64
+}
+
+abstract struct Shape : Base {
+    name: str = "shape"
+}
+
+struct Round : Shape {
+    radius: f64
+}
+
+struct Tagged<T> : Shape {
+    tag: T
+}
+
+# GEN-4: a candidate of an operator over a struct.
+impl const fn add_(lhs: Point, rhs: Point) -> Point => Point(x: lhs.x + rhs.x, y: lhs.y + rhs.y)
+
+const fn origin() -> Point => Point(x: 0.0)
+
+# EXPR-3: a field of a `var` is a place.
+const fn moved(point: Point, by: f64) -> Point {
+    var next = point
+    next.x += by
+    next.y = next.y + by
+    return next
+}
+
+const fn stretched(line: Line, by: f64) -> Line {
+    var next = line
+    next.end.x += by
+    next.class = 4
+    return next
+}
+
+const fn points() -> list<Point> => [Point(x: 1.0, y: 2.0), Point(x: 3.0)]
+
+# A field of an element of a list a call gives.
+const fn first_x() -> f64 => points()[0].x
+
+const fn named(shape: Shape) -> str => shape.name
+
+const fn same(lhs: Shape, rhs: Shape) -> bool => lhs == rhs
+
+const fn as_base(shape: Shape) -> Base => shape
+
+const fn base_id(base: Base) -> i64 => base.id
+
+# TYPE-5: written arguments evaluate once in source order; a field's
+# default only where it is left out.
+const fn written_order() -> Point {
+    var at = 1.0
+    return Point(y: {
+        at = 2.0
+        at
+    }, x: at)
+}
+
+const fn read_before() -> Point {
+    var at = 1.0
+    return Point(x: at, y: {
+        at = 5.0
+        at
+    })
+}
+
+# EXPR-3: "A key the dictionary has not is added"; a compound assignment
+# reads the place first.
+const fn counted(words: list<str>) -> dict<str, i64> {
+    var counts: dict<str, i64> = []
+    for word in words {
+        if get(counts, word) == null {
+            counts[word] = 1
+        } else {
+            counts[word] += 1
+        }
+    }
+    return counts
+}
+
+const fn bumped(book: dict<str, i64>, key: str) -> dict<str, i64> {
+    var changed = book
+    changed[key] += 1
+    return changed
+}
+
+# CTRL-12: a set and a dictionary in no order.
+const fn total(book: dict<str, i64>) -> i64 {
+    var sum = 0
+    for key, value in book {
+        sum += value
+    }
+    return sum
+}
+
+const fn size(members: set<f64>) -> i64 {
+    var count = 0
+    for member in members {
+        count += 1
+    }
+    return count
+}
+
+const fn holds(members: set<str>, wanted: str) -> bool {
+    for member in members {
+        if member == wanted {
+            return true
+        }
+    }
+    return false
+}
+
+# A set a call gives, looped over: it is held whole for the loop.
+const fn tags() -> set<str> => ["a", "b"]
+
+const fn tag_count() -> i64 {
+    var count = 0
+    for tag in tags() {
+        count += 1
+    }
+    return count
+}
+
+# A dictionary changed while it is looped over: the loop runs over what it
+# held when it began.
+const fn doubled_all(book: dict<str, i64>) -> dict<str, i64> {
+    var changed = book
+    for key, value in changed {
+        changed[key] = value * 2
+        changed["extra"] = 0
+    }
+    return changed
+}
+
+# The dictionary a struct holds, read through it.
+const fn price_of(book: Book, key: str) -> i64 => book.prices[key]
+
+const fn first_price(books: list<Book>) -> i64 => books[0].prices["a"]
+
+# A field of an element of a dictionary of structs, a place.
+const fn moved_in(book: dict<str, Point>) -> dict<str, Point> {
+    var changed = book
+    changed["a"].x = 9.0
+    return changed
+}
+
+# TYPE-16: deltas as values, and their properties.
+const fn arrived(change: delta<set<str>>) -> set<str> => change.added
+
+const fn joined(name: str) -> delta<set<str>> => delta<set<str>>(added: [name])
+
+const fn cleared() -> delta<f64?> => delta<f64?>()
+
+const fn seven() -> delta<i64?> => delta<i64?>(value: 7)
+
+const fn booked() -> delta<dict<str, i64>> => delta<dict<str, i64>>(updated: ["a": 1], removed: ["b"])
+
+const fn listed() -> delta<list<i64>> => delta<list<i64>>(updated: [0: 4], removed: [1])
+
+const fn nudged() -> delta<Point> => delta<Point>(x: 1.0)
+
+const fn pair_change() -> delta<tuple<f64, i64>> => (1.0, null)
+
+# TYPE-7: an enum's member made from its number or its name.
+const fn side_of(number: i64) -> Side => Side(number)
+
+const fn side_named(name: str) -> Side => Side(name)
+
+# TYPE-2: a zone and a time of day in it.
+const fn london() -> timezone => @[Europe/London]
+
+const fn opening() -> zoned_time => @09:30[Europe/London]
+
+# TYPE-14: a `T?` compared with a `T`.
+const fn is_one(value: i64?) -> bool => value == 1
+
+# FN-15: a `var` parameter's place beside an argument that runs
+# statements: the place is taken where the call is made.
+const fn bump(var count: i64, by: i64) {
+    count = by
+}
+
+const fn bump_after_growth() -> list<i64> {
+    var items = [10]
+    bump(items[0], {
+        items = [20, 30]
+        1
+    })
+    return items
+}
+
+# Core's OPS-6: a list of structs as a list of their parent.
+const fn as_shapes(rounds: list<Round>) -> list<Shape> => convert<list<Shape>>(rounds)
+
+test structs_are_values {
+    let point = Point(y: 2.0, x: 1.0)
+    assert point.x == 1.0 && point.y == 2.0
+    assert origin() == Point(x: 0.0, y: 0.0)
+    assert moved(point, 1.5) == Point(x: 2.5, y: 3.5)
+    assert point == Point(x: 1.0, y: 2.0)
+    assert point + Point(x: 3.0) == Point(x: 4.0, y: 2.0)
+    assert first_x() == 1.0
+    assert Empty() == Empty()
+}
+
+test fields_default_and_nest {
+    let line = Line(start: origin())
+    assert line.end == Point(x: 1.0, y: 0.0)
+    assert line.class == 3
+    assert line.note == null
+    let longer = stretched(line, 2.0)
+    assert longer.end.x == 3.0 && longer.class == 4
+    assert line.end.x == 1.0
+    assert Line(start: origin(), note: "n").note != null
+}
+
+test a_struct_holding_nan_is_not_equal_to_itself {
+    let odd = Point(x: 0.0 / 0.0)
+    assert odd != odd
+    assert [odd] != [odd]
+}
+
+test generic_and_abstract_structs {
+    assert Box(value: 3) == Box(value: 3, count: 0)
+    assert Box(value: "a").count == 0
+    let round = Round(id: 1, radius: 2.0)
+    assert named(round) == "shape"
+    assert same(round, Round(id: 1, radius: 2.0))
+    assert !same(round, Round(id: 2, radius: 2.0))
+    assert !same(Tagged(id: 1, tag: 1), Tagged(id: 1, tag: 1.0))
+    assert !same(round, Tagged(id: 1, tag: 2.0))
+    assert base_id(as_base(round)) == 1
+    assert base_id(round) == 1
+    assert as_shapes([round])[0].name == "shape"
+}
+
+test arguments_are_evaluated_in_the_order_written {
+    assert written_order() == Point(x: 2.0, y: 2.0)
+    assert read_before() == Point(x: 1.0, y: 5.0)
+}
+
+test sets_have_no_order {
+    let made: set<i64> = [3, 1, 2]
+    assert made == [1, 2, 3]
+    assert made != [1, 2]
+    let empty: set<str> = []
+    assert empty == []
+    assert size([0.0, -0.0, 1.0]) == 2
+    let books: set<Point> = [Point(x: 1.0), Point(x: 1.0, y: 0.0)]
+    assert books == [Point(x: 1.0)]
+    assert holds(["a", "b"], "b") && !holds(["a"], "b")
+    assert tag_count() == 2
+}
+
+test dictionaries_read_add_and_loop {
+    let book: dict<str, i64> = ["a": 1, "b": 2]
+    assert book["a"] == 1
+    assert book == ["b": 2, "a": 1]
+    assert get(book, "c") == null
+    assert get(book, "b") == 2
+    assert total(book) == 3
+    assert counted(["x", "y", "x"]) == ["x": 2, "y": 1]
+    assert bumped(book, "b") == ["a": 1, "b": 3]
+    assert doubled_all(["a": 1]) == ["a": 2, "extra": 0]
+    let again: dict<str, i64> = ["a": 1, "a": 2]
+    assert again == ["a": 2]
+    let shelf = Book(owner: "o", prices: ["a": 5])
+    assert price_of(shelf, "a") == 5
+    assert first_price([shelf]) == 5
+    assert moved_in(["a": Point(x: 1.0)]) == ["a": Point(x: 9.0)]
+    let odd: dict<str, f64> = ["n": 0.0 / 0.0]
+    assert odd != odd
+}
+
+test a_missing_key_fails {
+    let book: dict<str, i64> = ["a": 1]
+    assert raises("value.missing_key") {
+        let none = book["b"]
+    }
+    assert raises("value.missing_key") {
+        let more = bumped(book, "b")
+    }
+}
+
+const fn failing() -> i64 => [1][5]
+
+# EXPR-3: the key is added where the value is assigned; a value that
+# fails adds none.
+test a_failing_value_adds_no_key {
+    var book: dict<str, i64> = ["a": 1]
+    assert raises("value.index_out_of_range") {
+        book["b"] = failing()
+    }
+    assert book == ["a": 1]
+    var rows: list<dict<str, i64>> = [["a": 1]]
+    assert raises("value.index_out_of_range") {
+        rows[0]["b"] = {
+            let none = 0
+            failing()
+        }
+    }
+    assert rows == [["a": 1]]
+}
+
+test deltas_are_values {
+    assert arrived(joined("a")) == ["a"]
+    assert joined("a").removed == []
+    assert cleared().value == null
+    assert seven().value == 7
+    assert booked().updated == ["a": 1]
+    assert booked().removed == ["b"]
+    assert listed().updated == [0: 4]
+    assert listed().removed == [1]
+    assert listed().size_modified == null
+    assert nudged().x == 1.0
+    assert nudged().y == null
+    assert pair_change() == (1.0, null)
+}
+
+test enums_zones_and_nullables {
+    assert side_of(5) == Side.sell
+    assert side_named("buy") == Side.buy
+    assert london() == @[Europe/London]
+    assert opening() == @09:30[Europe/London]
+    assert opening() != @09:30[UTC]
+    assert is_one(1)
+    assert !is_one(2)
+    assert !is_one(null)
+}
+
+test a_var_place_is_taken_where_the_call_is_made {
+    assert bump_after_growth() == [1, 30]
+}

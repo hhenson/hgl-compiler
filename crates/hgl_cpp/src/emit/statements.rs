@@ -9,7 +9,8 @@
 //! | `name = value`, `name += value` | `name = value;`, the compound one's value the symbol's call |
 //! | `items[i] = value`, `pair[0] = value` | `::hglrt::item(items, i) = value;`, `std::get<0>(pair) = value;` |
 //! | `return`, `return value` | `return;`, `return value;` |
-//! | `if`, `while`, `for item in items` | `if`, `while`, `for (const T& item : items)` (CTRL-10, CTRL-12) |
+//! | `if`, `while`, `for item in items` | `if`, `while`, `for (const T& item : items)` (CTRL-10, CTRL-12); over a set or a dictionary, `composites`' |
+//! | `point.x = value`, `book[key] = value` | `point.x = value;`, `::hglrt::entry(book, key) = value;` (`composites`) |
 //! | `switch selector { case a: ... default: ... }` | the selector held once, and an `if` for each label, compared by value (CTRL-6) |
 //! | A call that assigns places, a value dropped | `call(...);`, `static_cast<void>(value);` |
 //!
@@ -66,6 +67,12 @@ pub(super) struct Scope<'b> {
     /// C++ place it is: the value reads the place as its left operand,
     /// and reads it where the statement's held indices name it.
     pub(super) read_as: Option<(Expr, String)>,
+    /// While an assignment's place is written, whether the part of it
+    /// still to be written is the whole place of an assignment that is
+    /// no compound one: a dictionary's entry there is added where the
+    /// dictionary has not its key (EXPR-3). `None` outside an
+    /// assignment's place: a `var` parameter's.
+    pub(super) assigning: Option<bool>,
 }
 
 impl<'b> Scope<'b> {
@@ -82,6 +89,7 @@ impl<'b> Scope<'b> {
             read: false,
             statement_call: false,
             read_as: None,
+            assigning: None,
         }
     }
 
@@ -100,6 +108,7 @@ impl<'b> Scope<'b> {
             read: false,
             statement_call: false,
             read_as: None,
+            assigning: None,
         }
     }
 }
@@ -236,7 +245,10 @@ impl Emitter<'_> {
                 let holds = changes(value)
                     || changes(place)
                     || (reads_an_element(place) && (may_fail(value) || indexed_may_fail(place)));
-                let Some(written) = self.place_held(scope, place, holds) else {
+                scope.assigning = Some(operator.is_none());
+                let written = self.place_held(scope, place, holds);
+                scope.assigning = None;
+                let Some(written) = written else {
                     self.unsupported(*at, "an assignment to this place");
                     return;
                 };
@@ -356,6 +368,11 @@ impl Emitter<'_> {
                 body: statements,
                 at,
             } => {
+                // CTRL-12: over a set or a dictionary (`composites`).
+                if matches!(sequence.ty, Type::Set(_) | Type::Dict { .. }) {
+                    self.composite_for(scope, bound, sequence, statements, *at, depth, text);
+                    return;
+                }
                 let (Type::List { element, .. }, [name]) = (&sequence.ty, bound.as_slice()) else {
                     self.unsupported(*at, "a `for` loop over this");
                     return;
@@ -550,7 +567,8 @@ impl Emitter<'_> {
 
     /// The C++ place `place` is, which an assignment or a `var`
     /// parameter writes (EXPR-3, FN-15): a local, a list's element, a
-    /// tuple's position, at any depth. `None` for any other.
+    /// tuple's position, a struct's field, and in an assignment a
+    /// dictionary's entry, at any depth. `None` for any other.
     pub(super) fn place(&mut self, scope: &mut Scope, place: &Expr) -> Option<String> {
         self.place_held(scope, place, false)
     }
@@ -558,6 +576,12 @@ impl Emitter<'_> {
     /// [`Emitter::place`], each list's index held under a name of its
     /// own before the statement where `holds` is true.
     fn place_held(&mut self, scope: &mut Scope, place: &Expr, holds: bool) -> Option<String> {
+        // Whether this is the whole place of an assignment that is no
+        // compound one; what it is part of is not (EXPR-3).
+        let adds = scope.assigning == Some(true);
+        if scope.assigning.is_some() {
+            scope.assigning = Some(false);
+        }
         match &place.kind {
             ExprKind::Local(local) => {
                 scope.read = true;
@@ -603,8 +627,19 @@ impl Emitter<'_> {
                     }
                     Some(format!("{item}({listed}, {written})"))
                 }
+                // EXPR-3: "A key the dictionary has not is added"
+                // (`composites`).
+                Type::Dict { .. } if scope.assigning.is_some() => {
+                    let base = self.place_held(scope, base, holds)?;
+                    self.dict_place(scope, base, index, holds, adds)
+                }
                 _ => None,
             },
+            // EXPR-3: "a field, `point.x = 1`" (`composites`).
+            ExprKind::Field { base, member } => {
+                let written = self.place_held(scope, base, holds)?;
+                self.field_place(&base.ty, written, *member)
+            }
             _ => None,
         }
     }
@@ -614,6 +649,7 @@ impl Emitter<'_> {
 fn indexed_may_fail(place: &Expr) -> bool {
     match &place.kind {
         ExprKind::Index { base, index } => may_fail(index) || indexed_may_fail(base),
+        ExprKind::Field { base, .. } => indexed_may_fail(base),
         _ => false,
     }
 }
@@ -638,14 +674,18 @@ fn mentions(statements: &[Stmt], local: LocalId) -> usize {
 }
 
 /// True where `value` reads what something else holds, as it is: a
-/// local, an element or a position of one, a constant. A `let` of it may
-/// be a reference; any other value is made where it is read, an element
-/// whose list and index are held before it is read among them
-/// (`expressions::held_read`).
+/// local, an element, an entry, a position or a field of one, a constant.
+/// A `let` of it may be a reference; any other value is made where it is
+/// read, an element whose list and index are held before it is read
+/// among them (`expressions::held_read`), and a list's delta's `updated`
+/// and `removed` (`composites::field_refers`).
 pub(super) fn refers(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Local(_) | ExprKind::Constant { .. } => true,
         ExprKind::Index { base, index } => !held_read(base, index) && refers(base),
+        ExprKind::Field { base, member } => {
+            super::composites::field_refers(&base.ty, *member) && refers(base)
+        }
         _ => false,
     }
 }

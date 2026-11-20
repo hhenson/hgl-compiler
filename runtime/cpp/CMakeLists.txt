@@ -50,6 +50,7 @@ include(GNUInstallDirs)
 add_library(hglrt SHARED
     src/capabilities.cpp
     src/checked.cpp
+    src/collections.cpp
     src/conversions.cpp
     src/failure.cpp
     src/host.cpp
@@ -122,6 +123,7 @@ if(BUILD_TESTING)
         tests/main.cpp
         tests/capabilities_tests.cpp
         tests/checked_tests.cpp
+        tests/collections_tests.cpp
         tests/conversion_tests.cpp
         tests/endpoint_tests.cpp
         tests/failure_tests.cpp
