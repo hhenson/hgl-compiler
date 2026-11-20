@@ -51,6 +51,9 @@ inline constexpr std::string_view out_of_range = "numeric.out_of_range";
 inline constexpr std::string_view division_by_zero = "numeric.division_by_zero";
 /// A conversion that cannot be made (OPS-7, OPS-8).
 inline constexpr std::string_view invalid_conversion = "convert.invalid";
+/// A sum or a difference of a tenor of business days and one of months and
+/// days (TEN-2).
+inline constexpr std::string_view mixed_units = "tenor.mixed_units";
 /// A source's `yield` after a negative duration (SOURCE-2).
 inline constexpr std::string_view negative_duration = "yield.negative_duration";
 /// A source's `yield` at a time that is not after the one before (SOURCE-3).

@@ -59,6 +59,9 @@ using civil_datetime = hgraph::CivilDateTime;
 /// `zoned_datetime` (TYPE-2): an instant, the zone it is resolved in, and
 /// that zone's offset at it.
 using zoned_datetime = hgraph::ZonedDateTime;
+/// `tenor` (TYPE-17): a count of months and a count of days, or a count of
+/// business days, hgraph's `Tenor` (tenors.h).
+using tenor = hgraph::Tenor;
 
 /// `list<T>` (TYPE-4): a `std::vector<T>` with a hash, so that hgraph can
 /// hold it as configuration (see the head of this file). It is a vector in
@@ -229,6 +232,8 @@ std::string type_name() {
         return "civil_datetime";
     } else if constexpr (std::is_same_v<T, zoned_datetime>) {
         return "zoned_datetime";
+    } else if constexpr (std::is_same_v<T, tenor>) {
+        return "tenor";
     } else if constexpr (detail::is_list<T>::value) {
         return "list<" + type_name<typename T::value_type>() + ">";
     } else if constexpr (detail::is_fixed_list<T>::value) {

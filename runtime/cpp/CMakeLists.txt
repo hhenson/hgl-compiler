@@ -47,6 +47,7 @@ add_library(hglrt SHARED
     src/host.cpp
     src/scalar.cpp
     src/temporal.cpp
+    src/tenors.cpp
     src/testing.cpp
     src/text.cpp
 )
@@ -118,6 +119,7 @@ if(BUILD_TESTING)
         tests/scalar_tests.cpp
         tests/sources_tests.cpp
         tests/temporal_tests.cpp
+        tests/tenor_tests.cpp
         tests/testing_tests.cpp
         tests/text_tests.cpp
         tests/traces_tests.cpp

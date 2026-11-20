@@ -105,6 +105,7 @@ the chapters' entries stay the hgraph target's.
 | An instant moved by a duration, and the duration between two: `datetime`, `civil_datetime`, a `date` as a `civil_datetime`, a `zoned_datetime` in its zone; `date + time`; two zoned datetimes equal by instant and zone, or as UTC | OPS-1, OPS-2, OPS-10, TYPE-2 | `temporal.h` | `temporal_tests.cpp` |
 | `str` concatenation and repetition | OPS-1 | `text.h` | `text_tests.cpp` |
 | Every `convert` of the scalars: those that cannot fail, and those that can under `invalid`, with `rounding` and `nan` | OPS-4, OPS-6, OPS-7, OPS-8 | `conversions.h` | `conversion_tests.cpp` |
+| A tenor, hgraph's `Tenor`: its arithmetic, count by count and checked; its order and `compare_`; its text; and the parts core's calendar candidates are written with, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-6, TEN-8, TEN-9 | `tenors.h` | `tenor_tests.cpp` |
 | `append`, `extend` | LIST-1, LIST-2, LIST-3 | `lists.h` | `capabilities_tests.cpp` |
 | `get`, `has`, `put` of the global store | CAP-6 | `capabilities.h` | `capabilities_tests.cpp` |
 | A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
