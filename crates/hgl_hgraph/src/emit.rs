@@ -25,17 +25,17 @@ use hgl_analyser::{
     Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
+use hgl_lower::canonical::canonical_argument;
 use hgl_lower::copies::{self, Copies, by_value, changed_in_place, may_hold, struct_in_place};
+use hgl_lower::instances::{self, Instances};
 use hgl_lower::types::inherited;
 
-use crate::instances::Instances;
 use crate::{codes, provides, python_module, test_function};
 
 mod types;
 use types::*;
 
 mod names;
-pub(crate) use names::canonical_argument;
 use names::*;
 
 mod annotate;
@@ -1111,8 +1111,8 @@ impl<'a> Emitter<'a> {
         // the key `"run.output"`". Core has `record` as HGL for any
         // type, so it is written for the type the entry publishes
         // (GEN-2).
-        let record = match crate::instances::run_result(program, run) {
-            Some(result) => match crate::instances::core_function(program, "record") {
+        let record = match instances::run_result(program, run) {
+            Some(result) => match instances::core_function(program, "record") {
                 Some(found) => {
                     self.called_name(found, &[GenericArgument::Type(result)], run.call.at)
                 }

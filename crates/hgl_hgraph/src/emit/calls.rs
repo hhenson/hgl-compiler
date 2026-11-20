@@ -1126,7 +1126,7 @@ impl<'a> Emitter<'a> {
             // (`run_wiring`), and of the type its trace is of otherwise.
             let own = signature.generics.is_empty();
             let (written, bound) = self.bound(function, signature, arguments, |_, value| {
-                let payload = crate::instances::trace_payload(&value.ty)?;
+                let payload = instances::trace_payload(&value.ty)?;
                 let parameter = arguments
                     .iter()
                     .find(|argument| std::ptr::eq(&argument.value, value))
@@ -1302,12 +1302,12 @@ impl<'a> Emitter<'a> {
     fn run_wired(&mut self, call: &Expr, ty: &Type) -> String {
         let at = call.at;
         let program = self.program;
-        let Some(wiring) = crate::instances::run_wiring(program, call, ty) else {
+        let Some(wiring) = instances::run_wiring(program, call, ty) else {
             self.unsupported(at, "this eval");
             return "{}, None".to_string();
         };
         let instance =
-            |emitter: &mut Self, function: &str, of: &Type| match crate::instances::core_function(
+            |emitter: &mut Self, function: &str, of: &Type| match instances::core_function(
                 program, function,
             ) {
                 Some(found) => emitter.called_name(found, &[GenericArgument::Type(of.clone())], at),

@@ -56,7 +56,6 @@
 
 mod emit;
 mod host;
-mod instances;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -271,7 +270,7 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
     // GEN-2: the instances of generic temporal declarations the program
     // asks for, found before any module is written: a call in one
     // module asks for an instance written in another.
-    let instances = instances::Instances::of(program);
+    let instances = hgl_lower::instances::Instances::of(program);
     for (index, module) in program.modules.iter().enumerate() {
         if module.path == Program::CORE {
             let mut written = emit::module(program, index, &instances, &mut unwritten_in_core);
