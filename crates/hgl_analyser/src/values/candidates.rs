@@ -1095,10 +1095,11 @@ pub(super) enum AtInstance<'a> {
     Untold,
 }
 
-/// A call of an operator, in the body of a generic declaration, whose
-/// candidate a generic parameter of that declaration selects: which
-/// candidates admit it is not told there, and each instance of the
-/// declaration selects it with its own types ([`Typer::select_per_instance`]).
+/// A call of an operator, in the body of a generic declaration, that a
+/// membership the declaration's `requires` states authorises: every
+/// member has a candidate for it, and each instance of the declaration
+/// selects its own with its types ([`Typer::select_per_instance`],
+/// hhenson/hgl_spec#144).
 #[derive(Debug, Clone)]
 pub(crate) struct Selecting {
     /// Where the call is written: the expression the body has for it,

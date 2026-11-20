@@ -255,11 +255,11 @@ pub struct Module {
     /// The module's `instantiate` items, each with the position of its
     /// file in `files`. They declare nothing, and name what they request.
     pub(crate) instantiations: Vec<(usize, SyntaxNode)>,
-    /// The calls in each declaration's body whose candidate a generic
-    /// parameter of the declaration selects, which each instance of it
-    /// selects for itself (GEN-3, GEN-5, GEN-6): one entry for each of
-    /// `declarations`, in the same order. The body has each as a call
-    /// with no callee ([`crate::hir::Callee::Unread`]);
+    /// The calls in each declaration's body that a membership its
+    /// `requires` states authorises, whose candidate each instance of
+    /// it selects for itself (hhenson/hgl_spec#144, GEN-5): one entry
+    /// for each of `declarations`, in the same order. The body has each
+    /// as a call with no callee ([`crate::hir::Callee::Unread`]);
     /// [`Program::instance`] gives the instance's.
     pub(crate) selecting: Vec<Vec<crate::values::Selecting>>,
 }
