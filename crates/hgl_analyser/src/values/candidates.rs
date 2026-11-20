@@ -366,6 +366,7 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            lifted: false,
         };
         self.finished_call(&kind, false);
         (kind, signature.result.clone().unwrap_or(Type::Unknown))

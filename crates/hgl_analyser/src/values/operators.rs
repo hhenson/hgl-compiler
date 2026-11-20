@@ -733,6 +733,7 @@ impl<'a> Typer<'a> {
             callee: Callee::Unread,
             arguments,
             form,
+            lifted: false,
         }
     }
 }

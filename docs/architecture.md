@@ -761,6 +761,10 @@ form. Every value in it is one of two things (FN-3, EXPR-3, EXPR-4):
 | The same with ordinary values alone | An ordinary value: the call is made while the graph is built |
 | A call of an operation the graph requires (GEN-7), given no connection | Not settled: a temporal candidate would make it a connection and a value candidate a value, and which it is is selected where the generic parameters are known. It is not judged where a constant is required |
 | A local | What its first value is; `hir::Local::category` says which of the three |
+| A symbol, `&&`, `\|\|` and `!` among them; a construction, a sequence, a result form, an element or a field; with a connection among its parts | A connection, as a call of its identity given one is |
+
+Each expression's is recorded on it (`hir::Expr::category`), and whether a
+call is lifted on the call.
 
 The types are the ones a value function has, so a symbol and a call
 select as they do there, with two differences (FN-4, GEN-5): a call
@@ -1529,11 +1533,17 @@ analysed program.
 
 The analyser exports what it works out and a target would otherwise
 work out again: which declarations are sources (`Module::is_source`,
-SOURCE-1), and an integration test's limit (`INTEGRATION_LIMIT`, TST-17).
-The hgraph target still decides two things the analyser decides too:
-whether an expression is a connection (`connects`, FN-3) and so which
-calls are lifted (FN-6). The two tables differ, on forms the hgraph
-target does not write in a graph, so neither is replaced yet.
+SOURCE-1), an integration test's limit (`INTEGRATION_LIMIT`, TST-17),
+whether each expression is a connection or an ordinary value
+(`hir::Expr::category`, FN-3), and whether each call is lifted (the
+`lifted` of `hir::ExprKind::Call`, FN-6). The last two are written on
+every expression once its body is read, from the one rule the typing
+pass reads by (`values::lifting::category`), and again on an instance's
+body (`Program::instance`), where each operation the declaration
+requires is the call of its candidate and what it gives is settled.
+A lifted call's arguments that are connections are its node's inputs,
+and the rest its configuration. The targets read them (compiler issue
+270).
 
 ## Transpilers
 

@@ -22,7 +22,7 @@ use hgl_parser::{SyntaxKind, SyntaxNode};
 
 use super::fit::{not_null, nullable, window_value};
 use super::{BOOL, Fact, Typer};
-use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LabelValue, LocalId};
+use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LabelValue, LocalId, ValueCategory};
 use crate::syntax::tokens;
 use crate::types::{Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
@@ -378,6 +378,7 @@ impl Typer<'_> {
                     },
                     ty,
                     at,
+                    category: ValueCategory::Unsettled,
                 }
             }
             Some(Child::Named(path)) => {

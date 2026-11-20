@@ -483,7 +483,12 @@ impl<'a> Typer<'a> {
         // The call is held to what any call in a graph is: a `const`
         // parameter is given no connection (FN-3).
         self.constants_of(&kind);
-        let call = Expr { kind, ty, at };
+        let call = Expr {
+            kind,
+            ty,
+            at,
+            category: ValueCategory::Unsettled,
+        };
         // "It names a callable": a struct's name constructs a value,
         // and is no call that a boundary covers.
         if matches!(call.kind, ExprKind::Construct { .. }) {

@@ -196,7 +196,15 @@ impl<'a> Typer<'a> {
             Outcome::Nothing | Outcome::Returns | Outcome::Null => Type::Unknown,
         };
         let kind = ExprKind::Block { statements, value };
-        (Expr { kind, ty, at }, outcome)
+        (
+            Expr {
+                kind,
+                ty,
+                at,
+                category: ValueCategory::Unsettled,
+            },
+            outcome,
+        )
     }
 
     /// CTRL-10: "In a value function the condition of an `if` or a
@@ -282,6 +290,7 @@ impl<'a> Typer<'a> {
                 kind: ExprKind::Unread,
                 ty: Type::Unknown,
                 at,
+                category: ValueCategory::Unsettled,
             };
             return (unread, Outcome::Value(Type::Unknown));
         };
@@ -441,7 +450,15 @@ impl<'a> Typer<'a> {
             then: Box::new(then.value),
             otherwise: other.map(|other| Box::new(other.value)),
         };
-        (Expr { kind, ty, at }, outcome)
+        (
+            Expr {
+                kind,
+                ty,
+                at,
+                category: ValueCategory::Unsettled,
+            },
+            outcome,
+        )
     }
 
     /// The one type the values of two branches have, with nothing
@@ -944,6 +961,7 @@ fn widened_block(branch: &Expr) -> Option<Expr> {
         kind: ExprKind::Widen(value.clone()),
         ty: float.clone(),
         at: value.at,
+        category: ValueCategory::Unsettled,
     };
     Some(Expr {
         kind: ExprKind::Block {
@@ -952,6 +970,7 @@ fn widened_block(branch: &Expr) -> Option<Expr> {
         },
         ty: float,
         at: branch.at,
+        category: ValueCategory::Unsettled,
     })
 }
 

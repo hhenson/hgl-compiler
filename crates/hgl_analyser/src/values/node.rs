@@ -10,7 +10,9 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::endpoints::endpoint_argument;
 use super::fit::{accepts_float, is_integer_literal, open};
 use super::{Fact, Typer, children};
-use crate::hir::{self, Body, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt};
+use crate::hir::{
+    self, Body, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt, ValueCategory,
+};
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{child, tokens};
 use crate::types::Type;
@@ -723,6 +725,7 @@ impl<'a> Typer<'a> {
                     kind: ExprKind::ChildEndpointOf(Box::new(child)),
                     ty,
                     at,
+                    category: ValueCategory::Unsettled,
                 }
             }),
             None => (named.kind() == SyntaxKind::NameExpr)
@@ -733,6 +736,7 @@ impl<'a> Typer<'a> {
                     kind: ExprKind::EndpointOf(local),
                     ty: self.locals[local].ty.omission_removed().clone(),
                     at,
+                    category: ValueCategory::Unsettled,
                 }),
         };
         if let Some(endpoint) = endpoint {
@@ -765,6 +769,7 @@ impl<'a> Typer<'a> {
             kind: ExprKind::Unread,
             ty: Type::Unknown,
             at,
+            category: ValueCategory::Unsettled,
         }
     }
 

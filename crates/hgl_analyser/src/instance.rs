@@ -35,8 +35,8 @@
 use hgl_diagnostics::Location;
 
 use crate::declared::substitute_within;
-use crate::hir::{Answer, Body, Callee, Expr, ExprKind, walk_statements_mut};
-use crate::program::Program;
+use crate::hir::{Answer, Body, Callee, Expr, ExprKind, ValueCategory, walk_statements_mut};
+use crate::program::{Phase, Program};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
 
 /// Where each generic parameter of a declaration is declared, with what
@@ -57,7 +57,10 @@ impl Program {
     /// own generic parameters, and requirements that body states
     /// ([`Answer::Stated`]). Those are given as the body's own instance
     /// has them: a call in the body this returns names no generic
-    /// parameter of the declaration, and no requirement of it.
+    /// parameter of the declaration, and no requirement of it. What each
+    /// expression is and which calls are lifted are recorded again for
+    /// the instance ([`Expr::category`]): the generic body could not say
+    /// what an operation it requires gives (GEN-7).
     pub fn instance(
         &self,
         module: usize,
@@ -109,6 +112,11 @@ impl Program {
             &mut body,
             &|call| call.walk_mut(&mut |inner| self.place(inner, &map, requirements)),
         );
+        // FN-3, FN-6: what each expression is, and which calls are
+        // lifted, with the candidates in place, which the generic body
+        // could not say of an operation it requires.
+        let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
+        crate::values::record(self, &mut body, graph);
         Some((taken, body))
     }
 
@@ -155,6 +163,7 @@ impl Program {
                 kind: self.constant(value, ty, at)?,
                 ty: ty.clone(),
                 at,
+                category: ValueCategory::Unsettled,
             })
         };
         match value {
