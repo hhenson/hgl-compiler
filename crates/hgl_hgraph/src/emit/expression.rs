@@ -235,6 +235,10 @@ impl Emitter<'_> {
             ExprKind::CheckedChild { read, result } => {
                 self.checked_child(function, read, *result, value.at)
             }
+            // TYPE-11: a read of a window's value "before the window is
+            // `all_valid` ... gives an `err` of an `error` with that code
+            // where its place takes a `result<list<V>, error>`" (ERR-14).
+            ExprKind::CheckedWindow(read) => self.window_result(function, read, value.at),
             // TIME-9: `scheduled()` as a bool, where it sets no
             // subscription (TIME-3: "Selectors under negation or
             // disjunction leave the default in place"): what woke the
@@ -1381,17 +1385,10 @@ impl Emitter<'_> {
         };
         // A window's value is read as the `list<V>` it holds, and fails
         // where the window is not all valid (TYPE-11, `window_value`).
-        // ERR-14 gives the `err` of a child that is not valid, and does
-        // not say what a window that is valid and not all valid gives
-        // where the place takes a `result`.
+        // ERR-14: so does "a read of a window's value before it is
+        // `all_valid`" take its form from its place: where it takes a
+        // `result`, `checked_child_result` gives that failure's `err`.
         let value = if matches!(read.ty, Type::RollingWindow { .. }) {
-            if result {
-                self.unsupported(
-                    at,
-                    "a window's value read where its place takes a `result` (ERR-14)",
-                );
-                return "None".to_string();
-            }
             self.window_value("_port")
         } else {
             self.part_value(&read.ty, "_port", at)
@@ -1451,6 +1448,26 @@ impl Emitter<'_> {
     pub(super) fn window_value(&mut self, port: &str) -> String {
         self.natives = true;
         format!("_core.window_values({port})")
+    }
+
+    /// The read `read` of a window's value where its place takes
+    /// `result<list<V>, error>` (TYPE-11, ERR-14), written at `at`: the
+    /// window an input, `out` or a child of either named when the program
+    /// is compiled, read through its endpoint. The provider gives `ok`
+    /// of the list it holds, or, where it is not all valid, `err` of an
+    /// `error` whose code is `value.unset_read`
+    /// (`_core.window_result`).
+    fn window_result(&mut self, function: &Function, read: &Expr, at: Location) -> String {
+        if matches!(read.ty, Type::RollingWindow { .. }) {
+            self.unsupported(read.at, GENERIC_WINDOW_READ);
+            return "None".to_string();
+        }
+        let Some(port) = self.child_port(function, read) else {
+            self.unsupported(at, "this read of a window");
+            return "None".to_string();
+        };
+        self.natives = true;
+        format!("_core.window_result({port})")
     }
 
     /// The read `value` of a window, an input, `out` or a child of

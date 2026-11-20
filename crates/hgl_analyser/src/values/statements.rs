@@ -602,6 +602,38 @@ impl<'a> Typer<'a> {
                 "`out` is written only in a `when`, and this is `stop`".to_string(),
             );
         }
+        // FN-16: "A `ref` result designates one endpoint whole: an
+        // assignment to a part of its `out`, `out.bid = x` or `out[0] =
+        // x`, rejects. Proposed: that assignment rejects with the code
+        // `binding.immutable`." The place is named and not read: `out`
+        // of a `ref` result is an endpoint, and a read of it is
+        // `ref.read`, which is not reported again here (ERR-9). `stop`
+        // and `start` write no `out` at all (`out.lifecycle`).
+        if is_out && self.signature.reference && self.hook == Some(Hook::When) {
+            self.diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::BINDING_IMMUTABLE,
+                    self.at(place),
+                    "`out` of a `ref` result designates one endpoint whole, and no part of it \
+                     is assigned"
+                        .to_string(),
+                    "FN-16",
+                )
+                .with_note("`out = items[idx]` or `return items[idx]` designates an endpoint"),
+            );
+            let before = self.naming.replace(self.at(&root));
+            let target = self.expression(place, None);
+            self.naming = before;
+            // The value is still read, for what it reports itself.
+            let value = self.expression(value, Some(&target.ty));
+            return Stmt::AssignPlace {
+                place: target,
+                operator,
+                value,
+                at,
+            };
+        }
         let writable = is_out
             || matches!(
                 self.locals[local].kind,

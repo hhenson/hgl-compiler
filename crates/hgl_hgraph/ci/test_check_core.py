@@ -91,3 +91,15 @@ class CoreGateTest(unittest.TestCase):
             failed + self.not_rejected, counts, code=1, listed=set()))
         self.assertTrue(self.rejection_problems(
             "", "rejection cases: 0 passed, 0 failed\n", code=2))
+
+    def test_a_listed_rejection_of_a_const_fn_is_found_by_its_name(self):
+        # A row names the declaration as its source writes it, `const fn
+        # climbed`: the name is the last word.
+        row = "FAILED   rejection   spec/hgl_core/tests/conformance/rejections/instances.hgl:21 const fn climbed\n"
+        detail = (
+            "    expected type/generic.instance_limit on line 23 of spec/hgl_core/tests/conformance/"
+            "rejections/instances.hgl: not reported\n"
+        )
+        counts = "rejection cases: 0 passed, 1 failed\n"
+        listed = {"conformance::rejections/instances.hgl::climbed"}
+        self.assertFalse(self.rejection_problems(row + detail, counts, code=1, listed=listed))

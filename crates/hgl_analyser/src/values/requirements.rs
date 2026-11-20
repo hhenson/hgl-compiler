@@ -1189,6 +1189,58 @@ use crate::INSTANCES;
 /// past it is not made, and is reported as [`INSTANCES`] is.
 const ARGUMENTS: usize = 1 << 16;
 
+/// How deep a type an instance's generic arguments may hold: `list<T>`
+/// in `nest<T>` nests a list in a list at each instance. One past it is
+/// not made, and is reported as [`INSTANCES`] is: the instances of a
+/// type that grows so never end (GEN-13), and a type that deep is not
+/// read further.
+const NESTING: usize = 256;
+
+/// How deep `ty` nests one type in another: one for a type that holds
+/// none. It is counted with a list of what is still to look at, and not
+/// by a function calling itself, so a type of any depth is counted.
+fn nesting<'t>(ty: &'t Type) -> usize {
+    let mut deepest = 0;
+    let mut waiting: Vec<(&'t Type, usize)> = vec![(ty, 1)];
+    while let Some((ty, depth)) = waiting.pop() {
+        deepest = deepest.max(depth);
+        let mut inside = |part: &'t Type| waiting.push((part, depth + 1));
+        match ty {
+            Type::Named { arguments, .. } => {
+                for argument in arguments {
+                    if let Argument::Type(argument) = argument {
+                        inside(argument);
+                    }
+                }
+            }
+            Type::Tuple(elements) => elements.iter().for_each(&mut inside),
+            Type::List { element: inner, .. }
+            | Type::Set(inner)
+            | Type::Endpoint(inner)
+            | Type::Atomic(inner)
+            | Type::Delta(inner)
+            | Type::Trace { cell: inner, .. }
+            | Type::Nullable(inner)
+            | Type::RollingWindow { value: inner, .. } => inside(inner),
+            Type::Dict { key, value } => {
+                inside(key);
+                inside(value);
+            }
+            Type::Result { value, error } => {
+                inside(value);
+                inside(error);
+            }
+            Type::Scalar(_)
+            | Type::Parameter { .. }
+            | Type::Signal
+            | Type::Error
+            | Type::ErrorContext
+            | Type::Unknown => {}
+        }
+    }
+    deepest
+}
+
 /// Tells the `requires` of each instance a call makes.
 ///
 /// GEN-3: "A call of a function whose `requires` does not hold with the
@@ -1287,8 +1339,12 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     // The declarations whose calls reach a `requires` with what they
     // are given: an instance of any other makes none to tell.
     // A body that works out a generic argument from its own parameters
-    // is followed for the instances it makes, whose evaluation may fail.
-    let mut reaching: std::collections::HashSet<(usize, usize)> = computing;
+    // is followed for the instances it makes, whose evaluation may fail;
+    // and every body that passes its parameters on, whose instances may
+    // never end (GEN-13: "Where the instances of one declaration never
+    // end when the program is compiled, the program rejects").
+    let mut reaching: std::collections::HashSet<(usize, usize)> =
+        passed.keys().copied().chain(computing).collect();
     loop {
         let more: Vec<(usize, usize)> = passed
             .iter()
@@ -1440,6 +1496,13 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 at,
             } in calls
             {
+                let deep = generics.iter().any(
+                    |argument| matches!(argument, Argument::Type(ty) if nesting(ty) > NESTING),
+                );
+                if deep {
+                    exhausted = true;
+                    break;
+                }
                 let key = instance_key(callee, &generics, &answers);
                 if key.len() > ARGUMENTS {
                     exhausted = true;
@@ -1634,17 +1697,20 @@ fn past_the_limit(
                 && earlier.primary.span.start == at.span.start
         });
         if !rejected {
-            diagnostics.emit(crate::local_error(
-                Category::Constraint,
-                codes::local::INSTANCE_LIMIT,
+            // GEN-13 catalogues the code, proposed, for instances past
+            // the implementation's bound.
+            diagnostics.emit(crate::error(
+                Category::Type,
+                codes::INSTANCE_LIMIT,
                 at,
                 format!(
                     "the instances of `{name}` this call makes do not end within the \
                      {INSTANCES} this compiler follows, with generic arguments no longer than \
-                     {ARGUMENTS} characters written out: the `requires` and the generic \
-                     arguments of those past them are not told"
+                     {ARGUMENTS} characters written out and types in them no deeper than \
+                     {NESTING}: the `requires` and the generic arguments of those past them are \
+                     not told"
                 ),
-                "GEN-3",
+                "GEN-13",
             ));
         }
     }

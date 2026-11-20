@@ -71,10 +71,11 @@ fn ref_marks(program: &Program, diagnostics: &mut Diagnostics) {
                 }
                 _ => None,
             };
+            let file = module.files[declaration.file].file;
             let Some(what) = what else {
+                signal_marks(module, index, file, diagnostics);
                 continue;
             };
-            let file = module.files[declaration.file].file;
             for mark in marks {
                 diagnostics.emit(
                     error(
@@ -94,6 +95,49 @@ fn ref_marks(program: &Program, diagnostics: &mut Diagnostics) {
                 );
             }
         }
+    }
+}
+
+/// FN-16: "A `signal` parameter is not marked either, and a mark on one
+/// rejects: a signal has no payload to designate (TYPE-12) ...
+/// Proposed: ... a mark on what is no node, or on a `signal` parameter,
+/// with `ref.position`." TYPE-12: a `signal` input "is not marked `ref`
+/// (FN-16)". Each such mark of the declaration at `index` of `module`,
+/// one that may take a mark, is reported at its `ref`; a `signal?` that
+/// may be left out is a `signal` parameter too.
+fn signal_marks(
+    module: &crate::program::Module,
+    index: usize,
+    file: FileId,
+    diagnostics: &mut Diagnostics,
+) {
+    let Some(Detail::Callable(signature)) = module.details.get(index) else {
+        return;
+    };
+    let written = crate::read::parameters(&module.declarations[index].syntax);
+    for (parameter, node) in signature.parameters.iter().zip(&written) {
+        if !parameter.reference || *parameter.ty.omission_removed() != Type::Signal {
+            continue;
+        }
+        let Some(mark) =
+            crate::syntax::tokens(node).find(|token| token.kind() == hgl_parser::SyntaxKind::KwRef)
+        else {
+            continue;
+        };
+        diagnostics.emit(
+            error(
+                Category::FunctionKind,
+                codes::REF_POSITION,
+                Location::new(file, mark.span()),
+                format!(
+                    "`{}` is a `signal`, which has no payload to designate, and is not marked \
+                     `ref`",
+                    parameter.name
+                ),
+                "FN-16",
+            )
+            .with_note("a `signal` parameter is given a connection as it is, and ticks"),
+        );
     }
 }
 

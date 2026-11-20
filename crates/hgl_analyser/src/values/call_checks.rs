@@ -62,8 +62,10 @@ impl<'a> Typer<'a> {
     /// 0s)` there asks for a wake at the start, the node's first
     /// evaluation. A duration that is not admitted, a negative one in
     /// `start` included, rejects where the compiler sees its value, a
-    /// literal or a constant (UNIT-13), and elsewhere fails the call as
-    /// the program runs." Core's CAP-5 holds the alarm to the same.
+    /// literal or a constant (UNIT-13), with `schedule.duration_bounds`,
+    /// and elsewhere fails the call as the program runs, with
+    /// `schedule.non_positive_duration`." Core's CAP-5 holds the alarm to
+    /// the same.
     ///
     /// A wake is asked by a call of one of core's candidates of
     /// `schedule`, given the scheduler or the alarm. The duration the
@@ -143,7 +145,7 @@ impl<'a> Typer<'a> {
         self.diagnostics.emit(
             error(
                 Category::Type,
-                codes::SCHEDULE_NON_POSITIVE_DURATION,
+                codes::SCHEDULE_DURATION_BOUNDS,
                 given.value.at,
                 message.to_string(),
                 "TIME-8",

@@ -55,6 +55,7 @@ transpiler: partial
 - `scheduled()` under a negation or in a disjunction sets nothing: the handler keeps the defaults, is run by an input's wake and not by a wake of the scheduler or alarm alone, and requires every input valid
 - In a node that injects neither, a handler that subscribes to no input is never run, and not written: a node no handler of which subscribes to an input is `active=()`, and one with no input is given one that never wakes it
 - `modified([])` read as a bool is `True` in the body of a handler whose header selects it, at a wake that lands with an input's tick too; elsewhere, in another body or under a negation or a disjunction, it is that no temporal input is modified as `modified(input)` asks it, `(not ((a.modified and a.valid) or ...))`, so an invalidation is none and a `ref` parameter is modified where its designation changed, and `True` in a node with no input
+- An input that counts as modified as its branch starts (CTRL-2) wakes its node, satisfies a `modified` selector and makes `modified([])` false, as hgraph samples an input it binds in that cycle
 - Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])` in `start` or `stop`, which are no cycle of the node, and is reported; `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
 
 ## TIME-4
@@ -65,6 +66,8 @@ analyser: partial
 - A child's guard is `all_valid` of its collection or `valid` of the child as the read names it, in a body or as a header's test; a child's `valid` in a header names no input, and the default admission stands with it
 - An endpoint argument is read through its grouping (EXPR-1) by every check: `valid((quote.bid))` is `valid(quote.bid)`
 - The guard of a whole read of a struct, a tuple or a fixed list, a child among them, is `all_valid` of what it reads (TIME-1)
+- A test of `modified(input)` guards what `valid(input)` does, in a header's top-level conjunct, `when modified(a) && valid([])`, and in a body, in `stop` too, and `modified` of a child as the read names it guards that child: "An input is not modified without being valid"; `modified(a, b)` and `modified()` guard none, nor does a saved bool
+- Not settled: whether `modified` of a collection admits a read of its child, which `valid` of it does not; such a read is left rejected (`payload.unguarded`)
 - Left: aggregate subscriptions; node-wide validity
 
 transpiler: partial
@@ -72,6 +75,7 @@ transpiler: partial
 - hgraph: the node subscribes to the union of handler subscriptions and requires the validity common to all handlers
 - Each handler checks any additional validity requirements
 - On an active invalidation, `when valid([])` admits the wake, and a modification guard reads each selected input's current publication flags
+- A read under a test of `modified(input)` is the input's value: the test is hgraph's `(a.modified and a.valid)`, and of a child `_core.child_modified`, so an invalidation is no modification and admits no read
 - Left: `all_valid` and structural inputs
 
 ## TIME-5
@@ -117,7 +121,7 @@ transpiler: partial
 - A whole dictionary published removes each key it has not (`_core.dict_replaced`); a whole empty dictionary, and a whole set, empty or the same again, tick where they change nothing, as hgraph's do not (TIME-7: "A value published whole, the same again or empty, is no delta, and ticks as any publication does"): the set is cleared first through its own port (`_core.set_replaced`), from a `return`, `out =`, a part of `out`, a lifted function's result, and a struct or a tuple published whole, and a source's and a replay's are cleared alike
 - A delta that names no change, `delta<set<i64>>()`, `delta<dict<str, i64>>()` or `delta<list<i64>>()`, ticks only where it makes the value valid and empty, never published or invalidated, and is otherwise no tick: it marks nothing `modified`, wakes no subscriber and is recorded by no trace; at the top, within a collection, and beside an unsized list in a struct or a tuple (END-3)
 - Such a delta of a struct, a tuple or a fixed list, `delta<Quote>()`, `(null, null)`, `delta<list<i64, 2>>()`, sets no child and is never a tick, a dictionary's value among them, at any depth, where hgraph's `TSD` ticks for one; it adds no key the dictionary does not hold (`_core._pruned`, one place for every nesting)
-- So, as TIME-7 proposes, is one whose every entry is an ignored removal
+- So, as TIME-7 has it, agreed, is one whose every entry is an ignored removal: core's three cases for it pass
 - Not settled: a struct with no field, which has no child to be valid (TIME-9), is published as hgraph's `TS` of its class, and `delta<Empty>()` ticks and makes it valid, as `Empty()` does
 - An unsized list's `out`, hgraph 0.9.5's unbounded `TSL`: a whole value replaces what it held, a delta's size is counted from what it holds, `out[i] = v` is `_core.list_child(_output, i)`, which fails past the list, and two writes in one evaluation publish their sum (END-5); a whole value that changes nothing hgraph sees, an empty list first among them, still ticks
 - A part of `out` read is its own port, a fixed list's and an unsized list's position among them
@@ -131,7 +135,7 @@ analyser: partial
 - `inject` names one of the listed capabilities and binds each but `out` to a local of the type core declares for it; `alarm` and `scheduler` in one node are rejected (`inject.alarm_and_scheduler`)
 - A capability type written other than as the whole type of a parameter of a `const fn` or a native value function, and a capability that is the value of a `state` or `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published, is rejected (`capability.as_value`); a `let` and an argument of a parameter of its type are uses, one given to a parameter written as a generic parameter or `any` is rejected (hhenson/hgl_spec#73), and a property is read with its type (NATIVE-6)
 - A capture by an anonymous function is reported: of the injected name by the resolver (`name.captured`, FN-14), and of a `let` it is bound to or a parameter of its type here
-- A wake asked of the scheduler or the alarm, a call of core's `schedule`, with a duration the compiler sees, a literal, a constant or a constant expression of them, that is not more than zero rejects (`schedule.non_positive_duration`, proposed): in `start` a negative one, and in a `when` or `stop` zero too; in a value function given the capability a negative one, and a zero is left to the target, since the rule does not say whether a call there is in `start`
+- A wake asked of the scheduler or the alarm, a call of core's `schedule`, with a duration the compiler sees, a literal, a constant or a constant expression of them, that is not more than zero rejects (`schedule.duration_bounds`): in `start` a negative one, and in a `when` or `stop` zero too; in a value function given the capability a negative one, and a zero is left to the target, since the rule does not say whether a call there is in `start`
 
 transpiler: partial
 

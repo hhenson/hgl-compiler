@@ -212,6 +212,32 @@ impl Typer<'_> {
         }
     }
 
+    /// True where `value` is the read, in a hook, of a window's value:
+    /// a temporal input or `out` whose type is a window, or a child of
+    /// either named when the program is compiled that is one, each read
+    /// as the `list<V>` it holds (TYPE-11). One known only when it runs
+    /// is a [`ExprKind::CheckedChild`].
+    pub(super) fn window_read(&self, value: &Expr) -> bool {
+        if !self.reads_children() {
+            return false;
+        }
+        match &value.kind {
+            ExprKind::Local(local) => {
+                (self.is_temporal_input(*local) || Some(*local) == self.out)
+                    && matches!(
+                        self.locals[*local].ty.omission_removed(),
+                        Type::RollingWindow { .. }
+                    )
+            }
+            ExprKind::Field { .. } | ExprKind::Index { .. } => {
+                self.reads_window(value)
+                    && (self.rooted_at_out(value)
+                        || matches!(self.child_of(value), Some(Child::Named(_))))
+            }
+            _ => false,
+        }
+    }
+
     /// True where `value` is `out` or a child of it, through fields and
     /// indices (TIME-7).
     fn rooted_at_out(&self, value: &Expr) -> bool {

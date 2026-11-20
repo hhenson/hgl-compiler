@@ -158,6 +158,7 @@ analyser: partial
 
 - Size kind and bounds (`rolling_window.size_kind`, `rolling_window.size_bounds`) of sizes read by the one reader (`constant`): literals, generic value parameters, constants of a module and constant expressions of those, a duration and an `i64` multiplied in either order among them; a size of a type other than `i64` or `duration` is of the wrong kind; an omitted minimum is the maximum in identity
 - `all_valid` takes a window (TIME-9), and a window's value read in a hook, of an input, of `out` or of a child of either, and given to a value function in composition, is a `list<V>` (FN-12, END-9); that list indexed is no child (TIME-9)
+- Read where the place takes a `result<list<V>, error>`, returned, bound or given, it is of that result (`CheckedWindow`, or `CheckedChild` where it is a child known when the program runs), as ERR-14 has it
 - Left: a size computed by a call, or from a generic parameter, whose kind and bounds are not checked
 
 transpiler: partial
@@ -167,7 +168,8 @@ transpiler: partial
 - A window within a struct, a tuple, a fixed list or a dictionary is that one's child, wired by its port in a graph, and that value's validity is its children's
 - A window is valid at its first value and all valid at its minimum, of ticks or of its arrivals' span, the `TSW`'s own; a value leaves a window of a duration only as another arrives, and its exit is no tick; a minimum of `0s` is written as the maximum, which hgraph 0.9.5's `TSW` reads as zero
 - A window's value, of an input, of `out`, of a child where it is admitted or checked when it runs, in a `when` or `stop`, and given to a lifted helper, is the `list<V>` it holds, oldest first (`_core.window_values`), which fails with `value.unset_read` before the window is all valid, where hgraph 0.9.5 reads what it holds
-- Left, reported: the value of a window that a generic type parameter stands for, which the body, checked once (GEN-7), reads as a `T`; a value that holds a window read whole; a window child's value where a `result` is expected, which ERR-14 does not say; a window given to a lifted parameter with a default, which FN-11 does not say; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection
+- Where its place takes a `result<list<V>, error>` it is `ok` of that list, or before the window is all valid `err` of an `error` coded `value.unset_read` (`_core.window_result`, and `_core.checked_child_result` of a child known when it runs); given to a lifted parameter with a default, FN-11's entry says what binds
+- Left, reported: the value of a window that a generic type parameter stands for, which the body, checked once (GEN-7), reads as a `T`; a value that holds a window read whole; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection
 
 ## TYPE-12
 
@@ -178,6 +180,7 @@ parser: done
 analyser: done
 
 - `ref` is no type but a mark of a node's parameter and result, whose type is the T after it (FN-16); a graph gives a `ref` parameter of T a connection of T
+- A `signal` parameter marked `ref` is `ref.position`, a code whose row is proposed (FN-16)
 - `rolling_window`, `atomic` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)
 - A `signal` takes no default but `null` (`type.mismatch`), and a hook gives it to an endpoint operation and reads it nowhere else (`type.not_ordinary`)
 

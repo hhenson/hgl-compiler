@@ -360,15 +360,19 @@ fn a_constant_in_a_requires_is_read_by_its_name() {
     );
 }
 
-/// No rule pins a program whose instances never end, so the instances
-/// of one declaration that one call makes are followed up to one bound,
-/// `hgl_analyser::INSTANCES`, which the hgraph target writes no more than
-/// either. A call that makes exactly that many of one is followed whole,
-/// each once, and so is one that makes that many of each of two; one
-/// that makes one more of one is the local `generic.instance_limit`,
-/// which says that its instances do not end within the bound.
-/// `climb<N + 1>` in `climb<N>` ends when the program runs, and every
-/// instance's `requires` holds, but its instances do not end.
+/// GEN-13: "Where the instances of one declaration never end when the
+/// program is compiled, the program rejects, whatever a run of it would
+/// do: an implementation has a bound on the instances of one
+/// declaration, and rejects the program where they pass it. Proposed: the
+/// code `generic.instance_limit`, at the call that makes the first of
+/// them." The bound is `hgl_analyser::INSTANCES`, which the hgraph target
+/// writes no more than either. A call that makes exactly that many of one
+/// declaration is followed whole, each once, and so is one that makes
+/// that many of each of two; one that makes one more of one rejects, and
+/// says that its instances do not end within the bound. `climb<N + 1>` in
+/// `climb<N>` ends when the program runs, but its instances do not; nor
+/// do those of `nest<list<T>>` in `nest<T>`, a type that grows, with no
+/// `requires` anywhere.
 #[test]
 fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
     assert_eq!(hgl_analyser::INSTANCES, 4096);
@@ -400,7 +404,7 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
     let past = module(&turning(hgl_analyser::INSTANCES + 1));
     assert_eq!(
         past.summary(),
-        ["m.hgl:5:24 local:constraint/generic.instance_limit GEN-3"]
+        ["m.hgl:5:24 type/generic.instance_limit GEN-13"]
     );
     let climb = module(concat!(
         "const fn small<const K: i64>(v: i64) -> i64 requires !(K == 1000000) => v + K\n",
@@ -410,11 +414,22 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
     ));
     assert_eq!(
         climb.summary(),
-        ["m.hgl:5:24 local:constraint/generic.instance_limit GEN-3"]
+        ["m.hgl:5:24 type/generic.instance_limit GEN-13"]
     );
     let message = &climb.findings[0].message;
     assert!(
         message.contains("instances of `climb` this call makes do not end within the 4096"),
         "{message}"
+    );
+    let nest = module(concat!(
+        "const fn nest<T>(x: i64, v: T) -> i64 {\n",
+        "    if x <= 0 { return 0 }\n",
+        "    return nest<list<T>>(x - 1, [v])\n",
+        "}\n",
+        "const fn a() -> i64 => nest(3, 1)\n",
+    ));
+    assert_eq!(
+        nest.summary(),
+        ["m.hgl:6:24 type/generic.instance_limit GEN-13"]
     );
 }

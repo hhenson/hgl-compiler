@@ -666,31 +666,39 @@ impl<'a> Emitter<'a> {
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let python = name(&parameter.name);
             match bound.get(index).and_then(Option::as_ref) {
-                // FN-12: "A window is passed only where it is `all_valid`:
-                // its value is not read before (TYPE-11)", and TYPE-11:
-                // "That value ... given to a lifted helper (FN-12), is a
-                // `list<V>` of the values held, oldest first". Core's
-                // lifting table: a window that is not all valid is "No
-                // invocation". The node requires it valid, as hgraph's
-                // `valid=` does, and invokes the helper where it is all
-                // valid. FN-11 binds a parameter's default or null where
-                // its input is not valid, and does not say what a window
-                // that is valid and not all valid binds: that is
-                // reported.
+                // FN-12: "A window is passed only where it is `all_valid`,
+                // whatever the parameter's default (FN-11): its value is
+                // not read before (TYPE-11)", and TYPE-11: "That value
+                // ... given to a lifted helper (FN-12), is a `list<V>` of
+                // the values held, oldest first". Core's lifting table: a
+                // window that is not all valid is "No invocation". The
+                // node requires it valid, as hgraph's `valid=` does, and
+                // invokes the helper where it is all valid.
+                //
+                // FN-11: a parameter's default, or the null of one that
+                // admits it, binds where the input is not valid, and "a
+                // window is supplied only where it is `all_valid` as
+                // well, whatever its default or null contract (FN-12):
+                // one that is valid and not all valid binds no fallback,
+                // its default included, and the helper is not invoked".
                 Some(Bound::Input(ty)) if matches!(ty, Type::RollingWindow { .. }) => {
                     inputs += 1;
                     let annotation = self.annotation_or_object(ty, true, at);
                     parameters.push(format!("{python}: {annotation}"));
-                    if parameter.has_default || matches!(parameter.ty, Type::Nullable(_)) {
-                        self.unsupported(
-                            at,
-                            "a window given to a lifted helper's parameter that has a default (FN-11)",
-                        );
-                    }
                     let read = self.window_value(&python);
-                    passed.push(format!("{python}={read}"));
-                    admitted.push(format!("{python}.all_valid"));
-                    required.push(python);
+                    match self.left_out(target, index, parameter) {
+                        Some(fallback) => {
+                            admitted.push(format!("(not {python}.valid or {python}.all_valid)"));
+                            passed.push(format!(
+                                "{python}=({read} if {python}.valid else {fallback})"
+                            ));
+                        }
+                        None => {
+                            passed.push(format!("{python}={read}"));
+                            admitted.push(format!("{python}.all_valid"));
+                            required.push(python);
+                        }
+                    }
                 }
                 Some(Bound::Input(ty)) => {
                     inputs += 1;

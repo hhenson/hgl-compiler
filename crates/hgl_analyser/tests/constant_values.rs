@@ -1187,7 +1187,7 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
 /// `requires`, or a generic argument worked out from the body's own
 /// parameters, whose evaluation may fail there (ERR-9), and no further
 /// than this compiler follows: what is past that is not told, which is
-/// reported (local `generic.instance_limit`) and not taken to hold
+/// reported (`generic.instance_limit`, proposed in GEN-13) and not taken to hold
 /// (GEN-3). Two calls of itself at each level, with new arguments each
 /// time, make instances without end.
 #[test]

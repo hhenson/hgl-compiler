@@ -867,7 +867,8 @@ struct Proofs<'p> {
 ///
 /// ERR-12: a binding "tested directly against null": `value != null`,
 /// `value == null`, with the `null` on either side. TIME-4: "A guard is
-/// a test of `valid(input)`, on the input by its name". ERR-3: "Track
+/// a test of `valid(input)` or of `modified(input)`, on the input by its
+/// name". ERR-3: "Track
 /// negation, short-circuit paths". A test of anything else, a field or
 /// a call, proves nothing.
 fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>, Vec<Fact>) {
@@ -908,15 +909,38 @@ fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>
             }
             (facts, Vec::new())
         }
+        // TIME-4: "A guard is a test of `valid(input)` or of
+        // `modified(input)`, on the input by its name ... An input is
+        // not modified without being valid, so `modified` of it guards
+        // what `valid` of it does; `modified(a, b)`, which holds where
+        // either is, guards neither." Nor does `modified()`, of every
+        // input, or `modified([])`, of none.
+        ExprKind::Endpoint {
+            operation: EndpointOperation::Modified,
+            inputs: Some(named),
+        } => match named.as_slice() {
+            [input] => (vec![Fact::Valid(*input)], Vec::new()),
+            _ => (Vec::new(), Vec::new()),
+        },
         // TIME-4: "A child's guard is a test of `all_valid` of its
-        // input, or of `valid` of the child as the read names it,
-        // `valid(parts[1])` for `parts[1]`". One known only when the
+        // input, or of `valid` or `modified` of the child as the read
+        // names it, `valid(parts[1])` for `parts[1]`". `modified` of it
+        // proves what `valid` of it does. One known only when the
         // program runs proves nothing here.
         ExprKind::ChildEndpoint {
-            operation: operation @ (EndpointOperation::Valid | EndpointOperation::AllValid),
+            operation:
+                operation @ (EndpointOperation::Valid
+                | EndpointOperation::AllValid
+                | EndpointOperation::Modified),
             child,
         } => match children(child) {
-            Some(path) => (children::child_facts(*operation, path), Vec::new()),
+            Some(path) => {
+                let operation = match operation {
+                    EndpointOperation::Modified => EndpointOperation::Valid,
+                    other => *other,
+                };
+                (children::child_facts(operation, path), Vec::new())
+            }
             None => (Vec::new(), Vec::new()),
         },
         // ERR-3: a binding "gains its tag fact from a direct

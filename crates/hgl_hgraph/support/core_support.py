@@ -715,9 +715,9 @@ def _pruned(port, change, shape):
     TIME-7: a delta that names no change, published where the value is
     valid, "is no tick"; "A struct, a tuple and a `list<V, N>` are valid where a
     child is (TIME-9), and such a delta of one, `delta<Quote>()`, sets no
-    child: it changes no validity, and is never a tick"; proposed there,
-    "a delta whose every entry is ignored, the removal of a key, a member
-    or a position that is not held (TYPE-16), names no change". hgraph
+    child: it changes no validity, and is never a tick", and "A delta
+    whose every entry is ignored, the removal of a key, a member or a
+    position that is not held (TYPE-16), names no change too". hgraph
     does not tick a `TSD` or a `TSS` for one, but ticks what holds it, a
     `TSD`, a bundle or a `TSL`, where it is given one for that child, and
     a `TSD` for a key given a struct's delta that names nothing, held or
@@ -803,8 +803,8 @@ def _validated(port):
     published or invalidated, it makes the value valid and empty, and
     ticks. Where it is valid the delta changes nothing, and is no tick";
     core's END-3: "it makes the endpoint valid, empty and modified".
-    Proposed in both: a delta whose every entry is an ignored removal
-    names no change. hgraph 0.9.5's `TSD` and `TSS` tick for neither, which is
+    And in both: a delta whose every entry is an ignored removal names
+    no change too. hgraph 0.9.5's `TSD` and `TSS` tick for neither, which is
     right where they are valid; where they are not, `clear` makes them
     valid, empty and modified. An invalidated one holds nothing
     (`invalidated`)."""
@@ -1021,8 +1021,8 @@ def list_applied(port, delta, whole=False):
     TIME-7: "A delta that names no change ... ticks only where it changes
     validity. Where a `list<V>` ... is not valid, never published or
     invalidated, it makes the value valid and empty, and ticks. Where it
-    is valid the delta changes nothing, and is no tick". Proposed there: a delta whose
-    every entry is an ignored removal names no change. hgraph's `TSL`
+    is valid the delta changes nothing, and is no tick", and a delta whose
+    every entry is an ignored removal names no change too. hgraph's `TSL`
     does not tick for either, valid or not: where the list is not valid it
     is made to (`_ticked`).
 
@@ -1540,6 +1540,18 @@ def window_values(port):
         )
     values = port.value
     return list(values.tolist() if hasattr(values, "tolist") else values)
+
+
+def window_result(port):
+    """A window's value read where its place takes `result<list<V>, error>`
+    (the language's TYPE-11, ERR-14): "A read of it before the window is
+    `all_valid` fails with `value.unset_read`, or gives an `err` of an
+    `error` with that code where its place takes a
+    `result<list<V>, error>`". Otherwise `ok` of the values held, oldest
+    first, as `window_values` reads them."""
+    if not port.all_valid:
+        return Err(Error("the window is read before it holds its minimum", code="value.unset_read"))
+    return Ok(window_values(port))
 
 
 def _bound(port):

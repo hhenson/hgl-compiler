@@ -120,19 +120,19 @@ fn a_duration_the_compiler_sees_is_held_to_its_hook() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:7:29 type/schedule.non_positive_duration TIME-8",
-            "m.hgl:8:29 type/schedule.non_positive_duration TIME-8",
-            "m.hgl:9:29 type/schedule.non_positive_duration TIME-8",
-            "m.hgl:10:29 type/schedule.non_positive_duration TIME-8",
+            "m.hgl:7:29 type/schedule.duration_bounds TIME-8",
+            "m.hgl:8:29 type/schedule.duration_bounds TIME-8",
+            "m.hgl:9:29 type/schedule.duration_bounds TIME-8",
+            "m.hgl:10:29 type/schedule.duration_bounds TIME-8",
             // The value inside the parentheses.
-            "m.hgl:11:30 type/schedule.non_positive_duration TIME-8",
-            "m.hgl:19:25 type/schedule.non_positive_duration TIME-8",
-            "m.hgl:29:25 type/schedule.non_positive_duration TIME-8",
-            "m.hgl:30:25 type/schedule.non_positive_duration TIME-8",
-            "m.hgl:38:29 type/schedule.non_positive_duration TIME-8",
-            "m.hgl:45:32 type/schedule.non_positive_duration TIME-8",
-            "m.hgl:50:40 type/schedule.non_positive_duration TIME-8",
-            "m.hgl:51:46 type/schedule.non_positive_duration TIME-8",
+            "m.hgl:11:30 type/schedule.duration_bounds TIME-8",
+            "m.hgl:19:25 type/schedule.duration_bounds TIME-8",
+            "m.hgl:29:25 type/schedule.duration_bounds TIME-8",
+            "m.hgl:30:25 type/schedule.duration_bounds TIME-8",
+            "m.hgl:38:29 type/schedule.duration_bounds TIME-8",
+            "m.hgl:45:32 type/schedule.duration_bounds TIME-8",
+            "m.hgl:50:40 type/schedule.duration_bounds TIME-8",
+            "m.hgl:51:46 type/schedule.duration_bounds TIME-8",
         ]
     );
 }
@@ -178,6 +178,6 @@ fn a_duration_known_only_as_the_program_runs_is_accepted() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:26:25 type/schedule.non_positive_duration TIME-8"]
+        ["m.hgl:26:25 type/schedule.duration_bounds TIME-8"]
     );
 }

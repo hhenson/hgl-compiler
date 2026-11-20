@@ -158,9 +158,10 @@ analyser: done
 analyser: done
 
 - A child read checked when it runs (`CheckedChild`) where the place expects `result<T, error>`, T the child's type, is of that result (EXPR-5); elsewhere it is the T
+- So is a read of a window's value, of an input, `out` or a child named when compiled (`CheckedWindow`), where the place expects `result<list<V>, error>`, "T being the `list<V>` it reads as (TYPE-11)"
 
 transpiler: partial
 
 - hgraph: `ok` of the child's value, or `err` of an `error` coded `value.unset_read` where the child is not valid (`_core.checked_child_result`); elsewhere the read fails with that code.; a dictionary's entry whose key is absent is a child that is not valid (TIME-1), and is read as one
 - A struct, a tuple or a fixed list read whole there that is valid and not all valid gives the same, a required part that is not valid failing the read
-- Left, reported: a window child's value where a `result` is expected: ERR-14 does not say what a window that is valid and not all valid gives (TYPE-11)
+- A window's value read there before it is all valid gives that `err` too (`_core.window_result`, and `_core.checked_child_result` of a window child known when it runs)

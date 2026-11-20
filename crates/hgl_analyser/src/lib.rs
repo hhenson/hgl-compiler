@@ -111,12 +111,14 @@ pub use types::{
 
 /// The most instances of one generic declaration that one call is
 /// followed to: of those the call makes, through the instance it calls
-/// and each one those call in turn, each counted once. No rule says
-/// whether a program whose instances never end, as `climb<N + 1>` in
-/// `climb<const N: i64>` makes, is accepted, so none is followed past
-/// this many. The analyser tells the `requires` and the generic
-/// arguments of no more, and reports a call whose instances go past it
-/// (local `generic.instance_limit`); a target makes no more from one call
+/// and each one those call in turn, each counted once. GEN-13: "Where the
+/// instances of one declaration never end when the program is compiled,
+/// the program rejects ... an implementation has a bound on the instances
+/// of one declaration, and rejects the program where they pass it", as
+/// `climb<N + 1>` in `climb<const N: i64>` makes them. The analyser
+/// rejects a call whose instances go past this many
+/// (`generic.instance_limit`, proposed), and tells the `requires` and
+/// the generic arguments of no more; a target makes no more from one call
 /// either, and reports a call of one it does not write. So neither stage
 /// runs without end.
 pub const INSTANCES: usize = 4096;
@@ -221,9 +223,9 @@ pub mod codes {
     pub const SCHEDULED_LIFECYCLE: &str = "scheduled.lifecycle";
     /// A wake asked of the scheduler or the alarm with a `duration` the
     /// compiler sees, that is not more than zero, other than a zero in
-    /// `start` (TIME-8). The catalogue's row is proposed, and lists the
-    /// code among the execution codes too.
-    pub const SCHEDULE_NON_POSITIVE_DURATION: &str = "schedule.non_positive_duration";
+    /// `start` (TIME-8). Where the program runs such a wake fails with
+    /// the execution code `schedule.non_positive_duration`.
+    pub const SCHEDULE_DURATION_BOUNDS: &str = "schedule.duration_bounds";
     /// `endpoint<T>` other than as the whole type of a native value
     /// function's parameter (TYPE-12).
     pub const ENDPOINT_POSITION: &str = "endpoint.position";
@@ -403,6 +405,11 @@ pub mod codes {
     /// A call leaves a generic parameter of its callee unresolved
     /// (GEN-2, GEN-8).
     pub const GENERIC_UNRESOLVED: &str = "generic.unresolved";
+    /// A call makes instances of generic declarations past what this
+    /// compiler follows (GEN-13: "an implementation has a bound on the
+    /// instances of one declaration, and rejects the program where they
+    /// pass it"). The catalogue's row is proposed.
+    pub const INSTANCE_LIMIT: &str = "generic.instance_limit";
     /// A call gives a generic value parameter of its callee no
     /// compile-time constant (GEN-8).
     pub const GENERIC_ARGUMENT_CONSTANT: &str = "generic.argument_constant";
@@ -526,13 +533,6 @@ pub mod codes {
         /// constant failures reject"). Local: the catalogue has no row
         /// for it.
         pub const CONSTANT_FAILURE: &str = "constant.failure";
-        /// The instances of a generic declaration that a call makes do
-        /// not end within the [`crate::INSTANCES`] this compiler follows
-        /// to tell the `requires` and the generic arguments they hold
-        /// (GEN-3, ERR-9). What is past that many is not told, and not
-        /// taken to hold. Local: no rule says whether a program whose
-        /// instances never end is rejected.
-        pub const INSTANCE_LIMIT: &str = "generic.instance_limit";
         /// `scheduled()` in a value function, a graph or a test, which is
         /// no node and has no schedule of its own (FN-9, TIME-9). Local:
         /// the catalogue's `inject.no_scheduler` names a node alone.
@@ -546,14 +546,13 @@ pub mod codes {
         pub const READING_LIMIT: &str = "reading.limit";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 9] = [
+        pub const ALL: [&str; 8] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
             YIELD_IN_VALUE,
             SWITCH_LABEL_CONSTANT,
             CONSTANT_FAILURE,
-            INSTANCE_LIMIT,
             SCHEDULED_OUTSIDE_NODE,
             READING_LIMIT,
         ];
