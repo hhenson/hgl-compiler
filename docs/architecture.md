@@ -2210,7 +2210,7 @@ nothing, so a family implements only its own:
 
 | Method | Asked | Gives |
 | --- | --- | --- |
-| `schema(emitter, ty)` | For every temporal parameter, result, `let` of a connection, port and replay, through `Emitter::temporal_schema` | hgraph's schema of a temporal value of `ty`, qualified: `::hgraph::TS<::hgraph::Int>` |
+| `schema(emitter, ty)` | For every temporal parameter, result, `let` of a connection, port and replay, through `Emitter::temporal_schema`; and for the type of a child of a family's own form, through `Emitter::form_schema`, which reports nothing | hgraph's schema of a temporal value of `ty`, qualified: `::hgraph::TS<::hgraph::Int>` |
 | `read(emitter, ty, view)` | For a read of a temporal input's payload in a hook (TIME-1), through `temporal_read` | The C++ of the value, checked when it runs: `::hglrt::checked_value(view)` |
 | `publish(emitter, ty, view, value)` | For `return value`, `out = value`, a source's `yield` and a lifted call's result (TIME-7), through `temporal_publish` | One statement that publishes `value`, a T or a `delta<T>`, to `view`: `view.set(value);` |
 | `delta(emitter, ty, view, checked)` | For `delta_value` (END-3), through `temporal_delta`, which `Emitter::delta_value` calls in the form the analyser recorded (`ExprKind::CheckedDelta` is the place that takes a `result`, ERR-14) | `::hglrt::fn_delta_value(view)`, or `fn_delta_value_checked` where `checked`: a family whose delta needs a conversion gives the library's `endpoint_read` specialization for its schema (`endpoints.h`) |

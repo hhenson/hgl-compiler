@@ -149,11 +149,18 @@ impl Emitter<'_> {
     /// hgraph's schema of a temporal value of `ty` ([`Family::schema`]);
     /// one no family writes is reported at `at`.
     pub(super) fn temporal_schema(&mut self, ty: &Type, at: Location) -> Option<String> {
-        let found = FAMILIES.iter().find_map(|family| family.schema(self, ty));
+        let found = self.form_schema(ty);
         if found.is_none() {
             self.unsupported(at, &format!("a temporal value of `{ty}`"));
         }
         found
+    }
+
+    /// hgraph's schema of a temporal value of `ty` ([`Family::schema`]),
+    /// reporting nothing: a family asks it of the type of a child of its
+    /// own form, and reports its own form where the child has none.
+    pub(super) fn form_schema(&mut self, ty: &Type) -> Option<String> {
+        FAMILIES.iter().find_map(|family| family.schema(self, ty))
     }
 
     /// The read of the payload of `view`, of `ty`, in a hook
