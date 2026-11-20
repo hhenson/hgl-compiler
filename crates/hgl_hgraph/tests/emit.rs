@@ -6413,6 +6413,22 @@ fn an_option_a_bound_generic_parameter_gives_is_written_with_its_value() {
     ]);
 }
 
+/// hhenson/hgl_spec#144, GEN-3, GEN-7: under a membership each instance
+/// is written with the candidate it selects: by name, by symbol (core's
+/// `<`), and for the `zero` option of core's division that a generic
+/// value parameter gives.
+#[test]
+fn a_membership_is_written_with_each_instances_candidate() {
+    let emitted = emit_clean(&[GENERICS_FIXES_WAVE3]);
+    let python = emitted.module("demo.generics_fixes_wave3");
+    python.assert_writes(&[
+        "def _inst_sized_of__i64(value):\n    return _impl_sized_i64(value=value)",
+        "def _inst_sized_of__str(value):\n    return _impl_sized_str(value=value)",
+        "def _inst_less_num__f64(a, b):\n    return _core.lt__T_T(lhs=a, rhs=b)",
+        "return _core.div__f64_f64(lhs=a, rhs=b, zero=\"ieee\")",
+    ]);
+}
+
 /// UNIT-13: "A constant is read by its name wherever an ordinary value
 /// is." A `requires` that compares a generic value parameter with a
 /// module's constant holds for the constant's value, and the instance

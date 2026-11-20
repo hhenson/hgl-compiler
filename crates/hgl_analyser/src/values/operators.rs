@@ -6,7 +6,7 @@
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::candidates::{Chosen, Given, Key, Wanted, typed_by_place};
+use super::candidates::{Chosen, Given, Key, Settled, Wanted, typed_by_place};
 use super::constants::generic_default;
 use super::fit::{not_null, open};
 use super::inference::{bare_parameter, fixed, infer, placed, unsaid};
@@ -330,16 +330,27 @@ impl<'a> Typer<'a> {
         // candidate's condition reads is given here as no constant this
         // pass reads: which candidates admit the call cannot be told,
         // and the call is not judged. GEN-7: "A generic body is checked
-        // under its stated requirements". Where that is for a generic
-        // parameter of the declaration being read, which its `requires`
-        // does not settle, no candidate is known to admit the call, and
-        // it is rejected here, where the body is declared.
-        let unsettled = untold && self.names_own_generics(&given, &wanted);
-        if untold && !unsettled {
-            return (self.unselected(given, Form::Named), Type::Unknown);
-        }
-        if unsettled {
-            selected.clear();
+        // under its stated requirements": where that is for a generic
+        // parameter of the declaration being read, what its `requires`
+        // states settles it ([`Typer::select_per_instance`]).
+        let named = Location::new(self.file, name.span());
+        let written = list.parent().map_or(named, |call| self.at(&call));
+        match self.select_per_instance(
+            operator,
+            &given,
+            (&wanted, requested.as_ref()),
+            (Form::Named, written, named),
+            untold,
+        ) {
+            Settled::Deferred(ty) => return (self.unselected(given, Form::Named), ty),
+            Settled::Rejected(report) => {
+                self.diagnostics.emit(report);
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            }
+            Settled::Elsewhere if untold => {
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            }
+            Settled::Elsewhere => {}
         }
         // An argument could not be tried once the function's readings
         // were used up (`REREADS`): the call is then not judged.
@@ -356,15 +367,12 @@ impl<'a> Typer<'a> {
             if selected.len() > 1 && expected.is_some_and(open) {
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
-            let mut diagnostic = self.no_one_candidate(
+            let diagnostic = self.no_one_candidate(
                 (name.text(), at),
                 public,
                 (&given, &wanted),
                 (!candidates.is_empty(), &selected),
             );
-            if unsettled {
-                diagnostic = diagnostic.with_note(UNSETTLED);
-            }
             self.diagnostics.emit(diagnostic);
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
@@ -735,7 +743,8 @@ impl<'a> Typer<'a> {
 pub(super) const UNSETTLED: &str = "which candidate admits this depends on a generic parameter of \
      the declaration it is written in, which its `requires` does not settle: a generic body \
      is checked under its stated requirements (GEN-7), so state the operation it calls, \
-     `requires name(T) -> R`, or the parameter's value, `requires M == .value`";
+     `requires name(T) -> R`, the parameter's value, `requires M == .value`, or the types or \
+     values it may be, `requires T in {i64, f64}`";
 
 /// The names a call of an operator may give beside the operator's own
 /// parameters: those its candidates declare as generic value

@@ -131,10 +131,10 @@ fn instance_called_by(checked: &Checked, caller: &Body) -> Body {
 /// the one for `i64` and `wrap_req(true)` the other (GEN-5: "Concrete
 /// types outrank variables"), through a caller that states it again
 /// too; and a call for whose types a requirement does not hold is
-/// `requires.unmet` (GEN-3). A membership, `T in {i64, f64}`, names no
-/// operation: `a < b` under it rejects as without it (whether a
-/// membership authorises an operation each of its types has is not
-/// settled by the pinned text).
+/// `requires.unmet` (GEN-3). Under a membership, `T in {i64, f64}`, `a <
+/// b` is authorised, each of the types having a candidate for it, and
+/// each instance selects its own (hhenson/hgl_spec#144; see
+/// `a_membership_authorises_what_each_member_has_a_candidate_for`).
 #[test]
 fn a_call_in_a_generic_body_is_judged_by_its_stated_requirements() {
     let checked = module(concat!(
@@ -155,6 +155,7 @@ fn a_call_in_a_generic_body_is_judged_by_its_stated_requirements() {
         "const fn relayed() -> i64 => relay(5)\n",
         "const fn ints() -> i64 => needs(1)\n",
         "const fn bools() -> i64 => needs(true)\n",
+        "const fn ordered() -> bool => less_num(1, 2)\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -162,7 +163,6 @@ fn a_call_in_a_generic_body_is_judged_by_its_stated_requirements() {
             "m.hgl:5:43 operator/operator.no_candidate OPS-2",
             "m.hgl:6:38 operator/operator.no_candidate GEN-5",
             "m.hgl:7:33 operator/operator.no_candidate GEN-5",
-            "m.hgl:9:72 operator/operator.no_candidate OPS-2",
             "m.hgl:18:28 constraint/requires.unmet GEN-3",
         ],
         "{}",
@@ -174,6 +174,9 @@ fn a_call_in_a_generic_body_is_judged_by_its_stated_requirements() {
     let instance = |caller: &str| instance_called_by(&checked, body(&checked, caller));
     assert_eq!(called(&checked, &instance("whole")), ["kind_of(i64)"]);
     assert_eq!(called(&checked, &instance("other")), ["kind_of(T) <bool>"]);
+    // Under the membership the body selects nothing; the instance does.
+    assert_eq!(called(&checked, body(&checked, "less_num")), ["none"]);
+    assert_eq!(called(&checked, &instance("ordered")), ["lt_(T, T) <i64>"]);
     // `relay(5)` makes `relay<i64>`, whose call of `wrap_req` makes
     // `wrap_req<i64>`.
     let relayed = instance("relayed");
@@ -197,10 +200,11 @@ fn a_call_in_a_generic_body_is_judged_by_its_stated_requirements() {
 /// rejected where the body is declared (GEN-7; GEN-5: "No match
 /// rejects"), whatever values a caller gives and whatever default the
 /// parameter has: `go`, `later`, and core's division in `ratio`. A
-/// membership, `M in {.slow, .fast}`, binds nothing: whether it
-/// authorises a call that each of its values selects is not settled by
-/// the pinned text, and it rejects as the bare case does. Written in
-/// place, `step(1, mode: .medium)` is rejected as it was.
+/// membership, `M in {.slow, .fast}`, authorises the call where each of
+/// its values selects a candidate, and each instance selects its own;
+/// one with a value no candidate admits, `.medium`, rejects at the
+/// declaration (hhenson/hgl_spec#144, beside GEN-6). Written in place,
+/// `step(1, mode: .medium)` is rejected as it was.
 #[test]
 fn an_option_a_generic_parameter_gives_is_judged_by_its_requirements() {
     let checked = module(concat!(
@@ -218,16 +222,18 @@ fn an_option_a_generic_parameter_gives_is_judged_by_its_requirements() {
         "const fn fast() -> i64 => bound<.fast>(1)\n",
         "const fn nan() -> f64 => quiet<.nan>(1.0, 0.0)\n",
         "const fn direct() -> i64 => step(1, mode: .medium)\n",
+        "const fn lacking<const M: Mode>(v: i64) -> i64 requires M in {.slow, .medium} => step(v, mode: M)\n",
+        "const fn quick() -> i64 => among<.fast>(1)\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:6:46 operator/operator.no_candidate GEN-5",
             "m.hgl:7:57 operator/operator.no_candidate GEN-5",
-            "m.hgl:8:78 operator/operator.no_candidate GEN-5",
             "m.hgl:10:63 operator/operator.no_candidate GEN-5",
             "m.hgl:13:27 constraint/requires.unmet GEN-3",
             "m.hgl:15:29 operator/operator.no_candidate GEN-5",
+            "m.hgl:16:82 operator/operator.no_candidate GEN-5",
         ],
         "{}",
         checked.report
@@ -240,6 +246,25 @@ fn an_option_a_generic_parameter_gives_is_judged_by_its_requirements() {
     assert_eq!(
         called(&checked, body(&checked, "quiet")),
         ["div_(f64, f64) <Z>"]
+    );
+    // Under the membership each instance selects.
+    assert_eq!(called(&checked, body(&checked, "among")), ["none"]);
+    assert_eq!(
+        called(
+            &checked,
+            &instance_called_by(&checked, body(&checked, "quick"))
+        ),
+        ["step(i64, Mode)"]
+    );
+    let lacking = checked
+        .findings
+        .iter()
+        .position(|finding| finding.at == "m.hgl:16:82")
+        .expect("the membership's lacking value is reported");
+    assert!(
+        checked.report.contains("for `M` = `.medium`"),
+        "{lacking}: {}",
+        checked.report
     );
 }
 
@@ -401,6 +426,17 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
         hgl_analyser::INSTANCES
     );
     assert_eq!(module(&both).summary(), NONE);
+    // An instance is its arguments' values, a constant inside a type
+    // too: `list<i64, ((N + 1) % 4096)>` that comes back to `list<i64,
+    // 0>` is the root's instance again.
+    let typed = format!(
+        "const fn need<const N: i64>(v: i64) -> i64 requires !(N == 100000) => v\n\
+         const fn turn<T, const N: i64>(v: i64, held: T) -> i64 =>\n    \
+             if v <= 0 {{ need<N>(v) }} else {{ turn<list<i64, ((N + 1) % {size})>, ((N + 1) % {size})>(v - 1, []) }}\n\
+         const fn a() -> i64 => turn<list<i64, 0>, 0>(3, [])\n",
+        size = hgl_analyser::INSTANCES
+    );
+    assert_eq!(module(&typed).summary(), NONE, "{}", module(&typed).report);
     let past = module(&turning(hgl_analyser::INSTANCES + 1));
     assert_eq!(
         past.summary(),
@@ -432,4 +468,71 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
         nest.summary(),
         ["m.hgl:6:24 type/generic.instance_limit GEN-13"]
     );
+}
+
+/// hhenson/hgl_spec#144, GEN-3, GEN-7: a membership, `requires T in {i64,
+/// f64}`, "Authorises in the body an operation that every listed type
+/// has a candidate for ... each instance selects its candidate. An
+/// operation that a listed type lacks rejects at the declaration." So
+/// `kind_of(value)` under `T in {i64, f64}` is accepted and each call
+/// selects its own; under `T in {i64, str}` it rejects where it is
+/// declared, naming `str`. The same where the membership is joined to
+/// another requirement by `&&`, for a membership of one type, and for
+/// two type parameters each with a membership, where every combination
+/// needs a candidate: `(f64, bool)` has none. A symbol is held alike:
+/// core's `<` takes no `list<i64>`. A call of the function with a type
+/// outside the membership is `requires.unmet` (GEN-3).
+#[test]
+fn a_membership_authorises_what_each_member_has_a_candidate_for() {
+    let checked = module(concat!(
+        "operator kind_of<T>(value: T) -> i64\n",
+        "impl const fn kind_of(value: i64) -> i64 => 1\n",
+        "impl const fn kind_of(value: f64) -> i64 => 2\n",
+        "const fn both<T>(value: T) -> i64 requires T in {i64, f64} => kind_of(value)\n",
+        "const fn lacking<T>(value: T) -> i64 requires T in {i64, str} => kind_of(value)\n",
+        "const fn nested<T>(value: T) -> i64 requires T in {i64, f64} && eq_(T, T) -> bool => kind_of(value)\n",
+        "const fn one<T>(value: T) -> i64 requires T in {f64} => kind_of(value)\n",
+        "operator pair_of<A, B>(a: A, b: B) -> i64\n",
+        "impl const fn pair_of(a: i64, b: str) -> i64 => 1\n",
+        "impl const fn pair_of(a: f64, b: str) -> i64 => 2\n",
+        "impl const fn pair_of(a: i64, b: bool) -> i64 => 3\n",
+        "const fn pairs<A, B>(a: A, b: B) -> i64 requires A in {i64, f64} && B in {str} => pair_of(a, b)\n",
+        "const fn gaps<A, B>(a: A, b: B) -> i64 requires A in {i64, f64} && B in {str, bool} => pair_of(a, b)\n",
+        "const fn ordered<T>(a: T, b: T) -> bool requires T in {i64, list<i64>} => a < b\n",
+        "const fn c1() -> i64 => both(5)\n",
+        "const fn c2() -> i64 => both(1.5)\n",
+        "const fn c3() -> i64 => one(2.5)\n",
+        "const fn c4() -> i64 => pairs(1.5, \"s\")\n",
+        "const fn c5() -> i64 => nested(5)\n",
+        "const fn c6() -> i64 => both(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:66 operator/operator.no_candidate GEN-5",
+            "m.hgl:14:88 operator/operator.no_candidate GEN-5",
+            "m.hgl:15:77 operator/operator.no_candidate OPS-2",
+            "m.hgl:21:25 constraint/requires.unmet GEN-3",
+        ],
+        "{}",
+        checked.report
+    );
+    for named in [
+        "for `T` = `str`",
+        "for `A` = `f64` and `B` = `bool`",
+        "for `T` = `list<i64>`",
+    ] {
+        assert!(
+            checked.report.contains(named),
+            "{named}: {}",
+            checked.report
+        );
+    }
+    assert_eq!(called(&checked, body(&checked, "both")), ["none"]);
+    let instance = |caller: &str| instance_called_by(&checked, body(&checked, caller));
+    assert_eq!(called(&checked, &instance("c1")), ["kind_of(i64)"]);
+    assert_eq!(called(&checked, &instance("c2")), ["kind_of(f64)"]);
+    assert_eq!(called(&checked, &instance("c3")), ["kind_of(f64)"]);
+    assert_eq!(called(&checked, &instance("c4")), ["pair_of(f64, str)"]);
+    assert_eq!(called(&checked, &instance("c5")), ["kind_of(i64)"]);
 }

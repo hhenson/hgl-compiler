@@ -9,7 +9,7 @@ use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
-use super::candidates::{Given, Key, Wanted};
+use super::candidates::{AtInstance, Given, Key, Wanted};
 use super::fit::{open, whole};
 use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, unreadable};
@@ -131,6 +131,91 @@ impl<'a> Typer<'a> {
             ));
         }
         bound
+    }
+
+    /// The memberships the `requires` of the declaration being read
+    /// states of its generic parameters, each parameter where it is
+    /// declared with its members: `T in {i64, f64}` of a type parameter,
+    /// `T == i64` as a membership of one, and `M in {.slow, .fast}` of a
+    /// generic value parameter, each member read as a value of `M`'s
+    /// type. Only those that hold wherever the condition does: alone or
+    /// joined to the rest by `&&` (GEN-15). A parameter stated twice is
+    /// in each: its members are those of the first.
+    ///
+    /// hhenson/hgl_spec#144: a membership "Authorises in the body an
+    /// operation that every listed type has a candidate for".
+    pub(super) fn memberships(&self) -> Vec<(Location, Vec<Argument>)> {
+        let Some(clause) = child(&self.declaration.syntax, SyntaxKind::RequiresClause) else {
+            return Vec::new();
+        };
+        let mut relations = Vec::new();
+        if let Some(condition) = clause.children().next() {
+            conjoined_relations(&condition, &mut relations);
+        }
+        let own: Vec<Location> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        // What the `read` pass said a type written here means: one that
+        // names no generic parameter of the declaration.
+        let type_at = |node: &SyntaxNode| -> Option<Type> {
+            let ty = self.written.get(&(self.file, node.span().start))?;
+            (whole(ty) && !mentions(ty, &own)).then(|| (*ty).clone())
+        };
+        let mut found: Vec<(Location, Vec<Argument>)> = Vec::new();
+        for relation in relations {
+            let operands: Vec<SyntaxNode> = relation.children().collect();
+            let [left, right] = operands.as_slice() else {
+                continue;
+            };
+            let Some(generic) = (left.kind() == SyntaxKind::NamedType)
+                .then(|| left.text().to_string().trim().to_string())
+                .and_then(|name| {
+                    self.signature
+                        .generics
+                        .iter()
+                        .find(|generic| generic.name == name)
+                })
+            else {
+                continue;
+            };
+            if found.iter().any(|(at, _)| *at == generic.at) {
+                continue;
+            }
+            let within = tokens(&relation).any(|token| token.text() == "in")
+                && right.kind() == SyntaxKind::ConstraintSet;
+            let equal = has_token(&relation, SyntaxKind::EqEq);
+            let members: Option<Vec<Argument>> = match &generic.kind {
+                GenericKind::Type | GenericKind::Plain if within => right
+                    .children()
+                    .map(|member| type_at(&member).map(Argument::Type))
+                    .collect(),
+                GenericKind::Type | GenericKind::Plain if equal => {
+                    type_at(right).map(|ty| vec![Argument::Type(ty)])
+                }
+                GenericKind::Value(ty) if within => right
+                    .children()
+                    .map(|member| {
+                        let value = self.read_constant(&member, Some(ty)).ok()?;
+                        (crate::constant::worked_out(&value) && !value.names_one_of(&own)).then(
+                            || {
+                                Argument::Constant(Constant {
+                                    text: member.text().to_string().trim().to_string(),
+                                    value,
+                                })
+                            },
+                        )
+                    })
+                    .collect(),
+                _ => None,
+            };
+            if let Some(members) = members.filter(|members| !members.is_empty()) {
+                found.push((generic.at, members));
+            }
+        }
+        found
     }
 
     /// The types an operator's requirement admits for its result, with
@@ -1340,11 +1425,23 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     // are given: an instance of any other makes none to tell.
     // A body that works out a generic argument from its own parameters
     // is followed for the instances it makes, whose evaluation may fail;
-    // and every body that passes its parameters on, whose instances may
-    // never end (GEN-13: "Where the instances of one declaration never
-    // end when the program is compiled, the program rejects").
-    let mut reaching: std::collections::HashSet<(usize, usize)> =
-        passed.keys().copied().chain(computing).collect();
+    // every body that passes its parameters on, whose instances may never
+    // end (GEN-13: "Where the instances of one declaration never end when
+    // the program is compiled, the program rejects"); and a body with a
+    // call whose candidate each instance selects, which reaches the
+    // candidate's.
+    let mut reaching: std::collections::HashSet<(usize, usize)> = program
+        .modules
+        .iter()
+        .enumerate()
+        .flat_map(|(index, module)| {
+            (0..module.declarations.len())
+                .filter(|&position| module.selects_per_instance(position))
+                .map(move |position| (index, position))
+        })
+        .chain(passed.keys().copied())
+        .chain(computing)
+        .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
             .iter()
@@ -1415,9 +1512,15 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 past_the_limit(&from, made.callee, program, diagnostics);
                 break;
             }
-            let Some(inner) = passed.get(&made.callee) else {
+            let inner = passed.get(&made.callee).map_or(&[][..], Vec::as_slice);
+            let selecting = program.modules.get(made.callee.0).map_or(&[][..], |unit| {
+                unit.selecting
+                    .get(made.callee.1)
+                    .map_or(&[][..], Vec::as_slice)
+            });
+            if inner.is_empty() && selecting.is_empty() {
                 continue;
-            };
+            }
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
@@ -1489,6 +1592,138 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     at: call.at,
                 });
             }
+            // GEN-5: a call whose candidate a generic parameter of the
+            // body selects is selected here, with this instance's types
+            // ([`Typer::select_at_instance`]).
+            if !selecting.is_empty() {
+                let (module, declaration) = made.callee;
+                let unit = &program.modules[module];
+                // GEN-13: the body is read as the instance has it, each
+                // generic value parameter of its type there.
+                let signature = match unit.details.get(declaration) {
+                    Some(Detail::Callable(signature)) => {
+                        super::candidates::in_instance(signature, &map)
+                    }
+                    _ => empty.clone(),
+                };
+                let (bindings, written, arguments) = &tables[module];
+                let sink = std::cell::RefCell::new(Vec::new());
+                let mut typer = super::Typer::bare(
+                    program,
+                    unit,
+                    &unit.declarations[declaration],
+                    &signature,
+                    super::Tables {
+                        bindings,
+                        written,
+                        calls: arguments,
+                        selecting: &sink,
+                    },
+                    diagnostics,
+                );
+                typer.instance = declared
+                    .iter()
+                    .copied()
+                    .zip(made.generics.iter().cloned())
+                    .collect();
+                // The body's locals, which the calls' arguments read, of
+                // their types in this instance.
+                if let Some(Some(body)) = unit.bodies.get(declaration) {
+                    typer.locals = body
+                        .locals
+                        .iter()
+                        .map(|local| hir::Local {
+                            ty: placed(substitute_within(&local.ty, &map), &declared),
+                            ..local.clone()
+                        })
+                        .collect();
+                    typer.assigned = vec![true; body.locals.len()];
+                }
+                // The last put at each place: the reading of the call
+                // that stands.
+                let standing = selecting
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, call)| {
+                        !selecting[index + 1..]
+                            .iter()
+                            .any(|later| later.at == call.at)
+                    })
+                    .map(|(_, call)| call);
+                for call in standing {
+                    let name = &program.modules[call.operator.module].declarations
+                        [call.operator.declaration]
+                        .name;
+                    // What is rejected of the call in this instance is
+                    // reported at each call that makes the instance, with
+                    // the call in the body, and where it points there,
+                    // beside it.
+                    let rejected =
+                        |typer: &mut super::Typer, reports: Vec<hgl_diagnostics::Diagnostic>| {
+                            for report in reports {
+                                for &root in &from {
+                                    let mut report = report.clone();
+                                    let within = report.primary;
+                                    report.primary = root;
+                                    let mut report = report.with_related(
+                                        call.name,
+                                        format!(
+                                            "`{name}` is called here, with the generic arguments \
+                                         this call gives the function it calls"
+                                        ),
+                                    );
+                                    if within != call.name {
+                                        report = report.with_related(within, "here, in that call");
+                                    }
+                                    // A call rejected for a `requires` makes
+                                    // no instance to judge further (ERR-9:
+                                    // "Do not demand cascaded diagnostics").
+                                    if !typer.unmet_reported(root)
+                                        && !typer.diagnostics.as_slice().contains(&report)
+                                    {
+                                        typer.diagnostics.emit(report);
+                                    }
+                                }
+                            }
+                        };
+                    // ERR-9: "Failure during argument evaluation precedes
+                    // later admission checks."
+                    if let Some(report) = typer.option_fails(call) {
+                        rejected(&mut typer, vec![report]);
+                        continue;
+                    }
+                    match typer.select_at_instance(call, None) {
+                        AtInstance::Selected(chosen, given) => {
+                            let (module, declaration, generics) =
+                                (chosen.module, chosen.declaration, chosen.generics.clone());
+                            // What the call is held to once its candidate
+                            // is selected (`Typer::called`): a `var`
+                            // parameter's place among them (FN-15).
+                            let mark = typer.diagnostics.len();
+                            typer.called(call.operator, chosen, given, (call.form, call.name));
+                            let reports = typer.diagnostics.as_slice()[mark..].to_vec();
+                            typer.diagnostics.truncate(mark);
+                            let fails = !reports.is_empty();
+                            rejected(&mut typer, reports);
+                            if fails {
+                                continue;
+                            }
+                            let answers = typer.answers(module, declaration, &generics);
+                            calls.push(Resolved {
+                                callee: (module, declaration),
+                                generics,
+                                answers,
+                                at: call.name,
+                            });
+                        }
+                        // GEN-5: "No match rejects; tied most-specific
+                        // candidates are ambiguous", at each call that
+                        // makes the instance.
+                        AtInstance::Rejected(report) => rejected(&mut typer, vec![report]),
+                        AtInstance::Untold => {}
+                    }
+                }
+            }
             for Resolved {
                 callee,
                 generics,
@@ -1512,6 +1747,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     let (module, declaration) = callee;
                     let unit = &program.modules[module];
                     let (bindings, written, arguments) = &tables[module];
+                    let sink = std::cell::RefCell::new(Vec::new());
                     let mut typer = super::Typer::bare(
                         program,
                         unit,
@@ -1521,6 +1757,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                             bindings,
                             written,
                             calls: arguments,
+                            selecting: &sink,
                         },
                         diagnostics,
                     );
@@ -1555,10 +1792,75 @@ fn instance_key(callee: (usize, usize), generics: &[Argument], answers: &[hir::A
         .iter()
         .map(|argument| match argument {
             Argument::Constant(constant) => format!("{:?}", constant.value),
-            Argument::Type(ty) => format!("{ty:?}"),
+            Argument::Type(ty) => format!("{:?}", by_value(ty)),
         })
         .collect();
     format!("{callee:?}{generics:?}{answers:?}")
+}
+
+/// `ty` with each constant in it, a size or a constant argument at any
+/// depth, held by its value alone, as it is written put aside:
+/// `list<i64, ((N + 1) % 2)>` at `N = 1` is `list<i64, 0>`. What an
+/// instance is ([`instance_key`]) is so its arguments' values.
+fn by_value(ty: &Type) -> Type {
+    let constant = |constant: &Constant| Constant {
+        text: String::new(),
+        value: constant.value.clone(),
+    };
+    let part = |inner: &Type| Box::new(by_value(inner));
+    match ty {
+        Type::Named {
+            name,
+            module,
+            declaration,
+            arguments,
+            kind,
+        } => Type::Named {
+            name: name.clone(),
+            module: *module,
+            declaration: *declaration,
+            arguments: arguments
+                .iter()
+                .map(|argument| match argument {
+                    Argument::Type(ty) => Argument::Type(by_value(ty)),
+                    Argument::Constant(given) => Argument::Constant(constant(given)),
+                })
+                .collect(),
+            kind: *kind,
+        },
+        Type::Tuple(elements) => Type::Tuple(elements.iter().map(by_value).collect()),
+        Type::List { element, size } => Type::List {
+            element: part(element),
+            size: size.as_ref().map(constant),
+        },
+        Type::Set(inner) => Type::Set(part(inner)),
+        Type::Endpoint(inner) => Type::Endpoint(part(inner)),
+        Type::Atomic(inner) => Type::Atomic(part(inner)),
+        Type::Delta(inner) => Type::Delta(part(inner)),
+        Type::Nullable(inner) => Type::Nullable(part(inner)),
+        Type::Trace { cell, style } => Type::Trace {
+            cell: part(cell),
+            style: *style,
+        },
+        Type::Dict { key, value } => Type::Dict {
+            key: part(key),
+            value: part(value),
+        },
+        Type::RollingWindow {
+            value,
+            maximum,
+            minimum,
+        } => Type::RollingWindow {
+            value: part(value),
+            maximum: constant(maximum),
+            minimum: minimum.as_ref().map(constant),
+        },
+        Type::Result { value, error } => Type::Result {
+            value: part(value),
+            error: part(error),
+        },
+        other => other.clone(),
+    }
 }
 
 /// A call an instance makes: what it calls, with what it gives the

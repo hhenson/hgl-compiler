@@ -27,8 +27,10 @@
 //! can be: Python takes a value of any type. It is written by instance
 //! too where its body calls an operation the declaration requires, or
 //! hands one of its requirements on to what it calls (GEN-16): which
-//! candidate that is depends on the types. So is one that reads a
-//! generic value parameter as a value (GEN-13), and one that calls a
+//! candidate that is depends on the types, and where its body calls an
+//! operator whose candidate its generic parameters select (GEN-3,
+//! GEN-5). So is one that reads a generic value parameter as a value
+//! (GEN-13), and one that calls a
 //! function written by instance with its own generic parameters, which
 //! are known only in an instance of it.
 //!
@@ -344,9 +346,12 @@ impl Instances {
         for (index, module) in program.modules.iter().enumerate() {
             for (declaration, body) in module.bodies.iter().enumerate() {
                 let value = module.declarations[declaration].kind.role() == Some(Role::Value);
+                // GEN-5: a body with a call whose candidate its generic
+                // parameters select is written for each instance, which
+                // calls the candidate it selects.
                 if let (Some(body), true) = (body, value)
                     && generic(program, index, declaration)
-                    && requires(body)
+                    && (requires(body) || module.selects_per_instance(declaration))
                 {
                     instances.requiring.insert((index, declaration));
                 }

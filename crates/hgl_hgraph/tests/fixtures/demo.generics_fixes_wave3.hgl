@@ -46,6 +46,32 @@ test an_option_a_bound_generic_parameter_gives_selects {
     assert is_ok(checked<.error>(1.0, 2.0))
 }
 
+# hhenson/hgl_spec#144, GEN-3, GEN-7: a membership authorises in the body
+# an operation that every listed type, or value, has a candidate for, and
+# each instance selects its candidate: by name, by symbol, for two type
+# parameters, and for an option a generic value parameter gives.
+operator sized<T>(value: T) -> i64
+impl const fn sized(value: i64) -> i64 => 1
+impl const fn sized(value: f64) -> i64 => 2
+impl const fn sized(value: str) -> i64 => 3
+const fn sized_of<T>(value: T) -> i64 requires T in {i64, f64, str} => sized(value)
+const fn less_num<T>(a: T, b: T) -> bool requires T in {i64, f64} => a < b
+const fn sum_of<A, B>(a: A, b: B) -> i64 requires A in {i64, f64} && B in {str} => sized(a) + sized(b)
+const fn ratio<const Z: ZeroPolicy>(a: f64, b: f64) -> f64 requires Z in {.ieee, .nan} => div_(a, b, zero: Z)
+
+test a_membership_selects_for_each_instance {
+    assert sized_of(5) == 1
+    assert sized_of(1.5) == 2
+    assert sized_of("s") == 3
+    assert less_num(1, 2)
+    assert !less_num(2.5, 1.5)
+    assert sum_of(1, "s") == 4
+    assert sum_of(1.5, "s") == 5
+    assert ratio<.ieee>(1.0, 0.0) > 1.0e300
+    let nan = ratio<.nan>(1.0, 0.0)
+    assert nan != nan
+}
+
 # UNIT-13: "A constant is read by its name wherever an ordinary value
 # is": in a `requires`, compared with a generic value parameter, and in
 # the set it is compared with.
