@@ -6421,3 +6421,173 @@ fn the_delta_of_a_value_that_holds_a_duration_window_is_reported() {
         ]
     );
 }
+
+/// How a candidate is selected for each instance of a generic function,
+/// where a generic parameter of that function selects it (GEN-3, GEN-5,
+/// GEN-6). Its tests run on hgraph with every fixture's
+/// (`the_generated_tests_pass_on_hgraph`).
+const GENERICS_FIXES_WAVE3: (&str, &str) = fixture!("demo.generics_fixes_wave3.hgl");
+
+/// GEN-7: "A generic body is checked under its stated requirements".
+/// GEN-16: the body of `wrap<U>` calls `kind_of`, which it requires, and
+/// each instance is written with the candidate that answers the
+/// requirement at its call: for an `i64` the concrete one, for any other
+/// the generic one (GEN-5: "Concrete types outrank variables"); in an
+/// instance reached through another; and in a graph, lifted (FN-6).
+#[test]
+fn a_requirement_is_written_with_its_answer_for_each_instance() {
+    let emitted = emit_clean(&[GENERICS_FIXES_WAVE3]);
+    let python = emitted.module("demo.generics_fixes_wave3");
+    python.assert_writes(&[
+        "def _inst_wrap__i64(value):\n    return _impl_kind_of_i64(value=value)",
+        "def _inst_wrap__bool(value):\n    return _impl_kind_of_T(value=value)",
+        "def _inst_twice__f64(value):\n    return _core.add__i64_i64(lhs=_impl_kind_of_T(value=value), rhs=_impl_kind_of_T(value=value))",
+        "def _inst_relay__i64(value):\n    return _inst_wrap__i64(value=value)",
+        "(value: _hg.TS[_py.bool]) -> _hg.TS[_py.int]:\n    return _impl_kind_of_T(value=value.value)",
+    ]);
+}
+
+/// GEN-6: "A call admits the candidate only where that holds for the
+/// parameter's value at the call". GEN-3: "A positive conjunctive
+/// equality may bind one unresolved generic from known data". Core's
+/// division given its `zero` option by a generic value parameter the
+/// body's `requires` binds is written with the bound value.
+#[test]
+fn an_option_a_bound_generic_parameter_gives_is_written_with_its_value() {
+    let emitted = emit_clean(&[GENERICS_FIXES_WAVE3]);
+    let python = emitted.module("demo.generics_fixes_wave3");
+    python.assert_writes(&[
+        "return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")",
+        "return _core.div__f64_f64(lhs=a, rhs=b, zero=\"error\")",
+    ]);
+}
+
+/// GEN-3: a membership "authorizes in the body (GEN-7) an operation that
+/// each listed type has a candidate for ... and each instance selects its
+/// own candidate (GEN-5)". Under a membership each instance
+/// is written with the candidate it selects: by name, by symbol (core's
+/// `<`), and for the `zero` option of core's division that a generic
+/// value parameter gives.
+#[test]
+fn a_membership_is_written_with_each_instances_candidate() {
+    let emitted = emit_clean(&[GENERICS_FIXES_WAVE3]);
+    let python = emitted.module("demo.generics_fixes_wave3");
+    python.assert_writes(&[
+        "def _inst_sized_of__i64(value):\n    return _impl_sized_i64(value=value)",
+        "def _inst_sized_of__str(value):\n    return _impl_sized_str(value=value)",
+        "def _inst_less_num__f64(a, b):\n    return _core.lt__T_T(lhs=a, rhs=b)",
+        "return _core.div__f64_f64(lhs=a, rhs=b, zero=\"ieee\")",
+    ]);
+}
+
+/// UNIT-13: "A constant is read by its name wherever an ordinary value
+/// is." A `requires` that compares a generic value parameter with a
+/// module's constant holds for the constant's value, and the instance
+/// is written.
+#[test]
+fn a_constant_in_a_requires_is_read_by_its_name() {
+    let emitted = emit_clean(&[GENERICS_FIXES_WAVE3]);
+    let python = emitted.module("demo.generics_fixes_wave3");
+    python.assert_writes(&["def _inst_named__3(v):", "def _inst_among__5(v):"]);
+}
+
+/// Lexes, parses and analyses `files` as [`emit`] does, and writes the
+/// program for hgraph whatever the analyser reported: each code the
+/// analyser reported, and what the target reported, each as `emit`
+/// gives it.
+fn written_despite(files: &[(&str, &str)]) -> (Vec<String>, Vec<String>) {
+    let mut sources = SourceMap::new();
+    let mut diagnostics = Diagnostics::new();
+    let mut parsed = Vec::new();
+    for (name, text) in files.iter().chain(&hgl_analyser::CORE_FILES) {
+        let file = sources.add(*name, *text).unwrap();
+        let tokens = lex(&sources, file, &mut diagnostics);
+        let tree = parse(
+            &sources,
+            file,
+            &tokens,
+            Entry::SourceFile,
+            Limits::default(),
+            &mut diagnostics,
+        );
+        parsed.push(ParsedFile {
+            file,
+            root: tree.syntax(),
+            omit: Vec::new(),
+        });
+    }
+    let program = analyse(&parsed, &mut diagnostics);
+    let analysed: Vec<String> = diagnostics
+        .as_slice()
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str().to_string())
+        .collect();
+    let before = diagnostics.len();
+    transpile(&program, &mut diagnostics);
+    let reported = diagnostics.as_slice()[before..]
+        .iter()
+        .map(|diagnostic| {
+            let source = sources.file(diagnostic.primary.file);
+            format!(
+                "{}:{} {}: {}",
+                source.name(),
+                source.line_col(diagnostic.primary.span.start),
+                diagnostic.code.as_str(),
+                diagnostic.message
+            )
+        })
+        .collect();
+    (analysed, reported)
+}
+
+/// The instances of one declaration that one call makes are written up
+/// to the analyser's bound (`hgl_analyser::INSTANCES`), so writing a
+/// program ends however many it would make. A call that makes exactly
+/// that many is written whole. One that makes one more, which the
+/// analyser rejects (`generic.instance_limit`, GEN-13), is not written past
+/// them, and the call of the next is reported; and so is one whose
+/// instances never end, `climb<N + 1>` in `climb<N>`, which is given to
+/// the target here as the analyser leaves it.
+#[test]
+fn the_instances_one_call_makes_are_written_up_to_one_bound() {
+    let turning = |size: usize| {
+        format!(
+            "module m\n\
+             const fn need<const N: i64>(v: i64) -> i64 => v + N\n\
+             const fn turn<const N: i64>(v: i64) -> i64 =>\n    \
+                 if v <= 0 {{ need<N>(v) }} else {{ turn<((N + 1) % {size})>(v - 1) }}\n\
+             test a {{ assert turn<0>(3) == 3 }}\n"
+        )
+    };
+    let within = emit_clean(&[("m.hgl", &turning(hgl_analyser::INSTANCES))]);
+    let python = within.text("_hgl/_m_m/__init__.py");
+    assert_eq!(
+        python.matches("def _inst_turn__").count(),
+        hgl_analyser::INSTANCES
+    );
+    let (analysed, reported) = written_despite(&[("m.hgl", &turning(hgl_analyser::INSTANCES + 1))]);
+    assert_eq!(analysed, ["generic.instance_limit"]);
+    assert_eq!(
+        reported,
+        [
+            "m.hgl:4:37 target.unsupported: the hgraph target does not write an instance of `turn` past the 4096 instances of it one call makes yet"
+        ]
+    );
+    let (analysed, reported) = written_despite(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn small<const K: i64>(v: i64) -> i64 => v + K\n",
+            "const fn climb<const N: i64>(v: i64) -> i64 =>\n",
+            "    if v <= 0 { small<N>(v) } else { climb<N + 1>(v - 1) }\n",
+            "test a { assert climb<0>(3) == 3 }\n",
+        ),
+    )]);
+    assert_eq!(analysed, ["generic.instance_limit"]);
+    assert_eq!(
+        reported,
+        [
+            "m.hgl:4:38 target.unsupported: the hgraph target does not write an instance of `climb` past the 4096 instances of it one call makes yet"
+        ]
+    );
+}

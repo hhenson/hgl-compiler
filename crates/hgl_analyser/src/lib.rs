@@ -109,7 +109,23 @@ pub use types::{
     Signature, StructType, TraceStyle, Type, WrittenType,
 };
 
+/// The most instances of one generic declaration that one call is
+/// followed to: of those the call makes, through the instance it calls
+/// and each one those call in turn, each counted once. GEN-13: "Where the
+/// instances of one declaration never end when the program is compiled,
+/// the program rejects ... an implementation has a bound on the instances
+/// of one declaration, and rejects the program where they pass it", as
+/// `climb<N + 1>` in `climb<const N: i64>` makes them. The analyser
+/// rejects a call whose instances go past this many
+/// (`generic.instance_limit`, proposed), and tells the `requires` and
+/// the generic arguments of no more; a target makes no more from one call
+/// either, and reports a call of one it does not write. So neither stage
+/// runs without end.
+pub const INSTANCES: usize = 4096;
+
 /// The diagnostic codes this stage reports.
+///
+/// Those directly in this module are codes/// The diagnostic codes this stage reports.
 ///
 /// Those directly in this module are codes of the specification's
 /// diagnostic catalogue, so an `expect-error` annotation can expect them

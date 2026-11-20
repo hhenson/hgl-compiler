@@ -32,6 +32,7 @@
 //! name, `str(value)`. A type that is not known is reported once, where
 //! it was found, and never again where it is used (ERR-9).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Diagnostics, Location};
@@ -46,6 +47,7 @@ use crate::types::{CallArguments, Detail, Scalar, Signature, Type};
 use control::label;
 use endpoints::endpoint_argument;
 
+pub(crate) use candidates::{Selecting, select_in_instance};
 pub(crate) use constants::generic_default;
 
 // Arguments given to parameters or fields, and a struct's construction (EXPR-2, TYPE-5).
@@ -111,10 +113,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
         let (bindings, written, calls) = tables(module);
+        let selecting = RefCell::new(Vec::new());
         let found = Tables {
             bindings: &bindings,
             written: &written,
             calls: &calls,
+            selecting: &selecting,
         };
         let constants: Vec<Option<Expr>> = module
             .declarations
@@ -132,12 +136,17 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
         let (bindings, written, calls) = tables(module);
+        let selecting = RefCell::new(Vec::new());
         let found = Tables {
             bindings: &bindings,
             written: &written,
             calls: &calls,
+            selecting: &selecting,
         };
         let mut bodies = Vec::with_capacity(module.declarations.len());
+        // The calls each body selects for each instance, by the
+        // declaration whose body it is.
+        let mut selected = Vec::with_capacity(module.declarations.len());
         for (position, declaration) in module.declarations.iter().enumerate() {
             let body = match (&declaration.kind, module.details.get(position)) {
                 // FN-1: a `const fn`. GEN-4: "an `impl const fn` a value
@@ -194,6 +203,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 }
             };
             bodies.push(body);
+            selected.push(selecting.take());
         }
         // TST-3: "A test is a composition-phase block with assertions."
         // It is no declaration: it has a name, and neither a parameter
@@ -260,6 +270,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         program.modules[index].run_body = run_body;
         program.modules[index].store_body = store_body;
         program.modules[index].defaults = defaults;
+        program.modules[index].selecting = selected;
     }
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
@@ -334,6 +345,11 @@ struct Tables<'a> {
     written: &'a HashMap<(FileId, u32), &'a Type>,
     /// The generic arguments each call writes (GEN-8).
     calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
+    /// Where each call is put whose candidate a generic parameter of the
+    /// declaration being read selects, for each instance to select
+    /// ([`candidates::Selecting`]). A `RefCell` lets a reader that holds
+    /// the tables by a shared reference add to it.
+    selecting: &'a RefCell<Vec<Selecting>>,
 }
 
 /// Reads one value function.
@@ -467,6 +483,19 @@ struct Typer<'a> {
     /// The values of the module constants this function's constants
     /// have named (UNIT-13): a constant named twice is read once.
     constants: crate::constant::Constants,
+    /// See [`Tables::selecting`].
+    selecting: &'a RefCell<Vec<Selecting>>,
+    /// What each generic parameter of the declaration being read stands
+    /// for, where a call in its body is selected for one instance of it
+    /// ([`candidates::Selecting`]): where each is declared, with its
+    /// argument. Empty otherwise.
+    instance: Vec<(Location, crate::types::Argument)>,
+    /// The generic value parameters of the declaration being read that
+    /// its `requires` binds, each where it is declared with the constant
+    /// it is bound to (GEN-3: "A positive conjunctive equality may bind
+    /// one unresolved generic from known data"): `M` of `requires M ==
+    /// .slow` is `.slow` where the body gives it to an option.
+    bound: Vec<(Location, crate::types::Argument)>,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -526,6 +555,7 @@ impl<'a> Typer<'a> {
             };
             typer.declare(&parameter.name, parameter.at, kind, ty, true);
         }
+        typer.bound = typer.bindings();
         typer.applications();
         typer
     }
@@ -583,6 +613,9 @@ impl<'a> Typer<'a> {
             identities: HashMap::new(),
             candidates: HashMap::new(),
             constants: Default::default(),
+            selecting: tables.selecting,
+            instance: Vec::new(),
+            bound: Vec::new(),
             diagnostics,
         }
     }
@@ -641,6 +674,7 @@ impl<'a> Typer<'a> {
             returned: self.returned,
             unsure: self.unsure,
             present: self.present.len(),
+            selecting: self.selecting.borrow().len(),
         }
     }
 
@@ -668,6 +702,9 @@ impl<'a> Typer<'a> {
         for diagnostic in spent {
             self.diagnostics.emit(diagnostic);
         }
+        // A call the reading put to be selected for each instance goes
+        // with it: the reading that stands puts its own.
+        self.selecting.borrow_mut().truncate(mark.selecting);
         // A reading that declared nothing has nothing of its own in the
         // tables of locals, and they are not walked: a reading taken
         // back costs what was read, not what the function holds.
@@ -790,6 +827,8 @@ struct Mark {
     unsure: bool,
     /// How many bindings are proved not null.
     present: usize,
+    /// How many calls are put to be selected for each instance.
+    selecting: usize,
 }
 
 /// A value candidate of an operator: the positions of its module and of

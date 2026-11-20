@@ -128,6 +128,7 @@ pub(crate) fn assemble<'a>(
             call_arguments: Vec::new(),
             scope: Default::default(),
             instantiations: Vec::new(),
+            selecting: Vec::new(),
         });
     }
     (program, omits)

@@ -2205,6 +2205,52 @@ pub(crate) fn worked_out(value: &ConstantValue) -> bool {
     }
 }
 
+/// True where working `value` out with what `given` gives each generic
+/// value parameter in it fails when it is evaluated ([`fails`]), and not
+/// because this reader does not work it out: `M * 4611686018427387904`
+/// with `M` 4 is an `i64` out of range (NUM-2: "An unrepresentable i64
+/// result produces an HGL error"), and `10 // M` with `M` 0 a division
+/// of two `i64` by zero under the default `.fail` (NUM-12).
+pub(crate) fn fails_when_given(
+    value: &ConstantValue,
+    given: &dyn Fn(Location) -> Option<ConstantValue>,
+) -> bool {
+    match value {
+        ConstantValue::Binary(operator, left, right) => {
+            if fails_when_given(left, given) || fails_when_given(right, given) {
+                return true;
+            }
+            let (left, right) = (left.substituted(given), right.substituted(given));
+            matches!(
+                combined(*operator, &left, &right),
+                ConstantValue::Unevaluated
+            ) && fails(*operator, &left, &right)
+        }
+        ConstantValue::Unary(operator, operand) => {
+            if fails_when_given(operand, given) {
+                return true;
+            }
+            // OPS-10, TEN-2: the negation of the least `i64`, and of
+            // the least duration or tenor count, is none.
+            let operand = operand.substituted(given);
+            *operator == UnaryOperator::Negate
+                && matches!(
+                    negated_or_not(*operator, &operand),
+                    ConstantValue::Unevaluated
+                )
+                && matches!(
+                    operand,
+                    ConstantValue::Int(_) | ConstantValue::Duration(_) | ConstantValue::Tenor(_)
+                )
+        }
+        ConstantValue::Constructed { from, .. } => fails_when_given(from, given),
+        ConstantValue::List(values) | ConstantValue::Tuple(values) => {
+            values.iter().any(|value| fails_when_given(value, given))
+        }
+        _ => false,
+    }
+}
+
 // ---- Comparing ----
 
 impl ConstantValue {

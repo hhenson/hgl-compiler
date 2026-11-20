@@ -105,7 +105,7 @@ parser: done
 analyser: partial
 
 - A constant has the type it is written with, an ordinary value type, and its expression is read as a value of it with no parameter in scope
-- It is read by its name wherever a value is, and is a constant expression (FN-1) and a compile-time constant (GEN-8)
+- It is read by its name wherever a value is, and is a constant expression (FN-1) and a compile-time constant (GEN-8); in a `requires` compared with a generic value parameter or an option, `N == C`, `C == N`, `N in {C, 5}`, `mode == FAST`, it is that value and no type is read there (beside a type parameter, `T == C`, it is still `type.not_a_type`)
 - Where its value is needed, a size, a generic value argument, a `requires` operand, a default, a `switch` label, a delta's key, a tuple's index, an enum's number, it is followed to it by the one reader (`constant`), through the constants it names, in its expression and its type, each worked out once as a value of its own type: an `i64` constant is no `f64` (EXPR-5)
 - One computed by a call is held by its name, the same as itself and known beside no other
 - Two are one where their values are the same, however each is written (`ConstantValue::same`): `1`, `1.0` and `1.00` of an `f64`, `60s` and `1m`, two `datetime`s at one instant; `-0.0` and `0.0` are two, though `-0.0 == 0.0`, and any two NaNs one, `0.0 / 0.0` among them. That sameness is a type's identity (TYPE-3) and a call's instance (GEN-13); an equality the program writes, in a `requires` as elsewhere, is the language's `==` (`ConstantValue::equals`, GEN-3): `Flag<(-0.0 == 0.0)>` is `Flag<true>`
