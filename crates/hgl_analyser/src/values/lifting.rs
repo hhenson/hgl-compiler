@@ -5,8 +5,11 @@
 use hgl_diagnostics::{Category, Location};
 
 use super::Typer;
-use crate::hir::{Callee, Expr, ExprKind, Form, LocalId, ValueCategory};
-use crate::program::{DeclarationKind, Role};
+use crate::hir::{
+    Body, Callee, Expr, ExprKind, Form, Local, LocalId, Node, Stmt, ValueCategory,
+    walk_statement_nodes, walk_statements_mut,
+};
+use crate::program::{DeclarationKind, Program, Role};
 use crate::types::Detail;
 use crate::{codes, error};
 
@@ -72,120 +75,10 @@ impl<'a> Typer<'a> {
         );
     }
 
-    /// What a value read in a graph is (FN-3). A connection: a
-    /// temporal parameter, a local given one, the result of a temporal
-    /// function or candidate, or of a call given one, which is lifted
-    /// (FN-6). Any other is an ordinary value, known while the graph is
-    /// built, but for what an operation the graph requires gives
-    /// (GEN-7): which candidate that is is selected where the generic
-    /// parameters are known, and in composition it may be a temporal
-    /// one (GEN-5), so with no connection among its arguments what it
-    /// gives is not settled here.
+    /// What a value read in a graph is (FN-3), as [`category`] says,
+    /// with the locals read so far.
     pub(super) fn category(&self, value: &Expr) -> ValueCategory {
-        use ValueCategory::{Connection, Unsettled, Value};
-        let program = self.program;
-        // Several values taken together: a connection where one is, and
-        // not settled where one is not and none is a connection.
-        let join = |one: ValueCategory, other: ValueCategory| match (one, other) {
-            (Connection, _) | (_, Connection) => Connection,
-            (Unsettled, _) | (_, Unsettled) => Unsettled,
-            _ => Value,
-        };
-        let all = |values: &mut dyn Iterator<Item = &Expr>| {
-            values.map(|value| self.category(value)).fold(Value, join)
-        };
-        match &value.kind {
-            ExprKind::Local(local) => self.locals[*local].category,
-            ExprKind::Call {
-                callee, arguments, ..
-            } => {
-                let given = all(&mut arguments.iter().map(|argument| &argument.value));
-                match callee {
-                    Callee::Function {
-                        module,
-                        declaration,
-                        ..
-                    } if matches!(
-                        program.modules[*module].declarations[*declaration].kind,
-                        DeclarationKind::Function(Role::Temporal)
-                            | DeclarationKind::NativeFunction(Role::Temporal)
-                    ) =>
-                    {
-                        Connection
-                    }
-                    Callee::Candidate {
-                        module,
-                        declaration,
-                        ..
-                    } if matches!(
-                        program.modules[*module].declarations[*declaration]
-                            .kind
-                            .candidate(),
-                        Some((Role::Temporal, _))
-                    ) =>
-                    {
-                        Connection
-                    }
-                    Callee::Required { .. } => join(given, Unsettled),
-                    _ => given,
-                }
-            }
-            ExprKind::Construct { arguments, .. } | ExprKind::Delta { arguments } => {
-                all(&mut arguments.iter().map(|argument| &argument.value))
-            }
-            ExprKind::Unary { operand, .. } => self.category(operand),
-            ExprKind::Binary { left, right, .. } => join(self.category(left), self.category(right)),
-            ExprKind::Widen(inner) => self.category(inner),
-            // OPS-6: the list converted is what it is given, lifted
-            // over a connection as a conversion is (FN-6).
-            ExprKind::ParentList(inner) => self.category(inner),
-            ExprKind::Field { base, .. } => self.category(base),
-            // An enum constructed from a connection is lifted (FN-6).
-            ExprKind::EnumFrom { value, .. } => self.category(value),
-            // A result form over a connection is lifted, as a value
-            // function's call is (FN-6, ERR-3): what it gives is what it
-            // is given.
-            ExprKind::Tagged { payload, .. } => self.category(payload),
-            ExprKind::TagTest { value, .. } => self.category(value),
-            ExprKind::Payload { result, .. } => self.category(result),
-            ExprKind::ErrorPart { base, .. } => self.category(base),
-            ExprKind::Propagate(operand) => self.category(operand),
-            // ERR-7: a capture is a temporal boundary, and what is read
-            // of it a connection.
-            ExprKind::Capture(_) | ExprKind::Captured { .. } => Connection,
-            ExprKind::Error { message, code } => {
-                code.iter().fold(self.category(message), |given, code| {
-                    join(given, self.category(code))
-                })
-            }
-            ExprKind::Index { base, index } => join(self.category(base), self.category(index)),
-            ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => all(&mut entries.iter()),
-            ExprKind::Pairs(entries) => {
-                all(&mut entries.iter().flat_map(|(key, value)| [key, value]))
-            }
-            ExprKind::Block {
-                value: Some(value), ..
-            } => self.category(value),
-            // CTRL-13: "It is a connection when its condition is one or
-            // either branch's value is". CTRL-10: "A branch that returns
-            // from the function gives the `if` no value and takes no
-            // part in its type (CTRL-5)", and so none in what it is. An
-            // `if` no branch of which gives a value has none itself.
-            ExprKind::If { condition, .. } => {
-                let mut branches = value
-                    .kind
-                    .branch_values()
-                    .into_iter()
-                    .flatten()
-                    .filter(|branch| gives_a_value(branch))
-                    .map(|branch| self.category(branch));
-                match branches.next() {
-                    Some(first) => join(self.category(condition), branches.fold(first, join)),
-                    None => Value,
-                }
-            }
-            _ => Value,
-        }
+        category(self.program, &self.locals, value)
     }
 
     /// FN-3: "Where a constant is required ... a `const` parameter's
@@ -305,4 +198,210 @@ fn gives_a_value(value: &Expr) -> bool {
         Some(values) => values.into_iter().any(gives_a_value),
         None => true,
     }
+}
+
+/// What `value` is (FN-3), its locals being `locals`: "There a temporal
+/// parameter, and the result of a temporal or lifted call, is a
+/// connection: the argument of a call, the operand of a symbol, a
+/// condition, a bound local, or what is returned." So a connection is a
+/// temporal parameter, a local given one, the result of a temporal
+/// function or candidate, and what a call given one gives, which is
+/// lifted (FN-6); a symbol is the call of its identity, `&&`, `||` and
+/// `!` among them (the generics chapter's table), and a construction,
+/// a result form, an element or a field of a connection is one too.
+/// Any other is an ordinary value, known while the graph is built, but
+/// for what an operation the graph requires gives (GEN-7): which
+/// candidate that is is selected where the generic parameters are
+/// known, and in composition it may be a temporal one (GEN-5), so with
+/// no connection among its arguments what it gives is not settled here.
+///
+/// This is the one place the rule is written: the typing pass asks it
+/// as it reads ([`Typer::category`]), and [`record`] writes its answer
+/// on each expression for the stages after the analyser.
+pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> ValueCategory {
+    use ValueCategory::{Connection, Unsettled, Value};
+    let category = |value: &Expr| category(program, locals, value);
+    // Several values taken together: a connection where one is, and
+    // not settled where one is not and none is a connection.
+    let join = |one: ValueCategory, other: ValueCategory| match (one, other) {
+        (Connection, _) | (_, Connection) => Connection,
+        (Unsettled, _) | (_, Unsettled) => Unsettled,
+        _ => Value,
+    };
+    let all = |values: &mut dyn Iterator<Item = &Expr>| values.map(category).fold(Value, join);
+    match &value.kind {
+        // A default and a constant are read with no local in scope
+        // (UNIT-7, UNIT-13).
+        ExprKind::Local(local) => locals.get(*local).map_or(Value, |local| local.category),
+        ExprKind::Call {
+            callee, arguments, ..
+        } => {
+            let given = all(&mut arguments.iter().map(|argument| &argument.value));
+            match callee {
+                Callee::Function {
+                    module,
+                    declaration,
+                    ..
+                } if matches!(
+                    program.modules[*module].declarations[*declaration].kind,
+                    DeclarationKind::Function(Role::Temporal)
+                        | DeclarationKind::NativeFunction(Role::Temporal)
+                ) =>
+                {
+                    Connection
+                }
+                Callee::Candidate {
+                    module,
+                    declaration,
+                    ..
+                } if matches!(
+                    program.modules[*module].declarations[*declaration]
+                        .kind
+                        .candidate(),
+                    Some((Role::Temporal, _))
+                ) =>
+                {
+                    Connection
+                }
+                Callee::Required { .. } => join(given, Unsettled),
+                _ => given,
+            }
+        }
+        ExprKind::Construct { arguments, .. } | ExprKind::Delta { arguments } => {
+            all(&mut arguments.iter().map(|argument| &argument.value))
+        }
+        ExprKind::Unary { operand, .. } => category(operand),
+        ExprKind::Binary { left, right, .. } => join(category(left), category(right)),
+        ExprKind::Widen(inner) => category(inner),
+        // OPS-6: the list converted is what it is given, lifted
+        // over a connection as a conversion is (FN-6).
+        ExprKind::ParentList(inner) => category(inner),
+        ExprKind::Field { base, .. } => category(base),
+        // An enum constructed from a connection is lifted (FN-6).
+        ExprKind::EnumFrom { value, .. } => category(value),
+        // A result form over a connection is lifted, as a value
+        // function's call is (FN-6, ERR-3): what it gives is what it
+        // is given.
+        ExprKind::Tagged { payload, .. } => category(payload),
+        ExprKind::TagTest { value, .. } => category(value),
+        ExprKind::Payload { result, .. } => category(result),
+        ExprKind::ErrorPart { base, .. } => category(base),
+        ExprKind::Propagate(operand) => category(operand),
+        // ERR-7: a capture is a temporal boundary, and what is read
+        // of it a connection.
+        ExprKind::Capture(_) | ExprKind::Captured { .. } => Connection,
+        ExprKind::Error { message, code } => code
+            .iter()
+            .fold(category(message), |given, code| join(given, category(code))),
+        ExprKind::Index { base, index } => join(category(base), category(index)),
+        ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => all(&mut entries.iter()),
+        ExprKind::Pairs(entries) => all(&mut entries.iter().flat_map(|(key, value)| [key, value])),
+        ExprKind::Block {
+            value: Some(value), ..
+        } => category(value),
+        // CTRL-13: "It is a connection when its condition is one or
+        // either branch's value is". CTRL-10: "A branch that returns
+        // from the function gives the `if` no value and takes no
+        // part in its type (CTRL-5)", and so none in what it is. An
+        // `if` no branch of which gives a value has none itself.
+        ExprKind::If { condition, .. } => {
+            let mut branches = value
+                .kind
+                .branch_values()
+                .into_iter()
+                .flatten()
+                .filter(|branch| gives_a_value(branch))
+                .map(category);
+            match branches.next() {
+                Some(first) => join(category(condition), branches.fold(first, join)),
+                None => Value,
+            }
+        }
+        _ => Value,
+    }
+}
+
+/// True where `callee`, given a connection in composition, is lifted
+/// (FN-6): "A selected value helper, a `const fn` or a value candidate
+/// of an operator", a native one among them, that marks no parameter
+/// `var` (FN-15: "A function or a candidate that declares one is not
+/// lifted"). An operation the declaration requires is not known here
+/// (GEN-7), and a temporal function or candidate is the node or the
+/// graph itself.
+fn lifts(program: &Program, callee: &Callee) -> bool {
+    let Some((module, declaration)) = callee.declaration() else {
+        return false;
+    };
+    let declared = &program.modules[module];
+    let places = match declared.details.get(declaration) {
+        Some(Detail::Callable(signature)) => {
+            signature.parameters.iter().any(|parameter| parameter.var)
+        }
+        _ => false,
+    };
+    declared.declarations[declaration].kind.role() == Some(Role::Value) && !places
+}
+
+/// Records on every expression of `body` what it is ([`Expr::category`])
+/// and on every call whether it is lifted (the `lifted` of
+/// [`ExprKind::Call`]), as [`category`] says with the body's locals.
+/// `composition` is true for a graph's body, where FN-6 lifts: "A
+/// selected value helper ... with temporal arguments in composition is
+/// lifted". A node's hooks, a value function and a test lift nothing
+/// (a test's eval wires its target itself, TST-8).
+///
+/// A local that is not settled takes what the first value it is given
+/// is (EXPR-3: "Initialization fixes a binding's value/connection
+/// category"), as the typing pass has it. That changes nothing in a
+/// body as it was read, and settles an instance's
+/// ([`Program::instance`]): there each operation the declaration
+/// requires is the call of the candidate that answers it, a temporal
+/// one or a value one, so what it gives is known.
+pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
+    use ValueCategory::Unsettled;
+    let Body { locals, statements } = body;
+    walk_statement_nodes(statements, &mut |node| {
+        let (local, value) = match node {
+            Node::Statement(Stmt::Declare {
+                local,
+                value: Some(value),
+            })
+            | Node::Statement(Stmt::Assign { local, value, .. }) => (*local, value),
+            _ => return,
+        };
+        if locals[local].category == Unsettled {
+            let given = category(program, locals, value);
+            locals[local].category = given;
+        }
+    });
+    walk_statements_mut(statements, &mut |value| {
+        recorded(program, locals, composition, value);
+    });
+}
+
+/// Records what `value` is and, for a call, whether it is lifted, as
+/// [`record`] does for one expression of a body with `locals`.
+fn recorded(program: &Program, locals: &[Local], composition: bool, value: &mut Expr) {
+    value.category = category(program, locals, value);
+    if let ExprKind::Call {
+        callee,
+        arguments,
+        lifted,
+        ..
+    } = &mut value.kind
+    {
+        *lifted = composition
+            && lifts(program, callee)
+            && arguments.iter().any(|argument| {
+                category(program, locals, &argument.value) == ValueCategory::Connection
+            });
+    }
+}
+
+/// [`record`] for an expression that stands in no body: a constant's
+/// value (UNIT-13), a default (UNIT-7), or what an application's run
+/// statement is given (RUN-1). Each is read with no local in scope, and
+/// none composes a graph.
+pub(crate) fn record_value(program: &Program, value: &mut Expr) {
+    value.walk_mut(&mut |inner| recorded(program, &[], false, inner));
 }

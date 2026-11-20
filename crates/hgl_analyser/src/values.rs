@@ -49,6 +49,7 @@ use endpoints::endpoint_argument;
 
 pub(crate) use candidates::{Selecting, select_in_instance};
 pub(crate) use constants::generic_default;
+pub(crate) use lifting::record;
 
 // Arguments given to parameters or fields, and a struct's construction (EXPR-2, TYPE-5).
 mod arguments;
@@ -120,7 +121,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             calls: &calls,
             selecting: &selecting,
         };
-        let constants: Vec<Option<Expr>> = module
+        let mut constants: Vec<Option<Expr>> = module
             .declarations
             .iter()
             .enumerate()
@@ -131,6 +132,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 Typer::new(program, module, declaration, &empty, found, diagnostics).constant(ty)
             })
             .collect();
+        for constant in constants.iter_mut().flatten() {
+            lifting::record_value(program, constant);
+        }
         program.modules[index].constants = constants;
     }
     for index in 0..program.modules.len() {
@@ -219,14 +223,14 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         }
         // RUN-1: an application's run statement. It is no declaration
         // either, and is read as a graph with no parameter is.
-        let run_body = module.run.as_ref().and_then(|run| {
+        let mut run_body = module.run.as_ref().and_then(|run| {
             let stand_in = Declaration::stand_in("run", run.at, run.file, &run.syntax, false);
             Typer::new(program, module, &stand_in, &empty, found, diagnostics).run_statement()
         });
         // UNIT-14: the statements an application sets its run's store
         // with are no declaration either. They are read together, as
         // the statements of one block are.
-        let store_body = module.store.first().and_then(|first| {
+        let mut store_body = module.store.first().and_then(|first| {
             let stand_in =
                 Declaration::stand_in("store", first.at, first.file, &first.syntax, false);
             Typer::new(program, module, &stand_in, &empty, found, diagnostics).store(&module.store)
@@ -264,6 +268,29 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 _ => Vec::new(),
             };
             defaults.push(read);
+        }
+        // What each expression is and which calls are lifted (FN-3,
+        // FN-6), written on what was read for the stages after this
+        // one. Only a graph's body composes.
+        for (position, body) in bodies.iter_mut().enumerate() {
+            if let Some(body) = body {
+                let graph = module.phases.get(position) == Some(&Some(Phase::Graph));
+                lifting::record(program, body, graph);
+            }
+        }
+        for body in test_bodies
+            .iter_mut()
+            .chain(std::iter::once(&mut store_body))
+            .flatten()
+        {
+            lifting::record(program, body, false);
+        }
+        for value in run_body
+            .iter_mut()
+            .flat_map(|run| std::iter::once(&mut run.call).chain(&mut run.config))
+            .chain(defaults.iter_mut().flatten().flatten())
+        {
+            lifting::record_value(program, value);
         }
         program.modules[index].bodies = bodies;
         program.modules[index].test_bodies = test_bodies;

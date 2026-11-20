@@ -1188,7 +1188,7 @@ impl<'a> Emitter<'a> {
     /// True where `value` is a connection of a graph: hgraph's wiring,
     /// which nothing changes where it is, and which is never copied.
     fn connection(&self, function: &Function, value: &Expr) -> bool {
-        function.mode == Mode::Graph && self.connects(function, value)
+        function.mode == Mode::Graph && value.is_connection()
     }
 
     /// `written`, the text of `value`, as what keeps it takes it: a
@@ -1405,7 +1405,7 @@ impl<'a> Emitter<'a> {
                 // (`connected_place`).
                 let assigned = if to_out {
                     self.assigned_to_out(function, place, value, copied)
-                } else if function.mode == Mode::Graph && self.connects(function, root) {
+                } else if function.mode == Mode::Graph && root.is_connection() {
                     self.connected_place(function, place, value, copied)
                 } else {
                     self.assigned(function, place, copied)
@@ -1474,11 +1474,11 @@ impl<'a> Emitter<'a> {
                         .current_result(function)
                         .is_some_and(|result| matches!(result, Type::Nullable(_)));
                 let value = if nullable {
-                    let connection = self.connects(function, returned);
+                    let connection = returned.is_connection();
                     self.normalized(function, value, connection, returned.at)
                 } else if function.mode == Mode::Graph
                     && self.in_case > 0
-                    && !self.connects(function, returned)
+                    && !returned.is_connection()
                 {
                     let ty = function
                         .signature
@@ -1614,7 +1614,7 @@ impl<'a> Emitter<'a> {
                     Type::List { size: Some(size), .. }
                         if !matches!(size.value, ConstantValue::Unbounded)
                 );
-                if self.connects(function, sequence) && !fixed {
+                if sequence.is_connection() && !fixed {
                     self.each(function, names, sequence, body, *at, depth);
                 } else {
                     self.scoped(|emitter| {

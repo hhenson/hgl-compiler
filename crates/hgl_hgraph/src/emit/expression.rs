@@ -27,9 +27,9 @@ impl Emitter<'_> {
                     | ExprKind::Captured { .. }
                     | ExprKind::TagTest { .. }
             )
-            && !self.connected_field(function, value)
-            && !self.connected_element(function, value)
-            && !(matches!(value.kind, ExprKind::Tuple(_)) && self.connects(function, value))
+            && !self.connected_field(value)
+            && !self.connected_element(value)
+            && !(matches!(value.kind, ExprKind::Tuple(_)) && value.is_connection())
         {
             self.unsupported(value.at, "this expression in a graph");
             return "None".to_string();
@@ -264,9 +264,7 @@ impl Emitter<'_> {
             // The language widens a literal and no connection (EXPR-5),
             // so what is widened here is known where the graph is
             // built. Python's `float` would act on a port.
-            ExprKind::Widen(inner)
-                if function.mode == Mode::Graph && self.connects(function, inner) =>
-            {
+            ExprKind::Widen(inner) if function.mode == Mode::Graph && inner.is_connection() => {
                 self.unsupported(value.at, "a widening of a connection");
                 "None".to_string()
             }
@@ -343,9 +341,7 @@ impl Emitter<'_> {
                 let then = self.expression(function, then);
                 format!("({then} if {condition} else None)")
             }
-            ExprKind::Tuple(entries)
-                if function.mode == Mode::Graph && self.connects(function, value) =>
-            {
+            ExprKind::Tuple(entries) if function.mode == Mode::Graph && value.is_connection() => {
                 self.connected_tuple(function, value, entries)
             }
             ExprKind::Tuple(entries) => {
@@ -629,7 +625,7 @@ impl Emitter<'_> {
                         self.unsupported(value.at, "an element of an unsized list of composites");
                         return "None".to_string();
                     }
-                    let connected = self.connects(function, index);
+                    let connected = index.is_connection();
                     let base = self.expression(function, base);
                     let index = self.expression(function, index);
                     let index = if connected {
@@ -640,7 +636,7 @@ impl Emitter<'_> {
                     self.natives = true;
                     return format!("_core.position_in({base}, {index})");
                 }
-                if matches!(base.ty, Type::List { .. }) && self.connects(function, index) {
+                if matches!(base.ty, Type::List { .. }) && index.is_connection() {
                     self.unsupported(value.at, "a list's element at a position that ticks");
                     return "None".to_string();
                 }
@@ -657,7 +653,7 @@ impl Emitter<'_> {
                         self.unsupported(value.at, "an element of a dictionary of composites");
                         return "None".to_string();
                     }
-                    let connected = self.connects(function, index);
+                    let connected = index.is_connection();
                     let Some(key) = self.annotation(key, false, value.at) else {
                         return "None".to_string();
                     };
@@ -720,7 +716,7 @@ impl Emitter<'_> {
                 value: tested,
             } => {
                 self.natives = true;
-                let lifted = function.mode == Mode::Graph && self.connects(function, tested);
+                let lifted = function.mode == Mode::Graph && tested.is_connection();
                 let tested = self.expression(function, tested);
                 let tag = if *success { "ok" } else { "err" };
                 if lifted {
@@ -843,6 +839,7 @@ impl Emitter<'_> {
                             },
                             ty: Type::Scalar(Scalar::Bool),
                             at: value.at,
+                            category: ValueCategory::Value,
                         };
                         self.expression(function, &one)
                     })
@@ -1704,7 +1701,7 @@ impl Emitter<'_> {
         };
         let mut given = Vec::new();
         for (index, entry) in entries.iter().enumerate() {
-            if !self.connects(function, entry) && !whole_scalar(&entry.ty) {
+            if !entry.is_connection() && !whole_scalar(&entry.ty) {
                 self.unsupported(entry.at, "a composite value in a tuple of connections");
                 return "None".to_string();
             }
@@ -1727,7 +1724,7 @@ impl Emitter<'_> {
     /// and structs map "to child fields"). hgraph gives the field's
     /// port: a bundle's own child, and for a `TS` of a whole struct a
     /// connection of that field of each value.
-    fn connected_field(&self, function: &Function, value: &Expr) -> bool {
+    fn connected_field(&self, value: &Expr) -> bool {
         let ExprKind::Field { base, .. } = &value.kind else {
             return false;
         };
@@ -1738,71 +1735,21 @@ impl Emitter<'_> {
                 kind: NamedKind::Struct,
                 ..
             }
-        ) && self.connects(function, base)
+        ) && base.is_connection()
     }
 
     /// True when `value`, written in a graph, is an element of a
     /// connection of a list or of a dictionary (TYPE-9: "lists to child
     /// positions, dictionaries to keyed children"): hgraph gives the
     /// child's port, and an unsized list's is reported where it is read.
-    fn connected_element(&self, function: &Function, value: &Expr) -> bool {
+    fn connected_element(&self, value: &Expr) -> bool {
         let ExprKind::Index { base, .. } = &value.kind else {
             return false;
         };
         matches!(
             base.ty,
             Type::List { .. } | Type::Dict { .. } | Type::Tuple(_)
-        ) && self.connects(function, base)
-    }
-
-    /// True when `value`, written in a graph, is a connection: a
-    /// temporal parameter or a local given one, what a temporal
-    /// function gives, or what a lifted call gives (FN-6).
-    pub(super) fn connects(&self, function: &Function, value: &Expr) -> bool {
-        match &value.kind {
-            ExprKind::Local(local) => function.locals[*local].category == ValueCategory::Connection,
-            ExprKind::Call {
-                callee, arguments, ..
-            } => callee.declaration().is_some_and(|(module, declaration)| {
-                let declared = &self.program.modules[module].declarations[declaration];
-                declared.kind.role() == Some(Role::Temporal)
-                    || arguments
-                        .iter()
-                        .any(|argument| self.connects(function, &argument.value))
-            }),
-            ExprKind::Widen(inner) => self.connects(function, inner),
-            // A tuple is a connection where one of its entries is.
-            ExprKind::Tuple(entries) => entries.iter().any(|entry| self.connects(function, entry)),
-            // ERR-7: a capture is "read through two connections".
-            ExprKind::Capture(_) | ExprKind::Captured { .. } => true,
-            // ERR-3: "In composition a test of a connection is an
-            // ordinary lifted call (FN-6): it gives a connection of
-            // `bool`".
-            ExprKind::TagTest { value, .. } => self.connects(function, value),
-            // A field of a connection is the field's own connection,
-            // and so is an element of one.
-            ExprKind::Field { base, .. } | ExprKind::Index { base, .. } => {
-                self.connects(function, base)
-            }
-            // CTRL-13: an `if` "is a connection when its condition is
-            // one or either branch's value is", and a block is what
-            // its value is.
-            ExprKind::If {
-                condition,
-                then,
-                otherwise,
-            } => {
-                self.connects(function, condition)
-                    || self.connects(function, then)
-                    || otherwise
-                        .as_ref()
-                        .is_some_and(|otherwise| self.connects(function, otherwise))
-            }
-            ExprKind::Block {
-                value: Some(value), ..
-            } => self.connects(function, value),
-            _ => false,
-        }
+        ) && base.is_connection()
     }
 
     /// TYPE-16: `delta<set<i64>>(added: [1, 2], removed: [3])`, a set's
