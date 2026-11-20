@@ -158,13 +158,9 @@ impl Test {
     /// on the line before it, or one minute where none is written."
     pub fn limit(&self) -> Option<Duration> {
         self.integration
-            .then(|| self.timeout.unwrap_or(INTEGRATION_LIMIT))
+            .then(|| self.timeout.unwrap_or(hgl_analyser::INTEGRATION_LIMIT))
     }
 }
-
-/// The time limit of an integration test that writes none: one minute
-/// (TST-17).
-pub const INTEGRATION_LIMIT: Duration = Duration::from_secs(60);
 
 impl Test {
     /// The statement of the test that line `line` of its module's file

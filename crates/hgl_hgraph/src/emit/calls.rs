@@ -394,8 +394,8 @@ impl<'a> Emitter<'a> {
             && declared_in
                 .bodies
                 .get(declaration)
-                .and_then(Option::as_ref)
-                .is_some_and(|body| !yields(&body.statements))
+                .is_some_and(Option::is_some)
+            && !declared_in.is_source(declaration)
     }
 
     /// What parameter `index` of the function `callee` is given when a

@@ -160,3 +160,32 @@ fn a_yield_writes_a_value_of_the_sources_type() {
         ]
     );
 }
+
+/// SOURCE-1: "A temporal `fn` whose body has a `yield` is a source". The
+/// analyser says which declarations are (`Module::is_source`), so that no
+/// target works it out again: a node and a graph are not.
+#[test]
+fn which_declarations_are_sources_is_said() {
+    let checked = module(concat!(
+        "fn two_values() -> i64 {\n",
+        "    yield 1s: 7\n",
+        "    yield 1s: 9\n",
+        "}\n",
+        "fn counted(value: i64) -> i64 {\n",
+        "    when { return value }\n",
+        "}\n",
+        "fn wired(value: i64) -> i64 => counted(value)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    let module = checked.program.module("m").unwrap();
+    let sources: Vec<(&str, bool)> = module
+        .declarations
+        .iter()
+        .enumerate()
+        .map(|(index, declared)| (declared.name.as_str(), module.is_source(index)))
+        .collect();
+    assert_eq!(
+        sources,
+        [("two_values", true), ("counted", false), ("wired", false)]
+    );
+}

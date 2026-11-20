@@ -24,7 +24,7 @@ impl Emitter<'_> {
         match module.phases.get(index).copied().flatten() {
             // SOURCE-1: "A temporal `fn` whose body has a `yield` is a
             // source".
-            Some(Phase::Node) if yields(&body.statements) => {
+            Some(Phase::Node) if module.is_source(index) => {
                 // SOURCE-1 has a source take no temporal input, and FN-16
                 // a node mark its result `ref`: a source's is not written.
                 if signature.reference {
@@ -1137,34 +1137,6 @@ pub(super) fn capability(injected: &str) -> Option<(&'static str, &'static str)>
         "scheduler" | "alarm" => Some(("_scheduler", "_hg.SCHEDULER")),
         _ => None,
     }
-}
-
-/// True when `statements` hold a `yield`, at any depth: in a loop, a
-/// `switch`, an `if` or a block. SOURCE-1: "A temporal `fn` whose body
-/// has a `yield` is a source".
-pub(super) fn yields(statements: &[Stmt]) -> bool {
-    fn within(value: &Expr) -> bool {
-        match &value.kind {
-            // A block ends with an expression where its last statement
-            // is one: an `if` that yields, say.
-            ExprKind::Block { statements, value } => {
-                yields(statements) || value.as_deref().is_some_and(within)
-            }
-            ExprKind::If {
-                then, otherwise, ..
-            } => within(then) || otherwise.as_deref().is_some_and(within),
-            _ => false,
-        }
-    }
-    statements.iter().any(|statement| match statement {
-        Stmt::Yield { .. } => true,
-        Stmt::For { body, .. } | Stmt::While { body, .. } => yields(body),
-        Stmt::Switch { cases, default, .. } => {
-            cases.iter().any(|case| yields(&case.body)) || default.as_deref().is_some_and(yields)
-        }
-        Stmt::Expr(value) => within(value),
-        _ => false,
-    })
 }
 
 /// An input a node designates (FN-16), as the provider's `Designation`
