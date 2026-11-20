@@ -8,13 +8,11 @@
 //! which `src/runtime.rs` includes. An installed `hgl` then needs no
 //! checkout of the repository.
 //!
-//! `HGL_CPP_RUNTIME_SOURCE`, where it is set when `hgl` is built, names
-//! another directory to take the library from: a checkout of it under
-//! development, say. Where neither is there the list is empty, and the
-//! driver says so when it is asked to build. Cargo is told to run this
-//! script again when a file of the directory changes; while there is
-//! none it watches only this script, since a path that is not there
-//! would have the crate rebuilt on every build.
+//! Where `runtime/cpp` is not there the list is empty, and the driver
+//! says so when it is asked to build. Cargo is told to run this script
+//! again when a file of the directory changes; while there is none it
+//! watches only this script, since a path that is not there would have
+//! the crate rebuilt on every build.
 
 use std::env;
 use std::fmt::Write as _;
@@ -25,11 +23,7 @@ fn main() {
     // CARGO_MANIFEST_DIR is this crate's directory; the workspace root
     // is two levels up.
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("set by Cargo"));
-    println!("cargo::rerun-if-env-changed=HGL_CPP_RUNTIME_SOURCE");
-    let runtime = match env::var_os("HGL_CPP_RUNTIME_SOURCE").filter(|named| !named.is_empty()) {
-        Some(named) => PathBuf::from(named),
-        None => manifest.join("../../runtime/cpp"),
-    };
+    let runtime = manifest.join("../../runtime/cpp");
     let mut files = Vec::new();
     if runtime.join("CMakeLists.txt").is_file() {
         println!("cargo::rerun-if-changed={}", runtime.display());

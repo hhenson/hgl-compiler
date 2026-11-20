@@ -234,6 +234,12 @@ pub(super) fn native(name: &str) -> String {
     format!("::{}::{name}", crate::runtime::NAMESPACE)
 }
 
+/// A name of the runtime library's test host, qualified from the global
+/// namespace: `::hglrt::testing::check`.
+pub(crate) fn testing(name: &str) -> String {
+    format!("::{}::{name}", crate::runtime::TESTING)
+}
+
 /// A value function of the program as a call names it, qualified from
 /// the global namespace: `::hgl::demo::calc::m_::total`.
 pub(super) fn function(program: &Program, module: usize, declaration: usize) -> String {

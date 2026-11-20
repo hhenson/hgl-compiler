@@ -24,11 +24,11 @@
 //! | HGL | C++ |
 //! | --- | --- |
 //! | Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, in the namespace `hgl::demo::calc::m_` |
-//! | Its named tests | Functions in `hgl::demo::calc::m_::t_`, and `tests/demo.calc.cpp`, an entry unit that runs those its command line names |
+//! | Its named tests | Functions in `hgl::demo::calc::m_::t_`, and `tests/demo.calc.cpp`, an entry unit that registers each with the runtime library's test host and runs those its command line names |
 //! | `const fn total(a: i64, b: i64) -> i64` | A function `::hgraph::Int total(::hgraph::Int a, ::hgraph::Int b)` |
 //! | `i64`, `f64`, `bool` | hgraph's `Int`, `Float`, `Bool` |
 //! | A native candidate of core, `a + b` of two `i64` | The library's function named as the hgraph target names it: `::hglrt::add__i64_i64(a, b)` |
-//! | `assert condition` | `::hglrt::check(condition)`, after `::hglrt::statement(__LINE__)` |
+//! | `assert condition` | `::hglrt::testing::check(condition)`, after `::hglrt::testing::statement()` |
 //!
 //! Every other form is reported as not written yet. `docs/architecture.md`
 //! says what is covered and how the target's progress is counted.

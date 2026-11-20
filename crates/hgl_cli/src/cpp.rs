@@ -25,9 +25,11 @@ mod build;
 mod sdk;
 
 use std::fs;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use hgl_analyser::Program;
 use hgl_cpp::Output;
@@ -38,6 +40,7 @@ use hgl_source::SourceMap;
 
 use super::EXIT_FAILED;
 use build::{Workspace, write_if_changed};
+
 use sdk::Toolchain;
 
 /// Writes `files` under `directory`, each where it differs from what is
@@ -172,24 +175,44 @@ impl OnCpp<'_> {
         };
         // Each executable built runs its tests, and those of one that is
         // not are not run: an older one is never run in its place.
-        let launches: Vec<Launch> = wanted
-            .iter()
-            .zip(&built.fresh)
-            .filter(|(_, fresh)| **fresh)
-            .map(|(&executable, _)| Launch {
-                executable,
-                tests: runnable
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (_, _, of))| *of == executable)
-                    .map(|(slot, (_, test, _))| (slot, *test))
-                    .collect(),
-            })
-            .collect();
+        // A test held to a time limit (TST-17) is run in a process of its
+        // own, which is ended at the limit; the others of an executable
+        // share one.
+        let mut launches: Vec<Launch> = Vec::new();
+        for (&executable, _) in wanted.iter().zip(&built.fresh).filter(|(_, fresh)| **fresh) {
+            let tests = runnable
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, _, of))| *of == executable);
+            let mut shared = Vec::new();
+            for (slot, (_, test, _)) in tests {
+                match test.limit() {
+                    Some(limit) => launches.push(Launch {
+                        executable,
+                        tests: vec![(slot, *test)],
+                        limit: Some(limit),
+                    }),
+                    None => shared.push((slot, *test)),
+                }
+            }
+            if !shared.is_empty() {
+                launches.push(Launch {
+                    executable,
+                    tests: shared,
+                    limit: None,
+                });
+            }
+        }
         let mut outcomes = vec![None; runnable.len()];
-        for (slot, outcome) in
-            launch_all(&workspace, output, &launches, self.sources, jobs.as_deref())
-        {
+        let libraries = library_path(&description.libraries);
+        for (slot, outcome) in launch_all(
+            &workspace,
+            output,
+            &launches,
+            self.sources,
+            &libraries,
+            jobs.as_deref(),
+        ) {
             outcomes[slot] = Some(outcome);
         }
         let failure = built.failure.unwrap_or_default();
@@ -204,23 +227,28 @@ impl OnCpp<'_> {
     }
 }
 
-/// One executable to run, and the tests it is to run: each as a
+/// One run of an executable, and the tests it is to run: each as a
 /// position among the tests asked to run, and the test.
 struct Launch<'o> {
     /// Its position in `Output::executables`.
     executable: usize,
     /// The tests.
     tests: Vec<(usize, &'o hgl_cpp::Test)>,
+    /// How long the run may take, for the one test held to a limit
+    /// (TST-17); `None` for tests with none.
+    limit: Option<Duration>,
 }
 
 /// Runs each of `launches` in `workspace`, as many at once as `jobs`
-/// says or the machine has cores, and gives what became of each test,
-/// by its position among those asked to run.
+/// says or the machine has cores, each with `libraries` as its
+/// `LD_LIBRARY_PATH`, and gives what became of each test, by its
+/// position among those asked to run.
 fn launch_all(
     workspace: &Workspace,
     output: &Output,
     launches: &[Launch],
     sources: &SourceMap,
+    libraries: &std::ffi::OsStr,
     jobs: Option<&str>,
 ) -> Vec<(usize, Outcome)> {
     let threads = jobs
@@ -241,7 +269,9 @@ fn launch_all(
                         let Some(launch) = launches.get(taken) else {
                             break;
                         };
-                        ran.extend(launch_one(workspace, output, launch, sources));
+                        ran.extend(launch_one(
+                            workspace, output, launch, taken, sources, libraries,
+                        ));
                     }
                     ran
                 })
@@ -259,13 +289,16 @@ fn launch_all(
     ran.into_iter().flatten().collect()
 }
 
-/// Runs one executable on a plan of its tests, and reads what became of
-/// each from the results it writes.
+/// Runs one executable, the `position`th of the runs, on its tests, with
+/// `libraries` as its `LD_LIBRARY_PATH`, and reads what became of each
+/// from the results it writes.
 fn launch_one(
     workspace: &Workspace,
     output: &Output,
     launch: &Launch,
+    position: usize,
     sources: &SourceMap,
+    libraries: &std::ffi::OsStr,
 ) -> Vec<(usize, Outcome)> {
     let module = &output.executables[launch.executable].module;
     let all = |reason: String| -> Vec<(usize, Outcome)> {
@@ -275,50 +308,52 @@ fn launch_one(
             .map(|(slot, _)| (*slot, Outcome::NotRun(reason.clone())))
             .collect()
     };
-    let plan = workspace
-        .directory
-        .join("plans")
-        .join(format!("{module}.txt"));
+    // A results file for each run, by its position among them.
     let results = workspace
         .directory
         .join("results")
-        .join(format!("{module}.txt"));
-    // One test on each line: its identity and its time limit in seconds,
-    // `-` for none (TST-17).
-    let planned: String = launch
-        .tests
-        .iter()
-        .map(|(_, test)| {
-            let limit = test
-                .limit()
-                .map_or("-".to_string(), |limit| limit.as_secs_f64().to_string());
-            format!("{} {limit}\n", test.identity())
-        })
-        .collect();
-    let written = write_if_changed(&plan, &planned).and_then(|()| {
-        // What an earlier run recorded is not this run's.
-        match fs::remove_file(&results) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(format!(
-                "{} could not be removed: {error}",
-                results.display()
-            )),
-            _ => fs::create_dir_all(results.parent().expect("under the workspace"))
-                .map_err(|error| format!("{} could not be made: {error}", results.display())),
-        }
-    });
-    if let Err(reason) = written {
+        .join(format!("{module}.{position}.txt"));
+    // What an earlier run recorded is not this run's.
+    let cleared = match fs::remove_file(&results) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(format!(
+            "{} could not be removed: {error}",
+            results.display()
+        )),
+        _ => fs::create_dir_all(workspace.directory.join("results"))
+            .map_err(|error| format!("{} could not be made: {error}", results.display())),
+    };
+    if let Err(reason) = cleared {
         return all(reason);
     }
+    // `EXECUTABLE RESULTS NAME...`: the runtime library's test host
+    // (`hglrt/testing.h`).
     let executable = workspace.executable(module);
-    let finished = match Command::new(&executable).arg(&plan).arg(&results).output() {
+    let mut command = Command::new(&executable);
+    command
+        .env("LD_LIBRARY_PATH", libraries)
+        .arg(&results)
+        .args(launch.tests.iter().map(|(_, test)| test.identity()));
+    let (finished, timed_out) = match finish(&mut command, launch.limit) {
         Ok(finished) => finished,
         Err(error) => {
             return all(format!(
-                "{} could not be started: {error}",
+                "{} could not be run: {error}",
                 executable.display()
             ));
         }
     };
+    // TST-17: a test still running at its limit has failed.
+    if let (true, Some(limit)) = (timed_out, launch.limit) {
+        let said = format!(
+            "timed out: it was still running after its limit of {}",
+            seconds(limit)
+        );
+        return launch
+            .tests
+            .iter()
+            .map(|(slot, _)| (*slot, Outcome::FailedRun(said.clone())))
+            .collect();
+    }
     let printed = String::from_utf8_lossy(&finished.stderr);
     let last = printed
         .lines()
@@ -358,6 +393,74 @@ fn launch_one(
             (*slot, outcome)
         })
         .collect()
+}
+
+/// `directories`, the libraries' directories of a toolchain, before
+/// those `LD_LIBRARY_PATH` already names, as its value.
+fn library_path(directories: &[String]) -> std::ffi::OsString {
+    let inherited = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+    let paths = directories
+        .iter()
+        .map(PathBuf::from)
+        .chain(std::env::split_paths(&inherited));
+    // A directory with a `:` in it cannot be named in the list; it is
+    // then left to the executable's `RPATH`.
+    std::env::join_paths(paths).unwrap_or(inherited)
+}
+
+/// Runs `command` to its end, and gives what it printed and how it
+/// ended; or, where `limit` is given and the run is still going when it
+/// passes, ends it and says so. Only this run's own process is ended.
+fn finish(
+    command: &mut Command,
+    limit: Option<Duration>,
+) -> std::io::Result<(std::process::Output, bool)> {
+    let Some(limit) = limit else {
+        return command.output().map(|output| (output, false));
+    };
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // What it prints is read as it runs, so that it never waits on a
+    // full pipe.
+    let mut stderr = child.stderr.take().expect("piped above");
+    let reader = std::thread::spawn(move || {
+        let mut printed = Vec::new();
+        let _ = stderr.read_to_end(&mut printed);
+        printed
+    });
+    let deadline = Instant::now() + limit;
+    let (status, timed_out) = loop {
+        if let Some(status) = child.try_wait()? {
+            break (status, false);
+        }
+        if Instant::now() >= deadline {
+            // It may have ended by itself since.
+            let _ = child.kill();
+            break (child.wait()?, true);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let stderr = reader.join().unwrap_or_default();
+    let output = std::process::Output {
+        status,
+        stdout: Vec::new(),
+        stderr,
+    };
+    Ok((output, timed_out))
+}
+
+/// A time limit as a person reads it, as the hgraph target's driver
+/// writes it: `1m`, `90s`, `0.5s`.
+fn seconds(limit: Duration) -> String {
+    let seconds = limit.as_secs_f64();
+    if seconds >= 60.0 && seconds % 60.0 == 0.0 {
+        format!("{}m", (seconds / 60.0) as u64)
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 /// `hgl run --target cpp` of application `chosen` of `program`: no

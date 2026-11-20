@@ -27,6 +27,8 @@
     "core_implementation::months_end_at_the_months_last_day",
     "core_implementation::reverse_date_time_addition",
     "core_implementation::reverse_scaling",
+    "core_implementation::text_is_read_as_a_float",
+    "core_implementation::text_is_read_as_an_integer",
     "core_implementation::the_other_conversions",
 ]
 "an eval" = [
@@ -170,14 +172,11 @@
     "core_implementation::repeated_invalidation_is_silent",
     "core_implementation::unconfigured_arithmetic_uses_lifting",
 ]
-"the candidate `eq_(f64, f64, f64, f64)`" = [
-    "core_implementation::a_number_is_a_flag_and_back",
+"the candidate `add_(i64, f64)`" = [
     "core_implementation::mixed_numeric_arithmetic",
-    "core_implementation::text_is_read_as_a_float",
 ]
-"the candidate `eq_(i64, i64, f64, f64)`" = [
-    "core_implementation::an_f64_is_rounded_as_asked",
-    "core_implementation::text_is_read_as_an_integer",
+"the candidate `convert(i64)`" = [
+    "core_implementation::a_number_is_a_flag_and_back",
 ]
 "the candidate `eq_(zoned_datetime, zoned_datetime, bool)`" = [
     "core_implementation::a_duration_moves_a_zoned_instant",
@@ -209,6 +208,9 @@
 "the type `zoned_datetime`" = [
     "core_implementation::zoned_datetimes_are_equal_by_instant_and_zone",
     "core_implementation::zoned_datetimes_compared_as_utc_are_equal_by_instant",
+]
+"this expression" = [
+    "core_implementation::an_f64_is_rounded_as_asked",
 ]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph

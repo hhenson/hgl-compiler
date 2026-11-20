@@ -219,7 +219,7 @@ fn a_value_function_and_its_tests_are_written() {
     let marked: Vec<usize> = unit
         .lines()
         .enumerate()
-        .filter(|(_, line)| line.contains("::hglrt::statement(__LINE__)"))
+        .filter(|(_, line)| line.contains("::hglrt::testing::statement()"))
         .map(|(number, _)| number + 1)
         .collect();
     let lines: Vec<String> = marked
@@ -372,4 +372,45 @@ fn an_executable_links_what_its_units_call() {
         .map(|&unit| output.units[unit].source.as_str())
         .collect();
     assert_eq!(units, ["modules/demo.a.cpp", "modules/demo.b.cpp"]);
+}
+
+/// EXPR-2: arguments are evaluated in the order written, and then the
+/// defaults of those left out. C++ promises no order for a call's
+/// arguments, so where more than one may fail each is a statement of
+/// its own, in that order, before the call.
+#[test]
+fn arguments_that_may_fail_are_evaluated_in_order() {
+    let emitted = emit(&[(
+        "demo.order.hgl",
+        concat!(
+            "module demo.order\n",
+            "const fn one() -> i64 => 1\n",
+            "const fn pair(a: i64, b: i64 = one()) -> i64 => a\n",
+            "const fn ordered() -> i64 => pair(one())\n",
+            "const fn direct() -> i64 => pair(2)\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.order.cpp")
+        .unwrap()
+        .text;
+    let one = "::hgl::demo::order::m_::one()";
+    let pair = "::hgl::demo::order::m_::pair";
+    assert!(
+        unit.contains(&format!(
+            "return [&] {{ const ::hgraph::Int argument_0_ = {one}; \
+             const ::hgraph::Int argument_1_ = {one}; \
+             return {pair}(argument_0_, argument_1_); }}();"
+        )),
+        "{unit}"
+    );
+    // One argument that may fail, the default, needs no order.
+    assert!(
+        unit.contains(&format!("return {pair}(2, {one});")),
+        "{unit}"
+    );
 }

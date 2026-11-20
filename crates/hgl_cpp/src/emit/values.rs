@@ -334,18 +334,22 @@ impl Emitter<'_> {
         }
         // Each parameter's argument: the one written for it, or what
         // `hgl_lower` says one left out is given (UNIT-8), a default
-        // read with nothing in scope (UNIT-7).
-        let mut given: Vec<Option<String>> = vec![None; signature.parameters.len()];
-        let mut written: Vec<(usize, String)> = Vec::new();
+        // read with nothing in scope (UNIT-7). Each is the parameter's
+        // position, what is written for it, and whether it may fail.
+        let mut written: Vec<(usize, String, bool)> = Vec::new();
         for argument in arguments {
-            let Some(index) = argument.parameter.filter(|&index| index < given.len()) else {
+            let Some(index) = argument
+                .parameter
+                .filter(|&index| index < signature.parameters.len())
+            else {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let value = self.expression(body, &argument.value);
-            written.push((index, value));
+            written.push((index, value, may_fail(&argument.value)));
         }
+        let mut defaulted: Vec<(usize, String, bool)> = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
-            if written.iter().any(|(given, _)| *given == index) {
+            if written.iter().any(|(given, _, _)| *given == index) {
                 continue;
             }
             match left_out(program, (module, declaration), index, parameter) {
@@ -364,7 +368,7 @@ impl Emitter<'_> {
                     self.expanding.push(key);
                     let value = self.expression(&cold, default);
                     self.expanding.pop();
-                    given[index] = Some(value);
+                    defaulted.push((index, value, may_fail(default)));
                 }
                 // UNIT-8: a `T?` left out is null; no nullable type is
                 // written yet.
@@ -377,28 +381,23 @@ impl Emitter<'_> {
                 }
             }
         }
-        // EXPR-2: in the order written. Where more than one argument
-        // may fail, each is a statement of its own, in that order,
-        // before the call; an immediately called lambda gives them a
-        // block to be in.
-        let effects = arguments
-            .iter()
-            .filter(|argument| {
-                !matches!(
-                    argument.value.kind,
-                    ExprKind::Literal(_) | ExprKind::Local(_)
-                )
-            })
-            .count();
-        if effects <= 1 {
-            for (index, value) in written {
-                given[index] = Some(value);
+        // EXPR-2: the arguments written, in the order written, and then
+        // the defaults of those left out. Where more than one of them
+        // may fail, C++, which evaluates a call's arguments in no order
+        // it promises, is given each as a statement of its own, in that
+        // order, before the call; an immediately called lambda gives
+        // them a block to be in. Its names, `argument_0_`, are of a form
+        // `identifier` gives no HGL name.
+        let mut given: Vec<String> = vec![String::new(); signature.parameters.len()];
+        let ordered: Vec<(usize, String, bool)> = written.into_iter().chain(defaulted).collect();
+        if ordered.iter().filter(|(_, _, fails)| *fails).count() <= 1 {
+            for (index, value, _) in ordered {
+                given[index] = value;
             }
-            let given: Vec<String> = given.into_iter().map(Option::unwrap_or_default).collect();
             return format!("{called}({})", given.join(", "));
         }
         let mut steps = String::new();
-        for (index, value) in written {
+        for (index, value, _) in ordered {
             let Some(ty) = cpp_type(&signature.parameters[index].ty) else {
                 return self.missing(
                     at,
@@ -406,9 +405,8 @@ impl Emitter<'_> {
                 );
             };
             steps.push_str(&format!("const {ty} argument_{index}_ = {value}; "));
-            given[index] = Some(format!("argument_{index}_"));
+            given[index] = format!("argument_{index}_");
         }
-        let given: Vec<String> = given.into_iter().map(Option::unwrap_or_default).collect();
         format!("[&] {{ {steps}return {called}({}); }}()", given.join(", "))
     }
 
@@ -453,4 +451,10 @@ impl Emitter<'_> {
                     })
             })
     }
+}
+
+/// True where evaluating `value` may fail or do anything at all: any
+/// expression but a literal and a local.
+fn may_fail(value: &Expr) -> bool {
+    !matches!(value.kind, ExprKind::Literal(_) | ExprKind::Local(_))
 }

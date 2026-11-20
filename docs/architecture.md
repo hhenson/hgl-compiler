@@ -2088,8 +2088,8 @@ over any program to its end.
 | `const fn` over `i64`, `f64`, `bool` | A function over hgraph's `Int`, `Float`, `Bool` |
 | A native candidate or function of core | The runtime library's function, named as the hgraph target names its provider's: `::hglrt::add__i64_i64` |
 | A call with more than one argument that may fail | Its arguments evaluated one statement at a time, in the order written (EXPR-2), in a lambda called where it stands |
-| Named test | A function of `hgl::demo::calc::m_::t_`; each statement told to the library first, `::hglrt::statement(__LINE__)`; `assert` is `::hglrt::check` |
-| The tests of a module | `tests/demo.calc.cpp`: a table of them by identity and a `main` that runs those a plan names; one executable |
+| Named test | A function of `hgl::demo::calc::m_::t_`; each statement told to the library's test host first, `::hglrt::testing::statement()`; `assert` is `::hglrt::testing::check` |
+| The tests of a module | `tests/demo.calc.cpp`: a `hglrt::testing::Registration` of each by its identity, and a `main` that is `hglrt::testing::main`; one executable |
 | Everything else | Reported: `the cpp target does not write ... yet` |
 
 Every C++ name an HGL name gives is made by one function,
@@ -2105,22 +2105,18 @@ left out too, and a test that reaches one is listed with the first form
 it reaches, as `hgl_lower::pieces` finds it for both targets. What a
 call that leaves an argument out gives it is `hgl_lower::calls`'s.
 
-What the driver needs of `runtime/cpp` until the runtime library and
-this driver are reconciled: a CMake project that reads `HGL_HGRAPH_SDK`
-and `HGL_HGRAPH_DEPS` as cache variables, takes `BUILD_TESTING=OFF` and
-`HGLRT_TESTS=OFF`, and installs `lib/libhglrt.so`, linked with hgraph's
-`runtime` and `wiring` libraries, and `include/hglrt/hglrt.h`, the fixed
-include set, which includes `include/hglrt/host.h`, the test host
-alone. A native is defined where its name followed by `(` is in a header
-under `include/`. The host's names are `hglrt::TestCase` (a name and a
-function), `hglrt::run_tests(cases, argc, argv)`, `hglrt::statement(line)`
-and `hglrt::check(holds)`. An executable is run as `EXE PLAN RESULTS`:
-the plan has a line for each test to run, its identity and its limit in
-seconds or `-`; the results are the hgraph driver's protocol (`start N`,
-`passed N`, `failed N LINE TEXT`, `unloaded N TEXT`), read by the same
-code, `hgl_hgraph::read_results`, with LINE a line of the module's unit.
-`HGL_CPP_RUNTIME_SOURCE`, when `hgl` is built, takes the library from
-another directory in place of `runtime/cpp`.
+What the target takes of the runtime library ("The C++ runtime
+library" below): its CMake project, configured with `HGL_HGRAPH_SDK`,
+`HGL_HGRAPH_DEPS` and `BUILD_TESTING=OFF`, built and installed;
+`hglrt/hglrt.h`, the fixed include set; core's natives in `hglrt`, a
+native being defined where its name followed by `(` is in a header under
+`include/`; and its test host, `hglrt::testing`. An executable is run as
+`EXE RESULTS NAME...`, and the results are the hgraph driver's protocol
+(`start N`, `passed N`, `failed N LINE TEXT`, `unloaded N TEXT`), read by
+the same code, `hgl_hgraph::read_results`, with LINE a line of the
+module's unit. The host takes no time limit, so a test held to one
+(TST-17) is run in a process of its own, which the driver ends at the
+limit.
 
 #### The build driver
 
@@ -2150,7 +2146,7 @@ directory `--keep` names, under a lock held until its last executable
 has ended. Each file the target writes, and `build.ninja`, is written
 only where it changed, and `ninja -k 0` builds the executables of the
 tests to run: one object for each module's unit, with the precompiled
-header, one for each entry unit, without it, and one executable for each
+header, one for each entry unit, with it too, and one executable for each
 module, linked from its entry, its module's unit and each unit that
 one calls into, through those (a unit is linked whole). Where the
 build fails, an executable is run only where `ninja -n` says nothing is

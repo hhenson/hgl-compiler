@@ -11,10 +11,10 @@
 //! What the target wrote is written into the workspace only where it
 //! differs from what is there, and so is `build.ninja`: a file
 //! unchanged keeps its time, and `ninja` compiles nothing for it. The
-//! build has one object for each module's unit, compiled with the
-//! precompiled header, one for each entry unit, compiled without it,
-//! and one executable for each module with tests, linked from its entry
-//! and the units `hgl_cpp` says it needs.
+//! build has one object for each module's unit and each entry unit,
+//! compiled with the precompiled header, and one executable for each
+//! module with tests, linked from its entry and the units `hgl_cpp`
+//! says it needs.
 //!
 //! A build that fails runs no executable it did not finish: where
 //! `ninja` fails, each executable is run only where `ninja` says
@@ -44,18 +44,22 @@ pub(super) const JOBS: &str = "CMAKE_BUILD_PARALLEL_LEVEL";
 
 /// The directory everything the cpp target makes is kept under: the one
 /// `HGL_NATIVE_CACHE` names, or `hgl/native` in the user's cache
-/// directory.
+/// directory, as an absolute path. The paths a toolchain's description
+/// holds are under it, and `ninja` reads them from a workspace's
+/// directory: a relative one would be read from there.
 pub(super) fn cache() -> Result<PathBuf, String> {
-    if let Some(named) = std::env::var_os(CACHE).filter(|named| !named.is_empty()) {
-        return Ok(PathBuf::from(named));
-    }
-    dirs::cache_dir()
-        .map(|directory| directory.join("hgl").join("native"))
-        .ok_or_else(|| {
-            format!(
-                "there is no cache directory for the user: set {CACHE} to a directory to build in"
-            )
-        })
+    let directory = match std::env::var_os(CACHE).filter(|named| !named.is_empty()) {
+        Some(named) => PathBuf::from(named),
+        None => dirs::cache_dir()
+            .map(|directory| directory.join("hgl").join("native"))
+            .ok_or_else(|| {
+                format!(
+                    "there is no cache directory for the user: set {CACHE} to a directory to build in"
+                )
+            })?,
+    };
+    std::path::absolute(&directory)
+        .map_err(|error| format!("{} cannot be made absolute: {error}", directory.display()))
 }
 
 /// Takes the lock of `directory`, waiting for a run that holds it; it
@@ -151,7 +155,9 @@ impl Workspace {
         cache: &Path,
     ) -> Result<Workspace, String> {
         let directory = match keep {
-            Some(directory) => directory.to_path_buf(),
+            Some(directory) => std::path::absolute(directory).map_err(|error| {
+                format!("{} cannot be made absolute: {error}", directory.display())
+            })?,
             None => {
                 let mut hash = DefaultHasher::new();
                 for root in roots {
@@ -281,11 +287,9 @@ fn ninja_file(output: &Output, description: &Description) -> String {
         escaped(&description.link.join(" "))
     ));
     text.push_str(
-        "# A module's unit, with the precompiled header of the fixed include set.\n\
+        "# A unit, a module's or an entry, with the precompiled header of the\n\
+         # fixed include set.\n\
          rule unit\n  command = $cxx $cflags -Winvalid-pch -include $pch -MD -MF $out.d -c $in -o $out\n  \
-         depfile = $out.d\n  deps = gcc\n  description = compile $in\n\n\
-         # An entry unit, which includes the test host alone.\n\
-         rule entry\n  command = $cxx $cflags -MD -MF $out.d -c $in -o $out\n  \
          depfile = $out.d\n  deps = gcc\n  description = compile $in\n\n\
          rule link\n  command = $cxx -o $out $in $ldflags\n  description = link $out\n\n",
     );
@@ -298,7 +302,7 @@ fn ninja_file(output: &Output, description: &Description) -> String {
     }
     for executable in &output.executables {
         text.push_str(&format!(
-            "build {}: entry {}\n",
+            "build {}: unit {}\n",
             ninja_path(&object(&executable.source)),
             ninja_path(&executable.source)
         ));

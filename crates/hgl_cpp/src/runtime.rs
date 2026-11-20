@@ -22,12 +22,14 @@ pub static FILES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/runtime
 /// precompiles.
 pub const HEADER: &str = "hglrt/hglrt.h";
 
-/// The header an entry unit includes: the test host alone, with no
-/// header of hgraph's, so that an entry unit is quick to compile.
-pub const HOST_HEADER: &str = "hglrt/host.h";
-
-/// The C++ namespace the library defines its names in.
+/// The C++ namespace the library defines its names in: core's natives
+/// among them.
 pub const NAMESPACE: &str = "hglrt";
+
+/// The namespace of the library's test host (`hglrt/testing.h`): a
+/// test's `check` and `statement`, each test's `Registration`, and the
+/// `main` of an executable of tests.
+pub const TESTING: &str = "hglrt::testing";
 
 /// True where `hgl` carries the library's sources.
 pub fn available() -> bool {

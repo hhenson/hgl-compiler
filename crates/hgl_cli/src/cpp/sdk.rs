@@ -62,7 +62,7 @@ const DESCRIPTION: &str = "description.json";
 
 /// A version of what is made for a toolchain: raised when what this
 /// driver makes changes, so that what an older `hgl` made is not used.
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 /// Everything the cpp target builds with, as it was found.
 #[derive(Debug, Clone)]
@@ -98,6 +98,13 @@ pub(super) struct Description {
     /// The header every unit of a module is compiled with first, whose
     /// precompiled form is beside it.
     pub(super) header: String,
+    /// The directories an executable's libraries are loaded from: the
+    /// runtime library's, the SDK's and its dependencies'. An executable
+    /// is run with them in `LD_LIBRARY_PATH`: the runtime library and
+    /// the SDK's own find what they need by their own `RUNPATH`s, which
+    /// do not name the dependencies' directory, and a `RUNPATH` stops
+    /// the loader reading the executable's `RPATH` for what they load.
+    pub(super) libraries: Vec<String>,
 }
 
 impl Toolchain {
@@ -203,6 +210,7 @@ impl Toolchain {
             "compile": description.compile,
             "link": description.link,
             "header": description.header,
+            "libraries": description.libraries,
         });
         write_if_changed(&described, &json.to_string())?;
         Ok(description)
@@ -215,7 +223,12 @@ impl Toolchain {
             "Ninja".to_string(),
             format!("-DCMAKE_MAKE_PROGRAM={}", self.ninja.display()),
             format!("-DCMAKE_CXX_COMPILER={}", self.compiler.display()),
+            // The flags are these and no others: CMake would otherwise
+            // take `CXXFLAGS` and `LDFLAGS` from the environment, which
+            // the toolchain's hash does not hold.
             format!("-DCMAKE_CXX_FLAGS={}", self.flags.join(" ")),
+            "-DCMAKE_EXE_LINKER_FLAGS=".to_string(),
+            "-DCMAKE_SHARED_LINKER_FLAGS=".to_string(),
             format!("-D{SDK}={}", self.sdk.display()),
             format!("-D{DEPS}={}", self.deps.display()),
         ]
@@ -262,8 +275,7 @@ impl Toolchain {
             // The library is installed in `lib` on every system, where the
             // description's program finds it.
             .arg("-DCMAKE_INSTALL_LIBDIR=lib")
-            .arg("-DBUILD_TESTING=OFF")
-            .arg("-DHGLRT_TESTS=OFF");
+            .arg("-DBUILD_TESTING=OFF");
         run("the runtime library's configuration", &mut configure)?;
         let mut built = Command::new(cmake);
         built.arg("--build").arg(&build);
@@ -309,10 +321,18 @@ impl Toolchain {
         run("the description of a build against the SDK", &mut configure)?;
         let target = probe_target(&build.join(".cmake/api/v1/reply"))?;
         let mut description = description_of(&target, &self.compiler)?;
-        // The SDK's libraries find theirs beside them (`$ORIGIN`) and
-        // the dependencies nowhere: an `RPATH` of the program's, which
-        // the loader also reads for the libraries it loads, finds them.
+        // An `RPATH` of the program's, which the loader reads for what
+        // it loads where that has no `RUNPATH` of its own, so that an
+        // executable run by hand finds what it can.
         description.link.push("-Wl,--disable-new-dtags".to_string());
+        description.libraries = [
+            runtime.join("lib"),
+            self.sdk.join("lib"),
+            self.deps.join("lib"),
+        ]
+        .iter()
+        .map(|directory| directory.display().to_string())
+        .collect();
         if self.lld {
             description.link.push("-fuse-ld=lld".to_string());
         }
@@ -547,6 +567,7 @@ fn description_of(target: &Value, compiler: &Path) -> Result<Description, String
         compile,
         link,
         header: String::new(),
+        libraries: Vec::new(),
     })
 }
 
@@ -566,6 +587,7 @@ fn read_description(text: &str) -> Option<Description> {
         compile: strings(&json["compile"])?,
         link: strings(&json["link"])?,
         header: json["header"].as_str()?.to_string(),
+        libraries: strings(&json["libraries"])?,
     })
 }
 

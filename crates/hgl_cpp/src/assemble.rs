@@ -262,35 +262,37 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
 }
 
 /// The entry unit of module `index`'s tests: their declarations, a
-/// table of each by its identity (TST-15), and a `main` that runs
-/// those its command line names. `clear` is each test that can be run,
-/// with its position among the module's tests.
+/// registration of each with the runtime library's test host by its
+/// identity (TST-15), and a `main` that runs those its command line
+/// names. `clear` is each test that can be run, with its position among
+/// the module's tests. The registrations are in the entry unit, and in
+/// no module's unit, so that an executable linked with another
+/// module's unit runs only its own module's tests.
 fn entry(program: &Program, index: usize, clear: &[(usize, &Piece)]) -> String {
     let module = &program.modules[index];
     let tested = test_namespace(&module.path);
     let declared = tested.trim_start_matches("::");
-    let mut text = format!("{WRITTEN}\n#include <{}>\n", runtime::HOST_HEADER);
+    let mut text = format!("{WRITTEN}\n#include <{}>\n", runtime::HEADER);
     text.push_str(&format!("\nnamespace {declared}\n{{\n"));
     for (test, _) in clear {
         let name = crate::emit::identifier(&module.tests[*test].name);
         text.push_str(&format!("void {name}();\n"));
     }
     text.push_str(&format!("}}  // namespace {declared}\n"));
-    text.push_str("\nnamespace\n{\n// Each test by its identity, `module.path::name` (TST-15).\n");
-    text.push_str(&format!(
-        "const ::{}::TestCase cases[] = {{\n",
-        runtime::NAMESPACE
-    ));
-    for (test, _) in clear {
+    text.push_str("\nnamespace\n{\n// Each test, by its identity, `module.path::name` (TST-15).\n");
+    let registration = crate::emit::testing("Registration");
+    for (position, (test, _)) in clear.iter().enumerate() {
         let test = &module.tests[*test];
         let identity = crate::emit::string(&format!("{}::{}", module.path, test.name));
         let name = crate::emit::identifier(&test.name);
-        text.push_str(&format!("    {{{identity}, &{tested}::{name}}},\n"));
+        text.push_str(&format!(
+            "const {registration} test_{position}{{{identity}, &{tested}::{name}}};\n"
+        ));
     }
-    text.push_str("};\n}  // namespace\n");
+    text.push_str("}  // namespace\n");
     text.push_str(&format!(
-        "\nint main(int argc, char **argv)\n{{\n    return ::{}::run_tests(cases, argc, argv);\n}}\n",
-        runtime::NAMESPACE
+        "\nint main(int argc, char **argv)\n{{\n    return {}(argc, argv);\n}}\n",
+        crate::emit::testing("main")
     ));
     text
 }

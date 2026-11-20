@@ -22,18 +22,18 @@ namespace hgl::demo::calc::m_::t_
 
 void sums()
 {
-    ::hglrt::statement(__LINE__);
-    ::hglrt::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::calc::m_::total(2, 3), 5, 0.0, 0.0));
-    ::hglrt::statement(__LINE__);
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::calc::m_::total(2, 3), 5, 0.0, 0.0));
+    ::hglrt::testing::statement();
     [[maybe_unused]] const ::hgraph::Int large = ::hgl::demo::calc::m_::twice(21);
-    ::hglrt::statement(__LINE__);
-    ::hglrt::check(::hglrt::eq__i64_i64_f64_f64(large, 42, 0.0, 0.0));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(large, 42, 0.0, 0.0));
 }
 
 void overflows()
 {
-    ::hglrt::statement(__LINE__);
-    ::hglrt::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::calc::m_::total(9223372036854775807, 1), 0, 0.0, 0.0));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::calc::m_::total(9223372036854775807, 1), 0, 0.0, 0.0));
 }
 
 }  // namespace hgl::demo::calc::m_::t_

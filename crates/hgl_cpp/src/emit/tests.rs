@@ -2,12 +2,12 @@
 //! module's test namespace, which the module's entry unit runs when its
 //! command line names it. Part of the transpiler, the last stage.
 //!
-//! Each statement of the test is told to the runtime library before it
-//! runs, `::hglrt::statement(__LINE__)`, so that a failure names the
-//! statement that was running; `assert condition` is
-//! `::hglrt::check(condition)` (TST-4). A test's statements are written
-//! as a value function's are; an eval, and every other form, is not
-//! written yet.
+//! Each statement of the test is told to the runtime library's test
+//! host before it runs, `::hglrt::testing::statement()`, which takes the
+//! line it is called on, so that a failure names the statement that was
+//! running; `assert condition` is `::hglrt::testing::check(condition)`
+//! (TST-4). A test's statements are written as a value function's are;
+//! an eval, and every other form, is not written yet.
 
 use hgl_analyser::hir::{Body, Local, Stmt};
 use hgl_diagnostics::Location;
@@ -33,8 +33,8 @@ impl Emitter<'_> {
             self.piece
                 .statements
                 .push((line, statement_at(statement, &body.locals)));
-            let statement_line = names::native("statement");
-            text.push_str(&format!("{INDENT}{statement_line}(__LINE__);\n"));
+            let marked = names::testing("statement");
+            text.push_str(&format!("{INDENT}{marked}();\n"));
             self.test_statement(body, statement, &mut text);
         }
         text.push_str("}\n");
@@ -47,7 +47,7 @@ impl Emitter<'_> {
             // TST-4: "An `assert` takes a `bool`".
             Stmt::Assert { condition, .. } => {
                 let condition = self.expression(body, condition);
-                let check = names::native("check");
+                let check = names::testing("check");
                 text.push_str(&format!("{INDENT}{check}({condition});\n"));
             }
             Stmt::Return { at, .. } => self.unsupported(*at, "a `return` in a test"),

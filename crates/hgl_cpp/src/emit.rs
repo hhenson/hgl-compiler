@@ -29,7 +29,7 @@ mod tests;
 mod types;
 mod values;
 
-pub(crate) use names::{identifier, module_namespace, string, test_namespace};
+pub(crate) use names::{identifier, module_namespace, string, test_namespace, testing};
 
 /// What writing a module gave.
 pub(crate) struct Written {
