@@ -61,9 +61,14 @@ impl Emitter<'_> {
     /// become inputs; scalar arguments and omitted defaults bind as
     /// configuration"), wired: a node written for it in the context's
     /// `lifted`, given each connection as an input and each other argument
-    /// as configuration, in the order they are written. `given` are the
-    /// arguments written already, by their positions; `result` the type
-    /// of what the call gives, `None` for a function with no result.
+    /// as configuration, in the order they are written, then each
+    /// parameter the call leaves out as configuration, in the order of the
+    /// parameters (EXPR-2). `given` are the arguments written already, by
+    /// their positions; `defaults` the values already held for some of the
+    /// parameters left out, by their positions among the parameters (an
+    /// eval's, which holds them before its run's configuration); `result`
+    /// the type of what the call gives, `None` for a function with no
+    /// result.
     ///
     /// Its `eval` calls the function with the payload of each input and
     /// the value of each configuration, and publishes what it gives:
@@ -74,6 +79,7 @@ impl Emitter<'_> {
         scope: &mut Scope,
         value: &Expr,
         given: &[Given],
+        defaults: &[(usize, String)],
         result: Option<&Type>,
     ) -> String {
         let ExprKind::Call {
@@ -173,6 +179,14 @@ impl Emitter<'_> {
                             let read = self.temporal_read(&ty, &view, at);
                             let fallback = match fallback {
                                 LeftOut::Default(default) => {
+                                    // The analyser keeps a default as a
+                                    // value with no locals of its own, so a
+                                    // block in it that runs statements
+                                    // cannot be written (`calls`).
+                                    if changes(default) {
+                                        return self
+                                            .missing(default.at, "a default that runs statements");
+                                    }
                                     // UNIT-7: a default is read with no
                                     // local in scope.
                                     let cold = Body {
@@ -242,6 +256,94 @@ impl Emitter<'_> {
             locals.push(Local {
                 name: parameter.name.clone(),
                 at,
+                kind: LocalKind::Parameter,
+                ty,
+                category: ValueCategory::Value,
+            });
+        }
+        // FN-6: "scalar arguments and omitted defaults bind as
+        // configuration": each parameter the call leaves out is given its
+        // default where the graph is built, after the arguments written and
+        // in the order of the parameters (EXPR-2), as an `hgraph::Scalar`.
+        // One written `T?` with no default is given null (UNIT-8), which the
+        // call of the function in the node writes itself; so is a default
+        // of a `T?` that cannot fail, which is the same value wherever it
+        // is evaluated: hgraph holds no `std::optional` as configuration.
+        let mut omitted_failing = 0;
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            if arguments
+                .iter()
+                .any(|argument| argument.parameter == Some(index))
+            {
+                continue;
+            }
+            if parameter.pack.is_some() {
+                return self.missing(value.at, "a lifted call that leaves out a pack");
+            }
+            let (configured, ty) = match left_out(program, (module, declaration), index, parameter)
+            {
+                Some(LeftOut::Null) => continue,
+                Some(LeftOut::Default(default)) if matches!(default.ty, Type::Nullable(_)) => {
+                    if may_fail(default) {
+                        return self.missing(
+                            default.at,
+                            "a lifted call that leaves out a `T?` whose default may fail",
+                        );
+                    }
+                    continue;
+                }
+                Some(LeftOut::Default(default)) => {
+                    let configured = match defaults.iter().find(|(at, _)| *at == index) {
+                        Some((_, held)) => held.clone(),
+                        None => {
+                            if changes(default) {
+                                return self.missing(default.at, "a default that runs statements");
+                            }
+                            let cold = Body {
+                                locals: Vec::new(),
+                                statements: Vec::new(),
+                            };
+                            let mut defaults = Scope::cold(program, &cold);
+                            let written = self.expression(&mut defaults, default);
+                            if !defaults.before.is_empty() {
+                                return self
+                                    .missing(default.at, "a default that propagates a failure");
+                            }
+                            omitted_failing += usize::from(may_fail(default));
+                            written
+                        }
+                    };
+                    (configured, default.ty.clone())
+                }
+                None => {
+                    return self.missing(
+                        value.at,
+                        &format!("a call that leaves out `{}`", parameter.name),
+                    );
+                }
+            };
+            let Some(cpp) = self.written_type(&ty, value.at) else {
+                return "0".to_string();
+            };
+            let label = names::string(&parameter.name);
+            let name = identifier(&parameter.name);
+            parameters.push(format!("::hgraph::Scalar<{label}, {cpp}> {name}"));
+            roles.push(Role::Config);
+            unique |= super::nodes::holds_f64(program, &ty, 0);
+            wired.push(format!("static_cast<{cpp}>({configured})"));
+            labels.push(Some(parameter.name.clone()));
+            synthetic.push(Argument {
+                parameter: Some(index),
+                value: Expr {
+                    kind: ExprKind::Local(locals.len()),
+                    ty: ty.clone(),
+                    at: value.at,
+                    category: ValueCategory::Value,
+                },
+            });
+            locals.push(Local {
+                name: parameter.name.clone(),
+                at: value.at,
                 kind: LocalKind::Parameter,
                 ty,
                 category: ValueCategory::Value,
@@ -324,7 +426,8 @@ impl Emitter<'_> {
             .iter()
             .enumerate()
             .filter(|(position, argument)| unwritten(*position) && may_fail(&argument.value))
-            .count();
+            .count()
+            + omitted_failing;
         let mut steps = String::new();
         if failing > 1
             || arguments
@@ -475,7 +578,7 @@ impl Emitter<'_> {
         // The call the child graph makes, of its own ports and scalars.
         let inner = if lifted {
             let result = gives.then(|| call.ty.clone());
-            self.lifted(scope, call, &given, result.as_ref())
+            self.lifted(scope, call, &given, &[], result.as_ref())
         } else {
             let ports: Vec<(usize, String)> = given
                 .iter()
@@ -719,7 +822,7 @@ impl Family for Lifting {
             ExprKind::Call { .. } if value.is_lifted() => {
                 let result = value.ty.clone();
                 let gives = gives(emitter, value);
-                Some(emitter.lifted(scope, value, &[], gives.then_some(&result)))
+                Some(emitter.lifted(scope, value, &[], &[], gives.then_some(&result)))
             }
             ExprKind::Capture(call) => Some(emitter.capture(scope, value, call)),
             ExprKind::Captured { capture, error } => Some(emitter.captured(scope, capture, *error)),

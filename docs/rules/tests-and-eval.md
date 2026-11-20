@@ -27,7 +27,7 @@ transpiler: planned
 analyser: partial
 
 - A test declares no `state` or `cache`, injects nothing, and has no hook, `yield` or `return`, in its block or a block inside it (`test.statement_phase`)
-- Its block is read as a graph's body is, with `assert` among its statements
+- Outside the argument of an `eval` or a `run` its statements are value code, with `assert` among them: a call of a node, a graph or a source is `call.role` (the code proposed), an operator selects among all its candidates and one that selects a temporal candidate is `call.role` too (GEN-5), a `const` parameter takes any value, and nothing is lifted; the call an `eval` or a `run` takes is read as composition is
 - An eval of a target with a result is a trace of the result's type, bound with `let` and compared; a trace, or a value that holds one, stored in a field or given to a temporal function is `trace.escape`; one given to a `const fn` is the list of its publications there (TST-16)
 - Left: an `eval` outside a named test, which is not read; a trace returned
 

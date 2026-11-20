@@ -33,14 +33,17 @@
 // `try_except_` is declared by `<hgraph/types/subgraph_wiring.h>`, which
 // brings hgraph's full wiring front end (`graph_wiring.h`) with it: the
 // front end for generated code (`generated.h`) has no `try_except_`, as it
-// has `compiled::switch_` and `compiled::map_`. Nothing of hgraph's standard
-// library comes with it.
+// has `compiled::switch_` and `compiled::map_` (hgraph issue 1871, which
+// asks for it there; this include goes when it is). Nothing of hgraph's
+// standard library comes with it.
 #pragma once
 
 #include <hglrt/failure.h>
 #include <hglrt/values.h>
 
 #include <hgraph/types/generated.h>
+// hgraph issue 1871: `try_except_` is not in the front end for generated
+// code; until it is, its header and the full front end with it.
 #include <hgraph/types/subgraph_wiring.h>
 
 #include <cstddef>

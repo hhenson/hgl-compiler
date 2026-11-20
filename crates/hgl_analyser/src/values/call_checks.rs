@@ -508,9 +508,11 @@ impl<'a> Typer<'a> {
     /// A graph's own rule, that a `const` parameter is given no
     /// connection, is `constants_of`'s. This is the other half: where
     /// values are those of one evaluation, in a hook, a source or a
-    /// value function.
+    /// value function. Value code, a test's outside an `eval` or a `run`
+    /// and an application's statements, is evaluated once, before the
+    /// run's graph is built (TST-3, UNIT-14): what it gives is fixed.
     fn fixed_arguments(&mut self, selected: &Selected) {
-        if self.graph {
+        if self.graph || self.value_code {
             return;
         }
         let &Selected {

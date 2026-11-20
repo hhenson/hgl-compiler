@@ -41,6 +41,7 @@
     "conformance::changing_a_sibling_field_does_not_publish_a_bid",
 ]
 "a source with a declaration or a hook" = [
+    "conformance::a_delayed_yield_keeps_its_payload_until_it_wakes",
     "conformance::a_resumed_source_keeps_its_locals_until_it_returns",
 ]
 "a temporal value of `MarketQuote`" = [
@@ -70,6 +71,7 @@
     "conformance::published_null_takes_precedence_over_a_default",
     "conformance::removing_an_absent_key_is_ignored",
     "conformance::switching_keys_follows_the_new_child",
+    "core_implementation::a_null_publication_has_a_tuple_in_the_recording",
     "core_implementation::identity_arithmetic_invalidates_and_recovers",
     "core_implementation::identity_arithmetic_publications",
     "core_implementation::repeated_invalidation_is_silent",
@@ -138,6 +140,9 @@
 "a trace of `list<i64, 2>`" = [
     "conformance::a_fixed_list_delta_reports_the_position_in_updated",
 ]
+"a trace of `list<str, 2>`" = [
+    "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
+]
 "a trace of `tuple<i64, str>`" = [
     "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",
 ]
@@ -147,19 +152,9 @@
     "conformance::a_probe_reads_a_selected_producer_that_stayed_quiet",
     "conformance::an_outer_producer_keeps_its_lifetime_across_branches",
 ]
-"an eval's configuration" = [
-    "conformance::a_delayed_yield_keeps_its_payload_until_it_wakes",
-    "conformance::a_run_length_counts_from_its_start",
-    "conformance::a_simulation_runs_from_start_up_to_end",
-    "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
-    "conformance::an_alarm_cannot_hide_an_input_tick",
-    "conformance::an_earlier_recording_survives_a_second_run",
-    "conformance::conflicting_run_bounds_fail_before_evaluation",
-    "conformance::the_clock_reports_the_time_of_each_input",
-    "core_implementation::a_null_publication_has_a_tuple_in_the_recording",
-]
 "an injected `alarm`" = [
     "conformance::a_zero_duration_in_start_wakes_the_alarm_at_the_first_evaluation",
+    "conformance::an_alarm_cannot_hide_an_input_tick",
 ]
 "an injected `scheduler`" = [
     "conformance::a_reset_removes_all_wakes_from_an_inputless_node",

@@ -9,6 +9,7 @@
 #undef a
 #undef at
 #undef b
+#undef bit_kept
 #undef bump
 #undef bumped
 #undef bumped_at
@@ -23,7 +24,11 @@
 #undef evens
 #undef factor
 #undef first
+#undef first_bit_as_it_was
+#undef first_flag
 #undef first_row_total
+#undef flags
+#undef flipped
 #undef from_a_made_row
 #undef grown
 #undef held_text
@@ -47,6 +52,7 @@
 #undef opposite
 #undef pair
 #undef pick
+#undef pick_flag
 #undef placed
 #undef placed_at
 #undef present
@@ -55,6 +61,7 @@
 #undef same_level
 #undef scaled
 #undef sell
+#undef set_bits
 #undef side
 #undef sign
 #undef step
@@ -75,6 +82,10 @@ enum class Side
     sell,
     hold,
 };
+constexpr ::hglrt::EnumNames<Side, 3> hgl_enum(Side) noexcept
+{
+    return {"demo.values::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}, {Side::hold, "hold"}}};
+}
 
 // enum Level (TYPE-7)
 enum class Level
@@ -82,6 +93,10 @@ enum class Level
     low,
     high,
 };
+constexpr ::hglrt::EnumNames<Level, 2> hgl_enum(Level) noexcept
+{
+    return {"demo.values::Level", {{Level::low, "low"}, {Level::high, "high"}}};
+}
 
 // const limit: i64 (UNIT-13), module demo.values, line 9
 const ::hgraph::Int& limit();
@@ -191,7 +206,25 @@ std::tuple<::hgraph::Str, ::hgraph::Int> text_first();
 // same_level(level: Level) -> Level (`const fn`), module demo.values, line 270
 ::hgl::demo::values::m_::Level same_level(::hgl::demo::values::m_::Level level);
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 275
+// flipped(flags: list<bool>) -> list<bool> (`const fn`), module demo.values, line 276
+::hglrt::list<::hgraph::Bool> flipped(const ::hglrt::list<::hgraph::Bool>& flags);
+
+// first_flag(flags: list<bool>) -> bool (`const fn`), module demo.values, line 282
+::hgraph::Bool first_flag(const ::hglrt::list<::hgraph::Bool>& flags);
+
+// pick_flag(a: bool, b: bool) -> bool (`const fn`), module demo.values, line 284
+::hgraph::Bool pick_flag(::hgraph::Bool a, ::hgraph::Bool b);
+
+// first_bit_as_it_was() -> bool (`const fn`), module demo.values, line 286
+::hgraph::Bool first_bit_as_it_was();
+
+// bit_kept() -> bool (`const fn`), module demo.values, line 294
+::hgraph::Bool bit_kept();
+
+// set_bits(flags: list<bool>) -> i64 (`const fn`), module demo.values, line 301
+::hgraph::Int set_bits(const ::hglrt::list<::hgraph::Bool>& flags);
+
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 312
 void bump(::hgraph::Int& count, ::hgraph::Int by);
 
 namespace i_::first
@@ -204,6 +237,12 @@ namespace i_::first
 {
 // first<T>(values: list<T>) -> T (`const fn`), the instance `str`, module demo.values, line 74
 ::hgraph::Str of_str(const ::hglrt::list<::hgraph::Str>& values);
+}  // namespace i_::first
+
+namespace i_::first
+{
+// first<T>(values: list<T>) -> T (`const fn`), the instance `bool`, module demo.values, line 74
+::hgraph::Bool of_bool(const ::hglrt::list<::hgraph::Bool>& values);
 }  // namespace i_::first
 
 }  // namespace hgl::demo::values::m_

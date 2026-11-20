@@ -162,8 +162,11 @@ impl<'a> Typer<'a> {
         }
         // GEN-5: in composition "a temporal candidate outranks a value
         // candidate of the same parameter types, as composition chooses
-        // the temporal definition of a pair (FN-4)."
-        if self.graph && selected.len() > 1 {
+        // the temporal definition of a pair (FN-4)"; in a test's or an
+        // application's value code "a value candidate outranking a
+        // temporal one of the same parameter types".
+        if (self.graph || self.value_code) && selected.len() > 1 {
+            let composing = self.graph;
             let temporal = |chosen: &Chosen| {
                 matches!(
                     program.modules[chosen.module].declarations[chosen.declaration]
@@ -183,10 +186,12 @@ impl<'a> Typer<'a> {
             let outranked: Vec<bool> = selected
                 .iter()
                 .map(|chosen| {
-                    !temporal(chosen)
-                        && selected
-                            .iter()
-                            .any(|other| temporal(other) && types(other) == types(chosen))
+                    // The role that yields: the value one in composition,
+                    // the temporal one in value code.
+                    temporal(chosen) != composing
+                        && selected.iter().any(|other| {
+                            temporal(other) == composing && types(other) == types(chosen)
+                        })
                 })
                 .collect();
             let mut position = 0;
@@ -285,6 +290,54 @@ impl<'a> Typer<'a> {
         } = chosen;
         let signature: &Signature = &taken;
         let program = self.program;
+        // GEN-5: in a test's or an application's value code "a temporal
+        // candidate it selects rejects" (TST-3, UNIT-14), the code
+        // proposed as `call.role`.
+        if self.value_code
+            && !self.graph
+            && matches!(
+                program.modules[module].declarations[declaration]
+                    .kind
+                    .candidate(),
+                Some((Role::Temporal, _))
+            )
+        {
+            let name = &program.modules[operator.module].declarations[operator.declaration].name;
+            self.diagnostics.emit(
+                error(
+                    Category::FunctionKind,
+                    codes::CALL_ROLE,
+                    at,
+                    format!(
+                        "the candidate of `{name}` this selects is temporal, and value code calls \
+                         value functions"
+                    ),
+                    "GEN-5",
+                )
+                .with_related(
+                    program.modules[module].declarations[declaration].at,
+                    "this candidate",
+                )
+                .with_note(
+                    "a test outside an `eval` or a `run`, and an application's statements, are \
+                     value code (TST-3, UNIT-14)",
+                ),
+            );
+            let arguments = given
+                .into_iter()
+                .map(|given| hir::Argument {
+                    parameter: None,
+                    value: given.value,
+                })
+                .collect();
+            let kind = ExprKind::Call {
+                callee: Callee::Unread,
+                arguments,
+                form,
+                lifted: false,
+            };
+            return (kind, Type::Unknown);
+        }
         let bound = match program.modules[operator.module]
             .details
             .get(operator.declaration)
