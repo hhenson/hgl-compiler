@@ -40,8 +40,9 @@
 //! key read other than as the argument of a temporal parameter, the
 //! store read in a branch or a loop's body (hgraph builds a child graph
 //! on a wiring of its own, which neither sees nor sets the root's store),
-//! an ordinary value that may fail computed there, or in a graph called
-//! there at any depth (hgraph compiles every
+//! an ordinary value that may fail computed there, in a graph called
+//! there at any depth, or as the default of a parameter a call there
+//! leaves out (hgraph compiles every
 //! child as the graph around it is built, where FN-9 has its calls
 //! evaluated as the child is built), a
 //! `return` under a branch selected at runtime in a loop unrolled while
@@ -50,8 +51,9 @@
 //! declared before it.
 
 use hgl_analyser::hir::{Case, Expr, ExprKind, Node, Stmt, ValueCategory, walk_statement_nodes};
-use hgl_analyser::{LocalKind, Phase, Program, Type};
+use hgl_analyser::{Detail, LocalKind, Phase, Program, Type};
 use hgl_diagnostics::Location;
+use hgl_lower::calls::{LeftOut, left_out};
 use hgl_lower::graphs::{
     alternative_statements, always_returns, assigned_outside, continued, key_read_as_value,
     label_value, may_return, named_in, nested_return, taken,
@@ -1576,7 +1578,8 @@ impl Emitter<'_> {
 /// that may fail, or `None` (`Emitter::computes_while_built`). A value
 /// that cannot fail is the same computed either way; what can is a call
 /// that is no temporal function's, an element read and a constant
-/// (`calls::may_fail`). A graph they call is composed with them, so what
+/// (`calls::may_fail`), and the default of a parameter a call leaves out
+/// ([`default_may_fail`]). A graph they call is composed with them, so what
 /// its own body computes is computed then too, at any depth: where that
 /// may fail, the place is the call. A node's body runs only as the node is
 /// evaluated, and is not looked into. `composed` holds the graphs already
@@ -1596,6 +1599,13 @@ fn computed_while_built(
             return;
         };
         if found.is_some() {
+            return;
+        }
+        // UNIT-7: a parameter the call leaves out is given its default as
+        // the call is composed, whatever the call is: a temporal function's,
+        // or a lifted one's (FN-6).
+        if default_may_fail(program, value) {
+            found = Some(value.at);
             return;
         }
         if let ExprKind::Call { callee, .. } = &value.kind
@@ -1649,4 +1659,38 @@ fn computed_while_built(
         }
     }
     None
+}
+
+/// True where `value` is a call that leaves out a parameter whose
+/// default may fail (`calls::may_fail`): the default is evaluated as the
+/// call is (UNIT-7), and so, in a branch, while the graph around it is
+/// built.
+fn default_may_fail(program: &Program, value: &Expr) -> bool {
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = &value.kind
+    else {
+        return false;
+    };
+    let Some((module, declaration)) = callee.declaration() else {
+        return false;
+    };
+    let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration) else {
+        return false;
+    };
+    signature
+        .parameters
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            !arguments
+                .iter()
+                .any(|argument| argument.parameter == Some(*index))
+        })
+        .any(|(index, parameter)| {
+            matches!(
+                left_out(program, (module, declaration), index, parameter),
+                Some(LeftOut::Default(default)) if may_fail(default)
+            )
+        })
 }

@@ -567,6 +567,66 @@ fn a_value_that_may_fail_in_a_graph_a_branch_calls_is_reported() {
     assert_eq!(emitted.blocked("evaluated_once"), None);
 }
 
+/// FN-9, UNIT-7: a parameter a call in a branch leaves out is given its
+/// default as the call is composed, while the graph around the branch is
+/// built: a default that may fail, of a node's `const` parameter or of a
+/// lifted call's, is reported at the call; a literal one is written.
+#[test]
+fn a_default_that_may_fail_in_a_branch_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "const fn inverse(n: i64) -> i64 => 1 // n\n",
+                "\n",
+                "const fn plus(value: i64, by: i64 = inverse(0)) -> i64 => value + by\n",
+                "\n",
+                "fn shifted(value: i64, const by: i64 = inverse(0)) -> i64 {\n",
+                "    when { return value + by }\n",
+                "}\n",
+                "\n",
+                "fn kept(value: i64, const by: i64 = 2) -> i64 {\n",
+                "    when { return value + by }\n",
+                "}\n",
+                "\n",
+                "fn noded(open: bool, value: i64) -> i64 {\n",
+                "    if open { return shifted(value) }\n",
+                "    return value\n",
+                "}\n",
+                "\n",
+                "fn lifted(open: bool, value: i64) -> i64 {\n",
+                "    if open { return plus(value) }\n",
+                "    return value\n",
+                "}\n",
+                "\n",
+                "fn literal(open: bool, value: i64) -> i64 {\n",
+                "    if open { return kept(value) }\n",
+                "    return value\n",
+                "}\n",
+                "\n",
+                "test noded_once { assert eval(noded(open: [false], value: [1])) == [1] }\n",
+                "\n",
+                "test lifted_once { assert eval(lifted(open: [false], value: [1])) == [1] }\n",
+                "\n",
+                "test literal_once { assert eval(literal(open: [false], value: [1])) == [1] }\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    let reason = "the cpp target does not write an ordinary value that may fail computed in a branch or a loop's body, which hgraph computes while the graph around it is built yet";
+    assert_eq!(
+        emitted.blocked("noded_once"),
+        Some(format!("m.hgl:16:22 {reason}"))
+    );
+    assert_eq!(
+        emitted.blocked("lifted_once"),
+        Some(format!("m.hgl:21:22 {reason}"))
+    );
+    assert_eq!(emitted.blocked("literal_once"), None);
+}
+
 /// FN-9: a child of a `switch` "is built then, and its calls are
 /// evaluated then". hgraph compiles a child graph on a wiring of its own,
 /// which neither sees nor sets the store of the run's root, so a branch
