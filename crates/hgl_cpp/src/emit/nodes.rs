@@ -1092,7 +1092,11 @@ impl Family for Nodes {
         depth: usize,
         text: &mut String,
     ) -> bool {
-        let publishing = matches!(emitter.kind(), Some(Kind::Hook(Hook::When) | Kind::Lifted));
+        // A `return` written inside a value, the block a lambda gives
+        // (`expressions`), is the value's own, and publishes nothing:
+        // `conditional` marks it.
+        let publishing = matches!(emitter.kind(), Some(Kind::Hook(Hook::When) | Kind::Lifted))
+            && scope.conditional == 0;
         let indent = INDENT.repeat(depth);
         match statement {
             // FN-7: "a runtime return publishes and exits the function's

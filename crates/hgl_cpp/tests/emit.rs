@@ -621,7 +621,7 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
         .expect("the graph `twice`");
     assert!(
         twice.contains(
-            "[&] { const auto argument_00_ = value; const auto argument_01_ = ::hgl::m::m_::one(); const auto argument_02_ = ::hgl::m::m_::one(); return ::hgl::m::m_::w_::scaled(wiring_, argument_00_, argument_01_, argument_02_); }()"
+            "[&] { const auto argument_00_ = value; const ::hgraph::Int argument_01_ = ::hgl::m::m_::one(); const ::hgraph::Int argument_02_ = ::hgl::m::m_::one(); return ::hgl::m::m_::w_::scaled(wiring_, argument_00_, argument_01_, argument_02_); }()"
         ),
         "{twice}"
     );

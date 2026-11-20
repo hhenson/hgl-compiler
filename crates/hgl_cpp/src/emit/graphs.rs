@@ -295,7 +295,20 @@ impl Emitter<'_> {
             for index in order {
                 let name = names::temporary("argument", self.temporary());
                 let held = written[index].replace(name.clone()).unwrap_or_default();
-                steps.push_str(&format!("const auto {name} = {held}; "));
+                // A `const` parameter's value is held as its HGL type, so
+                // that what a later argument changes, an element of a
+                // `list<bool>` read through its proxy among it, is not
+                // what it holds; a port as it is.
+                let parameter = &signature.parameters[index];
+                let ty = if parameter.constant {
+                    match self.written_type(&parameter.ty, parameter.at) {
+                        Some(ty) => ty,
+                        None => return "0".to_string(),
+                    }
+                } else {
+                    "auto".to_string()
+                };
+                steps.push_str(&format!("const {ty} {name} = {held}; "));
             }
             let mut all = vec![WIRING.to_string()];
             all.extend(written.into_iter().flatten());
@@ -543,11 +556,14 @@ impl Family for Graphs {
                 }
                 true
             }
-            // FN-7: "A composition return selects a connection".
+            // FN-7: "A composition return selects a connection". A
+            // `return` written inside a value, the block a lambda gives
+            // (`expressions`), is the value's own, which `conditional`
+            // marks.
             Stmt::Return {
                 value: Some(value),
                 at,
-            } => {
+            } if scope.conditional == 0 => {
                 let Some(result) = emitter
                     .temporal
                     .as_ref()

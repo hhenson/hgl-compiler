@@ -6,12 +6,15 @@
 #undef Clock
 #undef Logger
 #undef a
+#undef a_held_value_is_as_it_was
 #undef a_run_is_bounded
 #undef add_one
 #undef adds_one
 #undef an_outputless_target_runs
 #undef any_name_is_written
 #undef b
+#undef bumped
+#undef chosen
 #undef clock
 #undef compose
 #undef core
@@ -21,19 +24,26 @@
 #undef counted_ticks
 #undef demo
 #undef earliest_start
+#undef first
 #undef first_of
+#undef flags
 #undef handlers_run_in_order
+#undef item
 #undef lhs
 #undef log_debug
 #undef logger
 #undef name
+#undef next
 #undef noted
+#undef one
 #undef opening
+#undef pick
 #undef record
 #undef replay
 #undef reset
 #undef rhs
 #undef scaled
+#undef second
 #undef seen
 #undef sources_and_constants
 #undef stamped
@@ -425,6 +435,86 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_::pick
+{
+// pick(value: bool, const first: bool, const second: bool) -> bool (node), module demo.temporal, line 68
+struct impl_
+{
+    static constexpr auto name = "demo.temporal::pick";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Bool>> value, [[maybe_unused]] ::hgraph::Scalar<"first", ::hgraph::Bool> first, [[maybe_unused]] ::hgraph::Scalar<"second", ::hgraph::Bool> second, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_)
+    {
+        // when, line 69 (TIME-3)
+        {
+            out_.set(first.value());
+            return;
+        }
+    }
+};
+}  // namespace n_::pick
+namespace w_
+{
+// pick(value: bool, const first: bool, const second: bool) -> bool (node), module demo.temporal, line 68
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> pick(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> value, ::hgraph::Bool first, ::hgraph::Bool second)
+{
+    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::pick::impl_>(wiring_, value, first, second);
+}
+}  // namespace w_
+
+namespace n_::chosen
+{
+// chosen(value: bool) -> bool (graph), module demo.temporal, line 72
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> value)
+    {
+        [[maybe_unused]] ::hglrt::list<::hgraph::Bool> flags = ::hglrt::list<::hgraph::Bool>{false};
+        return [&] { const auto argument_00_ = value; const ::hgraph::Bool argument_01_ = ::hglrt::item(flags, 0); const ::hgraph::Bool argument_02_ = [&]() -> ::hgraph::Bool {
+    ::hglrt::item(flags, 0) = true;
+    return true;
+}(); return ::hgl::demo::temporal::m_::w_::pick(wiring_, argument_00_, argument_01_, argument_02_); }();
+    }
+};
+}  // namespace n_::chosen
+namespace w_
+{
+// chosen(value: bool) -> bool (graph), module demo.temporal, line 72
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> chosen(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> value)
+{
+    return ::hgl::demo::temporal::m_::n_::chosen::impl_::compose(wiring_, value);
+}
+}  // namespace w_
+
+namespace n_::bumped
+{
+// bumped(value: i64) -> i64 (node), module demo.temporal, line 81
+struct impl_
+{
+    static constexpr auto name = "demo.temporal::bumped";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        // when, line 82 (TIME-3)
+        {
+            [[maybe_unused]] const ::hgraph::Int next = [&]() -> ::hgraph::Int {
+    [[maybe_unused]] const ::hgraph::Int one = 1;
+    return ::hglrt::add__i64_i64(::hglrt::checked_value(value), one);
+}();
+            out_.set(next);
+            return;
+        }
+    }
+};
+}  // namespace n_::bumped
+namespace w_
+{
+// bumped(value: i64) -> i64 (node), module demo.temporal, line 81
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> bumped(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hgraph::wire<::hgl::demo::temporal::m_::n_::bumped::impl_>(wiring_, value);
+}
+}  // namespace w_
+
 }  // namespace hgl::demo::temporal::m_
 
 namespace hgl::demo::temporal::m_::t_
@@ -544,6 +634,28 @@ void any_name_is_written()
     });
         const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{4};
         ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+}
+
+void a_held_value_is_as_it_was()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true}, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::temporal::m_::w_::chosen(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{false};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::temporal::m_::w_::bumped(wiring_, input_03_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{2, 3};
+        ::hglrt::testing::expect_same(left_04_, right_05_);
     }();
 }
 

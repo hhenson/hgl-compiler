@@ -178,7 +178,12 @@ impl Emitter<'_> {
                         written = emitter.expression(scope, &argument.value);
                     });
                     let name = names::temporary("argument", self.temporary());
-                    steps.push_str(&format!("{indent}const auto {name} = {written};\n"));
+                    // Held as its HGL type, so that a later part does not
+                    // change it through a proxy (`graphs::temporal_call`).
+                    let Some(ty) = self.written_type(&argument.value.ty, argument.value.at) else {
+                        return "0".to_string();
+                    };
+                    steps.push_str(&format!("{indent}const {ty} {name} = {written};\n"));
                     given.push((position, name));
                 }
                 continue;
@@ -250,7 +255,10 @@ impl Emitter<'_> {
                     return self.missing(default.at, "a default that propagates a failure");
                 }
                 let name = names::temporary("argument", self.temporary());
-                steps.push_str(&format!("{indent}const auto {name} = {written};\n"));
+                let Some(ty) = self.written_type(&default.ty, default.at) else {
+                    return "0".to_string();
+                };
+                steps.push_str(&format!("{indent}const {ty} {name} = {written};\n"));
                 defaults.push((index, name));
             }
         }

@@ -63,6 +63,31 @@ fn compose(value: i64) -> i64 {
     return name(value)
 }
 
+# A node given an element of a list and then a block that changes it: the
+# element is held as it was (EXPR-2).
+fn pick(value: bool, const first: bool, const second: bool) -> bool {
+    when { return first }
+}
+
+fn chosen(value: bool) -> bool {
+    var flags: list<bool> = [false]
+    return pick(value, flags[0], {
+        flags[0] = true
+        true
+    })
+}
+
+# A handler whose `let` is a block's value: its value is no publication.
+fn bumped(value: i64) -> i64 {
+    when {
+        let next = {
+            let one = 1
+            value + one
+        }
+        return next
+    }
+}
+
 test adds_one {
     assert eval(add_one(value: [1, _, 3])) == [2, _, 4]
     assert eval(add_one(value: [1])) != [1]
@@ -93,4 +118,9 @@ test a_run_is_bounded {
 
 test any_name_is_written {
     assert eval(compose(value: [4])) == [4]
+}
+
+test a_held_value_is_as_it_was {
+    assert eval(chosen(value: [true])) == [false]
+    assert eval(bumped(value: [1, 2])) == [2, 3]
 }
