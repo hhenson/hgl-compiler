@@ -314,9 +314,11 @@ test a_cell_that_names_no_change_wakes_no_reader_where_the_input_is_valid {
     ]
 }
 
-# TIME-7: "A value published whole, the same again or empty, is no delta,
-# and ticks as any publication does". A whole set published the same
-# again, not empty, is left: hgraph's `TSS` does not tick for it.
+# TIME-7: "Each entry of a dictionary and each position of a list that it
+# gives is published, the same value again included ... an empty list or
+# dictionary given to a valid empty one, the value is unchanged, and it is
+# no tick. Where a `list<V>`, a dictionary or a set is not valid, an empty
+# one given whole makes it valid, and ticks", invalidated among them.
 fn publish_whole(step: i64) -> list<i64> {
     inject out
     when {
@@ -346,9 +348,9 @@ fn whole_book_woken(prices: dict<str, i64>) -> bool {
 fn whole_watched(step: i64) -> bool => whole_woken(publish_whole(step))
 fn whole_book_watched(step: i64) -> bool => whole_book_woken(whole_book(step))
 
-test a_value_published_whole_the_same_again_ticks {
-    assert eval(whole_watched(step: [0, 0, 1, 1])) == [true, true, true, true]
-    assert eval(whole_book_watched(step: [0, 0, 1, 1])) == [true, true, true, true]
+test a_value_published_whole_the_same_again_ticks_where_it_gives_a_part {
+    assert eval(whole_watched(step: [0, 0, 1, 1, 2, 0, 0])) == [true, _, true, true, false, true, _]
+    assert eval(whole_book_watched(step: [0, 0, 1, 1, 2, 0, 0])) == [true, _, true, true, false, true, _]
 }
 
 # TIME-7 within a tuple and a struct that hold an unsized list: "Where it

@@ -423,8 +423,9 @@ test a_lifted_default_is_bound_only_where_the_input_is_not_valid {
 # changes validity. Where a `list<V>`, a dictionary or a set is not valid,
 # never published or invalidated, it makes the value valid and empty, and
 # ticks. Where it is valid the delta changes nothing, and is no tick ...
-# A value published whole, the same again or empty, is no delta, and
-# ticks as any publication does", and "A delta whose every entry is
+# Where that leaves nothing to publish, a set given the members it holds,
+# or an empty list or dictionary given to a valid empty one, the value is
+# unchanged, and it is no tick", and "A delta whose every entry is
 # ignored, the removal of a key, a member or a position that is not held
 # (TYPE-16), names no change too".
 
@@ -459,7 +460,7 @@ const fn member_count(members: set<i64>) -> i64 {
 fn members_counted(step: i64) -> i64 => member_count(publish_members(step))
 
 test an_empty_set_delta_ticks_only_where_it_makes_the_set_valid {
-    assert eval(members_watched(step: [0, 0, 1, 2, 0, 3, 0])) == [true, _, true, true, _, false, true]
+    assert eval(members_watched(step: [0, 0, 1, 2, 0, 3, 0])) == [true, _, _, true, _, false, true]
     assert eval(publish_members(step: [0, 0, 2, 0, 3, 0])) == [
         delta<set<i64>>(),
         _,
@@ -497,7 +498,7 @@ const fn entry_count(prices: dict<str, i64>) -> i64 {
 fn book_counted(step: i64) -> i64 => entry_count(publish_book(step))
 
 test an_empty_dictionary_delta_ticks_only_where_it_makes_the_dictionary_valid {
-    assert eval(book_watched(step: [0, 0, 1, 2, 0, 3, 0])) == [true, _, true, true, _, false, true]
+    assert eval(book_watched(step: [0, 0, 1, 2, 0, 3, 0])) == [true, _, _, true, _, false, true]
     assert eval(publish_book(step: [0, 0, 2, 0, 3, 0])) == [
         delta<dict<str, i64>>(),
         _,
@@ -534,7 +535,7 @@ const fn reading_count(readings: list<i64>) -> i64 {
 fn readings_counted(step: i64) -> i64 => reading_count(publish_readings(step))
 
 test an_empty_list_delta_ticks_only_where_it_makes_the_list_valid {
-    assert eval(readings_watched(step: [0, 0, 1, 2, 0, 3, 0])) == [true, _, true, true, _, false, true]
+    assert eval(readings_watched(step: [0, 0, 1, 2, 0, 3, 0])) == [true, _, _, true, _, false, true]
     assert eval(readings_counted(step: [2, 3, 0])) == [1, _, 0]
 }
 

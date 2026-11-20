@@ -211,8 +211,10 @@ fn chosen(flag: bool, values: list<i64>) -> list<i64> {
 
 fn chosen_digits(flag: bool, command: i64) -> i64 => digits(chosen(flag, edited(command)))
 
-test an_empty_list_ticks_wherever_it_is_published {
-    assert eval(cleared_digits(command: [0, 1])) == [0, 0]
+# TIME-7: an empty list given whole makes a list that is not valid valid,
+# and ticks; given to the valid empty one, it is no tick.
+test an_empty_list_makes_a_list_valid_wherever_it_is_published {
+    assert eval(cleared_digits(command: [0, 1])) == [0, _]
     assert eval(chosen_digits(flag: [true, false], command: [0, _])) == [0, 123]
 }
 

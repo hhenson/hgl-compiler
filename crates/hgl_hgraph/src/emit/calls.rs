@@ -687,10 +687,10 @@ impl<'a> Emitter<'a> {
             Lifts::Function(_) => call,
         };
         // An unsized list in the result ticks through the node's own
-        // port of its output where it is published empty, and a set
-        // where it keeps its members (`bundle_of`).
+        // port of its output where it is published empty and is not
+        // valid (`bundle_of`).
         let output = match (result, &returns) {
-            (Some(result), Some(returns)) if published_through_port(self.program, result) => {
+            (Some(result), Some(returns)) if holds_growing_list(self.program, result) => {
                 parameters.push(format!("_output: {} = None", output_annotation(returns)));
                 Some("_output")
             }
@@ -748,8 +748,8 @@ impl<'a> Emitter<'a> {
                 continue;
             };
             let taken = match input(self, &argument.value) {
-                // TIME-10: "Ordinary followers observe the selected
-                // target": a lifted function given a `ref` result takes
+                // TIME-10: a reader of a `ref` result "observes the
+                // endpoint designated": a lifted function given one takes
                 // an ordinary input of its type (FN-16), which hgraph
                 // binds to what it designates. A `?` that marks omission
                 // is no part of it, as the analyser admitted it

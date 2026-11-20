@@ -1,12 +1,12 @@
 module demo.refs_wave3
 
-# FN-16: "A `return` to a `ref` result is given an expression that
-# names an endpoint: a temporal input of the node, `ref` or not, or a
-# child of one ... The result designates the logical endpoint that path
-# names: its readers follow what that endpoint is bound to, a later
-# re-binding upstream included, and the node is not woken for it."
-# Core's END-10: "its readers follow what that endpoint is bound to, and
-# the node is not woken by that endpoint's ticks."
+# FN-16: "Returning a whole `ref` parameter samples its current
+# designation when the `return` executes ... If the input later
+# designates another target, the result keeps the sampled designation
+# until the node writes its result again. Returning an ordinary input or
+# a child path designates the logical endpoint named by the path.
+# Readers follow a later rebinding of that endpoint without waking the
+# node for it." Core's END-10 says the same.
 
 # Re-points its result where `use_b` ticks, and not where `a` or `b` is
 # re-bound upstream: both are passive.
@@ -21,7 +21,8 @@ fn follow(value: i64) -> i64 {
     when { return value }
 }
 
-# TIME-10: a `ref` parameter is modified where its designation changes.
+# TIME-10: a node active on a `ref` parameter "is woken where the
+# parameter is given a designation", and not by its target.
 fn designations(ref target: i64) -> i64 {
     state seen: i64 = 0
     when {
@@ -30,7 +31,7 @@ fn designations(ref target: i64) -> i64 {
     }
 }
 
-# A `ref` parameter, designated by a node its re-binding does not wake.
+# A `ref` parameter, sampled by a node its re-binding does not wake.
 fn pass_on(once: bool, ref target: i64) -> ref i64 {
     when modified(once) { return target }
 }
@@ -47,8 +48,19 @@ fn pass_on_any<T>(once: bool, ref target: T) -> ref T {
 
 # Passivates `data`, which then publishes where `a` is re-bound: the
 # node is not woken, so `when modified(data)` is not reached (TIME-3:
-# "Passivating an input removes it as a wake source").
+# "Passivating an input removes it as a wake source"), and the result
+# keeps what it sampled of `a`.
 fn steady(once: bool, data: i64, ref a: i64, ref b: i64) -> ref i64 {
+    when modified(once) {
+        passivate(data)
+        return a
+    }
+    when modified(data) { return b }
+}
+
+# As `steady`, of ordinary inputs: the result follows what `a` is
+# re-bound to, and the node is not woken for it.
+fn steady_held(once: bool, data: i64, a: i64, b: i64) -> ref i64 {
     when modified(once) {
         passivate(data)
         return a
@@ -65,22 +77,25 @@ fn passed_on_any(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
 # Two re-bindings, a node that designates either of two.
 fn picked_twice(outer: bool, use_b: bool, use_d: bool, a: i64, b: i64, c: i64, d: i64) -> i64 =>
     follow(pick(outer, pick(use_b, a, b), pick(use_d, c, d)))
-fn passed_on_designations(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
-    designations(pass_on(once, pick(use_b, a, b)))
 fn steady_of(once: bool, data: i64, use_b: bool, a: i64, b: i64, other: i64) -> i64 =>
     follow(steady(once, data, pick(use_b, a, b), other))
+fn steady_held_of(once: bool, data: i64, use_b: bool, a: i64, b: i64, other: i64) -> i64 =>
+    follow(steady_held(once, data, pick(use_b, a, b), other))
 
 # `use_b` picks `b` at the start, then `a` at the third cycle, where `a`
-# does not tick: a reader that follows the re-binding samples what `a`
-# holds, 2, and then has `a`'s 4 and not `b`'s 11. `once` ticks at the
-# start alone.
-test a_designation_follows_a_re_binding_upstream {
+# does not tick. `once` ticks at the start alone. A relay that returns
+# its `ref` parameter sampled `b`, and its reader has `b`'s 11 and not
+# `a`'s 4. One that returns an ordinary input follows the re-binding:
+# its reader ticks with what `a` holds, 2, and then has `a`'s 4.
+test a_ref_parameter_is_sampled_and_an_ordinary_input_followed {
     assert eval(passed_on(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
-        [10, _, 2, 4]
+        [10, _, _, 11]
     assert eval(held(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
         [10, _, 2, 4]
     assert eval(passed_on_any(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
-        [10, _, 2, 4]
+        [10, _, _, 11]
+    # The outer `pick` samples `b` from the first inner one, and later
+    # `c` from the second: neither inner re-binding reaches the reader.
     assert eval(picked_twice(
         outer: [false, _, _, true, _],
         use_b: [true, _, false, _, _],
@@ -89,13 +104,16 @@ test a_designation_follows_a_re_binding_upstream {
         b:     [10, _, _, _, _],
         c:     [100, _, _, _, _],
         d:     [1000, _, _, _, _],
-    )) == [10, _, 2, 100, 1000]
-    # TIME-10: "A reference ticks where its designation changes": a
-    # reader of the result through a `ref` parameter is modified at the
-    # re-binding upstream.
-    assert eval(passed_on_designations(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
-        [1, _, 2, _]
+    )) == [10, _, _, 100, _]
     assert eval(steady_of(
+        once:  [true, _, _, _],
+        data:  [1, _, 5, _],
+        use_b: [true, _, false, _],
+        a:     [1, 2, _, 4],
+        b:     [10, _, _, 11],
+        other: [100, _, _, _],
+    )) == [10, _, _, 11]
+    assert eval(steady_held_of(
         once:  [true, _, _, _],
         data:  [1, _, 5, _],
         use_b: [true, _, false, _],
@@ -105,18 +123,11 @@ test a_designation_follows_a_re_binding_upstream {
     )) == [10, _, 2, 4]
 }
 
-# TIME-10: "A designation published again unchanged is no tick, and
-# wakes no subscriber." Core's END-10: "A publication of the designation
-# it holds is no tick". What the result holds is what it held before the
-# evaluation: two writes that end where it began are none.
-fn designations_any(ref target: i64) -> i64 {
-    state seen: i64 = 0
-    when valid([]) {
-        seen += 1
-        return seen
-    }
-}
-
+# TIME-10: "Where the result is given the designation it holds, that
+# gives the reader no tick: it goes on observing the endpoint, a
+# publication of it in that cycle included." The node publishes the last
+# write of an evaluation, so two that end where it began give the reader
+# no tick.
 fn written_twice(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
     inject out
     when modified(flag) {
@@ -142,20 +153,17 @@ fn written_by_flag(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
     }
 }
 
-fn twice_designations(flag: bool, a: i64, b: i64) -> i64 =>
-    designations_any(written_twice(flag, a, b))
-fn returned_designations(flag: bool, a: i64, b: i64) -> i64 =>
-    designations_any(written_then_returned(flag, a, b))
-fn flagged_designations(flag: bool, a: i64, b: i64) -> i64 =>
-    designations_any(written_by_flag(flag, a, b))
+fn twice_followed(flag: bool, a: i64, b: i64) -> i64 => follow(written_twice(flag, a, b))
+fn returned_followed(flag: bool, a: i64, b: i64) -> i64 =>
+    follow(written_then_returned(flag, a, b))
 fn flagged_follow(flag: bool, a: i64, b: i64) -> i64 =>
     follow(written_by_flag(flag, a, b))
 
-test two_writes_that_end_where_they_began_are_no_tick {
-    assert eval(twice_designations(flag: [true, true, true], a: [1, _, _], b: [2, _, _])) == [1, _, _]
-    assert eval(returned_designations(flag: [true, true, true], a: [1, _, _], b: [2, _, _])) == [1, _, _]
-    assert eval(flagged_designations(flag: [true, true, false, true], a: [1, _, _, _], b: [2, _, _, _])) ==
-        [1, _, 2, 3]
+# Each evaluation ends designating `b`: the reader has `b`'s publications
+# and none of `a`'s, and no tick where `b` does not publish.
+test two_writes_that_end_where_they_began_give_a_reader_no_tick {
+    assert eval(twice_followed(flag: [true, true, true], a: [1, 4, _], b: [2, _, 3])) == [2, _, 3]
+    assert eval(returned_followed(flag: [true, true, true], a: [1, 4, _], b: [2, _, 3])) == [2, _, 3]
     assert eval(flagged_follow(flag: [true, true, false, true], a: [1, _, _, 5], b: [2, _, _, _])) ==
         [2, _, 1, 2]
 }
@@ -194,7 +202,6 @@ fn checked_any(ref target: i64) -> bool {
 
 fn maybe_followed(flag: bool, x: i64) -> i64 => follow(maybe(flag, x))
 fn maybe_checked(flag: bool, x: i64) -> bool => checked_any(maybe(flag, x))
-fn maybe_designations(flag: bool, x: i64) -> i64 => designations_any(maybe(flag, x))
 fn last_followed(flag: bool, x: i64) -> i64 => follow(last_action(flag, x))
 fn last_checked(flag: bool, x: i64) -> bool => checked_any(last_action(flag, x))
 
@@ -204,7 +211,6 @@ test invalidating_a_ref_result_designates_nothing {
     assert eval(maybe_followed(flag: [true, false, _, true], x: [1, _, 2, _])) == [1, _, _, 2]
     assert eval(maybe_checked(flag: [true, false, false, true], x: [1, _, _, _])) ==
         [true, false, _, true]
-    assert eval(maybe_designations(flag: [true, false, false, true], x: [1, _, _, _])) == [1, 2, _, 3]
     assert eval(last_followed(flag: [true, false, true], x: [1, _, 3])) == [1, _, 3]
     assert eval(last_checked(flag: [true, false, true], x: [1, _, _])) == [true, false, true]
 }
@@ -344,11 +350,11 @@ test a_designated_position_follows_a_re_binding_upstream {
 }
 
 # FN-16, proposed: "`out` of a `ref` result is as a `ref` parameter is:
-# the endpoint operations take it", and TIME-10, proposed: "`valid(low)`
-# is true where it designates something ... `last_modified(low)` is when
-# its designation last changed". Read after a write in the evaluation,
-# they ask of what the result designates then, against what it held
-# before.
+# the endpoint operations take it": TIME-10, "`valid` of a `ref`
+# parameter is whether a reference is present", and core's END-10,
+# `modified` "whether the parameter was given a designation" and
+# `last_modified` "when the parameter was last given a designation".
+# Read after a write in the evaluation, they ask of that write.
 fn stamped(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
     inject out
     when modified(flag) {
@@ -360,9 +366,7 @@ fn stamped(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
 }
 
 fn stamped_follow(flag: bool, a: i64, b: i64) -> i64 => follow(stamped(flag, a, b))
-fn stamped_designations(flag: bool, a: i64, b: i64) -> i64 => designations(stamped(flag, a, b))
 
 test out_of_a_ref_result_is_read_as_it_designates {
     assert eval(stamped_follow(flag: [true, true, _], a: [1, _, 3], b: [10, _, 11])) == [10, _, 11]
-    assert eval(stamped_designations(flag: [true, true, _], a: [1, _, 3], b: [10, _, 11])) == [1, _, _]
 }

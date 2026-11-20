@@ -76,8 +76,9 @@ fn checked_values(reading: i64) -> list<i64> => values_of(checked(collected(read
 test a_window_under_its_minimum_after_an_exit_is_not_read {
     assert eval(checked_outcome(reading: [1, 2, 3])) ==
         ["value.unset_read", "ok", "ok", _, "ok", "value.unset_read", "value.unset_read"]
+    # TIME-7: an empty list given whole to a valid empty one is no tick.
     assert eval(checked_values(reading: [1, 2, 3])) ==
-        [[], [1, 2], [1, 2, 3], _, [2, 3], [], []]
+        [[], [1, 2], [1, 2, 3], _, [2, 3], [], _]
 }
 
 # ---- A minimum of `0s`, and the list read after an exit ----

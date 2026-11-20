@@ -148,7 +148,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: a temporal list of a size is a `TSL` of that size; `list<T>` grows: hgraph 0.9.8's unbounded `TSL`, `Size[-1]`, which ticks by position, a child for each position it holds
-- hgraph 0.9.8 does not tick that `TSL` for a publication that changes nothing it sees, an empty list first among them: for a whole value, and for a delta that names no change where the list is not valid (TIME-7), the provider grows it by a position and drops it again in the same evaluation, which leaves nothing in the delta read
+- hgraph 0.9.8 does not tick that `TSL` for a publication that changes nothing it sees, an empty list first among them: for an empty whole value, and a delta that names no change, where the list is not valid (TIME-7), the provider grows it by a position and drops it again in the same evaluation, which leaves nothing in the delta read
 - A temporal tuple is no list: a `TSB` with no name and a field for each position, each of its own type (TYPE-9)
 - Left: `unbounded` and a size that is a generic parameter as a temporal shape
 
