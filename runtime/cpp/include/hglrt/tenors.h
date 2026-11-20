@@ -97,10 +97,11 @@ std::optional<i64> fn_business_days(const tenor& value);
 /// months and days takes the months first: the same day of the month that
 /// many months on, or the last day of that month where it has no such day.
 /// Then it takes the days. A count below zero moves back ... A result outside
-/// the `date` range is an HGL error with code `numeric.out_of_range`", and so
-/// is the date the months give, as the reference provider has it. Core calls
-/// it with a tenor of months and days alone: one of business days, which
-/// has neither, leaves the date as it is.
+/// the `date` range is an HGL error with code `numeric.out_of_range`. Only the
+/// result is held to the range: the date the months give may lie outside it
+/// where the days bring the result back within it". Core calls it with a
+/// tenor of months and days alone: one of business days, which has neither,
+/// leaves the date as it is.
 date fn_moved(date day, const tenor& by, std::source_location where = std::source_location::current());
 
 /// `weekend(day: date) -> bool` (TEN-5): true for a Saturday and for a
