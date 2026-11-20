@@ -371,7 +371,10 @@ fn temporal_code_is_written() {
 #[test]
 fn control_flow_is_written() {
     let emitted = emit_with(
-        &[("demo.control.hgl", include_str!("fixtures/demo.control.hgl"))],
+        &[(
+            "demo.control.hgl",
+            include_str!("fixtures/demo.control.hgl"),
+        )],
         &hgl_cpp::runtime::provides,
     );
     assert_eq!(emitted.reported, Vec::<String>::new());
@@ -389,7 +392,11 @@ fn control_flow_is_written() {
     // CTRL-3: the branch of no `else` never ticks; CTRL-6: a `switch`
     // with no `default` fails for a value no case has.
     assert!(unit.contains("return ::hglrt::never<::hgraph::TS<::hgraph::Int>>(wiring_);"));
-    assert!(unit.contains("::hglrt::unmatched<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>(wiring_, key_)"));
+    assert!(
+        unit.contains(
+            "::hglrt::unmatched<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>(wiring_, key_)"
+        )
+    );
     // CTRL-3: "An outputless if has no synthetic result".
     assert!(unit.contains("::hgraph::compiled::switch_sink_("));
     // An ordinary value a branch reads is its configuration.

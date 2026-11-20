@@ -1,6 +1,7 @@
 //! Control flow over connections in a graph: an `if` or a `switch` whose
 //! condition or selector is a connection (CTRL-2, CTRL-3, CTRL-5,
-//! CTRL-6, CTRL-13 to CTRL-15), and a `var` that holds a connection.
+//! CTRL-6, CTRL-13 to CTRL-15), a `for` over a connection (CTRL-7,
+//! CTRL-15), and a `var` that holds a connection.
 //! Part of the transpiler, the last stage; a family of the dispatch point
 //! (`forms`), which writes a graph's runs of statements so that it sees
 //! what follows each.
@@ -16,6 +17,8 @@
 //! | A `return` in a branch (CTRL-5, CTRL-14) | each branch is its statements and then the statements after the `if` or the `switch`, where it reaches them, and the graph returns what `switch_` gives |
 //! | A `switch` with no `default` (CTRL-6: "An unmatched selector uses default or fails") | a default branch given the selector, which fails as it starts (`::hglrt::unmatched`) |
 //! | `var x = c`, `x = d`, with `c`, `d` connections (CTRL-14) | `::hgraph::Port<S> x = c;`, `x = d;` |
+//! | `for name, price in prices`, `for item in items` over a connection of `dict<K, V>` or `list<T>` (CTRL-7, CTRL-15) | a struct `each_00_` in the graph's struct, its child graph `child_`, given the key where the body reads it, the member and what it takes, and its `wire_`, which wires it with hgraph's `compiled::map_sink_`: a child for each key or position |
+//! | `for item in items` over a connection of `list<T, N>` (CTRL-15) | the body written `N` times, each in a block where `item` is the list's child at that position |
 //!
 //! hgraph's `switch_` starts the branch a key selects, stops the one
 //! before, and keeps it while the key is published again as it was: a
@@ -31,17 +34,21 @@
 //! An `if` over an ordinary value whose value is a connection is C++'s
 //! `if`, where the graph is built (CTRL-1).
 //!
-//! Not written yet, and reported: a `for` over a connection, a `return` under a
-//! branch selected at runtime in a loop unrolled while the graph is built,
-//! branches that assign more than one `var`, and an `if` whose value is
-//! used and whose branches return or assign a `var` declared before it.
+//! Not written yet, and reported: a `for` over a connection of a set
+//! (hgraph's `compiled::map_` makes children for the keys of a dictionary
+//! or the positions of a list, and takes no set of keys alone), a loop's
+//! key read other than as the argument of a temporal parameter, a
+//! `return` under a branch selected at runtime in a loop unrolled while
+//! the graph is built, branches that assign more than one `var`, and an
+//! `if` whose value is used and whose branches return or assign a `var`
+//! declared before it.
 
 use hgl_analyser::hir::{Case, Expr, ExprKind, Stmt, ValueCategory, walk_statement_nodes};
 use hgl_analyser::{LocalKind, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::graphs::{
-    alternative_statements, always_returns, assigned_outside, continued, label_value, may_return,
-    named_in, nested_return, taken,
+    alternative_statements, always_returns, assigned_outside, continued, key_read_as_value,
+    label_value, may_return, named_in, nested_return, taken,
 };
 
 use super::Emitter;
@@ -239,6 +246,17 @@ fn parts(branch: &Expr) -> (&[Stmt], Option<&Expr>) {
     }
 }
 
+/// True where `statements` read or assign `local`, at any depth.
+fn reads(statements: &[Stmt], local: usize) -> bool {
+    let mut found = false;
+    walk_statement_nodes(statements, &mut |node| {
+        let (mut read, mut declared) = (Vec::new(), Vec::new());
+        named_in(node, &mut read, &mut declared);
+        found |= read.contains(&local);
+    });
+    found
+}
+
 /// True where `value`, a branch's value, returns from the graph inside.
 fn returning(value: Option<&Expr>) -> bool {
     value.is_some_and(|value| may_return(&[Stmt::Expr(value.clone())]))
@@ -315,13 +333,20 @@ impl Emitter<'_> {
             }) if condition.is_connection() => {
                 // Each branch's statements; an `else if` is the one
                 // statement of the `else`.
-                let then_statements = alternative_statements(Some(then));
-                let other_statements = alternative_statements(otherwise.as_deref());
-                if may_return(&then_statements) || may_return(&other_statements) {
-                    let branches = vec![
-                        (Key::Label("true".to_string(), None), then_statements),
-                        (Key::Label("false".to_string(), None), other_statements),
-                    ];
+                let branches = vec![
+                    (
+                        Key::Label("true".to_string(), None),
+                        alternative_statements(Some(then)),
+                    ),
+                    (
+                        Key::Label("false".to_string(), None),
+                        alternative_statements(otherwise.as_deref()),
+                    ),
+                ];
+                if branches
+                    .iter()
+                    .any(|(_, statements)| may_return(statements))
+                {
                     return self.returned(
                         scope,
                         (condition, "if"),
@@ -332,10 +357,6 @@ impl Emitter<'_> {
                         text,
                     );
                 }
-                let branches = vec![
-                    (Key::Label("true".to_string(), None), then_statements),
-                    (Key::Label("false".to_string(), None), other_statements),
-                ];
                 self.assigned_in_branches(scope, (condition, "if"), branches, *at, depth, text);
                 Branched::Written
             }
@@ -374,6 +395,25 @@ impl Emitter<'_> {
                         depth,
                         text,
                     );
+                }
+                // UNIT-12: "A `switch` case has no scope of its own: its
+                // statements bind in the block around the `switch`". A
+                // case here is a graph of its own, so a binding of one that
+                // is read after the `switch` is not written yet.
+                let outlives = branches
+                    .iter()
+                    .flat_map(|(_, statements)| statements)
+                    .filter_map(|bound| match bound {
+                        Stmt::Declare { local, .. } => Some(*local),
+                        _ => None,
+                    })
+                    .any(|local| reads(rest, local));
+                if outlives {
+                    self.unsupported(
+                        *at,
+                        "a binding of a case of a `switch` over a connection, read after it",
+                    );
+                    return Branched::Ended;
                 }
                 self.assigned_in_branches(scope, (selector, "switch"), branches, *at, depth, text);
                 Branched::Written
@@ -481,12 +521,344 @@ impl Emitter<'_> {
                 self.statement(scope, &again, depth, text);
                 Branched::Ended
             }
-            Stmt::For { sequence, at, .. } if sequence.is_connection() => {
-                self.unsupported(*at, "a `for` over a connection");
+            Stmt::For {
+                names,
+                sequence,
+                body,
+                at,
+            } if sequence.is_connection() => {
+                self.each(scope, (names, sequence), body, *at, depth, text);
                 Branched::Written
             }
             _ => Branched::No,
         }
+    }
+
+    /// A `for` of a graph over a connection (CTRL-15): "Over a connection
+    /// of `list<T, N>` it composes its body `N` times, `item` a
+    /// connection of `T` ... Over a connection of `list<T>`, `set<T>`, or
+    /// `dict<K, V>` it makes one child for each member (CTRL-7): `item` is
+    /// a connection of `T` for a list and an ordinary `T`, the member
+    /// itself, for a set; `key` is an ordinary `K` and `value` a
+    /// connection of `V` for a dictionary."
+    ///
+    /// The child is a graph of its own, which hgraph's `compiled::map_sink_`
+    /// runs for each key of a dictionary or each position of a list: it
+    /// keeps a child while its member stays and stops it where the member
+    /// is removed, and one added again starts fresh (CTRL-7: "Update
+    /// keeps the child; removal stops it; reinsertion creates fresh
+    /// state"). The connections the body reads of the graph around it are
+    /// given to each child whole ("Captured temporal connections are bound
+    /// whole and add no membership"), and each ordinary value as its
+    /// configuration. hgraph gives a child its key as a connection, so a
+    /// key is read only as the whole argument of a temporal parameter
+    /// (`hgl_lower::graphs::key_read_as_value`), where a connection is
+    /// what is taken.
+    fn each(
+        &mut self,
+        scope: &mut Scope,
+        (names, sequence): (&[usize], &Expr),
+        body: &[Stmt],
+        at: Location,
+        depth: usize,
+        text: &mut String,
+    ) {
+        let program = self.program;
+        let locals = &scope.body.locals;
+        // The key hgraph gives each child, and the member's own connection.
+        let (key, member, element) = match (&sequence.ty, names) {
+            (Type::Dict { value, .. }, [key, member]) => (Some(*key), *member, &**value),
+            (
+                Type::List {
+                    element,
+                    size: None,
+                },
+                [member],
+            ) => (None, *member, &**element),
+            (
+                Type::List {
+                    element,
+                    size: Some(size),
+                },
+                [item],
+            ) => {
+                // TYPE-4: a fixed list holds exactly its size.
+                let hgl_analyser::ConstantValue::Int(count) = size.value else {
+                    self.unsupported(at, "a `for` over a connection of a list of this size");
+                    return;
+                };
+                let count = u64::try_from(count).unwrap_or(0);
+                self.unrolled_each(
+                    scope,
+                    (*item, sequence, element, count),
+                    body,
+                    at,
+                    depth,
+                    text,
+                );
+                return;
+            }
+            // hgraph's `compiled::map_` makes its children for the keys of
+            // a dictionary or the positions of a list it multiplexes, and
+            // takes no set of keys alone.
+            (Type::Set(_), _) => {
+                self.unsupported(at, "a `for` over a connection of a set");
+                return;
+            }
+            _ => {
+                self.unsupported(at, "this `for`");
+                return;
+            }
+        };
+        if let Some(key) = key
+            && let Some(read) = key_read_as_value(program, key, body)
+        {
+            self.unsupported(
+                read,
+                "a loop's key read other than as the argument of a temporal parameter",
+            );
+            return;
+        }
+        let mut read: Vec<usize> = Vec::new();
+        let mut declared: Vec<usize> = names.to_vec();
+        walk_statement_nodes(body, &mut |node| named_in(node, &mut read, &mut declared));
+        let key = key.filter(|key| read.contains(key));
+        let bound = self.control.bound.clone();
+        let inputs = taken(locals, &bound, &[], read.clone(), &declared);
+        let configured = self.configured(scope, &read, &declared, &bound);
+        let Some(element) = self.temporal_schema(element, at) else {
+            return;
+        };
+        let mut ports = Vec::new();
+        for &local in &inputs {
+            let Some(schema) = self.temporal_schema(&locals[local].ty, locals[local].at) else {
+                return;
+            };
+            ports.push((identifier(&locals[local].name), schema));
+        }
+        let mut scalars = Vec::new();
+        for &local in &configured {
+            let Some(written) = self.written_type(&locals[local].ty, locals[local].at) else {
+                return;
+            };
+            scalars.push((local, identifier(&locals[local].name), written));
+        }
+        // The child's parameters: the key, where the body reads it, the
+        // member's connection, then what it takes.
+        let mut parameters = vec![format!("::hgraph::Wiring& {WIRING}")];
+        if let Some(key) = key {
+            let Some(schema) = self.temporal_schema(&locals[key].ty, locals[key].at) else {
+                return;
+            };
+            parameters.push(format!(
+                "[[maybe_unused]] ::hgraph::Port<{schema}> {}",
+                identifier(&locals[key].name)
+            ));
+        }
+        parameters.push(format!(
+            "[[maybe_unused]] ::hgraph::Port<{element}> {}",
+            identifier(&locals[member].name)
+        ));
+        for (port, schema) in &ports {
+            parameters.push(format!("[[maybe_unused]] ::hgraph::Port<{schema}> {port}"));
+        }
+        for (local, scalar, written) in &scalars {
+            parameters.push(format!(
+                "[[maybe_unused]] ::hgraph::Scalar<{}, {written}> {scalar}",
+                names::string(&locals[*local].name)
+            ));
+        }
+        // The child's own context: the key and the member are connections
+        // of it, and each value it is configured with its `hgraph::Scalar`.
+        let Some(outer) = self.temporal.as_ref() else {
+            return;
+        };
+        let mut context = Context::new(Kind::Graph, locals.len());
+        context.roles = outer.roles.clone();
+        context.roles[member] = Role::Connection;
+        if let Some(key) = key {
+            context.roles[key] = Role::Connection;
+        }
+        for &local in &configured {
+            context.roles[local] = Role::Config;
+        }
+        let mut child_bound: Vec<usize> = inputs.iter().chain(&configured).copied().collect();
+        child_bound.push(member);
+        child_bound.extend(key);
+        let mut statements = String::new();
+        let mut child_scope = Scope::cold(program, scope.body);
+        let before = std::mem::replace(&mut self.control.bound, child_bound);
+        let unrolling = std::mem::take(&mut self.control.unrolling);
+        self.in_context(&mut context, |emitter| {
+            emitter.statements(&mut child_scope, body, 3, &mut statements);
+        });
+        self.control.bound = before;
+        self.control.unrolling = unrolling;
+        if let Some(outer) = self.temporal.as_mut() {
+            outer.lifted.append(&mut context.lifted);
+        }
+        let number = self.temporary();
+        let name = names::temporary("each", number);
+        let line = self.line_of(at);
+        let label = names::string(&format!(
+            "{}:for on line {line}",
+            program.modules[self.module].path
+        ));
+        // Its `wire_`, given the collection, the connections the child
+        // takes and the values it is configured with.
+        let mut wired = vec![
+            format!("::hgraph::Wiring& {WIRING}"),
+            "::hgraph::WiringPortRef collection_".to_string(),
+        ];
+        for (port, schema) in &ports {
+            wired.push(format!("[[maybe_unused]] ::hgraph::Port<{schema}> {port}"));
+        }
+        for (local, scalar, written) in &scalars {
+            let taken = super::values::parameter_type(program, &locals[*local].ty, false, written);
+            wired.push(format!("[[maybe_unused]] {taken} {scalar}"));
+        }
+        let erased: Vec<String> = ports
+            .iter()
+            .map(|(port, _)| format!("{port}.erased()"))
+            .collect();
+        let mut given = vec![WIRING.to_string()];
+        given.extend(scalars.iter().map(|(_, scalar, _)| scalar.clone()));
+        let keyed = if key.is_some() {
+            "::hgraph::MapKeyArg::First"
+        } else {
+            "::hgraph::MapKeyArg::None"
+        };
+        let deeper = INDENT.repeat(2);
+        let struct_text = format!(
+            "// The `for` on line {line} over a connection (CTRL-7, CTRL-15): a child graph for\n\
+             // each member, which hgraph's `map_` runs while the member is there.\n\
+             struct {name}\n{{\n\
+             {INDENT}struct child_\n{INDENT}{{\n\
+             {INDENT}{INDENT}static constexpr auto name = {label};\n\
+             {INDENT}{INDENT}static void compose({})\n{INDENT}{INDENT}{{\n{statements}{INDENT}{INDENT}}}\n{INDENT}}};\n\n\
+             {INDENT}static void wire_({})\n{INDENT}{{\n\
+             {deeper}const std::array<::hgraph::WiringPortRef, {}> broadcast_{{{}}};\n\
+             {deeper}::hgraph::compiled::map_sink_({WIRING}, collection_, broadcast_, ::hgraph::compile_subgraph<child_>({}), {keyed});\n\
+             {INDENT}}}\n}};\n",
+            parameters.join(", "),
+            wired.join(", "),
+            erased.len(),
+            erased.join(", "),
+            given.join(", "),
+        );
+        if let Some(context) = self.temporal.as_mut() {
+            context.lifted.push(struct_text);
+        }
+        let collection = self.connection(scope, sequence, &sequence.ty);
+        let mut arguments = vec![WIRING.to_string(), format!("{collection}.erased()")];
+        arguments.extend(ports.iter().map(|(port, _)| port.clone()));
+        for &local in &configured {
+            let read = Expr {
+                kind: ExprKind::Local(local),
+                ty: locals[local].ty.clone(),
+                at,
+                category: ValueCategory::Value,
+            };
+            arguments.push(self.expression(scope, &read));
+        }
+        text.push_str(&format!(
+            "{}{name}::wire_({});\n",
+            INDENT.repeat(depth),
+            arguments.join(", ")
+        ));
+    }
+
+    /// A `for` over a connection of `list<T, N>`, `size` its `N` (CTRL-15:
+    /// "it composes its body `N` times, `item` a connection of `T`"): the
+    /// body written once for each position, where the graph is built, in
+    /// a block of its own in which `item` is the connection of that
+    /// position, the list's child as its temporal form gives it.
+    #[allow(clippy::too_many_arguments)]
+    fn unrolled_each(
+        &mut self,
+        scope: &mut Scope,
+        (item, sequence, element, size): (usize, &Expr, &Type, u64),
+        body: &[Stmt],
+        at: Location,
+        depth: usize,
+        text: &mut String,
+    ) {
+        // The list is read once for each position: it is read where it is
+        // a local, and a list made where it is looped over is not written.
+        if !matches!(sequence.kind, ExprKind::Local(_)) {
+            self.unsupported(
+                at,
+                "a `for` over a connection of a fixed list that is no local",
+            );
+            return;
+        }
+        let Some(schema) = self.temporal_schema(element, at) else {
+            return;
+        };
+        let indent = INDENT.repeat(depth);
+        let name = identifier(&scope.body.locals[item].name);
+        let role = self.role(item);
+        if let Some(context) = self.temporal.as_mut() {
+            context.roles[item] = Role::Connection;
+        }
+        let before = self.control.bound.clone();
+        self.control.unrolling += 1;
+        for position in 0..size {
+            let child = Expr {
+                kind: ExprKind::Index {
+                    base: Box::new(sequence.clone()),
+                    index: Box::new(Expr {
+                        kind: ExprKind::Literal(hgl_analyser::hir::Value::Int(
+                            i64::try_from(position).unwrap_or(i64::MAX),
+                        )),
+                        ty: Type::Scalar(hgl_analyser::Scalar::I64),
+                        at,
+                        category: ValueCategory::Value,
+                    }),
+                },
+                ty: element.clone(),
+                at,
+                category: ValueCategory::Connection,
+            };
+            let port = self.wiring_form(scope, &child);
+            text.push_str(&format!(
+                "{indent}{{\n{indent}{INDENT}[[maybe_unused]] const ::hgraph::Port<{schema}> {name} = {port};\n"
+            ));
+            self.control.bound.push(item);
+            self.statements(scope, body, depth + 1, text);
+            text.push_str(&format!("{indent}}}\n"));
+            self.control.bound.clone_from(&before);
+        }
+        self.control.unrolling -= 1;
+        if let Some(context) = self.temporal.as_mut() {
+            context.roles[item] = role;
+        }
+    }
+
+    /// The ordinary values of the graph being written that a child graph
+    /// reads, `read` less what it declares, `declared`, each with a value
+    /// where the child is written, `bound`: its configuration.
+    fn configured(
+        &self,
+        scope: &Scope,
+        read: &[usize],
+        declared: &[usize],
+        bound: &[usize],
+    ) -> Vec<usize> {
+        let locals = &scope.body.locals;
+        let mut configured: Vec<usize> = read
+            .iter()
+            .copied()
+            .filter(|local| {
+                !declared.contains(local)
+                    && bound.contains(local)
+                    && locals[*local].category == ValueCategory::Value
+                    && self.role(*local) != Role::Connection
+            })
+            .collect();
+        configured.sort_unstable();
+        configured.dedup();
+        configured
     }
 
     /// Reports a `switch` two of whose labels have one value, and says
@@ -848,17 +1220,7 @@ impl Emitter<'_> {
         }
         let bound = self.control.bound.clone();
         let inputs = taken(locals, &bound, &[], read.clone(), &declared);
-        let mut configured: Vec<usize> = read
-            .into_iter()
-            .filter(|local| {
-                !declared.contains(local)
-                    && bound.contains(local)
-                    && locals[*local].category == ValueCategory::Value
-                    && self.role(*local) != Role::Connection
-            })
-            .collect();
-        configured.sort_unstable();
-        configured.dedup();
+        let configured = self.configured(scope, &read, &declared, &bound);
         // What each is in the C++ written: the key's schema and type, each
         // input's schema, each configuration's type, and the result's
         // schema.
