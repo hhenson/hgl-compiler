@@ -33,6 +33,9 @@ struct Blocks {
     tests: Vec<Option<Diagnostic>>,
     /// For an application's run statement.
     application: Option<Diagnostic>,
+    /// For each instance of a generic declaration, in the order of
+    /// [`Written::instances`].
+    instances: Vec<Option<Diagnostic>>,
 }
 
 /// The target's output for `program`, whose modules were written as
@@ -41,15 +44,28 @@ struct Blocks {
 /// reported where the program reaches them.
 pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Diagnostic>) {
     let core = program.core();
-    // What each piece a declaration is written as reaches: its own, as
-    // no instance is written yet.
-    let pieces = |(module, declaration, _): &Used| -> Vec<&Reach> {
-        written
-            .get(*module)
-            .and_then(|written| written.declarations.get(*declaration))
+    // What each piece a declaration or an instance is written as
+    // reaches: the declaration's own, and the instance's.
+    let pieces = |(module, declaration, instance): &Used| -> Vec<&Reach> {
+        let Some(written) = written.get(*module) else {
+            return Vec::new();
+        };
+        let mut found: Vec<&Reach> = written
+            .declarations
+            .get(*declaration)
             .map(|piece| &piece.reach)
             .into_iter()
-            .collect()
+            .collect();
+        if let Some(suffix) = instance {
+            found.extend(
+                written
+                    .instances
+                    .iter()
+                    .filter(|(of, named, _)| of == declaration && named == suffix)
+                    .map(|(_, _, piece)| &piece.reach),
+            );
+        }
+        found
     };
     let mut found = Found::new();
     let mut blocked = |piece: &Piece| blocked(pieces, &mut found, &piece.reach);
@@ -59,6 +75,11 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             declarations: module.declarations.iter().map(&mut blocked).collect(),
             tests: module.tests.iter().map(&mut blocked).collect(),
             application: module.application.as_ref().and_then(&mut blocked),
+            instances: module
+                .instances
+                .iter()
+                .map(|(_, _, piece)| blocked(piece))
+                .collect(),
         })
         .collect();
     let mut files = Vec::new();
@@ -76,11 +97,22 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         .collect();
     for (index, module) in written.iter().enumerate() {
         let path = &program.modules[index].path;
+        // A type's declaration is in the header alone; each other piece
+        // that is clear has its definition in the unit.
         let defined: Vec<&Piece> = module
             .declarations
             .iter()
             .zip(&blocks[index].declarations)
-            .filter(|(piece, blocked)| blocked.is_none() && !piece.text.is_empty())
+            .chain(
+                module
+                    .instances
+                    .iter()
+                    .map(|(_, _, piece)| piece)
+                    .zip(&blocks[index].instances),
+            )
+            .filter(|(piece, blocked)| {
+                blocked.is_none() && !(piece.text.is_empty() && piece.declaration.is_empty())
+            })
             .map(|(piece, _)| piece)
             .collect();
         // Core's tests are no tests of the program's.
@@ -118,10 +150,14 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             header.push_str(&format!("\nnamespace {declared}\n{{\n"));
             unit.push_str(&format!("\nnamespace {declared}\n{{\n"));
             for piece in &defined {
-                header.push('\n');
-                header.push_str(&piece.declaration);
-                unit.push('\n');
-                unit.push_str(&piece.text);
+                if !piece.declaration.is_empty() {
+                    header.push('\n');
+                    header.push_str(&piece.declaration);
+                }
+                if !piece.text.is_empty() {
+                    unit.push('\n');
+                    unit.push_str(&piece.text);
+                }
             }
             header.push_str(&format!("\n}}  // namespace {declared}\n"));
             unit.push_str(&format!("\n}}  // namespace {declared}\n"));
@@ -243,7 +279,14 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .iter()
             .zip(&blocks[index].declarations)
             .chain(module.tests.iter().zip(&blocks[index].tests))
-            .chain(module.application.iter().zip([&blocks[index].application]));
+            .chain(module.application.iter().zip([&blocks[index].application]))
+            .chain(
+                module
+                    .instances
+                    .iter()
+                    .map(|(_, _, piece)| piece)
+                    .zip(&blocks[index].instances),
+            );
         for (piece, blocked) in pieces {
             if let (None, Some(diagnostic)) = (&piece.reach.broken, blocked) {
                 blocking.push(diagnostic.clone());

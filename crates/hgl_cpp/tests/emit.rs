@@ -57,9 +57,16 @@ impl Emitted {
 }
 
 /// Lexes, parses and analyses `files`, given as `(name, text)`, with
-/// the core the compiler is built with, and writes the program as C++.
+/// the core the compiler is built with, and writes the program as C++
+/// for a runtime library that defines the natives [`provides`] names.
 /// The program must be one the front end and the analyser accept.
 fn emit(files: &[(&str, &str)]) -> Emitted {
+    emit_with(files, &provides)
+}
+
+/// [`emit`], for a runtime library that defines the natives `provides`
+/// names.
+fn emit_with(files: &[(&str, &str)], provides: &dyn Fn(&str) -> bool) -> Emitted {
     let mut sources = SourceMap::new();
     let mut diagnostics = Diagnostics::new();
     let mut parsed = Vec::new();
@@ -84,7 +91,7 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
         render::to_string(&sources, &diagnostics)
     );
     let before = diagnostics.len();
-    let output = transpile_for(&program, &provides, &mut diagnostics);
+    let output = transpile_for(&program, provides, &mut diagnostics);
     let reported = diagnostics.as_slice()[before..]
         .iter()
         .map(|diagnostic| {
@@ -119,14 +126,26 @@ fn goldens(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// Compares every file `output` holds with the goldens of `name`, file
-/// by file, and that no golden is left that the target no longer
-/// writes; or, with `HGL_UPDATE_GOLDENS` set, writes them.
+/// The files of `output` that are the program's own: core's module,
+/// which every program has, is left out, so that a golden does not
+/// change with core.
+fn own_files(output: &Output) -> Vec<&hgl_cpp::File> {
+    output
+        .files
+        .iter()
+        .filter(|file| !file.path.starts_with("modules/core."))
+        .collect()
+}
+
+/// Compares every file `output` holds but core's with the goldens of
+/// `name`, file by file, and that no golden is left that the target no
+/// longer writes; or, with `HGL_UPDATE_GOLDENS` set, writes them.
 fn assert_goldens(name: &str, output: &Output) {
     let directory = goldens(name);
+    let files = own_files(output);
     if std::env::var_os("HGL_UPDATE_GOLDENS").is_some() {
         fs::remove_dir_all(&directory).ok();
-        for file in &output.files {
+        for file in &files {
             let path = directory.join(&file.path);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, &file.text).unwrap();
@@ -145,13 +164,13 @@ fn assert_goldens(name: &str, output: &Output) {
         kept.push(relative);
     }
     kept.sort();
-    let mut written: Vec<String> = output.files.iter().map(|file| file.path.clone()).collect();
+    let mut written: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
     written.sort();
     assert_eq!(
         written, kept,
         "the files written are the goldens' (HGL_UPDATE_GOLDENS=1 writes them again)"
     );
-    for file in &output.files {
+    for file in &files {
         // Git may check text out with CRLF line ends on Windows.
         let golden = fs::read_to_string(directory.join(&file.path))
             .unwrap()
@@ -267,10 +286,10 @@ fn a_form_not_written_yet_blocks_what_reaches_it() {
             "}\n",
         ),
     )]);
-    // NUM-1: `/` of two `i64` is a candidate with a generic `zero`
-    // policy, which is not written yet.
+    // NUM-1: `/` of two `i64` is core's candidate `div_`, which the
+    // library these tests take does not define.
     let division =
-        "demo.partial.hgl:4:35 the cpp target does not write a call with generic arguments yet";
+        "demo.partial.hgl:4:35 the cpp target does not write the candidate `div_(i64, i64)` yet";
     assert_eq!(emitted.reported, [division]);
     assert_eq!(emitted.blocked("written"), None);
     assert_eq!(
@@ -402,9 +421,9 @@ fn arguments_that_may_fail_are_evaluated_in_order() {
     let pair = "::hgl::demo::order::m_::pair";
     assert!(
         unit.contains(&format!(
-            "return [&] {{ const ::hgraph::Int argument_0_ = {one}; \
-             const ::hgraph::Int argument_1_ = {one}; \
-             return {pair}(argument_0_, argument_1_); }}();"
+            "return [&] {{ const auto& argument_00_ = {one}; \
+             const auto& argument_01_ = {one}; \
+             return {pair}(argument_00_, argument_01_); }}();"
         )),
         "{unit}"
     );
@@ -413,4 +432,44 @@ fn arguments_that_may_fail_are_evaluated_in_order() {
         unit.contains(&format!("return {pair}(2, {one});")),
         "{unit}"
     );
+}
+
+/// The natives `demo.values` reaches: those of [`provides`], `i64`'s
+/// difference, product, negation and floor remainder (NUM-1, NUM-2),
+/// the order and the equality of one type (OPS-2), and `append`
+/// (LIST-1).
+fn provides_values(name: &str) -> bool {
+    provides(name)
+        || [
+            "sub__i64_i64",
+            "mul__i64_i64",
+            "neg__i64",
+            "mod__i64_i64",
+            "lt__T_T",
+            "le__T_T",
+            "gt__T_T",
+            "eq__T_T",
+            "fn_append",
+        ]
+        .contains(&name)
+}
+
+/// Value code over the scalars and the plain composites, as the target
+/// writes it: constants (UNIT-13), an enum (TYPE-7), `if`, `switch`,
+/// `while` and `for` (CTRL-6, CTRL-10, CTRL-12), a place of a list
+/// (EXPR-3), defaults and a `T?` left out (UNIT-8), a generic function
+/// by instance (GEN-2), a tuple, a result and `?` (ERR-2, ERR-5), a
+/// `var` parameter (FN-15), and `assert raises` (TST-10). Everything is
+/// written, and each test can be run.
+#[test]
+fn value_code_is_written() {
+    let emitted = emit_with(
+        &[("demo.values.hgl", include_str!("fixtures/demo.values.hgl"))],
+        &provides_values,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.values", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
 }

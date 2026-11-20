@@ -1,0 +1,241 @@
+// Written by the hgl compiler for hgraph's C++ API. Do not edit.
+#include "demo.values.h"
+
+namespace hgl::demo::values::m_
+{
+
+// const limit: i64 (UNIT-13), module demo.values, line 9
+const ::hgraph::Int& limit()
+{
+    static const ::hgraph::Int value = 10;
+    return value;
+}
+
+// const step: duration (UNIT-13), module demo.values, line 10
+const ::hgraph::TimeDelta& step()
+{
+    static const ::hgraph::TimeDelta value = ::hgraph::TimeDelta{5000000};
+    return value;
+}
+
+// sign(value: i64) -> i64 (`const fn`), module demo.values, line 13
+::hgraph::Int sign([[maybe_unused]] ::hgraph::Int value)
+{
+    if (::hglrt::lt__T_T<::hgraph::Int>(value, 0))
+    {
+        return ::hglrt::neg__i64(1);
+    }
+    else if (::hglrt::eq__i64_i64_f64_f64(value, 0, 0.0, 0.0))
+    {
+        return 0;
+    }
+    return 1;
+}
+
+// larger(a: i64, b: i64) -> i64 (`const fn`), module demo.values, line 22
+::hgraph::Int larger([[maybe_unused]] ::hgraph::Int a, [[maybe_unused]] ::hgraph::Int b)
+{
+    return (::hglrt::lt__T_T<::hgraph::Int>(a, b) ? ::hgraph::Int(b) : ::hgraph::Int(a));
+}
+
+// opposite(side: Side) -> Side (`const fn`), module demo.values, line 25
+::hgl::demo::values::m_::Side opposite([[maybe_unused]] ::hgl::demo::values::m_::Side side)
+{
+    {
+        const ::hgl::demo::values::m_::Side selected_00_ = side;
+        if (selected_00_ == ::hgl::demo::values::m_::Side::buy)
+        {
+            return ::hgl::demo::values::m_::Side::sell;
+        }
+        else if (selected_00_ == ::hgl::demo::values::m_::Side::sell)
+        {
+            return ::hgl::demo::values::m_::Side::buy;
+        }
+        else
+        {
+            return side;
+        }
+    }
+}
+
+// triangle(count: i64) -> i64 (`const fn`), module demo.values, line 37
+::hgraph::Int triangle([[maybe_unused]] ::hgraph::Int count)
+{
+    [[maybe_unused]] ::hgraph::Int total = 0;
+    [[maybe_unused]] ::hgraph::Int at = 1;
+    while (::hglrt::le__T_T<::hgraph::Int>(at, count))
+    {
+        total = ::hglrt::add__i64_i64(total, at);
+        at = ::hglrt::add__i64_i64(at, 1);
+    }
+    return total;
+}
+
+// evens(values: list<i64>) -> list<i64> (`const fn`), module demo.values, line 48
+::hglrt::list<::hgraph::Int> evens([[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values)
+{
+    [[maybe_unused]] ::hglrt::list<::hgraph::Int> kept = ::hglrt::list<::hgraph::Int>{};
+    for (const ::hgraph::Int& value : values)
+    {
+        if (::hglrt::eq__i64_i64_f64_f64(::hglrt::mod__i64_i64<::hglrt::ZeroPolicy::fail>(value, 2), 0, 0.0, 0.0))
+        {
+            ::hglrt::fn_append<::hgraph::Int>(kept, value);
+        }
+    }
+    return kept;
+}
+
+// bumped(values: list<i64>, at: i64) -> list<i64> (`const fn`), module demo.values, line 59
+::hglrt::list<::hgraph::Int> bumped([[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values, [[maybe_unused]] ::hgraph::Int at)
+{
+    [[maybe_unused]] ::hglrt::list<::hgraph::Int> changed = values;
+    ::hglrt::item(changed, at) = ::hglrt::add__i64_i64(::hglrt::item(changed, at), 1);
+    return changed;
+}
+
+// scaled(value: i64, factor: i64 = ..., offset: i64? = ...) -> i64 (`const fn`), module demo.values, line 66
+::hgraph::Int scaled([[maybe_unused]] ::hgraph::Int value, [[maybe_unused]] ::hgraph::Int factor, [[maybe_unused]] std::optional<::hgraph::Int> offset)
+{
+    if ((!(offset).has_value()))
+    {
+        return ::hglrt::mul__i64_i64(value, factor);
+    }
+    return ::hglrt::add__i64_i64(::hglrt::mul__i64_i64(value, factor), (*offset));
+}
+
+// swapped(pair: tuple<i64, str>) -> tuple<str, i64> (`const fn`), module demo.values, line 77
+std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tuple<::hgraph::Int, ::hgraph::Str>& pair)
+{
+    return std::tuple<::hgraph::Str, ::hgraph::Int>{std::get<1>(pair), std::get<0>(pair)};
+}
+
+// checked(value: i64) -> result<i64, error> (`const fn`), module demo.values, line 80
+::hglrt::result<::hgraph::Int> checked([[maybe_unused]] ::hgraph::Int value)
+{
+    if (::hglrt::gt__T_T<::hgraph::Int>(value, ::hgl::demo::values::m_::limit()))
+    {
+        return ::hglrt::result<::hgraph::Int>{std::unexpect, ::hglrt::make_error(::hgraph::Str{"too large"}, ::hgraph::Str{"demo.too_large"})};
+    }
+    return ::hglrt::result<::hgraph::Int>{value};
+}
+
+// doubled(value: i64) -> result<i64, error> (`const fn`), module demo.values, line 87
+::hglrt::result<::hgraph::Int> doubled([[maybe_unused]] ::hgraph::Int value)
+{
+    const auto propagated_00_ = ::hgl::demo::values::m_::checked(value);
+    if (!propagated_00_.has_value())
+    {
+        return std::unexpected(propagated_00_.error());
+    }
+    [[maybe_unused]] const ::hgraph::Int checked_value = (*propagated_00_);
+    return ::hglrt::result<::hgraph::Int>{::hglrt::mul__i64_i64(checked_value, 2)};
+}
+
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 93
+void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int by)
+{
+    count = ::hglrt::add__i64_i64(count, by);
+}
+
+namespace i_::first
+{
+// first<T>(values: list<T>) -> T (`const fn`), the instance `i64`, module demo.values, line 74
+::hgraph::Int i64([[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values)
+{
+    return ::hglrt::item(values, 0);
+}
+}  // namespace i_::first
+
+namespace i_::first
+{
+// first<T>(values: list<T>) -> T (`const fn`), the instance `str`, module demo.values, line 74
+::hgraph::Str str([[maybe_unused]] const ::hglrt::list<::hgraph::Str>& values)
+{
+    return ::hglrt::item(values, 0);
+}
+}  // namespace i_::first
+
+}  // namespace hgl::demo::values::m_
+
+namespace hgl::demo::values::m_::t_
+{
+
+void conditions_choose()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check((([&] { const auto& argument_00_ = ::hgl::demo::values::m_::sign(::hglrt::neg__i64(5)); const auto& argument_01_ = ::hglrt::neg__i64(1); const auto& argument_02_ = 0.0; const auto& argument_03_ = 0.0; return ::hglrt::eq__i64_i64_f64_f64(argument_00_, argument_01_, argument_02_, argument_03_); }() && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::sign(0), 0, 0.0, 0.0)) && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::sign(7), 1, 0.0, 0.0)));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check((::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::larger(2, 9), 9, 0.0, 0.0) && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::larger(9, 2), 9, 0.0, 0.0)));
+}
+
+void a_switch_compares_by_value()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hgl::demo::values::m_::Side>(::hgl::demo::values::m_::opposite(::hgl::demo::values::m_::Side::buy), ::hgl::demo::values::m_::Side::sell));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hgl::demo::values::m_::Side>(::hgl::demo::values::m_::opposite(::hgl::demo::values::m_::Side::hold), ::hgl::demo::values::m_::Side::hold));
+}
+
+void loops_run()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::triangle(4), 10, 0.0, 0.0));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hgraph::Int>>(::hgl::demo::values::m_::evens(::hglrt::list<::hgraph::Int>{1, 2, 3, 4}), ::hglrt::list<::hgraph::Int>{2, 4}));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hgraph::Int>>(::hgl::demo::values::m_::bumped(::hglrt::list<::hgraph::Int>{1, 2, 3}, 1), ::hglrt::list<::hgraph::Int>{1, 3, 3}));
+}
+
+void defaults_and_nulls()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::scaled(3, 2, std::nullopt), 6, 0.0, 0.0));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::scaled(3, 3, std::nullopt), 9, 0.0, 0.0));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::scaled(3, 2, 1), 7, 0.0, 0.0));
+}
+
+void generics_by_instance()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::i_::first::i64(::hglrt::list<::hgraph::Int>{4, 5}), 4, 0.0, 0.0));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hgraph::Str>(::hgl::demo::values::m_::i_::first::str(::hglrt::list<::hgraph::Str>{::hgraph::Str{"a"}, ::hgraph::Str{"b"}}), ::hgraph::Str{"a"}));
+}
+
+void tuples_and_constants()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<std::tuple<::hgraph::Str, ::hgraph::Int>>(::hgl::demo::values::m_::swapped(std::tuple<::hgraph::Int, ::hgraph::Str>{1, ::hgraph::Str{"one"}}), std::tuple<::hgraph::Str, ::hgraph::Int>{::hgraph::Str{"one"}, 1}));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check((::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::limit(), 10, 0.0, 0.0) && ::hglrt::eq__T_T<::hgraph::TimeDelta>(::hgl::demo::values::m_::step(), ::hgraph::TimeDelta{5000000})));
+}
+
+void results_propagate()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check((::hgl::demo::values::m_::doubled(3)).has_value());
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check((!(::hgl::demo::values::m_::doubled(11)).has_value()));
+}
+
+void a_var_parameter_is_its_place()
+{
+    ::hglrt::testing::statement();
+    [[maybe_unused]] ::hgraph::Int count = 1;
+    ::hglrt::testing::statement();
+    ::hgl::demo::values::m_::bump(count, 2);
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(count, 3, 0.0, 0.0));
+}
+
+void an_overflow_fails_with_its_code()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::raises("numeric.out_of_range", [&] {
+        [[maybe_unused]] const ::hgraph::Int big = ::hglrt::add__i64_i64(::hgl::demo::values::m_::triangle(10), 9223372036854775807);
+    });
+}
+
+}  // namespace hgl::demo::values::m_::t_

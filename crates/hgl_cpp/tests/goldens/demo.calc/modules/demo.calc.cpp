@@ -4,11 +4,13 @@
 namespace hgl::demo::calc::m_
 {
 
+// total(a: i64, b: i64) -> i64 (`const fn`), module demo.calc, line 4
 ::hgraph::Int total([[maybe_unused]] ::hgraph::Int a, [[maybe_unused]] ::hgraph::Int b)
 {
     return ::hglrt::add__i64_i64(a, b);
 }
 
+// twice(value: i64) -> i64 (`const fn`), module demo.calc, line 6
 ::hgraph::Int twice([[maybe_unused]] ::hgraph::Int value)
 {
     [[maybe_unused]] const ::hgraph::Int doubled = ::hgl::demo::calc::m_::total(value, value);

@@ -176,3 +176,11 @@ jobs:
       - run: cargo test -p hgl_cli --locked --test cpp -- --ignored
       - run: cargo build --locked --bin hgl
       - run: python3 crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core --target cpp
+      # The same again, the generated code and the runtime library built
+      # with the address and undefined-behaviour sanitizers.
+      - run: cargo test -p hgl_cli --locked --test cpp -- --ignored
+        env:
+          HGL_CPP_FLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
+      - run: python3 crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core --target cpp
+        env:
+          HGL_CPP_FLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined

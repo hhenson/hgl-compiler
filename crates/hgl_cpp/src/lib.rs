@@ -222,13 +222,16 @@ pub fn transpile_for(
     diagnostics: &mut Diagnostics,
 ) -> Output {
     let core = program.core();
+    // GEN-2: C++ values are typed, so every generic function is written
+    // once for each set of generic arguments it is called with.
+    let instances = hgl_lower::instances::Instances::typed(program);
     let mut unwritten_in_core = Diagnostics::new();
     let written: Vec<emit::Written> = (0..program.modules.len())
         .map(|index| {
             if Some(index) == core {
-                emit::module(program, index, provides, &mut unwritten_in_core)
+                emit::module(program, index, provides, &instances, &mut unwritten_in_core)
             } else {
-                emit::module(program, index, provides, diagnostics)
+                emit::module(program, index, provides, &instances, diagnostics)
             }
         })
         .collect();

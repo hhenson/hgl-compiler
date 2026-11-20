@@ -8,7 +8,7 @@
 //! every run. The target's own names, the namespaces `m_` and `t_`,
 //! have a form [`identifier`] gives no HGL name.
 
-use hgl_analyser::{Program, Signature, Type};
+use hgl_analyser::{DeclarationKind, Program, Signature, Type};
 
 /// The words C++ keeps for itself, its alternative tokens, the names it
 /// gives a meaning in some places (`final`, `module`, `import`), and
@@ -240,15 +240,57 @@ pub(crate) fn testing(name: &str) -> String {
     format!("::{}::{name}", crate::runtime::TESTING)
 }
 
-/// A value function of the program as a call names it, qualified from
-/// the global namespace: `::hgl::demo::calc::m_::total`.
-pub(super) fn function(program: &Program, module: usize, declaration: usize) -> String {
-    let declared = &program.modules[module];
-    format!(
-        "{}::{}",
-        module_namespace(&declared.path),
-        identifier(&declared.declarations[declaration].name)
-    )
+/// Where a function of the program is defined: the namespace it is in,
+/// under its module's (`module_namespace`), and its name there. A value
+/// function is named `identifier` gives its name, `total`. An HGL
+/// candidate of an operator is in `c_`, where the candidates of one
+/// operator are C++ overloads of its name, `c_::add_1_` (GEN-4). An
+/// instance of a generic declaration (GEN-2) is named by its suffix in a
+/// namespace of its declaration's own under `i_`: `i_::spread::f64`,
+/// `c_::i_::add_1_::Weekdays`. `c_` and `i_` have the form the target's
+/// own names have, which no HGL name gives.
+pub(super) fn placed(
+    program: &Program,
+    module: usize,
+    declaration: usize,
+    instance: Option<&str>,
+) -> (Option<String>, String) {
+    let declared = &program.modules[module].declarations[declaration];
+    let candidate = matches!(declared.kind, DeclarationKind::Implementation(..));
+    let name = identifier(&declared.name);
+    match (candidate, instance) {
+        (false, None) => (None, name),
+        (true, None) => (Some("c_".to_string()), name),
+        (false, Some(suffix)) => (Some(format!("i_::{name}")), identifier(suffix)),
+        (true, Some(suffix)) => (Some(format!("c_::i_::{name}")), identifier(suffix)),
+    }
+}
+
+/// A function of the program, or an instance of one, as a call names
+/// it, qualified from the global namespace:
+/// `::hgl::demo::calc::m_::total`, `::hgl::demo::m_::i_::spread::f64`
+/// ([`placed`]). A constant is named as a function of its value is.
+pub(super) fn function(
+    program: &Program,
+    module: usize,
+    declaration: usize,
+    instance: Option<&str>,
+) -> String {
+    let (namespace, name) = placed(program, module, declaration, instance);
+    let module = module_namespace(&program.modules[module].path);
+    match namespace {
+        Some(namespace) => format!("{module}::{namespace}::{name}"),
+        None => format!("{module}::{name}"),
+    }
+}
+
+/// A name the generated code makes for what it holds while a statement
+/// runs, `word` and its number in the piece: `argument_00_`,
+/// `propagated_01_`. Its number is written after a `0`, a form no name
+/// [`identifier`] gives has: a name it escapes has `_1` for each `_` but
+/// the last, and a plain one does not end with `_`.
+pub(super) fn temporary(word: &str, number: usize) -> String {
+    format!("{word}_0{number}_")
 }
 
 /// A string as a C++ narrow string literal, for text the target writes

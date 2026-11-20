@@ -12,19 +12,24 @@
 //!
 //! The modules by concern, each saying what it writes: `names` (every
 //! C++ name), `types` (types, and the declarations of structs and
-//! enums), `values` (value functions, constants, statements and
-//! expressions), `nodes` and `graphs` (temporal functions and
-//! applications), `tests` (named tests).
+//! enums), `values` (value functions, their instances and constants),
+//! `statements`, `expressions` and `calls` (value code, a test's among
+//! it), `nodes` and `graphs` (temporal functions and applications),
+//! `tests` (named tests).
 
 use hgl_analyser::{DeclarationKind, Program};
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
+use hgl_lower::instances::Instances;
 use hgl_lower::pieces::Reach;
 
 use crate::codes;
 
+mod calls;
+mod expressions;
 mod graphs;
 mod names;
 mod nodes;
+mod statements;
 mod tests;
 mod types;
 mod values;
@@ -42,6 +47,10 @@ pub(crate) struct Written {
     /// For an application (UNIT-14), the piece its run statement is
     /// written as. `None` for a module.
     pub(crate) application: Option<Piece>,
+    /// A piece for each instance of a generic declaration of the module
+    /// (GEN-2): the declaration's position, the instance's suffix, and
+    /// the piece, in the order the instances were asked for.
+    pub(crate) instances: Vec<(usize, String, Piece)>,
 }
 
 /// One top-level part of a module as it is written: a declaration or a
@@ -59,8 +68,7 @@ pub(crate) struct Piece {
     /// What it reaches (`hgl_lower::pieces`): the first form in it that
     /// the target does not write yet, which leaves it out of the files,
     /// and the declarations of the program it names, whose definitions
-    /// it needs. Instances are not written yet, so each is named with no
-    /// instance's suffix.
+    /// it needs, an instance by its suffix (GEN-2).
     pub(crate) reach: Reach,
     /// For a test, where each of its statements starts: the line of
     /// its text, counted from 0, and the place in the source.
@@ -69,20 +77,26 @@ pub(crate) struct Piece {
 
 /// Writes module `index` of `program`, reporting each form it does not
 /// write to `diagnostics`. `provides` says whether the runtime library
-/// defines a native, by the name `names` gives it.
+/// defines a native, by the name `names` gives it; `instances` are the
+/// instances of generic declarations the program asks for, each written
+/// in its declaration's module.
 pub(crate) fn module(
     program: &Program,
     index: usize,
     provides: &dyn Fn(&str) -> bool,
+    instances: &Instances,
     diagnostics: &mut Diagnostics,
 ) -> Written {
     let mut emitter = Emitter {
         program,
         module: index,
         provides,
+        instances,
         diagnostics,
         piece: Piece::default(),
         expanding: Vec::new(),
+        temporaries: 0,
+        instanced: Vec::new(),
     };
     let declared = &program.modules[index];
     let declarations = (0..declared.declarations.len())
@@ -106,6 +120,7 @@ pub(crate) fn module(
         declarations,
         tests,
         application,
+        instances: emitter.instanced,
     }
 }
 
@@ -117,6 +132,8 @@ struct Emitter<'a> {
     module: usize,
     /// Whether the runtime library defines a native, by its name.
     provides: &'a dyn Fn(&str) -> bool,
+    /// The instances of generic declarations the program asks for.
+    instances: &'a Instances,
     /// Where what is not written yet is reported.
     diagnostics: &'a mut Diagnostics,
     /// The piece being written.
@@ -125,6 +142,13 @@ struct Emitter<'a> {
     /// function's module, the function's position there and the
     /// parameter's: one that comes back while it is written is reported.
     expanding: Vec<(usize, usize, usize)>,
+    /// How many names of its own the piece being written has made for
+    /// what it holds while a statement runs: each is told apart by its
+    /// number (`names::temporary`).
+    temporaries: usize,
+    /// The pieces written for the instances of the module's generic
+    /// declarations so far: see [`Written::instances`].
+    instanced: Vec<(usize, String, Piece)>,
 }
 
 impl Emitter<'_> {
@@ -137,14 +161,17 @@ impl Emitter<'_> {
             DeclarationKind::Function(hgl_analyser::Role::Temporal) => {
                 self.temporal_function(index);
             }
-            DeclarationKind::Constant => self.constant(at),
+            DeclarationKind::Constant => self.constant(index),
             DeclarationKind::Struct | DeclarationKind::Enum | DeclarationKind::NativeType => {
-                self.type_declaration(declared.kind, at);
+                self.type_declaration(index);
             }
             // An HGL candidate of an operator is a function of its
-            // module (GEN-4).
-            DeclarationKind::Implementation(..) => {
-                self.unsupported(at, "a candidate of an operator with a body");
+            // module (GEN-4): a value one is a value function's.
+            DeclarationKind::Implementation(hgl_analyser::Role::Value, _) => {
+                self.value_function(index);
+            }
+            DeclarationKind::Implementation(hgl_analyser::Role::Temporal, _) => {
+                self.unsupported(at, "a temporal candidate of an operator");
             }
             // An operator names its candidates and is no code of its
             // own. A native function or candidate is the runtime
@@ -177,6 +204,7 @@ impl Emitter<'_> {
 
     /// Ends the piece being written, and gives it.
     fn close(&mut self) -> Piece {
+        self.temporaries = 0;
         std::mem::take(&mut self.piece)
     }
 }

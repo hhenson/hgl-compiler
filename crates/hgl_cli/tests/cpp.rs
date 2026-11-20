@@ -313,3 +313,75 @@ fn block(path: &Path) {
     fs::remove_file(path).unwrap();
     fs::create_dir(path).unwrap();
 }
+
+/// Value code over the scalars and the plain composites, the emitter's
+/// own test program: constants, an enum, `if`, `switch`, `while` and
+/// `for`, places, defaults, a generic function by instance, tuples,
+/// results and `?`, a `var` parameter and `assert raises`. Every test
+/// of it passes on the SDK. With `HGL_CPP_FLAGS` naming the address and
+/// undefined-behaviour sanitizers, as the CI job for C++ runs it again,
+/// the same is true of the sanitized build.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn value_code_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("values");
+    let file = write(
+        &root,
+        "src/demo.values.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.values.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// EXPR-3: "An index outside a list fails where it is evaluated". The
+/// failure has no code (the catalogue has none for it), and the test is
+/// reported at the statement of it that was running, inside a function
+/// it called.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_failure_is_reported_at_its_statement() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("index");
+    let file = write(
+        &root,
+        "src/demo.index.hgl",
+        concat!(
+            "module demo.index\n",
+            "\n",
+            "const fn first(values: list<i64>) -> i64 => values[0]\n",
+            "\n",
+            "test outside {\n",
+            "    let none: list<i64> = []\n",
+            "    assert first(none) == 0\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let rows: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        rows[0], "FAILED   executable  demo.index::outside",
+        "{stdout}"
+    );
+    assert!(
+        rows[1].starts_with(&format!("    {file}:7:5: "))
+            && rows[1].contains("the index 0 is outside a sequence of 0"),
+        "{stdout}"
+    );
+}

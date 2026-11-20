@@ -26,8 +26,8 @@
 //!
 //! A value function with generic parameters is written once where it
 //! can be, as the hgraph target writes it: Python takes a value of any
-//! type. (A target whose values are typed needs an instance of each; that
-//! choice is not yet a parameter.) It is written by instance too where
+//! type ([`Instances::of`]). A target whose values are typed writes
+//! each by instance ([`Instances::typed`]). It is written by instance too where
 //! its body calls an operation the declaration requires, or
 //! hands one of its requirements on to what it calls (GEN-16): which
 //! candidate that is depends on the types, and where its body has a call
@@ -345,6 +345,20 @@ impl Instances {
     /// ([`hgl_analyser::INSTANCES`]): one past them is not made, and a
     /// call of it is reported.
     pub fn of(program: &Program) -> Instances {
+        Instances::collected(program, false)
+    }
+
+    /// The instances `program` asks for, as [`Instances::of`] gives
+    /// them, for a target whose values are typed: there every value
+    /// function and value candidate with generic parameters is written
+    /// by instance, one for each set of generic arguments it is called
+    /// with (GEN-2), as a temporal one is.
+    pub fn typed(program: &Program) -> Instances {
+        Instances::collected(program, true)
+    }
+
+    /// [`Instances::of`], or [`Instances::typed`] where `every` is true.
+    fn collected(program: &Program, every: bool) -> Instances {
         let mut instances = Instances::default();
         for (index, module) in program.modules.iter().enumerate() {
             for (declaration, body) in module.bodies.iter().enumerate() {
@@ -353,7 +367,7 @@ impl Instances {
                 // for each instance, which calls the candidate it selects.
                 if let (Some(body), true) = (body, value)
                     && generic(program, index, declaration)
-                    && (requires(body) || module.selects_per_instance(declaration))
+                    && (every || requires(body) || module.selects_per_instance(declaration))
                 {
                     instances.requiring.insert((index, declaration));
                 }

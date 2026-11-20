@@ -57,6 +57,35 @@ pub fn provides(name: &str) -> bool {
     DECLARED.contains(name)
 }
 
+/// True where the library declares the enum `name`, `enum class name`,
+/// in its own namespace: one of core's enums its natives take, which
+/// has core's members in core's order (`ZeroPolicy`, `Rounding`). The
+/// generated code names that one, and writes no enum of its own for it.
+pub fn declares_enum(name: &str) -> bool {
+    static DECLARED: LazyLock<HashSet<String>> = LazyLock::new(|| {
+        FILES
+            .iter()
+            .filter(|(path, _)| path.starts_with("include/"))
+            .filter_map(|(_, bytes)| std::str::from_utf8(bytes).ok())
+            .flat_map(|text| {
+                text.split("enum class ")
+                    .skip(1)
+                    .filter_map(|after| {
+                        let name: String = after
+                            .chars()
+                            .take_while(|character| {
+                                character.is_ascii_alphanumeric() || *character == '_'
+                            })
+                            .collect();
+                        (!name.is_empty()).then_some(name)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    });
+    DECLARED.contains(name)
+}
+
 /// Every name in `text` that a `(` follows, spaces between allowed.
 fn called_names(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
