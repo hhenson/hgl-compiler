@@ -93,9 +93,9 @@ pub(super) fn read_whole_all_valid(program: &Program, ty: &Type) -> bool {
     }
 }
 
-/// True for a concrete struct with no field, `struct Empty {}`, which
-/// this target writes as a temporal `TS` of its class
-/// (`Emitter::struct_annotation`).
+/// True for a concrete struct with no field, `struct Empty {}`, that no
+/// struct inherits from: a temporal value of it has no child, and
+/// publishes its one value whole (TIME-1, TYPE-9).
 pub(super) fn empty_struct(program: &Program, ty: &Type) -> bool {
     let Type::Named {
         module,
@@ -158,10 +158,9 @@ impl<'t> DeltaOf<'t> {
 /// A value of a struct is a T where T is an abstract struct it inherits
 /// from (TYPE-3), and where T publishes whole `delta<T>` is T itself.
 ///
-/// It asks whether `value` is `ty`'s delta, and is not the test of
-/// `Function::publishes_null`, which asks whether it is a nullable's
-/// `delta<T?>`: the two part at an `atomic<T?>`, whose delta is the
-/// `T?` a whole value has, and which this calls a delta.
+/// It asks whether `value` is `ty`'s delta, and not whether it is a
+/// nullable's `delta<T?>`: the two part at an `atomic<T?>`, whose delta
+/// is the `T?` a whole value has, and which this calls a delta.
 pub(super) fn whole_value(ty: &Type, value: &Expr) -> bool {
     value.ty == *ty || value.ty != Type::delta(ty.clone())
 }
@@ -316,8 +315,7 @@ pub(super) fn duration_window(ty: &Type) -> bool {
     )
 }
 
-/// True for an unsized list, `list<T>` (TYPE-10: "a growing shape"),
-/// which this target writes as hgraph's unbounded `TSL`.
+/// True for an unsized list, `list<T>` (TYPE-10: "a growing shape").
 pub(super) fn growing_list(ty: &Type) -> bool {
     matches!(ty, Type::List { size: None, .. })
 }

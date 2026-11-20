@@ -1255,11 +1255,18 @@ impl Emitter<'_> {
             Asked::Some(required) => {
                 let parts: Vec<String> = required
                     .iter()
-                    .map(|(key, part)| {
+                    .map(|(index, part)| {
+                        // The child's port: `"bid"` for a struct's field,
+                        // `"_0"` for a tuple's position (`tuple_annotation`).
+                        let key = match ty {
+                            Type::Tuple(_) => position(*index),
+                            _ => field_of(self.program, ty, *index)
+                                .map_or_else(String::new, |member| name(&member.name)),
+                        };
                         let shape = validity_shape(self.program, part);
                         format!(
                             "{}: {}",
-                            string(key),
+                            string(&key),
                             shape.unwrap_or_else(|| "None".to_string())
                         )
                     })
@@ -2124,9 +2131,9 @@ enum Asked {
     /// value of a `T?`, or each field of a struct or position of a tuple.
     None,
     /// A struct's fields or a tuple's positions that are not optional,
-    /// beside one that is: each by the name of its port, `"bid"` or
-    /// `"_0"` (`tuple_annotation`), and its type.
-    Some(Vec<(String, Type)>),
+    /// beside one that is: each by its position among the struct's
+    /// fields (`fields_of`) or the tuple's positions, and its type.
+    Some(Vec<(usize, Type)>),
 }
 
 /// The children of `ty` its `all_valid` asks. TIME-9: "an optional
@@ -2141,16 +2148,17 @@ fn asked_children(program: &Program, ty: &Type) -> Asked {
         Type::Atomic(inner) => matches!(**inner, Type::Nullable(_)),
         _ => false,
     };
-    let parts: Vec<(String, Type, bool)> = match ty {
+    let parts: Vec<(usize, Type, bool)> = match ty {
         Type::Named {
             kind: NamedKind::Struct,
             ..
         } => match fields_of(program, ty) {
             Some(fields) => fields
                 .into_iter()
-                .map(|(member, part)| {
+                .enumerate()
+                .map(|(index, (_, part))| {
                     let optional = field(&part);
-                    (name(&member.name), part, optional)
+                    (index, part, optional)
                 })
                 .collect(),
             None => return Asked::Every,
@@ -2160,7 +2168,7 @@ fn asked_children(program: &Program, ty: &Type) -> Asked {
             .enumerate()
             .map(|(index, element)| {
                 let optional = matches!(element, Type::Nullable(_));
-                (position(index), element.clone(), optional)
+                (index, element.clone(), optional)
             })
             .collect(),
         Type::List { element: child, .. } | Type::Dict { value: child, .. } => {
@@ -2175,7 +2183,7 @@ fn asked_children(program: &Program, ty: &Type) -> Asked {
     if parts.iter().all(|(_, _, optional)| !optional) {
         return Asked::Every;
     }
-    let required: Vec<(String, Type)> = parts
+    let required: Vec<(usize, Type)> = parts
         .into_iter()
         .filter(|(_, _, optional)| !optional)
         .map(|(key, part, _)| (key, part))
