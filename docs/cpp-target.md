@@ -115,9 +115,10 @@ In 0.9.9: `add_node` keeps a builder's own scalars
 `try_except_<G>` takes options for canonical errors
 ([1835](https://github.com/hhenson/hgraph/issues/1835)). Nothing is asked
 on references: a `REF` output holds the reference it was given, which is
-the specification's rule for a returned `ref` parameter, and where the
-specification and hgraph differ hgraph is taken as right, but for
-invalidation, the growing list and windows of a duration.
+the specification's rule for a returned `ref` parameter. Where the pinned
+specification and hgraph differ, this target builds the specification's
+rule, and the difference goes to the specification's issue tracker to be
+decided there, not here.
 
 ## Progress and acceptance
 
