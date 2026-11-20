@@ -55,7 +55,7 @@ one executable for each test module or application
 | Graph | A function over `Wiring&` and typed ports, calling `wire<Node>`. Identical value nodes are interned by hgraph |
 | `if`, `switch`, `for` over connections | hgraph's `switch_node`, `map_node` and `tsl_map_node`, each child a compiled sub-graph with its captures |
 | Lifted call | A generated node that calls the instance |
-| Source | A node with no input that schedules itself. `yield` inside loops and branches needs a resumable body: a C++23 coroutine held in the node's state if hgraph's state can hold one, otherwise a state machine written by `hgl_lower` |
+| Source | A node with no input that schedules itself. The body is a C++23 coroutine (`std::generator` of a time and a payload) held in the node's state, made in `start` and destroyed in `stop`: `yield` inside loops and branches is written as it reads, with the body's locals in the coroutine's frame. A trial ran one on hgraph: the trace was right, a failure inside the body was the node's failure, and the frame was freed after a finished and after a failed run |
 | Failure | Thrown as hgraph's `ExecutionFailure` carrying `CanonicalError` (code, message, node, phase, time). `capture` is `try_except_node` with canonical errors. `assert raises` finds the failure in the exception it catches |
 | Test | Core's `replay` and `record` are compiled like any module. The compiler writes each eval's entry graph, runs the executor in simulation and reads the recording from the run's store |
 | Application | The same, in real time, stopped through the engine's control |
@@ -65,7 +65,9 @@ one executable for each test module or application
 C++ does not check what Rust would. Three rules stand in for it.
 
 - Generated code holds no view of an input or an output beyond the hook call
-  it was given in; what is kept is copied.
+  it was given in; what is kept is copied. A source's coroutine takes its
+  configuration by value, and reaches the clock, the scheduler and the store
+  through a slot the node fills before each resumption.
 - An internal fault is no HGL failure (ERR-1): only `ExecutionFailure` may be
   captured. What `try_except_node` does with any other exception is checked
   before `capture` is written, and raised on hgraph if it captures it.
@@ -127,7 +129,5 @@ the two disagree, the specification decides which is wrong.
 
 - Containers for a set and a dictionary, an abstract struct's value, and a
   delta's C++ form: with step 2's collections lane.
-- Whether a source is a coroutine or a lowered state machine: with step 2's
-  sources lane, by what hgraph's node state can hold.
 - Whether instances that two modules both need can be built once across
   programs: after step 1, from measured build times.
