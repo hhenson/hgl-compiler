@@ -267,6 +267,7 @@ analyser: done
 transpiler: done
 
 - hgraph: a tenor's own candidates are the provider's functions, and `date ± tenor` core's HGL, written as any generic value function is
+- The C++ target emits the shared hgraph scalar for tenor types and both forms of literal, including zero calendar and zero business days.
 
 ## TEN-2
 
