@@ -255,9 +255,26 @@ pub struct Module {
     /// The module's `instantiate` items, each with the position of its
     /// file in `files`. They declare nothing, and name what they request.
     pub(crate) instantiations: Vec<(usize, SyntaxNode)>,
+    /// The calls in each declaration's body that a membership its
+    /// `requires` states authorises, whose candidate each instance of
+    /// it selects for itself (GEN-3, GEN-7, GEN-5): one entry
+    /// for each of `declarations`, in the same order. The body has each
+    /// as a call with no callee ([`crate::hir::Callee::Unread`]);
+    /// [`Program::instance`] gives the instance's.
+    pub(crate) selecting: Vec<Vec<crate::values::Selecting>>,
 }
 
 impl Module {
+    /// True where the body of `declaration` has a call whose candidate
+    /// is selected for each instance of the declaration: its candidate
+    /// is known only in an instance ([`Program::instance`]), so the
+    /// body is written for each.
+    pub fn selects_per_instance(&self, declaration: usize) -> bool {
+        self.selecting
+            .get(declaration)
+            .is_some_and(|calls| !calls.is_empty())
+    }
+
     /// The declarations `name` is bound to in the module's scope: none,
     /// one, or the two functions of a temporal and value pair (FN-4).
     pub fn lookup(&self, name: &str) -> impl Iterator<Item = &Declaration> {

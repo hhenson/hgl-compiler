@@ -1,0 +1,88 @@
+module demo.generics_fixes_wave3
+
+# How a candidate is selected for each instance of a generic function,
+# where a generic parameter of that function selects it.
+
+operator kind_of<T>(value: T) -> i64
+impl const fn kind_of(value: i64) -> i64 => 1
+impl const fn kind_of<T>(value: T) -> i64 requires !(T == i64) => 2
+
+# GEN-7: "A generic body is checked under its stated requirements".
+# GEN-16: under `requires kind_of(U) -> i64` the body calls the operation
+# it requires, and each call of it gives the candidate that answers the
+# requirement for its types (GEN-5: "Concrete types outrank variables"),
+# through another instance too, and in a graph.
+const fn wrap<U>(value: U) -> i64 requires kind_of(U) -> i64 => kind_of(value)
+const fn twice<U>(value: U) -> i64 requires kind_of(U) -> i64 => kind_of(value) + kind_of(value)
+const fn relay<V>(value: V) -> i64 requires kind_of(V) -> i64 => wrap(value)
+fn wired<U>(value: U) -> i64 requires kind_of(U) -> i64 => kind_of(value)
+
+test a_requirement_is_answered_for_each_instance {
+    assert wrap(5) == 1
+    assert wrap(true) == 2
+    assert wrap("s") == 2
+    assert twice(5) == 2
+    assert twice(1.5) == 4
+    assert relay(5) == 1
+    assert relay(false) == 2
+    assert eval(wired(value: [5, 6])) == [1, 1]
+    assert eval(wired(value: [true])) == [2]
+}
+
+# GEN-6: "A call admits the candidate only where that holds for the
+# parameter's value at the call". GEN-3: "A positive conjunctive
+# equality may bind one unresolved generic from known data": core's
+# division selects by its `zero` option, which a generic value parameter
+# the body's `requires` binds gives.
+const fn quiet<const Z: ZeroPolicy>(a: f64, b: f64) -> f64 requires Z == .nan => div_(a, b, zero: Z)
+const fn checked<const Z: ZeroPolicy>(a: f64, b: f64) -> result<f64, error> requires Z == .error =>
+    div_(a, b, zero: Z)
+
+test an_option_a_bound_generic_parameter_gives_selects {
+    assert quiet<.nan>(1.0, 4.0) == 0.25
+    let nan = quiet<.nan>(1.0, 0.0)
+    assert nan != nan
+    assert is_err(checked<.error>(1.0, 0.0))
+    assert is_ok(checked<.error>(1.0, 2.0))
+}
+
+# GEN-3: a membership "authorizes in the body (GEN-7) an operation that
+# each listed type has a candidate for ... and each instance selects its
+# own candidate (GEN-5)"; and, proposed, a membership of a generic value
+# parameter a call that gives it as an option. A membership authorises in the body
+# an operation that every listed type, or value, has a candidate for, and
+# each instance selects its candidate: by name, by symbol, for two type
+# parameters, and for an option a generic value parameter gives.
+operator sized<T>(value: T) -> i64
+impl const fn sized(value: i64) -> i64 => 1
+impl const fn sized(value: f64) -> i64 => 2
+impl const fn sized(value: str) -> i64 => 3
+const fn sized_of<T>(value: T) -> i64 requires T in {i64, f64, str} => sized(value)
+const fn less_num<T>(a: T, b: T) -> bool requires T in {i64, f64} => a < b
+const fn sum_of<A, B>(a: A, b: B) -> i64 requires A in {i64, f64} && B in {str} => sized(a) + sized(b)
+const fn ratio<const Z: ZeroPolicy>(a: f64, b: f64) -> f64 requires Z in {.ieee, .nan} => div_(a, b, zero: Z)
+
+test a_membership_selects_for_each_instance {
+    assert sized_of(5) == 1
+    assert sized_of(1.5) == 2
+    assert sized_of("s") == 3
+    assert less_num(1, 2)
+    assert !less_num(2.5, 1.5)
+    assert sum_of(1, "s") == 4
+    assert sum_of(1.5, "s") == 5
+    assert ratio<.ieee>(1.0, 0.0) > 1.0e300
+    let nan = ratio<.nan>(1.0, 0.0)
+    assert nan != nan
+}
+
+# UNIT-13: "A constant is read by its name wherever an ordinary value
+# is": in a `requires`, compared with a generic value parameter, and in
+# the set it is compared with.
+const THREE: i64 = 3
+const fn named<const N: i64>(v: i64) -> i64 requires N == THREE => v + N
+const fn among<const N: i64>(v: i64) -> i64 requires N in {THREE, 5} => v + N
+
+test a_constant_in_a_requires_is_read_by_its_name {
+    assert named<3>(1) == 4
+    assert among<5>(1) == 6
+}

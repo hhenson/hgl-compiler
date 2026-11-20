@@ -2023,15 +2023,46 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
 /// constant in either is not known, `FBox<X>` beside `FBox<2.0>` with `X`
 /// still to be given. GEN-3: "under negation/disjunction it only tests
 /// already-resolved data", so a type equality has the three answers a
-/// constant's has ([`ConstantValue::same`]).
+/// constant's has ([`ConstantValue::same`]). A generic type parameter
+/// not yet given is such data too: `U` may be any type, so `U` beside
+/// `i64` is not known to be it or to differ from it, while `list<U>`
+/// beside `set<i64>` is known to differ whatever `U` is.
 pub(crate) fn same_type(left: &Type, right: &Type) -> Option<bool> {
     if agree_as(left, right, false) {
         Some(true)
-    } else if !agree_as(left, right, true) {
+    } else if !agree_as(&opened(left), &opened(right), true) {
         Some(false)
     } else {
         None
     }
+}
+
+/// `ty` with each generic type parameter it names replaced by a type
+/// that is not known, which agrees with any ([`agree_as`]).
+fn opened(ty: &Type) -> Type {
+    // `any_part` takes a closure that cannot change what it captures,
+    // so the parameters found are kept in a `RefCell`, whose contents
+    // may change behind a shared reference.
+    let found = std::cell::RefCell::new(Vec::new());
+    ty.any_part(
+        &|part| {
+            if let Type::Parameter { at, .. } = part {
+                found.borrow_mut().push(*at);
+            }
+            false
+        },
+        &|_| false,
+    );
+    let unknown = Argument::Type(Type::Unknown);
+    let map: Vec<(Location, &Argument)> = found
+        .into_inner()
+        .into_iter()
+        .map(|at| (at, &unknown))
+        .collect();
+    if map.is_empty() {
+        return ty.clone();
+    }
+    substitute(ty, &map)
 }
 
 /// [`agree`], with `unknown` what two constants count as where whether

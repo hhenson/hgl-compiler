@@ -24,9 +24,13 @@
 //! fn sum(a: f64, b: f64) -> f64 => <core's add_(f64, f64)>(a, b)
 //! ```
 //!
-//! Nothing is analysed again. The body was checked under its stated
-//! requirements (GEN-7), and each call recorded the candidates that
-//! meet them: this puts the two together.
+//! The body was checked under its stated requirements (GEN-7), and
+//! each call recorded the candidates that meet them: this puts the two
+//! together. One call is read again: a call of an operator that a
+//! membership the declaration states authorises, `requires T in {i64,
+//! f64}`, is the call of the candidate it selects with the instance's
+//! types (GEN-7: "Each instance then selects its own candidate";
+//! [`crate::values::Selecting`]).
 
 use hgl_diagnostics::Location;
 
@@ -95,6 +99,16 @@ impl Program {
         walk_statements_mut(&mut body.statements, &mut |expression| {
             self.place(expression, &map, requirements);
         });
+        // GEN-5: a call a membership authorises is the call of the
+        // candidate it selects with these arguments in place, which is
+        // read here.
+        crate::values::select_in_instance(
+            self,
+            (module, declaration),
+            generics,
+            &mut body,
+            &|call| call.walk_mut(&mut |inner| self.place(inner, &map, requirements)),
+        );
         Some((taken, body))
     }
 

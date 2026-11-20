@@ -1231,18 +1231,32 @@ A function and a struct with no generic parameter are held to a
 `requires` they state too. What cannot be told where a generic body
 passes on a parameter of its own is told once the typed program is
 whole, for each instance a call that gives every argument makes, at any
-depth (`requirements::instances_hold`), and reported at that call. Only
-the calls that reach a `requires` are followed, each instance once
-however many calls make it, and at most 4096 instances from one, whose
-arguments are no longer than 65536 characters written out; a call whose
-instances go past that is
-`generic.instance_limit` (proposed), for what is past it is not told. What
+depth (`requirements::instances_hold`), and reported at that call: of a
+struct a type in a generic declaration applies, and a generic argument
+worked out from the body's own generic parameters, rejected
+(`generic.argument_constant`) where its evaluation fails there. A call
+of another generic function in a generic body is judged where the body
+is declared, by what its `requires` states (GEN-7,
+hhenson/hgl_spec#144), and is not judged again for each instance. A call of an operator in a generic body whose
+candidate the body's own parameters would select is judged once, where
+the body is declared, under what its `requires` states (GEN-7): a named
+operator requirement makes it the required operation; a membership
+(`T in {i64, f64}`) authorises it where "each listed type has one"
+(GEN-3), and each instance then selects its own
+(`values::Selecting`, which `Program::instance` reads for the target);
+otherwise it is rejected there. Only
+the calls that reach one of those are followed, each instance once
+however many calls make it, and at most `hgl_analyser::INSTANCES`
+(4096) instances of one declaration from one call, whose arguments are
+no longer than 65536 characters written out; a call whose instances go
+past that is `generic.instance_limit` (GEN-13, proposed), for what is
+past it is not told. The hgraph target makes no more than that many either. What
 is not told for a constant this compiler does not work out is reported
 as not known to hold; nothing else that cannot be told is reported.
 A generic parameter of the declaration a call is written in is no one
-type, so a membership of it is not told; a named operator requirement
-of it is, by what that declaration states (GEN-7), a struct's as a
-function's. A generic value is read however it is written (GEN-8): a
+type, so a membership of it is not told there; a named operator
+requirement of it is, by what that declaration states (GEN-7), a
+struct's as a function's. A generic value is read however it is written (GEN-8): a
 literal of any kind, an enum's member in any spelling, a constant's
 name, after the callee's name or by name. One reader does that for a
 call, a construction and a written type, so a spelling means the same

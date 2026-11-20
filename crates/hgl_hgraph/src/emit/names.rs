@@ -33,6 +33,19 @@ impl Emitter<'_> {
         }
         let instances = self.instances;
         let Some(instance) = instances.find(program, (module, declaration), generics) else {
+            // One past the instances one call makes, which are not all
+            // written (`Instances::of`).
+            if instances.past(program, (module, declaration), generics) {
+                let name = &program.modules[module].declarations[declaration].name;
+                self.unsupported(
+                    at,
+                    &format!(
+                        "an instance of `{name}` past the {} instances of it one call makes",
+                        hgl_analyser::INSTANCES
+                    ),
+                );
+                return "None".to_string();
+            }
             self.unsupported(
                 at,
                 "a call of a generic temporal function with generic arguments that are not known",

@@ -6,7 +6,7 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
-use super::candidates::{Given, Key, Wanted, typed_by_place};
+use super::candidates::{Given, Key, Settled, Wanted, typed_by_place};
 use super::control::joined;
 use super::expressions::takes_its_type;
 use super::fit::{open, whole};
@@ -627,6 +627,45 @@ impl<'a> Typer<'a> {
             among: self.result_among(operator, public, &[], &own_generics),
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
+        // GEN-7: "A generic body is checked under its stated
+        // requirements". Where which candidates admit the symbol cannot be
+        // told for a generic parameter of the declaration being read,
+        // what its `requires` states settles it
+        // ([`Typer::select_per_instance`]). The symbol's expression is the
+        // one its first operand is part of.
+        // Where it is rejected the symbol's own report is made, with
+        // what says why beside it.
+        let mut unsettled: Vec<String> = Vec::new();
+        {
+            let written = given
+                .iter()
+                .find(|given| matches!(given.key, Key::Position(0)))
+                .and_then(|given| given.node.parent())
+                .map_or(symbol.at, |node| self.at(&node));
+            let settled = self.select_per_instance(
+                operator,
+                &given,
+                (&wanted, None),
+                (symbol.form, written, symbol.at),
+                untold,
+            );
+            match settled {
+                Settled::Deferred(ty) => {
+                    let ty = if matches!(ty, Type::Unknown) {
+                        symbol.unjudged
+                    } else {
+                        ty
+                    };
+                    return (self.unselected(given, symbol.form), ty);
+                }
+                Settled::Elsewhere => {}
+                Settled::Rejected(report) => {
+                    unsettled = report.notes;
+                    selected.clear();
+                }
+            }
+        }
+        let untold = untold && unsettled.is_empty();
         // Which candidates admit the call cannot be told, or an entry
         // could not be tried once the function's readings were used up
         // (`REREADS`): the symbol is then not judged.
@@ -726,6 +765,9 @@ impl<'a> Typer<'a> {
             }
             diagnostic
         };
+        let diagnostic = unsettled
+            .into_iter()
+            .fold(diagnostic, |diagnostic, note| diagnostic.with_note(note));
         self.diagnostics.emit(diagnostic);
         // What the place expects was asked of the candidates and none
         // gives it: the place is not then told the symbol is of another

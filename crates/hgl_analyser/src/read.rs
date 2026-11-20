@@ -843,8 +843,9 @@ impl Reader<'_> {
                         is_type(parent.kind()) || parent.kind() == SyntaxKind::GenericArgs
                     });
                     // A const option compared in a constraint is a
-                    // value: no type is written there.
-                    if !inside && !self.names_an_option(&node) {
+                    // value: no type is written there. So is a constant
+                    // compared with one (UNIT-13).
+                    if !inside && !self.names_an_option(&node) && !self.compared_constant(&node) {
                         self.outermost(&node);
                     }
                 }
@@ -896,6 +897,10 @@ impl Reader<'_> {
         // An operand of `==` or `in`; `is` compares types. What it is
         // compared with is constants: no type, and no set that holds
         // one. `zero == i64` compares no option.
+        // A constant of a module is a value there too (UNIT-13: "A
+        // constant is read by its name wherever an ordinary value is").
+        let value =
+            |operand: &SyntaxNode| !is_type(operand.kind()) || self.names_a_constant(operand);
         let compared = node.parent().is_some_and(|relation| {
             relation.kind() == SyntaxKind::ConstraintRelation
                 && tokens(&relation).any(|token| {
@@ -905,9 +910,9 @@ impl Reader<'_> {
                 && relation.children().filter(|operand| operand != node).all(
                     |operand| match operand.kind() {
                         SyntaxKind::ConstraintSet => {
-                            operand.children().all(|member| !is_type(member.kind()))
+                            operand.children().all(|member| value(&member))
                         }
-                        kind => !is_type(kind),
+                        _ => value(&operand),
                     },
                 )
         });
@@ -962,6 +967,94 @@ impl Reader<'_> {
             Some(parameter) => is_const(&parameter),
             None => true,
         }
+    }
+
+    /// True when `node`, which the parser read as a type, names a
+    /// constant of a module (UNIT-13).
+    fn names_a_constant(&self, node: &SyntaxNode) -> bool {
+        if node.kind() != SyntaxKind::NamedType || child(node, SyntaxKind::GenericArgs).is_some() {
+            return false;
+        }
+        let Some(name) = name_token(node) else {
+            return false;
+        };
+        matches!(
+            self.bindings.get(&(self.file, name.span().start)).copied(),
+            Some(Binding::Declarations { module, declarations })
+                if declarations.iter().any(|&declaration| {
+                    self.program.modules[*module].declarations[declaration].kind
+                        == DeclarationKind::Constant
+                })
+        )
+    }
+
+    /// True when `node`, which the parser read as a type, names a
+    /// constant of a module that a constraint compares with a value: an
+    /// operand of `==`, or of `in` or a member of its set, whose other
+    /// side is a generic value parameter, a const option, a literal or
+    /// another constant. UNIT-13: "A constant is read by its name
+    /// wherever an ordinary value is." GEN-3: a `requires` may use
+    /// "equalities, the membership of a constant in a set of
+    /// constants". `N == C` and `N in {C, 5}` so compare `N` with the
+    /// constant's value, which is read where the condition is told
+    /// (`crate::constant`). Beside a type, `T == C`, it is left to be
+    /// read as the type it is not, and is reported.
+    fn compared_constant(&self, node: &SyntaxNode) -> bool {
+        if !self.names_a_constant(node) {
+            return false;
+        }
+        // The relation, and the operand on the other side of it.
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        let (relation, others): (SyntaxNode, Vec<SyntaxNode>) = match parent.kind() {
+            SyntaxKind::ConstraintRelation => {
+                let others = parent
+                    .children()
+                    .filter(|operand| operand != node)
+                    .collect();
+                (parent, others)
+            }
+            SyntaxKind::ConstraintSet => {
+                let Some(relation) = parent.parent() else {
+                    return false;
+                };
+                let others = relation
+                    .children()
+                    .filter(|operand| *operand != parent)
+                    .collect();
+                (relation, others)
+            }
+            _ => return false,
+        };
+        let compares = relation.kind() == SyntaxKind::ConstraintRelation
+            && tokens(&relation).any(|token| {
+                token.kind() == SyntaxKind::EqEq
+                    || (token.kind() == SyntaxKind::Ident && token.text() == "in")
+            });
+        // A generic value parameter of the declaration, by its kind.
+        let generic_value = |operand: &SyntaxNode| {
+            operand.kind() == SyntaxKind::NamedType
+                && name_token(operand).is_some_and(|name| {
+                    matches!(
+                        self.bindings.get(&(self.file, name.span().start)).copied(),
+                        Some(Binding::Local {
+                            at,
+                            kind: LocalKind::GenericParameter,
+                        }) if self.generics.iter().any(|generic| {
+                            generic.at == *at && Kind::of(&generic.kind) == Kind::Value
+                        })
+                    )
+                })
+        };
+        compares
+            && !others.is_empty()
+            && others.iter().all(|other| {
+                !is_type(other.kind())
+                    || generic_value(other)
+                    || self.names_an_option(other)
+                    || self.names_a_constant(other)
+            })
     }
 
     /// Reads a type that stands in no other type, once.

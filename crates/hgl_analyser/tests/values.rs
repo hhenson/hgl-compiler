@@ -2659,8 +2659,9 @@ fn a_selecting_option_is_given_a_compile_time_constant() {
         // An `i64` is no `Zero`.
         "    let mistyped = ratio(a, b, zero: 3)\n",
         // A generic value parameter in scope is a compile-time constant.
-        // What it is, is known where `uses` is called: which candidate
-        // it selects is not judged here.
+        // GEN-7: "A generic body is checked under its stated
+        // requirements": `uses` states nothing of `P`, so no candidate is
+        // known to admit the call, and it is rejected here.
         "    let passed = ratio(a, b, zero: P)\n",
         "}\n",
     ));
@@ -2670,6 +2671,7 @@ fn a_selecting_option_is_given_a_compile_time_constant() {
             "m.hgl:8:37 type/generic.argument_constant GEN-8",
             "m.hgl:9:18 operator/operator.no_candidate GEN-5",
             "m.hgl:10:20 operator/operator.no_candidate GEN-5",
+            "m.hgl:11:18 operator/operator.no_candidate GEN-5",
         ]
     );
     assert_eq!(locals(&checked, "uses")[7], "passed: _");
