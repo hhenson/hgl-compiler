@@ -1,18 +1,19 @@
-//! The instances of generic temporal declarations a program asks for.
+//! The instances of generic declarations a program asks for. Part of
+//! lowering: a transpiler writes each before it writes the modules.
 //!
-//! An hgraph node or graph is written with the types of its inputs, and
-//! a node's code calls the function chosen for those types. So a
-//! temporal function with generic parameters, and a temporal candidate
-//! of an operator with them, is written once for each set of generic
-//! arguments it is called with (GEN-2):
+//! A node or a graph is written with the types of its inputs, and a
+//! node's code calls the function chosen for those types. So a temporal
+//! function with generic parameters, and a temporal candidate of an
+//! operator with them, is written once for each set of generic arguments
+//! it is called with (GEN-2):
 //!
 //! ```text
 //! fn identity_sum<T>(lhs: T, rhs: T) -> T
 //!     requires add_(T, T) -> T => lhs +{invalid: .identity} rhs
 //! ```
 //!
-//! called with two `f64` and with two `str` is two graphs,
-//! `_inst_identity_sum__f64` and `_inst_identity_sum__str`.
+//! called with two `f64` and with two `str` is two graphs, whose
+//! [`Instance::suffix`]es are `f64` and `str`.
 //!
 //! This reads the typed program for those calls before any module is
 //! written, since a call in one module asks for an instance that is
@@ -24,8 +25,10 @@
 //! OPS-9 gives a body of its own.
 //!
 //! A value function with generic parameters is written once where it
-//! can be: Python takes a value of any type. It is written by instance
-//! too where its body calls an operation the declaration requires, or
+//! can be, as the hgraph target writes it: Python takes a value of any
+//! type. (A target whose values are typed needs an instance of each; that
+//! choice is not yet a parameter.) It is written by instance too where
+//! its body calls an operation the declaration requires, or
 //! hands one of its requirements on to what it calls (GEN-16): which
 //! candidate that is depends on the types, and where its body has a call
 //! a membership it states authorises, whose candidate each instance
@@ -51,30 +54,30 @@ use hgl_analyser::{
     Argument as GenericArgument, DeclarationKind, Detail, Program, Role, Signature, Type,
 };
 
-use crate::emit::canonical_argument;
+use crate::canonical::canonical_argument;
 
 /// A generic temporal declaration as one set of generic arguments takes
 /// it.
-pub(crate) struct Instance {
+pub struct Instance {
     /// Each generic argument as text no other is written as
     /// (`canonical_argument`): what tells one instance from another.
     key: Vec<String>,
-    /// What follows the declaration's own name in the instance's Python
-    /// name: the generic arguments, each character that is no letter
-    /// or digit as `_`, and a number where two instances would
+    /// What follows the declaration's own name in the name a target
+    /// gives the instance: the generic arguments, each character that is
+    /// no letter or digit as `_`, and a number where two instances would
     /// otherwise have one name.
-    pub(crate) suffix: String,
+    pub suffix: String,
     /// Its signature, with the generic arguments in place.
-    pub(crate) signature: Signature,
+    pub signature: Signature,
     /// Its body, with them in place, and each operation the declaration
     /// requires as the call of the candidate that answers it (GEN-16).
-    pub(crate) body: Body,
+    pub body: Body,
 }
 
 /// The instances of each generic temporal declaration of a program, in
 /// the order they are first asked for.
 #[derive(Default)]
-pub(crate) struct Instances {
+pub struct Instances {
     /// By the declaration: the position of its module in the program,
     /// and its position among that module's declarations.
     declared: BTreeMap<(usize, usize), Vec<Instance>>,
@@ -103,17 +106,17 @@ struct Asked {
 /// What an eval's run is wired with (core's CEVAL-1: "core's `replay`
 /// wired to each temporal input of the target, and the target's result
 /// as the entry's").
-pub(crate) struct Wiring {
+pub struct Wiring {
     /// Each temporal input the eval gives a trace: its parameter's
     /// name, and the type the input is of.
-    pub(crate) inputs: Vec<(String, Type)>,
+    pub inputs: Vec<(String, Type)>,
     /// The type of the target's result, where it has one.
-    pub(crate) result: Option<Type>,
+    pub result: Option<Type>,
 }
 
 /// The endpoint payload for a trace of publications (TST-5, TYPE-16).
 /// Replays and the lifted node receiving those replays use the same type.
-pub(crate) fn trace_payload(trace: &Type) -> Option<Type> {
+pub fn trace_payload(trace: &Type) -> Option<Type> {
     let Type::Trace { cell, .. } = trace else {
         return None;
     };
@@ -150,7 +153,7 @@ fn published_type(cell: &Type) -> Type {
 /// (the language's TST-5): a scalar is its own delta, and a set's and a
 /// nullable's delta name the type they are of. A delta does not say
 /// that a part of it was an `atomic<V>`, whose delta is V.
-pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring> {
+pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring> {
     let ExprKind::Call {
         callee:
             Callee::Function {
@@ -215,7 +218,7 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
 /// which the run records (core's CRUN-8): "The run wires `record` to
 /// the entry's result". `None` for an entry with no result, and where
 /// the statement's call is no call of a function.
-pub(crate) fn run_result(program: &Program, run: &Run) -> Option<Type> {
+pub fn run_result(program: &Program, run: &Run) -> Option<Type> {
     let ExprKind::Call {
         callee:
             Callee::Function {
@@ -239,7 +242,7 @@ pub(crate) fn run_result(program: &Program, run: &Run) -> Option<Type> {
 }
 
 /// The temporal function `name` of core's module: `replay`, `record`.
-pub(crate) fn core_function(program: &Program, name: &str) -> Option<(usize, usize)> {
+pub fn core_function(program: &Program, name: &str) -> Option<(usize, usize)> {
     let core = program.core()?;
     let declaration = program.modules[core]
         .declarations
@@ -341,7 +344,7 @@ impl Instances {
     /// declaration are made from one call than the analyser follows
     /// ([`hgl_analyser::INSTANCES`]): one past them is not made, and a
     /// call of it is reported.
-    pub(crate) fn of(program: &Program) -> Instances {
+    pub fn of(program: &Program) -> Instances {
         let mut instances = Instances::default();
         for (index, module) in program.modules.iter().enumerate() {
             for (declaration, body) in module.bodies.iter().enumerate() {
@@ -474,7 +477,7 @@ impl Instances {
             ) else {
                 continue;
             };
-            // The arguments as part of a Python name.
+            // The arguments as part of a name.
             let plain: String = key
                 .join("_")
                 .chars()
@@ -594,14 +597,14 @@ impl Instances {
     /// value one whose body needs to know what answers its
     /// requirements, or calls one written by instance with its own
     /// generic parameters.
-    pub(crate) fn instanced(&self, program: &Program, module: usize, declaration: usize) -> bool {
+    pub fn instanced(&self, program: &Program, module: usize, declaration: usize) -> bool {
         generic_temporal(program, module, declaration)
             || self.requiring.contains(&(module, declaration))
     }
 
     /// The instances of `declaration` of `module`, in the order they
     /// were first asked for.
-    pub(crate) fn declared(&self, module: usize, declaration: usize) -> &[Instance] {
+    pub fn declared(&self, module: usize, declaration: usize) -> &[Instance] {
         self.declared
             .get(&(module, declaration))
             .map_or(&[], Vec::as_slice)
@@ -610,7 +613,7 @@ impl Instances {
     /// True where the instance of `declaration` of `module` for the
     /// generic arguments `generics` was asked for and not made: it is
     /// past the instances of it one call makes ([`hgl_analyser::INSTANCES`]).
-    pub(crate) fn past(
+    pub fn past(
         &self,
         program: &Program,
         (module, declaration): (usize, usize),
@@ -623,7 +626,7 @@ impl Instances {
     /// The instance of `declaration` of `module` for the generic
     /// arguments `generics`. `None` where they are not whole, or the
     /// declaration has no body to write.
-    pub(crate) fn find(
+    pub fn find(
         &self,
         program: &Program,
         (module, declaration): (usize, usize),

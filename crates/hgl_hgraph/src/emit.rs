@@ -16,28 +16,36 @@ use std::collections::BTreeSet;
 
 use hgl_analyser::hir::{
     Argument, BinaryOperator, Body, CalendarDate, Callee, Case, Cell, ClockTime, EndpointOperation,
-    ErrorPart, Expr, ExprKind, Header, Hook, Local, Run, Stmt, Temporal, Tenor, UnaryOperator,
-    Value, ValueCategory,
+    ErrorPart, Expr, ExprKind, Hook, Local, Run, Stmt, Temporal, Tenor, UnaryOperator, Value,
+    ValueCategory,
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
-    FieldRef, LocalKind, Member, NamedKind, OperatorRef, Parameter, Phase, Program, Role, Scalar,
+    FieldRef, LocalKind, NamedKind, OperatorRef, Parameter, Phase, Program, Role, Scalar,
     Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
-
-use crate::copies::{
-    self, Copies, built_anew, by_value, changed_in_place, may_hold, struct_in_place,
+use hgl_lower::calls::{LeftOut, field_default, known_duration, left_out, left_out_never_valid};
+use hgl_lower::canonical::canonical_argument;
+use hgl_lower::copies::{self, Copies, by_value, changed_in_place, may_hold, struct_in_place};
+use hgl_lower::instances::{self, Instances};
+use hgl_lower::nodes::{
+    Designated, Handler, Timer, designated, designates, designations, is_input, is_out,
+    is_reference, required_inputs, subscribed_inputs,
 };
-use crate::instances::Instances;
+use hgl_lower::pieces::Reach;
+use hgl_lower::types::{
+    Asked, HELD_DEPTH, asked_children, empty_struct, field_of, fields_of, growing_list,
+    holds_growing_list, inherited, is_nullable, payload_of, read_whole_all_valid, whole_value,
+    windows_in,
+};
+
 use crate::{codes, provides, python_module, test_function};
 
 mod types;
-pub(crate) use types::inherited;
 use types::*;
 
 mod names;
-pub(crate) use names::canonical_argument;
 use names::*;
 
 mod annotate;
@@ -92,22 +100,15 @@ pub(crate) struct Written {
 /// such a name.
 pub(crate) const APPLICATION: &str = "_application";
 
-/// What a piece names: a declaration, as the position of its module in
-/// the program and its position in that module, and for a declaration
-/// that is written by instance, the suffix of the instance named.
-pub(crate) type Used = (usize, usize, Option<String>);
-
 /// One top-level part of a module as it is written: a declaration or a
 /// named test.
 #[derive(Default)]
 pub(crate) struct Piece {
     /// Its Python text.
     text: String,
-    /// The first form in it that the target does not write yet. A piece
-    /// with one is left out of the file.
-    pub(crate) broken: Option<Diagnostic>,
-    /// The functions and the types it names.
-    pub(crate) uses: BTreeSet<Used>,
+    /// What it reaches: the first form in it that is not written, and
+    /// what it names.
+    pub(crate) reach: Reach,
     /// True for a type, which is written before the functions: a
     /// function's annotations are read where it is defined, and may
     /// name a type the source declares after it.
@@ -283,27 +284,14 @@ impl<'a> Function<'a> {
     /// True when `local` is a temporal input of the node being written:
     /// a parameter that is not `const`.
     fn is_input(&self, local: usize) -> bool {
-        let declared = &self.locals[local];
-        declared.kind == LocalKind::Parameter
-            && self.signature.is_some_and(|signature| {
-                signature
-                    .parameters
-                    .iter()
-                    .any(|parameter| parameter.name == declared.name && !parameter.constant)
-            })
+        is_input(self.locals, self.signature, local)
     }
 
     /// True when `local` is a temporal input of the node being written
     /// that is marked `ref` (FN-16): an endpoint whose value is not
     /// read, hgraph's `REF` input.
     fn is_reference(&self, local: usize) -> bool {
-        let declared = &self.locals[local];
-        declared.kind == LocalKind::Parameter
-            && self.signature.is_some_and(|signature| {
-                signature.parameters.iter().any(|parameter| {
-                    parameter.name == declared.name && !parameter.constant && parameter.reference
-                })
-            })
+        is_reference(self.locals, self.signature, local)
     }
 
     /// True when `local` is an endpoint the node writes as hgraph's `REF`:
@@ -322,8 +310,7 @@ impl<'a> Function<'a> {
 
     /// True when `local` is the node's `inject out` (TIME-7).
     fn is_out(&self, local: usize) -> bool {
-        let declared = &self.locals[local];
-        declared.kind == LocalKind::Inject && declared.name == "out"
+        is_out(self.locals, local)
     }
 
     /// The type of what the port `value` reads in a hook holds: an
@@ -492,8 +479,8 @@ impl<'a> Emitter<'a> {
             at,
             format!("the hgraph target does not write {what} yet"),
         );
-        if self.piece.broken.is_none() {
-            self.piece.broken = Some(diagnostic.clone());
+        if self.piece.reach.broken.is_none() {
+            self.piece.reach.broken = Some(diagnostic.clone());
         }
         // A declaration written by instance is written more than once,
         // and what one instance lacks another may lack too: it is
@@ -580,8 +567,8 @@ impl<'a> Emitter<'a> {
         let program = self.program;
         let early: BTreeSet<&str> = types
             .iter()
-            .filter(|piece| piece.broken.is_none())
-            .flat_map(|piece| piece.uses.iter())
+            .filter(|piece| piece.reach.broken.is_none())
+            .flat_map(|piece| piece.reach.uses.iter())
             .filter(|(module, _, _)| *module != self.module)
             .map(|(module, _, _)| program.modules[*module].path.as_str())
             .collect();
@@ -599,7 +586,7 @@ impl<'a> Emitter<'a> {
         // file, counted from 1: `lines` is the lines written so far.
         let mut lines = out.matches('\n').count();
         let write = |piece: &mut Piece, out: &mut String, lines: &mut usize| {
-            if piece.broken.is_some() {
+            if piece.reach.broken.is_some() {
                 // It is in no file, so its statements are on no line.
                 piece.statements.clear();
                 return;
@@ -621,7 +608,7 @@ impl<'a> Emitter<'a> {
         }
         if !late.is_empty() {
             // Two blank lines after the types, as before any piece.
-            if types.iter().any(|piece| piece.broken.is_none()) {
+            if types.iter().any(|piece| piece.reach.broken.is_none()) {
                 late.insert_str(0, "\n\n");
             }
             lines += late.matches('\n').count();
@@ -1113,8 +1100,8 @@ impl<'a> Emitter<'a> {
         // the key `"run.output"`". Core has `record` as HGL for any
         // type, so it is written for the type the entry publishes
         // (GEN-2).
-        let record = match crate::instances::run_result(program, run) {
-            Some(result) => match crate::instances::core_function(program, "record") {
+        let record = match instances::run_result(program, run) {
+            Some(result) => match instances::core_function(program, "record") {
                 Some(found) => {
                     self.called_name(found, &[GenericArgument::Type(result)], run.call.at)
                 }
@@ -1729,59 +1716,14 @@ fn at_of(statement: &Stmt, locals: &[Local]) -> Location {
     }
 }
 
-/// True where `value` is a designation, what a `return` to a `ref` result
-/// or `out =` of one is given (FN-16): the endpoint of a temporal input
-/// of the node, or of a child of one, which the analyser reads as such
-/// only there.
-fn designates(value: &Expr) -> bool {
-    matches!(
-        value.kind,
-        ExprKind::EndpointOf(_) | ExprKind::ChildEndpointOf(_)
-    )
-}
-
-/// How a node designates a temporal input (FN-16: "A parameter that is
-/// not `ref` may be designated too"): whole, or by a position of it, a
-/// fixed list. hgraph makes a reference only from a `REF` input, so the
-/// node is given the input a second time as a hidden `REF` input,
-/// `_ref_name`, or one for each position, `_ref0_name` (`node`), which
-/// is active whatever the node's own activity is: a `ref` parameter
-/// that may be passive among them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Designated {
-    /// `return value`
-    Whole,
-    /// `return items[idx]`, of a `list<T, N>`.
-    Position,
-}
-
-/// What `value`, a designation (`designates`), designates of a temporal
-/// input of `function`: the input, and how. `None` for a child of a
-/// `ref` parameter, and for a child of another shape.
-fn designated(function: &Function, value: &Expr) -> Option<(usize, Designated)> {
-    match &value.kind {
-        ExprKind::EndpointOf(local) if function.is_input(*local) => {
-            Some((*local, Designated::Whole))
-        }
-        ExprKind::ChildEndpointOf(child) => match &child.kind {
-            ExprKind::Index { base, .. } => match (&base.kind, &base.ty) {
-                (ExprKind::Local(local), Type::List { size: Some(_), .. })
-                    if function.is_input(*local) && !function.is_reference(*local) =>
-                {
-                    Some((*local, Designated::Position))
-                }
-                _ => None,
-            },
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// The name of the hidden `REF` input a node designates `input` through
 /// (`Designated`), and the name the provider is told it by where there
-/// is one for each position. Every name the target makes up starts with
-/// `_`, and a program's own never does.
+/// is one for each position. hgraph makes a reference only from a `REF`
+/// input, so the node is given the input a second time as a hidden `REF`
+/// input, `_ref_name`, or one for each position, `_ref0_name` (`node`),
+/// which is active whatever the node's own activity is: a `ref`
+/// parameter that may be passive among them. Every name the target makes
+/// up starts with `_`, and a program's own never does.
 fn designated_name(input: &Local) -> String {
     format!("_ref_{}", name(&input.name))
 }

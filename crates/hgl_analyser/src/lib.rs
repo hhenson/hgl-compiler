@@ -123,6 +123,12 @@ pub use types::{
 /// runs without end.
 pub const INSTANCES: usize = 4096;
 
+/// The time limit of an integration test that writes none: one minute.
+/// TST-17: an integration test "is time-bound: it runs within a time
+/// limit by the host clock, the duration `@timeout(5s)` gives on the line
+/// before it, or one minute where none is written" ([`Test::timeout`]).
+pub const INTEGRATION_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// The diagnostic codes this stage reports.
 ///
 /// Those directly in this module are codes/// The diagnostic codes this stage reports.

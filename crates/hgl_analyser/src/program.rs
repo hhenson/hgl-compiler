@@ -275,6 +275,16 @@ impl Module {
             .is_some_and(|calls| !calls.is_empty())
     }
 
+    /// True where `declaration` is a source: a temporal function whose
+    /// own body has a `yield` (SOURCE-1: "A temporal `fn` whose body has a
+    /// `yield` is a source"). A `yield` in an anonymous function inside
+    /// it is that function's. An instance of a generic source is one too.
+    pub fn is_source(&self, declaration: usize) -> bool {
+        self.declarations
+            .get(declaration)
+            .is_some_and(crate::phases::is_source)
+    }
+
     /// The declarations `name` is bound to in the module's scope: none,
     /// one, or the two functions of a temporal and value pair (FN-4).
     pub fn lookup(&self, name: &str) -> impl Iterator<Item = &Declaration> {

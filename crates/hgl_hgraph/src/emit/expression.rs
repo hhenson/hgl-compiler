@@ -944,13 +944,7 @@ impl Emitter<'_> {
     /// no field and no local (UNIT-7), so it means the same wherever it
     /// is written.
     fn field_default(&mut self, default: FieldRef, at: Location) -> String {
-        let program = self.program;
-        let value = program.modules[default.module]
-            .defaults
-            .get(default.declaration)
-            .and_then(|defaults| defaults.get(default.field))
-            .and_then(Option::as_ref);
-        let Some(value) = value else {
+        let Some(value) = field_default(self.program, default) else {
             self.unsupported(at, "a default of a field left out here");
             return "None".to_string();
         };
@@ -1085,7 +1079,10 @@ impl Emitter<'_> {
                 .find(|(designated, _)| *designated == local)
                 .map(|(_, port)| string(port))
         };
-        match (designated(function, value), &value.kind) {
+        match (
+            designated(function.locals, function.signature, value),
+            &value.kind,
+        ) {
             (Some((local, Designated::Whole)), _) => port(self, local),
             (Some((local, Designated::Position)), ExprKind::ChildEndpointOf(child)) => {
                 let ExprKind::Index { index, .. } = &child.kind else {
@@ -1255,11 +1252,18 @@ impl Emitter<'_> {
             Asked::Some(required) => {
                 let parts: Vec<String> = required
                     .iter()
-                    .map(|(key, part)| {
+                    .map(|(index, part)| {
+                        // The child's port: `"bid"` for a struct's field,
+                        // `"_0"` for a tuple's position (`tuple_annotation`).
+                        let key = match ty {
+                            Type::Tuple(_) => position(*index),
+                            _ => field_of(self.program, ty, *index)
+                                .map_or_else(String::new, |member| name(&member.name)),
+                        };
                         let shape = validity_shape(self.program, part);
                         format!(
                             "{}: {}",
-                            string(key),
+                            string(&key),
                             shape.unwrap_or_else(|| "None".to_string())
                         )
                     })
@@ -2113,76 +2117,4 @@ pub(super) fn constant_position(index: &Expr) -> Option<usize> {
 /// True for the literal `null`.
 fn is_null(value: &Expr) -> bool {
     matches!(value.kind, ExprKind::Literal(Value::Null))
-}
-
-/// Which children of a temporal value of `ty` its `all_valid` asks
-/// (TIME-9): "every one ... one level deep, an optional child aside".
-enum Asked {
-    /// Every child: no child is optional, or `ty` is no collection.
-    Every,
-    /// None: every child is optional, a list's element or a dictionary's
-    /// value of a `T?`, or each field of a struct or position of a tuple.
-    None,
-    /// A struct's fields or a tuple's positions that are not optional,
-    /// beside one that is: each by the name of its port, `"bid"` or
-    /// `"_0"` (`tuple_annotation`), and its type.
-    Some(Vec<(String, Type)>),
-}
-
-/// The children of `ty` its `all_valid` asks. TIME-9: "an optional
-/// child aside: one whose type is `T?`, or a field that TYPE-4 makes
-/// optional, is not asked", and TYPE-4: "A field is optional when its
-/// type is nullable, `T?`, or an `atomic<...>` of a nullable type", with
-/// the struct's own arguments given (`fields_of`): the `value: T` of a
-/// `Box<i64?>` is optional.
-fn asked_children(program: &Program, ty: &Type) -> Asked {
-    let field = |child: &Type| match child {
-        Type::Nullable(_) => true,
-        Type::Atomic(inner) => matches!(**inner, Type::Nullable(_)),
-        _ => false,
-    };
-    let parts: Vec<(String, Type, bool)> = match ty {
-        Type::Named {
-            kind: NamedKind::Struct,
-            ..
-        } => match fields_of(program, ty) {
-            Some(fields) => fields
-                .into_iter()
-                .map(|(member, part)| {
-                    let optional = field(&part);
-                    (name(&member.name), part, optional)
-                })
-                .collect(),
-            None => return Asked::Every,
-        },
-        Type::Tuple(elements) => elements
-            .iter()
-            .enumerate()
-            .map(|(index, element)| {
-                let optional = matches!(element, Type::Nullable(_));
-                (position(index), element.clone(), optional)
-            })
-            .collect(),
-        Type::List { element: child, .. } | Type::Dict { value: child, .. } => {
-            return if matches!(**child, Type::Nullable(_)) {
-                Asked::None
-            } else {
-                Asked::Every
-            };
-        }
-        _ => return Asked::Every,
-    };
-    if parts.iter().all(|(_, _, optional)| !optional) {
-        return Asked::Every;
-    }
-    let required: Vec<(String, Type)> = parts
-        .into_iter()
-        .filter(|(_, _, optional)| !optional)
-        .map(|(key, part, _)| (key, part))
-        .collect();
-    if required.is_empty() {
-        Asked::None
-    } else {
-        Asked::Some(required)
-    }
 }
