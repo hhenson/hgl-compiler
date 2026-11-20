@@ -909,6 +909,32 @@ fn names_a_platform_may_take_are_kept_and_undefined() {
     );
 }
 
+/// TYPE-4: a `list<bool>` is a `std::vector<bool>`, which holds bits: an
+/// element given to a `var` parameter, a `bool&`, is reported.
+#[test]
+fn a_bit_given_to_a_var_parameter_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn set_flag(var flag: bool) {\n",
+            "    flag = true\n",
+            "}\n",
+            "const fn flags_set() -> list<bool> {\n",
+            "    var flags = [false, false]\n",
+            "    set_flag(flags[1])\n",
+            "    return flags\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:7:14 the cpp target does not write an element of a `list<bool>` given to a `var` parameter yet"
+        ]
+    );
+}
+
 /// Structs, sets, dictionaries and deltas as values (TYPE-3 to TYPE-6,
 /// TYPE-14, TYPE-16, EXPR-3, ERR-6, CTRL-12), an enum's member made from a
 /// value (TYPE-7), a zone and a time in it (TYPE-2), a `T?` compared with
@@ -1039,30 +1065,4 @@ fn a_struct_of_another_module_is_named_through_its_types_header() {
     assert!(file("modules/demo.b.h").contains("#include \"demo.a.types.h\""));
     assert!(file("modules/demo.a.h").contains("#include \"demo.a.types.h\""));
     assert!(!file("modules/demo.b.types.h").contains("demo.a"));
-}
-
-/// TYPE-4: a `list<bool>` is a `std::vector<bool>`, which holds bits: an
-/// element given to a `var` parameter, a `bool&`, is reported.
-#[test]
-fn a_bit_given_to_a_var_parameter_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "const fn set_flag(var flag: bool) {\n",
-            "    flag = true\n",
-            "}\n",
-            "const fn flags_set() -> list<bool> {\n",
-            "    var flags = [false, false]\n",
-            "    set_flag(flags[1])\n",
-            "    return flags\n",
-            "}\n",
-        ),
-    )]);
-    assert_eq!(
-        emitted.reported,
-        [
-            "m.hgl:7:14 the cpp target does not write an element of a `list<bool>` given to a `var` parameter yet"
-        ]
-    );
 }

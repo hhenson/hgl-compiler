@@ -180,18 +180,6 @@ impl Emitter<'_> {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let parameter = &signature.parameters[index];
-            // A place held before an argument that runs statements could
-            // be one that argument replaces or grows, a list's element
-            // gone: its indices are held in turn, and the place is taken
-            // where the call is made (`composites::held_place`).
-            if parameter.var && changing {
-                let Some((steps, place)) = self.held_place(scope, &argument.value) else {
-                    return self
-                        .missing(argument.value.at, "this place given to a `var` parameter");
-                };
-                written.push((index, place, may_fail(&argument.value), Held::Steps(steps)));
-                continue;
-            }
             if parameter.var {
                 // A `list<bool>` is a `std::vector<bool>`, which holds its
                 // elements as bits: an element is no `bool` a `bool&`
@@ -204,6 +192,19 @@ impl Emitter<'_> {
                         argument.value.at,
                         "an element of a `list<bool>` given to a `var` parameter",
                     );
+                }
+                // A place held before an argument that runs statements
+                // could be one that argument replaces or grows, a list's
+                // element gone: its indices are held in turn, and the
+                // place is taken where the call is made
+                // (`composites::held_place`).
+                if changing {
+                    let Some((steps, place)) = self.held_place(scope, &argument.value) else {
+                        return self
+                            .missing(argument.value.at, "this place given to a `var` parameter");
+                    };
+                    written.push((index, place, may_fail(&argument.value), Held::Steps(steps)));
+                    continue;
                 }
                 let Some(place) = self.place(scope, &argument.value) else {
                     return self
