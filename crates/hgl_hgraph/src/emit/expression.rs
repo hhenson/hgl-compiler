@@ -182,13 +182,10 @@ impl Emitter<'_> {
                     // hgraph's `TSD` and `TSS` keep their keys and members
                     // too, which a delta that names no change would leave
                     // in what it makes valid (TIME-7): the provider
-                    // empties each.
+                    // empties each, at any depth of a struct, a tuple and
+                    // a fixed list (`emptied_shape`).
                     EndpointOperation::Invalidate => {
-                        let shape = list_parts_shape(self.program, &endpoint.ty).or_else(|| {
-                            matches!(endpoint.ty, Type::Dict { .. } | Type::Set(_))
-                                .then(|| "\"entries\"".to_string())
-                        });
-                        match shape {
+                        match emptied_shape(self.program, &endpoint.ty) {
                             Some(shape) => {
                                 self.natives = true;
                                 format!("_core.invalidated({input}, {shape})")

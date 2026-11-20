@@ -5514,7 +5514,8 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         "    return _core.bundled(Square(id=id.value, side=1), {\"id\": None})".to_string(),
         // TIME-7: a whole struct with a struct field and a set field.
         "{\"quote\": {\"bid\": None, \"ask\": None}, \"size\": None})".to_string(),
-        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1))"
+        // Its set is published through its own port (`_whole_set`).
+        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1), {\"tags\": \"set\", \"count\": None}, _output)"
             .to_string(),
         // TIME-7: `out` assigned by part, and read back.
         format!(
