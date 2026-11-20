@@ -19,6 +19,7 @@
 #include <hglrt/failure.h>
 #include <hglrt/scalar.h>
 #include <hglrt/temporal.h>
+#include <hglrt/tenors.h>
 #include <hglrt/values.h>
 
 #include <algorithm>
@@ -137,6 +138,7 @@ std::string scalar_text(datetime value);
 std::string scalar_text(duration value);
 std::string scalar_text(const civil_datetime& value);
 std::string scalar_text(const zoned_datetime& value);
+std::string scalar_text(const tenor& value);
 } // namespace detail
 
 /// `value` as the language writes it, for a person to read in a failure: a

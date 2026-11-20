@@ -237,6 +237,10 @@ std::string detail::scalar_text(const zoned_datetime& value) {
     return "@" + hgraph::format_zoned_datetime(value);
 }
 
+std::string detail::scalar_text(const tenor& value) {
+    return hglrt::detail::tenor_text(value);
+}
+
 // ---- Runs ----------------------------------------------------------------------
 
 namespace {
