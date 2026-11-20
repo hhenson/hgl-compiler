@@ -161,6 +161,11 @@ impl Emitter<'_> {
         depth: usize,
         text: &mut String,
     ) {
+        // The statements of a hook, a source and a graph that are no value
+        // code's are the dispatch point's (`forms`).
+        if self.form_statement(scope, statement, depth, text) {
+            return;
+        }
         let indent = INDENT.repeat(depth);
         let body = scope.body;
         match statement {

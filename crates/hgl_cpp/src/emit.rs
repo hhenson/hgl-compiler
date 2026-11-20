@@ -17,6 +17,15 @@
 //! `statements`, `expressions` and `calls` (value code, a test's among
 //! it), `nodes` and `graphs` (temporal functions and applications),
 //! `tests` (named tests).
+//!
+//! The temporal forms are written by families, which `forms`, the
+//! dispatch point, looks each form up in: `scalars` (a scalar's temporal
+//! form), `endpoints` (a hook's reads, endpoint operations and
+//! capabilities), `nodes` (a node's hooks), `sources` (a source's body),
+//! `graphs` (a graph's wiring and lifted calls), `tests` (evals and
+//! traces); `lifecycle` writes a run's bounds for `tests`. A construct
+//! lane adds its family as a module here and one entry in
+//! `forms::FAMILIES`.
 
 use hgl_analyser::{DeclarationKind, Program};
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
@@ -27,10 +36,15 @@ use crate::codes;
 
 mod calls;
 mod composites;
+mod endpoints;
 mod expressions;
+mod forms;
 mod graphs;
+mod lifecycle;
 mod names;
 mod nodes;
+mod scalars;
+mod sources;
 mod statements;
 mod tests;
 mod types;
@@ -116,6 +130,7 @@ pub(crate) fn module(
         expanding: Vec::new(),
         temporaries: 0,
         instanced: Vec::new(),
+        temporal: None,
     };
     let declared = &program.modules[index];
     let declarations = (0..declared.declarations.len())
@@ -168,6 +183,10 @@ struct Emitter<'a> {
     /// The pieces written for the instances of the module's generic
     /// declarations so far: see [`Written::instances`].
     instanced: Vec<(usize, String, Piece)>,
+    /// What the code being written is part of, where it is temporal: a
+    /// node's hook, a source's body, a graph, a lifted call's node or an
+    /// eval's entry (`nodes::Context`). `None` in value code.
+    temporal: Option<nodes::Context>,
 }
 
 impl Emitter<'_> {

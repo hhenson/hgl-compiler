@@ -62,6 +62,17 @@ struct Tagged<T> : Shape {
     tag: T
 }
 
+# A parent's arguments, a list's size among them, given through two levels.
+abstract struct Holder<T> {
+    value: T
+}
+
+abstract struct Sized<const n: i64> : Holder<list<i64, n>> {}
+
+struct Pair : Sized<2> {}
+
+const fn held(holder: Holder<list<i64, 2>>) -> list<i64, 2> => holder.value
+
 # GEN-4: a candidate of an operator over a struct.
 impl const fn add_(lhs: Point, rhs: Point) -> Point => Point(x: lhs.x + rhs.x, y: lhs.y + rhs.y)
 
@@ -292,6 +303,7 @@ test generic_and_abstract_structs {
     assert base_id(as_base(round)) == 1
     assert base_id(round) == 1
     assert as_shapes([round])[0].name == "shape"
+    assert held(Pair(value: [1, 2])) == [1, 2]
 }
 
 test arguments_are_evaluated_in_the_order_written {
@@ -421,4 +433,14 @@ test bits_are_held_as_they_were_read {
 
 test a_var_place_is_taken_where_the_call_is_made {
     assert bump_after_growth() == [1, 30]
+    # EXPR-2: the list's place is checked before a later index runs.
+    var rows = [[1]]
+    var seen = 0
+    assert raises("value.index_out_of_range") {
+        bump(rows[5][{
+            seen = 1
+            0
+        }], 1)
+    }
+    assert seen == 0
 }

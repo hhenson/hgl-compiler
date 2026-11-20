@@ -368,9 +368,17 @@ fn substituted(ty: &Type, generics: &[GenericParameter], arguments: &[GenericArg
         Type::Set(inner) => Type::Set(again(inner)),
         Type::Delta(inner) => Type::Delta(again(inner)),
         Type::Atomic(inner) => Type::Atomic(again(inner)),
+        // A size that is a generic value parameter of `generics` is the
+        // constant its argument gives (GEN-13).
         Type::List { element, size } => Type::List {
             element: again(element),
-            size: size.clone(),
+            size: size.as_ref().map(|size| match &size.value {
+                ConstantValue::Parameter { at, .. } => match argument_of(at) {
+                    Some(GenericArgument::Constant(given)) => given.clone(),
+                    _ => size.clone(),
+                },
+                _ => size.clone(),
+            }),
         },
         Type::Dict { key, value } => Type::Dict {
             key: again(key),
@@ -1468,6 +1476,12 @@ impl Emitter<'_> {
                 }
                 Type::List { .. } => {
                     let (mut steps, written) = self.held_place(scope, base)?;
+                    // EXPR-2: the list's own place, an element or an
+                    // entry, is checked before this index is evaluated;
+                    // the place is taken again at the call.
+                    if reads_an_element(base) {
+                        steps.push_str(&format!("static_cast<void>({written}); "));
+                    }
                     let at = self.expression(scope, index);
                     let held = names::temporary("index", self.temporary());
                     steps.push_str(&format!("const ::hgraph::Int {held} = {at}; "));

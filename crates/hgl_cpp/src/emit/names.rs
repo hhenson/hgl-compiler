@@ -22,7 +22,11 @@ use hgl_analyser::{DeclarationKind, Detail, Program, Signature, Type};
 /// headers define besides are not here: each file `#undef`s the plain
 /// names it writes after its last `#include` (`assemble`), and units
 /// are compiled as strict C++23, in which the compiler predefines none
-/// (`linux`) and keeps no GNU keyword (`typeof`).
+/// (`linux`) and keeps no GNU keyword (`typeof`). And the two names by
+/// which the runtime library finds what the compiler writes for a type:
+/// `hgl_enum`, an enum's names beside it (`types`), and `hgl_name`, the
+/// name a type the compiler writes holds in it (`values.h`, `type_name`),
+/// which a field or a member of that name would otherwise be taken for.
 const RESERVED: &[&str] = &[
     "alignas",
     "alignof",
@@ -76,6 +80,8 @@ const RESERVED: &[&str] = &[
     "for",
     "friend",
     "goto",
+    "hgl_enum",
+    "hgl_name",
     "if",
     "import",
     "indeterminate",
@@ -403,6 +409,9 @@ mod tests {
         assert_eq!(identifier("EOF"), "EOF_");
         assert_eq!(identifier("N"), "N_");
         assert_eq!(identifier("MAX_SIZE"), "MAX_1SIZE_");
+        // The runtime library's own hooks into what the compiler writes.
+        assert_eq!(identifier("hgl_enum"), "hgl_1enum_");
+        assert_eq!(identifier("hgl_name"), "hgl_1name_");
         for name in ["_kept", "add_", "a__b", "int", "EOF", "_", "__", "_1_"] {
             assert!(!identifier(name).contains("__"), "{name}");
         }

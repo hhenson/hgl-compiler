@@ -312,30 +312,362 @@ fn a_form_not_written_yet_blocks_what_reaches_it() {
     assert!(!unit.contains("reaches_a_division"), "{unit}");
 }
 
-/// Core's conformance case `replay_preserves_equal_ticks` evaluates
-/// nodes, which are not written yet: it is listed with the first form
-/// it needs, and nothing of it is written.
+/// Temporal code over the scalars, as the target writes it: a graph and
+/// its lifted calls (FN-6), a constant connection (FN-3), nodes with
+/// state, handlers tested in order and capabilities (TIME-3, TIME-6,
+/// CAP-2, CAP-3), a source (SOURCE-1), and the evals of them, dense and
+/// timed, compared, one of them bounded by a `RunConfig` (TST-4 to TST-8,
+/// CRUN-2). Everything is written, and each test
+/// can be run, against the runtime library `hgl` carries.
 #[test]
-fn an_eval_is_not_written_yet() {
-    let emitted = emit(&[(
-        "scalar_eval.hgl",
-        concat!(
-            "module conformance part scalar_eval\n",
-            "\n",
-            "fn pass_i64(value: i64) -> i64 {\n",
-            "    when { return delta_value(value) }\n",
-            "}\n",
-            "\n",
-            "test replay_preserves_equal_ticks {\n",
-            "    assert eval(pass_i64(value: [7, _, 7, 9])) == [7, _, 7, 9]\n",
-            "}\n",
-        ),
-    )]);
-    assert_eq!(
-        emitted.blocked("replay_preserves_equal_ticks").as_deref(),
-        Some("scalar_eval.hgl:8:12 the cpp target does not write an eval yet")
+fn temporal_code_is_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.temporal.hgl",
+            include_str!("fixtures/demo.temporal.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
     );
-    assert!(emitted.output.executables.is_empty());
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.temporal", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    // CEVAL-1: core's `replay` and `record` are written in core's unit,
+    // an instance for each type an eval replays and records; the test's
+    // executable links it.
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    for instance in [
+        "::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_i64::impl_>",
+        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_i64::impl_>",
+        "::hgraph::wire<::hgl::core::m_::n_::i_::record::of_datetime::impl_>",
+    ] {
+        assert!(core.contains(instance), "{instance} in\n{core}");
+    }
+    // hgraph issue 1866: a node whose configuration holds an `f64` is a
+    // node of its own, `replay<f64>` among them; one with none is
+    // interned, above.
+    assert!(
+        core.contains("add_unique_node(typeid(::hgl::core::m_::n_::i_::replay::of_f64::impl_)")
+    );
+    assert!(!core.contains("::hgraph::wire<::hgl::core::m_::n_::i_::replay::of_f64::impl_>"));
+    // A temporal function's struct is `impl_`, in a namespace of the
+    // function's name: one named as a member of it, `name` or `compose`,
+    // is no member of the same name as its class.
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.temporal.cpp")
+        .unwrap()
+        .text;
+    for function in ["name", "compose"] {
+        assert!(
+            unit.contains(&format!("namespace n_::{function}\n{{\n// {function}(")),
+            "{function} in\n{unit}"
+        );
+        assert!(!unit.contains(&format!("struct {function}\n")), "{unit}");
+    }
+    let executable = &emitted.output.executables[0];
+    let units: Vec<&str> = executable
+        .units
+        .iter()
+        .map(|&unit| emitted.output.units[unit].source.as_str())
+        .collect();
+    assert!(units.contains(&"modules/core.cpp"), "{units:?}");
+}
+
+/// A temporal form the target does not write yet is reported through the
+/// dispatch point, where it is written, and blocks what reaches it: a
+/// temporal value of a type no family writes, and a capability no family
+/// makes. A test that reaches neither is run.
+#[test]
+fn a_temporal_form_not_written_yet_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn first(values: list<i64>) -> i64 {\n",
+                "    when { return 1 }\n",
+                "}\n",
+                "\n",
+                "fn later(value: i64) -> i64 {\n",
+                "    inject scheduler\n",
+                "    start { schedule(scheduler, 0s) }\n",
+                "    when { return value }\n",
+                "}\n",
+                "\n",
+                "fn passed(value: i64) -> i64 {\n",
+                "    when { return delta_value(value) }\n",
+                "}\n",
+                "\n",
+                "test a_list {\n",
+                "    assert eval(first(values: [[1, 2]])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_scheduler {\n",
+                "    assert eval(later(value: [1])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_scalar {\n",
+                "    assert eval(passed(value: [7, _, 7, 9])) == [7, _, 7, 9]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("a_list").as_deref(),
+        Some("m.hgl:18:31 the cpp target does not write a temporal value of `list<i64>` yet")
+    );
+    assert_eq!(
+        emitted.blocked("a_scheduler").as_deref(),
+        Some("m.hgl:8:12 the cpp target does not write an injected `scheduler` yet")
+    );
+    assert_eq!(emitted.blocked("a_scalar"), None);
+}
+
+/// EXPR-2: an eval's call, the defaults of the `const` parameters it
+/// leaves out among it, is evaluated before the run's configuration:
+/// where they are held, each default is held before the configuration.
+#[test]
+fn an_evals_defaults_are_held_before_its_configuration() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "const fn one() -> i64 => 1\n",
+                "\n",
+                "const fn span() -> duration => 2us\n",
+                "\n",
+                "fn scaled(value: i64, const by: i64 = one()) -> i64 {\n",
+                "    when { return value * by }\n",
+                "}\n",
+                "\n",
+                "test bounded {\n",
+                "    assert eval(scaled(value: [1, 2, 3]), RunConfig(length: span())) == [1, 2]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("bounded"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    let test = unit.split("void bounded()").nth(1).unwrap();
+    let default = test
+        .find("= ::hgl::m::m_::one();")
+        .expect("the default held");
+    let bounds = test
+        .find("= ::hglrt::testing::Bounds{.length = ::hgl::m::m_::span()};")
+        .expect("the configuration held");
+    assert!(default < bounds, "{test}");
+}
+
+/// SOURCE-1: "A `let` there holds a working value": a `let` of a block's
+/// value in a source's body is written, its block's own `return` left to
+/// the lambda it is written as.
+#[test]
+fn a_sources_value_block_is_written() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn counted(const n: i64) -> i64 {\n",
+                "    let next = {\n",
+                "        let one = 1\n",
+                "        n + one\n",
+                "    }\n",
+                "    yield 1us: next\n",
+                "}\n",
+                "\n",
+                "test counts {\n",
+                "    assert eval(counted(n: 2)) == [_, 3]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_eq!(emitted.blocked("counts"), None);
+}
+
+/// TIME-6, TIME-8: a node's capability is made in `start` before a
+/// `cache` initializer that reads it.
+#[test]
+fn a_capability_is_made_before_the_initializers_that_read_it() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn opened(value: i64) -> datetime {\n",
+                "    inject clock\n",
+                "    cache opening: datetime = clock.evaluation_time\n",
+                "    when { return opening }\n",
+                "}\n",
+                "\n",
+                "test opens {\n",
+                "    assert eval(opened(value: [1])) == [earliest_start]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("opens"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    let start = unit
+        .split("static void start(")
+        .nth(1)
+        .expect("the node's start");
+    let start = start.split("static void eval(").next().unwrap();
+    let made = start
+        .find("const ::hglrt::Clock clock")
+        .expect("the clock made");
+    let read = start
+        .find("opening = (clock).evaluation_time();")
+        .expect("the cache initialized");
+    assert!(made < read, "{start}");
+}
+
+/// TST-5: a trace given to an eval that is no trace written out, a `let`
+/// of an eval's, is reported where it is given, and not wired as a
+/// constant of its payload.
+#[test]
+fn a_trace_held_in_a_let_given_to_an_eval_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn pass(value: i64) -> i64 {\n",
+                "    when { return value }\n",
+                "}\n",
+                "\n",
+                "test again {\n",
+                "    let seen = eval(pass(value: [1]))\n",
+                "    assert eval(pass(value: seen)) == [1]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("again").as_deref(),
+        Some(
+            "m.hgl:9:29 the cpp target does not write a trace given to an eval that is no trace written out yet"
+        )
+    );
+}
+
+/// A temporal call that leaves out `const` parameters (UNIT-8): where
+/// more than one default may fail, each is held in the order of the
+/// parameters (EXPR-2); a default that runs statements is reported, as a
+/// value call's is; and a lifted call that leaves one out is reported,
+/// since its defaults bind as configuration where the graph is built
+/// (FN-6).
+#[test]
+fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "const fn one() -> i64 => 1\n",
+                "\n",
+                "fn scaled(value: i64, const by: i64 = one(), const plus: i64 = one()) -> i64 {\n",
+                "    when { return value * by + plus }\n",
+                "}\n",
+                "\n",
+                "fn twice(value: i64) -> i64 => scaled(value)\n",
+                "\n",
+                "fn blocky(value: i64, const by: i64 = {\n",
+                "    let b = 2\n",
+                "    b + 1\n",
+                "}) -> i64 {\n",
+                "    when { return value * by }\n",
+                "}\n",
+                "\n",
+                "fn blocked(value: i64) -> i64 => blocky(value)\n",
+                "\n",
+                "const fn add(a: i64, b: i64 = 1) -> i64 => a + b\n",
+                "\n",
+                "fn lifted_default(value: i64) -> i64 => add(value)\n",
+                "\n",
+                "test ordered {\n",
+                "    assert eval(twice(value: [1])) == [2]\n",
+                "}\n",
+                "\n",
+                "test block {\n",
+                "    assert eval(blocked(value: [1])) == [3]\n",
+                "}\n",
+                "\n",
+                "test lifted {\n",
+                "    assert eval(lifted_default(value: [1])) == [2]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("ordered"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    // Both defaults call `one`, and each may fail: each is held, `by`
+    // before `plus`, before the wiring function is called.
+    let twice = unit
+        .split("namespace n_::twice")
+        .nth(1)
+        .expect("the graph `twice`");
+    assert!(
+        twice.contains(
+            "[&] { const auto argument_00_ = value; const ::hgraph::Int argument_01_ = ::hgl::m::m_::one(); const ::hgraph::Int argument_02_ = ::hgl::m::m_::one(); return ::hgl::m::m_::w_::scaled(wiring_, argument_00_, argument_01_, argument_02_); }()"
+        ),
+        "{twice}"
+    );
+    assert!(
+        emitted.blocked("block").is_some_and(
+            |reason| reason.ends_with("does not write a default that runs statements yet")
+        ),
+        "{:?}",
+        emitted.blocked("block")
+    );
+    assert!(
+        emitted.blocked("lifted").is_some_and(|reason| reason
+            .ends_with("does not write a lifted call that leaves out a parameter yet")),
+        "{:?}",
+        emitted.blocked("lifted")
+    );
 }
 
 /// UNIT-8: a default is written where its argument is left out; one

@@ -53,6 +53,11 @@ impl Emitter<'_> {
             }
             return written.clone();
         }
+        // The temporal forms, and the reads of a hook, are the dispatch
+        // point's (`forms`), which a construct lane adds to.
+        if let Some(written) = self.form_expression(scope, value) {
+            return written;
+        }
         if matches!(value.kind, ExprKind::Local(_) | ExprKind::Constant { .. }) {
             scope.read = true;
         }
