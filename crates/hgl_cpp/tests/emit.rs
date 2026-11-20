@@ -445,6 +445,7 @@ fn provides_values(name: &str) -> bool {
             "mul__i64_i64",
             "neg__i64",
             "mod__i64_i64",
+            "floordiv__i64_i64",
             "lt__T_T",
             "le__T_T",
             "gt__T_T",

@@ -151,6 +151,27 @@ const fn held_text() -> str {
     return held
 }
 
+# A tuple holds what each entry gave when it was evaluated, where a
+# later entry changes what an earlier one read.
+const fn tuple_first() -> tuple<i64, i64> {
+    var x = 1
+    return (x, {
+        x = 2
+        0
+    })
+}
+
+const fn text_first() -> tuple<str, i64> {
+    var words = ["before"]
+    return (words[0], {
+        words = ["after", "more"]
+        0
+    })
+}
+
+# NUM-2: a list whose entry is out of range.
+const fn grown(by: i64) -> list<i64> => [by + 9223372036854775807]
+
 const fn made_error() -> str {
     var message = "before"
     let made = error(message: message, code: {
@@ -217,6 +238,8 @@ test evaluation_follows_the_order_written {
     assert list_first() == 20
     assert index_once() == ([10, 25, 30], 1)
     assert held_text() == "text"
+    assert tuple_first() == (1, 0)
+    assert text_first() == ("before", 0)
     assert made_error() == "before"
 }
 
@@ -234,5 +257,14 @@ test a_var_parameter_is_its_place {
 test an_overflow_fails_with_its_code {
     assert raises("numeric.out_of_range") {
         let big = triangle(10) + 9223372036854775807
+    }
+}
+
+# EXPR-2: an element's list is evaluated before its index, where both
+# may fail.
+test a_list_fails_before_its_index {
+    let zero = 0
+    assert raises("numeric.out_of_range") {
+        let element = grown(1)[1 // zero]
     }
 }

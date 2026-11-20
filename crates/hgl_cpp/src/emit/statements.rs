@@ -24,6 +24,7 @@ use hgl_lower::graphs::may_return;
 
 use super::Emitter;
 use super::calls::changes;
+use super::expressions::held_read;
 use super::names::{self, identifier};
 use super::types::by_value;
 use super::values::INDENT;
@@ -528,12 +529,12 @@ impl Emitter<'_> {
 /// True where `value` reads what something else holds, as it is: a
 /// local, an element or a position of one, a constant. A `let` of it may
 /// be a reference; any other value is made where it is read, an element
-/// read with an index that runs statements among them (it is read from
-/// a list held for the read alone).
+/// whose list and index are held before it is read among them
+/// (`expressions::held_read`).
 pub(super) fn refers(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Local(_) | ExprKind::Constant { .. } => true,
-        ExprKind::Index { base, index } => !changes(index) && refers(base),
+        ExprKind::Index { base, index } => !held_read(base, index) && refers(base),
         _ => false,
     }
 }

@@ -137,8 +137,7 @@ impl Emitter<'_> {
                 let Some(ty) = self.written_type(&value.ty, value.at) else {
                     return "0".to_string();
                 };
-                let entries = self.entries(scope, entries);
-                format!("{ty}{{{entries}}}")
+                self.constructed(scope, &ty, entries)
             }
             // EXPR-9: a sequence is what its type says it makes: a list
             // here.
@@ -146,8 +145,7 @@ impl Emitter<'_> {
                 let Some(ty) = self.written_type(&value.ty, value.at) else {
                     return "0".to_string();
                 };
-                let entries = self.entries(scope, entries);
-                format!("{ty}{{{entries}}}")
+                self.constructed(scope, &ty, entries)
             }
             // EXPR-7: an element of a list, checked when it runs; a
             // position of a tuple, which is a constant (FN-3).
@@ -159,13 +157,18 @@ impl Emitter<'_> {
                     let base = self.expression(scope, base);
                     format!("std::get<{position}>({base})")
                 }
-                // EXPR-2: the list, then the index; where either runs
-                // statements, which may change what the other reads, the
-                // list is held as it was first, then the index, and the
-                // element read is a value of its own.
-                Type::List { .. } if changes(base) || changes(index) => {
+                // EXPR-2: the list, then the index. Where they are held
+                // (`held_read`), the list is held first, as it was where
+                // the index may change it, and the element read is a
+                // value of its own.
+                Type::List { .. } if held_read(base, index) => {
                     let Some(ty) = self.written_type(&value.ty, value.at) else {
                         return "0".to_string();
+                    };
+                    let held = if changes(index) {
+                        "const auto"
+                    } else {
+                        "const auto&"
                     };
                     let base = self.expression(scope, base);
                     let index = self.expression(scope, index);
@@ -173,7 +176,7 @@ impl Emitter<'_> {
                     let list = names::temporary("list", self.temporary());
                     let at = names::temporary("index", self.temporary());
                     format!(
-                        "[&]() -> {ty} {{ const auto {list} = {base}; const auto {at} = {index}; return ::{}::item({list}, {at}); }}()",
+                        "[&]() -> {ty} {{ {held} {list} = {base}; const auto {at} = {index}; return ::{}::item({list}, {at}); }}()",
                         runtime::NAMESPACE
                     )
                 }
@@ -311,12 +314,35 @@ impl Emitter<'_> {
     /// The entries of a tuple or a list, each as its place expects, in
     /// the order written: C++ evaluates the entries of a braced list in
     /// order (EXPR-13).
-    fn entries(&mut self, scope: &mut Scope, entries: &[Expr]) -> String {
-        let written: Vec<String> = entries
-            .iter()
-            .map(|entry| self.expression(scope, entry))
-            .collect();
-        written.join(", ")
+    /// `ty{entries...}`, a tuple or a list, its entries evaluated in
+    /// the order written (EXPR-2). Where an entry after the first runs
+    /// statements, which may change what an earlier one reads, each is
+    /// first held as a value of its own, of its own type: `std::tuple`'s
+    /// constructor would copy an earlier entry only after the later ones
+    /// had run.
+    fn constructed(&mut self, scope: &mut Scope, ty: &str, entries: &[Expr]) -> String {
+        if !entries.iter().skip(1).any(changes) {
+            let written: Vec<String> = entries
+                .iter()
+                .map(|entry| self.expression(scope, entry))
+                .collect();
+            return format!("{ty}{{{}}}", written.join(", "));
+        }
+        let mut steps = String::new();
+        let mut held = Vec::new();
+        for entry in entries {
+            let Some(entry_ty) = self.written_type(&entry.ty, entry.at) else {
+                return "0".to_string();
+            };
+            let written = self.expression(scope, entry);
+            let name = names::temporary("entry", self.temporary());
+            steps.push_str(&format!("const {entry_ty} {name} = {written}; "));
+            held.push(name);
+        }
+        format!(
+            "[&]() -> {ty} {{ {steps}return {ty}{{{}}}; }}()",
+            held.join(", ")
+        )
     }
 
     /// A block or an `if` that gives a value and has statements of its
@@ -422,6 +448,15 @@ impl Emitter<'_> {
             _ => self.missing(at, "this literal"),
         }
     }
+}
+
+/// True where an element read of the list `base` at `index` holds the
+/// list, then the index, before it reads, so that they are evaluated in
+/// that order (EXPR-2): where either runs statements, which may change
+/// what the other reads, and where both may fail, which C++ would
+/// evaluate in either order. The element read is then a value of its own.
+pub(super) fn held_read(base: &Expr, index: &Expr) -> bool {
+    changes(base) || changes(index) || (may_fail(base) && may_fail(index))
 }
 
 /// An `i64` as a C++ literal. The least has none: its negation is out of

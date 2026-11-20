@@ -14,6 +14,7 @@ void evaluation_follows_the_order_written();
 void a_type_declared_after_its_use();
 void a_var_parameter_is_its_place();
 void an_overflow_fails_with_its_code();
+void a_list_fails_before_its_index();
 }  // namespace hgl::demo::values::m_::t_
 
 namespace
@@ -30,6 +31,7 @@ const ::hglrt::testing::Registration test_7{"demo.values::evaluation_follows_the
 const ::hglrt::testing::Registration test_8{"demo.values::a_type_declared_after_its_use", &::hgl::demo::values::m_::t_::a_type_declared_after_its_use};
 const ::hglrt::testing::Registration test_9{"demo.values::a_var_parameter_is_its_place", &::hgl::demo::values::m_::t_::a_var_parameter_is_its_place};
 const ::hglrt::testing::Registration test_10{"demo.values::an_overflow_fails_with_its_code", &::hgl::demo::values::m_::t_::an_overflow_fails_with_its_code};
+const ::hglrt::testing::Registration test_11{"demo.values::a_list_fails_before_its_index", &::hgl::demo::values::m_::t_::a_list_fails_before_its_index};
 }  // namespace
 
 int main(int argc, char **argv)
