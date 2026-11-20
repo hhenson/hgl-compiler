@@ -37,7 +37,9 @@
 //! Not written yet, and reported: a `for` over a connection of a set
 //! (hgraph's `compiled::map_` makes children for the keys of a dictionary
 //! or the positions of a list, and takes no set of keys alone), a loop's
-//! key read other than as the argument of a temporal parameter, a
+//! key read other than as the argument of a temporal parameter, the
+//! store read in a branch or a loop's body (hgraph builds a child graph
+//! on a wiring of its own, which neither sees nor sets the root's store), a
 //! `return` under a branch selected at runtime in a loop unrolled while
 //! the graph is built, branches that assign more than one `var`, and an
 //! `if` whose value is used and whose branches return or assign a `var`
@@ -286,14 +288,15 @@ impl Emitter<'_> {
     }
 
     /// Notes what `statement` gives a value: a local declared with one,
-    /// or assigned.
+    /// assigned, or a capability injected (FN-9).
     fn bind_statement(&mut self, statement: &Stmt) {
         let bound = match statement {
             Stmt::Declare {
                 local,
                 value: Some(_),
             }
-            | Stmt::Assign { local, .. } => *local,
+            | Stmt::Assign { local, .. }
+            | Stmt::Inject { local, .. } => *local,
             _ => return,
         };
         if !self.control.bound.contains(&bound) {
@@ -630,6 +633,9 @@ impl Emitter<'_> {
         let bound = self.control.bound.clone();
         let inputs = taken(locals, &bound, &[], read.clone(), &declared);
         let configured = self.configured(scope, &read, &declared, &bound);
+        if self.reads_a_capability(scope, &configured, at) {
+            return;
+        }
         let Some(element) = self.temporal_schema(element, at) else {
             return;
         };
@@ -837,6 +843,43 @@ impl Emitter<'_> {
         if let Some(context) = self.temporal.as_mut() {
             context.roles[item] = role;
         }
+    }
+
+    /// Reports a capability among `configured`, what a child graph at `at`
+    /// reads of the graph it is written in, and says whether it did. A
+    /// child is compiled on a wiring of its own, which neither sees nor
+    /// may set the store of the run's root (FN-9: a child of a `switch` or
+    /// of a `for` over a temporal collection "is built then, and its calls
+    /// are evaluated then"), and no capability is a value hgraph keeps as
+    /// configuration.
+    fn reads_a_capability(&mut self, scope: &Scope, configured: &[usize], at: Location) -> bool {
+        let program = self.program;
+        let capability = configured
+            .iter()
+            .find_map(|&local| match &scope.body.locals[local].ty {
+                Type::Named {
+                    module,
+                    declaration,
+                    ..
+                } => super::endpoints::capability_type(program, *module, *declaration).map(|_| {
+                    program.modules[*module].declarations[*declaration]
+                        .name
+                        .clone()
+                }),
+                _ => None,
+            });
+        let Some(name) = capability else {
+            return false;
+        };
+        if name == "GlobalState" {
+            self.unsupported(
+                at,
+                "the store in a branch or a loop's body, a child graph that hgraph builds on a wiring of its own, which neither sees nor sets the root's store",
+            );
+        } else {
+            self.unsupported(at, &format!("a `{name}` read in a branch or a loop's body"));
+        }
+        true
     }
 
     /// The ordinary values of the graph being written that a child graph
@@ -1225,6 +1268,9 @@ impl Emitter<'_> {
         let bound = self.control.bound.clone();
         let inputs = taken(locals, &bound, &[], read.clone(), &declared);
         let configured = self.configured(scope, &read, &declared, &bound);
+        if self.reads_a_capability(scope, &configured, at) {
+            return None;
+        }
         // What each is in the C++ written: the key's schema and type, each
         // input's schema, each configuration's type, and the result's
         // schema.

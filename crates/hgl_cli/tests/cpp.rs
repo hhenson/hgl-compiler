@@ -111,6 +111,45 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
     );
 }
 
+/// A compiler is known by the macros it defines, not by its name, and
+/// must be of the platform's family: one that is not says what was
+/// found and what is needed, GCC on Linux and Apple clang on macOS. The
+/// SDK named is only what the driver looks for before the compiler.
+#[cfg(unix)]
+#[test]
+fn a_compiler_not_of_the_platforms_family_is_named_and_refused() {
+    let root = scratch("compiler");
+    let file = write(&root, "flags.hgl", FLAGS);
+    let sdk = root.join("sdk");
+    fs::create_dir_all(sdk.join("lib/cmake/hgraph")).expect("the scratch directory is writable");
+    fs::write(sdk.join("lib/cmake/hgraph/hgraphConfig.cmake"), "")
+        .expect("the scratch directory is writable");
+    for part in ["include", "lib"] {
+        fs::create_dir_all(root.join("deps").join(part))
+            .expect("the scratch directory is writable");
+    }
+    // `true` runs, and defines nothing.
+    let output = hgl_in(
+        &["test", &file, "--target", "cpp", "--test", "holds"],
+        &[
+            ("HGL_HGRAPH_SDK", &argument(&sdk)),
+            ("HGL_HGRAPH_DEPS", &argument(&root.join("deps"))),
+            ("CXX", "true"),
+        ],
+        &[],
+    );
+    let said = text(&output.stdout);
+    let needed = if cfg!(target_os = "macos") {
+        "the cpp target needs Apple clang 21 or later here, named by CXX or on the PATH as one of clang++"
+    } else {
+        "the cpp target needs GCC 15 or later here, named by CXX or on the PATH as one of g++-17, g++-16, \
+         g++-15, g++"
+    };
+    assert_eq!(output.status.code(), Some(2), "{said}");
+    assert!(said.contains(needed), "{said}");
+    assert!(said.contains("(neither GCC nor Apple clang)"), "{said}");
+}
+
 /// `hgl emit --target cpp` writes each module's header and unit, core's
 /// among them, and an entry unit for its tests; a program with a form
 /// the target does not write yet is not written.
@@ -393,7 +432,7 @@ fn value_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 15 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 16 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -423,7 +462,7 @@ fn temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
