@@ -34,6 +34,11 @@ struct Box<T> {
 
 struct Empty {}
 
+# A struct's generic parameter of an enum's type.
+struct Sided<const side: Side> {
+    count: i64 = 0
+}
+
 struct Flags {
     on: list<bool>
     first: bool
@@ -245,6 +250,7 @@ test structs_are_values {
     assert point + Point(x: 3.0) == Point(x: 4.0, y: 2.0)
     assert first_x() == 1.0
     assert Empty() == Empty()
+    assert Sided<Side.sell>(count: 2).count == 2
 }
 
 test fields_default_and_nest {

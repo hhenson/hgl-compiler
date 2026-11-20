@@ -356,11 +356,11 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
 
 /// The types header of module `index`, of the pieces `typed` that
 /// declare its types (`emit::Layout`): the types headers of the modules
-/// whose types they name; each struct declared; what each struct
-/// inherits from; the enums and then the structs, each struct after
-/// those it holds, as C++ needs a struct defined before a struct that
-/// holds it, though a type may name one declared after it (UNIT-6); and
-/// what each struct tells the runtime library.
+/// whose types they name; the enums, which a struct's generic parameter
+/// may be of, and each struct declared; what each struct inherits from;
+/// the structs, each after those it holds, as C++ needs a struct defined
+/// before a struct that holds it, though a type may name one declared
+/// after it (UNIT-6); and what each struct tells the runtime library.
 fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
     let path = &program.modules[index].path;
     let namespace = module_namespace(path);
@@ -416,6 +416,14 @@ fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
     }
     let within =
         |body: String| format!("\nnamespace {declared}\n{{\n{body}\n}}  // namespace {declared}\n");
+    // The enums first: a struct's generic parameter may be of one, which
+    // its forward declaration names.
+    let enums: Vec<String> = typed
+        .iter()
+        .filter(|piece| piece.layout.is_none() && !piece.declaration.is_empty())
+        .map(|piece| piece.declaration.clone())
+        .collect();
+    let mut first = format!("\n{}", enums.join("\n"));
     if !ordered.is_empty() {
         let forward: String = ordered
             .iter()
@@ -425,9 +433,15 @@ fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
             .iter()
             .map(|layout| layout.delta_forward.as_str())
             .collect();
-        text.push_str(&within(format!(
+        if !enums.is_empty() {
+            first.push('\n');
+        }
+        first.push_str(&format!(
             "{forward}namespace d_\n{{\n{deltas}}}  // namespace d_"
-        )));
+        ));
+    }
+    text.push_str(&within(first));
+    if !ordered.is_empty() {
         let parents: String = ordered
             .iter()
             .map(|layout| layout.parents.as_str())
@@ -436,17 +450,12 @@ fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
             text.push('\n');
             text.push_str(&parents);
         }
+        let definitions: Vec<String> = ordered
+            .iter()
+            .map(|layout| layout.definition.clone())
+            .collect();
+        text.push_str(&within(format!("\n{}", definitions.join("\n"))));
     }
-    let mut definitions = Vec::new();
-    for piece in typed.iter().filter(|piece| piece.layout.is_none()) {
-        if !piece.declaration.is_empty() {
-            definitions.push(piece.declaration.clone());
-        }
-    }
-    for layout in &ordered {
-        definitions.push(layout.definition.clone());
-    }
-    text.push_str(&within(format!("\n{}", definitions.join("\n"))));
     if !ordered.is_empty() {
         text.push('\n');
         for layout in &ordered {

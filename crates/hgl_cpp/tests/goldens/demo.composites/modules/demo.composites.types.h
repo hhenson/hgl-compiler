@@ -14,6 +14,7 @@
 #undef Round
 #undef Shape
 #undef Side
+#undef Sided
 #undef Tagged
 #undef buy
 #undef composites
@@ -43,12 +44,22 @@
 
 namespace hgl::demo::composites::m_
 {
+
+// enum Side (TYPE-7)
+enum class Side
+{
+    buy,
+    sell,
+};
+
 struct Point;
 struct Line;
 struct Book;
 template <class T_>
 struct Box;
 struct Empty;
+template <::hgl::demo::composites::m_::Side side>
+struct Sided;
 struct Flags;
 class Base;
 class Shape;
@@ -63,6 +74,8 @@ struct Book;
 template <class T_>
 struct Box;
 struct Empty;
+template <::hgl::demo::composites::m_::Side side>
+struct Sided;
 struct Flags;
 struct Base;
 struct Shape;
@@ -96,6 +109,11 @@ template <>
 struct hglrt::delta_of<::hgl::demo::composites::m_::Empty>
 {
     using type = ::hgl::demo::composites::m_::d_::Empty;
+};
+template <::hgl::demo::composites::m_::Side side>
+struct hglrt::delta_of<::hgl::demo::composites::m_::Sided<side>>
+{
+    using type = ::hgl::demo::composites::m_::d_::Sided<side>;
 };
 template <>
 struct hglrt::delta_of<::hgl::demo::composites::m_::Flags>
@@ -135,13 +153,6 @@ struct hglrt::parents<::hgl::demo::composites::m_::Tagged<T_>>
 
 namespace hgl::demo::composites::m_
 {
-
-// enum Side (TYPE-7)
-enum class Side
-{
-    buy,
-    sell,
-};
 
 // struct Point (TYPE-3), module demo.composites, line 17
 struct Point
@@ -254,7 +265,28 @@ struct Empty
 };
 }  // namespace d_
 
-// struct Flags (TYPE-3), module demo.composites, line 37
+// struct Sided (TYPE-3), module demo.composites, line 38
+template <::hgl::demo::composites::m_::Side side>
+struct Sided
+{
+    ::hgraph::Int count;
+
+    friend bool operator==(const Sided&, const Sided&) = default;
+};
+
+namespace d_
+{
+// delta<Sided> (TYPE-16)
+template <::hgl::demo::composites::m_::Side side>
+struct Sided
+{
+    std::optional<::hgraph::Int> count;
+
+    friend bool operator==(const Sided&, const Sided&) = default;
+};
+}  // namespace d_
+
+// struct Flags (TYPE-3), module demo.composites, line 42
 struct Flags
 {
     ::hglrt::list<::hgraph::Bool> on;
@@ -275,7 +307,7 @@ struct Flags
 };
 }  // namespace d_
 
-// abstract struct Base (TYPE-3), module demo.composites, line 44
+// abstract struct Base (TYPE-3), module demo.composites, line 49
 class Base
 {
   public:
@@ -314,7 +346,7 @@ struct Base
 };
 }  // namespace d_
 
-// abstract struct Shape (TYPE-3), module demo.composites, line 48
+// abstract struct Shape (TYPE-3), module demo.composites, line 53
 class Shape
 {
   public:
@@ -360,7 +392,7 @@ struct Shape
 };
 }  // namespace d_
 
-// struct Round (TYPE-3), module demo.composites, line 52
+// struct Round (TYPE-3), module demo.composites, line 57
 struct Round
 {
     ::hgraph::Int id;
@@ -383,7 +415,7 @@ struct Round
 };
 }  // namespace d_
 
-// struct Tagged (TYPE-3), module demo.composites, line 56
+// struct Tagged (TYPE-3), module demo.composites, line 61
 template <class T_>
 struct Tagged
 {
@@ -509,6 +541,26 @@ template <>
 struct std::hash<::hgl::demo::composites::m_::d_::Empty>
 {
     std::size_t operator()(const ::hgl::demo::composites::m_::d_::Empty& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <::hgl::demo::composites::m_::Side side>
+struct hglrt::fields<::hgl::demo::composites::m_::Sided<side>>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::Sided<side>::count};
+};
+template <::hgl::demo::composites::m_::Side side>
+struct hglrt::fields<::hgl::demo::composites::m_::d_::Sided<side>>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::d_::Sided<side>::count};
+};
+template <::hgl::demo::composites::m_::Side side>
+struct std::hash<::hgl::demo::composites::m_::Sided<side>>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::Sided<side>& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <::hgl::demo::composites::m_::Side side>
+struct std::hash<::hgl::demo::composites::m_::d_::Sided<side>>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::d_::Sided<side>& value) const { return ::hglrt::key_hash_of(value); }
 };
 template <>
 struct hglrt::fields<::hgl::demo::composites::m_::Flags>
