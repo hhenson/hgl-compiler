@@ -243,6 +243,14 @@ std::size_t hash_of(const T& value) {
     }
 }
 
+/// What a header of this library says of a value type it declares that the
+/// chains of `type_name` and of `testing::text_of` (traces.h) do not know, a
+/// set's or a dictionary's among them (keyed.h): a specialization gives
+/// `name()`, the HGL name of the type, and `text(value)`, a value of it as the
+/// language writes it. The primary says nothing.
+template <class T>
+struct value_form {};
+
 /// The name of the HGL type that the C++ type `T` holds, as HGL writes it
 /// (`i64`, `list<tuple<datetime, f64>>`, `str?`): the name a list is
 /// registered with hgraph under.
@@ -289,6 +297,8 @@ std::string type_name() {
         }(std::make_index_sequence<std::tuple_size_v<T>>{});
     } else if constexpr (named_enum<T>) {
         return std::string{hgl_enum(T{}).type};
+    } else if constexpr (requires { value_form<T>::name(); }) {
+        return value_form<T>::name();
     } else if constexpr (requires { T::hgl_name; }) {
         // A type the compiler writes (a struct, a node's state) names itself.
         return std::string{T::hgl_name};

@@ -188,6 +188,8 @@ std::string text_of(const T& value) {
         return hglrt::detail::member_text(value);
     } else if constexpr (requires { detail::scalar_text(value); }) {
         return detail::scalar_text(value);
+    } else if constexpr (requires { value_form<T>::text(value); }) {
+        return value_form<T>::text(value);
     } else {
         return "a value of " + type_name<T>();
     }
@@ -506,7 +508,9 @@ delta_t<T> whole_delta(const T& value, std::size_t size) {
 
 /// What each cell of a trace of a T publishes, in order, a whole one as the
 /// delta that replaces what the value held: the size of a list is followed
-/// through each cell, a delta's among them.
+/// through each cell, a delta's among them. A header of this library that
+/// declares a value type whose whole cell needs more of what the earlier
+/// cells left specializes it for that type (keyed.h: a set, a dictionary).
 template <class T>
 class Publisher {
   public:
