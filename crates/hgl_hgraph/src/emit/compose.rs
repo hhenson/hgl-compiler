@@ -656,7 +656,7 @@ impl Emitter<'_> {
     fn repeated_label(cases: &[Case]) -> Option<Location> {
         let mut seen: Vec<LabelValue> = Vec::new();
         for case in cases {
-            let Some(value) = Self::label_value(case) else {
+            let Some(value) = label_value(case) else {
                 continue;
             };
             if seen.contains(&value) {
@@ -667,22 +667,8 @@ impl Emitter<'_> {
         None
     }
 
-    /// The value of `case`'s label: the one the analyser resolved it to
-    /// (`Case::value`), or, for a label it could not resolve, the
-    /// literal or the member an instance has in its place (GEN-13).
-    /// `None` for any other, a constant a `const fn` computes among them.
-    fn label_value(case: &Case) -> Option<LabelValue> {
-        case.value.clone().or_else(|| match &case.label.kind {
-            ExprKind::Literal(Value::Int(value)) => Some(LabelValue::Int(*value)),
-            ExprKind::Literal(Value::Bool(value)) => Some(LabelValue::Bool(*value)),
-            ExprKind::Literal(Value::Str(value)) => Some(LabelValue::Str(value.clone())),
-            ExprKind::EnumMember { member, .. } => Some(LabelValue::Member(*member)),
-            _ => None,
-        })
-    }
-
     /// Reports a `switch` over a connection with a label whose value is
-    /// not known here ([`Emitter::label_value`]) beside another label,
+    /// not known here ([`label_value`]) beside another label,
     /// and says whether it did. CTRL-6: "Duplicate values reject", and
     /// hgraph's `switch_` keys its branches by each label's value and
     /// keeps the last of two of one value, where a `switch` over an
@@ -693,7 +679,7 @@ impl Emitter<'_> {
         if cases.len() < 2 {
             return false;
         }
-        let Some(case) = cases.iter().find(|case| Self::label_value(case).is_none()) else {
+        let Some(case) = cases.iter().find(|case| label_value(case).is_none()) else {
             return false;
         };
         self.unsupported(
@@ -1026,7 +1012,7 @@ impl Emitter<'_> {
     }
 
     /// What a child graph of a `switch_` or a `map_` takes of the graph
-    /// it is written in (`taken`), from what its statements name and
+    /// it is written in ([`taken`]), from what its statements name and
     /// declare, `read` and `declared`, with each window given to it reported
     /// (`windows_given`): `over` is the loop's sequence, where it is a
     /// loop's.
@@ -1037,29 +1023,9 @@ impl Emitter<'_> {
         over: Option<&Type>,
         at: Location,
     ) -> Vec<usize> {
-        let taken = self.taken(function, read, declared);
+        let taken = taken(function.locals, &self.bound, &self.ported, read, declared);
         self.windows_given(function, &taken, over, at);
         taken
-    }
-
-    /// What a child graph takes of the graph it is written in, from
-    /// what its statements name, `read`, and declare, `declared`
-    /// ([`named_in`]): every connection named, read or assigned, at any
-    /// depth, that has a value where the child is written
-    /// (`Emitter::bound`), less the names the child declares itself.
-    /// One the child does not need is harmless; one with no value yet is
-    /// never given. A key that hgraph gives as a port is a connection
-    /// here (`Emitter::ported`).
-    fn taken(&self, function: &Function, mut read: Vec<usize>, declared: &[usize]) -> Vec<usize> {
-        read.retain(|local| {
-            !declared.contains(local)
-                && self.bound.contains(local)
-                && (function.locals[*local].category == ValueCategory::Connection
-                    || self.ported.contains(local))
-        });
-        read.sort_unstable();
-        read.dedup();
-        read
     }
 
     /// Reports, at `at`, a window given to a child graph: one that a
@@ -1214,7 +1180,7 @@ impl Emitter<'_> {
             }
         };
         if let Some(key) = key
-            && let Some(read) = self.key_read_as_value(key, body)
+            && let Some(read) = key_read_as_value(self.program, key, body)
         {
             self.unsupported(
                 read,
@@ -1315,66 +1281,6 @@ impl Emitter<'_> {
         } else {
             self.line(depth, &format!("_hg.map_({})", given.join(", ")));
         }
-    }
-
-    /// Where `body`, the body of a loop that makes one child for each
-    /// member, reads `key`, the loop's key or member, other than as the
-    /// whole argument of a temporal parameter of a temporal function:
-    /// `None` where it reads it only so. hgraph's `map_` gives a child
-    /// its key as a port, and a port is what such a parameter takes; an
-    /// ordinary value given one is a constant of it (FN-3), which ticks
-    /// where the child starts, as the key's port does. Anywhere else the
-    /// key would be a value known where the child is built, which
-    /// hgraph does not give.
-    fn key_read_as_value(&self, key: usize, body: &[Stmt]) -> Option<Location> {
-        use hgl_analyser::hir::{Node, walk_statement_nodes};
-        let program = self.program;
-        let mut reads = Vec::new();
-        let mut given = Vec::new();
-        walk_statement_nodes(body, &mut |node| match node {
-            Node::Expression(Expr {
-                kind: ExprKind::Local(local),
-                at,
-                ..
-            }) if *local == key => reads.push(*at),
-            Node::Expression(Expr {
-                kind:
-                    ExprKind::Call {
-                        callee:
-                            Callee::Function {
-                                module,
-                                declaration,
-                                ..
-                            },
-                        arguments,
-                        ..
-                    },
-                ..
-            }) => {
-                let declared = &program.modules[*module];
-                let temporal =
-                    declared.declarations[*declaration].kind.role() == Some(Role::Temporal);
-                let Some(Detail::Callable(signature)) = declared.details.get(*declaration) else {
-                    return;
-                };
-                for argument in arguments {
-                    let taken = argument
-                        .parameter
-                        .and_then(|index| signature.parameters.get(index))
-                        .is_some_and(|parameter| {
-                            !parameter.constant && !parameter.var && parameter.pack.is_none()
-                        });
-                    if temporal
-                        && taken
-                        && matches!(argument.value.kind, ExprKind::Local(local) if local == key)
-                    {
-                        given.push(argument.value.at);
-                    }
-                }
-            }
-            _ => {}
-        });
-        reads.into_iter().find(|at| !given.contains(at))
     }
 
     /// CTRL-6: "Switch labels are typed source constants, compared by
@@ -1884,6 +1790,103 @@ fn captured_call_of<'p>(program: &'p Program, call: &'p Expr) -> Option<Captured
         signature,
         bodied,
     })
+}
+
+/// The value of `case`'s label: the one the analyser resolved it to
+/// (`Case::value`), or, for a label it could not resolve, the
+/// literal or the member an instance has in its place (GEN-13).
+/// `None` for any other, a constant a `const fn` computes among them.
+pub(super) fn label_value(case: &Case) -> Option<LabelValue> {
+    case.value.clone().or_else(|| match &case.label.kind {
+        ExprKind::Literal(Value::Int(value)) => Some(LabelValue::Int(*value)),
+        ExprKind::Literal(Value::Bool(value)) => Some(LabelValue::Bool(*value)),
+        ExprKind::Literal(Value::Str(value)) => Some(LabelValue::Str(value.clone())),
+        ExprKind::EnumMember { member, .. } => Some(LabelValue::Member(*member)),
+        _ => None,
+    })
+}
+
+/// What a child graph takes of the graph it is written in, from what
+/// its statements name, `read`, and declare, `declared` ([`named_in`]):
+/// every connection named, read or assigned, at any depth, that has a
+/// value where the child is written, `bound`, less the names the child
+/// declares itself (CTRL-7: "Captured temporal connections are bound
+/// whole and add no membership"). `locals` are the graph's locals. One the
+/// child does not need is harmless; one with no value yet is never
+/// given. A local the target gives the child as a connection, though
+/// the language has it as an ordinary value, is one too: `ported`, the
+/// key of a loop that makes one child for each member.
+pub(super) fn taken(
+    locals: &[Local],
+    bound: &[usize],
+    ported: &[usize],
+    mut read: Vec<usize>,
+    declared: &[usize],
+) -> Vec<usize> {
+    read.retain(|local| {
+        !declared.contains(local)
+            && bound.contains(local)
+            && (locals[*local].category == ValueCategory::Connection || ported.contains(local))
+    });
+    read.sort_unstable();
+    read.dedup();
+    read
+}
+
+/// Where `body`, the body of a loop over a connection that makes one
+/// child for each member, reads `key`, the loop's key or member, other
+/// than as the whole argument of a temporal parameter of a temporal
+/// function: `None` where it reads it only so. Given so, the key is a
+/// connection of the child, or an ordinary value wired as a constant of
+/// one where the child starts (FN-3); read anywhere else it is a value
+/// the child must know as it is built (CTRL-7).
+pub(super) fn key_read_as_value(program: &Program, key: usize, body: &[Stmt]) -> Option<Location> {
+    use hgl_analyser::hir::{Node, walk_statement_nodes};
+    let mut reads = Vec::new();
+    let mut given = Vec::new();
+    walk_statement_nodes(body, &mut |node| match node {
+        Node::Expression(Expr {
+            kind: ExprKind::Local(local),
+            at,
+            ..
+        }) if *local == key => reads.push(*at),
+        Node::Expression(Expr {
+            kind:
+                ExprKind::Call {
+                    callee:
+                        Callee::Function {
+                            module,
+                            declaration,
+                            ..
+                        },
+                    arguments,
+                    ..
+                },
+            ..
+        }) => {
+            let declared = &program.modules[*module];
+            let temporal = declared.declarations[*declaration].kind.role() == Some(Role::Temporal);
+            let Some(Detail::Callable(signature)) = declared.details.get(*declaration) else {
+                return;
+            };
+            for argument in arguments {
+                let taken = argument
+                    .parameter
+                    .and_then(|index| signature.parameters.get(index))
+                    .is_some_and(|parameter| {
+                        !parameter.constant && !parameter.var && parameter.pack.is_none()
+                    });
+                if temporal
+                    && taken
+                    && matches!(argument.value.kind, ExprKind::Local(local) if local == key)
+                {
+                    given.push(argument.value.at);
+                }
+            }
+        }
+        _ => {}
+    });
+    reads.into_iter().find(|at| !given.contains(at))
 }
 
 /// What is bound after branches (`Emitter::bound`): what each of
