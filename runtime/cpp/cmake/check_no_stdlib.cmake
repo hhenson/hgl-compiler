@@ -1,0 +1,39 @@
+# Fails where libhglrt takes anything of hgraph's standard library or of
+# Arrow, which the C++ target takes nothing from (docs/cpp-target.md): the
+# test `hglrt_takes_no_stdlib` runs it, with
+#
+#   PREPROCESSED  the include set of the library's public headers,
+#                 preprocessed (tests/include_set.cpp): every header they
+#                 bring in, at any depth, is named in it
+#   SOURCE_DIR    runtime/cpp, whose sources are read for an include of one
+#   READELF       readelf, and BINARIES the library, its tests and hgraph's
+#                 runtime and wiring libraries they link, whose dynamic
+#                 sections are read for a library they need: an SDK built
+#                 with Arrow fails it (scripts/provision-hgraph-sdk.sh)
+#
+# Arrow's headers are under `arrow/`, hgraph's standard library's under
+# `hgraph/lib/`, and their shared objects are `libarrow*`, `libparquet*` and
+# `libhgraph_stdlib*`.
+file(STRINGS "${PREPROCESSED}" markers REGEX "^# [0-9]+ \"")
+foreach(marker IN LISTS markers)
+    if(marker MATCHES "\"[^\"]*(hgraph/lib/|/arrow/)[^\"]*\"")
+        message(FATAL_ERROR "libhglrt's public headers bring in ${CMAKE_MATCH_0}")
+    endif()
+endforeach()
+
+file(GLOB_RECURSE sources "${SOURCE_DIR}/include/*" "${SOURCE_DIR}/src/*" "${SOURCE_DIR}/tests/*")
+foreach(source IN LISTS sources)
+    file(STRINGS "${source}" includes REGEX "^[ \t]*#[ \t]*include[ \t]*[<\"]")
+    foreach(include IN LISTS includes)
+        if(include MATCHES "[<\"](hgraph/lib/|arrow/)")
+            message(FATAL_ERROR "${source} includes ${include}")
+        endif()
+    endforeach()
+endforeach()
+
+foreach(binary IN LISTS BINARIES)
+    execute_process(COMMAND "${READELF}" -d "${binary}" OUTPUT_VARIABLE dynamic COMMAND_ERROR_IS_FATAL ANY)
+    if(dynamic MATCHES "NEEDED[^\n]*(libarrow|libparquet|libhgraph_stdlib)[^\n]*")
+        message(FATAL_ERROR "${binary} needs ${CMAKE_MATCH_0}")
+    endif()
+endforeach()

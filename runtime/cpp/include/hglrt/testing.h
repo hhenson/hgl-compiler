@@ -20,7 +20,7 @@
 
 #include <hgraph/runtime/executor.h>
 #include <hgraph/runtime/global_state.h>
-#include <hgraph/types/graph_wiring.h>
+#include <hgraph/types/generated.h>
 
 #include <cstddef>
 #include <exception>
