@@ -33,10 +33,11 @@ namespace hgl::demo::apps::backtest::m_
 // The run statement of application demo.apps.backtest, line 12: `eval` (UNIT-14, RUN-1, RUN-3).
 ::hglrt::application::Output application_()
 {
+    ::hglrt::application::Store store_;
+    [[maybe_unused]] const ::hglrt::GlobalState global_state{store_.view()};
+    ::hglrt::put_GlobalState_str_V<::hgraph::Int>(global_state, ::hgraph::Str{"limit"}, ::hgl::demo::apps::backtest::m_::limit());
     const ::hglrt::testing::Bounds bounds_ = ::hglrt::testing::Bounds{};
-    return ::hglrt::application::run<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        [[maybe_unused]] const ::hglrt::GlobalState global_state{wiring_.global_state()};
-        ::hglrt::put_GlobalState_str_V<::hgraph::Int>(global_state, ::hgraph::Str{"limit"}, ::hgl::demo::apps::backtest::m_::limit());
+    return ::hglrt::application::run<::hgraph::Int>(store_, [&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::apps::m_::w_::bounded(wiring_, ::hglrt::list<::hgraph::Int>{1, 2, 3}), ::hgraph::Str{::hglrt::testing::run_output});
     }, bounds_, ::hglrt::testing::Mode::simulation);
 }

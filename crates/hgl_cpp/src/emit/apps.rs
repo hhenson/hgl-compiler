@@ -2,24 +2,25 @@
 //! and an application (UNIT-14, RUN-1 to RUN-3): its run statement, as
 //! the function its executable runs. Part of the transpiler, the last
 //! stage; a family of the dispatch point (`forms`) for `inject
-//! global_state` in a graph and in an application.
+//! global_state` in a graph.
 //!
 //! | HGL | C++ |
 //! | --- | --- |
 //! | `inject global_state` in a graph (FN-9) | `const ::hglrt::GlobalState global_state{wiring_.global_state()};`: the store of the run whose graph is being built, which hgraph's `Wiring` holds and carries onto the graph it builds |
 //! | `put(global_state, "limit", limit)`, `get`, `has` in a graph (FN-9) | the library's natives, as a node's hook calls them (`capabilities.h`), called as `compose` runs: once, in the order written, before any node of the graph starts |
 //! | `application demo.app` (UNIT-14) | `::hglrt::application::Output application_()` in the namespace of its module's unit, and an entry unit, `applications/demo.app.cpp`, whose `main` is the library's host of it (`assemble`) |
-//! | `inject global_state` and each `put` before the run statement (UNIT-14) | the first statements of the run's entry, before its call is wired: the store of the run's graph, before the graph is built |
-//! | `eval(counted(upto: 3), config)`, `run(...)` (RUN-1, RUN-3) | `::hglrt::application::run<T>(entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"` (CRUN-8), as an eval's does; `run` of an entry with no result. `eval` is `Mode::simulation`, `run` `Mode::real_time` |
-//! | The configuration, core's `RunConfig` (RUN-1) | `const ::hglrt::testing::Bounds bounds_ = ::hglrt::application::bounds(config);`, the value as the value code writes it; with none written, `RunConfig()`'s, `Bounds{}` |
+//! | `inject global_state` and each `put` before the run statement (UNIT-14) | the function's first statements, on a store of its own, `::hglrt::application::Store store_;`: `const ::hglrt::GlobalState global_state{store_.view()};` and the natives' calls, which the run gives its graph before the entry is wired |
+//! | `eval(counted(upto: 3), config)`, `run(...)` (RUN-1, RUN-3) | `::hglrt::application::run<T>(store_, entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"` (CRUN-8), as an eval's does; `run` of an entry with no result. `eval` is `Mode::simulation`, `run` `Mode::real_time` |
+//! | The call's arguments and the configuration, core's `RunConfig` (RUN-1) | `const ::hglrt::testing::Bounds bounds_ = ...;`, as an eval's configuration is written (`lifecycle`), after the store; with none written, `RunConfig()`'s, `Bounds{}`. Where more than one of the arguments and the configuration may fail, or one runs statements, each argument is held before it, in the order written (EXPR-2), as an eval's are |
 //!
 //! The library's `run` gives the run's output as text, and its host
 //! (`hglrt/application_host.h`) writes it for the driver (`hgl_cli`).
 
-use hgl_analyser::hir::{Body, Stmt};
+use hgl_analyser::hir::{Body, ExprKind, Stmt};
 use hgl_lower::instances::run_result;
 
 use super::Emitter;
+use super::calls::{changes, may_fail};
 use super::forms::Family;
 use super::graphs::WIRING;
 use super::names::{self, identifier};
@@ -35,6 +36,10 @@ pub(crate) const APPLICATION: &str = "application_";
 
 /// The name of the capability `inject global_state` binds (TIME-8).
 const STORE: &str = "global_state";
+
+/// The name of the store an application's function sets (UNIT-14), of a
+/// form no HGL name gives.
+const SET: &str = "store_";
 
 impl Emitter<'_> {
     /// Writes the module's application (UNIT-14): what sets its run's
@@ -70,45 +75,87 @@ impl Emitter<'_> {
         let testing = testing.trim_end_matches("::");
         let inner = INDENT.repeat(2);
 
-        // The configuration, a value as any other (RUN-1), worked out
-        // before the run, whose bounds it gives (CRUN-2).
+        // UNIT-14: the store, set first, in the order written, by value
+        // code "read as a constant's is ... with no parameter in scope".
+        let mut text = format!("{INDENT}::{library}::application::Store {SET};\n");
+        if let Some(store) = &declared.store_body {
+            let mut setting = Scope::cold(program, store);
+            for statement in &store.statements {
+                match statement {
+                    Stmt::Inject { local, .. } => text.push_str(&format!(
+                        "{INDENT}[[maybe_unused]] const ::{library}::GlobalState {}{{{SET}.view()}};\n",
+                        identifier(&store.locals[*local].name)
+                    )),
+                    _ => self.statement(&mut setting, statement, 1, &mut text),
+                }
+            }
+        }
+
+        // EXPR-2: the call's arguments in the order written, then the
+        // configuration, as an eval's (`tests`): where more than one of
+        // them may fail, or one runs statements, each argument is held
+        // first, in that order, before the configuration.
         let none = Body {
             locals: Vec::new(),
             statements: Vec::new(),
         };
         let mut scope = Scope::cold(program, &none);
-        let bounds = match &run.config {
-            Some(config) => {
-                let written = self.expression(&mut scope, config);
-                format!("::{library}::application::bounds({written})")
+        let arguments = match &run.call.kind {
+            ExprKind::Call { arguments, .. } => arguments.as_slice(),
+            _ => &[],
+        };
+        let config = run.config.as_ref();
+        let held = arguments
+            .iter()
+            .map(|argument| &argument.value)
+            .chain(config)
+            .filter(|part| may_fail(part))
+            .count()
+            > 1
+            || arguments.iter().any(|argument| changes(&argument.value))
+            || config.is_some_and(changes);
+        // Each held, after what it needs run before it.
+        let hold = |text: &mut String, scope: &mut Scope, line: String| {
+            for before in std::mem::take(&mut scope.before) {
+                for line in before.lines() {
+                    text.push_str(&format!("{INDENT}{line}\n"));
+                }
             }
+            text.push_str(&format!("{INDENT}{line}\n"));
+        };
+        let mut given: Vec<(usize, String)> = Vec::new();
+        if held {
+            for (position, argument) in arguments.iter().enumerate() {
+                let written = self.expression(&mut scope, &argument.value);
+                let name = names::temporary("argument", self.temporary());
+                hold(
+                    &mut text,
+                    &mut scope,
+                    format!("const auto {name} = {written};"),
+                );
+                given.push((position, name));
+            }
+        }
+        // RUN-1, CRUN-2: the configuration's bounds, as an eval's are
+        // (`lifecycle`).
+        let bounds = match config {
+            Some(config) => self.run_bounds(&mut scope, config),
             None => format!("{testing}::Bounds{{}}"),
         };
-        let mut text = String::new();
-        for before in std::mem::take(&mut scope.before) {
-            for line in before.lines() {
-                text.push_str(&format!("{INDENT}{line}\n"));
-            }
-        }
-        text.push_str(&format!(
-            "{INDENT}const {testing}::Bounds bounds_ = {bounds};\n"
-        ));
+        hold(
+            &mut text,
+            &mut scope,
+            format!("const {testing}::Bounds bounds_ = {bounds};"),
+        );
 
-        // The entry: the store set first, then the call wired, and core's
-        // `record` of its result under the run's key (CRUN-8).
+        // The entry: the call wired, and core's `record` of its result
+        // under the run's key (CRUN-8).
         let mut entry = String::new();
-        if let Some(store) = &declared.store_body {
-            let mut setting = Scope::cold(program, store);
-            let mut context = Context::new(Kind::Entry, store.locals.len());
-            self.in_context(&mut context, |emitter| {
-                emitter.statements(&mut setting, &store.statements, 2, &mut entry);
-            });
-        }
         let mut called = Scope::cold(program, &none);
         let mut context = Context::new(Kind::Entry, 0);
         let mut target = String::new();
         self.in_context(&mut context, |emitter| {
-            target = emitter.temporal_call(&mut called, &run.call, &[]);
+            target = emitter.temporal_call(&mut called, &run.call, &given);
         });
         for before in std::mem::take(&mut called.before) {
             for line in before.lines() {
@@ -143,7 +190,7 @@ impl Emitter<'_> {
         self.piece.text = format!(
             "// The run statement of application {}, line {line}: `{word}` (UNIT-14, RUN-1, RUN-3).\n\
              ::{library}::application::Output {APPLICATION}()\n{{\n{text}\
-             {INDENT}return {ran}([&](::hgraph::Wiring& {WIRING}, [[maybe_unused]] ::hgraph::DateTime start_) {{\n\
+             {INDENT}return {ran}({SET}, [&](::hgraph::Wiring& {WIRING}, [[maybe_unused]] ::hgraph::DateTime start_) {{\n\
              {entry}{INDENT}}}, bounds_, {testing}::Mode::{mode});\n}}\n",
             declared.path
         );
@@ -167,18 +214,17 @@ fn run_line(declared: &hgl_analyser::Module) -> Option<usize> {
     )
 }
 
-/// The store's family: `inject global_state` where a graph is built and
-/// where an application sets its run's store.
+/// The store's family: `inject global_state` where a graph is built.
 pub(super) struct Apps;
 
 impl Family for Apps {
     // FN-9: "A graph injects `global_state` and no other, and uses it
     // where the graph is built: each call on it is evaluated once then,
-    // in the order written, before any node of that graph starts". UNIT-14:
-    // an application's are "evaluated once, in the order written, before
-    // the run's graph is built". CRUN-7: "A graph that injects the store
-    // puts values there as it is built". Each is the store of the wiring
-    // the graph is built on, which hgraph carries onto the graph built.
+    // in the order written, before any node of that graph starts". CRUN-7:
+    // "A graph that injects the store puts values there as it is built".
+    // It is the store of the wiring the graph is built on, which hgraph
+    // carries onto the graph built; each call on it is the library's
+    // native, called as `compose` runs.
     fn statement(
         &self,
         emitter: &mut Emitter<'_>,
@@ -191,7 +237,7 @@ impl Family for Apps {
             return false;
         };
         let name = &scope.body.locals[*local].name;
-        if name != STORE || !matches!(emitter.kind(), Some(Kind::Graph | Kind::Entry)) {
+        if name != STORE || emitter.kind() != Some(Kind::Graph) {
             return false;
         }
         text.push_str(&format!(

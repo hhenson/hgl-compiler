@@ -48,17 +48,27 @@ struct Limited {
     }
 };
 
-/// The entry of `limited` over `trace`, with the store set first as an
-/// application's statements set it (UNIT-14): `put(global_state, "limit",
-/// limit)`.
-hglrt::testing::Entry limited_entry(Dense<i64> trace, i64 limit) {
-    return [trace, limit](hgraph::Wiring& wiring, datetime at) {
-        const hglrt::GlobalState global_state{wiring.global_state()};
-        hglrt::put_GlobalState_str_V<i64>(global_state, "limit", limit);
+/// The entry of `limited` over `trace`.
+hglrt::testing::Entry limited_entry(Dense<i64> trace) {
+    return [trace](hgraph::Wiring& wiring, datetime at) {
         auto replayed = hgraph::wire<hglrt_test::Replay>(wiring, hglrt::testing::replay_items(trace, at));
         hgraph::wire<hglrt_test::Record>(wiring, hgraph::wire<Limited>(wiring, replayed),
                                          hglrt::str{hglrt::testing::run_output});
     };
+}
+
+/// A store as an application sets it before its run (UNIT-14): `put(
+/// global_state, "limit", limit)`.
+hglrt::application::Store limit_of(i64 limit) {
+    hglrt::application::Store store;
+    hglrt::put_GlobalState_str_V<i64>(hglrt::GlobalState{store.view()}, "limit", limit);
+    return store;
+}
+
+/// An entry with nothing to set in the store.
+hglrt::application::Store& nothing_stored() {
+    static hglrt::application::Store none;
+    return none;
 }
 
 /// The lines of the results file `results`, which is then removed.
@@ -134,31 +144,36 @@ void started() {
 void nothing(pid_t, Requests&) {}
 
 Output seeded() {
-    return hglrt::application::run<i64>(limited_entry(Dense<i64>{1, 2, 3, 4}, 2), {}, Mode::simulation);
+    hglrt::application::Store store = limit_of(2);
+    return hglrt::application::run<i64>(store, limited_entry(Dense<i64>{1, 2, 3, 4}), {}, Mode::simulation);
 }
 
 Output silent() {
-    return hglrt::application::run(limited_entry(Dense<i64>{1}, 2), {}, Mode::simulation);
+    hglrt::application::Store store = limit_of(2);
+    return hglrt::application::run(store, limited_entry(Dense<i64>{1}), {}, Mode::simulation);
 }
 
 Output failing() {
     return hglrt::application::run<i64>(
+        nothing_stored(),
         hglrt_test::entry_of<hglrt_test::Doubled>(Dense<i64>{1, std::numeric_limits<i64>::max()}), {},
         Mode::simulation);
 }
 
 Output both_bounds() {
-    return hglrt::application::run<i64>(limited_entry(Dense<i64>{1}, 2), {.end = start + 1s, .length = 1s},
-                                        Mode::simulation);
+    hglrt::application::Store store = limit_of(2);
+    return hglrt::application::run<i64>(store, limited_entry(Dense<i64>{1}),
+                                        {.end = start + 1s, .length = 1s}, Mode::simulation);
 }
 
 Output endless() {
-    return hglrt::application::run<i64>(hglrt_test::entry_of<hglrt_test::Counted>(Dense<i64>{7}), {},
-                                        Mode::real_time);
+    return hglrt::application::run<i64>(
+        nothing_stored(), hglrt_test::entry_of<hglrt_test::Counted>(Dense<i64>{7}), {}, Mode::real_time);
 }
 
 Output bounded_in_real_time() {
-    return hglrt::application::run<i64>(hglrt_test::entry_of<hglrt_test::Counted>(Dense<i64>{7, 7}),
+    return hglrt::application::run<i64>(nothing_stored(),
+                                        hglrt_test::entry_of<hglrt_test::Counted>(Dense<i64>{7, 7}),
                                         {.length = 200ms}, Mode::real_time);
 }
 
@@ -176,7 +191,7 @@ Output endless_and_slow_to_stop() {
         hglrt_test::entry_of<hglrt_test::Counted>(Dense<i64>{7})(wiring, at);
         hgraph::wire<SlowToStop>(wiring, hglrt::constant(wiring, i64{1}));
     };
-    return hglrt::application::run<i64>(entry, {}, Mode::real_time);
+    return hglrt::application::run<i64>(nothing_stored(), entry, {}, Mode::real_time);
 }
 
 Output endless_simulation() {
@@ -184,15 +199,8 @@ Output endless_simulation() {
         hglrt_test::entry_of<hglrt_test::Counted>(Dense<i64>{7})(wiring, at);
         std::this_thread::sleep_for(60s);
     };
-    return hglrt::application::run<i64>(entry, {}, Mode::simulation);
+    return hglrt::application::run<i64>(nothing_stored(), entry, {}, Mode::simulation);
 }
-
-/// A RunConfig as the compiler writes core's struct: its three fields.
-struct RunConfig {
-    std::optional<datetime> start{};
-    std::optional<datetime> end{};
-    std::optional<hglrt::duration> length{};
-};
 
 } // namespace
 
@@ -202,13 +210,6 @@ TEST_CASE("an instant is written as the host writes a publication's") {
     CHECK(instant_text(start + 1s - 1us) == "1970-01-01T00:00:01Z");
     CHECK(instant_text(datetime{std::chrono::sys_days{std::chrono::year{2026} / 11 / 21}} + 9h + 30min +
                        250ms) == "2026-11-21T09:30:00.250000Z");
-}
-
-TEST_CASE("a configuration's fields are the run's bounds (RUN-1, CRUN-2)") {
-    const auto bounds = hglrt::application::bounds(RunConfig{.start = start + 1s, .length = 3s});
-    CHECK(bounds.start == start + 1s);
-    CHECK_FALSE(bounds.end.has_value());
-    CHECK(bounds.length == 3s);
 }
 
 TEST_CASE("an application's run is set its store before its graph is built, and gives its output (UNIT-14, "
@@ -222,8 +223,9 @@ TEST_CASE("an application's run is set its store before its graph is built, and 
     CHECK((*output)[1].value == "2");
     CHECK_FALSE(silent().has_value());
     // A run that runs no cycle has an empty output.
+    hglrt::application::Store store = limit_of(2);
     const Output none =
-        hglrt::application::run<i64>(limited_entry(Dense<i64>{1}, 2), {.length = 0us}, Mode::simulation);
+        hglrt::application::run<i64>(store, limited_entry(Dense<i64>{1}), {.length = 0us}, Mode::simulation);
     REQUIRE(none.has_value());
     CHECK(none->empty());
 }

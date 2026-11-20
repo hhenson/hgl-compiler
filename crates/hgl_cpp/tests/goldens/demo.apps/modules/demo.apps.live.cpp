@@ -14,8 +14,9 @@ namespace hgl::demo::apps::live::m_
 // The run statement of application demo.apps.live, line 6: `run` (UNIT-14, RUN-1, RUN-3).
 ::hglrt::application::Output application_()
 {
-    const ::hglrt::testing::Bounds bounds_ = ::hglrt::testing::Bounds{};
-    return ::hglrt::application::run([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+    ::hglrt::application::Store store_;
+    const ::hglrt::testing::Bounds bounds_ = ::hglrt::testing::Bounds{.length = ::hgraph::TimeDelta{200000}};
+    return ::hglrt::application::run(store_, [&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::demo::apps::m_::w_::quiet(wiring_, ::hglrt::list<::hgraph::Int>{1, 2});
     }, bounds_, ::hglrt::testing::Mode::real_time);
 }

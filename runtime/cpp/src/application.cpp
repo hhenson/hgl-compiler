@@ -32,6 +32,13 @@ std::string detail::instant_text(datetime at) {
     return text + "Z";
 }
 
+testing::Entry detail::seeded(Store& store, const testing::Entry& entry) {
+    return [&store, &entry](hgraph::Wiring& wiring, datetime start) {
+        wiring.global_state().copy_from(store.view());
+        entry(wiring, start);
+    };
+}
+
 namespace {
 
 /// The status the process ends with where it is interrupted, as a shell

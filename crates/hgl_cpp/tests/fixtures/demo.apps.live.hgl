@@ -2,5 +2,5 @@ application demo.apps.live
 
 use demo.apps::{quiet}
 
-# RUN-3: `run` is in real time; with no end, until its host stops it.
-run(quiet(values: [1, 2]))
+# RUN-3: `run` is in real time, here for a fifth of a second (CRUN-2).
+run(quiet(values: [1, 2]), RunConfig(length: 200ms))

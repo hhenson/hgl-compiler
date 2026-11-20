@@ -179,6 +179,36 @@ const BROKEN: &str = concat!(
     "eval(failing())\n",
 );
 
+/// CRUN-2: a simulation from a start of its own, for a length: its end
+/// is exclusive.
+const LATER: &str = concat!(
+    "application demo.ticks.later\n",
+    "\n",
+    "use demo.ticks::{doubled}\n",
+    "\n",
+    "eval(doubled(values: [1, 2, 3, 4]), RunConfig(start: @2026-01-02T00:00:00Z, length: 3s))\n",
+);
+
+/// CRUN-2: a configuration with both an `end` and a `length`, refused
+/// before the run's graph is built.
+const BOTH: &str = concat!(
+    "application demo.ticks.both\n",
+    "\n",
+    "use demo.ticks::{doubled}\n",
+    "\n",
+    "eval(doubled(values: [1]), RunConfig(end: @2026-01-02T00:00:00Z, length: 3s))\n",
+);
+
+/// RUN-3: `run`, in real time, here for a fifth of a second: it ends at
+/// its end, with nothing asked of it.
+const LIVE: &str = concat!(
+    "application demo.ticks.live\n",
+    "\n",
+    "use demo.ticks::{counted}\n",
+    "\n",
+    "run(counted(every: 50ms), RunConfig(length: 220ms))\n",
+);
+
 /// RUN-3: `run`, in real time, with no end: until its host stops it.
 const ENDLESS: &str = concat!(
     "application demo.ticks.endless\n",
@@ -808,6 +838,9 @@ fn an_application_runs_on_the_sdk() {
         ("seeded.hgl", SEEDED),
         ("silent.hgl", SILENT),
         ("broken.hgl", BROKEN),
+        ("later.hgl", LATER),
+        ("both.hgl", BOTH),
+        ("live.hgl", LIVE),
     ] {
         write(&root, name, text);
     }
@@ -879,14 +912,56 @@ fn an_application_runs_on_the_sdk() {
     );
     assert_eq!(output.status.code(), Some(0));
 
-    let output = run("demo.ticks.broken", &[]);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(text(&output.stdout), "");
-    let said = text(&output.stderr);
-    let last = said.lines().last().unwrap_or("");
+    for (application, code) in [
+        ("demo.ticks.broken", "numeric.division_by_zero"),
+        ("demo.ticks.both", "run.end_and_length"),
+    ] {
+        let output = run(application, &[]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(text(&output.stdout), "");
+        let said = text(&output.stderr);
+        let last = said.lines().last().unwrap_or("");
+        assert!(
+            last.starts_with(&format!("hgl: {application} failed: {code}: ")),
+            "{said}"
+        );
+    }
+
+    // CRUN-2: the run's own start, and an end that is exclusive; a field
+    // replaced (RUN-2).
+    let output = run("demo.ticks.later", &[]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "2026-01-02T00:00:01Z  2\n",
+            "2026-01-02T00:00:02Z  4\n",
+            "ran demo.ticks.later on cpp: 2 publications\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    let output = run("demo.ticks.later", &["--config", "length=2s"]);
+    assert_eq!(
+        text(&output.stdout),
+        "2026-01-02T00:00:01Z  2\nran demo.ticks.later on cpp: 1 publication\n",
+        "{}",
+        text(&output.stderr)
+    );
+
+    // RUN-3, CRUN-5: in real time it ends at its end, counting from 1 at
+    // the host clock's pace.
+    let output = run("demo.ticks.live", &[]);
+    let printed = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let lines: Vec<&str> = printed.lines().collect();
+    let (summary, published) = lines.split_last().expect("something is printed");
+    assert!(!published.is_empty() && published.len() <= 5, "{printed}");
+    for (position, line) in published.iter().enumerate() {
+        assert!(line.ends_with(&format!("Z  {}", position + 1)), "{printed}");
+    }
     assert!(
-        last.starts_with("hgl: demo.ticks.broken failed: numeric.division_by_zero: "),
-        "{said}"
+        summary.starts_with("ran demo.ticks.live on cpp: "),
+        "{printed}"
     );
 }
 
