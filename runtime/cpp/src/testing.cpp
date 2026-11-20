@@ -252,7 +252,8 @@ namespace {
 
 /// The runs of the test under way, which its host stops once its limit has
 /// passed (TST-17): the executor of the run under way, whether runs are
-/// watched, and whether they are to stop.
+/// watched (a run made while they are has `StopAtStart` observe it), and
+/// whether they are to stop.
 struct Runs {
     std::mutex mutex;
     std::optional<hgraph::GraphExecutorView> under_way;
@@ -372,16 +373,18 @@ Run run(const Entry& entry, const Bounds& bounds, Mode mode) {
         // hgraph has no run that ends where it starts, so none is made.
         return Run(start);
     }
-    // One for the process: an executor keeps its observers for as long as
-    // it lives, and a run's is kept for its store.
-    static StopAtStart stopper;
     hgraph::GraphExecutorBuilder builder;
     builder.graph_builder(std::move(wiring).finish())
         .mode(mode == Mode::simulation ? hgraph::GraphExecutorMode::Simulation
                                        : hgraph::GraphExecutorMode::RealTime)
         .start_time(start)
-        .end_time(end)
-        .add_lifecycle_observer(&stopper);
+        .end_time(end);
+    if (runs().watched) {
+        // One for the process: an executor keeps its observers for as long
+        // as it lives, and a run's is kept for its store.
+        static StopAtStart stopper;
+        builder.add_lifecycle_observer(&stopper);
+    }
     hgraph::GraphExecutorValue executor = builder.make_executor();
     {
         const UnderWay registered(executor.view());
