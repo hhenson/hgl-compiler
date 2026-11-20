@@ -671,10 +671,14 @@ impl<'a> Typer<'a> {
     /// .fast}`, or an equality with a type, `T == i64`, authorises the
     /// call where every member, and with two parameters every
     /// combination of their members, has one candidate that admits it,
-    /// with what is held of a call once its candidate is selected
-    /// (hhenson/hgl_spec#144: an operation "that every listed type has a
-    /// candidate for ... each instance selects its candidate. An
-    /// operation that a listed type lacks rejects at the declaration").
+    /// with what is held of a call once its candidate is selected. GEN-3:
+    /// a membership of a type parameter "authorizes in the body (GEN-7) an
+    /// operation that each listed type has a candidate for ... and each
+    /// instance selects its own candidate (GEN-5). An operation that a
+    /// listed type lacks rejects at the declaration"; and, proposed, a
+    /// membership of a generic value parameter "authorizes in the body a
+    /// call that gives M as an option (GEN-6) where each listed value has
+    /// a candidate that admits it".
     /// The call is then recorded for each instance to select
     /// ([`Selecting`]), and what it gives in the body is returned. Where
     /// one combination has none, or nothing settles the call, it is
@@ -804,8 +808,8 @@ impl<'a> Typer<'a> {
                 .collect();
             return Settled::Rejected(report.with_note(format!(
                 "for {}, which the declaration's `requires` admits: a membership authorises an \
-                 operation only where every member has a candidate for it (GEN-3, GEN-7; \
-                 hhenson/hgl_spec#144)",
+                 operation only where each listed member has a candidate for it (GEN-3, \
+                 GEN-7)",
                 members.join(" and ")
             )));
         }
@@ -981,6 +985,8 @@ impl<'a> Typer<'a> {
     /// gives a generic value parameter is a compile-time constant, "Any
     /// other rejects". It points at the option in the generic body.
     pub(super) fn option_fails(&mut self, selecting: &Selecting) -> Option<Diagnostic> {
+        // In composition the candidates are the temporal ones too (GEN-5).
+        self.graph = selecting.graph;
         let operator = selecting.operator;
         let program = self.program;
         let Some(Detail::Callable(public)) = program.modules[operator.module]
@@ -1098,8 +1104,8 @@ pub(super) enum AtInstance<'a> {
 /// A call of an operator, in the body of a generic declaration, that a
 /// membership the declaration's `requires` states authorises: every
 /// member has a candidate for it, and each instance of the declaration
-/// selects its own with its types ([`Typer::select_per_instance`],
-/// hhenson/hgl_spec#144).
+/// selects its own with its types ([`Typer::select_per_instance`];
+/// GEN-3, GEN-7: "Each instance then selects its own candidate").
 #[derive(Debug, Clone)]
 pub(crate) struct Selecting {
     /// Where the call is written: the expression the body has for it,

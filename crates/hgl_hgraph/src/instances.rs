@@ -29,7 +29,7 @@
 //! hands one of its requirements on to what it calls (GEN-16): which
 //! candidate that is depends on the types, and where its body has a call
 //! a membership it states authorises, whose candidate each instance
-//! selects (hhenson/hgl_spec#144). So is one that reads a generic value parameter as a value
+//! selects (GEN-3, GEN-7). So is one that reads a generic value parameter as a value
 //! (GEN-13), and one that calls a
 //! function written by instance with its own generic parameters, which
 //! are known only in an instance of it.

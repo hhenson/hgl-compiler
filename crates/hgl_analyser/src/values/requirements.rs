@@ -142,8 +142,11 @@ impl<'a> Typer<'a> {
     /// joined to the rest by `&&` (GEN-15). A parameter stated twice is
     /// in each: its members are those of the first.
     ///
-    /// hhenson/hgl_spec#144: a membership "Authorises in the body an
-    /// operation that every listed type has a candidate for".
+    /// GEN-3: "A membership of a type parameter in a set of types,
+    /// `requires T in {i64, f64}`, authorizes in the body (GEN-7) an
+    /// operation that each listed type has a candidate for"; and,
+    /// proposed, one of a generic value parameter a call that gives it
+    /// as an option.
     pub(super) fn memberships(&self) -> Vec<(Location, Vec<Argument>)> {
         let Some(clause) = child(&self.declaration.syntax, SyntaxKind::RequiresClause) else {
             return Vec::new();

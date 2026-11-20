@@ -257,7 +257,7 @@ pub struct Module {
     pub(crate) instantiations: Vec<(usize, SyntaxNode)>,
     /// The calls in each declaration's body that a membership its
     /// `requires` states authorises, whose candidate each instance of
-    /// it selects for itself (hhenson/hgl_spec#144, GEN-5): one entry
+    /// it selects for itself (GEN-3, GEN-7, GEN-5): one entry
     /// for each of `declarations`, in the same order. The body has each
     /// as a call with no callee ([`crate::hir::Callee::Unread`]);
     /// [`Program::instance`] gives the instance's.

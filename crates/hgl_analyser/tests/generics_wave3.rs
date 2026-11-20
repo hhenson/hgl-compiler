@@ -133,7 +133,7 @@ fn instance_called_by(checked: &Checked, caller: &Body) -> Body {
 /// too; and a call for whose types a requirement does not hold is
 /// `requires.unmet` (GEN-3). Under a membership, `T in {i64, f64}`, `a <
 /// b` is authorised, each of the types having a candidate for it, and
-/// each instance selects its own (hhenson/hgl_spec#144; see
+/// each instance selects its own (GEN-3; see
 /// `a_membership_authorises_what_each_member_has_a_candidate_for`).
 #[test]
 fn a_call_in_a_generic_body_is_judged_by_its_stated_requirements() {
@@ -203,7 +203,11 @@ fn a_call_in_a_generic_body_is_judged_by_its_stated_requirements() {
 /// membership, `M in {.slow, .fast}`, authorises the call where each of
 /// its values selects a candidate, and each instance selects its own;
 /// one with a value no candidate admits, `.medium`, rejects at the
-/// declaration (hhenson/hgl_spec#144, beside GEN-6). Written in place,
+/// declaration (GEN-3, proposed: "a membership of a generic value
+/// parameter, `requires M in {.fast, .slow}`, authorizes in the body a
+/// call that gives M as an option (GEN-6) where each listed value has a
+/// candidate that admits it, and each instance selects its own"). Written
+/// in place,
 /// `step(1, mode: .medium)` is rejected as it was.
 #[test]
 fn an_option_a_generic_parameter_gives_is_judged_by_its_requirements() {
@@ -470,10 +474,11 @@ fn the_instances_one_call_makes_are_followed_up_to_one_bound() {
     );
 }
 
-/// hhenson/hgl_spec#144, GEN-3, GEN-7: a membership, `requires T in {i64,
-/// f64}`, "Authorises in the body an operation that every listed type
-/// has a candidate for ... each instance selects its candidate. An
-/// operation that a listed type lacks rejects at the declaration." So
+/// GEN-3: "A membership of a type parameter in a set of types, `requires
+/// T in {i64, f64}`, authorizes in the body (GEN-7) an operation that each
+/// listed type has a candidate for, `a < b` there, and each instance
+/// selects its own candidate (GEN-5). An operation that a listed type
+/// lacks rejects at the declaration." So
 /// `kind_of(value)` under `T in {i64, f64}` is accepted and each call
 /// selects its own; under `T in {i64, str}` it rejects where it is
 /// declared, naming `str`. The same where the membership is joined to
@@ -535,4 +540,128 @@ fn a_membership_authorises_what_each_member_has_a_candidate_for() {
     assert_eq!(called(&checked, &instance("c3")), ["kind_of(f64)"]);
     assert_eq!(called(&checked, &instance("c4")), ["pair_of(f64, str)"]);
     assert_eq!(called(&checked, &instance("c5")), ["kind_of(i64)"]);
+}
+
+/// The pinned fragments of GEN-3 and GEN-7, as written. GEN-7: "It is
+/// judged once, where it is declared, by what its `requires` states, and
+/// never again for the generic arguments a call of it gives. A call of
+/// an operator in it is admitted where those requirements make a
+/// candidate known to take it, and the declaration rejects where they do
+/// not (`operator.no_candidate`). They make one known where a candidate
+/// takes every generic argument they admit, where a named operator
+/// requirement states the call (GEN-16), and, under a membership, where
+/// each listed type has one (GEN-3). Each instance then selects its own
+/// candidate (GEN-5)." Of the fragment: "the instances that `less(1, 2)`
+/// and `less(1.5, 2.0)` make each select their own"; "`wrap(7)` is 1,
+/// its instance selecting the first candidate of `kind_of`, and
+/// `wrap(true)` is 2, selecting the second"; and "`==`", whose candidate
+/// takes every `T`, needs nothing stated.
+#[test]
+fn the_fragments_judged_where_they_are_declared_are_accepted() {
+    let checked = module(concat!(
+        "const fn less<T>(a: T, b: T) -> bool requires T in {i64, f64} => a < b\n",
+        "operator kind_of<V>(value: V) -> i64\n",
+        "impl const fn kind_of(value: i64) -> i64 => 1\n",
+        "impl const fn kind_of<T>(value: T) -> i64 requires !(T == i64) => 2\n",
+        "const fn wrap<U>(value: U) -> i64 requires kind_of(U) -> i64 => kind_of(value)\n",
+        "const fn same<T>(a: T, b: T) -> bool => a == b\n",
+        "const fn ints() -> bool => less(1, 2)\n",
+        "const fn floats() -> bool => less(1.5, 2.0)\n",
+        "const fn seven() -> i64 => wrap(7)\n",
+        "const fn yes() -> i64 => wrap(true)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let instance = |caller: &str| instance_called_by(&checked, body(&checked, caller));
+    assert_eq!(called(&checked, &instance("ints")), ["lt_(T, T) <i64>"]);
+    assert_eq!(called(&checked, &instance("floats")), ["lt_(T, T) <f64>"]);
+    assert_eq!(called(&checked, &instance("seven")), ["kind_of(i64)"]);
+    assert_eq!(called(&checked, &instance("yes")), ["kind_of(T) <bool>"]);
+    // A candidate that takes every `T` is selected in the body itself.
+    assert_eq!(called(&checked, body(&checked, "same")), ["eq_(T, T) <T>"]);
+}
+
+/// GEN-7's deliberate rejections, "each at its declaration, whatever its
+/// calls give (`operator.no_candidate`): `less` with no `requires`, as no
+/// candidate of `<` takes every `T`; `less` with `requires T in {i64,
+/// Point}`, for a `struct Point { x: f64 }` that `<` has no candidate for;
+/// and `wrap` with no `requires`, as the two candidates of `kind_of`
+/// between them take every `U` and neither takes every one." Each is
+/// rejected though no call of it is written, and though a call of it
+/// gives a type a candidate takes.
+#[test]
+fn the_fragments_rejected_at_their_declaration() {
+    let checked = module(concat!(
+        "struct Point { x: f64 }\n",
+        "const fn less<T>(a: T, b: T) -> bool => a < b\n",
+        "const fn points<T>(a: T, b: T) -> bool requires T in {i64, Point} => a < b\n",
+        "operator kind_of<V>(value: V) -> i64\n",
+        "impl const fn kind_of(value: i64) -> i64 => 1\n",
+        "impl const fn kind_of<T>(value: T) -> i64 requires !(T == i64) => 2\n",
+        "const fn wrap<U>(value: U) -> i64 => kind_of(value)\n",
+        "const fn ints() -> bool => less(1, 2)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:43 operator/operator.no_candidate OPS-2",
+            "m.hgl:4:72 operator/operator.no_candidate OPS-2",
+            "m.hgl:8:38 operator/operator.no_candidate GEN-5",
+        ],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.report.contains("for `T` = `Point`"),
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-3, proposed: "a membership of a generic value parameter, `requires
+/// M in {.fast, .slow}`, authorizes in the body a call that gives M as an
+/// option (GEN-6) where each listed value has a candidate that admits it,
+/// and each instance selects its own." Of the proposed fragment, with the
+/// candidates of `ratio`: "The first candidate admits each listed value,
+/// and the instance that `ratio_in(a, b, z: .nan)` makes selects it.
+/// Deliberate rejections, at the declaration (`operator.no_candidate`):
+/// the same with no `requires`, as no candidate admits every `z`; and with
+/// `requires z in {.ieee, .error}`, as the candidate for `.error` gives no
+/// `f64`."
+#[test]
+fn the_proposed_option_fragment_is_held_to_its_words() {
+    let checked = module(concat!(
+        "export enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "native impl fn ratio<const zero: Zero = .ieee>(lhs: f64, rhs: f64) -> f64\n",
+        "    requires zero in {.ieee, .nan}\n",
+        "native impl fn ratio<const zero: Zero>(lhs: f64, rhs: f64) -> result<f64, error>\n",
+        "    requires zero == .error\n",
+        "fn ratio_in<const z: Zero>(lhs: f64, rhs: f64) -> f64\n",
+        "    requires z in {.ieee, .nan} => ratio(lhs, rhs, zero: z)\n",
+        "fn bare<const z: Zero>(lhs: f64, rhs: f64) -> f64 => ratio(lhs, rhs, zero: z)\n",
+        "fn erring<const z: Zero>(lhs: f64, rhs: f64) -> f64\n",
+        "    requires z in {.ieee, .error} => ratio(lhs, rhs, zero: z)\n",
+        "fn wired(a: f64, b: f64) -> f64 => ratio_in(a, b, z: .nan)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:54 operator/operator.no_candidate GEN-5",
+            "m.hgl:12:38 operator/operator.no_candidate GEN-5",
+        ],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.report.contains("for `z` = `.error`"),
+        "{}",
+        checked.report
+    );
+    assert_eq!(called(&checked, body(&checked, "ratio_in")), ["none"]);
+    let (module, declaration, generics, requirements) = first_call(body(&checked, "wired"));
+    let (_, instance) = checked
+        .program
+        .instance(module, declaration, &generics, &requirements)
+        .expect("`ratio_in` has a body");
+    assert_eq!(called(&checked, &instance), ["ratio(f64, f64) <z>"]);
 }

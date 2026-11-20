@@ -29,7 +29,8 @@
 //! together. One call is read again: a call of an operator that a
 //! membership the declaration states authorises, `requires T in {i64,
 //! f64}`, is the call of the candidate it selects with the instance's
-//! types (hhenson/hgl_spec#144, [`crate::values::Selecting`]).
+//! types (GEN-7: "Each instance then selects its own candidate";
+//! [`crate::values::Selecting`]).
 
 use hgl_diagnostics::Location;
 

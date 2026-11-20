@@ -6413,7 +6413,9 @@ fn an_option_a_bound_generic_parameter_gives_is_written_with_its_value() {
     ]);
 }
 
-/// hhenson/hgl_spec#144, GEN-3, GEN-7: under a membership each instance
+/// GEN-3: a membership "authorizes in the body (GEN-7) an operation that
+/// each listed type has a candidate for ... and each instance selects its
+/// own candidate (GEN-5)". Under a membership each instance
 /// is written with the candidate it selects: by name, by symbol (core's
 /// `<`), and for the `zero` option of core's division that a generic
 /// value parameter gives.

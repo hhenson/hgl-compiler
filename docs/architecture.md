@@ -1238,8 +1238,8 @@ evaluation fails there. A call of an operator in a generic body whose
 candidate the body's own parameters would select is judged once, where
 the body is declared, under what its `requires` states (GEN-7): a named
 operator requirement makes it the required operation; a membership
-(`T in {i64, f64}`) authorises it where every member has a candidate
-(hhenson/hgl_spec#144), and each instance then selects its own
+(`T in {i64, f64}`) authorises it where "each listed type has one"
+(GEN-3), and each instance then selects its own
 (`values::Selecting`, which `Program::instance` reads for the target);
 otherwise it is rejected there. Only
 the calls that reach one of those are followed, each instance once
