@@ -5,7 +5,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | The body, its statements and `yield` among them | a static member `body_` of the node's struct, an `::hglrt::generator` of `::hglrt::Yielded<T>`, given the source's `const` parameters by value: no hgraph view is held across a `yield` |
+//! | The body, its statements and `yield` among them | a static member `body_` of the node's struct, an `::hglrt::generator` of `::hglrt::Yielded<T>`, or of `Yielded<delta<T>>` where every `yield` gives a delta that is a type of its own (TIME-7), given the source's `const` parameters by value: no hgraph view is held across a `yield` |
 //! | `yield time: value` (SOURCE-2) | `co_yield yielded_type_{time, value};`, the time evaluated first, then the payload |
 //! | A bare `return`, the body's end (SOURCE-4) | `co_return;`, the coroutine's end |
 //! | Its node | `start` makes the body, held in the node's state with where it is; `eval` steps it with `::hglrt::resume`, which publishes what is due and asks the node's scheduler for the next target (SOURCE-2, SOURCE-3); `stop` destroys it, and the locals in its frame |
@@ -98,7 +98,31 @@ impl Emitter<'_> {
             self.unsupported(at, "a source with no result");
             return;
         };
-        let Some(payload) = self.written_type(result, at) else {
+        // TIME-7: a `yield` takes "a complete value of the result's type
+        // T, published whole, or a `delta<T>`", as a `return` does: what
+        // the body yields is its payload, which the result's form
+        // publishes as it is. A delta that is a type of its own, a set's or
+        // a list's, is no T.
+        let mut deltas = Vec::new();
+        let mut wholes = false;
+        hgl_analyser::hir::walk_statement_nodes(&body.statements, &mut |node| {
+            if let hgl_analyser::hir::Node::Statement(Stmt::Yield { value, .. }) = node {
+                match &value.ty {
+                    delta @ hgl_analyser::Type::Delta(_) => deltas.push(delta.clone()),
+                    _ => wholes = true,
+                }
+            }
+        });
+        deltas.dedup();
+        let yielded = match (deltas.as_slice(), wholes) {
+            ([], _) => result,
+            ([delta], false) => delta,
+            _ => {
+                self.unsupported(at, "a source that yields both a value whole and a delta");
+                return;
+            }
+        };
+        let Some(payload) = self.written_type(yielded, at) else {
             return;
         };
         let Some(schema) = self.temporal_schema(result, at) else {
