@@ -136,7 +136,18 @@ impl<'a> Typer<'a> {
 
     // ---- Statements ----
 
+    /// A statement of a block. One read where no expression is, is read
+    /// once, and has its own allowance of rereads
+    /// (`Typer::begin_construct`).
     pub(super) fn statement(&mut self, node: &SyntaxNode) -> Stmt {
+        let outer = self.begin_construct(node);
+        let statement = self.statement_read(node);
+        self.end_construct(outer);
+        statement
+    }
+
+    /// [`Typer::statement`], within its construct.
+    fn statement_read(&mut self, node: &SyntaxNode) -> Stmt {
         match node.kind() {
             SyntaxKind::LocalDecl => self.local(node),
             // FN-9: "A graph injects `global_state` and no other, and

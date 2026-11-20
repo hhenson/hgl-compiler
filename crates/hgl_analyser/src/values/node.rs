@@ -24,6 +24,9 @@ impl<'a> Typer<'a> {
         let block = child(&self.declaration.syntax, SyntaxKind::Block)?;
         let mut statements = Vec::new();
         for statement in block.children() {
+            // Each declaration and hook has its own allowance of rereads
+            // (`Typer::begin_construct`).
+            self.begin_construct(&statement);
             match statement.kind() {
                 SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
                     // TIME-5: "State initializers cannot read current
@@ -96,6 +99,7 @@ impl<'a> Typer<'a> {
         let block = child(&self.declaration.syntax, SyntaxKind::Block)?;
         let mut statements = Vec::new();
         for statement in block.children() {
+            self.begin_construct(&statement);
             match statement.kind() {
                 SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
                     self.initializing = statement.kind() == SyntaxKind::StateDecl;
@@ -325,7 +329,7 @@ impl<'a> Typer<'a> {
     /// under a configured `&&{...}` nothing is a top-level conjunct. So
     /// the condition is read once with nothing of it admitted, its
     /// record taken, and that reading taken back: what it reported,
-    /// declared and assigned, and what it spent of the function's
+    /// declared and assigned, and what it spent of the hook's
     /// rereads ([`super::REREADS`]), so the reading that stands is the
     /// one there would be without it. A `when` stands only at the top of
     /// a node's body, and is read once there, so this is one more
