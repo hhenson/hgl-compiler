@@ -100,11 +100,6 @@ void schedule_Scheduler_duration_str__bool(const Scheduler& capability, duration
 
 void schedule_Scheduler_datetime_str__bool(const Scheduler& capability, datetime at,
                                            const std::optional<str>& tag, bool on_wall_clock) {
-    // hgraph keeps a wall-clock wake already past for the next cycle: CAP-4
-    // drops one before the evaluation time on either clock.
-    if (at < capability.view().now()) {
-        return;
-    }
     capability.view().schedule(at, engine_tag(tag), on_wall_clock);
 }
 
