@@ -79,13 +79,19 @@ C++ does not check what Rust would. Three rules stand in for it.
 
 ## Building and turnaround
 
-Measured on the trial, at `-O0`:
+Measured at `-O0` with GCC 15 on the SDK built without Arrow and
+`libhglrt` on hgraph's front end for generated code (in brackets: on the
+SDK with Arrow and `graph_wiring.h`, as before):
 
 | Step | Time |
 | --- | --- |
-| One unit against a precompiled header of hgraph's includes | 1.5 to 2.0 s, and about 0.1 s for each node |
-| Link with `lld` (GNU `ld`: 0.12 s) | 0.015 s |
-| Edit to result | 1.8 s |
+| The precompiled header of `<hglrt/hglrt.h>` | 5.0 s, 254 MB (6.0 s, 300 MB) |
+| A unit of nodes, graphs and an eval, against it | 1.55 s (1.75 s) |
+| The same unit with no precompiled header | 2.8 s (3.2 s) |
+| A module's unit of value functions and a test, against it; with none | 0.57 s (0.81 s); 1.48 s (2.27 s) |
+| A test executable's entry unit: `hglrt.h` against it; `host.h` alone, with none | 0.57 s (0.81 s); 0.06 s |
+| Edit to result, `hgl test --target cpp` of a small module | 0.65 s (0.95 s) |
+| Link with `lld` (GNU `ld`: 0.12 s), on the trial | 0.015 s |
 | Whole suite (about 135 modules), 12 jobs, estimated from the trial | 40 to 55 s (the Python target: about a minute) |
 | Whole suite on a four-core CI runner, estimated | about 100 s |
 
@@ -93,8 +99,8 @@ The driver keeps these by: one unit for each module; `libhglrt` and core's
 instances built once for an SDK; a precompiled header of the fixed include
 set; one executable for each test module with its cases chosen when it
 runs; `ninja` for what changed; `lld`. A rejection case never builds.
-hgraph's lighter front end for generated code (`types/generated.h`) is
-the cheapest further saving; the times above are measured without it.
+A unit with no precompiled header still takes about twice as long as one
+against it, so the header stays.
 
 ## What hgraph is asked for
 
@@ -105,10 +111,10 @@ is in it, and each is taken up where the order of work reaches it:
 | --- | --- | --- |
 | [1833](https://github.com/hhenson/hgraph/issues/1833) | `switch_` and `map_` wiring of compiled children with no operator registration (`types/subgraph_wiring.h`) | The control-flow work wires with them; `libhglrt` carries no glue |
 | [1822](https://github.com/hhenson/hgraph/issues/1822), [1827](https://github.com/hhenson/hgraph/issues/1827) | The growing list's first empty publication and its validity, a shrink under a map or an index, invalidation emptying a collection, and tuple deltas | The collections work builds on the engine as it is; an adaptation is written only where a core case shows a difference, and names its issue |
-| [1848](https://github.com/hhenson/hgraph/issues/1848) | A generator that yields a time already past skips it and goes on | The source driver's own skip goes when its tests pass without it |
+| [1848](https://github.com/hhenson/hgraph/issues/1848) | A generator that yields a time already past skips it and goes on | That is hgraph's Python generator; a C++ node's `NodeScheduler` drops a wake at a past time, so the source driver of `libhglrt` keeps its own skip (SOURCE-3) |
 | [1834](https://github.com/hhenson/hgraph/issues/1834) | A C++ aggregate as a nominal bundle's whole value | A struct is written and read whole |
-| [1838](https://github.com/hhenson/hgraph/issues/1838) | A lighter front end for generated code (`types/generated.h`) | Generated units include it; the precompiled header stays only where it still pays |
-| [1839](https://github.com/hhenson/hgraph/issues/1839) | A runtime and wiring library without Arrow (`HGRAPH_WITH_ARROW=OFF`) | The SDK is to be built so, and Arrow leaves the dependency prefix |
+| [1838](https://github.com/hhenson/hgraph/issues/1838) | A lighter front end for generated code (`types/generated.h`) | `libhglrt`'s headers, and so generated units, include it; the precompiled header still pays |
+| [1839](https://github.com/hhenson/hgraph/issues/1839) | A runtime and wiring library without Arrow (`HGRAPH_WITH_ARROW=OFF`) | The SDK is built so: 14 MB where it was 54, its prefix fmt, spdlog and simdjson; a test of `libhglrt` fails where Arrow or hgraph's standard library is included or linked |
 | [1837](https://github.com/hhenson/hgraph/issues/1837), [1835](https://github.com/hhenson/hgraph/issues/1835), [1836](https://github.com/hhenson/hgraph/issues/1836) | `add_node` keeps a builder's own scalars; `try_except_<G>` takes options for canonical errors; a `tenor` scalar | In use |
 
 Nothing is asked on references: a `REF` output holds the reference it
