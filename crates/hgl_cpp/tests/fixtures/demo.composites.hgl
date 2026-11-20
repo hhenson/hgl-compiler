@@ -67,6 +67,13 @@ struct Tagged<T> : Shape {
     tag: T
 }
 
+# An abstract struct with an optional field.
+abstract struct Noted {
+    note: str? = null
+}
+
+struct Memo : Noted {}
+
 # A parent's arguments, a list's size among them, given through two levels.
 abstract struct Holder<T> {
     value: T
@@ -421,6 +428,12 @@ test enums_zones_and_nullables {
     assert opening() == @09:30[Europe/London]
     assert opening() != @09:30[UTC]
     assert is_one(1)
+    # The left operand runs first, and replaces what the right one reads.
+    var noted: Noted = Memo(note: "a")
+    assert {
+        noted = Memo(note: "b")
+        "b"
+    } == noted.note
     assert !is_one(2)
     assert !is_one(null)
 }

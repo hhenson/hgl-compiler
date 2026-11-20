@@ -80,133 +80,133 @@
 namespace hgl::demo::composites::m_
 {
 
-// held(holder: Holder<list<i64, 2>>) -> list<i64, 2> (`const fn`), module demo.composites, line 79
+// held(holder: Holder<list<i64, 2>>) -> list<i64, 2> (`const fn`), module demo.composites, line 86
 std::array<::hgraph::Int, 2> held(const ::hgl::demo::composites::m_::Holder<std::array<::hgraph::Int, 2>>& holder);
 
 namespace c_
 {
-// add_(lhs: Point, rhs: Point) -> Point (candidate `impl const fn`), module demo.composites, line 82
+// add_(lhs: Point, rhs: Point) -> Point (candidate `impl const fn`), module demo.composites, line 89
 ::hgl::demo::composites::m_::Point add_1_(::hgl::demo::composites::m_::Point lhs, ::hgl::demo::composites::m_::Point rhs);
 }  // namespace c_
 
-// origin() -> Point (`const fn`), module demo.composites, line 84
+// origin() -> Point (`const fn`), module demo.composites, line 91
 ::hgl::demo::composites::m_::Point origin();
 
-// moved(point: Point, by: f64) -> Point (`const fn`), module demo.composites, line 87
+// moved(point: Point, by: f64) -> Point (`const fn`), module demo.composites, line 94
 ::hgl::demo::composites::m_::Point moved(::hgl::demo::composites::m_::Point point, ::hgraph::Float by);
 
-// stretched(line: Line, by: f64) -> Line (`const fn`), module demo.composites, line 94
+// stretched(line: Line, by: f64) -> Line (`const fn`), module demo.composites, line 101
 ::hgl::demo::composites::m_::Line stretched(const ::hgl::demo::composites::m_::Line& line, ::hgraph::Float by);
 
-// points() -> list<Point> (`const fn`), module demo.composites, line 101
+// points() -> list<Point> (`const fn`), module demo.composites, line 108
 ::hglrt::list<::hgl::demo::composites::m_::Point> points();
 
-// first_x() -> f64 (`const fn`), module demo.composites, line 104
+// first_x() -> f64 (`const fn`), module demo.composites, line 111
 ::hgraph::Float first_x();
 
-// named(shape: Shape) -> str (`const fn`), module demo.composites, line 106
+// named(shape: Shape) -> str (`const fn`), module demo.composites, line 113
 ::hgraph::Str named(const ::hgl::demo::composites::m_::Shape& shape);
 
-// same(lhs: Shape, rhs: Shape) -> bool (`const fn`), module demo.composites, line 108
+// same(lhs: Shape, rhs: Shape) -> bool (`const fn`), module demo.composites, line 115
 ::hgraph::Bool same(const ::hgl::demo::composites::m_::Shape& lhs, const ::hgl::demo::composites::m_::Shape& rhs);
 
-// as_base(shape: Shape) -> Base (`const fn`), module demo.composites, line 110
+// as_base(shape: Shape) -> Base (`const fn`), module demo.composites, line 117
 ::hgl::demo::composites::m_::Base as_base(const ::hgl::demo::composites::m_::Shape& shape);
 
-// base_id(base: Base) -> i64 (`const fn`), module demo.composites, line 112
+// base_id(base: Base) -> i64 (`const fn`), module demo.composites, line 119
 ::hgraph::Int base_id(const ::hgl::demo::composites::m_::Base& base);
 
-// written_order() -> Point (`const fn`), module demo.composites, line 116
+// written_order() -> Point (`const fn`), module demo.composites, line 123
 ::hgl::demo::composites::m_::Point written_order();
 
-// read_before() -> Point (`const fn`), module demo.composites, line 124
+// read_before() -> Point (`const fn`), module demo.composites, line 131
 ::hgl::demo::composites::m_::Point read_before();
 
-// counted(words: list<str>) -> dict<str, i64> (`const fn`), module demo.composites, line 134
+// counted(words: list<str>) -> dict<str, i64> (`const fn`), module demo.composites, line 141
 ::hglrt::dict<::hgraph::Str, ::hgraph::Int> counted(const ::hglrt::list<::hgraph::Str>& words);
 
-// bumped(book: dict<str, i64>, key: str) -> dict<str, i64> (`const fn`), module demo.composites, line 146
+// bumped(book: dict<str, i64>, key: str) -> dict<str, i64> (`const fn`), module demo.composites, line 153
 ::hglrt::dict<::hgraph::Str, ::hgraph::Int> bumped(const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book, const ::hgraph::Str& key);
 
-// total(book: dict<str, i64>) -> i64 (`const fn`), module demo.composites, line 153
+// total(book: dict<str, i64>) -> i64 (`const fn`), module demo.composites, line 160
 ::hgraph::Int total(const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book);
 
-// size(members: set<f64>) -> i64 (`const fn`), module demo.composites, line 161
+// size(members: set<f64>) -> i64 (`const fn`), module demo.composites, line 168
 ::hgraph::Int size(const ::hglrt::set<::hgraph::Float>& members);
 
-// holds(members: set<str>, wanted: str) -> bool (`const fn`), module demo.composites, line 169
+// holds(members: set<str>, wanted: str) -> bool (`const fn`), module demo.composites, line 176
 ::hgraph::Bool holds(const ::hglrt::set<::hgraph::Str>& members, const ::hgraph::Str& wanted);
 
-// tags() -> set<str> (`const fn`), module demo.composites, line 179
+// tags() -> set<str> (`const fn`), module demo.composites, line 186
 ::hglrt::set<::hgraph::Str> tags();
 
-// tag_count() -> i64 (`const fn`), module demo.composites, line 181
+// tag_count() -> i64 (`const fn`), module demo.composites, line 188
 ::hgraph::Int tag_count();
 
-// doubled_all(book: dict<str, i64>) -> dict<str, i64> (`const fn`), module demo.composites, line 191
+// doubled_all(book: dict<str, i64>) -> dict<str, i64> (`const fn`), module demo.composites, line 198
 ::hglrt::dict<::hgraph::Str, ::hgraph::Int> doubled_all(const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book);
 
-// price_of(book: Book, key: str) -> i64 (`const fn`), module demo.composites, line 201
+// price_of(book: Book, key: str) -> i64 (`const fn`), module demo.composites, line 208
 ::hgraph::Int price_of(const ::hgl::demo::composites::m_::Book& book, const ::hgraph::Str& key);
 
-// first_price(books: list<Book>) -> i64 (`const fn`), module demo.composites, line 203
+// first_price(books: list<Book>) -> i64 (`const fn`), module demo.composites, line 210
 ::hgraph::Int first_price(const ::hglrt::list<::hgl::demo::composites::m_::Book>& books);
 
-// moved_in(book: dict<str, Point>) -> dict<str, Point> (`const fn`), module demo.composites, line 206
+// moved_in(book: dict<str, Point>) -> dict<str, Point> (`const fn`), module demo.composites, line 213
 ::hglrt::dict<::hgraph::Str, ::hgl::demo::composites::m_::Point> moved_in(const ::hglrt::dict<::hgraph::Str, ::hgl::demo::composites::m_::Point>& book);
 
-// arrived(change: delta<set<str>>) -> set<str> (`const fn`), module demo.composites, line 213
+// arrived(change: delta<set<str>>) -> set<str> (`const fn`), module demo.composites, line 220
 ::hglrt::set<::hgraph::Str> arrived(const ::hglrt::set_delta<::hgraph::Str>& change);
 
-// joined(name: str) -> delta<set<str>> (`const fn`), module demo.composites, line 215
+// joined(name: str) -> delta<set<str>> (`const fn`), module demo.composites, line 222
 ::hglrt::set_delta<::hgraph::Str> joined(const ::hgraph::Str& name);
 
-// cleared() -> delta<f64?> (`const fn`), module demo.composites, line 217
+// cleared() -> delta<f64?> (`const fn`), module demo.composites, line 224
 std::optional<::hgraph::Float> cleared();
 
-// seven() -> delta<i64?> (`const fn`), module demo.composites, line 219
+// seven() -> delta<i64?> (`const fn`), module demo.composites, line 226
 std::optional<::hgraph::Int> seven();
 
-// booked() -> delta<dict<str, i64>> (`const fn`), module demo.composites, line 221
+// booked() -> delta<dict<str, i64>> (`const fn`), module demo.composites, line 228
 ::hglrt::dict_delta<::hgraph::Str, ::hgraph::Int> booked();
 
-// listed() -> delta<list<i64>> (`const fn`), module demo.composites, line 223
+// listed() -> delta<list<i64>> (`const fn`), module demo.composites, line 230
 ::hglrt::list_delta<::hglrt::list<::hgraph::Int>> listed();
 
-// nudged() -> delta<Point> (`const fn`), module demo.composites, line 225
+// nudged() -> delta<Point> (`const fn`), module demo.composites, line 232
 ::hgl::demo::composites::m_::d_::Point nudged();
 
-// listed_in_order() -> delta<list<i64>> (`const fn`), module demo.composites, line 229
+// listed_in_order() -> delta<list<i64>> (`const fn`), module demo.composites, line 236
 ::hglrt::list_delta<::hglrt::list<::hgraph::Int>> listed_in_order();
 
-// pair_change() -> tuple<f64?, i64?> (`const fn`), module demo.composites, line 237
+// pair_change() -> tuple<f64?, i64?> (`const fn`), module demo.composites, line 244
 std::tuple<std::optional<::hgraph::Float>, std::optional<::hgraph::Int>> pair_change();
 
-// side_of(number: i64) -> Side (`const fn`), module demo.composites, line 240
+// side_of(number: i64) -> Side (`const fn`), module demo.composites, line 247
 ::hgl::demo::composites::m_::Side side_of(::hgraph::Int number);
 
-// side_named(name: str) -> Side (`const fn`), module demo.composites, line 242
+// side_named(name: str) -> Side (`const fn`), module demo.composites, line 249
 ::hgl::demo::composites::m_::Side side_named(const ::hgraph::Str& name);
 
-// london() -> timezone (`const fn`), module demo.composites, line 245
+// london() -> timezone (`const fn`), module demo.composites, line 252
 ::hgraph::ZoneId london();
 
-// opening() -> zoned_time (`const fn`), module demo.composites, line 247
+// opening() -> zoned_time (`const fn`), module demo.composites, line 254
 ::hgraph::ZonedTime opening();
 
-// is_one(value: i64?) -> bool (`const fn`), module demo.composites, line 250
+// is_one(value: i64?) -> bool (`const fn`), module demo.composites, line 257
 ::hgraph::Bool is_one(std::optional<::hgraph::Int> value);
 
-// bump(count: i64, by: i64) (`const fn`), module demo.composites, line 254
+// bump(count: i64, by: i64) (`const fn`), module demo.composites, line 261
 void bump(::hgraph::Int& count, ::hgraph::Int by);
 
-// bump_after_growth() -> list<i64> (`const fn`), module demo.composites, line 258
+// bump_after_growth() -> list<i64> (`const fn`), module demo.composites, line 265
 ::hglrt::list<::hgraph::Int> bump_after_growth();
 
-// as_shapes(rounds: list<Round>) -> list<Shape> (`const fn`), module demo.composites, line 268
+// as_shapes(rounds: list<Round>) -> list<Shape> (`const fn`), module demo.composites, line 275
 ::hglrt::list<::hgl::demo::composites::m_::Shape> as_shapes(const ::hglrt::list<::hgl::demo::composites::m_::Round>& rounds);
 
-// failing() -> i64 (`const fn`), module demo.composites, line 362
+// failing() -> i64 (`const fn`), module demo.composites, line 369
 ::hgraph::Int failing();
 
 }  // namespace hgl::demo::composites::m_

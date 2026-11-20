@@ -1487,8 +1487,9 @@ impl Emitter<'_> {
     /// expected"; OPS-2: "`==` and `!=` compare two values of one type"):
     /// two nullables are equal where both are null or both hold equal
     /// values. C++'s comparison of optionals is that. The two are
-    /// evaluated in the order written (EXPR-2). `None` for operands of any
-    /// other types.
+    /// evaluated in the order written (EXPR-2), each held as a value of its
+    /// own where either runs statements or both may fail. `None` for
+    /// operands of any other types.
     pub(super) fn nullable_equality(
         &mut self,
         scope: &mut Scope,
@@ -1501,7 +1502,10 @@ impl Emitter<'_> {
             return None;
         }
         let symbol = if equal { "==" } else { "!=" };
-        let ordered = changes(right) || (may_fail(left) && may_fail(right));
+        // Either side running statements may change what the other reads,
+        // a field of an abstract struct read by reference among it: both
+        // are then held as values, in the order written.
+        let ordered = changes(left) || changes(right) || (may_fail(left) && may_fail(right));
         let left_text = self.expression(scope, left);
         let right_text = self.expression(scope, right);
         if !ordered {
