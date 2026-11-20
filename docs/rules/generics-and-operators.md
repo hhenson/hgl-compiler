@@ -67,6 +67,7 @@ analyser: partial
 - In a value function, a call of an operator, by name or by the symbol that stands for it, selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened, which the candidates' types settle before their conditions, and candidates that tie in which literals they widen give way to the one that widens every one; no candidate and a tie rejected
 - A generic candidate is admitted with its parameters resolved from the call, and the most specific admitted one is selected (GEN-12)
 - In a graph a call selects among temporal and value candidates, and a temporal candidate outranks a value one of the same parameter types
+- In value code, a test's outside an `eval` or a `run` and an application's statements, a call selects among both too, a value candidate outranking a temporal one of the same parameter types; a temporal candidate it selects is `call.role`, the code proposed (TST-3, UNIT-14)
 - Left: a candidate with a pack; an operator with a pack, and so the Boolean connectives and `!`; an argument that is itself a call only its requested output selects; composition, where a temporal candidate outranks a value one of the same parameter types, and runtime bodies
 
 ## GEN-6

@@ -5,14 +5,14 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | `fn count(value: i64) -> i64 { ... }` | a struct `n_::count` of the module's namespace, with static `eval`, and `start` and `stop` where it needs them; and a wiring function `w_::count(wiring_, value)`, which its module's header declares, that adds the node to a graph |
+//! | `fn count(value: i64) -> i64 { ... }` | a struct `n_::count::impl_` of the module's namespace, with static `eval`, and `start` and `stop` where it needs them; and a wiring function `w_::count(wiring_, value)`, which its module's header declares, that adds the node to a graph |
 //! | A temporal parameter; a `const` one | `::hgraph::In<"value", TS<...>>`, its activity and its validity the node's (TIME-4); `::hgraph::Scalar<"key", T>` |
 //! | `state` and `cache` (TIME-6) | members of the node's one `state_type_`, held by hgraph as the node's `State`, each given its first value as the node starts, then bound by reference in each hook |
 //! | `inject clock`, `logger`, `global_state` (TIME-8) | the hgraph view of the hook, and the library's capability made from it at the top of the hook (`endpoints`) |
 //! | `inject scheduler`, `inject alarm` (TIME-8, TIME-9) | the same, made with the hook it is made in and in every `eval`, and what woke the node read as `eval` is entered, which guards the handlers (`scheduling`) |
 //! | `when` handlers (TIME-3) | tested in source order in `eval`, each guarded by what it asks beyond the node's own validity |
 //! | `return value`, `out = value` (TIME-7, FN-7) | the value published to the node's output, `out_`, as its temporal form publishes; a `return` then leaves the evaluation |
-//! | A generic node (GEN-2) | a struct and a wiring function for each instance `hgl_lower` collects, `n_::i_::record::of_i64` |
+//! | A generic node (GEN-2) | a struct and a wiring function for each instance `hgl_lower` collects, `n_::i_::record::of_i64::impl_` |
 //!
 //! What a handler subscribes to and requires is `hgl_lower::nodes`'s, as
 //! the analyser read the header. An input every executed handler
@@ -34,6 +34,12 @@ use super::names::{self, identifier};
 use super::statements::{Scope, statement_at};
 use super::values::INDENT;
 use crate::runtime;
+
+/// The name of every temporal function's struct, in a namespace of the
+/// function's own name (`Placed`): no member it has, `name`, `eval` or
+/// `compose`, has the name of the struct, which C++ refuses, whatever the
+/// function is called.
+pub(super) const IMPLEMENTATION: &str = "impl_";
 
 /// The name of the view of a node's result, `out` (TIME-7).
 pub(super) const OUT: &str = "out_";
@@ -410,7 +416,7 @@ impl Emitter<'_> {
         let held = !states.is_empty();
         let placed = Placed::of(program, self.module, index, instance);
         let qualified = placed.qualified(program, self.module);
-        let mut text = format!("// {shown}\nstruct {}\n{{\n", placed.name);
+        let mut text = format!("// {shown}\nstruct {IMPLEMENTATION}\n{{\n");
         text.push_str(&format!(
             "{INDENT}static constexpr auto name = {};\n",
             names::string(&placed.display(program, self.module))
@@ -438,30 +444,31 @@ impl Emitter<'_> {
                 written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type_{{}});\n"));
             }
             written.push_str(&prologue(body, &states));
-            let Some(made) =
-                self.capabilities(body, &injected, &[], statements, Hook::Start, &mut hook)
+            // TIME-6: "Cache is reconstructible node-local value data,
+            // initialized on every start"; a `state` is given its first
+            // value as the node starts too, since no state is restored.
+            // An initializer may read a capability, which is made first.
+            let initialized: Vec<Stmt> = states
+                .iter()
+                .filter_map(|(local, value)| {
+                    value.map(|value| Stmt::Assign {
+                        local: *local,
+                        operator: None,
+                        value: value.clone(),
+                        at: body.locals[*local].at,
+                    })
+                })
+                .collect();
+            let used: Vec<Stmt> = initialized.iter().chain(statements).cloned().collect();
+            let Some(made) = self.capabilities(body, &injected, &[], &used, Hook::Start, &mut hook)
             else {
                 return;
             };
+            written.push_str(&made);
             context.kind = Kind::Hook(Hook::Start);
             let mut scope = Scope::cold(program, body);
             self.in_context(&mut context, |emitter| {
-                // TIME-6: "Cache is reconstructible node-local value data,
-                // initialized on every start"; a `state` is given its
-                // first value as the node starts too, since no state is
-                // restored.
-                for (local, value) in &states {
-                    if let Some(value) = value {
-                        let assigned = Stmt::Assign {
-                            local: *local,
-                            operator: None,
-                            value: (*value).clone(),
-                            at: body.locals[*local].at,
-                        };
-                        emitter.statement(&mut scope, &assigned, 2, &mut written);
-                    }
-                }
-                written.push_str(&made);
+                emitter.statements(&mut scope, &initialized, 2, &mut written);
                 emitter.statements(&mut scope, statements, 2, &mut written);
             });
             text.push_str(&format!(
@@ -1040,11 +1047,12 @@ pub(super) fn registration(
 }
 
 /// Where a temporal function, or an instance of one, is written: its
-/// struct is `name` in the namespace `structs` under the module's, and
-/// its wiring function `name` in `wiring`.
+/// struct is [`IMPLEMENTATION`] in the namespace `structs` under the
+/// module's, and its wiring function `name` in `wiring`.
 pub(super) struct Placed {
-    /// The namespace of its struct, under the module's: `n_`, or
-    /// `n_::i_::record` for an instance.
+    /// The namespace of its struct, under the module's, named as the
+    /// function: `n_::count`, or `n_::i_::record::of_i64` for an
+    /// instance.
     pub(super) structs: String,
     /// The namespace of its wiring function, under the module's: `w_`,
     /// or `w_::i_::record`.
@@ -1075,7 +1083,7 @@ impl Placed {
             None => root.to_string(),
         };
         Placed {
-            structs: under("n_"),
+            structs: format!("{}::{name}", under("n_")),
             wiring: under("w_"),
             name,
             hgl: program.modules[module].declarations[declaration]
@@ -1089,10 +1097,9 @@ impl Placed {
     /// Its struct, qualified from the global namespace.
     pub(super) fn qualified(&self, program: &hgl_analyser::Program, module: usize) -> String {
         format!(
-            "{}::{}::{}",
+            "{}::{}::{IMPLEMENTATION}",
             names::module_namespace(&program.modules[module].path),
-            self.structs,
-            self.name
+            self.structs
         )
     }
 
@@ -1135,7 +1142,11 @@ impl Family for Nodes {
         depth: usize,
         text: &mut String,
     ) -> bool {
-        let publishing = matches!(emitter.kind(), Some(Kind::Hook(Hook::When) | Kind::Lifted));
+        // A `return` written inside a value, the block a lambda gives
+        // (`expressions`), is the value's own, and publishes nothing:
+        // `conditional` marks it.
+        let publishing = matches!(emitter.kind(), Some(Kind::Hook(Hook::When) | Kind::Lifted))
+            && scope.conditional == 0;
         let indent = INDENT.repeat(depth);
         match statement {
             // FN-7: "a runtime return publishes and exits the function's

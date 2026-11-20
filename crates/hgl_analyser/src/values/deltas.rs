@@ -151,8 +151,15 @@ impl<'a> Typer<'a> {
     /// properties, by name ... A property left out is empty, or null
     /// for a struct's field, a nullable's `value`, and a list's
     /// `size_modified`. A tuple's delta is an ordinary tuple, and is
-    /// written as one is." The constructor of a type that has no
-    /// delta of its own is not read.
+    /// written as one is."
+    ///
+    /// A delta that is another type the language has, a scalar's, a
+    /// tuple's or a window's, has no constructor: the owner on
+    /// hhenson/hgl_spec#163, "`delta<T>(...)` for such a T rejects with
+    /// `delta.argument_name`, the empty form included". Each property
+    /// it names is reported, or the constructor where it names none. The
+    /// constructor of a delta not known yet, a generic parameter's, is
+    /// not read.
     pub(super) fn delta_constructor(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         let Some(list) = child(node, SyntaxKind::ArgList) else {
             return (ExprKind::Unread, Type::Unknown);
@@ -163,6 +170,14 @@ impl<'a> Typer<'a> {
             Some(Type::Delta(of)) => self.delta_properties(of),
             _ => None,
         };
+        if let Some(ty) = written
+            && !matches!(ty, Type::Delta(_))
+            && !open(ty)
+        {
+            let ty = ty.clone();
+            self.no_delta_constructor(node, &list, &ty);
+            return self.unread_call(&list);
+        }
         let (Some(ty), Some(properties)) = (written, properties) else {
             return self.unread_call(&list);
         };
@@ -222,6 +237,53 @@ impl<'a> Typer<'a> {
         self.delta_overlap(&ty, &written);
         self.delta_bounds(&ty, &written);
         (ExprKind::Delta { arguments }, ty)
+    }
+
+    /// Reports the constructor at `node`, whose arguments are `list`, of
+    /// a delta that is `ty`, another type the language has: at each
+    /// property it names, or at the constructor where it names none
+    /// (TYPE-16, `delta.argument_name`).
+    fn no_delta_constructor(&mut self, node: &SyntaxNode, list: &SyntaxNode, ty: &Type) {
+        let names: Vec<SyntaxToken> = self
+            .call_arguments(list)
+            .into_iter()
+            .filter_map(|(name, _)| name)
+            .collect();
+        let places = if names.is_empty() {
+            vec![(Location::new(self.file, node.span()), None)]
+        } else {
+            names
+                .iter()
+                .map(|name| {
+                    (
+                        Location::new(self.file, name.span()),
+                        Some(name.text().to_string()),
+                    )
+                })
+                .collect()
+        };
+        for (at, property) in places {
+            let message = match property {
+                Some(property) => format!(
+                    "this delta is `{ty}`, another type the language has, which has no \
+                     constructor and no property `{property}`"
+                ),
+                None => format!(
+                    "this delta is `{ty}`, another type the language has, which has no \
+                     constructor"
+                ),
+            };
+            self.diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::DELTA_ARGUMENT_NAME,
+                    at,
+                    message,
+                    "TYPE-16",
+                )
+                .with_note(format!("a `{ty}` is written as its type writes it")),
+            );
+        }
     }
 
     /// The entries of the properties `written` gives at `position` that

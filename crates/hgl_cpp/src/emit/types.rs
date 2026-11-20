@@ -185,7 +185,13 @@ impl Emitter<'_> {
     /// Notes enum `declaration` of `module`, where it is another module's
     /// and declared by no library.
     pub(super) fn note_enum(&mut self, module: usize, declaration: usize) {
-        let name = &self.program.modules[module].declarations[declaration].name;
+        let declared = &self.program.modules[module].declarations[declaration];
+        // A capability, core's native type, is the library's, and no enum
+        // to declare (`endpoints::capability_type`).
+        if declared.kind != DeclarationKind::Enum {
+            return;
+        }
+        let name = &declared.name;
         let library = Some(module) == self.program.core() && runtime::declares_enum(name);
         if module != self.module && !library {
             self.piece.types.insert((module, declaration));

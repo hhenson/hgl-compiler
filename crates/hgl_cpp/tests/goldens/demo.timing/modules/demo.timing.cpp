@@ -67,10 +67,10 @@
 namespace hgl::demo::timing::m_
 {
 
-namespace n_
+namespace n_::ticker
 {
 // ticker(const every: duration, const times: i64) -> i64 (node), module demo.timing, line 10
-struct ticker
+struct impl_
 {
     static constexpr auto name = "demo.timing::ticker";
 
@@ -85,8 +85,8 @@ struct ticker
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
-        count = 0;
         [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_03_, ::hglrt::Hook::start};
+        count = 0;
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, every.value(), ::hgraph::Str{"tick"}, false);
     }
 
@@ -111,17 +111,17 @@ struct ticker
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::ticker
 }  // namespace hgl::demo::timing::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::ticker::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::ticker::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::ticker::state_type_>("hgl:demo.timing::ticker.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::ticker::impl_::state_type_>("hgl:demo.timing::ticker.state");
     }
 };
 
@@ -132,14 +132,14 @@ namespace w_
 // ticker(const every: duration, const times: i64) -> i64 (node), module demo.timing, line 10
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> ticker(::hgraph::Wiring& wiring_, ::hgraph::TimeDelta every, ::hgraph::Int times)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::ticker>(wiring_, every, times);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::ticker::impl_>(wiring_, every, times);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::cause_of_wake
 {
 // cause_of_wake(value: i64) -> str (node), module demo.timing, line 23
-struct cause_of_wake
+struct impl_
 {
     static constexpr auto name = "demo.timing::cause_of_wake";
 
@@ -175,20 +175,20 @@ struct cause_of_wake
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::cause_of_wake
 namespace w_
 {
 // cause_of_wake(value: i64) -> str (node), module demo.timing, line 23
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> cause_of_wake(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::cause_of_wake>(wiring_, value);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::cause_of_wake::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::empty_selected
 {
 // empty_selected(value: i64) -> bool (node), module demo.timing, line 37
-struct empty_selected
+struct impl_
 {
     static constexpr auto name = "demo.timing::empty_selected";
 
@@ -212,20 +212,20 @@ struct empty_selected
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::empty_selected
 namespace w_
 {
 // empty_selected(value: i64) -> bool (node), module demo.timing, line 37
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> empty_selected(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::empty_selected>(wiring_, value);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::empty_selected::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::empty_elsewhere
 {
 // empty_elsewhere(value: i64) -> bool (node), module demo.timing, line 44
-struct empty_elsewhere
+struct impl_
 {
     static constexpr auto name = "demo.timing::empty_elsewhere";
 
@@ -250,20 +250,20 @@ struct empty_elsewhere
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::empty_elsewhere
 namespace w_
 {
 // empty_elsewhere(value: i64) -> bool (node), module demo.timing, line 44
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> empty_elsewhere(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::empty_elsewhere>(wiring_, value);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::empty_elsewhere::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::scheduled_on_input
 {
 // scheduled_on_input(value: i64) -> bool (node), module demo.timing, line 54
-struct scheduled_on_input
+struct impl_
 {
     static constexpr auto name = "demo.timing::scheduled_on_input";
 
@@ -287,20 +287,20 @@ struct scheduled_on_input
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::scheduled_on_input
 namespace w_
 {
 // scheduled_on_input(value: i64) -> bool (node), module demo.timing, line 54
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> scheduled_on_input(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::scheduled_on_input>(wiring_, value);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::scheduled_on_input::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::pending
 {
 // pending() -> bool (node), module demo.timing, line 62
-struct pending
+struct impl_
 {
     static constexpr auto name = "demo.timing::pending";
 
@@ -325,20 +325,20 @@ struct pending
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::pending
 namespace w_
 {
 // pending() -> bool (node), module demo.timing, line 62
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> pending(::hgraph::Wiring& wiring_)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::pending>(wiring_);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::pending::impl_>(wiring_);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::cancel_next
 {
 // cancel_next() -> bool (node), module demo.timing, line 72
-struct cancel_next
+struct impl_
 {
     static constexpr auto name = "demo.timing::cancel_next";
 
@@ -353,8 +353,8 @@ struct cancel_next
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& woken = kept_.woken;
-        woken = 0;
         [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start};
+        woken = 0;
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{1}, std::nullopt, false);
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{3}, std::nullopt, false);
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{5}, std::nullopt, false);
@@ -381,17 +381,17 @@ struct cancel_next
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::cancel_next
 }  // namespace hgl::demo::timing::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::cancel_next::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::cancel_next::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::cancel_next::state_type_>("hgl:demo.timing::cancel_next.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::cancel_next::impl_::state_type_>("hgl:demo.timing::cancel_next.state");
     }
 };
 
@@ -402,14 +402,14 @@ namespace w_
 // cancel_next() -> bool (node), module demo.timing, line 72
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> cancel_next(::hgraph::Wiring& wiring_)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::cancel_next>(wiring_);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::cancel_next::impl_>(wiring_);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::wake_in_the_past
 {
 // wake_in_the_past(value: i64) -> str (node), module demo.timing, line 88
-struct wake_in_the_past
+struct impl_
 {
     static constexpr auto name = "demo.timing::wake_in_the_past";
 
@@ -434,20 +434,20 @@ struct wake_in_the_past
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::wake_in_the_past
 namespace w_
 {
 // wake_in_the_past(value: i64) -> str (node), module demo.timing, line 88
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> wake_in_the_past(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::wake_in_the_past>(wiring_, value);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::wake_in_the_past::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::wake_after
 {
 // wake_after(delay: duration) -> bool (node), module demo.timing, line 99
-struct wake_after
+struct impl_
 {
     static constexpr auto name = "demo.timing::wake_after";
 
@@ -466,20 +466,20 @@ struct wake_after
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::wake_after
 namespace w_
 {
 // wake_after(delay: duration) -> bool (node), module demo.timing, line 99
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> wake_after(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::TimeDelta>> delay)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::wake_after>(wiring_, delay);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::wake_after::impl_>(wiring_, delay);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::alarm_or_input
 {
 // alarm_or_input(value: i64) -> str (node), module demo.timing, line 108
-struct alarm_or_input
+struct impl_
 {
     static constexpr auto name = "demo.timing::alarm_or_input";
 
@@ -509,20 +509,20 @@ struct alarm_or_input
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::alarm_or_input
 namespace w_
 {
 // alarm_or_input(value: i64) -> str (node), module demo.timing, line 108
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> alarm_or_input(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::alarm_or_input>(wiring_, value);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::alarm_or_input::impl_>(wiring_, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::alarmed
 {
 // alarmed() -> i64 (node), module demo.timing, line 117
-struct alarmed
+struct impl_
 {
     static constexpr auto name = "demo.timing::alarmed";
 
@@ -537,8 +537,8 @@ struct alarmed
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
-        count = 0;
         [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::start};
+        count = 0;
         ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{1});
     }
 
@@ -563,17 +563,17 @@ struct alarmed
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::alarmed
 }  // namespace hgl::demo::timing::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::alarmed::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::alarmed::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::alarmed::state_type_>("hgl:demo.timing::alarmed.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::alarmed::impl_::state_type_>("hgl:demo.timing::alarmed.state");
     }
 };
 
@@ -584,14 +584,14 @@ namespace w_
 // alarmed() -> i64 (node), module demo.timing, line 117
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> alarmed(::hgraph::Wiring& wiring_)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::alarmed>(wiring_);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::alarmed::impl_>(wiring_);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::time_before_each_delay
 {
 // time_before_each_delay() -> datetime (source), module demo.timing, line 129
-struct time_before_each_delay
+struct impl_
 {
     static constexpr auto name = "demo.timing::time_before_each_delay";
     // SOURCE-2: "The first evaluation begins the body".
@@ -669,17 +669,17 @@ struct time_before_each_delay
         kept_.frame_.reset();
     }
 };
-}  // namespace n_
+}  // namespace n_::time_before_each_delay
 }  // namespace hgl::demo::timing::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::time_before_each_delay::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::time_before_each_delay::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::time_before_each_delay::state_type_>("hgl:demo.timing::time_before_each_delay.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::time_before_each_delay::impl_::state_type_>("hgl:demo.timing::time_before_each_delay.state");
     }
 };
 
@@ -690,14 +690,14 @@ namespace w_
 // time_before_each_delay() -> datetime (source), module demo.timing, line 129
 ::hgraph::Port<::hgraph::TS<::hgraph::DateTime>> time_before_each_delay(::hgraph::Wiring& wiring_)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::time_before_each_delay>(wiring_);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::time_before_each_delay::impl_>(wiring_);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::absolute_yields
 {
 // absolute_yields(const first: datetime, const second: datetime) -> i64 (source), module demo.timing, line 138
-struct absolute_yields
+struct impl_
 {
     static constexpr auto name = "demo.timing::absolute_yields";
     // SOURCE-2: "The first evaluation begins the body".
@@ -761,17 +761,17 @@ struct absolute_yields
         kept_.frame_.reset();
     }
 };
-}  // namespace n_
+}  // namespace n_::absolute_yields
 }  // namespace hgl::demo::timing::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::absolute_yields::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::absolute_yields::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::absolute_yields::state_type_>("hgl:demo.timing::absolute_yields.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::absolute_yields::impl_::state_type_>("hgl:demo.timing::absolute_yields.state");
     }
 };
 
@@ -782,14 +782,14 @@ namespace w_
 // absolute_yields(const first: datetime, const second: datetime) -> i64 (source), module demo.timing, line 138
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> absolute_yields(::hgraph::Wiring& wiring_, ::hgraph::DateTime first, ::hgraph::DateTime second)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::absolute_yields>(wiring_, first, second);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::absolute_yields::impl_>(wiring_, first, second);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::finish_or_resume
 {
 // finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 144
-struct finish_or_resume
+struct impl_
 {
     static constexpr auto name = "demo.timing::finish_or_resume";
     // SOURCE-2: "The first evaluation begins the body".
@@ -872,17 +872,17 @@ struct finish_or_resume
         kept_.frame_.reset();
     }
 };
-}  // namespace n_
+}  // namespace n_::finish_or_resume
 }  // namespace hgl::demo::timing::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::finish_or_resume::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::finish_or_resume::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::finish_or_resume::state_type_>("hgl:demo.timing::finish_or_resume.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::finish_or_resume::impl_::state_type_>("hgl:demo.timing::finish_or_resume.state");
     }
 };
 
@@ -893,14 +893,14 @@ namespace w_
 // finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 144
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> finish_or_resume(::hgraph::Wiring& wiring_, ::hgraph::Bool finish_early)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::finish_or_resume>(wiring_, finish_early);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::finish_or_resume::impl_>(wiring_, finish_early);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::counter
 {
 // counter(const limit: i64) -> i64 (source), module demo.timing, line 155
-struct counter
+struct impl_
 {
     static constexpr auto name = "demo.timing::counter";
     // SOURCE-2: "The first evaluation begins the body".
@@ -984,17 +984,17 @@ struct counter
         ::hgl::core::m_::log_debug(logger, ::hgraph::Str{"counted"});
     }
 };
-}  // namespace n_
+}  // namespace n_::counter
 }  // namespace hgl::demo::timing::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::counter::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::counter::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::counter::state_type_>("hgl:demo.timing::counter.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::counter::impl_::state_type_>("hgl:demo.timing::counter.state");
     }
 };
 
@@ -1005,14 +1005,14 @@ namespace w_
 // counter(const limit: i64) -> i64 (source), module demo.timing, line 155
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counter(::hgraph::Wiring& wiring_, ::hgraph::Int limit)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::counter>(wiring_, limit);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::counter::impl_>(wiring_, limit);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::counting_from
 {
 // counting_from(const first: i64) -> i64 (source), module demo.timing, line 166
-struct counting_from
+struct impl_
 {
     static constexpr auto name = "demo.timing::counting_from";
     // SOURCE-2: "The first evaluation begins the body".
@@ -1094,17 +1094,17 @@ struct counting_from
         kept_.frame_.reset();
     }
 };
-}  // namespace n_
+}  // namespace n_::counting_from
 }  // namespace hgl::demo::timing::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::counting_from::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::counting_from::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::counting_from::state_type_>("hgl:demo.timing::counting_from.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::counting_from::impl_::state_type_>("hgl:demo.timing::counting_from.state");
     }
 };
 
@@ -1115,14 +1115,14 @@ namespace w_
 // counting_from(const first: i64) -> i64 (source), module demo.timing, line 166
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counting_from(::hgraph::Wiring& wiring_, ::hgraph::Int first)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::counting_from>(wiring_, first);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::counting_from::impl_>(wiring_, first);
 }
 }  // namespace w_
 
-namespace n_::i_::repeated
+namespace n_::i_::repeated::of_i64
 {
 // repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 176
-struct of_i64
+struct impl_
 {
     static constexpr auto name = "demo.timing::repeated[i64]";
     // SOURCE-2: "The first evaluation begins the body".
@@ -1203,17 +1203,17 @@ struct of_i64
         kept_.frame_.reset();
     }
 };
-}  // namespace n_::i_::repeated
+}  // namespace n_::i_::repeated::of_i64
 }  // namespace hgl::demo::timing::m_
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::i_::repeated::of_i64::state_type_>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::i_::repeated::of_i64::impl_::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::i_::repeated::of_i64::state_type_>("hgl:demo.timing::repeated[i64].state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::i_::repeated::of_i64::impl_::state_type_>("hgl:demo.timing::repeated[i64].state");
     }
 };
 
@@ -1224,7 +1224,7 @@ namespace w_::i_::repeated
 // repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 176
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> of_i64(::hgraph::Wiring& wiring_, ::hgraph::Int value, ::hgraph::Int times)
 {
-    return ::hgraph::wire<::hgl::demo::timing::m_::n_::i_::repeated::of_i64>(wiring_, value, times);
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::i_::repeated::of_i64::impl_>(wiring_, value, times);
 }
 }  // namespace w_::i_::repeated
 
@@ -1374,25 +1374,37 @@ void absolute_targets_before_at_and_after_the_start()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_02_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_00_ = ::hgl::core::m_::never(); const auto argument_01_ = ::hgl::core::m_::earliest_start(); return ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, argument_00_, argument_01_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_04_ = [&]() {
+        const ::hgraph::DateTime argument_00_ = ::hgl::core::m_::never();
+        const ::hgraph::DateTime argument_01_ = ::hgl::core::m_::earliest_start();
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const ::hgraph::DateTime argument_02_ = argument_00_; const ::hgraph::DateTime argument_03_ = argument_01_; return ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, argument_02_, argument_03_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_03_ = ::hglrt::testing::Dense<::hgraph::Int>{20};
-        ::hglrt::testing::expect_same(left_02_, right_03_);
+    }();
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{20};
+        ::hglrt::testing::expect_same(left_04_, right_05_);
     }();
     ::hglrt::testing::statement();
     [&] {
-        const auto left_06_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = ::hgl::core::m_::earliest_start(); const auto argument_05_ = ::hglrt::add__datetime_duration(::hgl::core::m_::earliest_start(), ::hgraph::TimeDelta{2}); return ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_010_ = [&]() {
+        const ::hgraph::DateTime argument_06_ = ::hgl::core::m_::earliest_start();
+        const ::hgraph::DateTime argument_07_ = ::hglrt::add__datetime_duration(::hgl::core::m_::earliest_start(), ::hgraph::TimeDelta{2});
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const ::hgraph::DateTime argument_08_ = argument_06_; const ::hgraph::DateTime argument_09_ = argument_07_; return ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, argument_08_, argument_09_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 20};
-        ::hglrt::testing::expect_same(left_06_, right_07_);
+    }();
+        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 20};
+        ::hglrt::testing::expect_same(left_010_, right_011_);
     }();
     ::hglrt::testing::statement();
     ::hglrt::testing::raises("yield.non_increasing_time", [&] {
-        static_cast<void>(::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_08_ = ::hgl::core::m_::never(); const auto argument_09_ = ::hgl::core::m_::never(); return ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, argument_08_, argument_09_); }(), ::hgraph::Str{::hglrt::testing::run_output});
-    }));
+        static_cast<void>([&]() {
+        const ::hgraph::DateTime argument_012_ = ::hgl::core::m_::never();
+        const ::hgraph::DateTime argument_013_ = ::hgl::core::m_::never();
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const ::hgraph::DateTime argument_014_ = argument_012_; const ::hgraph::DateTime argument_015_ = argument_013_; return ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, argument_014_, argument_015_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }());
     });
 }
 

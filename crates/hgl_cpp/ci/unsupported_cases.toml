@@ -19,6 +19,7 @@
     "conformance::activity_belongs_to_the_binding",
 ]
 "a `?` here" = [
+    "conformance::conflicting_run_bounds_fail_before_evaluation",
     "conformance::eval_preserves_failure",
 ]
 "a `capture`" = [
@@ -85,6 +86,7 @@
     "conformance::publication_establishes_validity",
     "conformance::removing_an_absent_key_is_ignored",
     "conformance::switching_keys_follows_the_new_child",
+    "core_implementation::a_null_publication_has_a_tuple_in_the_recording",
     "core_implementation::identity_arithmetic_invalidates_and_recovers",
     "core_implementation::identity_arithmetic_publications",
     "core_implementation::repeated_invalidation_is_silent",
@@ -153,6 +155,9 @@
 "a trace of `list<i64, 2>`" = [
     "conformance::a_fixed_list_delta_reports_the_position_in_updated",
 ]
+"a trace of `list<str, 2>`" = [
+    "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
+]
 "a trace of `tuple<i64, str>`" = [
     "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",
 ]
@@ -169,17 +174,6 @@
     "conformance::lifted_default_still_requires_other_inputs",
     "conformance::lifted_nullable_binds_null_on_a_trigger",
     "conformance::published_null_takes_precedence_over_a_default",
-]
-"an eval's configuration" = [
-    "conformance::a_delayed_yield_keeps_its_payload_until_it_wakes",
-    "conformance::a_run_length_counts_from_its_start",
-    "conformance::a_simulation_runs_from_start_up_to_end",
-    "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
-    "conformance::an_alarm_cannot_hide_an_input_tick",
-    "conformance::an_earlier_recording_survives_a_second_run",
-    "conformance::conflicting_run_bounds_fail_before_evaluation",
-    "conformance::the_clock_reports_the_time_of_each_input",
-    "core_implementation::a_null_publication_has_a_tuple_in_the_recording",
 ]
 "the type `Closed`" = [
     "core_implementation::a_calendar_says_what_a_business_day_is",
