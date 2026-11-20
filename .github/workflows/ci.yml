@@ -111,8 +111,68 @@ jobs:
       - run: python -m unittest discover -s crates/hgl_hgraph/ci
       - run: cargo build --locked --bin hgl
       - run: python crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core
-      # The cpp target's list of the cases it does not run yet
-      # (crates/hgl_cpp/ci/unsupported_cases.toml). While it runs none it
-      # needs no C++ SDK; this step moves to the job that has one when a
-      # case runs.
-      - run: python crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core --target cpp
+
+  cpp:
+    # libhglrt, the C++ target's runtime library (runtime/cpp), built
+    # against hgraph's C++ SDK and its unit tests run, then all of it again
+    # under the address and undefined-behaviour sanitizers
+    # (docs/architecture.md, "The C++ runtime library"). Ubuntu 26.04's
+    # image has GCC 15, which the SDK needs.
+    runs-on: ubuntu-26.04
+    env:
+      # The hgraph release the SDK is built from.
+      HGRAPH_TAG: "0.9.8"
+      # The image's GCC 15, for the SDK and for the library.
+      CXX: g++-15
+      # The dependency prefix and the SDK, which the steps below make or
+      # restore, at paths that are the same in every run: a conda prefix
+      # holds its own path, and the SDK holds the prefix's.
+      HGL_HGRAPH_DEPS: ${{ github.workspace }}/.hgraph/deps
+      HGL_HGRAPH_SDK: ${{ github.workspace }}/.hgraph/sdk
+    steps:
+      - uses: actions/checkout@v7
+        # `hgl`, which the C++ target's steps below build, is built with
+        # core's module from the pinned hgl_core submodule.
+        with:
+          submodules: recursive
+      # What the two are made from: the tag, the script, which names every
+      # package of the prefix and how the SDK is configured, and the image
+      # they are built on.
+      - id: key
+        shell: bash
+        run: echo "key=hgraph-sdk-$ImageOS-$RUNNER_ARCH-$HGRAPH_TAG-${{ hashFiles('scripts/provision-hgraph-sdk.sh') }}" >> "$GITHUB_OUTPUT"
+      # A run with this key restores both and builds neither. A run that
+      # builds them saves them, from a pull request too: the key changes
+      # only with the tag, the script or the image, and a pull request that
+      # changes the script then builds them once and not on each push.
+      - id: cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            .hgraph/deps
+            .hgraph/sdk
+          key: ${{ steps.key.outputs.key }}
+      # micromamba makes the dependency prefix from conda-forge: hgraph's
+      # dependencies, with CMake and Ninja, as hgraph's own CI has them.
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          micromamba-version: "2.10.0-0"
+      - if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/provision-hgraph-sdk.sh "$HGRAPH_TAG" "$HGL_HGRAPH_SDK"
+      # The prefix's CMake and Ninja for what follows.
+      - run: echo "$HGL_HGRAPH_DEPS/bin" >> "$GITHUB_PATH"
+      - run: cmake -S runtime/cpp -B build/cpp -G Ninja -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build/cpp
+      - run: ctest --test-dir build/cpp --output-on-failure
+      - run: cmake -S runtime/cpp -B build/cpp-sanitize -G Ninja -DCMAKE_BUILD_TYPE=Debug -DHGLRT_SANITIZE=ON
+      - run: cmake --build build/cpp-sanitize
+      - run: ctest --test-dir build/cpp-sanitize --output-on-failure
+      # The C++ target on the SDK: the tests that build and run what it
+      # writes, and core's cases, held to the list of those it does not
+      # run yet (crates/hgl_cpp/ci/unsupported_cases.toml).
+      - run: cargo --version
+      - run: cargo test -p hgl_cli --locked --test cpp -- --ignored
+      - run: cargo build --locked --bin hgl
+      - run: python3 crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core --target cpp

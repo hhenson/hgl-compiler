@@ -81,3 +81,30 @@ rule, made apart, then merge as long as they change different lines.
 - [Program execution](rules/program-execution.md)
 - [Source documentation](rules/source-documentation.md)
 - [Core](rules/core.md)
+
+## The C++ target's runtime library
+
+No rule is `done` or `partial` for the C++ target yet: no program reaches
+its runtime library, `libhglrt` (`runtime/cpp`), until the target's emitter
+writes one, and the target's progress is counted in cases
+([cpp-target.md](cpp-target.md#progress-and-acceptance)). What the library
+implements and its unit tests check today, under `runtime/cpp`, is this;
+the chapters' entries stay the hgraph target's.
+
+| What | Rules or core declarations | Header | Tests |
+| --- | --- | --- | --- |
+| An execution failure: hgraph's `ExecutionFailure` carrying the error, its code or none, and the place it was raised at; `?` raising a retained error with its provenance | ERR-1, ERR-4, ERR-5, ERR-8 | `failure.h` | `failure_tests.cpp` |
+| Reads checked when they run: `value.unset_read`, or `err` of it where the place takes a result; an index outside a list | TIME-1, ERR-14, EXPR-3 | `checked.h` | `checked_tests.cpp` |
+| `add_`, `sub_`, `mul_`, `neg_`, `floordiv_`, `mod_` of `i64`, checked, with their zero policies | NUM-1, NUM-2, NUM-3, NUM-9, NUM-12 | `scalar.h` | `scalar_tests.cpp` |
+| `add_`, `sub_`, `mul_`, `neg_` of `f64`; `div_` of two `f64` and of two `i64` under each zero policy | NUM-1, NUM-2, NUM-3, NUM-9, NUM-12 | `scalar.h` | `scalar_tests.cpp` |
+| `eq_`, `ne_` of `i64` and `i64`, `f64` and `f64`, `i64` and `f64`: exact, and within `abs` and `rel` | NUM-2, NUM-4, NUM-5 | `scalar.h` | `scalar_tests.cpp` |
+| `eq_<T>`, `ne_<T>`; `lt_<T>`, `le_<T>`, `gt_<T>`, `ge_<T>` | OPS-2, NUM-6 | `scalar.h` | `scalar_tests.cpp` |
+| `and_`, `or_`, `not_` | OPS-5 | `scalar.h` | `scalar_tests.cpp` |
+| `add_(datetime, duration)`, checked | OPS-1, OPS-10 | `scalar.h` | `scalar_tests.cpp` |
+| `append`, `extend` | LIST-1, LIST-2, LIST-3 | `lists.h` | `capabilities_tests.cpp` |
+| `get`, `has`, `put` of the global store | CAP-6 | `capabilities.h` | `capabilities_tests.cpp` |
+| A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
+| The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
+| Tests registered by name and run as named; `assert`; `assert raises` | TST-2, TST-10, TST-11, TST-15 | `testing.h` | `testing_tests.cpp` |
+| Traces written dense and timed, and their comparison; a trace replayed to an input | TST-4, TST-6, TST-7, CEVAL-2 | `testing.h` | `testing_tests.cpp` |
+| A run's bounds, the run in simulation, its store and its recording; an eval and its failure | CRUN-1, CRUN-2, CRUN-3, CRUN-7, CRUN-8, CEVAL-1, CEVAL-4, CEVAL-5, CEVAL-6 | `testing.h` | `testing_tests.cpp`, `sources_tests.cpp` |
