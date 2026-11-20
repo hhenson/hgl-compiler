@@ -292,6 +292,7 @@ TEST_CASE("an enum's value is its member, named as the language writes it (TYPE-
     CHECK(text_of(hglrt::ZeroPolicy::nan) == "ZeroPolicy.nan");
     CHECK(text_of(hglrt::Rounding::half_even) == "Rounding.half_even");
     CHECK(text_of(hglrt::InvalidPolicy::fail) == "InvalidPolicy.fail");
+    CHECK(text_of(hglrt::LogLevel::warning) == "LogLevel.warning");
     CHECK(text_of(Side::sell) == "Side.sell");
     CHECK(text_of(list<Side>{Side::buy, Side::sell}) == "[Side.buy, Side.sell]");
     CHECK(text_of(std::optional<CmpResult>{}) == "null");
@@ -303,6 +304,7 @@ TEST_CASE("an enum's value is its member, named as the language writes it (TYPE-
     CHECK(hgraph::scalar_descriptor<list<hglrt::ZeroPolicy>>::value_meta() != nullptr);
     CHECK(hgraph::scalar_descriptor<list<hglrt::Rounding>>::value_meta() != nullptr);
     CHECK(hgraph::scalar_descriptor<Recorded<hglrt::InvalidPolicy>>::value_meta() != nullptr);
+    CHECK(hgraph::scalar_descriptor<list<hglrt::LogLevel>>::value_meta() != nullptr);
     CHECK(hgraph::scalar_descriptor<Recorded<Side>>::value_meta() != nullptr);
     // A trace of one says where it differs by its members' names.
     CHECK(said(Dense<CmpResult>{CmpResult::less}, Dense<CmpResult>{CmpResult::greater}) ==

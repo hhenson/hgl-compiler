@@ -2231,12 +2231,8 @@ template whose first argument is the type converted to,
 `convert_i64<f64>`, the `T` of `convert<T>(value)`; one that can fail
 takes `invalid` after it, `convert_str<i64, InvalidPolicy::fail>`. Core's
 enums that the natives take or give (`ZeroPolicy`, `CmpResult`,
-`Rounding`, `InvalidPolicy`) are the library's, their members in core's
-order, each with its `hgl_enum`. The compiler writes one for each enum of
-a program, in the enum's namespace and right after it:
-`constexpr ::hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept { return
-{"demo.trade::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}}; }`, the
-type's name qualified with its module's path and each member's HGL name. One that can fail takes the place it is called from, a defaulted
+`Rounding`, `InvalidPolicy`, `LogLevel`) are the library's, their members
+in core's order. One that can fail takes the place it is called from, a defaulted
 `std::source_location`, which its failure carries: the HGL file and line
 where the generated code sets them with `#line`. hgraph keeps that place
 for a failure of `start` or `stop`, which it nests; one of an evaluation
@@ -2258,6 +2254,15 @@ after `un_schedule` or `reset` (CAP-4); a tag goes to hgraph after a mark,
 since hgraph keeps no wake under the empty tag. An evaluation with no wake
 due and no input modified is no wake: hgraph evaluates the node at a
 wake that was cancelled. The alarm is hgraph's `SingleShotScheduler`.
+
+An enum is named by `hgl_enum`, found by argument-dependent lookup, which
+each of core's enums the library declares has, and which the compiler
+writes for each enum of a program, in the enum's namespace and right
+after it: `constexpr ::hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept
+{ return {"demo.trade::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}};
+}`, the type's name qualified with its module's path, and each member
+with its HGL name. It is all an enum needs: its HGL name, its text
+(`Side.buy`) and its hgraph schema come from it.
 
 A list is `hglrt::list<T>` and not a bare `std::vector<T>` because hgraph
 hashes a value it holds as configuration, a source's items, through

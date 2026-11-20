@@ -51,6 +51,15 @@ enum class Hook { start, evaluation, stop };
 /// `warning`, or `error`").
 enum class LogLevel { debug, info, warning, error };
 
+/// The names of core's `LogLevel` (values.h, `EnumNames`).
+constexpr EnumNames<LogLevel, 4> hgl_enum(LogLevel) noexcept {
+    return {"core::LogLevel",
+            {{LogLevel::debug, "debug"},
+             {LogLevel::info, "info"},
+             {LogLevel::warning, "warning"},
+             {LogLevel::error, "error"}}};
+}
+
 /// `Logger` (CAP-2), what `inject logger` binds: the run's logger, as the
 /// hook's `hgraph::LoggerView` gives it.
 class Logger {
