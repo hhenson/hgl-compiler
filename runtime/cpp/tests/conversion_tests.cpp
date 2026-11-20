@@ -299,6 +299,10 @@ TEST_CASE("text and a bool, text and bytes, a date and a datetime (OPS-6, OPS-7)
     // "`convert<datetime>(@2026-03-01) == @2026-03-01T00:00:00Z`";
     // "`convert<date>(@2026-03-01T23:59:59Z) == @2026-03-01`".
     CHECK(hglrt::convert_date<hglrt::datetime>(year{2026} / 3 / 1) == sys_days{year{2026} / 3 / 1});
+    // A name no other candidate has is called with no template argument.
+    CHECK(hglrt::convert_date(year{2026} / 3 / 1) == sys_days{year{2026} / 3 / 1});
+    CHECK(hglrt::convert_datetime(sys_days{year{2026} / 3 / 1}) == year{2026} / 3 / 1);
+    CHECK(hglrt::convert_bytes(bytes{"ok"}).value() == "ok");
     CHECK(hglrt::convert_datetime<hglrt::date>(sys_days{year{2026} / 3 / 1} + 23h + 59min + 59s) ==
           year{2026} / 3 / 1);
     // Before the epoch, the date is the day the instant is in.

@@ -157,6 +157,7 @@ TEST_CASE("a list's cells are its delta or a whole value, which replaces what it
     CHECK(hglrt::testing::detail::size_after(3, ValuesDelta{.size_modified = -1}) == 2);
     CHECK(hglrt::testing::detail::size_after(3, ValuesDelta{.size_modified = -5}) == 0);
     CHECK(hglrt::testing::detail::size_after(2, ValuesDelta{.updated = {{4, 1}}}) == 5);
+    CHECK(hglrt::testing::detail::size_after(2, ValuesDelta{.updated = {{-1, 1}}}) == 2);
     CHECK(hglrt::testing::detail::size_after(
               2, ValuesDelta{.size_modified = std::numeric_limits<i64>::min()}) == 0);
 }
