@@ -11,8 +11,9 @@
 //!
 //! | Lookup | What it answers |
 //! | --- | --- |
-//! | a type's temporal form | [`Family::schema`], hgraph's schema of a temporal value of the type; [`Family::read`], a hook's read of its payload; [`Family::publish`], a publication of a value of it; [`Family::delta`], its `delta_value`; [`Family::constant`], a value of it wired as a connection (FN-3) |
+//! | a type's temporal form | [`Family::schema`], hgraph's schema of a temporal value of the type; [`Family::read`], a hook's read of its payload; [`Family::publish`], a publication of a value of it; [`Family::delta`], its `delta_value`; [`Family::constant`], a value of it wired as a connection (FN-3); [`Family::payload`], the C++ type a publication of it takes and a trace of it holds; [`Family::read_type`], the type a read of it gives |
 //! | a type's trace cell | [`Family::cell`], one cell of a trace written out (TST-5) |
+//! | a run of statements | [`Family::statements`], a run of them, each with what follows it |
 //! | a statement | [`Family::statement`], a statement of a hook, a source's body or a graph |
 //! | an expression | [`Family::expression`], an expression of a hook, a source's body, a test or value code |
 //! | a wiring form | [`Family::wiring`], an expression of a graph that is a connection, as the `hgraph::Port` it gives |
@@ -87,6 +88,23 @@ pub(super) trait Family: Sync {
         None
     }
 
+    /// The C++ type of what a publication to a temporal value of `ty`
+    /// takes, a source's `yield` among them, and of what a trace of it
+    /// holds, where that is not `ty`'s own C++ type: a window takes a V
+    /// (TIME-7: "A result of `rolling_window<V, Max, Min>` takes a V"),
+    /// and a trace of one holds its arrivals (TST-16).
+    fn payload(&self, _emitter: &mut Emitter<'_>, _ty: &Type) -> Option<String> {
+        None
+    }
+
+    /// The HGL type that a read of the payload of a temporal value of
+    /// `ty` gives, in a hook and to a lifted helper, where it is not `ty`
+    /// itself: a window's is a `list<V>` (TYPE-11). A lifted call's node
+    /// gives its helper an argument of that type.
+    fn read_type(&self, _emitter: &mut Emitter<'_>, _ty: &Type) -> Option<Type> {
+        None
+    }
+
     /// One cell of a trace of `ty` written out, whose value is `value`
     /// (TST-5: "written as a `return` is").
     fn cell(
@@ -97,6 +115,24 @@ pub(super) trait Family: Sync {
         _value: &Expr,
     ) -> Option<String> {
         None
+    }
+
+    /// Writes `statements`, a run of statements `depth` levels in (a
+    /// body's, a branch's, a loop's), into `text`, where the run is the
+    /// family's: true where it did. A family that writes a run sees what
+    /// follows each statement, which a `return` in a branch selected at
+    /// runtime needs (CTRL-14: "the continuation's otherwise"); it
+    /// writes each statement that is not its own with
+    /// `Emitter::statement`.
+    fn statements(
+        &self,
+        _emitter: &mut Emitter<'_>,
+        _scope: &mut Scope<'_>,
+        _statements: &[Stmt],
+        _depth: usize,
+        _text: &mut String,
+    ) -> bool {
+        false
     }
 
     /// Writes `statement`, `depth` levels in, into `text`, where it is
@@ -138,6 +174,13 @@ pub(super) trait Family: Sync {
 /// puts its own ahead of the spine's.
 static FAMILIES: &[&dyn Family] = &[
     &super::keyed::Keyed,
+    &super::windows::Windows,
+    &super::references::References,
+    &super::apps::Apps,
+    &super::scheduling::Scheduling,
+    &super::activity::Activity,
+    &super::lifting::Lifting,
+    &super::control::Control,
     &super::scalars::Scalars,
     &super::tests::Tests,
     &super::sources::Sources,
@@ -227,6 +270,26 @@ impl Emitter<'_> {
         }
     }
 
+    /// The C++ type of what a publication to a temporal value of `ty`
+    /// takes, and a trace of it holds ([`Family::payload`]): `ty`'s own
+    /// where no family says otherwise, and one not written is reported
+    /// at `at`.
+    pub(super) fn payload_type(&mut self, ty: &Type, at: Location) -> Option<String> {
+        match FAMILIES.iter().find_map(|family| family.payload(self, ty)) {
+            Some(payload) => Some(payload),
+            None => self.written_type(ty, at),
+        }
+    }
+
+    /// The HGL type a read of the payload of a temporal value of `ty`
+    /// gives ([`Family::read_type`]): `ty` where no family says otherwise.
+    pub(super) fn read_type(&mut self, ty: &Type) -> Type {
+        FAMILIES
+            .iter()
+            .find_map(|family| family.read_type(self, ty))
+            .unwrap_or_else(|| ty.clone())
+    }
+
     /// One cell of a trace of `ty` ([`Family::cell`]); one no family
     /// writes is reported at `value`.
     pub(super) fn trace_cell(&mut self, scope: &mut Scope, ty: &Type, value: &Expr) -> String {
@@ -237,6 +300,21 @@ impl Emitter<'_> {
             Some(cell) => cell,
             None => self.missing(value.at, &format!("a trace of `{ty}`")),
         }
+    }
+
+    /// Writes the run `statements` where a family writes it
+    /// ([`Family::statements`]): true where one did. The value code's
+    /// writer writes the rest, a statement at a time.
+    pub(super) fn form_statements(
+        &mut self,
+        scope: &mut Scope,
+        statements: &[Stmt],
+        depth: usize,
+        text: &mut String,
+    ) -> bool {
+        FAMILIES
+            .iter()
+            .any(|family| family.statements(self, scope, statements, depth, text))
     }
 
     /// Writes `statement` where a family writes it ([`Family::statement`]):

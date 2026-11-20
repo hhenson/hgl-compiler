@@ -25,6 +25,7 @@
 //! | --- | --- |
 //! | Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, in the namespace `hgl::demo::calc::m_`, and `modules/demo.calc.types.h` of the types it declares |
 //! | Its named tests | Functions in `hgl::demo::calc::m_::t_`, and `tests/demo.calc.cpp`, an entry unit that registers each with the runtime library's test host and runs those its command line names |
+//! | Application `demo.app` (UNIT-14) | Its module's unit, with its run statement as the function `hgl::demo::app::m_::application_`, and `applications/demo.app.cpp`, an entry unit whose `main` is the runtime library's host of that run |
 //! | `const fn total(a: i64, b: i64) -> i64` | A function `::hgraph::Int total(::hgraph::Int a, ::hgraph::Int b)`; a generic one, a function for each instance |
 //! | The scalars, enums, `T?`, tuples, lists, results | hgraph's scalars, `enum class`, `std::optional`, `std::tuple`, `hglrt::list`, `hglrt::result` |
 //! | Structs, sets, dictionaries, deltas | Aggregates with HGL's equality, `hglrt::set`, `hglrt::dict`, the deltas of `hglrt` and of each struct |
@@ -167,7 +168,8 @@ impl Test {
     }
 }
 
-/// An application as the target wrote it.
+/// An application as the target wrote it (UNIT-14): one executable,
+/// which runs its run statement once.
 #[derive(Debug, Clone)]
 pub struct Application {
     /// Its path.
@@ -178,6 +180,14 @@ pub struct Application {
     /// The first form the application needs that the target does not
     /// write yet. `None` for one that can be run.
     pub blocked: Option<Diagnostic>,
+    /// Its entry unit's file, one of [`Output::files`], whose `main` is
+    /// the runtime library's host of its run (`hglrt/application_host.h`).
+    /// `None` for one that is blocked.
+    pub source: Option<String>,
+    /// The units its executable is linked from, as positions in
+    /// [`Output::units`]: its own module's, and each that one calls into,
+    /// through those, as an [`Executable`]'s.
+    pub units: Vec<usize>,
 }
 
 /// The header of module `module`: `demo.calc` is `modules/demo.calc.h`.
@@ -204,8 +214,16 @@ pub fn entry_path(module: &str) -> String {
     format!("tests/{module}.cpp")
 }
 
+/// The entry unit of application `path`: `applications/demo.app.cpp`. An
+/// application's path is no module's (UNIT-14), and the directory is not
+/// the tests' own.
+pub fn application_path(path: &str) -> String {
+    format!("applications/{path}.cpp")
+}
+
 /// Writes `program` as C++: each module's header and unit, and an entry
-/// unit for each module with a test that can be run.
+/// unit for each module with a test that can be run and for each
+/// application that can be.
 ///
 /// `program` is one the analyser accepted. A form this target does not
 /// write yet is reported to `diagnostics`, and the declaration or the

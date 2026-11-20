@@ -55,10 +55,10 @@
 namespace hgl::demo::keyed::m_
 {
 
-namespace n_
+namespace n_::write_members
 {
 // write_members(step: i64) -> set<i64> (node), module demo.keyed, line 12
-struct write_members
+struct impl_
 {
     static constexpr auto name = "demo.keyed::write_members";
 
@@ -96,20 +96,20 @@ struct write_members
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::write_members
 namespace w_
 {
 // write_members(step: i64) -> set<i64> (node), module demo.keyed, line 12
 ::hgraph::Port<::hgraph::TSS<::hgraph::Int>> write_members(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::write_members>(wiring_, step);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::write_members::impl_>(wiring_, step);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::members_valid
 {
 // members_valid(members: set<i64>) -> bool (node), module demo.keyed, line 28
-struct members_valid
+struct impl_
 {
     static constexpr auto name = "demo.keyed::members_valid";
 
@@ -122,40 +122,40 @@ struct members_valid
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::members_valid
 namespace w_
 {
 // members_valid(members: set<i64>) -> bool (node), module demo.keyed, line 28
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> members_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSS<::hgraph::Int>> members)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::members_valid>(wiring_, members);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::members_valid::impl_>(wiring_, members);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::member_wakes
 {
 // member_wakes(step: i64) -> bool (graph), module demo.keyed, line 32
-struct member_wakes
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
     {
         return ::hgl::demo::keyed::m_::w_::members_valid(wiring_, ::hgl::demo::keyed::m_::w_::write_members(wiring_, step));
     }
 };
-}  // namespace n_
+}  // namespace n_::member_wakes
 namespace w_
 {
 // member_wakes(step: i64) -> bool (graph), module demo.keyed, line 32
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> member_wakes(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
-    return ::hgl::demo::keyed::m_::n_::member_wakes::compose(wiring_, step);
+    return ::hgl::demo::keyed::m_::n_::member_wakes::impl_::compose(wiring_, step);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::read_delta
 {
 // read_delta(members: set<i64>) -> set<i64> (node), module demo.keyed, line 34
-struct read_delta
+struct impl_
 {
     static constexpr auto name = "demo.keyed::read_delta";
 
@@ -168,33 +168,33 @@ struct read_delta
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::read_delta
 namespace w_
 {
 // read_delta(members: set<i64>) -> set<i64> (node), module demo.keyed, line 34
 ::hgraph::Port<::hgraph::TSS<::hgraph::Int>> read_delta(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSS<::hgraph::Int>> members)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::read_delta>(wiring_, members);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::read_delta::impl_>(wiring_, members);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::member_changes
 {
 // member_changes(step: i64) -> set<i64> (graph), module demo.keyed, line 38
-struct member_changes
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TSS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
     {
         return ::hgl::demo::keyed::m_::w_::read_delta(wiring_, ::hgl::demo::keyed::m_::w_::write_members(wiring_, step));
     }
 };
-}  // namespace n_
+}  // namespace n_::member_changes
 namespace w_
 {
 // member_changes(step: i64) -> set<i64> (graph), module demo.keyed, line 38
 ::hgraph::Port<::hgraph::TSS<::hgraph::Int>> member_changes(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
-    return ::hgl::demo::keyed::m_::n_::member_changes::compose(wiring_, step);
+    return ::hgl::demo::keyed::m_::n_::member_changes::impl_::compose(wiring_, step);
 }
 }  // namespace w_
 
@@ -209,10 +209,10 @@ namespace w_
     return total;
 }
 
-namespace n_
+namespace n_::total_of_members
 {
 // total_of_members(step: i64) -> i64 (graph), module demo.keyed, line 46
-struct total_of_members
+struct impl_
 {
     // The call of `sum_members` on line 46, lifted (FN-6).
     struct lifted_00_
@@ -230,20 +230,20 @@ struct total_of_members
         return ::hgraph::wire<lifted_00_>(wiring_, ::hgl::demo::keyed::m_::w_::write_members(wiring_, step));
     }
 };
-}  // namespace n_
+}  // namespace n_::total_of_members
 namespace w_
 {
 // total_of_members(step: i64) -> i64 (graph), module demo.keyed, line 46
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> total_of_members(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
-    return ::hgl::demo::keyed::m_::n_::total_of_members::compose(wiring_, step);
+    return ::hgl::demo::keyed::m_::n_::total_of_members::impl_::compose(wiring_, step);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::relay_members
 {
 // relay_members(members: set<i64>) -> set<i64> (node), module demo.keyed, line 64
-struct relay_members
+struct impl_
 {
     static constexpr auto name = "demo.keyed::relay_members";
 
@@ -256,20 +256,20 @@ struct relay_members
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::relay_members
 namespace w_
 {
 // relay_members(members: set<i64>) -> set<i64> (node), module demo.keyed, line 64
 ::hgraph::Port<::hgraph::TSS<::hgraph::Int>> relay_members(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSS<::hgraph::Int>> members)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::relay_members>(wiring_, members);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::relay_members::impl_>(wiring_, members);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::relay_floats
 {
 // relay_floats(values: set<f64>) -> set<f64> (node), module demo.keyed, line 79
-struct relay_floats
+struct impl_
 {
     static constexpr auto name = "demo.keyed::relay_floats";
 
@@ -282,20 +282,20 @@ struct relay_floats
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::relay_floats
 namespace w_
 {
 // relay_floats(values: set<f64>) -> set<f64> (node), module demo.keyed, line 79
 ::hgraph::Port<::hgraph::TSS<::hgraph::Float>> relay_floats(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSS<::hgraph::Float>> values)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::relay_floats>(wiring_, values);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::relay_floats::impl_>(wiring_, values);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::write_book
 {
 // write_book(step: i64) -> dict<str, i64> (node), module demo.keyed, line 90
-struct write_book
+struct impl_
 {
     static constexpr auto name = "demo.keyed::write_book";
 
@@ -337,20 +337,20 @@ struct write_book
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::write_book
 namespace w_
 {
 // write_book(step: i64) -> dict<str, i64> (node), module demo.keyed, line 90
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> write_book(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::write_book>(wiring_, step);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::write_book::impl_>(wiring_, step);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::book_valid
 {
 // book_valid(book: dict<str, i64>) -> bool (node), module demo.keyed, line 103
-struct book_valid
+struct impl_
 {
     static constexpr auto name = "demo.keyed::book_valid";
 
@@ -363,33 +363,33 @@ struct book_valid
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::book_valid
 namespace w_
 {
 // book_valid(book: dict<str, i64>) -> bool (node), module demo.keyed, line 103
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> book_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::book_valid>(wiring_, book);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::book_valid::impl_>(wiring_, book);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::book_wakes
 {
 // book_wakes(step: i64) -> bool (graph), module demo.keyed, line 107
-struct book_wakes
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
     {
         return ::hgl::demo::keyed::m_::w_::book_valid(wiring_, ::hgl::demo::keyed::m_::w_::write_book(wiring_, step));
     }
 };
-}  // namespace n_
+}  // namespace n_::book_wakes
 namespace w_
 {
 // book_wakes(step: i64) -> bool (graph), module demo.keyed, line 107
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> book_wakes(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
-    return ::hgl::demo::keyed::m_::n_::book_wakes::compose(wiring_, step);
+    return ::hgl::demo::keyed::m_::n_::book_wakes::impl_::compose(wiring_, step);
 }
 }  // namespace w_
 
@@ -404,10 +404,10 @@ namespace w_
     return (*found);
 }
 
-namespace n_
+namespace n_::priced
 {
 // priced(step: i64) -> i64 (graph), module demo.keyed, line 115
-struct priced
+struct impl_
 {
     // The call of `price_of_a` on line 115, lifted (FN-6).
     struct lifted_00_
@@ -425,20 +425,20 @@ struct priced
         return ::hgraph::wire<lifted_00_>(wiring_, ::hgl::demo::keyed::m_::w_::write_book(wiring_, step));
     }
 };
-}  // namespace n_
+}  // namespace n_::priced
 namespace w_
 {
 // priced(step: i64) -> i64 (graph), module demo.keyed, line 115
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> priced(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
-    return ::hgl::demo::keyed::m_::n_::priced::compose(wiring_, step);
+    return ::hgl::demo::keyed::m_::n_::priced::impl_::compose(wiring_, step);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::relay_book
 {
 // relay_book(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 127
-struct relay_book
+struct impl_
 {
     static constexpr auto name = "demo.keyed::relay_book";
 
@@ -452,20 +452,20 @@ struct relay_book
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::relay_book
 namespace w_
 {
 // relay_book(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 127
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> relay_book(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::relay_book>(wiring_, book);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::relay_book::impl_>(wiring_, book);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::book_changes
 {
 // book_changes(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 131
-struct book_changes
+struct impl_
 {
     static constexpr auto name = "demo.keyed::book_changes";
 
@@ -478,20 +478,20 @@ struct book_changes
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::book_changes
 namespace w_
 {
 // book_changes(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 131
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book_changes(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::book_changes>(wiring_, book);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::book_changes::impl_>(wiring_, book);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::relay_groups
 {
 // relay_groups(groups: dict<str, set<i64>>) -> dict<str, set<i64>> (node), module demo.keyed, line 145
-struct relay_groups
+struct impl_
 {
     static constexpr auto name = "demo.keyed::relay_groups";
 
@@ -504,20 +504,20 @@ struct relay_groups
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::relay_groups
 namespace w_
 {
 // relay_groups(groups: dict<str, set<i64>>) -> dict<str, set<i64>> (node), module demo.keyed, line 145
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TSS<::hgraph::Int>>> relay_groups(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TSS<::hgraph::Int>>> groups)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::relay_groups>(wiring_, groups);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::relay_groups::impl_>(wiring_, groups);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::entry_a
 {
 // entry_a(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 159
-struct entry_a
+struct impl_
 {
     static constexpr auto name = "demo.keyed::entry_a";
 
@@ -533,20 +533,20 @@ struct entry_a
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::entry_a
 namespace w_
 {
 // entry_a(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 159
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_a(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_a>(wiring_, book);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_a::impl_>(wiring_, book);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::entry_at
 {
 // entry_at(book: dict<str, i64>, key: str) -> i64 (node), module demo.keyed, line 163
-struct entry_at
+struct impl_
 {
     static constexpr auto name = "demo.keyed::entry_at";
 
@@ -559,20 +559,20 @@ struct entry_at
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::entry_at
 namespace w_
 {
 // entry_at(book: dict<str, i64>, key: str) -> i64 (node), module demo.keyed, line 163
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_at(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_at>(wiring_, book, key);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_at::impl_>(wiring_, book, key);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::entry_or_code
 {
 // entry_or_code(book: dict<str, i64>, key: str) -> str (node), module demo.keyed, line 167
-struct entry_or_code
+struct impl_
 {
     static constexpr auto name = "demo.keyed::entry_or_code";
 
@@ -597,20 +597,20 @@ struct entry_or_code
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::entry_or_code
 namespace w_
 {
 // entry_or_code(book: dict<str, i64>, key: str) -> str (node), module demo.keyed, line 167
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> entry_or_code(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_or_code>(wiring_, book, key);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_or_code::impl_>(wiring_, book, key);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::entry_delta
 {
 // entry_delta(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 177
-struct entry_delta
+struct impl_
 {
     static constexpr auto name = "demo.keyed::entry_delta";
 
@@ -627,13 +627,13 @@ struct entry_delta
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::entry_delta
 namespace w_
 {
 // entry_delta(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 177
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_delta(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book)
 {
-    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_delta>(wiring_, book);
+    return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_delta::impl_>(wiring_, book);
 }
 }  // namespace w_
 

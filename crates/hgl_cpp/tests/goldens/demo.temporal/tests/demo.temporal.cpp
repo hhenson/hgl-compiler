@@ -2,9 +2,11 @@
 #include <hglrt/host.h>
 
 // Names this file writes, which no macro of a header above takes.
+#undef a_held_value_is_as_it_was
 #undef a_run_is_bounded
 #undef adds_one
 #undef an_outputless_target_runs
+#undef any_name_is_written
 #undef demo
 #undef handlers_run_in_order
 #undef sources_and_constants
@@ -19,6 +21,8 @@ void sources_and_constants();
 void the_clock_is_read();
 void an_outputless_target_runs();
 void a_run_is_bounded();
+void any_name_is_written();
+void a_held_value_is_as_it_was();
 }  // namespace hgl::demo::temporal::m_::t_
 
 namespace
@@ -30,6 +34,8 @@ const ::hglrt::testing::Registration test_2{"demo.temporal::sources_and_constant
 const ::hglrt::testing::Registration test_3{"demo.temporal::the_clock_is_read", &::hgl::demo::temporal::m_::t_::the_clock_is_read};
 const ::hglrt::testing::Registration test_4{"demo.temporal::an_outputless_target_runs", &::hgl::demo::temporal::m_::t_::an_outputless_target_runs};
 const ::hglrt::testing::Registration test_5{"demo.temporal::a_run_is_bounded", &::hgl::demo::temporal::m_::t_::a_run_is_bounded};
+const ::hglrt::testing::Registration test_6{"demo.temporal::any_name_is_written", &::hgl::demo::temporal::m_::t_::any_name_is_written};
+const ::hglrt::testing::Registration test_7{"demo.temporal::a_held_value_is_as_it_was", &::hgl::demo::temporal::m_::t_::a_held_value_is_as_it_was};
 }  // namespace
 
 int main(int argc, char **argv)

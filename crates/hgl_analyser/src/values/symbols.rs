@@ -623,9 +623,11 @@ impl<'a> Typer<'a> {
         }
         let own_generics: Vec<Location> =
             public.generics.iter().map(|generic| generic.at).collect();
+        // A symbol writes no generic argument.
         let wanted = Wanted {
             place: symbol.place.as_ref(),
             among: self.result_among(operator, public, &[], &own_generics),
+            written: false,
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         // GEN-7: "A generic body is checked under its stated

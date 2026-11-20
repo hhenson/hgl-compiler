@@ -20,10 +20,16 @@
 //!    module's tests to run, and reads what became of each from the
 //!    results file it writes: the protocol of the hgraph target's
 //!    driver, read by the same code (`hgl_hgraph::read_results`).
+//!
+//! For `hgl run` it builds the one executable of the application chosen
+//! in the same way, runs it once, and reads what became of the run
+//! (`application`).
 
+mod application;
 mod build;
 mod sdk;
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -204,13 +210,13 @@ impl OnCpp<'_> {
             }
         }
         let mut outcomes = vec![None; runnable.len()];
-        let libraries = library_path(&description.libraries);
+        let libraries = sdk::library_path(&description);
         for (slot, outcome) in launch_all(
             &workspace,
             output,
             &launches,
             self.sources,
-            &libraries,
+            libraries.as_ref(),
             jobs.as_deref(),
         ) {
             outcomes[slot] = Some(outcome);
@@ -240,15 +246,16 @@ struct Launch<'o> {
 }
 
 /// Runs each of `launches` in `workspace`, as many at once as `jobs`
-/// says or the machine has cores, each with `libraries` as its
-/// `LD_LIBRARY_PATH`, and gives what became of each test, by its
+/// says or the machine has cores, each with `libraries`, a variable and
+/// its value, in its environment where there is one
+/// (`sdk::library_path`), and gives what became of each test, by its
 /// position among those asked to run.
 fn launch_all(
     workspace: &Workspace,
     output: &Output,
     launches: &[Launch],
     sources: &SourceMap,
-    libraries: &std::ffi::OsStr,
+    libraries: Option<&(&'static str, OsString)>,
     jobs: Option<&str>,
 ) -> Vec<(usize, Outcome)> {
     let threads = jobs
@@ -290,15 +297,15 @@ fn launch_all(
 }
 
 /// Runs one executable, the `position`th of the runs, on its tests, with
-/// `libraries` as its `LD_LIBRARY_PATH`, and reads what became of each
-/// from the results it writes.
+/// `libraries` in its environment where there is one, and reads what
+/// became of each from the results it writes.
 fn launch_one(
     workspace: &Workspace,
     output: &Output,
     launch: &Launch,
     position: usize,
     sources: &SourceMap,
-    libraries: &std::ffi::OsStr,
+    libraries: Option<&(&'static str, OsString)>,
 ) -> Vec<(usize, Outcome)> {
     let module = &output.executables[launch.executable].module;
     let all = |reason: String| -> Vec<(usize, Outcome)> {
@@ -329,8 +336,10 @@ fn launch_one(
     // (`hglrt/testing.h`).
     let executable = workspace.executable(module);
     let mut command = Command::new(&executable);
+    if let Some((variable, value)) = libraries {
+        command.env(variable, value);
+    }
     command
-        .env("LD_LIBRARY_PATH", libraries)
         .arg(&results)
         .args(launch.tests.iter().map(|(_, test)| test.identity()));
     let (finished, timed_out) = match finish(&mut command, launch.limit) {
@@ -395,19 +404,6 @@ fn launch_one(
         .collect()
 }
 
-/// `directories`, the libraries' directories of a toolchain, before
-/// those `LD_LIBRARY_PATH` already names, as its value.
-fn library_path(directories: &[String]) -> std::ffi::OsString {
-    let inherited = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
-    let paths = directories
-        .iter()
-        .map(PathBuf::from)
-        .chain(std::env::split_paths(&inherited));
-    // A directory with a `:` in it cannot be named in the list; it is
-    // then left to the executable's `RPATH`.
-    std::env::join_paths(paths).unwrap_or(inherited)
-}
-
 /// Runs `command` to its end, and gives what it printed and how it
 /// ended; or, where `limit` is given and the run is still going when it
 /// passes, ends it and says so. Only this run's own process is ended.
@@ -463,10 +459,20 @@ fn seconds(limit: Duration) -> String {
     }
 }
 
-/// `hgl run --target cpp` of application `chosen` of `program`: no
-/// application is written for this target yet, so none is run, and
-/// what stops it is said.
-pub(super) fn run(sources: &SourceMap, program: &Program, chosen: &str) -> ExitCode {
+/// `hgl run --target cpp` of application `chosen` of `program`
+/// (UNIT-14, RUN-1): its executable built in the program's workspace,
+/// the directory `keep` names or the one of its source `roots`, and run
+/// once, and its output printed as the hgraph target's is (`super::ran`).
+/// An interrupt of `hgl`, or a request for it to end, is the host's stop
+/// of the run (RUN-3), which is passed on to the executable
+/// (`application::Stop`).
+pub(super) fn run(
+    sources: &SourceMap,
+    program: &Program,
+    chosen: &str,
+    keep: Option<&Path>,
+    roots: &[PathBuf],
+) -> ExitCode {
     let mut unwritten = Diagnostics::new();
     let output = hgl_cpp::transpile(program, &mut unwritten);
     let name = hgl_cpp::TARGET;
@@ -478,21 +484,25 @@ pub(super) fn run(sources: &SourceMap, program: &Program, chosen: &str) -> ExitC
         eprintln!("hgl: the target wrote no application `{chosen}`");
         return ExitCode::from(EXIT_FAILED);
     };
-    match &application.blocked {
-        Some(diagnostic) => {
-            let source = sources.file(diagnostic.primary.file);
-            eprintln!(
-                "{}:{}: {}",
-                source.name(),
-                source.line_col(diagnostic.primary.span.start),
-                diagnostic.message
-            );
-            println!(
-                "not run: the {name} target does not write all that {} needs yet",
-                application.path
-            );
-        }
-        None => println!("not run: the {name} target writes no entry for an application yet"),
+    if let Some(diagnostic) = &application.blocked {
+        let source = sources.file(diagnostic.primary.file);
+        eprintln!(
+            "{}:{}: {}",
+            source.name(),
+            source.line_col(diagnostic.primary.span.start),
+            diagnostic.message
+        );
+        println!(
+            "not run: the {name} target does not write all that {} needs yet",
+            application.path
+        );
+        return ExitCode::from(EXIT_FAILED);
     }
-    ExitCode::from(EXIT_FAILED)
+    // Where the handler cannot be set the run goes on all the same, and
+    // an interrupt then ends `hgl` as it always did.
+    let stop = application::Stop::new();
+    let asked = stop.clone();
+    let _ = ctrlc::set_handler(move || asked.ask());
+    let ran = application::run(&output, application, keep, roots, &stop);
+    super::ran(&application.path, name, ran)
 }

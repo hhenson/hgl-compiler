@@ -15,17 +15,24 @@
 //! `composites` (structs, sets, dictionaries and deltas as values),
 //! `values` (value functions, their instances and constants),
 //! `statements`, `expressions` and `calls` (value code, a test's among
-//! it), `nodes` and `graphs` (temporal functions and applications),
-//! `tests` (named tests).
+//! it), `nodes` and `graphs` (temporal functions), `tests` (named
+//! tests), `apps` (applications).
 //!
 //! The temporal forms are written by families, which `forms`, the
 //! dispatch point, looks each form up in: `scalars` (a scalar's temporal
 //! form), `endpoints` (a hook's reads, endpoint operations and
 //! capabilities), `nodes` (a node's hooks), `sources` (a source's body),
-//! `graphs` (a graph's wiring and lifted calls), `tests` (evals and
-//! traces); `lifecycle` writes a run's bounds for `tests`; `keyed` (a
-//! set's and a dictionary's temporal form) is a construct lane's. A
-//! construct lane adds its family as a module here and one entry in
+//! `graphs` (a graph's wiring), `lifting` (lifted calls, `capture`, the
+//! temporal forms of `error` and `result`, a `?` in a `when`), `tests`
+//! (evals and traces), `windows` (a window's temporal form), `references`
+//! (a `ref` parameter's and result's designations), `apps` (the run's
+//! store where a graph or an application sets it), `scheduling` (a
+//! scheduler, an alarm, and a source's declarations and hooks),
+//! `activity` (an input's activity, and an enum's temporal form),
+//! `control` (`if`, `switch` and `for` over connections in a graph),
+//! `keyed` (a set's and a dictionary's temporal form);
+//! `lifecycle` writes a run's bounds for `tests` and `apps`. A construct
+//! lane adds its family as a module here and one entry in
 //! `forms::FAMILIES`.
 
 use hgl_analyser::{DeclarationKind, Program};
@@ -35,23 +42,31 @@ use hgl_lower::pieces::Reach;
 
 use crate::codes;
 
+mod activity;
+mod apps;
 mod calls;
 mod composites;
+mod control;
 mod endpoints;
 mod expressions;
 mod forms;
 mod graphs;
 mod keyed;
 mod lifecycle;
+mod lifting;
 mod names;
 mod nodes;
+mod references;
 mod scalars;
+mod scheduling;
 mod sources;
 mod statements;
 mod tests;
 mod types;
 mod values;
+mod windows;
 
+pub(crate) use apps::APPLICATION;
 pub(crate) use composites::Layout;
 pub(crate) use names::{
     identifier, module_namespace, program_names, string, test_namespace, testing,
@@ -133,6 +148,8 @@ pub(crate) fn module(
         temporaries: 0,
         instanced: Vec::new(),
         temporal: None,
+        ahead: Vec::new(),
+        control: control::State::default(),
     };
     let declared = &program.modules[index];
     let declarations = (0..declared.declarations.len())
@@ -189,13 +206,20 @@ struct Emitter<'a> {
     /// node's hook, a source's body, a graph, a lifted call's node or an
     /// eval's entry (`nodes::Context`). `None` in value code.
     temporal: Option<nodes::Context>,
+    /// What the piece being written puts ahead of its definition, at the
+    /// scope of its namespace: the node an eval writes for a value
+    /// function it lifts (`lifting`), which a test, a function, cannot
+    /// hold with its name.
+    ahead: Vec<String>,
+    /// What the control family keeps while it writes a graph: what has a
+    /// value where a child graph is written (`control`).
+    control: control::State,
 }
 
 impl Emitter<'_> {
     /// Writes declaration `index` of the module into the piece.
     fn declaration(&mut self, index: usize) {
         let declared = &self.program.modules[self.module].declarations[index];
-        let at = declared.at;
         match declared.kind {
             DeclarationKind::Function(hgl_analyser::Role::Value) => self.value_function(index),
             DeclarationKind::Function(hgl_analyser::Role::Temporal) => {
@@ -210,8 +234,10 @@ impl Emitter<'_> {
             DeclarationKind::Implementation(hgl_analyser::Role::Value, _) => {
                 self.value_function(index);
             }
+            // GEN-4: a temporal candidate is a node or a graph of its
+            // module, as a temporal function is.
             DeclarationKind::Implementation(hgl_analyser::Role::Temporal, _) => {
-                self.unsupported(at, "a temporal candidate of an operator");
+                self.temporal_function(index);
             }
             // An operator names its candidates and is no code of its
             // own. A native function or candidate is the runtime
@@ -245,6 +271,7 @@ impl Emitter<'_> {
     /// Ends the piece being written, and gives it.
     fn close(&mut self) -> Piece {
         self.temporaries = 0;
+        self.ahead.clear();
         std::mem::take(&mut self.piece)
     }
 }

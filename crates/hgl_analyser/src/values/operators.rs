@@ -8,8 +8,8 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::candidates::{Chosen, Given, Key, Settled, Wanted, typed_by_place};
 use super::constants::generic_default;
-use super::fit::{not_null, open};
-use super::inference::{bare_parameter, fixed, infer, placed, unsaid};
+use super::fit::open;
+use super::inference::{asked_of_result, bare_parameter, fixed, infer, placed, unsaid};
 use super::{Candidate, Typer};
 use crate::declared::{agree, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
@@ -315,6 +315,16 @@ impl<'a> Typer<'a> {
         ) {
             return self.call_required(operator, result, given, Form::Named);
         }
+        // True where the output requested is the type the call writes
+        // for the operator's result that is a type parameter and nothing
+        // more: the `i64?` of `get<i64?>(global_state, key)` for core's
+        // `operator get<V, S, K>(store: S, key: K) -> V` (GEN-8).
+        let result_written = requested.is_some()
+            && bare_parameter(
+                public.result.as_ref().unwrap_or(&Type::Unknown),
+                &public.generics,
+            )
+            .is_some_and(|index| matches!(explicit[index], Some(Argument::Type(_))));
         // GEN-5: "the requested output before inputs". EXPR-5: an
         // integer literal is an `f64` where one is expected; it selects
         // as the `i64` it is where a candidate takes one.
@@ -323,6 +333,7 @@ impl<'a> Typer<'a> {
                 .as_ref()
                 .or(expected.filter(|expected| !open(expected))),
             among,
+            written: result_written,
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         // EXPR-12: "Resolve configuration that selects an expression's
@@ -804,7 +815,8 @@ pub(super) struct Unfit {
 /// What the place a call stands in says of the operator's generic
 /// parameters: its result is the type the place expects (GEN-8). A `T`
 /// is a value of a `T?` (TYPE-14), so a place that expects an optional
-/// type says what a result that is not optional is.
+/// type says what a result that is not optional is
+/// ([`asked_of_result`]).
 pub(super) fn from_place(
     public: &Signature,
     expected: Option<&Type>,
@@ -813,10 +825,7 @@ pub(super) fn from_place(
     if let (Some(result), Some(expected)) = (&public.result, expected)
         && !open(expected)
     {
-        let place = match result {
-            Type::Nullable(_) => expected,
-            _ => not_null(Some(expected)).unwrap_or(expected),
-        };
+        let place = asked_of_result(result, expected, false);
         infer(result, place, &public.generics, found);
     }
 }

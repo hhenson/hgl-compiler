@@ -107,11 +107,23 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A node of scalars: its inputs' activity and validity, handlers in source order, `state` and `cache`, `start` and `stop` | FN-2, TIME-3, TIME-4, TIME-5, TIME-6 |
 | `return value`, `out = value`, `invalidate(out)` in a handler | TIME-7, FN-7, END-4 |
 | A payload read; `valid`, `modified`, `delta_value` plain and into a `result`, `last_modified` of an input | TIME-1, END-1, END-2, END-3, END-6, ERR-14 |
+| `is_active`, `activate` and `passivate` of a direct input in a handler, `is_active` in `stop` too | TIME-9, END-5 |
+| A temporal value of an enum: read, published, replayed, recorded, wired as a constant | TYPE-7, TYPE-16 |
 | `inject clock`, `logger`, `global_state`, and a property of each | TIME-8, CAP-1, CAP-2, CAP-3 |
-| A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
-| A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
-| `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| A source, and its `state`, `cache`, `inject`, `start` and `stop` | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
+| `inject scheduler` and `inject alarm` in a node; `schedule`, `un_schedule`, `reset`; what woke the node, which decides the handlers it runs; `scheduled()` and `modified([])` read as a `bool` | TIME-3, TIME-8, TIME-9, CAP-4, CAP-5 |
+| A graph; a value where a connection is expected; a lifted call, an input that binds its default or null where it is not valid, a parameter left out bound as configuration, a sink | FN-2, FN-3, FN-6, FN-11 |
+| `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn`; an eval of a value function | TST-4 to TST-8, TST-16 |
+| `capture`, its `.value` and `.error`; an `error` and a `result` as temporal values; `?` in a `when`; an error's `.context` | ERR-2, ERR-4, ERR-5, ERR-7, ERR-8 |
+| A temporal candidate of an operator | GEN-4, OPS-9 |
 | A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
+| A window of a scalar, of a tick count or of a duration: a publication to one, `all_valid`, its value read in a hook or given to a lifted helper where it is all valid, its delta and `removed_value` in the form their place takes, its trace, record and replay | TYPE-11, TYPE-16, END-3, END-9, ERR-14, FN-12, TIME-7, TST-16 |
+| A `ref` parameter and result: hgraph's `REF` input and output; a whole `ref` parameter returned sampled; an input that is no `ref` parameter designated whole, and followed through its re-binding with no handler run for it; `out =` and `invalidate(out)` of a `ref` result | FN-16, TIME-10, END-10 |
+| `inject global_state` in a graph, and `get`, `has`, `put` on it where the graph is built, once each, in the order written | FN-9, CAP-6, CRUN-7 |
+| An application: its statements setting the run's store before its run statement, in the order written; its run statement, `eval` in simulation and `run` in real time, with the entry's arguments and its `RunConfig` held in the order written; its entry unit and executable | UNIT-14, RUN-1, RUN-3, EXPR-2 |
+| `if` and `switch` over a connection in a graph: each branch a child graph of hgraph's `switch_`, taking what it reads whole; its value, the `var` it assigns, or a `return` and what follows; no `else`, no `default` | CTRL-2, CTRL-3, CTRL-5, CTRL-6, CTRL-13, CTRL-14, CTRL-15 |
+| A `var` of a connection; an `if` over an ordinary value that gives a connection | CTRL-1, CTRL-13, CTRL-14 |
+| `for` over a connection of a dictionary or a list, a child graph of hgraph's `map_` for each member; over a fixed list, the body for each position | CTRL-7, CTRL-15 |
 | A temporal set and dictionary: published whole and as a delta, read whole, `delta_value`, `all_valid` of a dictionary, an entry of a dictionary read in a hook and given to an endpoint operation, `invalidate(out)`, their trace cells whole and as deltas | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, END-3, END-4, TST-5, TST-9 |
 | A struct, a generic one and an abstract one, with `==` of each field; its construction by named fields, defaults and nulls, in the order written; its fields read and assigned; structs in lists, tuples, optionals, sets and dictionaries; a candidate of an operator over one | TYPE-3, TYPE-4, TYPE-5, OPS-2, GEN-4 |
 | A set and a dictionary, in no order, equal whatever the order; their literals; a strict read that fails with `value.missing_key`, an assignment that adds a key, core's `get`; `for` over each | TYPE-14, EXPR-3, EXPR-9, ERR-6, CTRL-12, OPS-2 |
@@ -123,21 +135,25 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 Not written yet, and reported: a `?` after anything its statement reads
 or runs before it (ERR-5), a `switch` case's binding read after the
 `switch` (UNIT-12), an element of a `list<bool>` given to a `var`
-parameter (a bit, no `bool&`), a struct that holds itself (TYPE-6), a field's
-default that runs statements, a field of an abstract struct assigned, a
-dictionary's entry given to a `var` parameter, a window, and of temporal
-code: a temporal value of any but a scalar, a set and a dictionary, a
-set's element or a dictionary's key of any but a scalar, a constant
-connection of a set or a dictionary, an entry of a dictionary's entry, a
-key's child as a connection of a graph (EXPR-7), `ref` (FN-16), `inject
-scheduler` and `alarm` (CAP-4, CAP-5), `all_valid`, `activate`,
-`passivate`, `scheduled()`, `if`, `switch` and `for` over connections
-(CTRL-7), `capture` (ERR-7), a lifted input with a default or a null
-(FN-11), a source with declarations or hooks, an eval's configuration
-that is no `RunConfig(...)` written in it (RUN-1), an eval of a value
-function (TST-5), and an application.
-A call of a function with a pack, core's `all_` and `any_`, has no
-callee the analyser reads.
+parameter (a bit, no `bool&`), a struct that holds itself (TYPE-6), a
+field's default that runs statements, a field of an abstract struct
+assigned, a dictionary's entry given to a `var` parameter, a window of
+any but a scalar, and of temporal code: a temporal value of any but a
+scalar, an enum, an `error`, a `result`, a set and a dictionary, a set's
+element or a dictionary's key of any but a scalar, a constant connection
+of a set or a dictionary, an entry of a dictionary's entry, a key's
+child as a connection of a graph (EXPR-7), a designation of a child of an
+input (FN-16), `all_valid` of any but a window or a dictionary, a change of an input's
+activity in `stop` (END-5), a `for` over a connection of a set
+(CTRL-15), in a branch or a loop's body the store or an ordinary value
+that may fail (FN-9: hgraph builds each child as the graph around it is
+built), a `return` under a branch selected at runtime in a loop unrolled
+where the graph is built, branches that assign two `var`s (CTRL-14), a
+`capture` given an `f64` configuration (ERR-7, hgraph issue 1866), a
+lifted call that leaves out a `T?` whose default may fail (FN-6), and an
+eval's or an application's configuration that is no `RunConfig(...)`
+written in it (RUN-1). A call of a function with a pack, core's `all_`
+and `any_`, has no callee the analyser reads.
 
 ## The C++ target's runtime library
 
@@ -170,9 +186,15 @@ the chapters' entries stay the hgraph target's.
 | `Scheduler`: its three properties, `schedule` with a duration or a datetime under a tag or none, on the wall clock in real time and unchanged by it in simulation, `un_schedule`, `reset`; `Alarm` and its `schedule`; what may be asked of each | CAP-4, CAP-5, TIME-8 | `capabilities.h` | `scheduler_tests.cpp` |
 | `get`, `has`, `put` of the global store, in a node and where a graph is built | CAP-6, FN-9 | `capabilities.h` | `capabilities_tests.cpp` |
 | A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
+| A capture, hgraph's `try_except_` of the graph of a captured call with canonical errors: its value, and its error ticked with each failure and where it failed; a failure of `start` escaping it; a `result` published whole | ERR-2, ERR-4, ERR-7, ERR-8 | `capture.h` | `capture_tests.cpp` |
+| What a `ref` parameter designates: the reference its `REF` input holds, present from the start where it is given a connection, or none, which an ordinary reader of the result it is published to observes | FN-16, TIME-10, END-10 | `references.h` | `references_tests.cpp` |
+| The branch of no `else`, a connection that never ticks; the branch of no `default`, which fails with the selector's value | CTRL-3, CTRL-6, CTRL-13 | `control.h` | `control_tests.cpp` |
 | An enum as a value of the library and of the test host: its HGL name, its members' text, its schema with hgraph; core's `CmpResult`, `ZeroPolicy`, `Rounding`, `InvalidPolicy`, `LogLevel` | TYPE-7, TST-4, TST-5, OPS-3 | `values.h`, `traces.h` | `traces_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
+| Whether an input ticked in an evaluation, published or lost its value, by which a node with a timer tells its wakes apart; a capability lent to a source's body for one resumption | TIME-3, TIME-9, END-4, SOURCE-1, TIME-8 | `timing.h` | `timing_tests.cpp` |
 | A source's body as a coroutine, `generator<T>`: run on to each `yield` as it is resumed, in loops and branches, giving what it yields; what it lets out thrown again where it was resumed; its frame and the locals in it destroyed wherever it stopped | SOURCE-1 | `generator.h` | `generator_tests.cpp` |
 | Tests registered by name and run as named, from an entry unit that includes no hgraph header; `assert`; `assert raises`; a test held to a time limit, failed once past it and its runs stopped | TST-2, TST-10, TST-11, TST-15, TST-17 | `host.h`, `testing.h` | `testing_tests.cpp` |
 | Traces of scalars, nullables, tuples and lists, written dense and timed, each cell whole or a delta; their comparison with an eval's recording and the values its result held, and where two first differ; what one written out replays to an input and gives a `const fn` | TST-4, TST-5, TST-6, TST-7, TST-9, TST-16, CEVAL-2, TYPE-16 | `traces.h`, `testing.h` | `traces_tests.cpp`, `testing_tests.cpp` |
 | A run's bounds, the run in simulation and in real time, its store and its recording; an eval and its failure | CRUN-1, CRUN-2, CRUN-3, CRUN-7, CRUN-8, CEVAL-1, CEVAL-4, CEVAL-5, CEVAL-6, RUN-3 | `testing.h` | `testing_tests.cpp`, `sources_tests.cpp` |
+| A window of a tick count and of a duration, hgraph's `TSW` and `TSWDuration`: a publication to one; `all_valid`; its value read checked, where hgraph reads the values held below the minimum (`hgraph_window_read.cpp`, hgraph alone); its delta, the value that arrived, none at an exit alone, plain and where a `result` is taken; `removed_value` where a `result` is taken; values leaving by age, and `last_modified` at an exit | TYPE-11, END-3, END-9, ERR-14 | `windows.h` | `window_tests.cpp`, `hgraph_window_read.cpp` |
+| An application's run: its store set before its graph is built, its output as text; its host, from an entry unit that includes no hgraph header, writing what became of the run, and stopping a run in real time asked down standard input or by an interrupt, as at its end; a simulation asked to stop, and a second interrupt, ending at once | UNIT-14, RUN-1, RUN-3, RUN-4, CRUN-1, CRUN-6, CRUN-7, CRUN-8 | `application.h`, `application_host.h` | `application_tests.cpp` |

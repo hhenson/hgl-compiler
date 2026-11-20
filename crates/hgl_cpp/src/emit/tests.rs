@@ -21,17 +21,21 @@
 //! | A trace given to a `const fn` (TST-16) | `::hglrt::testing::publications(trace)`, its publications as a list |
 //! | `let seen = eval(...)`, a `let` of a trace | `const auto seen = ...;`: the recording, or the trace written out, as the test host has it |
 //!
-//! An eval's configuration is the lifecycle's (`lifecycle`); an eval of a
-//! value function is not written yet, and is reported.
+//! An eval's configuration is the lifecycle's (`lifecycle`). An eval of a
+//! value function is its lifted node's (`lifting`), given the replays as
+//! its inputs and each default the call leaves out as configuration, and
+//! written ahead of the test.
 
 use hgl_analyser::hir::{Cell, Expr, ExprKind, Stmt};
 use hgl_analyser::{Argument as GenericArgument, Type};
+use hgl_lower::calls::{LeftOut, left_out};
 use hgl_lower::instances::{core_function, run_wiring, trace_payload};
 
 use super::Emitter;
 use super::calls::{changes, may_fail};
 use super::forms::Family;
 use super::graphs::WIRING;
+use super::lifting::Given;
 use super::names::{self, identifier};
 use super::nodes::{Context, Kind, Placed};
 use super::statements::{Scope, statement_at};
@@ -65,7 +69,17 @@ impl Emitter<'_> {
             self.statement(&mut scope, statement, 1, &mut text);
         }
         text.push_str("}\n");
-        self.piece.text = text;
+        // What the test's evals wire that a function cannot hold, ahead
+        // of it: its statements' lines move down by as many lines.
+        let ahead: String = std::mem::take(&mut self.ahead)
+            .into_iter()
+            .map(|node| node + "\n")
+            .collect();
+        let moved = ahead.matches('\n').count();
+        for (line, _) in &mut self.piece.statements {
+            *line += moved;
+        }
+        self.piece.text = ahead + &text;
     }
 
     /// `value`, an `eval(...)` (TST-5, TST-8; core's CEVAL-1): a run of
@@ -90,10 +104,6 @@ impl Emitter<'_> {
             program.modules[module].declarations[declaration].kind
                 == hgl_analyser::DeclarationKind::Function(hgl_analyser::Role::Temporal)
         });
-        if !temporal {
-            // TST-5: "a selected value helper uses ordinary lifting".
-            return self.missing(call.at, "an eval of a value function");
-        }
         let Some(wiring) = run_wiring(program, call, &value.ty) else {
             return self.missing(call.at, "an eval of this");
         };
@@ -104,9 +114,41 @@ impl Emitter<'_> {
         // one runs statements, each is held first, in that order, before
         // the run that reads them; a trace's cells are read where the
         // entry is wired otherwise.
+        // The defaults of the `const` parameters the call leaves out, which
+        // are evaluated after the arguments written (EXPR-2); of a value
+        // function, which is lifted, of every parameter it leaves out,
+        // which binds as configuration (FN-6).
+        let left: Vec<&Expr> = callee
+            .declaration()
+            .and_then(|(module, declaration)| {
+                match program.modules[module].details.get(declaration) {
+                    Some(hgl_analyser::Detail::Callable(signature)) => Some(
+                        signature
+                            .parameters
+                            .iter()
+                            .enumerate()
+                            .filter(|(index, parameter)| {
+                                (parameter.constant || !temporal)
+                                    && !arguments
+                                        .iter()
+                                        .any(|argument| argument.parameter == Some(*index))
+                            })
+                            .filter_map(|(index, parameter)| {
+                                match left_out(program, (module, declaration), index, parameter) {
+                                    Some(LeftOut::Default(default)) => Some(default),
+                                    _ => None,
+                                }
+                            })
+                            .collect(),
+                    ),
+                    _ => None,
+                }
+            })
+            .unwrap_or_default();
         let held = arguments
             .iter()
             .map(|argument| &argument.value)
+            .chain(left.iter().copied())
             .chain(config.as_deref())
             .filter(|part| may_fail(part))
             .count()
@@ -121,8 +163,21 @@ impl Emitter<'_> {
         // CEVAL-1: "core's `replay` wired to each temporal input of the
         // target", each given the trace written for it (CEVAL-2).
         let mut given: Vec<(usize, String)> = Vec::new();
+        // What a lifted target is given (`lifting`): the replays, and the
+        // configuration held.
+        let mut replayed: Vec<Given> = Vec::new();
         let mut context = Context::new(Kind::Entry, scope.body.locals.len());
         for (position, argument) in arguments.iter().enumerate() {
+            // A trace that is no trace written out, a `let` of one or an
+            // eval's, is replayed from what it holds: not written yet.
+            if matches!(argument.value.ty, Type::Trace { .. })
+                && !matches!(argument.value.kind, ExprKind::Trace(_))
+            {
+                return self.missing(
+                    argument.value.at,
+                    "a trace given to an eval that is no trace written out",
+                );
+            }
             if !matches!(argument.value.kind, ExprKind::Trace(_)) {
                 // A `const` parameter's configuration, held as a value; a
                 // value given to a temporal one is wired as a constant
@@ -137,7 +192,19 @@ impl Emitter<'_> {
                         written = emitter.expression(scope, &argument.value);
                     });
                     let name = names::temporary("argument", self.temporary());
-                    steps.push_str(&format!("{indent}const auto {name} = {written};\n"));
+                    // Held as its HGL type, so that a later part does not
+                    // change it through a proxy (`graphs::temporal_call`).
+                    let Some(ty) = self.written_type(&argument.value.ty, argument.value.at) else {
+                        return "0".to_string();
+                    };
+                    steps.push_str(&format!("{indent}const {ty} {name} = {written};\n"));
+                    // A lifted target is given it as configuration, so that
+                    // it is evaluated once (EXPR-2).
+                    replayed.push(Given {
+                        position,
+                        written: name.clone(),
+                        input: None,
+                    });
                     given.push((position, name));
                 }
                 continue;
@@ -172,12 +239,79 @@ impl Emitter<'_> {
             text.push_str(&format!(
                 "{indent}const ::hgraph::Port<{schema}> {port} = {replay}({WIRING}, {library}::replay_items({trace}, start_));\n"
             ));
-            given.push((position, port));
+            given.push((position, port.clone()));
+            replayed.push(Given {
+                position,
+                written: port,
+                input: Some(ty),
+            });
+        }
+        // EXPR-2: "the arguments written, then the defaults of those left
+        // out", and the configuration after the call: where the parts are
+        // held, each `const` parameter's default is held too, in the
+        // order of the parameters, before the configuration.
+        let mut defaults: Vec<(usize, String)> = Vec::new();
+        if held && let Some((module, declaration)) = callee.declaration() {
+            let parameters = match program.modules[module].details.get(declaration) {
+                Some(hgl_analyser::Detail::Callable(signature)) => signature.parameters.clone(),
+                _ => Vec::new(),
+            };
+            for (index, parameter) in parameters.iter().enumerate() {
+                let written = arguments
+                    .iter()
+                    .any(|argument| argument.parameter == Some(index));
+                if written || !(parameter.constant || !temporal) {
+                    continue;
+                }
+                let Some(LeftOut::Default(default)) =
+                    left_out(program, (module, declaration), index, parameter)
+                else {
+                    continue;
+                };
+                // A value function's default that cannot fail is the same
+                // value wherever it is evaluated: its lifted node binds it
+                // where it is wired (`lifting`).
+                if !temporal && !may_fail(default) {
+                    continue;
+                }
+                if changes(default) {
+                    return self.missing(default.at, "a default that runs statements");
+                }
+                let cold = hgl_analyser::hir::Body {
+                    locals: Vec::new(),
+                    statements: Vec::new(),
+                };
+                let mut cold_scope = Scope::cold(program, &cold);
+                let written = self.expression(&mut cold_scope, default);
+                if !cold_scope.before.is_empty() {
+                    return self.missing(default.at, "a default that propagates a failure");
+                }
+                let name = names::temporary("argument", self.temporary());
+                let Some(ty) = self.written_type(&default.ty, default.at) else {
+                    return "0".to_string();
+                };
+                steps.push_str(&format!("{indent}const {ty} {name} = {written};\n"));
+                defaults.push((index, name));
+            }
         }
         let mut target = String::new();
         self.in_context(&mut context, |emitter| {
-            target = emitter.temporal_call(scope, call, &given);
+            target = if temporal {
+                emitter.temporal_call_held(scope, call, &given, &defaults)
+            } else {
+                // TST-8: "A selected value helper uses ordinary lifting":
+                // a lifted node, given the replays as its inputs, which is
+                // written ahead of the test.
+                emitter.lifted(scope, call, &replayed, &defaults, wiring.result.as_ref())
+            };
         });
+        // A node written already, where the eval is written again, is
+        // not written twice.
+        for node in context.lifted {
+            if !self.ahead.contains(&node) {
+                self.ahead.push(node);
+            }
+        }
         // RUN-1: the run's configuration, core's `RunConfig`, gives its
         // bounds (CRUN-2), and an integration test's `run` its mode.
         let mut bounds = match config {
@@ -205,7 +339,7 @@ impl Emitter<'_> {
                 let Some(record) = self.core_instance("record", result, call.at) else {
                     return "0".to_string();
                 };
-                let Some(written) = self.written_type(result, call.at) else {
+                let Some(written) = self.payload_type(result, call.at) else {
                     return "0".to_string();
                 };
                 // TST-5: "one written as a T [is compared] with the value
@@ -214,8 +348,11 @@ impl Emitter<'_> {
                 // at each publication (`hglrt::testing::hold`): the result
                 // read whole as its form reads it, or none where that read
                 // fails. A result whose form no family writes is reported
-                // where the target is written.
+                // where the target is written. A window's trace holds its
+                // arrivals and its read is a list (`Family::read_type`): it
+                // has no cell written whole.
                 if Type::delta(result.clone()) != *result
+                    && self.read_type(result) == *result
                     && let Some(schema) = self.form_schema(result)
                 {
                     let read = self.temporal_read(result, "result_", call.at);
@@ -255,7 +392,7 @@ impl Emitter<'_> {
     /// `name`, `replay` or `record`, for `ty` (CEVAL-1), which the piece
     /// then reaches. `None` where there is none, which is reported at
     /// `at`.
-    fn core_instance(
+    pub(super) fn core_instance(
         &mut self,
         name: &str,
         ty: &Type,
@@ -293,7 +430,7 @@ impl Emitter<'_> {
         };
         let library = names::testing("");
         let library = library.trim_end_matches("::");
-        let Some(written) = self.written_type(ty, value.at) else {
+        let Some(written) = self.payload_type(ty, value.at) else {
             return "0".to_string();
         };
         // TST-6: a dense trace; TST-7: a timed one, each cell with its key.

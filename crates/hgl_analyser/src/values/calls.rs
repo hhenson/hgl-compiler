@@ -11,7 +11,7 @@ use hgl_source::{FileId, Span};
 use super::Typer;
 use super::arguments::{Slot, Takes};
 use super::fit::{not_null, open};
-use super::inference::{Inferred, Places, infer, mentions, placed};
+use super::inference::{Inferred, Places, asked_of_result, infer, mentions, placed};
 use super::node::RefRead;
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Callee, EndpointOperation, ExprKind, Form, Hook};
@@ -675,14 +675,12 @@ impl<'a> Typer<'a> {
 
         // The requested output: `let names: list<str> = repeat(3)` says
         // what the `T` of `repeat<T>(count: i64) -> list<T>` is. A `T`
-        // result given to a `T?` place is the `T`.
+        // result given to a `T?` place is the `T` (`asked_of_result`).
+        // What the call writes is found already, and is not changed.
         if let (Some(result), Some(expected)) = (&signature.result, expected)
             && !open(expected)
         {
-            let wanted = match result {
-                Type::Nullable(_) => expected,
-                _ => not_null(Some(expected)).unwrap_or(expected),
-            };
+            let wanted = asked_of_result(result, expected, false);
             infer(result, wanted, generics, &mut found);
         }
         // The inputs.

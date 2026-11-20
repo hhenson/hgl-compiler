@@ -1,0 +1,58 @@
+module demo.activity
+
+# The activity of a node's inputs and the temporal form of an enum, as
+# the cpp target writes them. Its goldens are under
+# `tests/goldens/demo.activity`.
+
+# An enum, published whole as a scalar is (TYPE-7, TYPE-16).
+export enum Mode { listen, ignore }
+
+# A control that makes the data input active or passive (END-5, TIME-3):
+# a passive input wakes no node, and is read as an active one where
+# another input wakes it.
+fn gated(mode: Mode, data: i64) -> i64 {
+    when modified(mode) {
+        if mode == .listen { activate(data) }
+        else { passivate(data) }
+    }
+    when modified(data) && is_active(data) { return data }
+    when modified(data) { return -data }
+}
+
+# A node that publishes an enum.
+fn mode_of(value: i64) -> Mode {
+    when {
+        if value > 0 { return .listen }
+        return .ignore
+    }
+}
+
+# Two bindings of one output, of which only the first wakes the node
+# (END-5: "Activity belongs to each input binding").
+fn bindings(driving: i64, sampled: i64) -> bool {
+    when modified(driving) { return is_active(driving) && !is_active(sampled) }
+}
+
+fn same_twice(value: i64) -> bool => bindings(value, value)
+
+# An enum wired as a constant connection (FN-3).
+fn listening(data: i64) -> i64 => gated(.listen, data)
+
+test a_passive_input_wakes_no_node {
+    assert eval(gated(
+        mode: [.listen, .ignore, _, .ignore, .listen, _],
+        data: [      1,       _, 2,       3,       _, 4],
+    )) ==     [      1,       _, _,      -3,       _, 4]
+}
+
+test an_enum_is_published {
+    assert eval(mode_of(value: [1, -1, 2])) == [.listen, .ignore, .listen]
+}
+
+test activity_belongs_to_the_binding {
+    assert eval(same_twice(value: [7, _, 7])) == [true, _, true]
+}
+
+test an_enum_is_a_constant_connection {
+    assert eval(listening(data: [1, 2])) == [1, 2]
+}
