@@ -43,6 +43,10 @@ duration smallest_step() noexcept;
 /// runs from.
 datetime earliest_start() noexcept;
 
+/// The latest end (CRUN-3): "one smallest step before `forever`", which is
+/// `2262-04-11T00:00:00Z`. A run's end is no later than it.
+datetime latest_end() noexcept;
+
 // ---- Cells (TST-5) -------------------------------------------------------
 
 /// A cell written as a whole value of T, where T's delta is no T.

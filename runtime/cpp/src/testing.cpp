@@ -79,6 +79,11 @@ datetime earliest_start() noexcept {
     return hgraph::MIN_ST;
 }
 
+datetime latest_end() noexcept {
+    return datetime{std::chrono::sys_days{std::chrono::year{2262} / std::chrono::April / 11}} -
+           smallest_step();
+}
+
 void detail::unordered_keys() {
     fail_uncoded("the keys of a timed trace must strictly increase");
 }
@@ -317,13 +322,27 @@ std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds, Mode
                                   ? earliest_start()
                                   : std::chrono::floor<duration>(hgraph::engine_clock::now());
     const datetime start = bounds.start.value_or(unstated);
-    // CRUN-3 reserves the epoch itself for `never`.
+    // CRUN-3: "a run's start is no earlier than the first [`earliest_start`]
+    // and its end no later than the second [`latest_end`]". CRUN-3 reserves
+    // the epoch itself for `never`. Neither rule names the failure of a run
+    // outside them: each fails with no code.
     if (start < earliest_start()) {
         fail_uncoded("the run's start is before the earliest evaluation time");
     }
+    const auto past_latest_end = [] { fail_uncoded("the run's end is after the latest end"); };
     std::optional<datetime> end = bounds.end;
     if (bounds.length.has_value()) {
+        // An end the length puts after the latest end, one no instant holds
+        // among them, is after it whatever the sum would be. The start is
+        // after the epoch, so the room before the latest end is a count of
+        // microseconds.
+        if (*bounds.length > latest_end() - start) {
+            past_latest_end();
+        }
         end = add__datetime_duration(start, *bounds.length);
+    }
+    if (end.has_value() && *end > latest_end()) {
+        past_latest_end();
     }
     return {start, end};
 }
@@ -342,10 +361,14 @@ hgraph::GlobalStateView Run::store() const {
 }
 
 Run run(const Entry& entry, const Bounds& bounds, Mode mode) {
-    const auto [start, end] = resolved(bounds, mode);
+    const auto [start, given_end] = resolved(bounds, mode);
     hgraph::Wiring wiring;
     entry(wiring, start);
-    if (end.has_value() && *end <= start) {
+    // CRUN-3: "`forever` ... after every [evaluation time]: no cycle runs at
+    // either": a run with no end ends at the latest end, which hgraph's own
+    // last time is later than.
+    const datetime end = given_end.value_or(latest_end());
+    if (end <= start) {
         // hgraph has no run that ends where it starts, so none is made.
         return Run(start);
     }
@@ -357,10 +380,8 @@ Run run(const Entry& entry, const Bounds& bounds, Mode mode) {
         .mode(mode == Mode::simulation ? hgraph::GraphExecutorMode::Simulation
                                        : hgraph::GraphExecutorMode::RealTime)
         .start_time(start)
+        .end_time(end)
         .add_lifecycle_observer(&stopper);
-    if (end.has_value()) {
-        builder.end_time(*end);
-    }
     hgraph::GraphExecutorValue executor = builder.make_executor();
     {
         const UnderWay registered(executor.view());

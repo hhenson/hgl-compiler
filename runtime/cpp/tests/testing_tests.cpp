@@ -252,6 +252,53 @@ TEST_CASE("a run's bounds (CRUN-2, CRUN-3)") {
     CHECK(code_raised([] { (void)hglrt::testing::resolved({.start = datetime{}}); }) == "(no code)");
 }
 
+TEST_CASE("a run's end is no later than the latest end, and no cycle is at or after forever (CRUN-3)") {
+    using hglrt::testing::evaluate;
+    using hglrt::testing::resolved;
+    using hglrt_test::Counted;
+    using hglrt_test::entry_of;
+    namespace c = std::chrono;
+    // "`forever`, `2262-04-11T00:00:00Z` ... the latest end, `latest_end`,
+    // one smallest step before `forever`".
+    const datetime forever{c::sys_days{c::year{2262} / 4 / 11}};
+    const datetime latest = hglrt::testing::latest_end();
+    CHECK(latest == forever - 1us);
+    CHECK(resolved({.end = latest}).second == latest);
+    CHECK(resolved({.start = latest - 1s, .length = 1s}).second == latest);
+    CHECK(hglrt::testing::same(evaluate<i64>(entry_of<Counted>(Dense<i64>{7}), {.end = latest}),
+                               Dense<i64>{1}));
+
+    // An end after it fails as a start before the earliest start does, with
+    // no code: one given, and one a length gives, a length so long that no
+    // instant holds the end among them.
+    const i64 most = std::numeric_limits<i64>::max();
+    for (const hglrt::testing::Bounds& past :
+         {hglrt::testing::Bounds{.end = latest + 1us}, hglrt::testing::Bounds{.end = forever + c::years{100}},
+          hglrt::testing::Bounds{.start = latest, .length = 1us},
+          hglrt::testing::Bounds{.start = forever + c::years{1}, .length = 1s},
+          hglrt::testing::Bounds{.start = datetime{c::sys_days{c::year{2300} / 1 / 1}}, .length = 1s},
+          hglrt::testing::Bounds{.length = c::days{1'000'000}},
+          hglrt::testing::Bounds{.length = hglrt::duration{most}},
+          hglrt::testing::Bounds{.start = latest, .length = hglrt::duration{most}}}) {
+        CHECK(code_raised([&] { (void)resolved(past); }) == "(no code)");
+        CHECK(code_raised([&] { (void)evaluate<i64>(entry_of<Counted>(Dense<i64>{7}), past); }) ==
+              "(no code)");
+    }
+
+    // A run with no end ends at the latest end: a start at it or after it,
+    // after forever and after hgraph's own last time among them, runs no
+    // cycle, and a publication timed after forever is not made.
+    for (const datetime late : {latest, forever + c::years{1}, datetime{c::sys_days{c::year{2300} / 1 / 1}},
+                                datetime{c::sys_days{c::year{9999} / 12 / 31}}}) {
+        const auto ran = evaluate<i64>(entry_of<Counted>(Dense<i64>{7}), {.start = late});
+        CHECK(ran.start == late);
+        CHECK(ran.entries.empty());
+    }
+    const auto ran =
+        evaluate<i64>(entry_of<Counted>(Timed<i64>{{{0s, 7}, {latest - 1us, 7}, {forever + 1s, 7}}}));
+    CHECK(hglrt::testing::same(ran, Timed<i64>{{{0s, 1}, {latest - 1us, 2}}}));
+}
+
 TEST_CASE("an eval runs its entry in simulation and reads its recording (CEVAL-1, CEVAL-4)") {
     using hglrt_test::Counted;
     using hglrt_test::entry_of;
