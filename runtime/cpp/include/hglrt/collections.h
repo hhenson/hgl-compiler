@@ -79,7 +79,7 @@ concept written_struct = requires { fields<S>::members; };
 /// A value of an abstract struct (TYPE-3): a class the compiler writes, which
 /// holds the struct it is through `held_`, a pointer to a `held_value`.
 template <class A>
-concept abstract_value = requires(const A& value) { value.held_->same(*value.held_); };
+concept abstract_value = requires(const A& value) { value.held_->same_(*value.held_); };
 
 template <class T>
 bool same(const T& lhs, const T& rhs);
@@ -281,7 +281,9 @@ list_delta<L> list_delta_of(const dict<i64, delta_t<typename L::value_type>>& up
 
 /// The part of a value of an abstract struct (TYPE-3) that every one has,
 /// whatever struct it holds: HGL's `==` of two, their identity as keys, and
-/// the hash of that identity.
+/// the hash of that identity. Its names, and those of `held_as`, end with
+/// `_`, which no name of a field the compiler writes does: the class of the
+/// abstract struct gives each field a function of the field's name.
 struct held_value {
     held_value() = default;
     held_value(const held_value&) = delete;
@@ -290,11 +292,11 @@ struct held_value {
 
     /// `==` (OPS-2): "Two structs are equal when they are of one struct with
     /// the same generic arguments ... and each field is equal".
-    [[nodiscard]] virtual bool equal(const held_value& other) const = 0;
+    [[nodiscard]] virtual bool equal_(const held_value& other) const = 0;
     /// Their identity as keys (`same`).
-    [[nodiscard]] virtual bool same(const held_value& other) const = 0;
+    [[nodiscard]] virtual bool same_(const held_value& other) const = 0;
     /// The hash of that identity.
-    [[nodiscard]] virtual std::size_t hash() const = 0;
+    [[nodiscard]] virtual std::size_t hash_() const = 0;
 };
 
 /// The struct `S` held where a value of the abstract struct whose
@@ -302,21 +304,21 @@ struct held_value {
 /// of the abstract struct derives from it to read each field it has.
 template <class Interface, class S>
 struct held_as : Interface {
-    explicit held_as(S held) : value(std::move(held)) {}
+    explicit held_as(S held) : held_(std::move(held)) {}
 
     /// The struct held.
-    S value;
+    S held_;
 
-    [[nodiscard]] bool equal(const held_value& other) const final {
+    [[nodiscard]] bool equal_(const held_value& other) const final {
         const auto* of = dynamic_cast<const held_as*>(&other);
-        return of != nullptr && value == of->value;
+        return of != nullptr && held_ == of->held_;
     }
-    [[nodiscard]] bool same(const held_value& other) const final {
+    [[nodiscard]] bool same_(const held_value& other) const final {
         const auto* of = dynamic_cast<const held_as*>(&other);
-        return of != nullptr && hglrt::same(value, of->value);
+        return of != nullptr && hglrt::same(held_, of->held_);
     }
-    [[nodiscard]] std::size_t hash() const final {
-        return detail::combined(typeid(S).hash_code(), key_hash_of(value));
+    [[nodiscard]] std::size_t hash_() const final {
+        return detail::combined(typeid(S).hash_code(), key_hash_of(held_));
     }
 };
 
@@ -451,7 +453,7 @@ bool same(const T& lhs, const T& rhs) {
         return std::apply([&](const auto... member) { return (same(lhs.*member, rhs.*member) && ...); },
                           fields<T>::members);
     } else if constexpr (abstract_value<T>) {
-        return lhs.held_->same(*rhs.held_);
+        return lhs.held_->same_(*rhs.held_);
     } else if constexpr (detail::is_expected<T>::value) {
         if (lhs.has_value() != rhs.has_value()) {
             return false;
@@ -520,7 +522,7 @@ std::size_t key_hash_of(const T& value) {
             fields<T>::members);
         return seed;
     } else if constexpr (abstract_value<T>) {
-        return value.held_->hash();
+        return value.held_->hash_();
     } else if constexpr (detail::is_expected<T>::value) {
         if (value.has_value()) {
             if constexpr (std::is_void_v<typename T::value_type>) {

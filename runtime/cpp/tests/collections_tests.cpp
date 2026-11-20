@@ -34,7 +34,7 @@ class Shape {
     template <class S>
     struct as_ final : hglrt::held_as<of_, S> {
         using hglrt::held_as<of_, S>::held_as;
-        [[nodiscard]] const i64& id() const override { return this->value.id; }
+        [[nodiscard]] const i64& id() const override { return this->held_.id; }
     };
 
     Shape() = default;
@@ -43,7 +43,7 @@ class Shape {
     Shape(S value) : held_{std::make_shared<const as_<S>>(std::move(value))} {}
 
     [[nodiscard]] const i64& id() const { return held_->id(); }
-    friend bool operator==(const Shape& lhs, const Shape& rhs) { return lhs.held_->equal(*rhs.held_); }
+    friend bool operator==(const Shape& lhs, const Shape& rhs) { return lhs.held_->equal_(*rhs.held_); }
 
     std::shared_ptr<const of_> held_;
 };

@@ -2,24 +2,10 @@
 #pragma once
 
 #include <hglrt/hglrt.h>
+#include "demo.values.types.h"
 
 namespace hgl::demo::values::m_
 {
-
-// enum Side (TYPE-7)
-enum class Side
-{
-    buy,
-    sell,
-    hold,
-};
-
-// enum Level (TYPE-7)
-enum class Level
-{
-    low,
-    high,
-};
 
 // const limit: i64 (UNIT-13), module demo.values, line 9
 const ::hgraph::Int& limit();

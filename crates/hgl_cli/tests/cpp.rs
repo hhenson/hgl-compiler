@@ -398,6 +398,83 @@ fn value_code_runs_on_the_sdk() {
     );
 }
 
+/// `demo.composites`, structs, sets, dictionaries and deltas as values
+/// (TYPE-3 to TYPE-6, TYPE-14, TYPE-16, EXPR-3, ERR-6, CTRL-12): every
+/// test of it passes on the SDK, and under the sanitizers where
+/// `HGL_CPP_FLAGS` names them, as the CI job for C++ runs it again.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn composite_values_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("composites");
+    let file = write(
+        &root,
+        "src/demo.composites.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.composites.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// Two modules, one of whose structs holds the other's, with an instance
+/// of the other's generic function over it: each is built, and its tests
+/// pass (GEN-2, UNIT-6).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_struct_that_holds_another_modules_is_built() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("struct-modules");
+    write(
+        &root,
+        "src/demo.inner.hgl",
+        concat!(
+            "module demo.inner\n",
+            "export struct Inner { value: i64 }\n",
+            "export const fn same<T>(value: T) -> T => value\n",
+        ),
+    );
+    write(
+        &root,
+        "src/demo.outer.hgl",
+        concat!(
+            "module demo.outer\n",
+            "use demo.inner::{Inner, same}\n",
+            "struct Outer { inner: Inner }\n",
+            "test each_names_the_other {\n",
+            "    let outer = Outer(inner: Inner(value: 4))\n",
+            "    assert same(outer) == outer && same(outer).inner.value == 4\n",
+            "}\n",
+        ),
+    );
+    let source = argument(&root.join("src"));
+    let output = hgl_in(&["test", &source, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("passed   executable  demo.outer::each_names_the_other"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-3: "An index outside a list fails where it is evaluated". The
 /// test is reported at the statement of it that was running, inside a
 /// function it called, with the runtime library's text of the failure.

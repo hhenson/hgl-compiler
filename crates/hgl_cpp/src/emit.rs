@@ -11,8 +11,9 @@
 //! not.
 //!
 //! The modules by concern, each saying what it writes: `names` (every
-//! C++ name), `types` (types, and the declarations of structs and
-//! enums), `values` (value functions, their instances and constants),
+//! C++ name), `types` (types, and the declarations of enums),
+//! `composites` (structs, sets, dictionaries and deltas as values),
+//! `values` (value functions, their instances and constants),
 //! `statements`, `expressions` and `calls` (value code, a test's among
 //! it), `nodes` and `graphs` (temporal functions and applications),
 //! `tests` (named tests).
@@ -25,6 +26,7 @@ use hgl_lower::pieces::Reach;
 use crate::codes;
 
 mod calls;
+mod composites;
 mod expressions;
 mod graphs;
 mod names;
@@ -34,6 +36,7 @@ mod tests;
 mod types;
 mod values;
 
+pub(crate) use composites::Layout;
 pub(crate) use names::{identifier, module_namespace, string, test_namespace, testing};
 
 /// What writing a module gave.
@@ -73,16 +76,20 @@ pub(crate) struct Piece {
     /// For a test, where each of its statements starts: the line of
     /// its text, counted from 0, and the place in the source.
     pub(crate) statements: Vec<(usize, Location)>,
-    /// The enums of other modules it names, each as its module and its
-    /// declaration: the header that declares the piece declares each
-    /// opaque, and the unit includes the header that defines it. A
-    /// header includes no other module's, as an instance may name an enum
-    /// of a module that imports its own (GEN-2).
+    /// The enums and structs of other modules it names, each as its
+    /// module and its declaration: the header that declares the piece
+    /// includes the types header of each one's module. A types header
+    /// includes no module's header but another's types header, as an
+    /// instance may name a type of a module that imports its own (GEN-2).
     pub(crate) types: std::collections::BTreeSet<(usize, usize)>,
-    /// True for the declaration of a type: the module's header declares
-    /// each before any function, which may name it wherever it is
-    /// declared (UNIT-6).
+    /// True for the declaration of a type: the module's types header
+    /// holds each, which the module's header includes before any
+    /// function, which may name it wherever it is declared (UNIT-6).
     pub(crate) is_type: bool,
+    /// For the declaration of a struct, what the module's types header
+    /// holds of it (`composites::Layout`); `None` for any other piece.
+    /// An enum's is its `declaration`.
+    pub(crate) layout: Option<Box<Layout>>,
 }
 
 /// Writes module `index` of `program`, reporting each form it does not

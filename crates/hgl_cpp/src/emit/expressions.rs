@@ -17,6 +17,8 @@
 //! | `error(message: m, code: c)`, `e.message`, `e.code` | `::hglrt::make_error(m, c)`, `(e).message`, `(e).code` (ERR-4) |
 //! | `value?` | the result held before the statement, the function left with its failure, and `(*held)` (ERR-5) |
 //! | A constant `name` | `name()` (UNIT-13) |
+//! | `@[Europe/London]`, `@09:30[Europe/London]` | hgraph's `ZoneId` and `ZonedTime` of them |
+//! | A struct, a field, a set, a dictionary, a delta, `Side(1)`, `maybe == 1` | `composites`' |
 //!
 //! A form not written yet is reported, and `0` stands in its place: the
 //! piece is left out of the files.
@@ -156,6 +158,19 @@ impl Emitter<'_> {
                 };
                 self.constructed(scope, &ty, entries)
             }
+            // TYPE-14, OPS-2: a `T?` compared with a `T`, which the
+            // analyser leaves to its symbol (`composites`).
+            ExprKind::Binary {
+                operator: operator @ (BinaryOperator::Equal | BinaryOperator::NotEqual),
+                left,
+                right,
+            } => {
+                match self.nullable_equality(scope, *operator == BinaryOperator::Equal, left, right)
+                {
+                    Some(written) => written,
+                    None => self.missing(value.at, "this expression"),
+                }
+            }
             // EXPR-9: a sequence is what its type says it makes: a list
             // here.
             ExprKind::Sequence(entries) if matches!(value.ty, Type::List { .. }) => {
@@ -206,6 +221,8 @@ impl Emitter<'_> {
                     scope.acted = true;
                     format!("::{}::item({base}, {index})", runtime::NAMESPACE)
                 }
+                // ERR-6: a dictionary's value for a key (`composites`).
+                Type::Dict { .. } => self.dict_read(scope, value, base, index),
                 _ => self.missing(value.at, "this read of an element"),
             },
             ExprKind::Block {
@@ -326,15 +343,19 @@ impl Emitter<'_> {
                 self.missing(value.at, "a comparison of traces")
             }
             ExprKind::Trace(_) => self.missing(value.at, "a trace"),
-            // A struct, a set and a dictionary are not written yet: each
-            // is reported by its type.
-            ExprKind::Construct { .. } | ExprKind::Sequence(_) | ExprKind::Pairs(_) => {
-                self.missing(value.at, &format!("the type `{}`", value.ty))
-            }
+            // A struct, a set, a dictionary and a delta (`composites`).
+            ExprKind::Construct { arguments, .. } => self.construct(scope, value, arguments),
+            ExprKind::Field { base, member } => self.field(scope, value, base, *member),
+            ExprKind::Delta { arguments } => self.delta(scope, value, arguments),
+            ExprKind::Sequence(entries) => self.set_literal(scope, value, entries),
+            ExprKind::Pairs(entries) => self.dict_literal(scope, value, entries),
+            ExprKind::ParentList(inner) => self.parent_list(scope, value, inner),
             // TYPE-7: `Side(1)`, `Side("buy")`.
-            ExprKind::EnumFrom { .. } => {
-                self.missing(value.at, "an enum's member made from a value")
-            }
+            ExprKind::EnumFrom {
+                module,
+                declaration,
+                value: from,
+            } => self.enum_from(scope, value, (*module, *declaration), from),
             _ => self.missing(value.at, "this expression"),
         }
     }
@@ -355,7 +376,7 @@ impl Emitter<'_> {
     /// first held as a value of its own, of its own type: `std::tuple`'s
     /// constructor would copy an earlier entry only after the later ones
     /// had run.
-    fn constructed(&mut self, scope: &mut Scope, ty: &str, entries: &[Expr]) -> String {
+    pub(super) fn constructed(&mut self, scope: &mut Scope, ty: &str, entries: &[Expr]) -> String {
         if !entries.iter().skip(1).any(changes) {
             let written: Vec<String> = entries
                 .iter()
@@ -552,6 +573,22 @@ fn temporal_literal(temporal: &hgl_analyser::hir::Temporal, ty: &Type) -> Option
             let micros = instant(temporal)?;
             Some(format!(
                 "::hgraph::DateTime{{std::chrono::microseconds{{{micros}}}}}"
+            ))
+        }
+        // TYPE-2: "named `timezone`" and "date-independent `zoned_time`".
+        Type::Scalar(Scalar::Timezone) => Some(format!(
+            "::hgraph::ZoneId{{{}}}",
+            names::string(temporal.zone.as_deref()?)
+        )),
+        Type::Scalar(Scalar::ZonedTime) => {
+            let time = time?;
+            Some(format!(
+                "::hgraph::ZonedTime{{::hgraph::time_of_day({}, {}, {}, {}), ::hgraph::ZoneId{{{}}}}}",
+                time.hour,
+                time.minute,
+                time.second,
+                time.microsecond,
+                names::string(temporal.zone.as_deref()?)
             ))
         }
         Type::Scalar(Scalar::ZonedDatetime) => {
