@@ -1466,7 +1466,14 @@ are catalogued (`hgl_analyser::codes`), one of them a warning, but for
 the local ones in `codes::local`, for rejections the catalogue has no
 row for: `cache.input_read` (TIME-1), `doc.unknown_key` (SDOC-3),
 `source.return_value` and `yield.in_value` (SOURCE-4), and
-`scheduled.outside_node` (FN-9). Its tests check each diagnostic's category and code against
+`scheduled.outside_node` (FN-9), and `reading.limit` (EXPR-5), whose
+limit is the compiler's: an expression that takes its type from its
+place is read again as each candidate's parameter it is tried as, and
+those readings nest. Each statement read where no expression is, each
+declaration of a node and each body written as one expression may read
+10,000 expressions again, and 16 more for each node of its syntax; one
+that needs more is rejected, and what is read before it changes
+nothing. Its tests check each diagnostic's category and code against
 the catalogue, or that list.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
