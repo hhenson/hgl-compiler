@@ -112,7 +112,8 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
 }
 
 /// `hgl emit --target cpp` writes each module's header and unit, core's
-/// among them, and an entry unit for its tests; a program with a form
+/// among them with core's types header, and an entry unit for its tests;
+/// a program with a form
 /// the target does not write yet is not written.
 #[test]
 fn emit_writes_a_unit_a_header_and_an_entry() {
@@ -137,9 +138,10 @@ fn emit_writes_a_unit_a_header_and_an_entry() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert_eq!(
         text(&output.stdout),
-        format!("wrote 5 files for cpp to {}\n", argument(&out))
+        format!("wrote 6 files for cpp to {}\n", argument(&out))
     );
     for file in [
+        "modules/core.types.h",
         "modules/core.h",
         "modules/core.cpp",
         "modules/demo.flags.h",
