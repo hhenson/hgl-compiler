@@ -386,9 +386,10 @@ impl Family for Tests {
             local,
             value: Some(value),
         } = statement
-            && matches!(scope.body.locals[*local].ty, Type::Trace { .. })
+            && let Some(declared) = scope.body.locals.get(*local)
+            && matches!(declared.ty, Type::Trace { .. })
         {
-            let name = identifier(&scope.body.locals[*local].name);
+            let name = identifier(&declared.name);
             let written = emitter.expression(scope, value);
             text.push_str(&format!(
                 "{}[[maybe_unused]] const auto {name} = {written};\n",
