@@ -6,6 +6,3 @@
 # under a reason that names the missing rule. A listed case must fail by
 # not being rejected: one that is rejected fails the check.
 [rejections]
-"a whole read needs `all_valid` (TIME-1)" = [
-    "conformance::rejections/collection_children.hgl::quote_without_admission",
-]

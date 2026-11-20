@@ -1,0 +1,173 @@
+module demo.windows_fixes
+
+fn readings(reading: i64) -> rolling_window<i64, 3, 2> {
+    when { return reading }
+}
+
+const fn total(values: list<i64>) -> i64 {
+    var sum: i64 = 0
+    for value in values { sum += value }
+    return sum
+}
+
+# ---- A value function's generic given a window (FN-1, GEN-1, TYPE-11) ----
+
+# FN-1: a value function's "parameter and result types are ordinary value
+# types", and GEN-1: "ordinary positions require value types". TYPE-11: a
+# window's value "given to a lifted helper (FN-12), is a `list<V>` of the
+# values held". So its `T` given a window is that list.
+const fn ident<T>(value: T) -> T => value
+const fn same<T>(a: T, b: T) -> bool => a == b
+const fn pick<T>(flag: bool, a: T, b: T) -> T {
+    if flag { return a }
+    return b
+}
+const fn one<T>(value: T) -> i64 => 1
+
+fn listed(reading: i64) -> list<i64> => ident(readings(reading))
+fn compared(a: i64, b: i64) -> bool => same(readings(a), readings(b))
+fn picked(flag: bool, a: i64, b: i64) -> list<i64> => pick(flag, readings(a), readings(b))
+fn counted(a: i64) -> i64 => one(readings(a))
+
+test a_value_functions_generic_given_a_window_is_its_list {
+    assert eval(listed(reading: [1, 2, 3, 4])) == [_, [1, 2], [1, 2, 3], [2, 3, 4]]
+    assert eval(compared(a: [1, 2, 3], b: [1, 2, 4])) == [_, true, false]
+    assert eval(picked(flag: [true, false], a: [1, 2], b: [5, 6])) == [_, [5, 6]]
+    assert eval(counted(a: [1, 2, 3])) == [_, 1, 1]
+}
+
+# ---- A window that is a child of `out` (TIME-7, TYPE-11) ----
+
+# TIME-7: "`inject out` exposes that same result for reads", and TYPE-11:
+# a window's value, "read in a hook ... is a `list<V>`": a field, an
+# element, a field of an element and an entry of `out` that is a window
+# is read as its list, which fails where the window is not all valid.
+struct Tally {
+    prices: rolling_window<i64, 3, 1>
+    last: i64
+}
+
+fn capped_field(price: i64) -> Tally {
+    inject out
+    when {
+        if all_valid(out) && total(out.prices) > 5 { return }
+        return delta<Tally>(prices: price, last: price)
+    }
+}
+
+fn capped_bound(price: i64) -> Tally {
+    inject out
+    when {
+        if all_valid(out) {
+            let held: list<i64> = out.prices
+            if total(held) > 5 { return }
+        }
+        return delta<Tally>(prices: price, last: price)
+    }
+}
+
+fn capped_loop(price: i64) -> Tally {
+    inject out
+    when {
+        var sum: i64 = 0
+        if all_valid(out) {
+            for value in out.prices { sum += value }
+        }
+        if sum > 5 { return }
+        return delta<Tally>(prices: price, last: price)
+    }
+}
+
+fn first_kept(price: i64) -> Tally {
+    inject out
+    when {
+        if all_valid(out) { return delta<Tally>(prices: price, last: out.prices[0]) }
+        return delta<Tally>(prices: price, last: price)
+    }
+}
+
+fn capped_slots(slot: i64, price: i64) -> list<rolling_window<i64, 3, 1>, 2> {
+    inject out
+    when {
+        if all_valid(out) && total(out[slot]) > 3 { return }
+        return delta<list<rolling_window<i64, 3, 1>, 2>>(updated: [slot: price])
+    }
+}
+
+fn capped_rows(price: i64) -> list<Tally, 1> {
+    inject out
+    when {
+        if all_valid(out) && total(out[0].prices) > 3 { return }
+        return delta<list<Tally, 1>>(updated: [0: delta<Tally>(prices: price, last: price)])
+    }
+}
+
+fn capped_keys(key: str, price: i64) -> dict<str, rolling_window<i64, 3, 1>> {
+    inject out
+    when {
+        if valid(out) && total(out[key]) > 3 { return }
+        return delta<dict<str, rolling_window<i64, 3, 1>>>(updated: [key: price])
+    }
+}
+
+fn key_change(prices: dict<str, rolling_window<i64, 3, 1>>) -> i64? {
+    when { return get(delta_value(prices).updated, "a") }
+}
+
+struct Book {
+    prices: rolling_window<i64, 3, 2>
+    last: i64
+}
+
+fn early_out(price: i64) -> Book {
+    inject out
+    when {
+        if all_valid(out) && total(out.prices) > 100 { return }
+        return delta<Book>(prices: price, last: price)
+    }
+}
+
+fn field_last(price: i64) -> i64 => capped_field(price).last
+fn bound_last(price: i64) -> i64 => capped_bound(price).last
+fn loop_last(price: i64) -> i64 => capped_loop(price).last
+fn kept_last(price: i64) -> i64 => first_kept(price).last
+fn slot_total(slot: i64, price: i64) -> i64 => total(capped_slots(slot, price)[0])
+fn row_last(price: i64) -> i64 => capped_rows(price)[0].last
+fn key_flow(key: str, price: i64) -> i64? => key_change(capped_keys(key, price))
+fn early_last(price: i64) -> i64 => early_out(price).last
+
+test a_window_child_of_out_is_read_as_its_list {
+    assert eval(field_last(price: [1, 2, 3, 4])) == [1, 2, 3, _]
+    assert eval(bound_last(price: [1, 2, 3, 4])) == [1, 2, 3, _]
+    assert eval(loop_last(price: [1, 2, 3, 4])) == [1, 2, 3, _]
+    assert eval(kept_last(price: [1, 2, 3, 4, 5])) == [1, 1, 1, 1, 2]
+    assert eval(slot_total(slot: [0, 1, 0, 0, 0], price: [1, 5, 2, 3, 4])) == [1, _, 3, 6, _]
+    assert eval(row_last(price: [1, 2, 3, 4])) == [1, 2, 3, _]
+    assert eval(key_flow(key: ["a", "a", "a", "a"], price: [1, 2, 3, 4])) == [1, 2, 3, _]
+    assert raises("value.unset_read") { eval(early_last(price: [1, 2])) }
+}
+
+# ---- A window's list indexed (TIME-9, TYPE-11) ----
+
+# A window is no collection (TIME-9): `book.prices[0]` is a position of
+# the list the window is read as, which `valid(book.prices)` admits, and
+# which fails where the window is not all valid.
+fn booked(price: i64) -> Book {
+    when { return delta<Book>(prices: price, last: price) }
+}
+
+fn first_price(book: Book) -> i64 {
+    when all_valid(book.prices) { return book.prices[0] }
+}
+
+fn early_first_price(book: Book) -> i64 {
+    when valid(book.prices) { return book.prices[0] }
+}
+
+fn first_flow(price: i64) -> i64 => first_price(booked(price))
+fn early_first_flow(price: i64) -> i64 => early_first_price(booked(price))
+
+test a_windows_list_within_a_value_is_indexed {
+    assert eval(first_flow(price: [1, 2, 3, 4])) == [_, 1, 1, 2]
+    assert raises("value.unset_read") { eval(early_first_flow(price: [1, 2])) }
+}

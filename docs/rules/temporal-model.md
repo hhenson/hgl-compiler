@@ -12,12 +12,12 @@ analyser: partial
 - A collection's child, an element, a field or an entry at any depth, is an endpoint (`ChildEndpoint`); its value or `delta_value` is read where `all_valid` of its collection or `valid` of the child holds, and at a constant index, a module's constant or a field one that is not is `payload.unguarded`; at an index known when it runs the read is `CheckedChild`, checked then
 - A `return` to a `ref` result names an input or a child and reads no payload, so it needs no admission (FN-16)
 - Left: a function value kept in a `state` or a `cache`, which carries a read into a later evaluation, and which the rules give no type
-- Left: a struct, a tuple or a fixed list read whole, a child among them, admitted only by its `all_valid` (`payload.unguarded`): core's case `quote_without_admission` is listed as not yet rejected
+- A struct, a tuple or a fixed list read whole, an input or a child named when the program is compiled, `return quote`, `rows[0]`, is admitted only by its own `all_valid`, in a header or as a guard: `valid` of it, and `all_valid` of what holds it, do not admit it (`payload.unguarded`); a dictionary and an unsized list are read whole where `valid` holds, an `atomic<V>` as any value that publishes whole
 
 transpiler: done
 
 - hgraph: an input's `valid`, `modified`, `value` and `delta_value`
-- Silence runs no node; an equal publication is a tick; `valid` reads an invalid input in `when valid([])`
+- Silence runs no node; an equal publication is a tick, and a delta that names no change, where the value is valid, is none (TIME-7); `valid` reads an invalid input in `when valid([])`
 - A child is hgraph's own child of the input (`_core.position_of`, `quote["bid"]`, `_core.entry_port`, one not valid where the key is absent); a read checked when it runs fails with `value.unset_read` where the child is not valid (`_core.checked_child`); an unsized list's position is its own, valid or not (hgraph 0.9.5's unbounded `TSL`), and one it does not hold is a child that is not valid (`_core.list_position`): `valid` and `modified` false, `last_modified` null, a read failing with `value.unset_read` or giving that `err` where a `result` is expected
 
 ## TIME-2
@@ -39,6 +39,7 @@ analyser: partial
 - A `when` whose header has no `valid` selector alone or as a top-level conjunct runs with every temporal input valid; one that has admits those its selectors name: `valid(a, b)` each input it names, `valid([])` none
 - A header that is `scheduled()` alone, in parentheses or not, admits none, and one that is `modified([])` alone every input
 - What a header admits is its record's (`hir::Header`), which the target reads, and by which the header's and the body's reads are judged: core's `valid` named through an alias, `c::valid(a)`, is the selector; under a configured `&&{...}`, the call of a candidate its configuration selects, nothing is a top-level conjunct and the default stands, which TIME-3 does not say in words
+- The record is learnt by reading the header once with nothing admitted, and that reading is taken back with what it spent of the function's rereads: one more reading of each header, with no bound, so a header's reads are judged by its record however many handlers come before it
 - `modified(a, b)` names the inputs it subscribes to, each by its name, and `modified([])` none: where the node injects neither `scheduler` nor `alarm`, or its `start` does not use the one it injects, the selector is warned of (`node.no_activation`) and the source accepted; any use in `start` counts, and `@suppress_warning("node.no_activation")` before the function acknowledges it
 - `modified([])` is that selector alone or as a top-level conjunct of its header; read as a bool, in a body or under a negation or a disjunction, it sets no subscription, and is not warned of: a handler whose header has no `modified` selector subscribes to every input
 - A sequence that names inputs is no selector's form (`endpoint.argument`)
@@ -63,7 +64,8 @@ analyser: partial
 - In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`)
 - A child's guard is `all_valid` of its collection or `valid` of the child as the read names it, in a body or as a header's test; a child's `valid` in a header names no input, and the default admission stands with it
 - An endpoint argument is read through its grouping (EXPR-1) by every check: `valid((quote.bid))` is `valid(quote.bid)`
-- Left: aggregate subscriptions; node-wide validity; the guard of a whole read of a struct, a tuple or a fixed list, `all_valid` of what it reads (TIME-1)
+- The guard of a whole read of a struct, a tuple or a fixed list, a child among them, is `all_valid` of what it reads (TIME-1)
+- Left: aggregate subscriptions; node-wide validity
 
 transpiler: partial
 
@@ -78,7 +80,7 @@ analyser: done
 
 - A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`; a source is held to the same
 - A state's initialiser reads no temporal input (`state.input_read`)
-- `start` reads no temporal input and gives none to an endpoint operation (`input.lifecycle`); `stop` reads one under manual admission, each read under a guard (`payload.unguarded`)
+- `start` reads no temporal input and gives none to an endpoint operation (`input.lifecycle`); `stop` reads one under manual admission, each read under a guard (`payload.unguarded`), a struct's, a tuple's or a fixed list's whole read under its `all_valid` (TIME-4)
 - A cache's initialiser reads none either (TIME-1)
 - A read in an anonymous function written in any of them is held to the same
 
@@ -101,6 +103,7 @@ analyser: partial
 - `inject out` needs a result, and is of the result's type
 - `out` is read in a `when` and in `stop`, not in a `state`'s or a `cache`'s initialiser, and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`)
 - A field or an element of `out` is assigned in a `when` as `out` is (EXPR-3)
+- A window that is a child of `out` is read as the `list<V>` it holds (TYPE-11)
 - What a `return` in a hook, an assignment to `out` and a source's `yield` publish is a complete value of the result or its `delta<T>` (TYPE-16), as core's cases relay a set with `return delta_value(input)`
 - A `ref` result takes no value: a `return` to it, and `out =` of it, names an endpoint, which it designates, and `out` of it is as a `ref` parameter is (FN-16)
 
@@ -112,7 +115,10 @@ transpiler: partial
 - A `stop` is given the output too, and reads it under `valid(out)`
 - A part of `out` is assigned through its own port, a struct's field, a tuple's position and a fixed list's position, each by a whole value of its type (EXPR-3 has a part take no `delta<T>`), and a dictionary's entry as that key's change; a place inside a part that publishes whole gives the part a new value, published whole; `out` read after holds it, and a required part of it that is not valid fails the read with `value.unset_read`
 - A whole dictionary published removes each key it has not (`_core.dict_replaced`); a whole empty dictionary or set ticks where it changes nothing (`_core.set_replaced`), as hgraph's do not
-- A delta that names no change, `delta<set<i64>>()`, `delta<dict<str, i64>>()` or `delta<list<i64>>()`, ticks only where it makes the value valid and empty, never published or invalidated, and is otherwise no tick: TIME-7 on the specification's `main` (the owner's decision on hhenson/hgl_spec#124, after the pin); so is one whose every entry is an ignored removal, which is proposed there
+- A delta that names no change, `delta<set<i64>>()`, `delta<dict<str, i64>>()` or `delta<list<i64>>()`, ticks only where it makes the value valid and empty, never published or invalidated, and is otherwise no tick: it marks nothing `modified`, wakes no subscriber and is recorded by no trace; at the top, within a collection, and beside an unsized list in a struct or a tuple (END-3)
+- Such a delta of a struct, a tuple or a fixed list, `delta<Quote>()`, `(null, null)`, `delta<list<i64, 2>>()`, sets no child and is never a tick
+- So, as TIME-7 proposes, is one whose every entry is an ignored removal
+- Not settled: a struct with no field, which has no child to be valid (TIME-9), is published as hgraph's `TS` of its class, and `delta<Empty>()` ticks and makes it valid, as `Empty()` does
 - Left: a whole set published the same again, not empty, which hgraph's `TSS` does not tick for
 - An unsized list's `out`, hgraph 0.9.5's unbounded `TSL`: a whole value replaces what it held, a delta's size is counted from what it holds, `out[i] = v` is `_core.list_child(_output, i)`, which fails past the list, and two writes in one evaluation publish their sum (END-5); a whole value that changes nothing hgraph sees, an empty list first among them, still ticks
 - A part of `out` read is its own port, a fixed list's and an unsized list's position among them
@@ -148,10 +154,12 @@ analyser: partial
 - `scheduled()` in a node that injects neither `scheduler` nor `alarm` is `inject.no_scheduler`: in a hook, a `state`'s or a `cache`'s initialiser, and a source's body (SOURCE-1)
 - `scheduled()` in a value function, a graph or a test, which is no node, is local `scheduled.outside_node` (FN-9): the catalogue has no row for it
 - `scheduled()` in `start` or `stop` is `scheduled.lifecycle`, wherever it stands in the hook, beside `inject.no_scheduler` in a node that injects neither
+- `scheduled()` in an anonymous function is judged where the function is written, each of the above (FN-14), wherever it is called; so is every endpoint operation in one, by what it is given (`endpoint.argument`: the function's own parameter or `let` is no input), how many arguments and generic arguments it takes, and the type its generic argument names
+- `scheduled<T>()` is the selector and is judged as `scheduled()` is, and takes no generic argument (`generic.argument_count`): core declares no function of the name
 - `is_active`, `activate` and `passivate` take only a direct temporal input, and `all_valid` only a list, tuple, struct, dictionary or window (`endpoint.argument`); a test of `all_valid` guards as one of `valid` does
 - The core function `is_active` resolves by its declaration and returns a `bool` in a handler or in stop
 - In a guard it sets neither subscription nor validity
-- Left: which place a selector stands in; an operator's candidate with an `endpoint<T>` parameter; that an endpoint is not retained; `scheduled()` in the initialiser of a node that injects one, which the rule does not place
+- Left: which place a selector stands in; an operator's candidate with an `endpoint<T>` parameter; that an endpoint is not retained; `scheduled()` in the initialiser of a node that injects one, which the rule does not place; `scheduled()` in an anonymous function in a node that injects one, which FN-14 may make a use of the capability, and is accepted: the target writes no anonymous function
 
 transpiler: partial
 
@@ -163,6 +171,7 @@ transpiler: partial
 - `is_scheduled_now` stays true for the rest of a wake after `un_schedule` or `reset` in it (CAP-4), read as the property, by a function given the scheduler, and as `scheduled()` in a body and in a later handler: hgraph 0.9.5's own is false once the wake due is cancelled
 - A window's `valid` and `all_valid` are the `TSW`'s, of ticks and of a duration (TYPE-11)
 - `all_valid` asks no optional child, a `T?` or a field TYPE-4 makes optional, a generic one given a `T?` among them: of a struct or a tuple with one, the provider asks the others (`_core.all_valid_of`), and of one whose every child is optional, a list or a dictionary of a `T?` among them, it is the value's `valid`
+- A list or a dictionary that a delta naming no change makes valid (TIME-7) has no element, and is valid and all valid
 
 ## TIME-10
 

@@ -23,7 +23,7 @@ lexer: done
 analyser: partial
 
 - Each temporal scalar a type of its own
-- A temporal constant is the value it denotes: two `datetime`s are one where they are one UTC instant, and two `zoned_datetime`s where they are one instant in one zone (the owner's decision on hhenson/hgl-compiler#211); a `zoned_time` is its parts
+- A temporal constant is the value it denotes: two `datetime`s are one where they are one UTC instant (UNIT-13: "`@2026-09-03T09:30Z` and `@2026-09-03T10:30+01:00`, one instant"), and two `zoned_datetime`s where they are one instant in one zone ("zone aliases are distinct names"); a `zoned_time` is its parts
 - Left: the domains of computed values
 
 transpiler: partial
@@ -39,14 +39,14 @@ transpiler: partial
 
 analyser: partial
 
-- Nominal identity by declaration and complete generic arguments; a parent is an abstract struct, listed once
+- Nominal identity by declaration and complete generic arguments, a value argument by its value (UNIT-13): `Scaled<1>` is `Scaled<1.00>`, and `Scaled<-0.0>` is not `Scaled<0.0>`; a parent is an abstract struct, listed once
 - an abstract struct is not constructed in a value function
 - Left: constructions elsewhere
 
 transpiler: partial
 
 - hgraph: a struct is a class the provider makes, with every field the struct has, a parent's first, read by name
-- A value of a generic struct is of the class for its arguments, so two applications are two types; two values are equal when they are of one and each field is
+- A value of a generic struct is of the class for its arguments, keyed by their values (UNIT-13), so two applications are two types; two values are equal when they are of one and each field is
 - A struct's class and its bundle's schema are of the module that declares it, which hgraph knows them by with their names, so two modules' structs of one name are two types to it too
 - As a temporal shape (TYPE-9) a generic struct's fields have the types its arguments give, under `atomic` it is a `TS` of the class for them, and an abstract struct's bundle has the fields it has itself: a connection of a struct below it is given where it is expected as a bundle of those fields
 - Left: a generic struct made in a function generic in its arguments; a value of an abstract struct as configuration or under `atomic`, and a temporal one read whole, since its bundle does not say which struct below it the value is
@@ -148,7 +148,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: a temporal list of a size is a `TSL` of that size; `list<T>` grows: hgraph 0.9.5's unbounded `TSL`, `Size[-1]`, which ticks by position, a child for each position it holds
-- hgraph 0.9.5 does not tick that `TSL` for a publication that changes nothing it sees, an empty list first among them: for a whole value, and for a delta that names no change where the list is not valid (TIME-7 on the specification's `main`), the provider grows it by a position and drops it again in the same evaluation, which leaves nothing in the delta read
+- hgraph 0.9.5 does not tick that `TSL` for a publication that changes nothing it sees, an empty list first among them: for a whole value, and for a delta that names no change where the list is not valid (TIME-7), the provider grows it by a position and drops it again in the same evaluation, which leaves nothing in the delta read
 - A temporal tuple is no list: a `TSB` with no name and a field for each position, each of its own type (TYPE-9)
 - Left: `unbounded` and a size that is a generic parameter as a temporal shape
 
@@ -157,7 +157,7 @@ transpiler: partial
 analyser: partial
 
 - Size kind and bounds (`rolling_window.size_kind`, `rolling_window.size_bounds`) of sizes read by the one reader (`constant`): literals, generic value parameters, constants of a module and constant expressions of those, a duration and an `i64` multiplied in either order among them; a size of a type other than `i64` or `duration` is of the wrong kind; an omitted minimum is the maximum in identity
-- `all_valid` takes a window (TIME-9), and a window's value read in a hook, and given to a value function in composition, is a `list<V>` (FN-12, END-9)
+- `all_valid` takes a window (TIME-9), and a window's value read in a hook, of an input, of `out` or of a child of either, and given to a value function in composition, is a `list<V>` (FN-12, END-9); that list indexed is no child (TIME-9)
 - Left: a size computed by a call, or from a generic parameter, whose kind and bounds are not checked
 
 transpiler: partial
@@ -167,7 +167,7 @@ transpiler: partial
 - A window within a struct, a tuple, a fixed list or a dictionary is that one's child, wired by its port in a graph, and that value's validity is its children's
 - A window is valid at its first value and all valid at its minimum, of ticks or of its arrivals' span, the `TSW`'s own; a value leaves a window of a duration only as another arrives, and its exit is no tick; a minimum of `0s` is written as the maximum, which hgraph 0.9.5's `TSW` reads as zero
 - A window's value, of an input, of `out`, of a child where it is admitted or checked when it runs, in a `when` or `stop`, and given to a lifted helper, is the `list<V>` it holds, oldest first (`_core.window_values`), which fails with `value.unset_read` before the window is all valid, where hgraph 0.9.5 reads what it holds
-- Left, reported: a value that holds a window read whole; a window child's value where a `result` is expected, which ERR-14 does not say; a window given to a lifted parameter with a default, which FN-11 does not say; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection
+- Left, reported: the value of a window that a generic type parameter stands for, which the body, checked once (GEN-7), reads as a `T`; a value that holds a window read whole; a window child's value where a `result` is expected, which ERR-14 does not say; a window given to a lifted parameter with a default, which FN-11 does not say; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection
 
 ## TYPE-12
 
@@ -235,7 +235,7 @@ analyser: partial
 - Each delta that is a type of its own has its properties: a set's `added` and `removed`, a list's `updated`, `removed` and `size_modified`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`)
 - It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`)
 - A `delta<V>` is a value where a `delta<V?>` is expected, and null is not
-- A set's, a dictionary's or a list's delta that names one constant entry both as added or updated and as removed is `delta.overlap`, constants read by the one reader (`constant`) as values of the key's type and compared by value: `-1`, an enum's member however written, `60s` and `1m`, an integer literal as an `f64` key
+- A set's, a dictionary's or a list's delta that names one constant entry both as added or updated and as removed is `delta.overlap`, constants read by the one reader (`constant`) as values of the key's type: `-1`, an enum's member however written, `60s` and `1m`, an integer literal as an `f64` key. Two are compared by the language's `==` (`ConstantValue::equals`), as TYPE-16 proposes, "and not by their sameness as constants (UNIT-13)": `0.0` and `-0.0` are one key, and two NaNs two
 - A constant position of a list's delta that is negative or past a fixed list's bounds is `delta.index_bounds`; a negative `size_modified` is a count to reduce by
 - Left: a constructor written for a tuple's delta, which is not judged
 
@@ -250,6 +250,7 @@ transpiler: partial
 - A fixed list's delta made as the graph runs fails, with no code, where a position is past its bounds or a `size_modified` moves its size (`_core.list_within`); its `removed` makes the position not valid
 - A dictionary's is hgraph's delta of a `TSD`, a `dict` of each key updated with its delta and of each removed with `REMOVE_IF_EXISTS`, made from `updated` and `removed` and read by them through the provider
 - A `removed` that names a key a dictionary does not hold, or a member a set does not hold, is ignored and is no failure (`_core.entries_published`, END-3)
+- Published, a delta that names no change, `delta<set<i64>>()`, ticks only where it makes the value valid (TIME-7)
 - A struct's and a tuple's delta that holds an unsized list's delta is published through the node's output, each list's size counted from what it holds (`_core.published_into`), by a node and by a source when it is due
 - A removed position an unsized list does not hold is ignored, as a dictionary's absent key is (the owner's decision on hhenson/hgl_spec#124)
 - An entry at or past a `size_modified` written with it contradicts the delta and fails the write that publishes it as the graph runs, with no execution code (the owner's decision there: "a failure"; hhenson/hgl_spec#137)

@@ -70,6 +70,8 @@ transpiler: partial
 analyser: planned
 
 - Inherited defaults compared; a conflict needs an override
+- Compared by bound expression and canonical type, a literal by its value however it is written (UNIT-13): `= 1` and `= 1.0` of an `f64` field are one default
+- Not built: two parents' defaults of one field are not compared, so a struct that has the field from both is accepted whatever they are, `= 1` beside `= 1.0` as one default and `= 1` beside `= 2` too
 
 ## UNIT-10
 
@@ -106,15 +108,18 @@ analyser: partial
 - It is read by its name wherever a value is, and is a constant expression (FN-1) and a compile-time constant (GEN-8); in a `requires` compared with a generic value parameter or an option, `N == C`, `C == N`, `N in {C, 5}`, `mode == FAST`, it is that value and no type is read there (beside a type parameter, `T == C`, it is still `type.not_a_type`)
 - Where its value is needed, a size, a generic value argument, a `requires` operand, a default, a `switch` label, a delta's key, a tuple's index, an enum's number, it is followed to it by the one reader (`constant`), through the constants it names, in its expression and its type, each worked out once as a value of its own type: an `i64` constant is no `f64` (EXPR-5)
 - One computed by a call is held by its name, the same as itself and known beside no other
+- Two are one where their values are the same, however each is written (`ConstantValue::same`): `1`, `1.0` and `1.00` of an `f64`, `60s` and `1m`, two `datetime`s at one instant; `-0.0` and `0.0` are two, though `-0.0 == 0.0`, and any two NaNs one, `0.0 / 0.0` among them. That sameness is a type's identity (TYPE-3) and a call's instance (GEN-13); an equality the program writes, in a `requires` as elsewhere, is the language's `==` (`ConstantValue::equals`, GEN-3): `Flag<(-0.0 == 0.0)>` is `Flag<true>`
+- How one is written is kept beside its value (`Constant::text`), for a message, and is never compared
 - One whose evaluation fails, an `i64` out of range or a division of two `i64` by zero, is local `constant.failure` where it is declared ("a failure in evaluating it is a required-constant failure (ERR-9)"), and says nothing more where it is read
 - One the reader does not work out, a datetime moved by a duration, is no value a generic value argument is given (`generic.argument_constant`), as the same expression written in place is not
 - An expression is read in a loop along a chain of operators, `1 + 1 + ... + 1`, of any length the parser builds a tree for
 - One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a default a call leaves to be read
-- Left: the value of a constant computed by a `const fn`; a struct's field default counts for a construction that gives the field
+- Left: the value of a constant computed by a `const fn`; a struct's field default counts for a construction that gives the field; a formatter's writing a constant back as written, as there is no formatter yet
 
 transpiler: done
 
 - hgraph: a constant is a function of no parameter that the provider runs once, and a read is a call of it, in value code, in a graph and from another module
+- An instance and a generic struct's class are keyed by their constants' values (`ConstantValue::key`, GEN-13): `reciprocal<1>()` and `reciprocal<1.0>()` call one, and `reciprocal<0.0>()` and `reciprocal<-0.0>()` two, each written with its own value whichever is called first
 
 ## UNIT-14
 

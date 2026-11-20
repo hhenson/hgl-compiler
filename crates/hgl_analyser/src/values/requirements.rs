@@ -2173,10 +2173,12 @@ pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
                     (None, Some(name)) => (name, left),
                     (None, None) => return None,
                 };
-                // The language's `==` (`ConstantValue::equals`): "`requires
-                // X == 0.0` is the language's `==`: it holds for `-0.0`"
-                // (hhenson/hgl_spec#139, UNIT-13). Where the value is not
-                // known, whether it holds is not either.
+                // The language's `==` (`ConstantValue::equals`). GEN-3:
+                // "An equality of two constants there is the `==` a
+                // program evaluates, and not their sameness (UNIT-13):
+                // with `const k: f64`, `requires k == 0.0` holds where `k`
+                // is `-0.0`." Where the value is not known, whether it
+                // holds is not either.
                 compared(&(of.value_of)(&name)?, &operand(constant, &name)?, of)
             } else if within {
                 let name = option(left)?;

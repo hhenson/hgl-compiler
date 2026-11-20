@@ -7,7 +7,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Typer;
-use crate::hir::{Expr, ExprKind, LocalId};
+use crate::hir::{EndpointOperation, Expr, ExprKind, LocalId};
 use crate::program::{DeclarationKind, LocalKind};
 use crate::read::is_type;
 use crate::syntax::{child, name_token, tokens};
@@ -83,7 +83,8 @@ impl<'a> Typer<'a> {
     }
 
     /// The body of the anonymous function `function`, read where it is
-    /// written in a node, for what it reads there.
+    /// written, for what it reads of a node's inputs there and for its
+    /// endpoint operations.
     ///
     /// FN-14: "An anonymous function's scope is the scope around it
     /// plus its parameters ... its body uses only parameters, generic
@@ -98,13 +99,26 @@ impl<'a> Typer<'a> {
     /// function is written is proved wherever it is called in that
     /// evaluation.
     ///
+    /// So is each endpoint operation in it, wherever the function is
+    /// written. TIME-9: an `endpoint<T>` parameter takes "a temporal
+    /// input of the enclosing node by its name, a child of one ... or
+    /// `out`, and nothing else", so not the function's own parameter or
+    /// a `let` of its body (`endpoint.argument`); and of `scheduled()`,
+    /// "A node that injects neither rejects it (`inject.no_scheduler`),
+    /// and so do `start` and `stop` (`scheduled.lifecycle`)", and FN-9,
+    /// "A value function injects none" (`scheduled.outside_node`). What
+    /// an operation reports of itself, of where it stands, of what it is
+    /// given and of the generic argument it is written with, does not
+    /// depend on the function's parameters, and stands.
+    ///
     /// The function's parameters and result take their types from its
     /// accepting form (FN-7), which is not read, and so do its `return`
     /// and its `?` (CTRL-5, ERR-5). A parameter is of the type written
     /// for it, or of none known. What the body declares, assigns or
     /// proves is taken back, and of what the walk reports only the
-    /// reads of the node's inputs stand: the rest would depend on those
-    /// types, and is not judged here.
+    /// reads of the node's inputs and the operations' own reports stand:
+    /// the rest would depend on those types, and is not judged here. A
+    /// `return` in the function, read as the node's would be, is one.
     pub(super) fn anonymous_reads(&mut self, function: &SyntaxNode) {
         /// The reports of a read of a node's input where nothing admits
         /// it (TIME-1, TIME-4, TIME-5).
@@ -114,9 +128,33 @@ impl<'a> Typer<'a> {
             codes::STATE_INPUT_READ,
             codes::local::CACHE_INPUT_READ,
         ];
-        if !(self.hook.is_some() || self.initializing || self.caching) {
+        /// What an endpoint operation reports of itself (TIME-9): what
+        /// it is given, how many arguments and generic arguments, and
+        /// where `scheduled()` stands (FN-9); that a `signal` has no
+        /// delta (TYPE-16) and a `ref` parameter's is not read (FN-16).
+        /// A `type.mismatch` is its own only at its generic argument
+        /// (EXPR-5): elsewhere it may be of what the function returns.
+        const OWN: [&str; 10] = [
+            codes::ENDPOINT_ARGUMENT,
+            codes::ARGUMENT_MISSING,
+            codes::ARGUMENT_UNEXPECTED,
+            codes::GENERIC_ARGUMENT_COUNT,
+            codes::GENERIC_ARGUMENT_KIND,
+            codes::INJECT_NO_SCHEDULER,
+            codes::SCHEDULED_LIFECYCLE,
+            codes::local::SCHEDULED_OUTSIDE_NODE,
+            codes::DELTA_UNSUPPORTED_SHAPE,
+            codes::REF_READ,
+        ];
+        let operations = self.operations_in(function);
+        // A read of a node's input stands only where a node's hook or
+        // initializer is read; elsewhere the walk is for the operations.
+        if !(self.hook.is_some() || self.initializing || self.caching) && operations.is_empty() {
             return;
         }
+        // CTRL-14: what the walk returns is the function's, not the
+        // graph's, and leaves the graph's result as it was.
+        let must_return = self.must_return;
         let mark = self.mark();
         let parameters = child(function, SyntaxKind::ParamList)
             .into_iter()
@@ -143,15 +181,72 @@ impl<'a> Typer<'a> {
         if let Some(body) = body {
             self.flow(&body, Some(&Type::Unknown), false);
         }
-        let reads: Vec<_> = self.diagnostics.as_slice()[mark.diagnostics..]
+        // A report of an operation's own, written within it.
+        let inside = |within: &Location, at: &Location| {
+            within.file == at.file
+                && within.span.start <= at.span.start
+                && at.span.end <= within.span.end
+        };
+        let own = |code: &str, at: &Location| {
+            operations.iter().any(|(call, generics)| {
+                (OWN.contains(&code) && inside(call, at))
+                    || (code == codes::TYPE_MISMATCH
+                        && generics
+                            .as_ref()
+                            .is_some_and(|generics| inside(generics, at)))
+            })
+        };
+        let kept: Vec<_> = self.diagnostics.as_slice()[mark.diagnostics..]
             .iter()
-            .filter(|diagnostic| READS.contains(&diagnostic.code.as_str()))
+            .filter(|diagnostic| {
+                let code = diagnostic.code.as_str();
+                READS.contains(&code) || own(code, &diagnostic.primary)
+            })
             .cloned()
             .collect();
         self.take_back(mark, false);
-        for diagnostic in reads {
+        self.must_return = must_return;
+        for diagnostic in kept {
             self.diagnostics.emit(diagnostic);
         }
+    }
+
+    /// Where the anonymous function `function` calls one of the
+    /// language's endpoint operations (TIME-9), each call from its name
+    /// to its `)`, with where its generic arguments are when it writes
+    /// them: by its name where nothing binds it or core's module does,
+    /// through an alias of core, `c::valid(a)`, and with generic
+    /// arguments, as each is read (`call_read`). A name a module or a
+    /// local binds is that one's.
+    fn operations_in(&self, function: &SyntaxNode) -> Vec<(Location, Option<Location>)> {
+        function
+            .descendants()
+            .filter_map(|call| {
+                let name = match call.kind() {
+                    SyntaxKind::CallExpr => call
+                        .children()
+                        .next()
+                        .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+                        .and_then(|callee| name_token(&callee)),
+                    SyntaxKind::TypedConstructor => name_token(&call),
+                    // GEN-14: a form that reads two ways is a call only
+                    // where the resolver decided so.
+                    SyntaxKind::UndecidedConstructor => {
+                        let at = self.at(&call);
+                        self.module
+                            .decisions
+                            .iter()
+                            .any(|decision| decision.at == at && decision.constructor == Some(true))
+                            .then(|| name_token(&call))
+                            .flatten()
+                    }
+                    _ => None,
+                }?;
+                let operation = EndpointOperation::named(name.text()).is_some();
+                let generics = child(&call, SyntaxKind::GenericArgs).map(|list| self.at(&list));
+                (operation && self.is_the_languages(&name)).then(|| (self.at(&call), generics))
+            })
+            .collect()
     }
 
     /// How the capability named at `node` is retained where it stands,

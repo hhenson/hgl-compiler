@@ -1,10 +1,11 @@
-//! The analyser against what a compile-time constant is: one value of
-//! the type its place gives it, however it is written, compared with
-//! another by that type's own equality (GEN-8, UNIT-13, EXPR-5, CTRL-6,
-//! TYPE-2, TYPE-7, TYPE-17; the owner's decision on
-//! hhenson/hgl-compiler#211). Each line of that issue's two tables is
-//! here twice: the program that must be rejected, and the one beside it
-//! that must not.
+//! The analyser against what a compile-time constant is. UNIT-13: "A
+//! compile-time constant (GEN-8), a literal or a constant among them, is
+//! one value of the type its place gives it (EXPR-5) ... Two
+//! compile-time constants are one where those values are the same,
+//! however each is written" (and CTRL-6, TYPE-2, TYPE-7, TYPE-17). Each
+//! line of the two tables of hhenson/hgl-compiler#211, which found where
+//! the compiler did not, is here twice: the program that must be
+//! rejected, and the one beside it that must not.
 //!
 //! A finding is written `line code`: the line of `m.hgl`, counted from
 //! the `module` line, and the catalogued code.
@@ -325,11 +326,12 @@ fn one_value_written_two_ways_is_one_value() {
     );
 }
 
-/// The owner's first point (hhenson/hgl-compiler#211): "if a constant
-/// once coerced to its expected type and converted to it's value is the
-/// same then it is the same". EXPR-5: "An integer literal is an `f64`
-/// where one is expected", so `FBox<1>` is `FBox<1.0>`; an `i64`
-/// constant is not converted by its place, and is no `f64`.
+/// UNIT-13: "A compile-time constant ... is one value of the type its
+/// place gives it (EXPR-5): `1` where an `f64` is expected is `1.0`. Two
+/// compile-time constants are one where those values are the same".
+/// EXPR-5: "An integer literal is an `f64` where one is expected", so
+/// `FBox<1>` is `FBox<1.0>`; an `i64` constant is not converted by its
+/// place, and is no `f64`.
 #[test]
 fn an_integer_literal_where_a_float_is_expected_is_the_float() {
     expect(
@@ -365,9 +367,10 @@ fn an_integer_literal_where_a_float_is_expected_is_the_float() {
     assert_eq!(keys, vec![Some("1.0".to_string()); 3]);
 }
 
-/// The owner's second point: "we should still trace back to the express
-/// way the it was written": a constant keeps how it is written beside
-/// its value, and a message shows it so.
+/// UNIT-13: "How a constant is written is kept with it, for diagnostics
+/// and for a formatter, which writes it back as written, and is never
+/// compared": a constant keeps how it is written beside its value, and a
+/// message shows it so.
 #[test]
 fn a_constant_keeps_how_it_is_written() {
     let checked = module(&with_shared(
@@ -389,10 +392,11 @@ fn a_constant_keeps_how_it_is_written() {
     assert!(matches!(constant.value, ConstantValue::Float(value) if value == 1.0));
 }
 
-/// TYPE-2: a `datetime` is a "UTC-instant", and two are equal as
-/// instants (the owner's decision on hhenson/hgl-compiler#211). A
-/// `zoned_datetime` is an instant in a named zone: "Same-instant zoned
-/// values need not be equal; zone aliases are distinct names".
+/// TYPE-2: a `datetime` is a "UTC-instant", and UNIT-13: two are one
+/// constant as one instant, "the `datetime`s `@2026-09-03T09:30Z` and
+/// `@2026-09-03T10:30+01:00`, one instant". A `zoned_datetime` is an
+/// instant in a named zone: "Same-instant zoned values need not be
+/// equal; zone aliases are distinct names".
 #[test]
 fn a_datetime_is_its_instant_and_a_zoned_one_its_zone_too() {
     let shared = concat!(
@@ -1285,13 +1289,12 @@ fn a_requires_compares_two_options_and_a_type_in_three_answers() {
     );
 }
 
-/// hhenson/hgl_spec#139, written in UNIT-13: "The same is the same
-/// value, not `==`: `-0.0` and `0.0` are different constants: different
-/// type arguments, different instances." "`requires X == 0.0` is the
-/// language's `==`: it holds for `-0.0`." "A NaN constant is the same
-/// constant as a NaN constant": NUM-3's true division "defaults to the
-/// `ieee` zero policy ... zero divided by zero produces NaN", which is a
-/// constant.
+/// UNIT-13: "The same value is not `==` ...: `-0.0` and `0.0` are two
+/// constants, though `-0.0 == 0.0`, and any two NaNs, `0.0 / 0.0` among
+/// them, are one constant, though `==` holds for no NaN." GEN-3: "with
+/// `const k: f64`, `requires k == 0.0` holds where `k` is `-0.0`".
+/// NUM-3's true division "defaults to the `ieee` zero policy ... zero
+/// divided by zero produces NaN", which is a constant.
 #[test]
 fn a_constant_is_its_value_and_a_comparison_the_languages() {
     let shared = concat!(

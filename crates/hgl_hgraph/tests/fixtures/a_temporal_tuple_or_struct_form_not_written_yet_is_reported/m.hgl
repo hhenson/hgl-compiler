@@ -3,7 +3,7 @@ abstract struct Shape { id: i64 }
 struct Circle : Shape { radius: i64 }
 struct Quote { bid: i64 }
 fn whole(shape: Shape) -> i64 {
-    when {
+    when all_valid(shape) {
         let held = shape
         return held.id
     }

@@ -58,7 +58,7 @@ impl Emitter<'_> {
                 {
                     let ty = function.port_type(value);
                     if matches!(ty, Type::RollingWindow { .. }) {
-                        return self.window_value(&port);
+                        return self.window_read(value, &port);
                     }
                     let read = self.port_value(ty, &port, value.at);
                     if function.is_out(*local) {
@@ -230,6 +230,11 @@ impl Emitter<'_> {
             // runs: a child that is not valid fails it
             // (`value.unset_read`), or gives an `err` where its place
             // takes a `result` (ERR-14)."
+            // A window bound to a generic type parameter (`window_read`).
+            ExprKind::CheckedChild { .. } if matches!(value.ty, Type::RollingWindow { .. }) => {
+                self.unsupported(value.at, GENERIC_WINDOW_READ);
+                "None".to_string()
+            }
             ExprKind::CheckedChild { read, result } => {
                 self.checked_child(function, read, *result, value.at)
             }
@@ -459,23 +464,10 @@ impl Emitter<'_> {
                     && self.reads_child(function, value) =>
             {
                 // TYPE-11: a window child's value is read as a `list<V>`
-                // (`window_value`), which the child's port is not.
-                let window_child = match &value.kind {
-                    ExprKind::Field { base, member } => field_of(self.program, &base.ty, *member)
-                        .is_some_and(|field| matches!(field.ty, Type::RollingWindow { .. })),
-                    ExprKind::Index { base, index } => match &base.ty {
-                        Type::List { element: child, .. } | Type::Dict { value: child, .. } => {
-                            matches!(**child, Type::RollingWindow { .. })
-                        }
-                        Type::Tuple(elements) => constant_position(index)
-                            .and_then(|position| elements.get(position))
-                            .is_some_and(|element| matches!(element, Type::RollingWindow { .. })),
-                        _ => false,
-                    },
-                    _ => false,
-                };
+                // (`window_read`), which the child's port is not.
+                let window_child = window_child(self.program, value);
                 match self.child_port(function, value) {
-                    Some(port) if window_child => self.window_value(&port),
+                    Some(port) if window_child => self.window_read(value, &port),
                     Some(port) => self.part_value(&value.ty, &port, value.at),
                     None => {
                         self.unsupported(value.at, "this read of a child");
@@ -1199,11 +1191,14 @@ impl Emitter<'_> {
                     ) && field_of(emitter.program, &base.ty, *member).is_some()
                         && within(emitter, function, base)
                 }
+                // A window is no collection (TIME-9): a position of the
+                // list its value is read as (TYPE-11) is no child of it.
                 ExprKind::Index { base, .. } => {
                     matches!(
                         base.ty,
                         Type::List { .. } | Type::Tuple(_) | Type::Dict { .. }
-                    ) && within(emitter, function, base)
+                    ) && !window_child(emitter.program, base)
+                        && within(emitter, function, base)
                 }
                 _ => false,
             }
@@ -1461,6 +1456,22 @@ impl Emitter<'_> {
         format!("_core.window_values({port})")
     }
 
+    /// The read `value` of a window, an input, `out` or a child of
+    /// either, through its endpoint `port` (`window_value`). The analyser
+    /// types a window's read as the `list<V>` it holds (TYPE-11); one
+    /// typed as the window itself is a generic type parameter's read in
+    /// an instance where the parameter stands for a window. The body was
+    /// checked once, its `T` read as a `T` (GEN-7), and the rules do not
+    /// say what the read of a `T` that is a window gives, nor that such a
+    /// binding rejects: it is reported.
+    fn window_read(&mut self, value: &Expr, port: &str) -> String {
+        if matches!(value.ty, Type::RollingWindow { .. }) {
+            self.unsupported(value.at, GENERIC_WINDOW_READ);
+            return "None".to_string();
+        }
+        self.window_value(port)
+    }
+
     /// What the port `port`, of a temporal value of `ty`, holds, read in
     /// a hook. A struct's bundle holds a value of the struct, made from
     /// each field's port in turn (TYPE-9), and a tuple's a tuple of each
@@ -1577,12 +1588,13 @@ impl Emitter<'_> {
     /// or as its composite is read whole, `let held = quote`.
     ///
     /// A part that has not published has no value to give, and none is
-    /// made up. The owner's decision so far, on hhenson/hgl_spec issue
-    /// 126, is that a whole read needs each required part valid, and
-    /// that a part whose type is optional may not be, and is then null
-    /// in the whole value; how the language says so is open there. Until
-    /// it says, this target reads a required part that is not valid as a
-    /// failure where the read runs, with the catalogued
+    /// made up. TIME-1: "A read of a struct, a tuple or a fixed list
+    /// whole, `return quote`, requires `all_valid` of it ... In the value
+    /// it reads, an optional child (TIME-9) that is not valid is null".
+    /// The analyser holds a whole read it sees to `all_valid`; one checked
+    /// when it runs, `rows[i]`, "that is not all valid fails it
+    /// (`value.unset_read`)" (ERR-14). So this target reads a required
+    /// part that is not valid as that failure, with the catalogued
     /// `value.unset_read` ("Executed operation requires an unset
     /// ordinary payload"), and an optional part that is not valid as
     /// null. A fixed list of required elements that publish whole is held
@@ -2036,6 +2048,30 @@ fn in_calendar(date: CalendarDate, time: ClockTime, minutes: i16) -> bool {
     let into_day = i32::from(time.hour) * 60 + i32::from(time.minute);
     let minutes = i32::from(minutes);
     !((first && into_day < minutes) || (last && into_day - minutes >= 24 * 60))
+}
+
+/// What the target reports where a generic declaration's type parameter
+/// stands for a window whose value its body reads (`window_read`).
+const GENERIC_WINDOW_READ: &str =
+    "the value of a window that a generic type parameter stands for (GEN-7, TYPE-11)";
+
+/// True where `value` is a child, a field, a position or an entry, whose
+/// declared type is a window (TYPE-11), whatever its read is typed as.
+pub(super) fn window_child(program: &Program, value: &Expr) -> bool {
+    let window = |ty: &Type| matches!(ty, Type::RollingWindow { .. });
+    match &value.kind {
+        ExprKind::Field { base, member } => {
+            field_of(program, &base.ty, *member).is_some_and(|field| window(&field.ty))
+        }
+        ExprKind::Index { base, index } => match &base.ty {
+            Type::List { element: child, .. } | Type::Dict { value: child, .. } => window(child),
+            Type::Tuple(elements) => constant_position(index)
+                .and_then(|position| elements.get(position))
+                .is_some_and(window),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// The position a constant index names, `pair[1]`: EXPR-3 has a
