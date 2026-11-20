@@ -112,6 +112,9 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
 | `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
 | A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
+| `if` and `switch` over a connection in a graph: each branch a child graph of hgraph's `switch_`, taking what it reads whole; its value, the `var` it assigns, or a `return` and what follows; no `else`, no `default` | CTRL-2, CTRL-3, CTRL-5, CTRL-6, CTRL-13, CTRL-14, CTRL-15 |
+| A `var` of a connection; an `if` over an ordinary value that gives a connection | CTRL-1, CTRL-13, CTRL-14 |
+| `for` over a connection of a dictionary or a list, a child graph of hgraph's `map_` for each member; over a fixed list, the body for each position | CTRL-7, CTRL-15 |
 
 Not written yet, and reported: a call that gives a `var` parameter a
 place beside an argument that runs statements (FN-15), a `?` after
@@ -122,8 +125,12 @@ member made from a value (TYPE-7), a pack, a struct, a set, a
 dictionary, a window, a delta of any but a scalar, `timezone`,
 `zoned_time`, and of temporal code: a temporal value of any but a
 scalar, `ref` (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
-`all_valid`, `activate`, `passivate`, `scheduled()`, `if`, `switch` and
-`for` over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
+`all_valid`, `activate`, `passivate`, `scheduled()`, a `for` over a
+connection of a set (CTRL-15), in a branch or a loop's body the store
+or an ordinary value that may fail (FN-9: hgraph builds each child as
+the graph around it is built), a `return` under a branch selected at
+runtime in a loop unrolled where the graph is built, branches that
+assign two `var`s (CTRL-14), `capture` (ERR-7), a lifted input with a
 default or a null (FN-11), a source with declarations or hooks, an
 eval's configuration that is no `RunConfig(...)` written in it (RUN-1),
 an eval of a value function (TST-5), and an application.
@@ -158,6 +165,7 @@ the chapters' entries stay the hgraph target's.
 | `Scheduler`: its three properties, `schedule` with a duration or a datetime under a tag or none, on the wall clock in real time and unchanged by it in simulation, `un_schedule`, `reset`; `Alarm` and its `schedule`; what may be asked of each | CAP-4, CAP-5, TIME-8 | `capabilities.h` | `scheduler_tests.cpp` |
 | `get`, `has`, `put` of the global store, in a node and where a graph is built | CAP-6, FN-9 | `capabilities.h` | `capabilities_tests.cpp` |
 | A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
+| The branch of no `else`, a connection that never ticks; the branch of no `default`, which fails with the selector's value | CTRL-3, CTRL-6, CTRL-13 | `control.h` | `control_tests.cpp` |
 | An enum as a value of the library and of the test host: its HGL name, its members' text, its schema with hgraph; core's `CmpResult`, `ZeroPolicy`, `Rounding`, `InvalidPolicy`, `LogLevel` | TYPE-7, TST-4, TST-5, OPS-3 | `values.h`, `traces.h` | `traces_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
 | A source's body as a coroutine, `generator<T>`: run on to each `yield` as it is resumed, in loops and branches, giving what it yields; what it lets out thrown again where it was resumed; its frame and the locals in it destroyed wherever it stopped | SOURCE-1 | `generator.h` | `generator_tests.cpp` |

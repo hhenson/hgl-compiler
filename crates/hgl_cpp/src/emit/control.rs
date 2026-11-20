@@ -39,13 +39,16 @@
 //! or the positions of a list, and takes no set of keys alone), a loop's
 //! key read other than as the argument of a temporal parameter, the
 //! store read in a branch or a loop's body (hgraph builds a child graph
-//! on a wiring of its own, which neither sees nor sets the root's store), a
+//! on a wiring of its own, which neither sees nor sets the root's store),
+//! an ordinary value that may fail computed there (hgraph compiles every
+//! child as the graph around it is built, where FN-9 has its calls
+//! evaluated as the child is built), a
 //! `return` under a branch selected at runtime in a loop unrolled while
 //! the graph is built, branches that assign more than one `var`, and an
 //! `if` whose value is used and whose branches return or assign a `var`
 //! declared before it.
 
-use hgl_analyser::hir::{Case, Expr, ExprKind, Stmt, ValueCategory, walk_statement_nodes};
+use hgl_analyser::hir::{Case, Expr, ExprKind, Node, Stmt, ValueCategory, walk_statement_nodes};
 use hgl_analyser::{LocalKind, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::graphs::{
@@ -54,6 +57,7 @@ use hgl_lower::graphs::{
 };
 
 use super::Emitter;
+use super::calls::may_fail;
 use super::forms::Family;
 use super::graphs::WIRING;
 use super::names::{self, identifier};
@@ -633,7 +637,7 @@ impl Emitter<'_> {
         let bound = self.control.bound.clone();
         let inputs = taken(locals, &bound, &[], read.clone(), &declared);
         let configured = self.configured(scope, &read, &declared, &bound);
-        if self.reads_a_capability(scope, &configured, at) {
+        if self.reads_a_capability(scope, &configured, at) || self.computes_while_built(body, &[]) {
             return;
         }
         let Some(element) = self.temporal_schema(element, at) else {
@@ -843,6 +847,56 @@ impl Emitter<'_> {
         if let Some(context) = self.temporal.as_mut() {
             context.roles[item] = role;
         }
+    }
+
+    /// Reports an ordinary value that may fail which a child graph
+    /// computes, in `statements` or in `tails`, the values it gives, and
+    /// says whether it did. FN-9: a child of a `switch` or of a `for` over
+    /// a temporal collection "is built then, and its calls are evaluated
+    /// then", as the branch or the member starts; hgraph compiles every
+    /// child once, while the graph around it is built, and so would compute
+    /// it then, where no branch may be selected, and fail before the run. A
+    /// value that cannot fail is the same computed either way; what can is
+    /// a call that is no temporal function's, an element read and a
+    /// constant (`calls::may_fail`).
+    fn computes_while_built(&mut self, statements: &[Stmt], tails: &[&Expr]) -> bool {
+        let program = self.program;
+        let mut found: Option<Location> = None;
+        let mut visit = |node: Node| {
+            let Node::Expression(value) = node else {
+                return;
+            };
+            if found.is_some() || value.is_connection() {
+                return;
+            }
+            let computed = match &value.kind {
+                ExprKind::Call { callee, .. } => {
+                    !callee.declaration().is_some_and(|(module, declaration)| {
+                        program.modules[module].declarations[declaration]
+                            .kind
+                            .role()
+                            == Some(hgl_analyser::Role::Temporal)
+                    })
+                }
+                ExprKind::Index { .. } | ExprKind::Constant { .. } => true,
+                _ => false,
+            };
+            if computed && may_fail(value) {
+                found = Some(value.at);
+            }
+        };
+        walk_statement_nodes(statements, &mut visit);
+        for tail in tails {
+            tail.walk_nodes(&mut visit);
+        }
+        let Some(computed) = found else {
+            return false;
+        };
+        self.unsupported(
+            computed,
+            "an ordinary value that may fail computed in a branch or a loop's body, which hgraph computes while the graph around it is built",
+        );
+        true
     }
 
     /// Reports a capability among `configured`, what a child graph at `at`
@@ -1270,6 +1324,15 @@ impl Emitter<'_> {
         let configured = self.configured(scope, &read, &declared, &bound);
         if self.reads_a_capability(scope, &configured, at) {
             return None;
+        }
+        for branch in branches {
+            let tails: Vec<&Expr> = match &branch.tail {
+                Tail::Value(value) => vec![&**value],
+                _ => Vec::new(),
+            };
+            if self.computes_while_built(&branch.statements, &tails) {
+                return None;
+            }
         }
         // What each is in the C++ written: the key's schema and type, each
         // input's schema, each configuration's type, and the result's

@@ -474,6 +474,48 @@ fn control_flow_not_written_yet_is_reported() {
 }
 
 /// FN-9: a child of a `switch` "is built then, and its calls are
+/// evaluated then". hgraph compiles every branch while the graph around
+/// it is built, so an ordinary value that may fail in a branch is
+/// reported: it would fail before the run, where the branch may never be
+/// selected. One that is a connection's work, a lifted call, is not.
+#[test]
+fn a_value_that_may_fail_in_a_branch_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn scaled(open: bool, value: i64, const factor: i64) -> i64 {\n",
+                "    if open {\n",
+                "        let n = factor * 4611686018427387904\n",
+                "        return value + n\n",
+                "    }\n",
+                "    return value\n",
+                "}\n",
+                "\n",
+                "fn lifted(open: bool, value: i64, const factor: i64) -> i64 {\n",
+                "    if open { return value * factor }\n",
+                "    return value\n",
+                "}\n",
+                "\n",
+                "test scaled_once { assert eval(scaled(open: [false], value: [1], factor: 2)) == [1] }\n",
+                "\n",
+                "test lifted_once { assert eval(lifted(open: [true], value: [1], factor: 2)) == [2] }\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("scaled_once").as_deref(),
+        Some(
+            "m.hgl:5:17 the cpp target does not write an ordinary value that may fail computed in a branch or a loop's body, which hgraph computes while the graph around it is built yet"
+        )
+    );
+    assert_eq!(emitted.blocked("lifted_once"), None);
+}
+
+/// FN-9: a child of a `switch` "is built then, and its calls are
 /// evaluated then". hgraph compiles a child graph on a wiring of its own,
 /// which neither sees nor sets the store of the run's root, so a branch
 /// that reads the store is reported, whatever writes the `inject`.
