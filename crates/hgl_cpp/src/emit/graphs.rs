@@ -1,7 +1,6 @@
 //! Writes temporal functions whose body is a graph's (FN-2: typed
 //! connections and no payload read) as structs whose static `compose`
-//! wires hgraph's graph, and an application's run statement (UNIT-14,
-//! RUN-1). Part of the transpiler, the last stage; a family of the
+//! wires hgraph's graph. Part of the transpiler, the last stage; a family of the
 //! dispatch point (`forms`) for the statements and the connections of a
 //! graph.
 //!
@@ -18,8 +17,8 @@
 //! Not written yet, and reported: `if`, `switch` and `for` over
 //! connections (CTRL-7), a `var` connection, a lifted input with a
 //! default or a null (FN-11), a call that leaves out a temporal input
-//! (UNIT-8), a temporal candidate of an operator, `inject global_state`
-//! in a graph (FN-9), and an application's run statement.
+//! (UNIT-8), and a temporal candidate of an operator. `inject
+//! global_state` in a graph (FN-9) is the `apps` family's.
 
 use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Local, Stmt, ValueCategory};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Signature, Type};
@@ -116,24 +115,6 @@ impl Emitter<'_> {
         whole.push_str(&wiring);
         self.piece.declaration = prototype;
         self.piece.text = whole;
-    }
-
-    /// Writes the module's run statement, for an application (RUN-1).
-    pub(super) fn application(&mut self) {
-        let declared = &self.program.modules[self.module];
-        let at = declared
-            .run_body
-            .as_ref()
-            .map(|run| run.at)
-            .or_else(|| declared.run.as_ref().map(|run| run.at))
-            .or_else(|| declared.application_at());
-        match at {
-            Some(at) => self.unsupported(at, "an application's run statement"),
-            None => {
-                // An application with no run statement to read was
-                // rejected; there is nothing to write.
-            }
-        }
     }
 
     /// `value` where a connection of `ty` is expected: the port of a

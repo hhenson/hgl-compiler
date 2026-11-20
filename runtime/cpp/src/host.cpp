@@ -33,11 +33,9 @@ std::map<std::string, Body, std::less<>>& registered() {
     return tests;
 }
 
-/// `text` as one line of the results file: a backslash, a line feed and a
-/// carriage return as `\\`, `\n` and `\r`, as the runner reads them, and
-/// every other character as it is, a NUL and the other control characters
-/// among them: the runner ends a line at a line feed alone.
-std::string escaped(std::string_view text) {
+} // namespace
+
+std::string detail::escaped(std::string_view text) {
     std::string out;
     out.reserve(text.size());
     for (const char character : text) {
@@ -57,6 +55,8 @@ std::string escaped(std::string_view text) {
     }
     return out;
 }
+
+namespace {
 
 /// A test named on the command line: its name, and its time limit where it
 /// is held to one.
@@ -227,7 +227,7 @@ int detail::main_with_grace(int argc, char** argv, long grace_milliseconds) {
         const auto found = registered().find(test.name);
         if (found == registered().end()) {
             say(std::format("unloaded {} {}", number,
-                            escaped(std::format("the program has no test `{}`", test.name))));
+                            detail::escaped(std::format("the program has no test `{}`", test.name))));
             continue;
         }
         const Outcome outcome =
@@ -238,7 +238,8 @@ int detail::main_with_grace(int argc, char** argv, long grace_milliseconds) {
             say(std::format("passed {}", number));
             continue;
         }
-        say(std::format("failed {} {} {}", number, outcome.failed->first, escaped(outcome.failed->second)));
+        say(std::format("failed {} {} {}", number, outcome.failed->first,
+                        detail::escaped(outcome.failed->second)));
         if (outcome.given_up) {
             std::fclose(results);
             std::_Exit(3);

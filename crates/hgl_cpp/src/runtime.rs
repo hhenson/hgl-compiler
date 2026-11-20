@@ -28,6 +28,11 @@ pub const HEADER: &str = "hglrt/hglrt.h";
 /// fraction of the time a module's unit takes.
 pub const HOST_HEADER: &str = "hglrt/host.h";
 
+/// The header an application's entry unit includes, and no other: the
+/// host of an application's run (UNIT-14), with nothing of hgraph's, as
+/// [`HOST_HEADER`] is for an entry unit of tests.
+pub const APPLICATION_HOST_HEADER: &str = "hglrt/application_host.h";
+
 /// The C++ namespace the library defines its names in: core's natives
 /// among them.
 pub const NAMESPACE: &str = "hglrt";

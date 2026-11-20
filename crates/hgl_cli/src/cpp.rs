@@ -20,7 +20,12 @@
 //!    module's tests to run, and reads what became of each from the
 //!    results file it writes: the protocol of the hgraph target's
 //!    driver, read by the same code (`hgl_hgraph::read_results`).
+//!
+//! For `hgl run` it builds the one executable of the application chosen
+//! in the same way, runs it once, and reads what became of the run
+//! (`application`).
 
+mod application;
 mod build;
 mod sdk;
 
@@ -454,10 +459,20 @@ fn seconds(limit: Duration) -> String {
     }
 }
 
-/// `hgl run --target cpp` of application `chosen` of `program`: no
-/// application is written for this target yet, so none is run, and
-/// what stops it is said.
-pub(super) fn run(sources: &SourceMap, program: &Program, chosen: &str) -> ExitCode {
+/// `hgl run --target cpp` of application `chosen` of `program`
+/// (UNIT-14, RUN-1): its executable built in the program's workspace,
+/// the directory `keep` names or the one of its source `roots`, and run
+/// once, and its output printed as the hgraph target's is (`super::ran`).
+/// An interrupt of `hgl`, or a request for it to end, is the host's stop
+/// of the run (RUN-3), which is passed on to the executable
+/// (`application::Stop`).
+pub(super) fn run(
+    sources: &SourceMap,
+    program: &Program,
+    chosen: &str,
+    keep: Option<&Path>,
+    roots: &[PathBuf],
+) -> ExitCode {
     let mut unwritten = Diagnostics::new();
     let output = hgl_cpp::transpile(program, &mut unwritten);
     let name = hgl_cpp::TARGET;
@@ -469,21 +484,25 @@ pub(super) fn run(sources: &SourceMap, program: &Program, chosen: &str) -> ExitC
         eprintln!("hgl: the target wrote no application `{chosen}`");
         return ExitCode::from(EXIT_FAILED);
     };
-    match &application.blocked {
-        Some(diagnostic) => {
-            let source = sources.file(diagnostic.primary.file);
-            eprintln!(
-                "{}:{}: {}",
-                source.name(),
-                source.line_col(diagnostic.primary.span.start),
-                diagnostic.message
-            );
-            println!(
-                "not run: the {name} target does not write all that {} needs yet",
-                application.path
-            );
-        }
-        None => println!("not run: the {name} target writes no entry for an application yet"),
+    if let Some(diagnostic) = &application.blocked {
+        let source = sources.file(diagnostic.primary.file);
+        eprintln!(
+            "{}:{}: {}",
+            source.name(),
+            source.line_col(diagnostic.primary.span.start),
+            diagnostic.message
+        );
+        println!(
+            "not run: the {name} target does not write all that {} needs yet",
+            application.path
+        );
+        return ExitCode::from(EXIT_FAILED);
     }
-    ExitCode::from(EXIT_FAILED)
+    // Where the handler cannot be set the run goes on all the same, and
+    // an interrupt then ends `hgl` as it always did.
+    let stop = application::Stop::new();
+    let asked = stop.clone();
+    let _ = ctrlc::set_handler(move || asked.ask());
+    let ran = application::run(&output, application, keep, roots, &stop);
+    super::ran(&application.path, name, ran)
 }

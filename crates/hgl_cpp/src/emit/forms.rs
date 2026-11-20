@@ -164,6 +164,7 @@ pub(super) trait Family: Sync {
 static FAMILIES: &[&dyn Family] = &[
     &super::windows::Windows,
     &super::references::References,
+    &super::apps::Apps,
     &super::scalars::Scalars,
     &super::tests::Tests,
     &super::sources::Sources,

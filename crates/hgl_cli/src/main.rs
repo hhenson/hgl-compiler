@@ -998,7 +998,13 @@ fn run(arguments: &RunArgs) -> ExitCode {
         }
     }
     if let Target::Cpp = arguments.target {
-        return cpp::run(&sources, &program, &chosen);
+        return cpp::run(
+            &sources,
+            &program,
+            &chosen,
+            arguments.keep.as_deref(),
+            &arguments.roots,
+        );
     }
     // What the target does not write yet is no error of the program:
     // it matters where the application needs it.
@@ -1056,7 +1062,16 @@ fn run(arguments: &RunArgs) -> ExitCode {
     let stop = Stop::new();
     let asked = stop.clone();
     let _ = ctrlc::set_handler(move || asked.ask());
-    match hgl_hgraph::run_application(&python, directory, &output, chosen, &stop) {
+    let ran = hgl_hgraph::run_application(&python, directory, &output, chosen, &stop);
+    self::ran(&application.path, name, ran)
+}
+
+/// What `hgl run` prints of what became of application `path` on the
+/// target `name`, and the status it ends with: the run's output once the
+/// run has stopped, a line for each publication (core's CRUN-8), or why
+/// it failed (CRUN-6: "A run that failed has no output") or was not run.
+fn ran(path: &str, name: &str, ran: RanApplication) -> ExitCode {
+    match ran {
         RanApplication::Stopped { output, by_host } => {
             let how = if by_host { " until it was stopped" } else { "" };
             match output {
@@ -1065,24 +1080,20 @@ fn run(arguments: &RunArgs) -> ExitCode {
                         println!("{at}  {value}");
                     }
                     println!(
-                        "ran {} on {name}{how}: {}",
-                        application.path,
+                        "ran {path} on {name}{how}: {}",
                         count(published.len(), "publication")
                     );
                 }
-                None => println!(
-                    "ran {} on {name}{how}: its entry has no result",
-                    application.path
-                ),
+                None => println!("ran {path} on {name}{how}: its entry has no result"),
             }
             ExitCode::SUCCESS
         }
         RanApplication::Failed(message) => {
-            eprintln!("hgl: {} failed: {message}", application.path);
+            eprintln!("hgl: {path} failed: {message}");
             ExitCode::from(EXIT_REJECTED)
         }
         RanApplication::NotRun(reason) => {
-            eprintln!("hgl: {} was not run: {reason}", application.path);
+            eprintln!("hgl: {path} was not run: {reason}");
             ExitCode::from(EXIT_FAILED)
         }
     }
