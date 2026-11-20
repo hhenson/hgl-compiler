@@ -100,7 +100,7 @@ impl Emitter<'_> {
             self.unsupported(at, "a source with no result");
             return;
         };
-        let Some(payload) = self.written_type(result, at) else {
+        let Some(payload) = self.payload_type(result, at) else {
             return;
         };
         let Some(schema) = self.temporal_schema(result, at) else {

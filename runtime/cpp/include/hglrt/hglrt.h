@@ -25,3 +25,4 @@
 #include <hglrt/testing.h>
 #include <hglrt/text.h>
 #include <hglrt/values.h>
+#include <hglrt/windows.h>

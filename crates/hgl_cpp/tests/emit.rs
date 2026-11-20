@@ -383,6 +383,124 @@ fn temporal_code_is_written() {
     assert!(units.contains(&"modules/core.cpp"), "{units:?}");
 }
 
+/// The windows' family (TYPE-11; core's END-9): a window of a tick count
+/// is hgraph's `TSW` and one of a duration its `TSWDuration`; a window's
+/// value, its delta and `removed_value` are read through the runtime
+/// library's `windows.h`, each in the form its place takes (ERR-14); a
+/// lifted helper is given a window only where it is all valid (FN-12);
+/// and a trace of a window is one of its V, which core's `replay` and
+/// `record` of the window publish and record (TST-16).
+#[test]
+fn windows_are_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.windows.hgl",
+            include_str!("fixtures/demo.windows.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.windows", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.windows.cpp")
+        .unwrap()
+        .text;
+    for written in [
+        "::hgraph::Out<::hgraph::TSW<::hgraph::Int, 3, 2>> out_",
+        "::hgraph::Out<::hgraph::TSWDuration<::hgraph::Int, 3, 1>> out_",
+        "::hglrt::window_push(out_, ::hglrt::checked_value(reading));",
+        "::hglrt::window_value_checked(readings)",
+        "::hglrt::fn_removed_value_checked(readings)",
+        "::hglrt::fn_delta_value_checked(readings)",
+        "::hglrt::fn_all_valid(readings)",
+        "::hgraph::In<\"readings\", ::hgraph::TSW<::hgraph::Int, 3, 2>, ::hgraph::InputValidity::AllValid> readings",
+    ] {
+        assert!(unit.contains(written), "{written} in\n{unit}");
+    }
+    // CEVAL-1, TST-16: core's `replay` of a window publishes each arrival,
+    // a V, and its `record` keeps a V for each tick that has a delta.
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    for written in [
+        "using yielded_type_ = ::hglrt::Yielded<::hgraph::Int>;\n    using body_type_ = ::hglrt::generator<yielded_type_>;\n\n    // The body (SOURCE-1), given its configuration by value.\n    static body_type_ body_([[maybe_unused]] ::hglrt::list<std::tuple<::hgraph::DateTime, ::hgraph::Int>> items)",
+        "[&out_](::hgraph::Int value_) { ::hglrt::window_push(out_, value_); }",
+        "::hgraph::In<\"input\", ::hgraph::TSWDuration<::hgraph::Int, 3, 0>> input",
+    ] {
+        assert!(core.contains(written), "{written} in\n{core}");
+    }
+}
+
+/// A window the target does not write yet is reported where its type is
+/// written, and blocks what reaches it: one of a nullable V, whose delta
+/// is the nullable's own (TYPE-11), and the invalidation of a window
+/// result (END-4).
+#[test]
+fn a_window_not_written_yet_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn kept(reading: f64) -> rolling_window<f64?, 3> {\n",
+                "    when { return reading }\n",
+                "}\n",
+                "\n",
+                "fn counted(readings: rolling_window<i64, 2>) -> i64 {\n",
+                "    when { return delta_value(readings) }\n",
+                "}\n",
+                "\n",
+                "test a_nullable_window {\n",
+                "    assert eval(kept(reading: [1.0, 2.0])) == [1.0, 2.0]\n",
+                "}\n",
+                "\n",
+                "fn cleared(reading: i64) -> rolling_window<i64, 2> {\n",
+                "    inject out\n",
+                "    when { invalidate(out) }\n",
+                "}\n",
+                "\n",
+                "test a_window {\n",
+                "    assert eval(counted(readings: [1, 2])) == [1, 2]\n",
+                "}\n",
+                "\n",
+                "test an_invalidated_window {\n",
+                "    assert eval(cleared(reading: [1])) == []\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("a_nullable_window").as_deref(),
+        Some("m.hgl:12:12 the cpp target does not write the type `rolling_window<f64?, 3>` yet")
+    );
+    assert!(
+        emitted.reported.contains(
+            &"m.hgl:3:4 the cpp target does not write a temporal value of `rolling_window<f64?, 3>` yet"
+                .to_string()
+        ),
+        "{:?}",
+        emitted.reported
+    );
+    assert_eq!(emitted.blocked("a_window"), None);
+    // END-4 of a window result.
+    assert_eq!(
+        emitted.blocked("an_invalidated_window").as_deref(),
+        Some("m.hgl:17:12 the cpp target does not write `invalidate` of a window yet")
+    );
+}
+
 /// A temporal form the target does not write yet is reported through the
 /// dispatch point, where it is written, and blocks what reaches it: a
 /// temporal value of a type no family writes, and a capability no family
