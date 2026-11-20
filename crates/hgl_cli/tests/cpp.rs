@@ -781,6 +781,36 @@ fn activity_runs_on_the_sdk() {
     );
 }
 
+/// Lifting and capture on the SDK (`demo.lifting`): lifted calls binding
+/// defaults, a sink, an eval of a value function, captures of a node, a
+/// graph and a lifted call, a write that stands before a failure, a `?` in
+/// a `when` and an error's context, each as the hgraph target gives it.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn lifting_code_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("lifting");
+    let file = write(
+        &root,
+        "src/demo.lifting.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.lifting.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-3: "An index outside a list fails where it is evaluated". The
 /// test is reported at the statement of it that was running, inside a
 /// function it called, with the runtime library's text of the failure.

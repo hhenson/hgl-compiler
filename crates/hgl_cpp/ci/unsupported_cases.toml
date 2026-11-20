@@ -6,25 +6,8 @@
 # until it is taken off. `check_core.py --target cpp --write-list` writes
 # the list from a run; read the difference before it is committed.
 
-"a `?` here" = [
-    "conformance::conflicting_run_bounds_fail_before_evaluation",
-    "conformance::eval_preserves_failure",
-]
-"a `capture`" = [
-    "conformance::a_captured_error_ticks_again_then_stays_valid",
-    "conformance::a_captured_failure_keeps_the_child_live",
-    "conformance::a_returned_error_is_a_value_at_a_capture_boundary",
-    "conformance::a_start_failure_escapes_without_an_input_tick",
-    "conformance::a_zero_duration_asked_of_the_scheduler_fails",
-    "conformance::an_entry_at_or_past_the_size_written_with_it_fails",
-    "conformance::an_entry_past_a_fixed_lists_end_fails",
-    "conformance::stop_failures_cross_a_capture_boundary",
-]
 "a `var` connection" = [
     "conformance::a_switch_forwards_the_selected_connection",
-]
-"a call of a temporal candidate of an operator" = [
-    "core_implementation::identity_arithmetic_is_generic",
 ]
 "a connection here" = [
     "conformance::an_early_return_skips_the_continuation",
@@ -32,10 +15,6 @@
 "a field of a connection" = [
     "conformance::an_atomic_quote_wakes_its_bid_projection",
     "conformance::changing_a_sibling_field_does_not_publish_a_bid",
-]
-"a lifted input that binds a default or a null" = [
-    "conformance::a_default_does_not_stand_for_a_window_below_its_minimum",
-    "conformance::a_lifted_default_returns_after_invalidation",
 ]
 "a temporal value of `MarketQuote`" = [
     "conformance::a_struct_is_all_valid_once_every_field_is",
@@ -52,8 +31,10 @@
     "conformance::a_removed_key_is_absent_until_added_again",
     "conformance::a_retained_list_is_independent_of_later_input_changes",
     "conformance::a_stored_null_is_distinct_from_an_absent_key",
+    "conformance::lifted_nullable_binds_null_on_a_trigger",
     "conformance::lifting_observes_the_complete_list_including_empty",
     "conformance::publication_establishes_validity",
+    "conformance::published_null_takes_precedence_over_a_default",
     "conformance::removing_an_absent_key_is_ignored",
     "conformance::switching_keys_follows_the_new_child",
     "core_implementation::a_null_publication_has_a_tuple_in_the_recording",
@@ -68,6 +49,8 @@
 "a temporal value of `list<i64, 2>`" = [
     "conformance::a_fixed_list_is_all_valid_once_every_position_is",
     "conformance::a_fixed_list_is_valid_once_one_position_is",
+    "conformance::a_result_accepts_the_read_of_an_invalid_child",
+    "conformance::an_entry_past_a_fixed_lists_end_fails",
     "conformance::fixed_list_children_become_readable_independently",
     "conformance::reading_an_invalid_child_at_a_runtime_index_fails",
 ]
@@ -81,16 +64,12 @@
     "conformance::an_empty_list_delta_ticks_only_where_it_makes_the_list_valid",
     "conformance::an_empty_list_given_to_an_empty_list_is_no_tick",
     "conformance::an_entry_after_the_last_position_extends_the_list",
+    "conformance::an_entry_at_or_past_the_size_written_with_it_fails",
     "conformance::reducing_a_list_past_its_length_leaves_it_empty",
     "conformance::removing_only_a_position_that_holds_no_value_is_no_tick",
 ]
-"a temporal value of `result<i64, error>`" = [
-    "conformance::a_result_accepts_the_read_of_an_invalid_child",
-]
-"a temporal value of `result<list<i64>, error>`" = [
-    "conformance::a_result_accepts_the_read_of_a_window_before_it_is_all_valid",
-]
 "a temporal value of `set<i64>`" = [
+    "conformance::a_set_delta_changes_only_the_named_members",
     "conformance::a_set_given_the_members_it_holds_is_no_tick",
     "conformance::a_whole_set_replaces_the_previous_members",
     "conformance::an_empty_set_delta_ticks_only_where_it_makes_the_set_valid",
@@ -134,14 +113,6 @@
     "conformance::a_conditional_child_restarts_only_after_leaving_its_branch",
     "conformance::a_probe_reads_a_selected_producer_that_stayed_quiet",
     "conformance::an_outer_producer_keeps_its_lifetime_across_branches",
-]
-"an eval of a value function" = [
-    "conformance::a_membership_admits_what_each_listed_type_has",
-    "conformance::a_set_delta_changes_only_the_named_members",
-    "conformance::lifted_default_gives_way_to_a_publication",
-    "conformance::lifted_default_still_requires_other_inputs",
-    "conformance::lifted_nullable_binds_null_on_a_trigger",
-    "conformance::published_null_takes_precedence_over_a_default",
 ]
 "the type `Closed`" = [
     "core_implementation::a_calendar_says_what_a_business_day_is",

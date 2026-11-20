@@ -123,6 +123,7 @@ if(BUILD_TESTING)
         tests/main.cpp
         tests/application_tests.cpp
         tests/capabilities_tests.cpp
+        tests/capture_tests.cpp
         tests/checked_tests.cpp
         tests/conversion_tests.cpp
         tests/endpoint_tests.cpp

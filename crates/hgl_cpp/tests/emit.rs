@@ -512,7 +512,10 @@ fn windows_are_written() {
         "::hglrt::fn_removed_value_checked(readings)",
         "::hglrt::fn_delta_value_checked(readings)",
         "::hglrt::fn_all_valid(readings)",
-        "::hgraph::In<\"readings\", ::hgraph::TSW<::hgraph::Int, 3, 2>, ::hgraph::InputValidity::AllValid> readings",
+        // FN-12: a lifted helper is given the window's `list<V>`, and is
+        // not called where the window is valid and not all valid.
+        "::hgraph::In<\"readings\", ::hgraph::TSW<::hgraph::Int, 3, 2>> readings",
+        "if (!::hglrt::fn_all_valid(readings))\n            {\n                return;\n            }\n            out_.set(::hgl::demo::windows::m_::total(::hglrt::window_value(readings)));",
     ] {
         assert!(unit.contains(written), "{written} in\n{unit}");
     }
@@ -531,6 +534,59 @@ fn windows_are_written() {
         "::hgraph::In<\"input\", ::hgraph::TSWDuration<::hgraph::Int, 3, 0>> input",
     ] {
         assert!(core.contains(written), "{written} in\n{core}");
+    }
+}
+
+/// FN-11, FN-12, TYPE-11: a window given to a lifted helper whose
+/// parameter has a default binds the default where the window is not
+/// valid, is given as the `list<V>` its read gives where it is all
+/// valid, and calls nothing where it is valid and not all valid.
+#[test]
+fn a_window_given_to_a_lifted_default_is_read_as_its_list() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "const fn total(values: list<i64> = [0]) -> i64 {\n",
+                "    var sum = 0\n",
+                "    for value in values {\n",
+                "        sum = sum + value\n",
+                "    }\n",
+                "    return sum\n",
+                "}\n",
+                "\n",
+                "fn kept(reading: i64) -> rolling_window<i64, 2> {\n",
+                "    when { return reading }\n",
+                "}\n",
+                "\n",
+                "fn totals(reading: i64) -> i64 {\n",
+                "    return total(kept(reading))\n",
+                "}\n",
+                "\n",
+                "test totalled {\n",
+                "    assert eval(totals(reading: [1, 2, 3])) == [_, 3, 5]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_eq!(emitted.blocked("totalled"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    for written in [
+        "::hgraph::In<\"values\", ::hgraph::TSW<::hgraph::Int, 2, 2>, ::hgraph::InputValidity::Unchecked> input_00_",
+        "if (::hglrt::fn_valid(input_00_) && !::hglrt::fn_all_valid(input_00_))",
+        "const ::hglrt::list<::hgraph::Int> values = ::hglrt::fn_valid(input_00_) ? ::hglrt::list<::hgraph::Int>{::hglrt::window_value(input_00_)} : ::hglrt::list<::hgraph::Int>{::hglrt::list<::hgraph::Int>{0}};",
+    ] {
+        assert!(unit.contains(written), "{written} in\n{unit}");
     }
 }
 
@@ -799,6 +855,78 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
     );
 }
 
+/// Lifting and capture (`demo.lifting`): a lifted call whose input binds
+/// its parameter's default until it publishes (FN-6, FN-11), an outputless
+/// helper lifted to a sink, an eval of a value function (TST-8), captures
+/// of a node, a graph and a lifted call with their `.value` and `.error`
+/// (ERR-7), a write that stands before a failure (ERR-8), a `?` in a
+/// `when` (ERR-5) and an error's context (ERR-4).
+/// Everything is written, and each test can be run, against the runtime
+/// library `hgl` carries.
+#[test]
+fn lifting_code_is_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.lifting.hgl",
+            include_str!("fixtures/demo.lifting.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.lifting", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.lifting.cpp")
+        .unwrap()
+        .text;
+    // FN-11: an input whose parameter has a default is not required valid,
+    // and binds the default where it is not.
+    assert!(unit.contains("::hgraph::InputValidity::Unchecked> input_00_"));
+    assert!(unit.contains("::hglrt::fn_valid(input_00_) ? ::hgraph::Int{::hglrt::checked_value(input_00_)} : ::hgraph::Int{2}"));
+    // ERR-7: a capture is hgraph's `try_except_` of a graph of its own.
+    assert!(unit.contains("::hglrt::capture<captured_"));
+}
+
+/// hgraph issue 1866: a capture whose configuration holds an `f64` is
+/// reported, as hgraph would take two boundaries whose configurations are
+/// `0.0` and `-0.0` for one, and wires no `try_except_` as a node of its
+/// own.
+#[test]
+fn a_capture_given_an_f64_configuration_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn shifted(value: f64, const by: f64) -> f64 {\n",
+                "    when { return value + by }\n",
+                "}\n",
+                "\n",
+                "fn captured(value: f64) -> f64 {\n",
+                "    return capture(shifted, value, -0.0).value\n",
+                "}\n",
+                "\n",
+                "test shifts {\n",
+                "    assert eval(captured(value: [1.0])) == [1.0]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("shifts").as_deref(),
+        Some(
+            "m.hgl:8:36 the cpp target does not write a `capture` given an `f64` configuration (hgraph issue 1866) yet"
+        )
+    );
+}
+
 /// A temporal form the target does not write yet is reported through the
 /// dispatch point, where it is written, and blocks what reaches it: a
 /// temporal value of a type no family writes, and a capability no family
@@ -1033,9 +1161,8 @@ fn a_trace_held_in_a_let_given_to_an_eval_is_reported() {
 /// A temporal call that leaves out `const` parameters (UNIT-8): where
 /// more than one default may fail, each is held in the order of the
 /// parameters (EXPR-2); a default that runs statements is reported, as a
-/// value call's is; and a lifted call that leaves one out is reported,
-/// since its defaults bind as configuration where the graph is built
-/// (FN-6).
+/// value call's is; and a lifted call that leaves one out binds its
+/// default as configuration where the graph is built (FN-6).
 #[test]
 fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
     let emitted = emit_with(
@@ -1107,12 +1234,110 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
         "{:?}",
         emitted.blocked("block")
     );
+    // The lifting family's (`a_lifted_calls_omitted_defaults_are_configuration`).
+    assert_eq!(emitted.blocked("lifted"), None);
     assert!(
-        emitted.blocked("lifted").is_some_and(|reason| reason
-            .ends_with("does not write a lifted call that leaves out a parameter yet")),
-        "{:?}",
-        emitted.blocked("lifted")
+        unit.contains("::hgraph::Scalar<\"b\", ::hgraph::Int> b"),
+        "{unit}"
     );
+}
+
+/// FN-6: "scalar arguments and omitted defaults bind as configuration": a
+/// lifted call that leaves out a parameter gives the node its default as
+/// an `hgraph::Scalar`, evaluated where the graph is built, after the
+/// arguments written and in the order of the parameters, each held first
+/// where more than one may fail (EXPR-2); one written `T?` with none is
+/// null in the node's call (UNIT-8); a default that runs statements is
+/// reported, as a temporal call's is. An eval of a value function binds
+/// what it leaves out so too, and holds it before its run's
+/// configuration.
+#[test]
+fn a_lifted_calls_omitted_defaults_are_configuration() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "const fn one() -> i64 => 1\n",
+                "\n",
+                "const fn summed(a: i64, b: i64 = one(), c: i64 = one(), d: i64? = null, e: i64? = 4) -> i64 {\n",
+                "    if d != null || e == null { return a }\n",
+                "    return a + b + c + e\n",
+                "}\n",
+                "\n",
+                "fn lifted_twice(value: i64) -> i64 => summed(value)\n",
+                "\n",
+                "const fn blocky(a: i64, b: i64 = {\n",
+                "    let x = 2\n",
+                "    x + 1\n",
+                "}) -> i64 => a + b\n",
+                "\n",
+                "fn lifted_block(value: i64) -> i64 => blocky(value)\n",
+                "\n",
+                "test twice {\n",
+                "    assert eval(lifted_twice(value: [1])) == [7]\n",
+                "}\n",
+                "\n",
+                "test block {\n",
+                "    assert eval(lifted_block(value: [1])) == [4]\n",
+                "}\n",
+                "\n",
+                "test evaluated {\n",
+                "    assert eval(summed(a: [1, 2]), RunConfig(length: 5us)) == [7, 8]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("twice"), None);
+    assert_eq!(emitted.blocked("evaluated"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    let twice = unit
+        .split("namespace n_::lifted_twice")
+        .nth(1)
+        .expect("the graph `lifted_twice`");
+    // The node takes `b`, `c` and `e` as configuration, and the call in it
+    // gives `d` its null: hgraph holds no `std::optional` as configuration,
+    // and a null is the same wherever it is evaluated.
+    assert!(
+        twice.contains("::hgraph::Scalar<\"b\", ::hgraph::Int> b, [[maybe_unused]] ::hgraph::Scalar<\"c\", ::hgraph::Int> c, [[maybe_unused]] ::hgraph::Scalar<\"e\", ::hgraph::Int> e"),
+        "{twice}"
+    );
+    assert!(
+        twice.contains("::hgl::m::m_::summed(::hglrt::checked_value(a), b.value(), c.value(), std::nullopt, e.value())"),
+        "{twice}"
+    );
+    // Each default may fail: each is held, `b` before `c`, after the
+    // argument written, before the node is wired.
+    assert!(
+        twice.contains(
+            "[&] { const auto argument_01_ = value; const auto argument_02_ = static_cast<::hgraph::Int>(::hgl::m::m_::one()); const auto argument_03_ = static_cast<::hgraph::Int>(::hgl::m::m_::one()); const auto argument_04_ = static_cast<::hgraph::Int>(4); return ::hgraph::wire<lifted_00_>(wiring_, argument_01_, argument_02_, argument_03_, argument_04_); }()"
+        ),
+        "{twice}"
+    );
+    assert!(
+        emitted.blocked("block").is_some_and(
+            |reason| reason.ends_with("does not write a default that runs statements yet")
+        ),
+        "{:?}",
+        emitted.blocked("block")
+    );
+    // The eval holds the defaults, `b` before `c`, before the run's
+    // configuration, and gives them to the node.
+    let tests = unit
+        .split("void evaluated()")
+        .nth(1)
+        .expect("the test `evaluated`");
+    let b = tests.find("= ::hgl::m::m_::one();").expect("`b` held");
+    let bounds = tests.find("const auto bounds_").expect("the bounds held");
+    assert!(b < bounds, "{tests}");
 }
 
 /// UNIT-8: a default is written where its argument is left out; one

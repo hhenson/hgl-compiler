@@ -11,7 +11,7 @@
 //!
 //! | Lookup | What it answers |
 //! | --- | --- |
-//! | a type's temporal form | [`Family::schema`], hgraph's schema of a temporal value of the type; [`Family::read`], a hook's read of its payload; [`Family::publish`], a publication of a value of it; [`Family::delta`], its `delta_value`; [`Family::constant`], a value of it wired as a connection (FN-3); [`Family::payload`], the C++ type a publication of it takes and a trace of it holds; [`Family::admission`], what a lifted call asks of an input of it (FN-12); [`Family::read_type`], the type a read of it gives |
+//! | a type's temporal form | [`Family::schema`], hgraph's schema of a temporal value of the type; [`Family::read`], a hook's read of its payload; [`Family::publish`], a publication of a value of it; [`Family::delta`], its `delta_value`; [`Family::constant`], a value of it wired as a connection (FN-3); [`Family::payload`], the C++ type a publication of it takes and a trace of it holds; [`Family::read_type`], the type a read of it gives |
 //! | a type's trace cell | [`Family::cell`], one cell of a trace written out (TST-5) |
 //! | a statement | [`Family::statement`], a statement of a hook, a source's body or a graph |
 //! | an expression | [`Family::expression`], an expression of a hook, a source's body, a test or value code |
@@ -96,14 +96,6 @@ pub(super) trait Family: Sync {
         None
     }
 
-    /// The validity a lifted call asks of its input of `ty` before it
-    /// invokes the helper, where it asks more than `valid` (FN-11,
-    /// FN-12): hgraph's `::hgraph::InputValidity::AllValid` for one that
-    /// is supplied only where it is all valid.
-    fn admission(&self, _emitter: &mut Emitter<'_>, _ty: &Type) -> Option<String> {
-        None
-    }
-
     /// The HGL type that a read of the payload of a temporal value of
     /// `ty` gives, in a hook and to a lifted helper, where it is not `ty`
     /// itself: a window's is a `list<V>` (TYPE-11). A lifted call's node
@@ -167,6 +159,7 @@ static FAMILIES: &[&dyn Family] = &[
     &super::apps::Apps,
     &super::scheduling::Scheduling,
     &super::activity::Activity,
+    &super::lifting::Lifting,
     &super::scalars::Scalars,
     &super::tests::Tests,
     &super::sources::Sources,
@@ -258,14 +251,6 @@ impl Emitter<'_> {
             Some(payload) => Some(payload),
             None => self.written_type(ty, at),
         }
-    }
-
-    /// The validity a lifted call asks of its input of `ty`
-    /// ([`Family::admission`]), where it asks more than `valid`.
-    pub(super) fn lifted_admission(&mut self, ty: &Type) -> Option<String> {
-        FAMILIES
-            .iter()
-            .find_map(|family| family.admission(self, ty))
     }
 
     /// The HGL type a read of the payload of a temporal value of `ty`
