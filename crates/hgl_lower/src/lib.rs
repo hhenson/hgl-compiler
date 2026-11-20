@@ -19,9 +19,12 @@
 //! * [`instances`]: which instances of generic declarations a program
 //!   asks for, and what an eval's run is wired with (GEN-2, CEVAL-1);
 //! * [`canonical`]: the text that tells one instance from another;
+//! * [`pieces`]: what a piece of a program reaches, and which tests and
+//!   applications reach a form a target does not write;
 //! * [`types`]: what a type of the program holds (TYPE-3).
 
 pub mod canonical;
 pub mod copies;
 pub mod instances;
+pub mod pieces;
 pub mod types;

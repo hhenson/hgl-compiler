@@ -28,6 +28,7 @@ use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_lower::canonical::canonical_argument;
 use hgl_lower::copies::{self, Copies, by_value, changed_in_place, may_hold, struct_in_place};
 use hgl_lower::instances::{self, Instances};
+use hgl_lower::pieces::Reach;
 use hgl_lower::types::inherited;
 
 use crate::{codes, provides, python_module, test_function};
@@ -89,23 +90,6 @@ pub(crate) struct Written {
 /// The `_` first makes the name the target's own: no declaration has
 /// such a name.
 pub(crate) const APPLICATION: &str = "_application";
-
-/// What a piece names: a declaration, as the position of its module in
-/// the program and its position in that module, and for a declaration
-/// that is written by instance, the suffix of the instance named.
-pub(crate) type Used = (usize, usize, Option<String>);
-
-/// What one piece of a program reaches: the first form in it that the
-/// target does not write yet, and the declarations it names, through
-/// which it reaches theirs (`crate::blocked`).
-#[derive(Default)]
-pub(crate) struct Reach {
-    /// The first form in it that the target does not write yet. A piece
-    /// with one is left out of the file.
-    pub(crate) broken: Option<Diagnostic>,
-    /// The functions and the types it names.
-    pub(crate) uses: BTreeSet<Used>,
-}
 
 /// One top-level part of a module as it is written: a declaration or a
 /// named test.

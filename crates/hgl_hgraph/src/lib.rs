@@ -64,7 +64,7 @@ use std::time::Duration;
 use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location};
 
-use crate::emit::{Reach, Used};
+use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
 pub use host::{Ran, RanApplication, Stop, run, run_application, run_within, write};
 
@@ -422,13 +422,6 @@ fn instanced(modules: &[Option<emit::Written>]) -> Instanced<'_> {
         .collect()
 }
 
-/// What [`blocked`] has found a function or an instance needs, by what
-/// names it: the first form it reaches that the target did not write,
-/// or none. Each is found once, however many pieces reach it: a chain of
-/// as many instances as one call makes (`hgl_analyser::INSTANCES`) is
-/// looked through once, and not once for each of its links.
-type Found = HashMap<Used, Option<Diagnostic>>;
-
 /// What each piece a function or an instance is written as reaches,
 /// for [`blocked`]: the declaration's own, and the instance's. One
 /// written by instance has nothing in its own, and is still left out
@@ -456,87 +449,6 @@ fn pieces_of<'w>(
         .chain(named)
         .map(|piece| &piece.reach)
         .collect()
-}
-
-/// The first form `test` needs that the target did not write: one of
-/// its own, or of a function it reaches through the functions it
-/// names. `pieces` gives what each piece a function or an instance is
-/// written as reaches, by what names it ([`pieces_of`]).
-///
-/// The functions are looked through depth first, in the order each
-/// piece names them, each once: a function may be reached twice, or
-/// reach itself. What is found of each is kept in `found` where it does
-/// not hang on the path it was reached by: all that a look that finds
-/// nothing passed, and where no function reached one on its own path
-/// again, what each on the path to the form found reaches.
-fn blocked<'p>(
-    pieces: impl Fn(&Used) -> Vec<&'p Reach>,
-    found: &mut Found,
-    test: &Reach,
-) -> Option<Diagnostic> {
-    if let Some(diagnostic) = &test.broken {
-        return Some(diagnostic.clone());
-    }
-    // Each function on the path from `test`, with what it names, and how
-    // many of those have been looked through.
-    let mut path: Vec<(Option<Used>, Vec<Used>, usize)> =
-        vec![(None, test.uses.iter().cloned().collect(), 0)];
-    let mut seen: HashSet<Used> = HashSet::new();
-    let mut finished: Vec<Used> = Vec::new();
-    // True once a function named one on its own path again.
-    let mut again = false;
-    let result = loop {
-        let Some((_, uses, next)) = path.last_mut() else {
-            break None;
-        };
-        let Some(used) = uses.get(*next).cloned() else {
-            if let Some((Some(done), _, _)) = path.pop() {
-                finished.push(done);
-            }
-            continue;
-        };
-        *next += 1;
-        if let Some(known) = found.get(&used) {
-            match known {
-                Some(diagnostic) => break Some(diagnostic.clone()),
-                None => continue,
-            }
-        }
-        if !seen.insert(used.clone()) {
-            again |= path.iter().any(|(on, _, _)| on.as_ref() == Some(&used));
-            continue;
-        }
-        let pieces = pieces(&used);
-        // The declaration's piece is looked at before the instance's,
-        // and what the instance names before what the declaration does.
-        if let Some(diagnostic) = pieces.iter().find_map(|piece| piece.broken.clone()) {
-            path.push((Some(used), Vec::new(), 0));
-            break Some(diagnostic);
-        }
-        let names: Vec<Used> = pieces
-            .iter()
-            .rev()
-            .flat_map(|piece| piece.uses.iter().cloned())
-            .collect();
-        path.push((Some(used), names, 0));
-    };
-    // What finds nothing passed nothing that does: each it passed finds
-    // nothing, however it is reached.
-    if result.is_none() {
-        for used in seen {
-            found.insert(used, None);
-        }
-    } else if !again {
-        for used in finished {
-            found.insert(used, None);
-        }
-        for (on, _, _) in path {
-            if let Some(on) = on {
-                found.insert(on, result.clone());
-            }
-        }
-    }
-    result
 }
 
 /// True where the provider of core's natives defines the function
