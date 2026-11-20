@@ -435,6 +435,50 @@ fn a_temporal_form_not_written_yet_is_reported() {
     assert_eq!(emitted.blocked("a_scalar"), None);
 }
 
+/// EXPR-2: an eval's call, the defaults of the `const` parameters it
+/// leaves out among it, is evaluated before the run's configuration:
+/// where they are held, each default is held before the configuration.
+#[test]
+fn an_evals_defaults_are_held_before_its_configuration() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "const fn one() -> i64 => 1\n",
+                "\n",
+                "const fn span() -> duration => 2us\n",
+                "\n",
+                "fn scaled(value: i64, const by: i64 = one()) -> i64 {\n",
+                "    when { return value * by }\n",
+                "}\n",
+                "\n",
+                "test bounded {\n",
+                "    assert eval(scaled(value: [1, 2, 3]), RunConfig(length: span())) == [1, 2]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("bounded"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    let test = unit.split("void bounded()").nth(1).unwrap();
+    let default = test
+        .find("= ::hgl::m::m_::one();")
+        .expect("the default held");
+    let bounds = test
+        .find("= ::hglrt::testing::Bounds{.length = ::hgl::m::m_::span()};")
+        .expect("the configuration held");
+    assert!(default < bounds, "{test}");
+}
+
 /// TIME-6, TIME-8: a node's capability is made in `start` before a
 /// `cache` initializer that reads it.
 #[test]

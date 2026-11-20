@@ -159,6 +159,20 @@ impl Emitter<'_> {
         value: &Expr,
         given: &[(usize, String)],
     ) -> String {
+        self.temporal_call_held(scope, value, given, &[])
+    }
+
+    /// [`Emitter::temporal_call`], where `defaults` are the values already
+    /// held for some of the parameters the call leaves out, by their
+    /// positions among the function's parameters: an eval's, which holds
+    /// them before its run's configuration (EXPR-2).
+    pub(super) fn temporal_call_held(
+        &mut self,
+        scope: &mut Scope,
+        value: &Expr,
+        given: &[(usize, String)],
+        defaults: &[(usize, String)],
+    ) -> String {
         let ExprKind::Call {
             callee:
                 Callee::Function {
@@ -227,6 +241,10 @@ impl Emitter<'_> {
             if !parameter.constant {
                 // UNIT-8: "an omitted temporal input is never valid".
                 return self.missing(value.at, "a call that leaves out a temporal input");
+            }
+            if let Some((_, held)) = defaults.iter().find(|(at, _)| *at == index) {
+                written[index] = Some(held.clone());
+                continue;
             }
             written[index] = Some(
                 match left_out(program, (module, declaration), index, parameter) {
