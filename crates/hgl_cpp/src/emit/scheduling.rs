@@ -6,6 +6,7 @@
 
 use hgl_analyser::hir::{Body, Hook, Stmt};
 use hgl_analyser::{LocalKind, Signature};
+use hgl_diagnostics::Location;
 use hgl_lower::nodes::{Handler, Timer};
 
 use super::Emitter;
@@ -69,6 +70,13 @@ pub(super) struct Hooked {
 }
 
 impl Emitter<'_> {
+    /// Whether the node of `signature`, which a timer wakes, is written:
+    /// one that is not is reported at `at`. Every one is, while none is
+    /// written.
+    pub(super) fn timed_node(&mut self, _signature: &Signature, _at: Location) -> bool {
+        true
+    }
+
     /// What the declarations and hooks of the source of `signature` and
     /// `body` add to its node: nothing for one that has none, which is
     /// all that is written yet. `None` where one is not written, which is
