@@ -98,9 +98,18 @@ impl Emitter<'_> {
             self.unsupported(at, "a source with no result");
             return;
         };
-        let Some(payload) = self.written_type(result, at) else {
+        let Some(mut payload) = self.written_type(result, at) else {
             return;
         };
+        // TIME-7: a `yield` takes "a complete value of the result's type
+        // T, published whole, or a `delta<T>`", which core's `replay`
+        // yields: where the two are C++ types of their own, the payload is
+        // either (`hglrt::yielded_t`).
+        let delta =
+            super::types::cpp_type(self.program, &hgl_analyser::Type::delta(result.clone()));
+        if delta.is_some_and(|delta| delta != payload) {
+            payload = format!("::{}::yielded_t<{payload}>", runtime::NAMESPACE);
+        }
         let Some(schema) = self.temporal_schema(result, at) else {
             return;
         };
