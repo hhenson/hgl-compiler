@@ -122,7 +122,8 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 
 Not written yet, and reported: a `?` after anything its statement reads
 or runs before it (ERR-5), a `switch` case's binding read after the
-`switch` (UNIT-12), a struct that holds itself (TYPE-6), a field's
+`switch` (UNIT-12), an element of a `list<bool>` given to a `var`
+parameter (a bit, no `bool&`), a struct that holds itself (TYPE-6), a field's
 default that runs statements, a field of an abstract struct assigned, a
 dictionary's entry given to a `var` parameter, a window, and of temporal
 code: a temporal value of any but a scalar, a set and a dictionary, a
