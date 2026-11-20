@@ -41,6 +41,7 @@
 #undef lhs
 #undef line
 #undef listed
+#undef listed_in_order
 #undef london
 #undef members
 #undef moved
@@ -169,34 +170,37 @@ std::optional<::hgraph::Int> seven();
 // nudged() -> delta<Point> (`const fn`), module demo.composites, line 209
 ::hgl::demo::composites::m_::d_::Point nudged();
 
-// pair_change() -> tuple<f64?, i64?> (`const fn`), module demo.composites, line 211
+// listed_in_order() -> delta<list<i64>> (`const fn`), module demo.composites, line 213
+::hglrt::list_delta<::hglrt::list<::hgraph::Int>> listed_in_order();
+
+// pair_change() -> tuple<f64?, i64?> (`const fn`), module demo.composites, line 221
 std::tuple<std::optional<::hgraph::Float>, std::optional<::hgraph::Int>> pair_change();
 
-// side_of(number: i64) -> Side (`const fn`), module demo.composites, line 214
+// side_of(number: i64) -> Side (`const fn`), module demo.composites, line 224
 ::hgl::demo::composites::m_::Side side_of(::hgraph::Int number);
 
-// side_named(name: str) -> Side (`const fn`), module demo.composites, line 216
+// side_named(name: str) -> Side (`const fn`), module demo.composites, line 226
 ::hgl::demo::composites::m_::Side side_named(const ::hgraph::Str& name);
 
-// london() -> timezone (`const fn`), module demo.composites, line 219
+// london() -> timezone (`const fn`), module demo.composites, line 229
 ::hgraph::ZoneId london();
 
-// opening() -> zoned_time (`const fn`), module demo.composites, line 221
+// opening() -> zoned_time (`const fn`), module demo.composites, line 231
 ::hgraph::ZonedTime opening();
 
-// is_one(value: i64?) -> bool (`const fn`), module demo.composites, line 224
+// is_one(value: i64?) -> bool (`const fn`), module demo.composites, line 234
 ::hgraph::Bool is_one(std::optional<::hgraph::Int> value);
 
-// bump(count: i64, by: i64) (`const fn`), module demo.composites, line 228
+// bump(count: i64, by: i64) (`const fn`), module demo.composites, line 238
 void bump(::hgraph::Int& count, ::hgraph::Int by);
 
-// bump_after_growth() -> list<i64> (`const fn`), module demo.composites, line 232
+// bump_after_growth() -> list<i64> (`const fn`), module demo.composites, line 242
 ::hglrt::list<::hgraph::Int> bump_after_growth();
 
-// as_shapes(rounds: list<Round>) -> list<Shape> (`const fn`), module demo.composites, line 242
+// as_shapes(rounds: list<Round>) -> list<Shape> (`const fn`), module demo.composites, line 252
 ::hglrt::list<::hgl::demo::composites::m_::Shape> as_shapes(const ::hglrt::list<::hgl::demo::composites::m_::Round>& rounds);
 
-// failing() -> i64 (`const fn`), module demo.composites, line 333
+// failing() -> i64 (`const fn`), module demo.composites, line 343
 ::hgraph::Int failing();
 
 }  // namespace hgl::demo::composites::m_

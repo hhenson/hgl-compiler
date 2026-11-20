@@ -757,7 +757,7 @@ impl Emitter<'_> {
             };
             given.push(text);
         }
-        self.made_in_order(scope, &ty, read.members.len(), given, ("{", "}"))
+        self.made_in_order(scope, (&ty, &ty), read.members.len(), given, ("{", "}"))
     }
 
     /// What `argument`, given to `slot`, is written as; `None` where its
@@ -821,16 +821,18 @@ impl Emitter<'_> {
         Some(text)
     }
 
-    /// `ty` made of `slots` values, `open` and `close` around them, each
-    /// given by one of `given`, which are in the order HGL evaluates them.
-    /// Where more than one of them may fail, or one runs statements, which
-    /// may change what another reads, each is first held in that order, as
-    /// a value of its own where one runs statements: C++ evaluates them in
-    /// the order of the slots.
+    /// A value of the C++ type `ty`, made by `made` (the type itself for
+    /// an aggregate, or a function that gives one) of `slots` values,
+    /// `open` and `close` around them, each given by one of `given`, which
+    /// are in the order HGL evaluates them. Where more than one of them
+    /// may fail, or one runs statements, which may change what another
+    /// reads, each is first held in that order, as a value of its own where
+    /// one runs statements: C++ evaluates them in the order of the slots.
+    #[allow(clippy::too_many_arguments)]
     fn made_in_order(
         &mut self,
         scope: &mut Scope,
-        ty: &str,
+        (ty, made): (&str, &str),
         slots: usize,
         given: Vec<Given>,
         (open, close): (&str, &str),
@@ -842,7 +844,7 @@ impl Emitter<'_> {
             for value in given {
                 filled[value.slot] = value.text;
             }
-            return format!("{ty}{open}{}{close}", filled.join(", "));
+            return format!("{made}{open}{}{close}", filled.join(", "));
         }
         let mut steps = String::new();
         for value in given {
@@ -857,7 +859,7 @@ impl Emitter<'_> {
         }
         scope.acted = true;
         format!(
-            "[&]() -> {ty} {{ {steps}return {ty}{open}{}{close}; }}()",
+            "[&]() -> {ty} {{ {steps}return {made}{open}{}{close}; }}()",
             filled.join(", ")
         )
     }
@@ -1055,11 +1057,11 @@ impl Emitter<'_> {
                     }
                 );
                 let slots = empty.len();
-                self.made_in_order(scope, &made, slots, given, ("(", ")"))
+                self.made_in_order(scope, (&ty, &made), slots, given, ("(", ")"))
             }
             _ => {
                 let slots = empty.len();
-                self.made_in_order(scope, &ty, slots, given, ("{", "}"))
+                self.made_in_order(scope, (&ty, &ty), slots, given, ("{", "}"))
             }
         }
     }

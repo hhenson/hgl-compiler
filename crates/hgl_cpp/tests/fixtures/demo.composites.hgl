@@ -208,6 +208,16 @@ const fn listed() -> delta<list<i64>> => delta<list<i64>>(updated: [0: 4], remov
 
 const fn nudged() -> delta<Point> => delta<Point>(x: 1.0)
 
+# A list's delta whose properties are held in the order written, one
+# running statements.
+const fn listed_in_order() -> delta<list<i64>> {
+    var at = 0
+    return delta<list<i64>>(removed: [at], updated: [{
+        at = 2
+        at
+    }: 9])
+}
+
 const fn pair_change() -> delta<tuple<f64, i64>> => (1.0, null)
 
 # TYPE-7: an enum's member made from its number or its name.
@@ -360,6 +370,7 @@ test deltas_are_values {
     assert listed().updated == [0: 4]
     assert listed().removed == [1]
     assert listed().size_modified == null
+    assert listed_in_order().removed == [0] && listed_in_order().updated == [2: 9]
     assert nudged().x == 1.0
     assert nudged().y == null
     assert pair_change() == (1.0, null)
