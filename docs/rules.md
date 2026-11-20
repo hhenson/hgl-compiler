@@ -94,7 +94,7 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A parameter, a `var` parameter, and a call that gives it a place; a copy where the copy rule says | FN-13, FN-15 |
 | A module constant, one value wherever it is read | UNIT-13 |
 | An enum and its members; `switch` on one | TYPE-7, CTRL-6 |
-| The scalars, `T?` and `null`, tuples, lists and fixed lists, and their literals | TYPE-1, TYPE-2, TYPE-4, TYPE-10, TYPE-14, LEX-11 |
+| The scalars, `tenor` among them, `T?` and `null`, tuples, lists and fixed lists, and their literals | TYPE-1, TYPE-2, TYPE-4, TYPE-10, TYPE-14, TYPE-17, LEX-11 |
 | `let`, `var`, assignment, compound assignment, a place of a list or a tuple | EXPR-3 |
 | `if` and `else`, as statements and values; blocks; `while`; `for` over a list; `return` | CTRL-5, CTRL-10, CTRL-12, FN-7 |
 | A test against `null`, and what it proves | ERR-12 |
@@ -107,7 +107,7 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 
 Not written yet, and reported: an enum's member made from a value
 (TYPE-7), a pack, a struct, a set, a dictionary, a window, a delta,
-`tenor`, `timezone`, `zoned_time`, and anything temporal.
+`timezone`, `zoned_time`, and anything temporal.
 
 ## The C++ target's runtime library
 

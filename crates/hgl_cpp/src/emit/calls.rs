@@ -36,6 +36,7 @@ use hgl_lower::calls::{LeftOut, left_out};
 use hgl_lower::copies::place_of;
 
 use super::Emitter;
+use super::expressions::integer_literal;
 use super::names::{self, identifier};
 use super::statements::{Scope, refers};
 use super::types::enum_name;
@@ -413,8 +414,7 @@ enum Held {
 /// not written yet.
 fn constant_value(program: &Program, value: &ConstantValue) -> Option<String> {
     match value {
-        ConstantValue::Int(i64::MIN) => Some("(-9223372036854775807 - 1)".to_string()),
-        ConstantValue::Int(number) => Some(number.to_string()),
+        ConstantValue::Int(number) => Some(integer_literal(*number)),
         ConstantValue::Bool(flag) => Some(flag.to_string()),
         ConstantValue::Member(member) => {
             let (module, declaration) = member.of.as_ref()?.declared;

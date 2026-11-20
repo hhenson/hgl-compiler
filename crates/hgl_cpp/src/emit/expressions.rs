@@ -3,7 +3,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | `7`, `2.5`, `true`, `"text"`, `5m` | `7`, `2.5`, `true`, `::hgraph::Str{"text"}`, `::hgraph::TimeDelta{300000000}` |
+//! | `7`, `2.5`, `true`, `"text"`, `5m`, `1Y2M`, `2B` | `7`, `2.5`, `true`, `::hgraph::Str{"text"}`, `::hgraph::TimeDelta{300000000}`, `::hgraph::Tenor::months_days(14, 0)`, `::hgraph::Tenor::business_days(2)` |
 //! | `@2026-09-03`, `@09:30`, `@2026-09-03T09:30Z`, `@2026-09-03T09:30` | hgraph's `Date`, `Time`, `DateTime` and `CivilDateTime` of them |
 //! | `@2026-09-03T09:30+01:00[Europe/London]` | `ZonedDateTime::from_resolved` of the instant, the zone and the offset written |
 //! | `null`, `value == null` | `std::nullopt`, `!(value).has_value()` (ERR-12: where a test has proved a binding is not null, it is read as `*binding`) |
@@ -21,7 +21,9 @@
 //! A form not written yet is reported, and `0` stands in its place: the
 //! piece is left out of the files.
 
-use hgl_analyser::hir::{BinaryOperator, ErrorPart, Expr, ExprKind, Stmt, UnaryOperator, Value};
+use hgl_analyser::hir::{
+    BinaryOperator, ErrorPart, Expr, ExprKind, Stmt, Tenor, UnaryOperator, Value,
+};
 use hgl_analyser::{Scalar, Type};
 use hgl_diagnostics::Location;
 
@@ -360,11 +362,7 @@ impl Emitter<'_> {
     /// A literal of type `ty` as C++.
     fn literal(&mut self, literal: &Value, ty: &Type, at: Location) -> String {
         match literal {
-            // The least `i64` has no C++ literal: its negation is out
-            // of range.
-            Value::Int(i64::MIN) => "(-9223372036854775807 - 1)".to_string(),
-            Value::Int(number) if *number < 0 => format!("({number})"),
-            Value::Int(number) => number.to_string(),
+            Value::Int(number) => integer_literal(*number),
             // `{:?}` writes the shortest text that reads back as the
             // same `f64`, always with a `.` or an exponent, as C++ reads
             // a double.
@@ -399,9 +397,18 @@ impl Emitter<'_> {
                 }
             }
             Value::Null => "std::nullopt".to_string(),
-            // TYPE-17: hgraph's `Tenor` is new in 0.9.10, and core's
-            // natives of it are not in the runtime library yet.
-            Value::Tenor(_) => self.missing(at, "the type `tenor`"),
+            // TYPE-17: a tenor of months and days, and one of business
+            // days, which are two forms: zero of one is not zero of the
+            // other.
+            Value::Tenor(Tenor::Moves { months, days }) => format!(
+                "::hgraph::Tenor::months_days({}, {})",
+                integer_literal(*months),
+                integer_literal(*days)
+            ),
+            Value::Tenor(Tenor::BusinessDays(count)) => format!(
+                "::hgraph::Tenor::business_days({})",
+                integer_literal(*count)
+            ),
             Value::Duration(micros) => format!("::hgraph::TimeDelta{{{micros}}}"),
             Value::Temporal(temporal) => match temporal_literal(temporal, ty) {
                 Some(written) => written,
@@ -409,6 +416,16 @@ impl Emitter<'_> {
             },
             _ => self.missing(at, "this literal"),
         }
+    }
+}
+
+/// An `i64` as a C++ literal. The least has none: its negation is out of
+/// range, so it is written as a difference.
+pub(super) fn integer_literal(number: i64) -> String {
+    match number {
+        i64::MIN => "(-9223372036854775807 - 1)".to_string(),
+        negative if negative < 0 => format!("({negative})"),
+        number => number.to_string(),
     }
 }
 

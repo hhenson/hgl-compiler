@@ -347,7 +347,7 @@ fn entry(program: &Program, index: usize, clear: &[(usize, &Piece)]) -> String {
     let module = &program.modules[index];
     let tested = test_namespace(&module.path);
     let declared = tested.trim_start_matches("::");
-    let mut text = format!("{WRITTEN}\n#include <{}>\n", runtime::HEADER);
+    let mut text = format!("{WRITTEN}\n#include <{}>\n", runtime::HOST_HEADER);
     text.push_str(&format!("\nnamespace {declared}\n{{\n"));
     for (test, _) in clear {
         let name = crate::emit::identifier(&module.tests[*test].name);

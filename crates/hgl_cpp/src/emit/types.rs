@@ -6,7 +6,7 @@
 //! | --- | --- |
 //! | `i64`, `f64`, `bool`, `str`, `bytes` | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes` (`primitive_types.h`) |
 //! | `date`, `time`, `datetime`, `duration` | hgraph's `Date`, `Time`, `DateTime`, `TimeDelta` (`util/date_time.h`) |
-//! | `civil_datetime`, `zoned_datetime` | hgraph's `CivilDateTime`, `ZonedDateTime` (`types/temporal.h`) |
+//! | `civil_datetime`, `zoned_datetime`, `tenor` | hgraph's `CivilDateTime`, `ZonedDateTime`, `Tenor` (`types/temporal.h`) |
 //! | `enum Side { buy, sell }` | `enum class Side { buy, sell }` of the module's namespace; an enum of core's the runtime library declares, `ZeroPolicy`, is the library's |
 //! | `T?` | `std::optional<T>` |
 //! | `tuple<A, B>` | `std::tuple<A, B>` |
@@ -14,7 +14,7 @@
 //! | `error`, `result<T, error>` | the library's `hglrt::error`, hgraph's `CanonicalError`; `hglrt::result<T>`, a `std::expected<T, error>` (ERR-2, ERR-4) |
 //!
 //! Every other type is not written yet: a struct, a set, a dictionary, a
-//! window, a delta, a trace, `tenor`, `timezone` and `zoned_time`.
+//! window, a delta, a trace, `timezone` and `zoned_time`.
 
 use hgl_analyser::{ConstantValue, DeclarationKind, Detail, Program, Scalar, Type};
 use hgl_diagnostics::Location;
@@ -91,7 +91,9 @@ fn scalar_type(scalar: Scalar) -> Option<&'static str> {
         Scalar::Duration => "::hgraph::TimeDelta",
         Scalar::CivilDatetime => "::hgraph::CivilDateTime",
         Scalar::ZonedDatetime => "::hgraph::ZonedDateTime",
-        Scalar::Tenor | Scalar::Timezone | Scalar::ZonedTime | Scalar::Any => return None,
+        // TYPE-17: hgraph's tenor, of its two forms.
+        Scalar::Tenor => "::hgraph::Tenor",
+        Scalar::Timezone | Scalar::ZonedTime | Scalar::Any => return None,
     })
 }
 

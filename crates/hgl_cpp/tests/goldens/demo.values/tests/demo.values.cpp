@@ -1,5 +1,5 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
-#include <hglrt/hglrt.h>
+#include <hglrt/host.h>
 
 namespace hgl::demo::values::m_::t_
 {

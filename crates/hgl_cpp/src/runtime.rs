@@ -17,10 +17,16 @@ use std::sync::LazyLock;
 /// Empty where `hgl` was built from a tree without the library.
 pub static FILES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/runtime_files.rs"));
 
-/// The header every generated unit includes first, under the library's
-/// include directory: the fixed include set, which the build driver
-/// precompiles.
+/// The header every generated module's unit includes first, under the
+/// library's include directory: the fixed include set, which the build
+/// driver precompiles.
 pub const HEADER: &str = "hglrt/hglrt.h";
+
+/// The header an entry unit includes, and no other: the test host's
+/// registration and `main`, with nothing of hgraph's, so that the build
+/// driver compiles an entry unit with no precompiled header, in a
+/// fraction of the time a module's unit takes.
+pub const HOST_HEADER: &str = "hglrt/host.h";
 
 /// The C++ namespace the library defines its names in: core's natives
 /// among them.

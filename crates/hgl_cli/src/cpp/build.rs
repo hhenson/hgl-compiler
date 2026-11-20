@@ -287,9 +287,13 @@ fn ninja_file(output: &Output, description: &Description) -> String {
         escaped(&description.link.join(" "))
     ));
     text.push_str(
-        "# A unit, a module's or an entry, with the precompiled header of the\n\
+        "# A module's unit, with the precompiled header of the\n\
          # fixed include set.\n\
          rule unit\n  command = $cxx $cflags -Winvalid-pch -include $pch -MD -MF $out.d -c $in -o $out\n  \
+         depfile = $out.d\n  deps = gcc\n  description = compile $in\n\n\
+         # An entry unit, which includes the test host's light header alone and\n\
+         # is compiled with no precompiled header.\n\
+         rule entry\n  command = $cxx $cflags -MD -MF $out.d -c $in -o $out\n  \
          depfile = $out.d\n  deps = gcc\n  description = compile $in\n\n\
          rule link\n  command = $cxx -o $out $in $ldflags\n  description = link $out\n\n",
     );
@@ -302,7 +306,7 @@ fn ninja_file(output: &Output, description: &Description) -> String {
     }
     for executable in &output.executables {
         text.push_str(&format!(
-            "build {}: unit {}\n",
+            "build {}: entry {}\n",
             ninja_path(&object(&executable.source)),
             ninja_path(&executable.source)
         ));
