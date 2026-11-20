@@ -1,0 +1,90 @@
+module demo.references
+
+# The `ref` parameters and results the cpp target writes (FN-16, TIME-10;
+# core's END-10), and what an ordinary reader of a `ref` result observes.
+# Its goldens are under `tests/goldens/demo.references`.
+
+# Two `ref` parameters, one of which the result designates: returning a
+# whole `ref` parameter samples what it designates.
+fn pick(flag: bool, ref low: i64, ref high: i64) -> ref i64 {
+    when modified(flag) {
+        if flag { return high }
+        return low
+    }
+}
+
+# An ordinary reader.
+fn follow(item: i64) -> i64 {
+    when { return item }
+}
+
+fn picked(flag: bool, low: i64, high: i64) -> i64 => follow(pick(flag, low, high))
+
+test a_reader_observes_the_input_designated {
+    assert eval(picked(
+        flag: [false, _, true,  _],
+        low:  [    1, 2,    3,  _],
+        high: [   10, _,    _, 11],
+    )) ==     [    1, 2,   10, 11]
+}
+
+test an_eval_records_a_ref_result_as_a_reader_does {
+    assert eval(pick(flag: [true, _], low: [1, 2], high: [3, _])) == [3, _]
+}
+
+# `valid` of a `ref` parameter is whether a reference is present, and a
+# node subscribed to one is woken where it is given a designation.
+fn present(probe: bool, ref target: i64) -> i64 {
+    state wakes: i64 = 0
+    when modified(target) { wakes += 1 }
+    when modified(probe) && valid(probe) {
+        if valid(target) { return wakes }
+        return -1
+    }
+}
+
+test a_ref_parameter_is_present_and_wakes_once {
+    assert eval(present(probe: [true, true, true], target: [_, 7, 8])) == [1, 1, 1]
+}
+
+# A generic relay: each instance is a node of its own (GEN-2).
+fn sampled<T>(take: bool, ref target: T) -> ref T {
+    when modified(take) { return target }
+}
+
+fn sample_picked(take: bool, flag: bool, low: i64, high: i64) -> i64 =>
+    follow(sampled(take, pick(flag, low, high)))
+
+test a_relay_keeps_what_it_sampled {
+    assert eval(sample_picked(
+        take: [true,    _,  _, true],
+        flag: [false, true, _,    _],
+        low:  [    1,    2, 3,    _],
+        high: [   10,    _, 11,   _],
+    )) ==     [    1,    2, 3,   11]
+}
+
+# An input that is no `ref` parameter, designated: its reader follows a
+# re-binding of it, and `invalidate(out)` leaves the result designating
+# nothing, which no later re-binding moves.
+fn choose(flag: i64, low: i64, high: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        if flag == 1 { out = low }
+        if flag == 2 { return high }
+        if flag == 0 { invalidate(out) }
+    }
+}
+
+fn chosen(flag: i64, sel: bool, a: i64, b: i64, high: i64) -> i64 =>
+    follow(choose(flag, pick(sel, a, b), high))
+
+test a_designated_input_is_followed_through_its_rebinding {
+    assert eval(chosen(
+        flag: [    1, _,    _,  _,   2,   _, 0,     _,   1],
+        sel:  [false, _, true,  _,   _,   _, _, false,   _],
+        a:    [    1, 2,    _,  3,   _,   _, _,     4,   _],
+        b:    [   10, _,    _, 11,   _,   _, _,     _,   _],
+        high: [  100, _,    _,  _,   _, 101, _,   102,   _],
+    )) ==     [    1, 2,   10, 11, 100, 101, _,     _,   4]
+}

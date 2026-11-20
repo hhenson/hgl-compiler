@@ -12,7 +12,7 @@
 //! | `all_valid(window)` (END-9) | `::hglrt::fn_all_valid(view)` |
 //! | `delta_value(window)` (END-3, END-9, ERR-14) | `::hglrt::fn_delta_value(view)`, or `fn_delta_value_checked` where its place takes a `result`: the value that arrived |
 //! | `removed_value(window)`, read only where its place takes a `result` (END-9, ERR-14) | `::hglrt::fn_removed_value_checked(view)` |
-//! | A window given to a lifted call (FN-11, FN-12) | an input of the call's node required `::hgraph::InputValidity::AllValid` |
+//! | A window given to a lifted call (FN-11, FN-12) | the helper given the window's `list<V>` (`read_type`), and not called where the window is valid and not all valid (`lifting`) |
 //! | A trace of a window, a source of one (TST-16, TIME-7) | a trace of its V, each cell the V that arrives; a source's payload a V |
 //!
 //! `valid`, `modified` and `last_modified` of a window are the endpoints'
@@ -197,13 +197,6 @@ impl Family for Windows {
             element: value.clone(),
             size: None,
         })
-    }
-
-    // FN-12: "A window is passed only where it is `all_valid`, whatever
-    // the parameter's default (FN-11): its value is not read before".
-    fn admission(&self, emitter: &mut Emitter<'_>, ty: &Type) -> Option<String> {
-        window(emitter, ty)?;
-        Some("::hgraph::InputValidity::AllValid".to_string())
     }
 
     // TST-5: a cell is "written as a `return` is": a window's is the V

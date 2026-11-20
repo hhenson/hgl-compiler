@@ -63,7 +63,7 @@ one executable for each test module or application
 | `ref` parameter and result | hgraph's `REF` input and output. Returning a whole `ref` parameter publishes the reference that input holds when the `return` runs, and no more: a `REF` output keeps what it was given, which is the specification's rule since hhenson/hgl_spec#147. Returning an ordinary input or a child of one designates that endpoint, which is followed through a re-binding: the node is active on that binding, publishes the new designation there and runs no handler for it (FN-16). A designation the result holds already is not published again (TIME-10) |
 | Failure | Thrown as hgraph's `ExecutionFailure` carrying `CanonicalError` (code, message, node, phase, time). `capture` is `try_except_node` with canonical errors. `assert raises` finds the failure in the exception it catches |
 | Test | Core's `replay` and `record` are compiled like any module. The compiler writes each eval's entry graph, runs the executor in simulation and reads the recording from the run's store |
-| Application | The same, in real time, stopped through the engine's control |
+| Application | The same, in an executable of its own whose host is `libhglrt`'s, in simulation or in real time; a run in real time its host asks to stop is stopped through the engine's control |
 
 ## Safety of generated C++
 

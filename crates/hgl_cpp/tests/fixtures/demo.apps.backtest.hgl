@@ -1,0 +1,12 @@
+application demo.apps.backtest
+
+use demo.apps::{bounded}
+
+const limit: i64 = 2
+
+# UNIT-14: the run's store, set before its graph is built.
+inject global_state
+put(global_state, "limit", limit)
+
+# RUN-3: `eval` is a simulation.
+eval(bounded(values: [1, 2, 3]))

@@ -12,9 +12,10 @@
 //! differs from what is there, and so is `build.ninja`: a file
 //! unchanged keeps its time, and `ninja` compiles nothing for it. The
 //! build has one object for each module's unit and each entry unit,
-//! compiled with the precompiled header, and one executable for each
-//! module with tests, linked from its entry and the units `hgl_cpp`
-//! says it needs.
+//! compiled with the precompiled header, one executable for each
+//! module with tests, `bin/<module>`, and one for each application,
+//! `run/<application>` (UNIT-14), each linked from its entry and the
+//! units `hgl_cpp` says it needs.
 //!
 //! A build that fails runs no executable it did not finish: where
 //! `ninja` fails, each executable is run only where `ninja` says
@@ -184,6 +185,11 @@ impl Workspace {
         self.directory.join("bin").join(module)
     }
 
+    /// The executable of application `path` (UNIT-14).
+    pub(super) fn application(&self, path: &str) -> PathBuf {
+        self.directory.join("run").join(path)
+    }
+
     /// Writes what the target wrote, `output`, and the `build.ninja`
     /// that builds it with `description`, each where it changed.
     pub(super) fn write(&self, output: &Output, description: &Description) -> Result<(), String> {
@@ -214,18 +220,40 @@ impl Workspace {
             .iter()
             .map(|&executable| format!("bin/{}", output.executables[executable].module))
             .collect();
+        self.build_targets(ninja, &targets, jobs)
+    }
+
+    /// Runs `ninja` for the executable of application `path`, as
+    /// [`Workspace::build`] does for tests' executables.
+    pub(super) fn build_application(
+        &self,
+        ninja: &Path,
+        path: &str,
+        jobs: Option<&str>,
+    ) -> Result<Built, String> {
+        self.build_targets(ninja, &[application_target(path)], jobs)
+    }
+
+    /// Runs `ninja` for `targets`, paths of executables of the build,
+    /// and says which of them are built.
+    fn build_targets(
+        &self,
+        ninja: &Path,
+        targets: &[String],
+        jobs: Option<&str>,
+    ) -> Result<Built, String> {
         let mut command = Command::new(ninja);
         command.arg("-C").arg(&self.directory).arg("-k").arg("0");
         if let Some(jobs) = jobs {
             command.arg("-j").arg(jobs);
         }
         let finished = command
-            .args(&targets)
+            .args(targets)
             .output()
             .map_err(|error| format!("`{}` could not be started: {error}", ninja.display()))?;
         if finished.status.success() {
             return Ok(Built {
-                fresh: vec![true; wanted.len()],
+                fresh: vec![true; targets.len()],
                 failure: None,
             });
         }
@@ -246,7 +274,7 @@ impl Workspace {
         // executable with nothing left to do was built from what is
         // written now.
         let mut fresh = Vec::new();
-        for target in &targets {
+        for target in targets {
             let dry = Command::new(ninja)
                 .arg("-C")
                 .arg(&self.directory)
@@ -291,8 +319,8 @@ fn ninja_file(output: &Output, description: &Description) -> String {
          # fixed include set.\n\
          rule unit\n  command = $cxx $cflags -Winvalid-pch -include $pch -MD -MF $out.d -c $in -o $out\n  \
          depfile = $out.d\n  deps = gcc\n  description = compile $in\n\n\
-         # An entry unit, which includes the test host's light header alone and\n\
-         # is compiled with no precompiled header.\n\
+         # An entry unit, which includes the test host's light header alone, or\n\
+         # an application's host's, and is compiled with no precompiled header.\n\
          rule entry\n  command = $cxx $cflags -MD -MF $out.d -c $in -o $out\n  \
          depfile = $out.d\n  deps = gcc\n  description = compile $in\n\n\
          rule link\n  command = $cxx -o $out $in $ldflags\n  description = link $out\n\n",
@@ -323,7 +351,37 @@ fn ninja_file(output: &Output, description: &Description) -> String {
             objects.join(" ")
         ));
     }
+    // UNIT-14: an application's executable, linked as a module's tests'
+    // is, from its entry unit and the units it needs.
+    for application in &output.applications {
+        let Some(source) = &application.source else {
+            continue;
+        };
+        text.push_str(&format!(
+            "build {}: entry {}\n",
+            ninja_path(&object(source)),
+            ninja_path(source)
+        ));
+        let mut objects = vec![ninja_path(&object(source))];
+        objects.extend(
+            application
+                .units
+                .iter()
+                .map(|&unit| ninja_path(&object(&output.units[unit].source))),
+        );
+        text.push_str(&format!(
+            "build {}: link {}\n",
+            ninja_path(&application_target(&application.path)),
+            objects.join(" ")
+        ));
+    }
     text
+}
+
+/// The path, in the build, of the executable of application `path`:
+/// `run/demo.app`, beside no module's tests, whose are under `bin/`.
+fn application_target(path: &str) -> String {
+    format!("run/{path}")
 }
 
 /// The object a unit at `source` is compiled to: `obj/modules/demo.calc.o`

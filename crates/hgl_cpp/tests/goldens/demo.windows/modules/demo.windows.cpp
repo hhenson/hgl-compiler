@@ -425,8 +425,12 @@ struct impl_
     struct lifted_00_
     {
         static constexpr auto name = "demo.windows:total";
-        static void eval([[maybe_unused]] ::hgraph::In<"readings", ::hgraph::TSW<::hgraph::Int, 3, 2>, ::hgraph::InputValidity::AllValid> readings, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+        static void eval([[maybe_unused]] ::hgraph::In<"readings", ::hgraph::TSW<::hgraph::Int, 3, 2>> readings, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
         {
+            if (!::hglrt::fn_all_valid(readings))
+            {
+                return;
+            }
             out_.set(::hgl::demo::windows::m_::total(::hglrt::window_value(readings)));
             return;
         }

@@ -56,6 +56,168 @@ const CALC: &str = concat!(
     "}\n",
 );
 
+/// A module of entries over a source: one that publishes a list of
+/// values a step apart, one that counts a beat for as long as its run
+/// goes, one that reads the run's store and one with no result over a
+/// node that writes it, a graph that sets the store where it is built
+/// (FN-9), and one whose run fails.
+const TICKS: &str = concat!(
+    "module demo.ticks\n",
+    "\n",
+    "export fn ticks(const values: list<i64>, const every: duration = 1s) -> i64 {\n",
+    "    for value in values {\n",
+    "        yield every: value\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn beats(const every: duration) -> i64 {\n",
+    "    while true {\n",
+    "        yield every: 1\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn count_of(value: i64) -> i64 {\n",
+    "    state count: i64 = 0\n",
+    "    when {\n",
+    "        count += 1\n",
+    "        return count\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "export fn counted(const every: duration = 1s) -> i64 {\n",
+    "    return count_of(beats(every))\n",
+    "}\n",
+    "\n",
+    "export fn doubled(const values: list<i64>) -> i64 {\n",
+    "    return ticks(values) * 2\n",
+    "}\n",
+    "\n",
+    "fn limited(value: i64) -> i64 {\n",
+    "    inject global_state\n",
+    "    when {\n",
+    "        if value <= get<i64>(global_state, \"limit\") { return value }\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "export fn bounded(const values: list<i64>) -> i64 {\n",
+    "    return limited(ticks(values))\n",
+    "}\n",
+    "\n",
+    "export fn seeded(const limit: i64, const values: list<i64>) -> i64 {\n",
+    "    inject global_state\n",
+    "    put(global_state, \"limit\", limit)\n",
+    "    return limited(ticks(values, every: get<i64>(global_state, \"limit\") * 1s))\n",
+    "}\n",
+    "\n",
+    "fn kept(value: i64) {\n",
+    "    inject global_state\n",
+    "    when { put(global_state, \"last\", value) }\n",
+    "}\n",
+    "\n",
+    "export fn quiet(const values: list<i64>) {\n",
+    "    kept(ticks(values))\n",
+    "}\n",
+    "\n",
+    "fn inverse(value: i64) -> i64 {\n",
+    "    when { return 6 // (value - 2) }\n",
+    "}\n",
+    "\n",
+    "export fn failing() -> i64 {\n",
+    "    return inverse(ticks([1, 2, 3]))\n",
+    "}\n",
+);
+
+/// RUN-3: `eval`, a simulation.
+const BACKTEST: &str = concat!(
+    "application demo.ticks.backtest\n",
+    "\n",
+    "use demo.ticks::{doubled}\n",
+    "\n",
+    "const rounds: list<i64> = [1, 2, 3]\n",
+    "\n",
+    "eval(doubled(values: rounds))\n",
+);
+
+/// UNIT-14: an application that sets the run's store before its run.
+const STORED: &str = concat!(
+    "application demo.ticks.stored\n",
+    "\n",
+    "use demo.ticks::{bounded}\n",
+    "\n",
+    "const fn sum<T>(a: T, b: T) -> T requires add_(T, T) -> T => a + b\n",
+    "\n",
+    "inject global_state\n",
+    "put(key: \"limit\", store: global_state, value: sum(1, 1))\n",
+    "\n",
+    "eval(bounded(values: [1, 2, 3, 4]))\n",
+);
+
+/// FN-9: one whose entry is a graph that sets the store as it is built.
+const SEEDED: &str = concat!(
+    "application demo.ticks.seeded\n",
+    "\n",
+    "use demo.ticks::{seeded}\n",
+    "\n",
+    "eval(seeded(limit: 2, values: [1, 2, 3]))\n",
+);
+
+/// An entry with no result: the run has no output (CRUN-8).
+const SILENT: &str = concat!(
+    "application demo.ticks.silent\n",
+    "\n",
+    "use demo.ticks::{quiet}\n",
+    "\n",
+    "eval(quiet(values: [1, 2]))\n",
+);
+
+/// An application whose run fails.
+const BROKEN: &str = concat!(
+    "application demo.ticks.broken\n",
+    "\n",
+    "use demo.ticks::{failing}\n",
+    "\n",
+    "eval(failing())\n",
+);
+
+/// CRUN-2: a simulation from a start of its own, for a length: its end
+/// is exclusive.
+const LATER: &str = concat!(
+    "application demo.ticks.later\n",
+    "\n",
+    "use demo.ticks::{doubled}\n",
+    "\n",
+    "eval(doubled(values: [1, 2, 3, 4]), RunConfig(start: @2026-01-02T00:00:00Z, length: 3s))\n",
+);
+
+/// CRUN-2: a configuration with both an `end` and a `length`, refused
+/// before the run's graph is built.
+const BOTH: &str = concat!(
+    "application demo.ticks.both\n",
+    "\n",
+    "use demo.ticks::{doubled}\n",
+    "\n",
+    "eval(doubled(values: [1]), RunConfig(end: @2026-01-02T00:00:00Z, length: 3s))\n",
+);
+
+/// RUN-3: `run`, in real time, here for a fifth of a second: it ends at
+/// its end, with nothing asked of it.
+const LIVE: &str = concat!(
+    "application demo.ticks.live\n",
+    "\n",
+    "use demo.ticks::{counted}\n",
+    "\n",
+    "run(counted(every: 50ms), RunConfig(length: 220ms))\n",
+);
+
+/// RUN-3: `run`, in real time, with no end: until its host stops it.
+const ENDLESS: &str = concat!(
+    "application demo.ticks.endless\n",
+    "\n",
+    "use demo.ticks::{counted}\n",
+    "\n",
+    "run(counted(every: 20ms))\n",
+);
+
 /// Runs `hgl` with `arguments`, with `set` in its environment and each
 /// of `unset` taken out of it.
 fn hgl_in(arguments: &[&str], set: &[(&str, &str)], unset: &[&str]) -> Output {
@@ -204,7 +366,8 @@ fn emit_writes_a_unit_a_header_and_an_entry() {
 }
 
 /// `hgl run --target cpp` says what an application needs that the
-/// target does not write, and runs nothing.
+/// target does not write, and runs nothing: here the invalidation of a
+/// window result (END-4), which a node its entry wires reaches.
 #[test]
 fn run_says_what_an_application_lacks() {
     let root = scratch("run");
@@ -213,10 +376,17 @@ fn run_says_what_an_application_lacks() {
         "app.hgl",
         concat!(
             "application demo.app\n",
-            "fn counted() -> i64 {\n",
-            "    yield 1s: 1\n",
+            "fn cleared(reading: i64) -> rolling_window<i64, 2> {\n",
+            "    inject out\n",
+            "    when { invalidate(out) }\n",
             "}\n",
-            "eval(counted())\n",
+            "fn counted(readings: rolling_window<i64, 2>) -> i64 {\n",
+            "    when { return delta_value(readings) }\n",
+            "}\n",
+            "fn later() -> i64 {\n",
+            "    return counted(readings: cleared(reading: 1))\n",
+            "}\n",
+            "eval(later())\n",
         ),
     );
     let output = hgl_in(&["run", &argument(&root), "--target", "cpp"], &[], &[]);
@@ -227,7 +397,28 @@ fn run_says_what_an_application_lacks() {
     );
     assert_eq!(
         text(&output.stderr),
-        format!("{file}:5:1: the cpp target does not write an application's run statement yet\n")
+        format!("{file}:4:12: the cpp target does not write `invalidate` of a window yet\n")
+    );
+}
+
+/// With no SDK named, `hgl run --target cpp` of an application the
+/// target writes says so, and runs nothing: status 2.
+#[test]
+fn run_with_no_sdk_named_says_so() {
+    let root = scratch("run_no_sdk");
+    write(&root, "ticks.hgl", TICKS);
+    write(&root, "backtest.hgl", BACKTEST);
+    let output = hgl_in(
+        &["run", &argument(&root), "--target", "cpp"],
+        &[],
+        &["HGL_HGRAPH_SDK", "HGL_HGRAPH_DEPS"],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(text(&output.stdout), "");
+    assert_eq!(
+        text(&output.stderr),
+        "hgl: demo.ticks.backtest was not run: HGL_HGRAPH_SDK is not set: set it to the install \
+         prefix of hgraph's C++ SDK, the directory that holds `lib/cmake/hgraph`\n"
     );
 }
 
@@ -495,6 +686,203 @@ fn windows_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// The `ref` parameters and results on the SDK (`demo.references`): what
+/// an ordinary reader of a `ref` result observes, what wakes a node of a
+/// `ref` parameter, a sampled designation, and a designated input whose
+/// re-binding its reader follows (FN-16, TIME-10; core's END-10).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn references_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("references");
+    let file = write(
+        &root,
+        "src/demo.references.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.references.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// The timing of nodes and sources on the SDK (`demo.timing`): nodes woken
+/// by a scheduler or an alarm, alone or with an input's tick, `scheduled()`
+/// and `modified([])` read as values, a wake dropped and one that fails
+/// (CAP-4, CAP-5, TIME-3, TIME-8, TIME-9), and sources that read their
+/// clock, keep a `cache` or a `state` and have `start` and `stop`
+/// (SOURCE-1 to SOURCE-4). Every test of it passes.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn timing_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("timing");
+    let file = write(
+        &root,
+        "src/demo.timing.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.timing.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 12 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// The activity of a node's inputs and the temporal form of an enum on
+/// the SDK (`demo.activity`): a passive input wakes no node and is read
+/// where another wakes it, activity belongs to each binding of one
+/// output (END-5), and an enum is published, replayed and wired as a
+/// constant.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn activity_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("activity");
+    let file = write(
+        &root,
+        "src/demo.activity.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.activity.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// Lifting and capture on the SDK (`demo.lifting`): lifted calls binding
+/// defaults, a sink, an eval of a value function, captures of a node, a
+/// graph and a lifted call, a write that stands before a failure, a `?` in
+/// a `when` and an error's context, each as the hgraph target gives it.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn lifting_code_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("lifting");
+    let file = write(
+        &root,
+        "src/demo.lifting.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.lifting.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// Control flow over connections on the SDK (`demo.control`): each
+/// branch of an `if` or a `switch` over a connection a child graph that
+/// hgraph's `compiled::switch_` runs while it is selected, started fresh
+/// each time (CTRL-2, CTRL-13 to CTRL-15). Every test of it passes, each
+/// expectation the language's.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn control_flow_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("control");
+    let file = write(
+        &root,
+        "src/demo.control.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.control.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 18 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// CTRL-6: "An unmatched selector uses default or fails." A `switch`
+/// over a connection with no `default` fails in the cycle its selector
+/// has a value no case has, with no code, and says the value.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn an_unmatched_connection_selector_fails_the_run() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("unmatched_connection");
+    let file = write(
+        &root,
+        "src/demo.routed.hgl",
+        concat!(
+            "module demo.routed\n",
+            "\n",
+            "fn routed(route: str, value: i64) -> i64 {\n",
+            "    var out = value\n",
+            "    switch route {\n",
+            "        case \"a\": out = value + 1\n",
+            "    }\n",
+            "    return out\n",
+            "}\n",
+            "\n",
+            "test another_value {\n",
+            "    assert eval(routed(route: [\"a\", \"c\"], value: [1, 2])) == [2, 3]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let rows: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        rows[0], "FAILED   executable  demo.routed::another_value",
+        "{stdout}"
+    );
+    assert!(
+        rows[1].starts_with(&format!("    {file}:12:5: "))
+            && rows[1].contains("no case of the `switch` has the value \"c\""),
         "{stdout}"
     );
 }
@@ -775,5 +1163,204 @@ fn names_a_platform_takes_are_built() {
         stdout.contains("passed   executable  demo.names::each_is_its_own"),
         "{stdout}{}",
         text(&output.stderr)
+    );
+}
+
+/// UNIT-14, RUN-1: an application runs on the SDK, and its output is
+/// printed: a line for each publication of its entry's result, in time
+/// order, its instant and then what was published (core's CRUN-8). The
+/// run's store holds what the application put there before its run
+/// (CRUN-7), and what a graph put there as it was built (FN-9). An entry
+/// with no result has no output. A run that fails has none either
+/// (CRUN-6), and says why: status 1. What was written for the run is kept
+/// where `--keep` says, and what starts the application may replace an
+/// argument of its entry (RUN-2).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn an_application_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("applications");
+    write(&root, "ticks.hgl", TICKS);
+    for (name, text) in [
+        ("backtest.hgl", BACKTEST),
+        ("stored.hgl", STORED),
+        ("seeded.hgl", SEEDED),
+        ("silent.hgl", SILENT),
+        ("broken.hgl", BROKEN),
+        ("later.hgl", LATER),
+        ("both.hgl", BOTH),
+        ("live.hgl", LIVE),
+    ] {
+        write(&root, name, text);
+    }
+    let kept = root.join("build");
+    let run = |application: &str, more: &[&str]| {
+        let mut arguments = vec![
+            "run",
+            root.to_str().unwrap(),
+            "--target",
+            "cpp",
+            "--application",
+            application,
+            "--keep",
+            kept.to_str().unwrap(),
+        ];
+        arguments.extend(more);
+        hgl_in(&arguments, &[], &[])
+    };
+    let output = run("demo.ticks.backtest", &[]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:01.000001Z  2\n",
+            "1970-01-01T00:00:02.000001Z  4\n",
+            "1970-01-01T00:00:03.000001Z  6\n",
+            "ran demo.ticks.backtest on cpp: 3 publications\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert!(kept.join("applications/demo.ticks.backtest.cpp").is_file());
+    assert!(kept.join("run/demo.ticks.backtest").is_file());
+
+    // RUN-2: an argument replaced.
+    let output = run("demo.ticks.backtest", &["--arg", "values=[5]"]);
+    assert_eq!(
+        text(&output.stdout),
+        "1970-01-01T00:00:01.000001Z  10\nran demo.ticks.backtest on cpp: 1 publication\n",
+        "{}",
+        text(&output.stderr)
+    );
+
+    for application in ["demo.ticks.stored", "demo.ticks.seeded"] {
+        let output = run(application, &[]);
+        let step = if application == "demo.ticks.stored" {
+            1
+        } else {
+            2
+        };
+        assert_eq!(
+            text(&output.stdout),
+            format!(
+                "1970-01-01T00:00:0{}.000001Z  1\n1970-01-01T00:00:0{}.000001Z  2\n\
+                 ran {application} on cpp: 2 publications\n",
+                step,
+                2 * step
+            ),
+            "{}",
+            text(&output.stderr)
+        );
+        assert_eq!(output.status.code(), Some(0));
+    }
+
+    let output = run("demo.ticks.silent", &[]);
+    assert_eq!(
+        text(&output.stdout),
+        "ran demo.ticks.silent on cpp: its entry has no result\n"
+    );
+    assert_eq!(output.status.code(), Some(0));
+
+    for (application, code) in [
+        ("demo.ticks.broken", "numeric.division_by_zero"),
+        ("demo.ticks.both", "run.end_and_length"),
+    ] {
+        let output = run(application, &[]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(text(&output.stdout), "");
+        let said = text(&output.stderr);
+        let last = said.lines().last().unwrap_or("");
+        assert!(
+            last.starts_with(&format!("hgl: {application} failed: {code}: ")),
+            "{said}"
+        );
+    }
+
+    // CRUN-2: the run's own start, and an end that is exclusive; a field
+    // replaced (RUN-2).
+    let output = run("demo.ticks.later", &[]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "2026-01-02T00:00:01Z  2\n",
+            "2026-01-02T00:00:02Z  4\n",
+            "ran demo.ticks.later on cpp: 2 publications\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    let output = run("demo.ticks.later", &["--config", "length=2s"]);
+    assert_eq!(
+        text(&output.stdout),
+        "2026-01-02T00:00:01Z  2\nran demo.ticks.later on cpp: 1 publication\n",
+        "{}",
+        text(&output.stderr)
+    );
+
+    // RUN-3, CRUN-5: in real time it ends at its end, counting from 1 at
+    // the host clock's pace.
+    let output = run("demo.ticks.live", &[]);
+    let printed = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let lines: Vec<&str> = printed.lines().collect();
+    let (summary, published) = lines.split_last().expect("something is printed");
+    assert!(!published.is_empty() && published.len() <= 5, "{printed}");
+    for (position, line) in published.iter().enumerate() {
+        assert!(line.ends_with(&format!("Z  {}", position + 1)), "{printed}");
+    }
+    assert!(
+        summary.starts_with("ran demo.ticks.live on cpp: "),
+        "{printed}"
+    );
+}
+
+/// RUN-3: an interrupt of `hgl` alone, a signal its executable does not
+/// get, stops a run in real time all the same: `hgl` passes it on, and
+/// prints what the run recorded up to then. Needs the SDK, as above, and
+/// a system with `kill`.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn an_interrupt_of_hgl_alone_stops_a_run_in_real_time() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("interrupted");
+    write(&root, "ticks.hgl", TICKS);
+    write(&root, "endless.hgl", ENDLESS);
+    let child = Command::new(env!("CARGO_BIN_EXE_hgl"))
+        .args(["run", &argument(&root), "--target", "cpp"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the hgl binary runs");
+    // Long enough for the program to be built and its run started.
+    std::thread::sleep(std::time::Duration::from_millis(8000));
+    // To `hgl` alone: its process, and not its group.
+    let sent = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("`kill` runs");
+    assert!(sent.success());
+    let output = child.wait_with_output().expect("hgl ends");
+    let printed = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{printed}{}",
+        text(&output.stderr)
+    );
+    let lines: Vec<&str> = printed.lines().collect();
+    let (summary, published) = lines.split_last().expect("something is printed");
+    // It counted from 1 for as long as it ran: on a slow host that may be
+    // no time at all, where the interrupt comes before the run starts.
+    for (position, line) in published.iter().enumerate() {
+        assert!(line.ends_with(&format!("Z  {}", position + 1)), "{printed}");
+    }
+    assert!(
+        summary.starts_with("ran demo.ticks.endless on cpp until it was stopped: "),
+        "{printed}"
     );
 }

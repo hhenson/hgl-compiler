@@ -13,6 +13,7 @@
 //! | `tuple<A, B>` | `std::tuple<A, B>` |
 //! | `list<T>`, `list<T, N>` | the library's `hglrt::list<T>`, a `std::vector<T>` hgraph can hash; `std::array<T, N>` |
 //! | `error`, `result<T, error>` | the library's `hglrt::error`, hgraph's `CanonicalError`; `hglrt::result<T>`, a `std::expected<T, error>` (ERR-2, ERR-4) |
+//! | An error's `.context` (ERR-4) | hgraph's `ErrorContext` |
 //! | A struct, a set, a dictionary, a delta | `composites`' |
 //!
 //! Every other type is not written yet: a window, a trace and anything
@@ -97,6 +98,10 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
             _ => return None,
         },
         Type::Error => format!("::{}::error", runtime::NAMESPACE),
+        // ERR-4: an error's `.context`, "a read-only nullable record of
+        // `.node: str`, `.phase: str` ... and `.evaluation_time`", is
+        // hgraph's `ErrorContext`, which `CanonicalError` holds.
+        Type::ErrorContext => "::hgraph::ErrorContext".to_string(),
         Type::Result { value, error } if **error == Type::Error => format!(
             "::{}::result<{}>",
             runtime::NAMESPACE,
