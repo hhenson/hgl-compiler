@@ -285,6 +285,30 @@ impl Emitter<'_> {
                     declaration.name,
                     members.join(",\n    ")
                 );
+                // What names the enum to the runtime library (`values.h`,
+                // `EnumNames`): its HGL name qualified with its module's
+                // path, and each member's, by which the library prints a
+                // member (`Side.buy`) and registers the enum with hgraph,
+                // which a temporal value of it needs. An enum of no member
+                // has no value to name.
+                if !members.is_empty() {
+                    let named: Vec<String> = read
+                        .members
+                        .iter()
+                        .zip(&members)
+                        .map(|(member, written)| {
+                            format!("{{{name}::{written}, {}}}", names::string(&member.name))
+                        })
+                        .collect();
+                    let qualified = format!("{}::{}", declared.path, declaration.name);
+                    self.piece.declaration.push_str(&format!(
+                        "constexpr ::{}::EnumNames<{name}, {}> hgl_enum({name}) noexcept\n{{\n    return {{{}, {{{}}}}};\n}}\n",
+                        runtime::NAMESPACE,
+                        members.len(),
+                        names::string(&qualified),
+                        named.join(", ")
+                    ));
+                }
             }
             DeclarationKind::Struct => self.struct_declaration(index),
             _ => self.unsupported(at, "a native type"),

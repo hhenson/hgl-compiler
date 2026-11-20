@@ -24,6 +24,10 @@ enum class Side
     sell,
     hold,
 };
+constexpr ::hglrt::EnumNames<Side, 3> hgl_enum(Side) noexcept
+{
+    return {"demo.values::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}, {Side::hold, "hold"}}};
+}
 
 // enum Level (TYPE-7)
 enum class Level
@@ -31,5 +35,9 @@ enum class Level
     low,
     high,
 };
+constexpr ::hglrt::EnumNames<Level, 2> hgl_enum(Level) noexcept
+{
+    return {"demo.values::Level", {{Level::low, "low"}, {Level::high, "high"}}};
+}
 
 }  // namespace hgl::demo::values::m_
