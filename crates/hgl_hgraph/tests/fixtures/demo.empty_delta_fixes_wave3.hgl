@@ -6,9 +6,15 @@ module demo.empty_delta_fixes_wave3
 # ticks. Where it is valid the delta changes nothing, and is no tick ... A
 # struct, a tuple and a `list<V, N>` are valid where a child is (TIME-9),
 # and such a delta of one, `delta<Quote>()`, sets no child: it changes no
-# validity, and is never a tick. ... A value published whole, the same
-# again or empty, is no delta, and ticks as any publication does". Core's
-# END-4: "Invalidation clears validity, modification, payload, and delta."
+# validity, and is never a tick." And: "A collection published whole is
+# published as its change from what the result holds. Each entry of a
+# dictionary and each position of a list that it gives is published, the
+# same value again included ... Where that leaves nothing to publish, a
+# set given the members it holds, or an empty list or dictionary given to
+# a valid empty one, the value is unchanged, and it is no tick. Where a
+# `list<V>`, a dictionary or a set is not valid, an empty one given whole
+# makes it valid, and ticks". Core's END-4: "Invalidation clears
+# validity, modification, payload, and delta."
 
 # Each reader below publishes at each wake (TIME-3): what the value holds,
 # ten for each member, key or element and the sum of them, or -1 where it
@@ -86,20 +92,19 @@ fn pair_members(pair: tuple<i64, set<i64>>) -> i64 {
 # ---- 1. A trace's cell written whole, given again ----
 #
 # TST-5: "Each cell is one cycle's publication, written as a `return` is
-# (TIME-7) ... a T, published whole". TIME-7: "A value published whole,
-# the same again or empty, is no delta, and ticks as any publication
-# does". A cell given again as it was is published whole again: it ticks,
-# and leaves the value as it was.
-test a_whole_cell_given_again_ticks_and_keeps_the_value {
-    assert eval(members_read(members: [[], [], [1, 2], [1, 2], []])) == [0, 0, 23, 23, 0]
-    assert eval(book_read(book: [[], [], ["a": 1, "b": 2], ["a": 1, "b": 2], []])) == [0, 0, 23, 23, 0]
-    assert eval(readings_read(readings: [[], [], [1, 2], [1, 2], []])) == [0, 0, 23, 23, 0]
+# (TIME-7) ... a T, published whole". A cell given again as it was is
+# published whole again: the empty one and a set's are no tick, and a
+# dictionary's entries and a list's positions tick, and leave the value as
+# it was.
+test a_whole_cell_given_again_ticks_where_it_publishes_a_part {
+    assert eval(members_read(members: [[], [], [1, 2], [1, 2], []])) == [0, _, 23, _, 0]
+    assert eval(book_read(book: [[], [], ["a": 1, "b": 2], ["a": 1, "b": 2], []])) == [0, _, 23, 23, 0]
+    assert eval(readings_read(readings: [[], [], [1, 2], [1, 2], []])) == [0, _, 23, 23, 0]
     # After a delta that made the value what the cell writes.
-    assert eval(members_read(members: [delta<set<i64>>(added: [1]), [1]])) == [11, 11]
+    assert eval(members_read(members: [delta<set<i64>>(added: [1]), [1]])) == [11, _]
     assert eval(book_read(book: [delta<dict<str, i64>>(updated: ["a": 1]), ["a": 1]])) == [11, 11]
     assert eval(readings_read(readings: [delta<list<i64>>(updated: [0: 1]), [1]])) == [11, 11]
-    # The set's delta then names nothing added and nothing removed.
-    assert eval(unchanged_members(members: [[1, 2], [1, 2], []])) == [false, true, false]
+    assert eval(unchanged_members(members: [[1, 2], [1, 2], []])) == [false, _, false]
 }
 
 # A `const fn` given the trace reads each cell as its delta (TST-16: "A T
@@ -121,8 +126,8 @@ test a_whole_cell_given_again_is_held_as_a_delta_that_names_nothing {
 # ---- 2. A source's set, as a node's ----
 #
 # SOURCE-1: a `yield` publishes as a `return` does (TIME-7). A delta that
-# names no change ticks where it makes the set valid, and not after; a
-# whole empty set, given again, ticks each time.
+# names no change ticks where it makes the set valid, and not after; nor
+# does a whole empty set given to the valid empty one.
 fn yielded_members() -> set<i64> {
     yield 1s: delta<set<i64>>()
     yield 1s: delta<set<i64>>()
@@ -137,11 +142,13 @@ fn yielded_members_read() -> i64 => members_read(yielded_members())
 
 test a_source_set_ticks_as_a_node_does {
     assert eval(yielded_members_read(), RunConfig(length: 8s)) == [
-        1s: 0, 3s: 0, 4s: 0, 5s: 11, 7s: 23,
+        1s: 0, 5s: 11, 7s: 23,
     ]
 }
 
-# A struct's set yielded whole, empty, twice.
+# A struct's set yielded whole, empty, twice: it ticks where it is made
+# valid, and not where it is given the empty set it holds, though the
+# struct's other field ticks.
 fn yielded_bags() -> Bag {
     yield 1s: Bag(members: [], count: 1)
     yield 1s: Bag(members: [], count: 1)
@@ -149,15 +156,16 @@ fn yielded_bags() -> Bag {
 
 fn yielded_bag_members() -> i64 => bag_members(yielded_bags())
 
-test a_sources_struct_with_an_empty_set_ticks_its_set {
-    assert eval(yielded_bag_members(), RunConfig(length: 3s)) == [1s: 0, 2s: 0]
+test a_sources_struct_with_an_empty_set_ticks_its_set_once {
+    assert eval(yielded_bag_members(), RunConfig(length: 3s)) == [1s: 0, 2s: -1]
 }
 
 # ---- 3. A whole value published again, unchanged ----
 #
-# TIME-7: "A value published whole, the same again or empty, is no delta,
-# and ticks as any publication does". Each way a node and a source
-# publish one: it ticks, and the value is as it was.
+# TIME-7, each way a node and a source publish one: a set given the
+# members it holds, and an empty list or dictionary given to the empty
+# one, are no tick; a dictionary's entries and a list's positions given
+# again tick, and the value is as it was.
 fn returned_members(step: i64) -> set<i64> {
     when {
         if step == 0 { return [] }
@@ -213,15 +221,14 @@ fn assigned_readings(step: i64) -> list<i64> {
 fn returned_readings_read(step: i64) -> i64 => readings_read(returned_readings(step))
 fn assigned_readings_read(step: i64) -> i64 => readings_read(assigned_readings(step))
 
-test a_whole_value_returned_or_assigned_again_ticks_and_keeps_the_value {
-    assert eval(returned_members_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
-    assert eval(assigned_members_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
-    assert eval(returned_book_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
-    assert eval(assigned_book_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
-    assert eval(returned_readings_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
-    assert eval(assigned_readings_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
-    # The set's delta names what the value changed: nothing, again.
-    assert eval(returned_members_unchanged(step: [1, 1, 0])) == [false, true, false]
+test a_whole_value_returned_or_assigned_again_ticks_where_it_publishes_a_part {
+    assert eval(returned_members_read(step: [1, 1, 0, 0, 1])) == [23, _, 0, _, 23]
+    assert eval(assigned_members_read(step: [1, 1, 0, 0, 1])) == [23, _, 0, _, 23]
+    assert eval(returned_book_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, _, 23]
+    assert eval(assigned_book_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, _, 23]
+    assert eval(returned_readings_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, _, 23]
+    assert eval(assigned_readings_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, _, 23]
+    assert eval(returned_members_unchanged(step: [1, 1, 0])) == [false, _, false]
 }
 
 fn yielded_again_members() -> set<i64> {
@@ -240,14 +247,15 @@ fn yielded_again_readings() -> list<i64> {
 fn yielded_again_members_read() -> i64 => members_read(yielded_again_members())
 fn yielded_again_readings_read() -> i64 => readings_read(yielded_again_readings())
 
-test a_whole_value_yielded_again_ticks_and_keeps_the_value {
-    assert eval(yielded_again_members_read(), RunConfig(length: 4s)) == [1s: 23, 2s: 23, 3s: 12]
-    assert eval(yielded_again_readings_read(), RunConfig(length: 5s)) == [1s: 23, 2s: 23, 3s: 0, 4s: 0]
+test a_whole_value_yielded_again_ticks_where_it_publishes_a_part {
+    assert eval(yielded_again_members_read(), RunConfig(length: 4s)) == [1s: 23, 3s: 12]
+    assert eval(yielded_again_readings_read(), RunConfig(length: 5s)) == [1s: 23, 2s: 23, 3s: 0]
 }
 
 # Inside a struct or a tuple published whole, from a `return`, from
 # `out =`, from an assignment to the part, and from a lifted function:
-# the set ticks as the value does.
+# the set given the members it holds is no tick, where the other field
+# given again ticks.
 fn returned_bag(step: i64) -> Bag {
     when { return Bag(members: [1, 2], count: step) }
 }
@@ -292,13 +300,13 @@ fn returned_pair_members(step: i64) -> i64 => pair_members(returned_pair(step))
 fn returned_tags_woken(step: i64) -> bool => tags_woken(returned_tags(step))
 fn lifted_members_read(step: i64) -> i64 => members_read(both(step))
 
-test a_set_inside_a_whole_value_published_again_ticks {
-    assert eval(returned_bag_members(step: [1, 1])) == [23, 23]
-    assert eval(assigned_bag_members(step: [1, 1])) == [23, 23]
-    assert eval(assigned_bag_part_members(step: [1, 1])) == [23, 23]
-    assert eval(returned_pair_members(step: [1, 1])) == [23, 23]
-    assert eval(returned_tags_woken(step: [1, 1])) == [true, true]
-    assert eval(lifted_members_read(step: [1, 1])) == [23, 23]
+test a_set_inside_a_whole_value_published_again_is_no_tick {
+    assert eval(returned_bag_members(step: [1, 1])) == [23, -1]
+    assert eval(assigned_bag_members(step: [1, 1])) == [23, -1]
+    assert eval(assigned_bag_part_members(step: [1, 1])) == [23, -1]
+    assert eval(returned_pair_members(step: [1, 1])) == [23, -1]
+    assert eval(returned_tags_woken(step: [1, 1])) == [true, _]
+    assert eval(lifted_members_read(step: [1, 1])) == [23, _]
 }
 
 fn yielded_full_bags() -> Bag {
@@ -308,8 +316,8 @@ fn yielded_full_bags() -> Bag {
 
 fn yielded_full_bag_members() -> i64 => bag_members(yielded_full_bags())
 
-test a_set_inside_a_whole_value_yielded_again_ticks {
-    assert eval(yielded_full_bag_members(), RunConfig(length: 3s)) == [1s: 23, 2s: 23]
+test a_set_inside_a_whole_value_yielded_again_is_no_tick {
+    assert eval(yielded_full_bag_members(), RunConfig(length: 3s)) == [1s: 23, 2s: -1]
 }
 
 # ---- 4. Invalidation empties what holds a dictionary or a set ----

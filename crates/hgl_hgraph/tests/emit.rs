@@ -3660,8 +3660,8 @@ const TIMERS_WAVE3: (&str, &str) = fixture!("demo.timers_wave3.hgl");
 /// it is true in a cycle where no temporal input was modified": `True`
 /// in the body of the handler whose header selects it, and elsewhere
 /// that no input is modified as `modified(input)` asks it, so that an
-/// invalidation is none, and a `ref` parameter is modified where its
-/// designation changed; `True` in a node with no input. TIME-8: a
+/// invalidation is none, and a `ref` parameter is modified where it is
+/// given a designation (END-10); `True` in a node with no input. TIME-8: a
 /// duration whose value the target does not work out is checked by the
 /// provider's function, `_starting=`, once every argument is evaluated
 /// (EXPR-2): the call fails where it is not more than zero, but for a
@@ -5128,9 +5128,12 @@ fn collection_validity_and_a_lists_delta_are_written() {
         "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]] = None",
         "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
         "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, \"list\")",
-        // TIME-7: a whole set ticks where it is empty and changes
-        // nothing, on the node's output.
-        "        return _core.set_replaced(_output, _core.removed(pair.delta_value))",
+        // TIME-7: a whole set is published as hgraph's `TSS` takes it,
+        // with no port of the node's output: "a set given the members it
+        // holds ... is no tick".
+        "def lost(pair: _hg.TSL[_hg.TS[_py.int], _hg.Size[2]]) -> _hg.TSS[_py.int]:\n\
+         \x20   if _core.valid_of(pair, (\"list\", None)):\n\
+         \x20       return _core.removed(pair.delta_value)",
     ]);
 }
 
@@ -5515,8 +5518,8 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         "    return _core.bundled(Square(id=id.value, side=1), {\"id\": None})".to_string(),
         // TIME-7: a whole struct with a struct field and a set field.
         "{\"quote\": {\"bid\": None, \"ask\": None}, \"size\": None})".to_string(),
-        // Its set is published through its own port (`_whole_set`).
-        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1), {\"tags\": \"set\", \"count\": None}, _output)"
+        // Its set is given as its members (TIME-7).
+        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1), {\"tags\": \"set\", \"count\": None})\n"
             .to_string(),
         // TIME-7: `out` assigned by part, and read back.
         format!(
@@ -5623,18 +5626,17 @@ fn a_temporal_tuple_or_struct_form_not_written_yet_is_reported() {
 /// FN-16: "A node ... may mark a temporal parameter `ref`, `ref low:
 /// f64`, and its result, `-> ref f64`. The mark is a mode ... A
 /// connection of T is given to a `ref` parameter, and a `ref` result is a
-/// connection of T to whoever reads it." TIME-10: "A reference ticks
-/// where its designation changes, not at every tick of its target. A
-/// designation published again unchanged is no tick". TYPE-12: "`signal`
+/// connection of T to whoever reads it." TIME-10: a reader of a `ref`
+/// result "observes the endpoint designated as if wired to it", and "a
+/// `ref` parameter is passive to what it designates". TYPE-12: "`signal`
 /// is a complete temporal input constraint with no readable payload".
 /// TYPE-9: "`atomic<V>` stops expansion at a complete ordinary V".
 const REFERENCES: (&str, &str) = fixture!("demo.references.hgl");
 
 /// A `ref` parameter and a `ref` result are hgraph's `REF` of their type,
 /// and a `signal` its `SIGNAL`. A node returns a `ref` parameter's value,
-/// the reference it holds, to re-point what follows it, and publishes no
-/// reference its result holds already (END-10): the provider's
-/// `Designation` keeps what it designates. An input that is no `ref`
+/// the reference it holds, sampled (FN-16), to re-point what follows it:
+/// the provider's `Designation` keeps what it designates. An input that is no `ref`
 /// parameter, is designated through a hidden `REF` input that a graph of
 /// the function's name gives it the input twice, and a fixed list's
 /// position through one for each position, which the graph gives each
@@ -5656,10 +5658,9 @@ fn a_ref_is_a_ref_and_a_signal_a_signal() {
             "def pick(use_left: _hg.TS[_py.bool], left: {reference}, right: {reference}, \
              _output: _hg.TS_OUT[{reference}] = None, _state: _hg.STATE = None) -> {reference}:"
         ),
-        "    _designation = _core.Designation(_output, _state, {\"left\": left, \"right\": right})\n"
-            .to_string(),
-        "        return _designation.returned(\"left\")\n".to_string(),
-        "        if (target.valid and target.modified):\n            return _designation.returned(\"target\")\n"
+        "    _designation = _core.Designation(_output, _state, {})\n".to_string(),
+        "        return _designation.sampled(left)\n".to_string(),
+        "    if (target.valid and target.modified):\n        return _designation.sampled(target)\n"
             .to_string(),
         format!("def checked(target: {reference}) -> _hg.TS[_py.bool]:\n    if target.modified:\n        return target.valid\n"),
         format!(
@@ -5750,51 +5751,56 @@ fn what_a_ref_cannot_be_given_yet_is_reported() {
     );
 }
 
-/// FN-16: "The result designates the logical endpoint that path names:
-/// its readers follow what that endpoint is bound to, a later re-binding
-/// upstream included, and the node is not woken for it." TIME-10: "A
-/// reference ticks where its designation changes".
+/// FN-16: "Returning a whole `ref` parameter samples its current
+/// designation when the `return` executes ... Returning an ordinary input
+/// or a child path designates the logical endpoint named by the path.
+/// Readers follow a later rebinding of that endpoint without waking the
+/// node for it."
 const REFS_WAVE3: (&str, &str) = fixture!("demo.refs_wave3.hgl");
 
-/// A `ref` parameter a node may not be woken by is given to it a second
-/// time, as a hidden `REF` input that is active, as an input that is no
-/// `ref` parameter is: the provider's `Designation` follows a re-binding
-/// of the one the result designates, and the node returns before its
-/// handlers where no active input of its own woke it. No validity is the
-/// whole node's, so a re-binding to an endpoint that is not valid is
-/// followed too: each handler asks its own. What an evaluation writes is
-/// published as it ends, an invalidation among it. A constant given to a
-/// `ref` parameter is a constant connection, and one left out designates
-/// nothing.
+/// A `ref` parameter returned whole is sampled from its own `REF`
+/// (`Designation.sampled`), and the node is given no other input for it:
+/// it is written as any node is. An input that is no `ref` parameter is
+/// given to the node a second time, as a hidden `REF` input that is
+/// active: the provider's `Designation` follows a re-binding of the one
+/// the result designates, and the node returns before its handlers where
+/// no active input of its own woke it. No validity is that node's, so a
+/// re-binding to an endpoint that is not valid is followed too: each
+/// handler asks its own. What an evaluation writes is published as it
+/// ends, an invalidation among it. A constant given to a `ref` parameter
+/// is a constant connection, and one left out designates nothing.
 #[test]
-fn a_designation_follows_a_re_binding_upstream() {
+fn a_ref_parameter_is_sampled_and_an_ordinary_input_followed() {
     let emitted = emit_clean(&[REFS_WAVE3]);
     let python = emitted.module("demo.refs_wave3");
     let reference = "_hg.REF[_hg.TS[_py.int]]";
     python.assert_writes(&[
         format!(
-            "@_hg.compute_node(active=(\"once\", \"_ref_target\"), valid=())\n\
-             def _node_pass_on(once: _hg.TS[_py.bool], target: {reference}, \
-             _ref_target: {reference}, "
+            "@_hg.compute_node(active=(\"once\",))\n\
+             def pass_on(once: _hg.TS[_py.bool], target: {reference}, "
         ),
-        "    _designation = _core.Designation(_output, _state, {\"_ref_target\": _ref_target})\n\
-         \x20   if not (once.modified or once.invalidated):\n\
-         \x20       return _designation.published()\n\
-         \x20   if once.valid and target.valid and once.modified:\n\
-         \x20       return _designation.returned(\"_ref_target\")\n\
+        "    _designation = _core.Designation(_output, _state, {})\n\
+         \x20   if once.modified:\n\
+         \x20       return _designation.sampled(target)\n\
          \x20   return _designation.published()\n"
             .to_string(),
-        "    return _node_pass_on(once=once, target=target, _ref_target=target)\n".to_string(),
+        "    _designation = _core.Designation(_output, _state, {\"_ref_value\": _ref_value})\n\
+         \x20   if not (once.modified or once.invalidated):\n\
+         \x20       return _designation.published()\n\
+         \x20   if once.valid and value.valid and once.modified:\n\
+         \x20       return _designation.returned(\"_ref_value\")\n\
+         \x20   return _designation.published()\n"
+            .to_string(),
+        "    return _node_hold(once=once, value=value, _ref_value=value)\n".to_string(),
         // An input whose activity the body changes is asked whether it is
         // active.
         "    if not (((once.modified or once.invalidated) and once.active) or \
          ((data.modified or data.invalidated) and data.active) or "
             .to_string(),
-        // TIME-10: "A designation published again unchanged is no tick":
-        // the writes of an evaluation are kept, and what the node returns
-        // is compared with what the result held before it.
-        "        _designation.designate(\"_ref_a\")\n\
-         \x20       _designation.designate(\"_ref_b\")\n\
+        // The writes of an evaluation are kept, and the node returns the
+        // last as it ends.
+        "        _designation.sample(a)\n\
+         \x20       _designation.sample(b)\n\
          \x20   return _designation.published()\n"
             .to_string(),
         // END-4: `invalidate(out)` of a `ref` result leaves it designating
