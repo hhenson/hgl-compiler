@@ -185,6 +185,16 @@ const fn made_error() -> str {
     return made.message
 }
 
+# EXPR-2: named arguments are evaluated in the order written.
+const fn code_first() -> str {
+    var text = "before"
+    let made = error(code: {
+        text = "after"
+        "code"
+    }, message: text)
+    return made.message
+}
+
 # UNIT-6: a function may name a type declared after it.
 const fn same_level(level: Level) -> Level => level
 
@@ -246,6 +256,7 @@ test evaluation_follows_the_order_written {
     assert text_first() == ("before", 0)
     assert from_a_made_row(1) == 7
     assert made_error() == "before"
+    assert code_first() == "after"
 }
 
 test a_type_declared_after_its_use {

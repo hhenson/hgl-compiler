@@ -248,13 +248,24 @@ std::tuple<::hgraph::Str, ::hgraph::Int> text_first()
     return (made).message;
 }
 
-// same_level(level: Level) -> Level (`const fn`), module demo.values, line 189
+// code_first() -> str (`const fn`), module demo.values, line 189
+::hgraph::Str code_first()
+{
+    [[maybe_unused]] ::hgraph::Str text = ::hgraph::Str{"before"};
+    [[maybe_unused]] const ::hglrt::error made = [&] { const auto code_01_ = [&]() -> ::hgraph::Str {
+    text = ::hgraph::Str{"after"};
+    return ::hgraph::Str{"code"};
+}(); const auto message_00_ = text; return ::hglrt::make_error(message_00_, code_01_); }();
+    return (made).message;
+}
+
+// same_level(level: Level) -> Level (`const fn`), module demo.values, line 199
 ::hgl::demo::values::m_::Level same_level([[maybe_unused]] ::hgl::demo::values::m_::Level level)
 {
     return level;
 }
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 194
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 204
 void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int by)
 {
     count = ::hglrt::add__i64_i64(count, by);
@@ -367,6 +378,8 @@ void evaluation_follows_the_order_written()
     ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::from_a_made_row(1), 7, 0.0, 0.0));
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hgraph::Str>(::hgl::demo::values::m_::made_error(), ::hgraph::Str{"before"}));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hgraph::Str>(::hgl::demo::values::m_::code_first(), ::hgraph::Str{"after"}));
 }
 
 void a_type_declared_after_its_use()

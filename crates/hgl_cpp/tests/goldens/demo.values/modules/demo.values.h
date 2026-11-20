@@ -93,10 +93,13 @@ std::tuple<::hgraph::Str, ::hgraph::Int> text_first();
 // made_error() -> str (`const fn`), module demo.values, line 179
 ::hgraph::Str made_error();
 
-// same_level(level: Level) -> Level (`const fn`), module demo.values, line 189
+// code_first() -> str (`const fn`), module demo.values, line 189
+::hgraph::Str code_first();
+
+// same_level(level: Level) -> Level (`const fn`), module demo.values, line 199
 ::hgl::demo::values::m_::Level same_level(::hgl::demo::values::m_::Level level);
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 194
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 204
 void bump(::hgraph::Int& count, ::hgraph::Int by);
 
 namespace i_::first

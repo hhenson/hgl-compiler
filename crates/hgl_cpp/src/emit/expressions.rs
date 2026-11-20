@@ -271,24 +271,39 @@ impl Emitter<'_> {
                 }
             }
             // ERR-4: `error(message: text, code: code)`, with no context.
-            // EXPR-2: the message, then the code; where both may fail, or
-            // one runs statements, each is held in turn first.
+            // EXPR-2: the two in the order written, named arguments in
+            // any order; where both may fail, or one runs statements,
+            // each is held in turn first.
             ExprKind::Error { message, code } => {
                 let ordered = changes(message)
                     || code.as_deref().is_some_and(changes)
                     || (may_fail(message) && code.as_deref().is_some_and(may_fail));
-                let message = self.expression(scope, message);
-                let code = match code {
-                    Some(code) => self.expression(scope, code),
-                    None => "std::nullopt".to_string(),
+                let code_first = code
+                    .as_deref()
+                    .is_some_and(|code| code.at.span.start < message.at.span.start);
+                let (message, code) = if code_first {
+                    let code = code.as_deref().map(|code| self.expression(scope, code));
+                    (self.expression(scope, message), code)
+                } else {
+                    let message = self.expression(scope, message);
+                    (
+                        message,
+                        code.as_deref().map(|code| self.expression(scope, code)),
+                    )
                 };
+                let code = code.unwrap_or_else(|| "std::nullopt".to_string());
                 let made = format!("::{}::make_error", runtime::NAMESPACE);
                 if ordered {
                     let held = names::temporary("message", self.temporary());
                     let coded = names::temporary("code", self.temporary());
-                    format!(
-                        "[&] {{ const auto {held} = {message}; const auto {coded} = {code}; return {made}({held}, {coded}); }}()"
-                    )
+                    let message = format!("const auto {held} = {message};");
+                    let code = format!("const auto {coded} = {code};");
+                    let (first, second) = if code_first {
+                        (code, message)
+                    } else {
+                        (message, code)
+                    };
+                    format!("[&] {{ {first} {second} return {made}({held}, {coded}); }}()")
                 } else {
                     format!("{made}({message}, {code})")
                 }
