@@ -1,7 +1,7 @@
 module demo.list_delta
 
 # TYPE-10: "`list<T>` denotes a growing shape", and TYPE-16 its delta,
-# on hgraph 0.9.5's unbounded `TSL`. A fixed list's delta beside it.
+# on hgraph 0.9.7's unbounded `TSL`. A fixed list's delta beside it.
 
 const fn digits(values: list<i64>) -> i64 {
     var code: i64 = 0

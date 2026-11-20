@@ -297,6 +297,15 @@ pub(super) fn windows_in(program: &Program, ty: &Type) -> Vec<Type> {
     found
 }
 
+/// True for a window of a duration, `rolling_window<f64, 3s, 2s>`
+/// (TYPE-11), which a value leaves as it ages, though nothing arrives.
+pub(super) fn duration_window(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::RollingWindow { maximum, .. } if matches!(maximum.value, ConstantValue::Duration(_))
+    )
+}
+
 /// True for an unsized list, `list<T>` (TYPE-10: "a growing shape"),
 /// which this target writes as hgraph's unbounded `TSL`.
 pub(super) fn growing_list(ty: &Type) -> bool {
@@ -431,7 +440,7 @@ pub(super) fn list_parts_shape(program: &Program, ty: &Type) -> Option<String> {
 /// list whose elements hold one. `None` where `ty` holds none.
 ///
 /// END-4: "Invalidation clears validity, modification, payload, and
-/// delta." hgraph 0.9.5's unbounded `TSL` keeps its positions, and its
+/// delta." hgraph 0.9.7's unbounded `TSL` keeps its positions, and its
 /// `TSD` and `TSS` their keys and members, which the next delta read
 /// would name removed, and which a delta that names no change would leave
 /// in what it makes valid (TIME-7: "it makes the value valid and empty").

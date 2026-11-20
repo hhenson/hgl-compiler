@@ -219,7 +219,7 @@ analyser: done
 transpiler: partial
 
 - hgraph: core's temporal candidates of `+` and `-` under `{invalid: .identity}` are written from core's own bodies, for each type they are called with: one valid operand is forwarded, right-only subtraction negates it, and both invalid invalidate the output
-- Core's five identity arithmetic cases pass on hgraph 0.9.1 when run by hand
+- Core's identity arithmetic cases pass on hgraph 0.9.7
 
 ## OPS-10
 
@@ -336,6 +336,7 @@ transpiler: done
 
 - hgraph: a publication marks the input modified for its cycle, an equal one included; an idle cycle leaves it unmodified with its value; an input bound to a node's output observes that output
 - `modified(x)`, as a guard, admits a read of `x` as `valid(x)` does (TIME-4): the read stands under `(x.modified and x.valid)`
+- A window of a duration is modified at an exit with nothing published (END-9), as hgraph 0.9.7's `TSW` is
 - An input of a node in a branch started while the program runs, bound to an endpoint already valid, is modified in the cycle the branch starts and wakes its node, as hgraph samples an input it binds: of an `if`, a `switch` and a dictionary's child (CTRL-2, CTRL-7); core's conditional case passes
 - Not written as a rule, since the pinned text leaves it out: a `ref` parameter, a collection's children, and `delta_value` and `last_modified` of such an input as its branch starts
 
@@ -351,14 +352,14 @@ analyser: partial
 transpiler: partial
 
 - hgraph: `delta_value(input)` of a scalar input, and of a nullable scalar, whose delta is hgraph's own
-- A fixed list's delta, `REMOVE` for a position that lost its value; an unsized list's, hgraph 0.9.5's `TSLDelta`: the new size where it moves, never a negative one, and on a shrink the dropped tail in `removed`, also for a smaller `size_modified` alone and a negative one, which the provider counts from what the list holds, to empty at most; growth by an entry after the last and past it, the positions between not valid
+- A fixed list's delta, `REMOVE` for a position that lost its value; an unsized list's, hgraph 0.9.7's `TSLDelta`: the new size where it moves, never a negative one, and on a shrink the dropped tail in `removed`, also for a smaller `size_modified` alone and a negative one, which the provider counts from what the list holds, to empty at most; growth by an entry after the last and past it, the positions between not valid
 - A fixed list's entry past its bounds, and a `size_modified` that moves its size, fails the write
 - A child's (`_core.child_delta`), which fails with `value.unset_read` where it is not valid
 - A removed position the list does not hold lost no value, and is ignored: nothing fails and nothing is lost (the owner's decision on hhenson/hgl_spec#124, as for a dictionary's absent key)
 - An entry at or past a `size_modified` written with it contradicts the delta and fails the write as the graph runs, with no execution code (the owner's decision on hhenson/hgl_spec#124: "a failure"); a constant one is not yet rejected when compiled (TYPE-16)
 - A dictionary's delta removes a key with `REMOVE_IF_EXISTS`, so one it does not hold is ignored, and is no failure, a delta read from an input and published again among them (`_core.entries_published`); a set ignores a member it does not hold
 - A delta that names no change, of a dictionary, a set or an unsized list, ticks only where it makes the endpoint valid, empty and modified, and its `delta_value` is then that delta (END-3, TIME-7), by a node, a source and a trace's cell, at the top, within a dictionary, a struct, a tuple or a fixed list, and beside an unsized list in a struct or a tuple; one of a struct, a tuple or a fixed list sets no child and is never a tick; so, as END-3 has it, agreed, is one whose every entry is an ignored removal. hgraph ticks a `TSD` and a `TSS` for neither, and `clear` makes one that is not valid valid; it ticks what holds one given such a change, so the provider leaves that child out (`_core.entries_published`); `invalidate(out)` of a dictionary or a set empties it first, as hgraph keeps its keys and members (`_core.invalidated`)
-- hgraph 0.9.5's bundle given a tuple ticks where any position is given, a change that a valid child is left as it was by among them, and fails the run for a dictionary's `REMOVE_IF_EXISTS` in it: a tuple that holds an unsized list is published as a `dict` of the positions it gives, as a struct is (`_core.published_into`)
+- hgraph 0.9.7's bundle given a tuple ticks where any position is given, a change that a valid child is left as it was by among them, and fails the run for a dictionary's `REMOVE_IF_EXISTS` in it: a tuple that holds an unsized list is published as a `dict` of the positions it gives, as a struct is (`_core.published_into`)
 - A dictionary or a set in a struct or a tuple that holds an unsized list is published as a node's delta of one is, by a node and by a source, the provider told where (`entries=`): an entry whose change names nothing, where it is valid, is left out
 - Left: a dictionary's or a set's assigned to an entry of `out`; an unsized list's delta inside a dictionary's or a list's delta, which is reported (TYPE-16)
 
@@ -417,7 +418,7 @@ analyser: partial
 
 transpiler: partial
 
-- hgraph: a child's endpoint is hgraph's child of the input or of `out`, `_core.position_of` of a fixed list and `_core.list_position` of an unsized one (hgraph 0.9.5's unbounded `TSL`), a bundle's field and `_core.entry_port`; a position an unsized list does not hold, before it publishes, while it is short or after a shrink, is a child that is not valid, as an absent key is; a child admitted is read through it, never through its siblings, and its delta as a direct input's of its type is (`language_delta`, a tuple's by `_core.positions`); a read at a run-time index fails with `value.unset_read` where the child is not valid, or gives `err` where a `result<T, error>` is expected
+- hgraph: a child's endpoint is hgraph's child of the input or of `out`, `_core.position_of` of a fixed list and `_core.list_position` of an unsized one (hgraph 0.9.7's unbounded `TSL`), a bundle's field and `_core.entry_port`; a position an unsized list does not hold, before it publishes, while it is short or after a shrink, is a child that is not valid, as an absent key is; a child admitted is read through it, never through its siblings, and its delta as a direct input's of its type is (`language_delta`, a tuple's by `_core.positions`); a read at a run-time index fails with `value.unset_read` where the child is not valid, or gives `err` where a `result<T, error>` is expected
 
 ## END-9
 
@@ -427,7 +428,8 @@ analyser: partial
 
 transpiler: partial
 
-- hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own, with a minimum of zero written as the maximum; a value leaves a window of a duration as the next arrives, and its exit is no tick
+- hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own; in one of a duration a value leaves one smallest step after its age is the maximum, and the window ticks for the exit, modified with nothing published (END-2), as hgraph 0.9.7's `TSW` does; a minimum of zero is held by the first value, and an empty window is not all valid; proposed: one emptied by exits stays valid, and `last_modified` is the exit's time
+- Proposed: `delta_value(x)` where a value leaves and none arrives fails with `value.unset_read` (`_core.window_delta`)
 - Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`), or gives that `err` where its place expects a `result<list<V>, error>` (`_core.window_result`); a lifted value function whose parameter has a default is not invoked where the window is valid and not all valid (FN-11); core's window cases pass
 - Left, reported: a window of a value that is no scalar or enum (TYPE-11), and invalidating one (END-4)
 
@@ -485,7 +487,7 @@ transpiler: partial
 - hgraph: as a node is entered each wake due then is taken from hgraph's scheduler (`_core.Wake`), which holds it until the node has run: it is delivered and no longer pending, so `is_scheduled`, `next_scheduled_time` (null where none is pending) and `un_schedule` with no tag see only the wakes to come, and `is_scheduled_now` holds through the evaluation, as `scheduled()` does
 - `schedule` with a `duration` or a `datetime`, a tag and `on_wall_clock`, `un_schedule` with a tag or without, and `reset` are hgraph's; a tag is kept with a mark before it, so the empty tag is a tag
 - A wake asked for at a `datetime` before the current evaluation time is dropped, with no failure; a zero duration in `start` wakes the node's first evaluation
-- A duration not more than zero, but a zero in `start`, fails the call with `schedule.non_positive_duration` where the compiler does not see it (TIME-8, `_starting=`): hgraph 0.9.5 drops a zero or negative duration asked for in an evaluation, and a negative one in `start`, with no failure
+- A duration not more than zero, but a zero in `start`, fails the call with `schedule.non_positive_duration` where the compiler does not see it (TIME-8, `_starting=`): hgraph 0.9.7 drops a zero or negative duration asked for in an evaluation, and a negative one in `start`, with no failure
 - Left, reported: a duration that may be zero asked for in a value function given the scheduler (TIME-8)
 - Every node with no temporal input is given one that never wakes it, since hgraph takes no node without an input
 

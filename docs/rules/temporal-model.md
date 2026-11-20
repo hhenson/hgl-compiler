@@ -18,7 +18,7 @@ transpiler: done
 
 - hgraph: an input's `valid`, `modified`, `value` and `delta_value`
 - Silence runs no node; an equal publication is a tick, and a delta that names no change, where the value is valid, is none (TIME-7); `valid` reads an invalid input in `when valid([])`
-- A child is hgraph's own child of the input (`_core.position_of`, `quote["bid"]`, `_core.entry_port`, one not valid where the key is absent); a read checked when it runs fails with `value.unset_read` where the child is not valid (`_core.checked_child`); an unsized list's position is its own, valid or not (hgraph 0.9.5's unbounded `TSL`), and one it does not hold is a child that is not valid (`_core.list_position`): `valid` and `modified` false, `last_modified` null, a read failing with `value.unset_read` or giving that `err` where a `result` is expected
+- A child is hgraph's own child of the input (`_core.position_of`, `quote["bid"]`, `_core.entry_port`, one not valid where the key is absent); a read checked when it runs fails with `value.unset_read` where the child is not valid (`_core.checked_child`); an unsized list's position is its own, valid or not (hgraph 0.9.7's unbounded `TSL`), and one it does not hold is a child that is not valid (`_core.list_position`): `valid` and `modified` false, `last_modified` null, a read failing with `value.unset_read` or giving that `err` where a `result` is expected
 
 ## TIME-2
 
@@ -49,6 +49,7 @@ transpiler: partial
 
 - hgraph: handlers run in source order
 - Omitting `modified` subscribes to every input and adds no publication condition
+- A window of a duration that a value leaves wakes its node and satisfies `modified` as a publication does: hgraph 0.9.7's `TSW` ticks for the exit
 - Explicit `modified()` and `modified(a, b)` require a current publication on any selected input, even when the selected inputs cover the entire node
 - A handler with `scheduled()` or `modified([])` is under one guard, that the node's scheduler or alarm woke it (TIME-9), and a header that is `scheduled()` alone requires no input valid
 - In a node that injects one, a handler with no `modified` selector is guarded by an input's wake: one published or was invalidated
@@ -123,7 +124,7 @@ transpiler: partial
 - Such a delta of a struct, a tuple or a fixed list, `delta<Quote>()`, `(null, null)`, `delta<list<i64, 2>>()`, sets no child and is never a tick, a dictionary's value among them, at any depth, where hgraph's `TSD` ticks for one; it adds no key the dictionary does not hold (`_core._pruned`, one place for every nesting)
 - So, as TIME-7 has it, agreed, is one whose every entry is an ignored removal: core's three cases for it pass
 - Not settled: a struct with no field, which has no child to be valid (TIME-9), is published as hgraph's `TS` of its class, and `delta<Empty>()` ticks and makes it valid, as `Empty()` does
-- An unsized list's `out`, hgraph 0.9.5's unbounded `TSL`: a whole value replaces what it held, a delta's size is counted from what it holds, `out[i] = v` is `_core.list_child(_output, i)`, which fails past the list, and two writes in one evaluation publish their sum (END-5); a whole value that changes nothing hgraph sees, an empty list first among them, still ticks
+- An unsized list's `out`, hgraph 0.9.7's unbounded `TSL`: a whole value replaces what it held, a delta's size is counted from what it holds, `out[i] = v` is `_core.list_child(_output, i)`, which fails past the list, and two writes in one evaluation publish their sum (END-5); a whole value that changes nothing hgraph sees, an empty list first among them, still ticks
 - A part of `out` read is its own port, a fixed list's and an unsized list's position among them
 - A struct's or a tuple's delta that holds an unsized list's delta is published through the output, each list's size counted from what it holds (`_core.published_into`); a source's node publishes what it yields so when it is due, an empty list in a struct among them
 - Left: a place inside an entry of a dictionary `out`; an empty unsized list assigned to an entry or a list's position of `out`, which hgraph does not tick for and which has no port of its own where it is written, fails as the graph runs
@@ -144,7 +145,7 @@ transpiler: partial
 - `inject scheduler` and `inject alarm` are both hgraph's `SCHEDULER`: it has one for a node, and no cheaper one; given to a function or bound to a `let` it is passed as it is
 - A source injects neither (SOURCE-1)
 - A zero duration asked of the scheduler or the alarm in `start` wakes the node's first evaluation, and a wake asked for at a `datetime` before the evaluation time is dropped, with no failure
-- A wake's duration that the target does not work out, an input, a local or a `const` parameter, is checked as the program runs, by the provider's `schedule` once every argument is evaluated (`_starting=`): one not more than zero fails the call with `schedule.non_positive_duration`, but a zero in `start`; hgraph 0.9.5 drops such a wake with no failure
+- A wake's duration that the target does not work out, an input, a local or a `const` parameter, is checked as the program runs, by the provider's `schedule` once every argument is evaluated (`_starting=`): one not more than zero fails the call with `schedule.non_positive_duration`, but a zero in `start`; hgraph 0.9.7 drops such a wake with no failure
 - Left, reported: a wake asked for in a value function with a duration that may be zero, anything but one the target works out to be more than zero, a literal, a constant or core's `+`, `-` and `*` by an `i64` of those, since the rule does not say whether a call there is in `start`
 
 ## TIME-9
@@ -171,7 +172,7 @@ transpiler: partial
 - Under a negation, in a disjunction and in a handler's body `scheduled()` is that bool, read once where the node is entered (`_timer_woke`): a handler that asks again under the tag that is due leaves it true, and `scheduler.is_scheduled_now` with it (CAP-4)
 - The endpoint operations are the input's own properties: `valid` of a struct is hgraph's `valid`, true once any child is, and `all_valid` hgraph's `all_valid`
 - Where a list, fixed or unsized, is in the value, `valid` and `all_valid` are the provider's (`_core.valid_of`, `_core.all_valid_of`): hgraph's `TSL` stays valid once every position has lost its value or a size alone has grown it, where the language's list is not; a handler's and a lifted helper's admission of such an input is too
-- `is_scheduled_now` stays true for the rest of a wake after `un_schedule` or `reset` in it (CAP-4), read as the property, by a function given the scheduler, and as `scheduled()` in a body and in a later handler: hgraph 0.9.5's own is false once the wake due is cancelled
+- `is_scheduled_now` stays true for the rest of a wake after `un_schedule` or `reset` in it (CAP-4), read as the property, by a function given the scheduler, and as `scheduled()` in a body and in a later handler: hgraph 0.9.7's own is false once the wake due is cancelled
 - A window's `valid` and `all_valid` are the `TSW`'s, of ticks and of a duration (TYPE-11)
 - `all_valid` asks no optional child, a `T?` or a field TYPE-4 makes optional, a generic one given a `T?` among them: of a struct or a tuple with one, the provider asks the others (`_core.all_valid_of`), and of one whose every child is optional, a list or a dictionary of a `T?` among them, it is the value's `valid`
 - A list or a dictionary that a delta naming no change makes valid (TIME-7) has no element, and is valid and all valid

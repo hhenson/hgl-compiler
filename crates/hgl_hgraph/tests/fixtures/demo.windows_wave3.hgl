@@ -340,11 +340,12 @@ test a_window_within_a_value_read_before_it_is_all_valid_fails {
 
 # ---- A window of a duration (TYPE-11, END-9) ----
 
-# TYPE-11's illustration: "In one of a duration, a value is still held
-# when its age is Max, and one older than Max leaves when the next value
-# arrives, and not before ... Nothing ticks for an exit". `all_valid`:
-# "values whose arrival times, from the oldest held to the newest, span
-# at least Min".
+# TYPE-11's illustration, which hgraph 0.9.7 follows (hhenson/hgraph#1818):
+# "one that arrived at t is held at t + Max and leaves one smallest step
+# later (RUN-3), whether or not a value arrives then. The window ticks for
+# that exit": 1.0, of 0s, leaves at 3s + 1us.
+# `all_valid`: "values whose arrival times, from the oldest held to the
+# newest, span at least Min".
 fn collect(price: f64) -> rolling_window<f64, 3s, 2s> {
     when { return price }
 }
@@ -375,24 +376,28 @@ const fn price_total(values: list<f64>) -> f64 {
 
 fn duration_total(price: f64) -> f64 => price_total(collect(price))
 
-test a_window_of_a_duration_holds_and_drops_values_as_they_arrive {
+test a_window_of_a_duration_holds_and_drops_values_as_they_age {
     assert eval(observed_duration(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0])) ==
-        [0s: [true, false], 1s: [true, false], 2s: [true, true], 4s: [true, true],
-         9s: [true, false]]
-    # At 3.5s the window still holds 1.0, older than 3s; at 8s, 2.0.
+        [0s: [true, false], 1s: [true, false], 2s: [true, true],
+         3000001us: [true, false], 4s: [true, true], 4000001us: [true, true],
+         5000001us: [true, false], 7000001us: [true, false], 9s: [true, false],
+         12000001us: [true, false]]
+    # At 3.5s the window holds 2.0 and 3.0, which span less than 2s, and
+    # is not read; at 4.5s, 3.0 and 4.0.
     assert eval(held_flow(
-        probe: [3500ms: true, 8s: true],
+        probe: [2500ms: true, 3500ms: true, 4500ms: true],
         price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0],
-    )) == [3500ms: [1.0, 2.0, 3.0], 8s: [2.0, 3.0, 4.0]]
+    )) == [2500ms: [1.0, 2.0, 3.0], 4500ms: [3.0, 4.0]]
     assert eval(duration_total(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0])) ==
-        [2s: 6.0, 4s: 9.0]
+        [2s: 6.0, 4s: 9.0, 4000001us: 7.0]
 }
 
 test a_window_of_a_duration_read_before_its_span_fails {
     assert raises("value.unset_read") { eval(duration_list_flow(price: [0s: 1.0, 1s: 2.0])) }
 }
 
-# TYPE-11: "a minimum of `0s` being read as Max", and "Omitted minimum
+# TYPE-11: "A minimum of `0s` is held by the first value, and an empty
+# window is not all valid, whatever its minimum", and "Omitted minimum
 # equals maximum".
 fn collect_from_zero(price: f64) -> rolling_window<f64, 3s, 0s> {
     when { return price }
@@ -413,11 +418,13 @@ fn whole_readiness(prices: rolling_window<f64, 3s>) -> list<bool, 2> {
 fn zero_flow(price: f64) -> list<bool, 2> => zero_readiness(collect_from_zero(price))
 fn whole_flow(price: f64) -> list<bool, 2> => whole_readiness(collect_whole(price))
 
-test a_zero_minimum_is_read_as_the_maximum {
+test a_zero_minimum_and_an_omitted_one {
     assert eval(zero_flow(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0])) ==
-        [0s: [true, false], 1s: [true, false], 2s: [true, false], 4s: [true, true],
-         9s: [true, false]]
+        [0s: [true, true], 1s: [true, true], 2s: [true, true], 3000001us: [true, true],
+         4s: [true, true], 4000001us: [true, true], 5000001us: [true, true],
+         7000001us: [true, false], 9s: [true, true], 12000001us: [true, false]]
     assert eval(whole_flow(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0])) ==
-        [0s: [true, false], 1s: [true, false], 2s: [true, false], 4s: [true, true],
-         9s: [true, false]]
+        [0s: [true, false], 1s: [true, false], 2s: [true, false], 3000001us: [true, false],
+         4s: [true, true], 4000001us: [true, false], 5000001us: [true, false],
+         7000001us: [true, false], 9s: [true, false], 12000001us: [true, false]]
 }

@@ -718,13 +718,14 @@ def _pruned(port, change, shape):
     child: it changes no validity, and is never a tick", and "A delta
     whose every entry is ignored, the removal of a key, a member or a
     position that is not held (TYPE-16), names no change too". hgraph
-    does not tick a `TSD` or a `TSS` for one, but ticks what holds it, a
-    `TSD`, a bundle or a `TSL`, where it is given one for that child, and
-    a `TSD` for a key given a struct's delta that names nothing, held or
-    not: so a child whose change names nothing is left out of its
-    holder's change. A dictionary or a set that is not valid is kept, and
-    made valid (`_validated`); a key that a struct's delta naming nothing
-    would add is not added."""
+    0.9.7 does not tick a valid `TSD` or `TSS` for one, but ticks a `TSD`
+    that holds it where it is given one for that child (a bundle and a
+    fixed `TSL` do not tick), and a `TSD` for a key given a struct's delta
+    that names nothing, held or not, adding a key it does not hold: so a
+    child whose change names nothing is left out of its holder's change.
+    A dictionary or a set that is not valid is kept, and made valid
+    (`_validated`); a key that a struct's delta naming nothing would add
+    is not added."""
     if change is None or shape is None:
         return change
     valid = port is not None and port.valid
@@ -804,10 +805,11 @@ def _validated(port):
     ticks. Where it is valid the delta changes nothing, and is no tick";
     core's END-3: "it makes the endpoint valid, empty and modified".
     And in both: a delta whose every entry is an ignored removal names
-    no change too. hgraph 0.9.5's `TSD` and `TSS` tick for neither, which is
-    right where they are valid; where they are not, `clear` makes them
-    valid, empty and modified. An invalidated one holds nothing
-    (`invalidated`)."""
+    no change too. hgraph 0.9.7's `TSD` and `TSS` tick for neither where
+    they are valid, which is right; where a `TSD` is not valid it ticks
+    for `{}` and not for a delta of ignored removals. Where either is not
+    valid, `clear` makes it valid, empty and modified. An invalidated one
+    holds nothing (`invalidated`)."""
     if not port.valid:
         port.clear()
 
@@ -848,7 +850,7 @@ def _whole_set(port, members):
     members, the set cleared first.
 
     TIME-7: "A value published whole, the same again or empty, is no
-    delta, and ticks as any publication does". hgraph 0.9.5's `TSS` does not tick
+    delta, and ticks as any publication does". hgraph 0.9.7's `TSS` does not tick
     for a whole value that leaves its members as they were, the empty one
     among them, and has no way to mark it modified. `clear` publishes the
     removal of each member it holds, and makes one that is not valid
@@ -942,7 +944,7 @@ def _ticked(port):
     (`list_applied`).
 
     TIME-7 has a write publish ("No write means no tick"), and TIME-9 has
-    "A published empty list ... valid". hgraph 0.9.5's unbounded `TSL`
+    "A published empty list ... valid". hgraph 0.9.7's unbounded `TSL`
     does not tick for a publication that leaves it as it was, the empty
     list it holds or holds no value yet among them, and so is never
     valid where an empty list is published first. It does tick for a
@@ -1151,7 +1153,7 @@ def _by_position(value, shape, entries=None):
     tick", and a tuple's that sets no position "sets no child: it changes
     no validity, and is never a tick". TYPE-16: a tuple's delta is "each
     position's delta, null where it did not change", and a dictionary's
-    `removed` the keys it removes. hgraph 0.9.5's bundle given a tuple
+    `removed` the keys it removes. hgraph 0.9.7's bundle given a tuple
     ticks where any position is given, a delta that changes nothing a
     valid child holds among them, and fails the run (`std::bad_cast`) for
     a dictionary's `REMOVE_IF_EXISTS` in it; given a `dict` it ticks only
@@ -1532,7 +1534,7 @@ def window_values(port):
     language's TYPE-11): "a `list<V>` of the values held, oldest first,
     and the read before `all_valid` fails with `value.unset_read`", as
     core's END-9 has it. hgraph's `TSW` holds them as an array, each made
-    the Python value it is. hgraph 0.9.5 reads a window that holds fewer
+    the Python value it is. hgraph 0.9.7 reads a window that holds fewer
     than its minimum as the values it holds: the read fails here."""
     if not port.all_valid:
         raise HglError(
@@ -1540,6 +1542,23 @@ def window_values(port):
         )
     values = port.value
     return list(values.tolist() if hasattr(values, "tolist") else values)
+
+
+def window_delta(port):
+    """`delta_value` of a window of a duration (the language's TYPE-11,
+    TYPE-16): the value that arrived in this cycle. TYPE-11, proposed, as
+    core's END-9 has it too: "where a value leaves and none arrives,
+    `delta_value` of the window, which is the value that arrived
+    (TYPE-16), has no value, and its read fails with `value.unset_read`".
+    hgraph 0.9.7's `TSW` ticks for an exit and gives no delta for it,
+    `None`, which no value it holds is: a window holds no null."""
+    delta = port.delta_value
+    if delta is None and port.modified:
+        raise HglError(
+            "the window's delta is read where a value leaves it and none arrives",
+            code="value.unset_read",
+        )
+    return delta
 
 
 def window_result(port):
@@ -1722,9 +1741,10 @@ def dict_replaced(output, value):
     keep those.
 
     TIME-7: "A value published whole, the same again or empty, is no
-    delta, and ticks as any publication does". hgraph's `TSD` does not
-    tick for an empty one where it holds none, valid or not, and is made
-    to (`clear`)."""
+    delta, and ticks as any publication does". hgraph 0.9.7's `TSD` does
+    not tick for an empty one where it is valid and holds none, and is
+    made to (`clear`), which makes one that is not valid valid and
+    empty."""
     made = {key: _REMOVE for key in (output.keys() if output.valid else ()) if key not in value}
     made.update({key: published(entry) for key, entry in value.items()})
     if not made:
@@ -2106,7 +2126,7 @@ def _wake_delay(at, starting):
     is written in `start`. The scheduler's and the alarm's `schedule`
     ask it once every argument of the call is evaluated (EXPR-2).
 
-    hgraph 0.9.5 fails none of them: a zero or negative duration asked
+    hgraph 0.9.7 fails none of them: a zero or negative duration asked
     for in an evaluation, and a negative one in `start`, is a wake at a
     time no cycle can still run at, dropped with no failure."""
     if at < _datetime.timedelta(0) or (at == _datetime.timedelta(0) and not starting):

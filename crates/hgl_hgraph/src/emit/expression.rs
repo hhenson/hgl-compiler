@@ -202,7 +202,13 @@ impl Emitter<'_> {
                     // (`language_delta`).
                     EndpointOperation::DeltaValue => {
                         let ty = endpoint.ty.clone();
-                        self.language_delta(&ty, format!("{input}.delta_value"), value.at)
+                        if duration_window(&ty) {
+                            // A window of a duration's (`window_delta`).
+                            self.natives = true;
+                            format!("_core.window_delta({input})")
+                        } else {
+                            self.language_delta(&ty, format!("{input}.delta_value"), value.at)
+                        }
                     }
                     // END-6: an invalid endpoint has no timestamp, even
                     // if it held a value before being invalidated.
@@ -524,7 +530,7 @@ impl Emitter<'_> {
                 // `dict` of both (see `delta`).
                 // TYPE-16: a list's delta has `updated`, `removed` and
                 // `size_modified` (see `list_delta`), for `list<V>` and
-                // `list<V, N>` alike: hgraph 0.9.5's `TSL`, bounded or
+                // `list<V, N>` alike: hgraph 0.9.7's `TSL`, bounded or
                 // not, reports a position that lost its value as
                 // `REMOVE`, and a fixed list's delta read has no size.
                 if let Some(DeltaOf::List) = delta {
@@ -1353,8 +1359,14 @@ impl Emitter<'_> {
             // END-8: a child's delta is read as a direct input's of its
             // type is (`language_delta`).
             EndpointOperation::DeltaValue => {
-                let shape = self.child_shape(&child.ty);
-                self.language_delta(&child.ty, format!("_core.child_delta({port}{shape})"), at)
+                // A window of a duration's, of a child that is valid
+                // (`window_delta`).
+                if duration_window(&child.ty) {
+                    format!("_core.checked_child({port}, _core.window_delta)")
+                } else {
+                    let shape = self.child_shape(&child.ty);
+                    self.language_delta(&child.ty, format!("_core.child_delta({port}{shape})"), at)
+                }
             }
             EndpointOperation::LastModified => {
                 let shape = self.child_shape(&child.ty);

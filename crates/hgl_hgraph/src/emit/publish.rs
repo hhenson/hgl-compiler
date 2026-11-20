@@ -518,9 +518,17 @@ impl Emitter<'_> {
     ///
     /// END-3: "For a list, the delta read gives the new size where it
     /// moves, never a negative one, and on a shrink names the dropped
-    /// tail positions in `removed`", as hgraph 0.9.5's unbounded `TSL`
+    /// tail positions in `removed`", as hgraph 0.9.7's unbounded `TSL`
     /// reads it.
     pub(super) fn language_delta(&mut self, ty: &Type, delta: String, at: Location) -> String {
+        // TYPE-11, proposed: "where a value leaves and none arrives,
+        // `delta_value` of the window ... has no value" (`window_delta`).
+        // What the delta of a value that holds one is then, a struct's
+        // field among them, it does not say, and hgraph gives that field
+        // none, as for one that did not change: it is reported.
+        if windows_in(self.program, ty).iter().any(duration_window) {
+            self.unsupported(at, "the delta of a value that holds a window of a duration");
+        }
         // TYPE-16: a struct's delta has "a property for each field": one
         // with no field has none, and its delta is the empty one.
         if empty_struct(self.program, ty) {
