@@ -29,6 +29,7 @@
     "core_implementation::mixed_equality_handles_special_values",
     "core_implementation::mixed_equality_preserves_integer_precision",
     "core_implementation::months_end_at_the_months_last_day",
+    "core_implementation::only_the_result_of_a_move_is_held_to_the_range",
     "core_implementation::reverse_date_time_addition",
     "core_implementation::reverse_scaling",
     "core_implementation::text_is_read_as_a_float",

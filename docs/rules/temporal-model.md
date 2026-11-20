@@ -109,7 +109,7 @@ analyser: partial
 - `out` is read in a `when` and in `stop`, not in a `state`'s or a `cache`'s initialiser, and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`)
 - A field or an element of `out` is assigned in a `when` as `out` is (EXPR-3)
 - A window that is a child of `out` is read as the `list<V>` it holds (TYPE-11)
-- What a `return` in a hook, an assignment to `out` and a source's `yield` publish is a complete value of the result or its `delta<T>` (TYPE-16), as core's cases relay a set with `return delta_value(input)`; a window's result takes a V, which arrives, and nothing else (`type.mismatch`), but, proposed, of a nullable V its delta as well
+- What a `return` in a hook, an assignment to `out` and a source's `yield` publish is a complete value of the result or its `delta<T>` (TYPE-16), as core's cases relay a set with `return delta_value(input)`; a window's result takes a V, which arrives, and nothing else (`type.mismatch`), but of a nullable V its delta as well
 - A `ref` result takes no value: a `return` to it, and `out =` of it, names an endpoint, which it designates, and `out` of it is as a `ref` parameter is (FN-16)
 
 transpiler: partial

@@ -159,7 +159,7 @@ analyser: partial
 - Size kind and bounds (`rolling_window.size_kind`, `rolling_window.size_bounds`) of sizes read by the one reader (`constant`): literals, generic value parameters, constants of a module and constant expressions of those, a duration and an `i64` multiplied in either order among them; a size of a type other than `i64` or `duration` is of the wrong kind; an omitted minimum is the maximum in identity
 - `all_valid` takes a window (TIME-9), and a window's value read in a hook, of an input, of `out` or of a child of either, and given to a value function in composition, is a `list<V>` (FN-12, END-9); that list indexed is no child (TIME-9)
 - Read where the place takes a `result<list<V>, error>`, returned, bound or given, it is of that result (`CheckedWindow`, or `CheckedChild` where it is a child known when the program runs), as ERR-14 has it
-- Its delta is the V that arrived (TYPE-16), and, proposed, of a nullable V the nullable's own delta, `delta<V>`, which its result takes as well (TIME-7), read before the window is all valid as after; a read of the delta of a window of a duration, an input's, a child's or `out`'s, whose place is not a `result` is `payload.unguarded`, and one of a window of a tick count is not
+- Its delta is the V that arrived (TYPE-16), and of a nullable V the nullable's own delta, `delta<V>`, which its result takes as well (TIME-7), read before the window is all valid as after; a read of the delta of a window of a duration, an input's, a child's or `out`'s, whose place is not a `result` is `payload.unguarded`, and one of a window of a tick count is not
 - Core's `removed_value` is read where its place takes a `result<V, error>` (ERR-14); a read whose place is not a `result` is `payload.unguarded` for every window
 - A window's result takes a V and nothing else (TIME-7); its trace's cells are V (TST-5), a generic target's once its arguments are known
 - Left: a size computed by a call, or from a generic parameter, whose kind and bounds are not checked; the delta of a window of a duration that a generic parameter stands for, which is read in an instance
@@ -237,7 +237,7 @@ transpiler: partial
 
 analyser: partial
 
-- `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window (proposed: of a window of a nullable V, `delta<V>`), a tuple of each position's delta under a `?`, and a type of its own for a nullable, a list, a set, a dictionary and a struct
+- `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window (of a window of a nullable V, `delta<V>`), a tuple of each position's delta under a `?`, and a type of its own for a nullable, a list, a set, a dictionary and a struct
 - A `signal` has none (`delta.unsupported_shape`); a `ref` parameter's `delta_value` is not read (`ref.read`, FN-16)
 - Each delta that is a type of its own has its properties: a set's `added` and `removed`, a list's `updated`, `removed` and `size_modified`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`)
 - It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`)

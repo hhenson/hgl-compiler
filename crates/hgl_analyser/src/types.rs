@@ -374,10 +374,10 @@ impl Type {
             }
             // "`atomic<V>`: V: an atomic publishes whole".
             Type::Atomic(value) => *value,
-            // "`rolling_window<V, Max, Min>`: V: the value that arrived.
-            // Proposed: for a nullable V, `delta<V>`, the optional of the
-            // row for `V?`, so that a null that arrives is told from no
-            // change (TYPE-11)".
+            // "`rolling_window<V, Max, Min>`: V: the value that arrived";
+            // TYPE-11: "That of a window of a nullable V ... is the
+            // nullable's own delta, `delta<f64?>`, which holds what
+            // arrived, a null among them".
             Type::RollingWindow { value, .. } => match *value {
                 nullable @ Type::Nullable(_) => Type::delta(nullable),
                 value => value,

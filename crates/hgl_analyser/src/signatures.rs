@@ -106,9 +106,9 @@ fn ref_marks(program: &Program, diagnostics: &mut Diagnostics) {
 /// one that may take a mark, is reported at its `ref`; a `signal?` that
 /// may be left out is a `signal` parameter too.
 ///
-/// The owner (hhenson/hgl_spec): "a window for reference is not allow":
-/// a `ref` parameter or a `ref` result whose type is a `rolling_window`
-/// rejects, with the code proposed as `ref.position`, as for a `signal`.
+/// "Nor does `ref` stand on a window: a `ref` parameter or a `ref` result
+/// whose type is a `rolling_window` rejects ... A mark on a window
+/// rejects with `ref.position` too."
 fn signal_marks(
     module: &crate::program::Module,
     index: usize,

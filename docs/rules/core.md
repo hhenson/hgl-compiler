@@ -283,9 +283,10 @@ transpiler: done
 
 ## TEN-4
 
-transpiler: done
+transpiler: partial
 
 - hgraph: the provider's `moved`: the months first, to the last day of a shorter month, then the days; a date outside the years 1 to 9999 is `numeric.out_of_range`
+- Left, reported: a move of a date written in the range's first or last year: the provider holds the date the months give to the range, where TEN-4 holds only the result
 
 ## TEN-5
 

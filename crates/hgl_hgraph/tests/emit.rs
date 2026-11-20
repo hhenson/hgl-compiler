@@ -3920,6 +3920,9 @@ fn a_window_form_not_written_yet_is_reported() {
 /// provider's index failure has no code for, and core's OPS-1 text
 /// repeated a count below zero, `numeric.out_of_range`, which the
 /// provider does not write. Another `numeric.out_of_range` is asserted.
+/// Core's TEN-4: "Only the result is held to the range", which the
+/// provider's month step is held to as well: a move of a date in the
+/// range's first or last year is reported, and one within it is written.
 #[test]
 fn a_failure_this_target_gives_no_code_is_not_asserted() {
     let emitted = emit(&[fixture!(
@@ -3936,9 +3939,13 @@ fn a_failure_this_target_gives_no_code_is_not_asserted() {
                 .to_string(),
             format!("m.hgl:8:5 {repeated}"),
             format!("m.hgl:9:5 {repeated}"),
+            "m.hgl:15:12 target.unsupported: the hgraph target does not write a move of a date \
+             in the first or last year of the range, which only its result is held to (TEN-4) yet"
+                .to_string(),
         ]
     );
     assert_eq!(emitted.blocked("other_codes"), None);
+    assert_eq!(emitted.blocked("moved_within"), None);
 }
 
 /// TYPE-9: a window inside a struct, a tuple, a list or a dictionary is

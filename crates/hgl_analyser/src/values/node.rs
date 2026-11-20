@@ -627,7 +627,7 @@ impl<'a> Typer<'a> {
     /// `atomic<V>` is published whole, as a V (TYPE-9: "`atomic<V>`
     /// stops expansion at a complete ordinary V"). TIME-7: "A result of
     /// `rolling_window<V, Max, Min>` takes a V, which arrives, and nothing
-    /// else (TYPE-11)", and, proposed, a nullable V's delta.
+    /// else (TYPE-11)", and a nullable V's delta.
     ///
     /// A value written out takes its type from its place (EXPR-5), and
     /// the place here is one or the other: `(1.0, null)` is no
@@ -641,9 +641,9 @@ impl<'a> Typer<'a> {
         } = result
         {
             let value = self.expression(node, Some(arriving));
-            // TIME-7, proposed: "one of a nullable V takes its delta as
-            // well, `delta<f64?>(value: 1.0)` or `delta<f64?>()`, as the
-            // arrival it holds".
+            // TIME-7: "One of a nullable V takes its delta as well,
+            // `delta<f64?>(value: 1.0)` or `delta<f64?>()`, as the arrival
+            // it holds".
             let delta = Type::delta(result.clone());
             if matches!(**arriving, Type::Nullable(_))
                 && !self.admits(arriving, &value.ty)
@@ -814,9 +814,10 @@ impl<'a> Typer<'a> {
     /// `delta_value` or its `removed_value`, as `read` says; `child` is
     /// the child of it read, as written, where one is. FN-16: "A read of
     /// the value or of the `delta_value` of one rejects when the program
-    /// is compiled ... That read rejects with the code `ref.read`", and,
-    /// proposed, "`removed_value` (TYPE-11) is set aside as `delta_value`
-    /// is ... a read of it there rejects with `ref.read`".
+    /// is compiled ... That read rejects with the code `ref.read`", and
+    /// "`removed_value` (TYPE-11) of a window that is a child of a `ref`
+    /// parameter ... is set aside as `delta_value` is: a read of it there
+    /// rejects with `ref.read`".
     pub(super) fn ref_read(
         &mut self,
         local: LocalId,

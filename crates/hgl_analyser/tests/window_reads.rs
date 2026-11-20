@@ -27,7 +27,7 @@ fn returned<'a>(checked: &'a common::Checked, name: &str) -> &'a Expr {
 }
 
 /// TYPE-16's table: "`rolling_window<V, Max, Min>`: V: the value that
-/// arrived. Proposed: for a nullable V, `delta<V>`". TYPE-11: "A window's
+/// arrived; for a nullable V, `delta<V>`". TYPE-11: "A window's
 /// delta (TYPE-16) is the value that arrived in the cycle, and is read
 /// before the window is `all_valid` as after". TIME-7: "A result of
 /// `rolling_window<V, Max, Min>` takes a V, which arrives, and nothing
@@ -271,9 +271,9 @@ fn a_windows_cell_in_a_trace_is_a_v() {
 }
 
 /// FN-16: "Nor does `ref` stand on a window: a `ref` parameter or a
-/// `ref` result whose type is a `rolling_window` rejects ... Proposed: a
-/// mark on a window rejects with `ref.position` too", one that may be
-/// left out among them. "Proposed: `removed_value` (TYPE-11) of a window
+/// `ref` result whose type is a `rolling_window` rejects ... A mark on a
+/// window rejects with `ref.position` too", one that may be left out
+/// among them. "`removed_value` (TYPE-11) of a window
 /// that is a child of a `ref` parameter or of `out` of a `ref` result, a
 /// field of a struct given by `ref`, is set aside as `delta_value` is: a
 /// read of it there rejects with `ref.read`", where a `result` is taken
@@ -306,13 +306,13 @@ fn a_window_is_not_marked_ref() {
     );
 }
 
-/// TYPE-11, proposed: "that of a window of a nullable V,
-/// `rolling_window<f64?, 3>`, is the nullable's own delta,
-/// `delta<f64?>`, which holds what arrived, a null among them ...
-/// `removed_value` gives the V itself, null included". TIME-7, proposed:
-/// "one of a nullable V takes its delta as well, `delta<f64?>(value:
-/// 1.0)` or `delta<f64?>()`, as the arrival it holds". TST-5: its trace's
-/// cells are that delta, a cell written `null` a published null.
+/// TYPE-11: "That of a window of a nullable V, `rolling_window<f64?,
+/// 3>`, is the nullable's own delta, `delta<f64?>`, which holds what
+/// arrived, a null among them ... `removed_value` of it gives the V
+/// itself, null included". TIME-7: "One of a nullable V
+/// takes its delta as well, `delta<f64?>(value: 1.0)` or `delta<f64?>()`,
+/// as the arrival it holds". TST-5: its trace's cells are that delta, a
+/// cell written `null` a published null.
 #[test]
 fn a_window_of_a_nullable_has_the_nullables_delta() {
     let checked = module(concat!(

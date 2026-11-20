@@ -454,7 +454,7 @@ impl<'a> Typer<'a> {
             // trace cannot supply the receiving node's input (TIME-9).
             evaluating && !reads_activity,
         );
-        // FN-16, proposed: "`removed_value` (TYPE-11) of a window that is
+        // FN-16: "`removed_value` (TYPE-11) of a window that is
         // a child of a `ref` parameter or of `out` of a `ref` result, a
         // field of a struct given by `ref`, is set aside as `delta_value`
         // is: a read of it there rejects with `ref.read`." A window is
