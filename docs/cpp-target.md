@@ -98,9 +98,20 @@ SDK with Arrow and `graph_wiring.h`, as before):
 The driver keeps these by: one unit for each module; `libhglrt` and core's
 instances built once for an SDK; a precompiled header of the fixed include
 set; one executable for each test module with its cases chosen when it
-runs; `ninja` for what changed; `lld`. A rejection case never builds.
-A unit with no precompiled header still takes about twice as long as one
-against it, so the header stays.
+runs; `ninja` for what changed; `lld` on Linux. A rejection case never
+builds. A unit with no precompiled header still takes about twice as long
+as one against it, so the header stays.
+
+On a macOS machine (Apple Silicon, Apple clang 21), with hgraph 0.9.13's
+SDK and the driver's own commands, beside the same on Linux (GCC 15):
+
+| Step | macOS | Linux |
+| --- | --- | --- |
+| The precompiled header of `<hglrt/hglrt.h>` | 1.6 s, 54 MB | 5.5 s, 265 MB |
+| A module's unit of value functions and two tests, against it; with none | 0.26 s; 1.38 s | 0.60 s; 1.70 s |
+| The entry unit, `host.h` alone | 0.11 s | 0.07 s |
+| The link (Apple's `ld`; GNU `ld`) | 0.07 s | 0.04 s |
+| Edit to result, `hgl test --target cpp` of that module | 0.55 s | 0.70 s |
 
 ## What hgraph is asked for
 
