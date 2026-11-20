@@ -48,6 +48,7 @@ find_package(hgraph CONFIG REQUIRED)
 include(GNUInstallDirs)
 
 add_library(hglrt SHARED
+    src/application.cpp
     src/capabilities.cpp
     src/checked.cpp
     src/conversions.cpp
@@ -120,12 +121,16 @@ if(BUILD_TESTING)
 
     add_executable(hglrt_tests
         tests/main.cpp
+        tests/application_tests.cpp
         tests/capabilities_tests.cpp
+        tests/capture_tests.cpp
         tests/checked_tests.cpp
+        tests/control_tests.cpp
         tests/conversion_tests.cpp
         tests/endpoint_tests.cpp
         tests/failure_tests.cpp
         tests/generator_tests.cpp
+        tests/references_tests.cpp
         tests/scalar_tests.cpp
         tests/scheduler_tests.cpp
         tests/sources_tests.cpp
@@ -133,6 +138,7 @@ if(BUILD_TESTING)
         tests/tenor_tests.cpp
         tests/testing_tests.cpp
         tests/text_tests.cpp
+        tests/timing_tests.cpp
         tests/traces_tests.cpp
         tests/window_tests.cpp
     )
