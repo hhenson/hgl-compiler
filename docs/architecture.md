@@ -2041,7 +2041,7 @@ passing. The backend owns this list alongside its target tests.
 
 ### cpp
 
-The second target (`docs/cpp-target.md`, the design): C++ against
+The second target, designed in [cpp-target.md](cpp-target.md): C++ against
 hgraph's graph, node, type and runtime layers, linked with `libhglrt`,
 the runtime library in `runtime/cpp`. It is a skeleton: it writes the
 smallest slice whole and reports every other form, as the hgraph target

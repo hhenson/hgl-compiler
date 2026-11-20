@@ -6,9 +6,6 @@
 # until it is taken off. `check_core.py --target cpp --write-list` writes
 # the list from a run; read the difference before it is committed.
 
-# Rejection cases the compiler does not yet reject, as in the hgraph
-# target's list: none.
-
 "`assert raises`" = [
     "conformance::a_failed_run_leaves_no_store_for_the_next_run",
     "conformance::conflicting_run_bounds_fail_before_evaluation",
@@ -214,4 +211,6 @@
     "core_implementation::zoned_datetimes_compared_as_utc_are_equal_by_instant",
 ]
 
+# Rejection cases the compiler does not yet reject, as in the hgraph
+# target's list: none.
 [rejections]

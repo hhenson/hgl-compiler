@@ -164,29 +164,33 @@ def toml_string(text):
 
 def write_list(path, gaps, unrejected):
     """Writes `gaps`, each case by name with its reason, to the list at
-    `path`, keeping its leading comments and its `[rejections]` table,
-    whose names are `unrejected` by reason."""
+    `path`, keeping its first comment and the comment above its
+    `[rejections]` table, whose names are `unrejected` by reason."""
+    lines = path.read_text(encoding="utf-8").splitlines()
     header = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.startswith("#") and line.strip():
+    for line in lines:
+        if not line.startswith("#"):
             break
         header.append(line)
-    while header and not header[-1].strip():
-        header.pop()
+    table = lines.index("[rejections]") if "[rejections]" in lines else len(lines)
+    above = []
+    for line in reversed(lines[len(header):table]):
+        if not line.startswith("#"):
+            break
+        above.insert(0, line)
     by_reason = {}
     for name, reason in gaps.items():
         by_reason.setdefault(reason, []).append(name)
-    lines = header + [""]
+    written = header + [""]
     for reason in sorted(by_reason):
-        lines.append(f"{toml_string(reason)} = [")
-        lines.extend(f"    {toml_string(name)}," for name in sorted(by_reason[reason]))
-        lines.append("]")
-    lines.append("")
-    lines.append("[rejections]")
+        written.append(f"{toml_string(reason)} = [")
+        written.extend(f"    {toml_string(name)}," for name in sorted(by_reason[reason]))
+        written.append("]")
+    written += [""] + above + ["[rejections]"]
     for reason in sorted(unrejected):
         names = ", ".join(toml_string(name) for name in sorted(unrejected[reason]))
-        lines.append(f"{toml_string(reason)} = [{names}]")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        written.append(f"{toml_string(reason)} = [{names}]")
+    path.write_text("\n".join(written) + "\n", encoding="utf-8")
 
 
 def main():
