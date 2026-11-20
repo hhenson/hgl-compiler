@@ -125,6 +125,7 @@ if(BUILD_TESTING)
         tests/capabilities_tests.cpp
         tests/capture_tests.cpp
         tests/checked_tests.cpp
+        tests/control_tests.cpp
         tests/conversion_tests.cpp
         tests/endpoint_tests.cpp
         tests/failure_tests.cpp

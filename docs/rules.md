@@ -121,6 +121,9 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A `ref` parameter and result: hgraph's `REF` input and output; a whole `ref` parameter returned sampled; an input that is no `ref` parameter designated whole, and followed through its re-binding with no handler run for it; `out =` and `invalidate(out)` of a `ref` result | FN-16, TIME-10, END-10 |
 | `inject global_state` in a graph, and `get`, `has`, `put` on it where the graph is built, once each, in the order written | FN-9, CAP-6, CRUN-7 |
 | An application: its statements setting the run's store before its run statement, in the order written; its run statement, `eval` in simulation and `run` in real time, with the entry's arguments and its `RunConfig` held in the order written; its entry unit and executable | UNIT-14, RUN-1, RUN-3, EXPR-2 |
+| `if` and `switch` over a connection in a graph: each branch a child graph of hgraph's `switch_`, taking what it reads whole; its value, the `var` it assigns, or a `return` and what follows; no `else`, no `default` | CTRL-2, CTRL-3, CTRL-5, CTRL-6, CTRL-13, CTRL-14, CTRL-15 |
+| A `var` of a connection; an `if` over an ordinary value that gives a connection | CTRL-1, CTRL-13, CTRL-14 |
+| `for` over a connection of a dictionary or a list, a child graph of hgraph's `map_` for each member; over a fixed list, the body for each position | CTRL-7, CTRL-15 |
 
 Not written yet, and reported: a call that gives a `var` parameter a
 place beside an argument that runs statements (FN-15), a `?` after
@@ -132,11 +135,15 @@ dictionary, a window of any but a scalar, a delta of any but a scalar, `timezone
 `zoned_time`, and of temporal code: a temporal value of any but a
 scalar, an enum, an `error` and a `result`, a designation of a child of an
 input (FN-16), `all_valid` of any but a window, a change of an input's
-activity in `stop` (END-5), `if`, `switch` and `for` over connections
-(CTRL-7), a `capture` given an `f64` configuration (ERR-7, hgraph issue
-1866), a lifted call that leaves out a `T?` whose default may fail
-(FN-6), and an eval's or an application's configuration that is no
-`RunConfig(...)` written in it (RUN-1).
+activity in `stop` (END-5), a `for` over a connection of a set
+(CTRL-15), in a branch or a loop's body the store or an ordinary value
+that may fail (FN-9: hgraph builds each child as the graph around it is
+built), a `return` under a branch selected at runtime in a loop unrolled
+where the graph is built, branches that assign two `var`s (CTRL-14), a
+`capture` given an `f64` configuration (ERR-7, hgraph issue 1866), a
+lifted call that leaves out a `T?` whose default may fail (FN-6), and an
+eval's or an application's configuration that is no `RunConfig(...)`
+written in it (RUN-1).
 
 ## The C++ target's runtime library
 
@@ -169,6 +176,7 @@ the chapters' entries stay the hgraph target's.
 | `get`, `has`, `put` of the global store, in a node and where a graph is built | CAP-6, FN-9 | `capabilities.h` | `capabilities_tests.cpp` |
 | A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
 | What a `ref` parameter designates: the reference its `REF` input holds, present from the start where it is given a connection, or none, which an ordinary reader of the result it is published to observes | FN-16, TIME-10, END-10 | `references.h` | `references_tests.cpp` |
+| The branch of no `else`, a connection that never ticks; the branch of no `default`, which fails with the selector's value | CTRL-3, CTRL-6, CTRL-13 | `control.h` | `control_tests.cpp` |
 | An enum as a value of the library and of the test host: its HGL name, its members' text, its schema with hgraph; core's `CmpResult`, `ZeroPolicy`, `Rounding`, `InvalidPolicy`, `LogLevel` | TYPE-7, TST-4, TST-5, OPS-3 | `values.h`, `traces.h` | `traces_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
 | Whether an input ticked in an evaluation, published or lost its value, by which a node with a timer tells its wakes apart; a capability lent to a source's body for one resumption | TIME-3, TIME-9, END-4, SOURCE-1, TIME-8 | `timing.h` | `timing_tests.cpp` |

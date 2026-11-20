@@ -119,9 +119,14 @@ impl Emitter<'_> {
     /// `value` where a connection of `ty` is expected: the port of a
     /// connection (`forms::wiring_form`), or an ordinary value wired as a
     /// constant (FN-3: "An ordinary value of type T is accepted where
-    /// composition expects a connection of T").
+    /// composition expects a connection of T"). A local the graph has as
+    /// a connection is one wherever it is read: a loop's key, which the
+    /// language has as an ordinary value and hgraph gives a child graph
+    /// as a connection (CTRL-15).
     pub(super) fn connection(&mut self, scope: &mut Scope, value: &Expr, ty: &Type) -> String {
-        if value.is_connection() {
+        let ported =
+            matches!(value.kind, ExprKind::Local(local) if self.role(local) == Role::Connection);
+        if value.is_connection() || ported {
             return self.wiring_form(scope, value);
         }
         let written = self.expression(scope, value);

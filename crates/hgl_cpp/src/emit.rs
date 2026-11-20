@@ -27,7 +27,8 @@
 //! (a `ref` parameter's and result's designations), `apps` (the run's
 //! store where a graph or an application sets it), `scheduling` (a
 //! scheduler, an alarm, and a source's declarations and hooks),
-//! `activity` (an input's activity, and an enum's temporal form);
+//! `activity` (an input's activity, and an enum's temporal form),
+//! `control` (`if`, `switch` and `for` over connections in a graph);
 //! `lifecycle` writes a run's bounds for `tests` and `apps`. A construct
 //! lane adds its family as a module here and one entry in
 //! `forms::FAMILIES`.
@@ -42,6 +43,7 @@ use crate::codes;
 mod activity;
 mod apps;
 mod calls;
+mod control;
 mod endpoints;
 mod expressions;
 mod forms;
@@ -138,6 +140,7 @@ pub(crate) fn module(
         instanced: Vec::new(),
         temporal: None,
         ahead: Vec::new(),
+        control: control::State::default(),
     };
     let declared = &program.modules[index];
     let declarations = (0..declared.declarations.len())
@@ -199,6 +202,9 @@ struct Emitter<'a> {
     /// function it lifts (`lifting`), which a test, a function, cannot
     /// hold with its name.
     ahead: Vec<String>,
+    /// What the control family keeps while it writes a graph: what has a
+    /// value where a child graph is written (`control`).
+    control: control::State,
 }
 
 impl Emitter<'_> {

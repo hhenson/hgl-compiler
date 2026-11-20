@@ -6,12 +6,6 @@
 # until it is taken off. `check_core.py --target cpp --write-list` writes
 # the list from a run; read the difference before it is committed.
 
-"a `var` connection" = [
-    "conformance::a_switch_forwards_the_selected_connection",
-]
-"a connection here" = [
-    "conformance::an_early_return_skips_the_continuation",
-]
 "a field of a connection" = [
     "conformance::an_atomic_quote_wakes_its_bid_projection",
     "conformance::changing_a_sibling_field_does_not_publish_a_bid",
@@ -107,12 +101,6 @@
 ]
 "a trace of `tuple<i64, str>`" = [
     "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",
-]
-"an `if` that gives a connection" = [
-    "conformance::a_branch_runs_once_with_the_values_held_when_it_starts",
-    "conformance::a_conditional_child_restarts_only_after_leaving_its_branch",
-    "conformance::a_probe_reads_a_selected_producer_that_stayed_quiet",
-    "conformance::an_outer_producer_keeps_its_lifetime_across_branches",
 ]
 "the type `Closed`" = [
     "core_implementation::a_calendar_says_what_a_business_day_is",

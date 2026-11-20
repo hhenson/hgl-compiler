@@ -9,9 +9,10 @@
 // sources (sources.h) with the coroutine type of a source's body
 // (generator.h), what tells a node's wakes apart and what a source's body is
 // lent (timing.h), windows (windows.h), what a `ref` parameter designates
-// (references.h), the test host (testing.h), and the run of an
-// application (application.h). It is built on hgraph's runtime and wiring
-// libraries alone: nothing of hgraph's standard library is used
+// (references.h), the branches control flow over a connection wires where
+// the language gives none (control.h), the test host (testing.h), and the
+// run of an application (application.h). It is built on hgraph's runtime
+// and wiring libraries alone: nothing of hgraph's standard library is used
 // (docs/cpp-target.md).
 #pragma once
 
@@ -19,6 +20,7 @@
 #include <hglrt/capabilities.h>
 #include <hglrt/capture.h>
 #include <hglrt/checked.h>
+#include <hglrt/control.h>
 #include <hglrt/conversions.h>
 #include <hglrt/endpoints.h>
 #include <hglrt/failure.h>
