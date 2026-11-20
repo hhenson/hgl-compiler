@@ -1,8 +1,9 @@
 //! What a call resolves a result that is a type parameter and nothing
 //! more to, the `V` of core's `get<V>(store: GlobalState, const key: str)
-//! -> V`, where the call writes a nullable type for it or its place
-//! expects one (GEN-2, GEN-8, core's CAP-6). Each test cites its rule,
-//! and uses the core the compiler is built with.
+//! -> V`, where the call writes a nullable type for it (GEN-2, GEN-8,
+//! core's CAP-6), and what a nullable place makes of it, which is not
+//! decided (hhenson/hgl_spec#165). Each test cites its rule, and uses the
+//! core the compiler is built with.
 //!
 //! A finding is written `file:line:column category/code rule`.
 
@@ -121,64 +122,20 @@ fn a_store_read_written_nullable_is_nullable() {
     );
 }
 
-/// CAP-6: "`get<V>(global_state, key)` is the value under `key`, of the
-/// type the call writes or its place expects". GEN-2: a call resolves a
-/// generic of its callee "then from the type its place expects of the
-/// result". So `let saved: i64? = get(global_state, key)` gives core's
-/// candidate an `i64?`, as core's `a_stored_null_is_distinct_from_an_absent_key`
-/// reads a key that `put` gave an `i64?`, and so does a function's
-/// result that is an `i64?`, in a hook and in value code given the
-/// store.
+/// GEN-8: "the generic arguments the call writes are the operator's"
+/// (`convert<f64>(count)` "supplies T"), and GEN-2: "What the call
+/// writes ... is not widened". So a program's operator whose generic
+/// candidate's result is its type parameter is given the nullable type
+/// the call writes, as core's `get` is (CAP-6), and so is a `const fn`.
+/// ERR-12 as above.
 #[test]
-fn a_store_read_into_a_nullable_place_is_nullable() {
-    let checked = module(concat!(
-        "fn hooked(value: i64?) -> i64? {\n",
-        "    inject global_state\n",
-        "    when {\n",
-        "        put(global_state, \"k\", value)\n",
-        "        let saved: i64? = get(global_state, \"k\")\n",
-        "        let whole: list<i64>? = get(global_state, \"whole\")\n",
-        "        let listed: list<i64?> = get(global_state, \"listed\")\n",
-        "        return get(global_state, \"k\")\n",
-        "    }\n",
-        "}\n",
-        "const fn valued(store: GlobalState) -> i64? => get(store, \"k\")\n",
-    ));
-    assert_eq!(checked.summary(), NONE);
-    assert_eq!(
-        called(&checked, body(&checked, "hooked")),
-        [
-            "put<i64?>: _",
-            "get<i64?>: i64?",
-            "get<list<i64>?>: list<i64>?",
-            "get<list<i64?>>: list<i64?>",
-            "get<i64?>: i64?",
-        ]
-    );
-    assert_eq!(
-        called(&checked, body(&checked, "valued")),
-        ["get<i64?>: i64?"]
-    );
-}
-
-/// GEN-2: "A call resolves a generic of its callee from what it writes
-/// after the name (GEN-8), then from the type its place expects of the
-/// result". GEN-8: "the generic arguments the call writes are the
-/// operator's" (`convert<f64>(count)` "supplies T"), and GEN-5: "Match
-/// candidates against the requested output before inputs". So a
-/// function's or a candidate's result that is its type parameter and
-/// nothing more is of the nullable type the call writes or its place
-/// expects, as core's `get` is (CAP-6). ERR-12 as above.
-#[test]
-fn a_result_that_is_a_type_parameter_takes_a_nullable_type_whole() {
+fn a_nullable_type_written_for_a_result_that_is_a_type_parameter_is_taken_whole() {
     let checked = module(concat!(
         "const fn made<V>(store: GlobalState) -> V => get(store, \"k\")\n",
         "operator fetch<V, S>(store: S) -> V\n",
         "impl const fn fetch<V>(store: GlobalState) -> V => get(store, \"k\")\n",
         "const fn uses(store: GlobalState) -> i64 {\n",
-        "    let made_placed: i64? = made(store)\n",
         "    let made_written = made<i64?>(store)\n",
-        "    let fetched_placed: i64? = fetch(store)\n",
         "    let fetched_written = fetch<i64?>(store)\n",
         "    let plain: i64 = fetched_written\n",
         "    return plain\n",
@@ -186,43 +143,73 @@ fn a_result_that_is_a_type_parameter_takes_a_nullable_type_whole() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:10:22 type/nullable.required_presence ERR-12"]
+        ["m.hgl:8:22 type/nullable.required_presence ERR-12"]
     );
-    assert_eq!(locals(&checked, "uses")[4], "fetched_written: i64?");
+    assert_eq!(
+        locals(&checked, "uses")[1..3],
+        ["made_written: i64?", "fetched_written: i64?"]
+    );
     assert_eq!(
         called(&checked, body(&checked, "uses")),
-        [
-            "made<i64?>: i64?",
-            "made<i64?>: i64?",
-            "fetch<i64?>: i64?",
-            "fetch<i64?>: i64?",
-        ]
+        ["made<i64?>: i64?", "fetch<i64?>: i64?"]
     );
 }
 
-/// GEN-2: "The first of these that says what a parameter is decides it,
-/// and what follows is checked against that". The place says what a
-/// result that is its type parameter is before the arguments do: `T` is
-/// an `i64?` for `same(a, b)` returned from a function whose result is
-/// one, each `i64` a value of it (TYPE-14: "A T is a value where a `T?`
-/// is expected"), and a `list<i64>` is then no `list<i64?>` for
-/// `first(xs)`. TYPE-14: a result of another form is no null, so the
-/// `?` a place expects is the place's: `repeat(3)` given to a
-/// `list<str>?` is a `list<str>`.
+/// Awaiting hhenson/hgl_spec#165, which asks what a nullable place says
+/// of a result that is a type parameter and nothing more. GEN-2 has a
+/// call resolve a generic "from the type its place expects of the
+/// result", and core's CAP-6 has `get` "of the type the call writes or
+/// its place expects"; the text does not say whether an `i64?` place
+/// makes the `V` of `get<V>(...) -> V` an `i64?` or an `i64`. This
+/// records what is done until it does: the `i64` under the `?`, a `T`
+/// being a value of a `T?` (TYPE-14).
 #[test]
-fn the_place_decides_a_result_that_is_a_type_parameter_before_the_arguments() {
+fn a_store_read_into_a_nullable_place_awaits_hgl_spec_165() {
     let checked = module(concat!(
-        "const fn same<T>(left: T, right: T) -> T => left\n",
-        "const fn first<T>(values: list<T>) -> T => values[0]\n",
-        "const fn repeat<T>(n: i64) -> list<T> => []\n",
-        "const fn uses(a: i64, b: i64, xs: list<i64>) -> i64? {\n",
-        "    let names: list<str>? = repeat(3)\n",
-        "    let head: i64? = first(xs)\n",
-        "    return same(a, b)\n",
+        "fn hooked(value: i64?) -> i64? {\n",
+        "    inject global_state\n",
+        "    when {\n",
+        "        put(global_state, \"k\", value)\n",
+        "        let saved: i64? = get(global_state, \"k\")\n",
+        "        return saved\n",
+        "    }\n",
         "}\n",
     ));
-    assert_eq!(checked.summary(), ["m.hgl:7:28 type/type.mismatch EXPR-5"]);
-    let calls = called(&checked, body(&checked, "uses"));
-    assert_eq!(calls[0], "repeat<str>: list<str>");
-    assert_eq!(calls[2], "same<i64?>: i64?");
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        called(&checked, body(&checked, "hooked")),
+        ["put<i64?>: _", "get<i64>: i64"]
+    );
+}
+
+/// Ordinary calls of a generic function whose result is its type
+/// parameter, in a nullable place, with arguments that say the parameter
+/// is not nullable: a binding, a function's result and a parameter, and
+/// a function under `requires T in {i64, f64}` (GEN-2, GEN-3, TYPE-14).
+/// They are accepted. What a nullable place says of such a result is
+/// not decided (hhenson/hgl_spec#165); a change that rejects them is a
+/// decision of that issue's, and not of this compiler's.
+#[test]
+fn a_nullable_place_accepts_a_result_its_arguments_say_is_not_nullable() {
+    let checked = module(concat!(
+        "const fn first<T>(values: list<T>) -> T => values[0]\n",
+        "const fn larger<T>(a: T, b: T) -> T\n",
+        "    requires T in {i64, f64} {\n",
+        "    if a < b { return b }\n",
+        "    return a\n",
+        "}\n",
+        "const fn into_let(xs: list<i64>) -> i64 {\n",
+        "    let head: i64? = first(xs)\n",
+        "    if head == null { return 0 }\n",
+        "    return head\n",
+        "}\n",
+        "const fn into_return(xs: list<i64>) -> i64? => first(xs)\n",
+        "const fn into_return_member(a: i64, b: i64) -> i64? => larger(a, b)\n",
+        "const fn takes(value: i64?) -> bool => value == null\n",
+        "const fn into_argument(xs: list<i64>) -> bool => takes(first(xs))\n",
+        "const fn written(xs: list<i64>) -> i64? => first<i64>(xs)\n",
+        "const fn repeat<T>(n: i64) -> list<T> => []\n",
+        "const fn listed() -> list<str>? => repeat(3)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
 }

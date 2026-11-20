@@ -849,26 +849,32 @@ pub(super) fn infer(
     }
 }
 
-/// What a place that expects `expected` says of a callee's declared
-/// result `result`, for [`infer`] to match the result with: the type
-/// the result is asked to be.
+/// What the output a call requests says of a callee's declared result
+/// `result`, for [`infer`] to match the result with. `requested` is the
+/// type the call's place expects, or the one the generic arguments the
+/// call writes make of an operator's result; `written` is true where it
+/// is the type the call writes for an operator's result that is its
+/// type parameter and nothing more.
 ///
-/// GEN-2: a call resolves a generic of its callee "from the type its
-/// place expects of the result". A result that is a type parameter and
-/// nothing more may itself be nullable, so it is that type whole, `?`
-/// and all: the `V` of core's `get<V>(store: GlobalState, const key:
-/// str) -> V` is an `i64?` in `let saved: i64? = get(global_state,
-/// key)` (core's CAP-6: "of the type the call writes or its place
-/// expects"). So is a result that is nullable itself, whose `?` the
-/// place's matches. A result of any other form, a `list<T>`, is never
-/// null, so the `?` of a place that expects it nullable is the place's
-/// (TYPE-14: "A T is a value where a `T?` is expected"), and the result
-/// is asked to be what is under it: `repeat(3)` given to a
-/// `list<str>?` is a `list<str>`.
-pub(super) fn asked_of_result<'t>(result: &Type, expected: &'t Type) -> &'t Type {
+/// A result that is nullable itself is matched with what is requested
+/// as it is. GEN-2: "What the call writes, or its place expects, is not
+/// widened", and core's CAP-6: `get<V>(global_state, key)` is "of the
+/// type the call writes", so a type written is taken whole, `?` and
+/// all: `get<i64?>(global_state, key)` gives core's candidate the
+/// `i64?` written.
+///
+/// Otherwise a `T` is a value of a `T?` (TYPE-14), and a result that is
+/// not nullable is asked to be what is under the `?` of a nullable
+/// place: `repeat(3)` given to a `list<str>?` is a `list<str>`. What a
+/// nullable place says of a result that is a type parameter and nothing
+/// more, the `V` of `let saved: i64? = get(global_state, key)`, is not
+/// decided (hhenson/hgl_spec#165, open): it is taken here to be what is
+/// under the `?`, an `i64`.
+pub(super) fn asked_of_result<'t>(result: &Type, requested: &'t Type, written: bool) -> &'t Type {
     match result {
-        Type::Nullable(_) | Type::Parameter { .. } => expected,
-        _ => not_null(Some(expected)).unwrap_or(expected),
+        Type::Nullable(_) => requested,
+        Type::Parameter { .. } if written => requested,
+        _ => not_null(Some(requested)).unwrap_or(requested),
     }
 }
 

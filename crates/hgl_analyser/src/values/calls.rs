@@ -674,18 +674,14 @@ impl<'a> Typer<'a> {
         let named = self.named_generics(list, generics, &mut found);
 
         // The requested output: `let names: list<str> = repeat(3)` says
-        // what the `T` of `repeat<T>(count: i64) -> list<T>` is, and
-        // `let saved: i64? = made()` that the `V` of `made<V>() -> V` is
-        // an `i64?` (`asked_of_result`).
+        // what the `T` of `repeat<T>(count: i64) -> list<T>` is. A `T`
+        // result given to a `T?` place is the `T` (`asked_of_result`).
+        // What the call writes is found already, and is not changed.
         if let (Some(result), Some(expected)) = (&signature.result, expected)
             && !open(expected)
         {
-            infer(
-                result,
-                asked_of_result(result, expected),
-                generics,
-                &mut found,
-            );
+            let wanted = asked_of_result(result, expected, false);
+            infer(result, wanted, generics, &mut found);
         }
         // The inputs.
         let slots: Vec<Slot> = signature
