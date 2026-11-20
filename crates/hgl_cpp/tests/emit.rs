@@ -479,6 +479,36 @@ fn an_evals_defaults_are_held_before_its_configuration() {
     assert!(default < bounds, "{test}");
 }
 
+/// SOURCE-1: "A `let` there holds a working value": a `let` of a block's
+/// value in a source's body is written, its block's own `return` left to
+/// the lambda it is written as.
+#[test]
+fn a_sources_value_block_is_written() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn counted(const n: i64) -> i64 {\n",
+                "    let next = {\n",
+                "        let one = 1\n",
+                "        n + one\n",
+                "    }\n",
+                "    yield 1us: next\n",
+                "}\n",
+                "\n",
+                "test counts {\n",
+                "    assert eval(counted(n: 2)) == [_, 3]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_eq!(emitted.blocked("counts"), None);
+}
+
 /// TIME-6, TIME-8: a node's capability is made in `start` before a
 /// `cache` initializer that reads it.
 #[test]

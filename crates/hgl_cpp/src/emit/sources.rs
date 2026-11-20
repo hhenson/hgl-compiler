@@ -36,7 +36,9 @@ impl Family for Sources {
         depth: usize,
         text: &mut String,
     ) -> bool {
-        if emitter.kind() != Some(Kind::Source) {
+        // A `return` written inside a value, the block a lambda gives
+        // (`expressions`), is the value's own: `conditional` marks it.
+        if emitter.kind() != Some(Kind::Source) || scope.conditional > 0 {
             return false;
         }
         let indent = INDENT.repeat(depth);
