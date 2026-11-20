@@ -718,7 +718,10 @@ fn a_malformed_delta_is_reported_once() {
 /// there it is "a `list<tuple<datetime, delta<T>>>`, one tuple for each
 /// publication", whichever style it was written in, and "the parameter
 /// is written with that type". A value that holds a trace is held to
-/// the same as the trace is.
+/// the same as the trace is. A temporal function, `pass` or the graph
+/// `through`, is not called in a test outside an `eval` at all (TST-3:
+/// its statements are value code there), with the code proposed as
+/// `call.role`.
 #[test]
 fn a_trace_goes_to_a_const_fn_and_nowhere_else() {
     let checked = module(concat!(
@@ -751,11 +754,11 @@ fn a_trace_goes_to_a_const_fn_and_nowhere_else() {
             // `dict<duration, i64>` is expected.
             "m.hgl:37:18 type/type.mismatch EXPR-5",
             "m.hgl:39:29 type/trace.escape TST-3",
-            "m.hgl:40:22 type/trace.escape TST-3",
+            "m.hgl:40:17 function-kind/call.role TST-3",
             "m.hgl:41:30 type/trace.escape TST-3",
-            "m.hgl:42:26 type/trace.escape TST-3",
+            "m.hgl:42:18 function-kind/call.role TST-3",
             "m.hgl:43:30 type/trace.escape TST-3",
-            "m.hgl:44:27 type/trace.escape TST-3",
+            "m.hgl:44:19 function-kind/call.role TST-3",
             "m.hgl:45:29 type/trace.escape TST-3",
         ]
     );

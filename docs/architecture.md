@@ -510,12 +510,16 @@ execution code of the catalogue, as a string literal written out
 (TST-10, `catalogue::EXECUTION_CODES`); anything else is
 `test.raises_code`.
 
-A test's block is then read as a graph's body is (`Typer::test`, into
-`Module::test_bodies`): a test has a name and neither a parameter nor a
-result. `assert` is a statement there (TST-4): its condition is a `bool`
-(`type.mismatch`) known when the test is built, and no connection
-(`connection.as_constant`). The block of an `assert raises` is read with
-the test's scope.
+A test's block is then read as value code (`Typer::test`, into
+`Module::test_bodies`), as an application's statements are (TST-3,
+UNIT-14): a test has a name and neither a parameter nor a result. It
+calls `const fn`s only, a temporal call there being `call.role`; an
+operator selects among all its candidates, a value one outranking a
+temporal one of the same parameter types, and a temporal one selected is
+`call.role` too (GEN-5, the typer's `value_code`); nothing is lifted. The call
+an `eval` or a `run` takes is read as composition is. `assert` is a
+statement there (TST-4): its condition is a `bool` (`type.mismatch`).
+The block of an `assert raises` is read with the test's scope.
 
 ### Eval
 
@@ -2126,9 +2130,11 @@ test --target cpp` runs over any program to its end.
 | A value where a connection is expected (FN-3) | Its temporal form's constant, `::hglrt::constant<::hgraph::Int>(wiring_, 5)` |
 | A node whose configuration holds an `f64` | Wired with `Wiring::add_unique_node` and not `hgraph::wire`: hgraph interns two nodes whose configurations are `==`, as `0.0` and `-0.0` are ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)), until it tells them apart |
 | `eval(target(value: [1, _, 3]))` (TST-5 to TST-8, CEVAL-1) | `::hglrt::testing::evaluate<T>` of an entry that wires core's `replay` instance of each trace written to its input, the target's wiring function, and core's `record` of the result under `"run.output"`; `run(...)` in real time; a target with no result `::hglrt::testing::run` |
+| `eval(call, RunConfig(start: s, length: l))` (RUN-1, CRUN-2) | The run given `::hglrt::testing::Bounds{.start = s, .length = l}`, each field the configuration writes (`lifecycle`); the call's arguments and the configuration held first, in the order written, where more than one may fail (EXPR-2) |
+| `let seen = eval(...)` | `const auto seen = ...;`, the recording, read where a trace is |
 | A trace written out; `==` and `!=` of two (TST-4, TST-6, TST-7, TST-16) | `::hglrt::testing::Dense<T>`, `Timed<T>`, each cell as its type's family writes it; in an `assert`, `expect_same` or `expect_different` of the two held in order, elsewhere `same`; a trace given to a `const fn`, `publications` |
 | A window of a scalar, `rolling_window<i64, 3, 2>`, `rolling_window<i64, 3us, 1us>` (TYPE-11; core's END-9) | hgraph's `TSW<::hgraph::Int, 3, 2>`, `TSWDuration<::hgraph::Int, 3, 1>` (its bounds in microseconds), whose values leave it by age as hgraph has it; a publication `::hglrt::window_push(out_, value)`; its value read in a hook `::hglrt::window_value(view)`, which fails before it is all valid, or `window_value_checked` where a `result` is taken (`ExprKind::CheckedWindow`); `all_valid` `::hglrt::fn_all_valid`; `delta_value` plain or checked, and `removed_value`, read only into a `result`, `::hglrt::fn_removed_value_checked`; a lifted call's input of one `InputValidity::AllValid` (FN-12); a trace of one, and a source's payload, of its V (`forms::Family::payload`) |
-| Everything else | Reported: `the cpp target does not write ... yet`: a struct, a set, a dictionary, a window of any but a scalar, a delta of any but a scalar, `timezone`, `zoned_time`; a temporal value of any but a scalar; a `ref` parameter or result, `inject scheduler` and `alarm`, `all_valid` of any but a window, `activate`, `passivate`, `scheduled()`; `if`, `switch` and `for` over connections, `capture`, a lifted input with a default or a null; a source with declarations or hooks; an eval with a configuration or of a value function; an application |
+| Everything else | Reported: `the cpp target does not write ... yet`: a struct, a set, a dictionary, a window of any but a scalar, a delta of any but a scalar, `timezone`, `zoned_time`; a temporal value of any but a scalar; a `ref` parameter or result, `inject scheduler` and `alarm`, `all_valid` of any but a window, `activate`, `passivate`, `scheduled()`; `if`, `switch` and `for` over connections, `capture`, a lifted input with a default or a null; a source with declarations or hooks; an eval's configuration that is no `RunConfig(...)` written in it; an eval of a value function; an application |
 
 Every C++ name an HGL name gives is made by one function,
 `emit::names::identifier`: a plain name (a letter first, a letter or
@@ -2360,11 +2366,11 @@ later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
 which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists 129
+target's list, and `--write-list` writes from a run. Today it lists 125
 of core's 198 runtime cases, each with the form it needs that the
 target does not write: a temporal value of a collection, a struct or a
-nullable, the scheduler, `ref`, control flow over connections, an eval
-with a configuration, and the rest the step-2 lanes take.
+nullable, the scheduler, `ref`, control flow over connections,
+and the rest the step-2 lanes take.
 
 ### The C++ runtime library
 

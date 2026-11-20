@@ -75,3 +75,9 @@ test the_clock_is_read {
 test an_outputless_target_runs {
     eval(noted(value: [1, 2]))
 }
+
+test a_run_is_bounded {
+    let opening = @2026-01-05T09:30:00Z
+    let seen = eval(add_one(value: [1, 2, 3]), RunConfig(start: opening, length: 2us))
+    assert seen == [2, 3]
+}
