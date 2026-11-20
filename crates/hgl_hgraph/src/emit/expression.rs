@@ -530,7 +530,7 @@ impl Emitter<'_> {
                 // `dict` of both (see `delta`).
                 // TYPE-16: a list's delta has `updated`, `removed` and
                 // `size_modified` (see `list_delta`), for `list<V>` and
-                // `list<V, N>` alike: hgraph 0.9.7's `TSL`, bounded or
+                // `list<V, N>` alike: hgraph 0.9.8's `TSL`, bounded or
                 // not, reports a position that lost its value as
                 // `REMOVE`, and a fixed list's delta read has no size.
                 if let Some(DeltaOf::List) = delta {

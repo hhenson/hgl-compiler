@@ -290,25 +290,7 @@ impl Emitter<'_> {
         let python = node_name.as_str();
         // The function's own parameters, as the graph that stands for
         // a node with a hidden input takes them.
-        let mut declared: Vec<String> = parameters[..signature.parameters.len()].to_vec();
-        // A list whose positions the node designates is taken by the
-        // graph as a `REF` of it: hgraph gives the position of a
-        // connection that is a reference, a `ref` result's, as a `REF`
-        // that ticks where the list is re-bound (TIME-10), and the
-        // position of the list it dereferences to as one that does not.
-        for port in designations.iter().filter(|port| port.positions) {
-            let input = &body.locals[port.local].name;
-            let Some(index) = signature
-                .parameters
-                .iter()
-                .position(|parameter| &parameter.name == input)
-            else {
-                continue;
-            };
-            if let Some((head, annotation)) = declared[index].split_once(": ") {
-                declared[index] = format!("{head}: {}", designating(annotation));
-            }
-        }
+        let declared: Vec<String> = parameters[..signature.parameters.len()].to_vec();
         let designated_parameters: Vec<String> = designations
             .iter()
             .flat_map(|port| &port.hidden)
@@ -801,13 +783,13 @@ impl Emitter<'_> {
                     positions: false,
                 }),
                 // One hidden `REF` input for each position, which the
-                // graph gives the list's position: hgraph binds that
-                // wherever the list comes from, a reference among them
-                // (`_ref0_items` for `items[0]`). A `TSL` of `REF`s
-                // given the list whole is bound to the positions of a
-                // list's output only, and fails as the graph runs for one
-                // that is a reference ("TSOutput structural reference
-                // alternatives are not implemented yet").
+                // graph gives the list's position, `items[0]`: hgraph
+                // binds that wherever the list comes from, a reference
+                // among them, and it ticks where the list is re-bound
+                // upstream (TIME-10: "A reference ticks where its
+                // designation changes"). hgraph 0.9.8's `TSL` of `REF`s
+                // given a list that is a reference follows the list, but
+                // its position does not tick where the list is re-bound.
                 (
                     Designated::Position,
                     Type::List {

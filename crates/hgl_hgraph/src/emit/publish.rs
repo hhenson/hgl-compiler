@@ -518,7 +518,7 @@ impl Emitter<'_> {
     ///
     /// END-3: "For a list, the delta read gives the new size where it
     /// moves, never a negative one, and on a shrink names the dropped
-    /// tail positions in `removed`", as hgraph 0.9.7's unbounded `TSL`
+    /// tail positions in `removed`", as hgraph 0.9.8's unbounded `TSL`
     /// reads it.
     pub(super) fn language_delta(&mut self, ty: &Type, delta: String, at: Location) -> String {
         // TYPE-11, proposed: "where a value leaves and none arrives,

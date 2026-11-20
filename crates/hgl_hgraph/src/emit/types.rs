@@ -440,7 +440,7 @@ pub(super) fn list_parts_shape(program: &Program, ty: &Type) -> Option<String> {
 /// list whose elements hold one. `None` where `ty` holds none.
 ///
 /// END-4: "Invalidation clears validity, modification, payload, and
-/// delta." hgraph 0.9.7's unbounded `TSL` keeps its positions, and its
+/// delta." hgraph 0.9.8's unbounded `TSL` keeps its positions, and its
 /// `TSD` and `TSS` their keys and members, which the next delta read
 /// would name removed, and which a delta that names no change would leave
 /// in what it makes valid (TIME-7: "it makes the value valid and empty").
