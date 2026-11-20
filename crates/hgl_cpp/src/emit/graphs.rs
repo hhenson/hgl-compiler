@@ -212,6 +212,13 @@ impl Emitter<'_> {
             written[index] = Some(
                 match left_out(program, (module, declaration), index, parameter) {
                     Some(LeftOut::Default(default)) => {
+                        // The analyser keeps a default as a value with no
+                        // locals of its own, so a block in it that runs
+                        // statements cannot be written, as a value call's
+                        // cannot (`calls`).
+                        if changes(default) {
+                            return self.missing(default.at, "a default that runs statements");
+                        }
                         let cold = Body {
                             locals: Vec::new(),
                             statements: Vec::new(),
@@ -221,6 +228,10 @@ impl Emitter<'_> {
                         if !defaults.before.is_empty() {
                             return self.missing(default.at, "a default that propagates a failure");
                         }
+                        // EXPR-2: a default is evaluated after the
+                        // arguments written, in the order of the
+                        // parameters, and counts in what is held.
+                        failing += usize::from(may_fail(default));
                         written
                     }
                     Some(LeftOut::Null) => "std::nullopt".to_string(),
@@ -286,6 +297,18 @@ impl Emitter<'_> {
         else {
             return self.missing(value.at, "this lifted call");
         };
+        // FN-6: "scalar arguments and omitted defaults bind as
+        // configuration", where the graph is built: a parameter the call
+        // leaves out is bound so by the lifting work, and not written in
+        // the node's `eval` here.
+        let given = |index: usize| {
+            arguments
+                .iter()
+                .any(|argument| argument.parameter == Some(index))
+        };
+        if (0..signature.parameters.len()).any(|index| !given(index)) {
+            return self.missing(value.at, "a lifted call that leaves out a parameter");
+        }
         let mut locals: Vec<Local> = Vec::new();
         let mut roles: Vec<Role> = Vec::new();
         let mut parameters: Vec<String> = Vec::new();

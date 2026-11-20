@@ -123,6 +123,16 @@ impl Emitter<'_> {
         let mut given: Vec<(usize, String)> = Vec::new();
         let mut context = Context::new(Kind::Entry, scope.body.locals.len());
         for (position, argument) in arguments.iter().enumerate() {
+            // A trace that is no trace written out, a `let` of one or an
+            // eval's, is replayed from what it holds: not written yet.
+            if matches!(argument.value.ty, Type::Trace { .. })
+                && !matches!(argument.value.kind, ExprKind::Trace(_))
+            {
+                return self.missing(
+                    argument.value.at,
+                    "a trace given to an eval that is no trace written out",
+                );
+            }
             if !matches!(argument.value.kind, ExprKind::Trace(_)) {
                 // A `const` parameter's configuration, held as a value; a
                 // value given to a temporal one is wired as a constant
@@ -386,9 +396,10 @@ impl Family for Tests {
             local,
             value: Some(value),
         } = statement
-            && matches!(scope.body.locals[*local].ty, Type::Trace { .. })
+            && let Some(declared) = scope.body.locals.get(*local)
+            && matches!(declared.ty, Type::Trace { .. })
         {
-            let name = identifier(&scope.body.locals[*local].name);
+            let name = identifier(&declared.name);
             let written = emitter.expression(scope, value);
             text.push_str(&format!(
                 "{}[[maybe_unused]] const auto {name} = {written};\n",
