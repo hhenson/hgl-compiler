@@ -58,6 +58,11 @@ namespace detail {
 /// its length, and a temporal collection's child is read through
 /// `checked_value`.
 void check_index(i64 index, std::size_t size, std::source_location where);
+
+/// What `item` of a list of `T` that outlives the read gives: a `const`
+/// reference to the element, and for a `list<bool>` the `bool` itself.
+template <class T>
+using element_read = std::conditional_t<std::is_same_v<T, bool>, bool, const T&>;
 } // namespace detail
 
 /// `values[index]` (EXPR-7): the element of a list at an `i64` position. An
@@ -68,17 +73,24 @@ void check_index(i64 index, std::size_t size, std::source_location where);
 /// ends with the read's statement (`names()[0]`), the element itself, moved
 /// out of the list, so that nothing refers into a list that is gone: a
 /// `const` reference bound to it, which a `let` is (docs/cpp-target.md),
-/// keeps it. Each gives what the vector's own `operator[]` gives: of a
-/// `list<bool>`, a `std::vector<bool>` that holds bits, the `bool` itself to
-/// read and the vector's reference to its bit as a place.
+/// keeps it. A `list<bool>` is a `std::vector<bool>`, which holds bits and so
+/// has no `bool` to refer to, and whose `operator[]` gives a proxy of the
+/// standard library's own (a `bool` in libstdc++, a class in libc++): a read
+/// of one gives the `bool` itself, converted from it, on every library, and
+/// a place the vector's reference to its bit, which refers into the vector.
 template <class T>
-typename std::vector<T>::const_reference item(const std::vector<T>& values, i64 index,
-                                              std::source_location where = std::source_location::current()) {
+detail::element_read<T> item(const std::vector<T>& values, i64 index,
+                             std::source_location where = std::source_location::current()) {
     detail::check_index(index, values.size(), where);
-    return values[static_cast<std::size_t>(index)];
+    if constexpr (std::is_same_v<T, bool>) {
+        return static_cast<bool>(values[static_cast<std::size_t>(index)]);
+    } else {
+        return values[static_cast<std::size_t>(index)];
+    }
 }
 
-/// `values[index]` as a place, which an assignment writes (EXPR-3, FN-15).
+/// `values[index]` as a place, which an assignment writes (EXPR-3, FN-15):
+/// `T&`, and for a `list<bool>` the vector's `reference` to the bit.
 template <class T>
 typename std::vector<T>::reference item(std::vector<T>& values, i64 index,
                                         std::source_location where = std::source_location::current()) {
@@ -87,20 +99,20 @@ typename std::vector<T>::reference item(std::vector<T>& values, i64 index,
 }
 
 /// `values[index]` of a list that ends with the read's statement: the
-/// element, moved out of it.
+/// element, moved out of it (a `list<bool>`'s converted to a `bool`).
 template <class T>
 T item(std::vector<T>&& values, i64 index, std::source_location where = std::source_location::current()) {
     detail::check_index(index, values.size(), where);
-    return std::move(values[static_cast<std::size_t>(index)]);
+    return static_cast<T>(std::move(values[static_cast<std::size_t>(index)]));
 }
 
 /// `values[index]` of a `const` list that ends with the read's statement:
-/// a copy of the element.
+/// a copy of the element (a `list<bool>`'s converted to a `bool`).
 template <class T>
 T item(const std::vector<T>&& values, i64 index,
        std::source_location where = std::source_location::current()) {
     detail::check_index(index, values.size(), where);
-    return values[static_cast<std::size_t>(index)];
+    return static_cast<T>(values[static_cast<std::size_t>(index)]);
 }
 
 /// `values[index]` of a fixed list, `list<T, N>` (TYPE-4, EXPR-3).
