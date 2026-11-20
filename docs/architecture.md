@@ -2087,14 +2087,15 @@ The second target, designed in [cpp-target.md](cpp-target.md): C++ against
 hgraph's graph, node, type and runtime layers, linked with `libhglrt`,
 the runtime library in `runtime/cpp`. It writes value code whole, value
 functions and the tests of them, and the temporal code of scalars:
-nodes, graphs, sources and the evals of them. It reports every other
+nodes, graphs, sources and the evals of them; the run's store where a
+graph is built, and applications. It reports every other
 form, as the hgraph target reports what it does not write, so that `hgl
 test --target cpp` runs over any program to its end.
 
 | Part | Where | What it does |
 | --- | --- | --- |
-| Emitter | `crates/hgl_cpp/src/emit.rs` and `emit/` by concern: `names`, `types`, `values`, `statements`, `expressions`, `calls`, `nodes`, `graphs`, `sources`, `tests`; the temporal forms through the dispatch point, `forms` ("Temporal forms: what a construct lane reads" below), and its families `scalars`, `endpoints`, `nodes`, `sources`, `graphs`, `tests` | Writes each declaration, instance and named test as a piece: a prototype for the module's header, a definition for its unit, the functions it calls, and the first form in it not written |
-| Assembly | `crates/hgl_cpp/src/assemble.rs` | Leaves out each piece that is not written or reaches one that is not, puts the rest into each module's header and unit, and writes an entry unit for each module with a test that can be run |
+| Emitter | `crates/hgl_cpp/src/emit.rs` and `emit/` by concern: `names`, `types`, `values`, `statements`, `expressions`, `calls`, `nodes`, `graphs`, `sources`, `tests`, `apps`; the temporal forms through the dispatch point, `forms` ("Temporal forms: what a construct lane reads" below), and its families `apps`, `scalars`, `endpoints`, `nodes`, `sources`, `graphs`, `tests` | Writes each declaration, instance, named test and application's run statement as a piece: a prototype for the module's header, a definition for its unit, the functions it calls, and the first form in it not written |
+| Assembly | `crates/hgl_cpp/src/assemble.rs` | Leaves out each piece that is not written or reaches one that is not, puts the rest into each module's header and unit, and writes an entry unit for each module with a test that can be run and for each application that can be |
 | Runtime library | `crates/hgl_cpp/src/runtime.rs`, `build.rs` | Carries `runtime/cpp` in `hgl`, and reads from its headers which of core's natives it defines |
 | Build driver | `crates/hgl_cli/src/cpp.rs` and `cpp/` | Finds the toolchain, prepares it once, builds a program in a workspace kept between runs, runs the executables and reads their results |
 
@@ -2124,14 +2125,19 @@ test --target cpp` runs over any program to its end.
 | `return value`, `out = value`, `invalidate(out)` in a handler (TIME-7, FN-7) | The value published to `out_` as its temporal form publishes, `out_.set(value);`, and for a `return` the evaluation left; `::hglrt::fn_invalidate(out_)` |
 | A temporal input read in a hook; `valid`, `modified`, `delta_value`, `last_modified` of one (TIME-1, END-1 to END-6) | The form's checked read of the view, `::hglrt::checked_value(price)`; the library's natives given the view itself, `::hglrt::fn_valid(price)`; `delta_value` in the form its place takes, `fn_delta_value_checked` where the analyser recorded a `result` (ERR-14) |
 | `inject clock`, `logger`, `global_state`; a property of one (TIME-8, CAP-1) | The hook's hgraph view, a parameter of each hook that uses it, and the library's `::hglrt::Clock` made from it at the top of the hook; `clock.evaluation_time()` |
+| `get`, `has`, `put` on the store (CAP-6) | The library's natives, `::hglrt::put_GlobalState_str_V<T>(global_state, key, value)` |
+| `inject global_state` in a graph; a call on it (FN-9) | `const ::hglrt::GlobalState global_state{wiring_.global_state()};` in `compose`, the store of the wiring the graph is built on, which hgraph carries onto the graph it builds: each call runs once as the graph is built, in the order written, before any node starts (`apps`) |
 | A source (SOURCE-1 to SOURCE-4) | A node whose static `body_` is an `::hglrt::generator` of `::hglrt::Yielded<T>`, given its `const` parameters by value; `yield t: v` is `co_yield yielded_type_{t, v};`, a bare `return` `co_return;`. `start` makes the body, held in the node's state with where it is, `eval` steps it with `::hglrt::resume`, `stop` destroys it |
 | A graph (FN-2, FN-7) | A struct with static `compose(::hgraph::Wiring& wiring_, ...)`, a temporal parameter an `hgraph::Port` and a `const` one a value; a connection `let` a `const ::hgraph::Port<S>`, `return` the port given |
 | A lifted call (FN-6, FN-11) | A node of its own, a struct `lifted_00_` in the graph's struct, where the analyser marks the call lifted: each argument that is a connection an input, required valid, and each other configuration, an `hgraph::Scalar`; its `eval` calls the function and publishes what it gives |
 | A value where a connection is expected (FN-3) | Its temporal form's constant, `::hglrt::constant<::hgraph::Int>(wiring_, 5)` |
 | A node whose configuration holds an `f64` | Wired with `Wiring::add_unique_node` and not `hgraph::wire`: hgraph interns two nodes whose configurations are `==`, as `0.0` and `-0.0` are ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)), until it tells them apart |
 | `eval(target(value: [1, _, 3]))` (TST-5 to TST-8, CEVAL-1) | `::hglrt::testing::evaluate<T>` of an entry that wires core's `replay` instance of each trace written to its input, the target's wiring function, and core's `record` of the result under `"run.output"`; `run(...)` in real time; a target with no result `::hglrt::testing::run` |
+| Application `demo.app` (UNIT-14) | In its module's unit, `::hglrt::application::Output application_()`, which runs its run statement once; `applications/demo.app.cpp`, an entry unit whose `main` is the library's host of that run, `::hglrt::application::main` (`apps`, `assemble`) |
+| Its `inject global_state` and `put`s before its run statement (UNIT-14) | The first statements of the run's entry, on the store of its wiring, before its call is wired |
+| `eval(call, config)`, `run(call, config)` (RUN-1, RUN-3) | `::hglrt::application::run<T>(entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"`, as an eval's does; `run` of an entry with no result. The configuration is its value, `::hglrt::application::bounds(config)`, read for its `start`, `end` and `length`; none is `Bounds{}`. `eval` is a simulation, `run` in real time |
 | A trace written out; `==` and `!=` of two (TST-4, TST-6, TST-7, TST-16) | `::hglrt::testing::Dense<T>`, `Timed<T>`, each cell as its type's family writes it; in an `assert`, `expect_same` or `expect_different` of the two held in order, elsewhere `same`; a trace given to a `const fn`, `publications` |
-| Everything else | Reported: `the cpp target does not write ... yet`: a struct, a set, a dictionary, a window, a delta of any but a scalar, `timezone`, `zoned_time`; a temporal value of any but a scalar; a `ref` parameter or result, `inject scheduler` and `alarm`, `all_valid`, `activate`, `passivate`, `scheduled()`; `if`, `switch` and `for` over connections, `capture`, a lifted input with a default or a null; a source with declarations or hooks; an eval with a configuration or of a value function; an application |
+| Everything else | Reported: `the cpp target does not write ... yet`: a struct, a set, a dictionary, a window, a delta of any but a scalar, `timezone`, `zoned_time`; a temporal value of any but a scalar; a `ref` parameter or result, `inject scheduler` and `alarm`, `all_valid`, `activate`, `passivate`, `scheduled()`; `if`, `switch` and `for` over connections, `capture`, a lifted input with a default or a null; a source with declarations or hooks; an eval with a configuration or of a value function; a configuration of a run that is no struct the value code writes |
 
 Every C++ name an HGL name gives is made by one function,
 `emit::names::identifier`: a plain name (a letter first, a letter or
@@ -2339,8 +2345,29 @@ failure: an older executable is never run in a newer one's place.
 Executables run side by side.
 
 `hgl emit --target cpp --out DIR` writes the files. `hgl run --target
-cpp` says what the application needs that is not written: no
-application is written yet.
+cpp` runs an application (UNIT-14) as `hgl run` does on hgraph ("An
+application" above), with what it replaces read again: it builds the
+application's executable, `run/<application>`, in the program's
+workspace (`--keep`'s directory, or the one under the cache), linked
+from its entry unit and the units its module's reaches, and runs it as
+`EXECUTABLE RESULTS` (`cpp/application.rs`). The executable's host
+(`hglrt/application_host.h`) runs the run statement once and writes
+RESULTS in the form the hgraph target's driver writes (`start`,
+`published TIME TEXT`, `stopped`, `stopped none`, `host`, `failed
+TEXT`); `hgl` reads it and prints the output, the exit status and the
+reason for a failure as it does for the hgraph target. TIME is the
+instant in UTC, `1970-01-01T00:00:01.000001Z`, and TEXT the value as the
+library's `text_of` writes it, as a trace's text is. What the program
+and hgraph print goes to standard error. An interrupt of `hgl`, or a
+request for it to end, is passed to the executable down its standard
+input, `stop`; an interrupt from a terminal reaches it as well. A run in
+real time asked to stop is stopped through hgraph's executor, as a test
+past its time limit is (one asked before it starts is stopped as it
+starts), and ends as at its end, with what it recorded; a simulation
+asked to stop, and a run interrupted a second time, end the executable
+at once, `failed interrupted`, and a second interrupt of `hgl` ends it
+too. The executable's standard input closed is such a request: what
+started it is gone.
 
 The crate's tests compare the C++ written for three programs, `demo.calc`,
 `demo.values` (value code of every form written) and `demo.temporal`
@@ -2350,7 +2377,9 @@ hgl_cpp --test emit` writes them again; core's module is left out of
 them) and check what blocks what. `crates/hgl_cli/tests/cpp.rs` checks
 the driver: what is said with no SDK, `emit` and `run`; and, given an
 SDK, the whole route, that a failed build runs no older executable,
-that `demo.values` and `demo.temporal` pass, and where a failure is reported, with `cargo
+that `demo.values` and `demo.temporal` pass, where a failure is
+reported, applications run with their output, the store and a failure,
+and a run in real time stopped by an interrupt of `hgl` alone, with `cargo
 test -p hgl_cli --test cpp -- --ignored`, which the `cpp` job of the CI
 workflow runs, with `check_core.py --target cpp`, and then both again
 with `HGL_CPP_FLAGS` naming the address and undefined-behaviour
@@ -2400,6 +2429,8 @@ not use.
 | `host.h` | What the entry unit of a test executable needs, and no hgraph header: registration and `main`, which holds a test to its time limit | TST-14, TST-15, TST-17 |
 | `traces.h` | Traces, dense and timed, of scalars, nullables, tuples and lists, each cell whole or a delta; their comparison and where two first differ; replay items and what a `const fn` is given; the text of a value | TST-4 to TST-7, TST-9, TST-16, CEVAL-2 |
 | `testing.h` | The rest of the test host: `check`, `raises`, `expect_same`, a run in simulation or in real time, from no earlier than the earliest start to no later than the latest end (one with no end ends there), its recording, and the values its result held | TST-2 to TST-11, TST-17, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
+| `application.h` | The run of an application: `run<T>`, the test host's run of its entry and its output as text, each publication's instant and value; `bounds`, a `RunConfig`'s | UNIT-14, RUN-1 to RUN-4, CRUN-1 to CRUN-8 |
+| `application_host.h` | What an application's entry unit needs, and no hgraph header: `main`, which runs the run statement once, writes what became of it to a results file, and stops a run when its host asks: down standard input, or by an interrupt | RUN-3, CRUN-6 |
 
 A native is a function named as the emitter names the candidate
 (`hgl_cpp`, `names::native_candidate`): the operator's name and the type
