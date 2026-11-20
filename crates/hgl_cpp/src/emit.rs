@@ -32,6 +32,7 @@ use hgl_lower::pieces::Reach;
 
 use crate::codes;
 
+mod activity;
 mod calls;
 mod endpoints;
 mod expressions;

@@ -6,18 +6,6 @@
 # until it is taken off. `check_core.py --target cpp --write-list` writes
 # the list from a run; read the difference before it is committed.
 
-"`activate` here" = [
-    "conformance::a_later_probe_does_not_replay_a_passive_invalidation",
-    "conformance::a_manual_wake_still_checks_the_only_handlers_guard",
-    "conformance::a_passive_invalidation_is_visible_but_unmodified_on_a_probe",
-    "conformance::a_passive_publication_counts_on_an_independent_wake",
-    "conformance::a_shared_output_keeps_its_other_subscribers",
-    "conformance::an_active_only_handler_queries_its_input",
-    "conformance::passivation_changes_wakes_and_preserves_data",
-]
-"`is_active` here" = [
-    "conformance::activity_belongs_to_the_binding",
-]
 "a `?` here" = [
     "conformance::eval_preserves_failure",
 ]
@@ -67,12 +55,6 @@
     "conformance::a_struct_is_all_valid_once_every_field_is",
     "conformance::a_struct_is_valid_once_one_field_is",
     "conformance::a_whole_struct_is_a_trace_cell",
-]
-"a temporal value of `ScalarAction`" = [
-    "conformance::last_modified_follows_the_last_publication",
-]
-"a temporal value of `WriteOrder`" = [
-    "conformance::the_last_write_decides_validity",
 ]
 "a temporal value of `dict<str, i64>`" = [
     "conformance::a_whole_dictionary_is_a_trace_cell",
@@ -135,6 +117,7 @@
     "conformance::removing_only_an_absent_member_is_no_tick",
 ]
 "a trace of `datetime?`" = [
+    "conformance::last_modified_follows_the_last_publication",
     "conformance::propagating_a_retained_error_preserves_its_origin",
 ]
 "a trace of `i64?`" = [

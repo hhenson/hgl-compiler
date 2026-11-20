@@ -428,6 +428,37 @@ fn temporal_code_runs_on_the_sdk() {
     );
 }
 
+/// The activity of a node's inputs and the temporal form of an enum on
+/// the SDK (`demo.activity`): a passive input wakes no node and is read
+/// where another wakes it, activity belongs to each binding of one
+/// output (END-5), and an enum is published, replayed and wired as a
+/// constant.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn activity_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("activity");
+    let file = write(
+        &root,
+        "src/demo.activity.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.activity.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-3: "An index outside a list fails where it is evaluated". The
 /// test is reported at the statement of it that was running, inside a
 /// function it called, with the runtime library's text of the failure.
