@@ -570,11 +570,12 @@ impl<'a> Typer<'a> {
             .then(|| asked.clone())
     }
 
-    /// The value candidates of `operator`, wherever they are declared.
-    /// GEN-5: "Library membership and registration order grant no
-    /// priority."
+    /// The value candidates of `operator`, wherever they are declared,
+    /// and in composition and value code its temporal ones too. GEN-5:
+    /// "Library membership and registration order grant no priority."
     pub(super) fn value_candidates(&mut self, operator: OperatorRef) -> Vec<Candidate<'a>> {
-        let key = (operator.module, operator.declaration);
+        let all = self.graph || self.value_code;
+        let key = (operator.module, operator.declaration, all);
         if let Some(found) = self.candidates.get(&key) {
             return found.clone();
         }
@@ -583,11 +584,13 @@ impl<'a> Typer<'a> {
         for (module, declared) in program.modules.iter().enumerate() {
             for (declaration, candidate) in declared.declarations.iter().enumerate() {
                 // GEN-5: "A call in a value function or a runtime body
-                // selects among the value candidates. A call in
-                // composition selects among all of them".
+                // selects among the value candidates. A call in a test's
+                // or an application's value code (TST-3, UNIT-14)
+                // selects among all of them ... A call in composition
+                // selects among all of them".
                 let admitted = match candidate.kind.candidate() {
                     Some((Role::Value, Some(of))) => of == operator,
-                    Some((Role::Temporal, Some(of))) => self.graph && of == operator,
+                    Some((Role::Temporal, Some(of))) => all && of == operator,
                     _ => false,
                 };
                 if !admitted {
