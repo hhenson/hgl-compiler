@@ -130,8 +130,10 @@ struct Bounds {
 /// simulation and the host clock's present time in real time. ... `length`
 /// gives the end counted from the start the run has ... A `RunConfig` with
 /// both an `end` and a `length` is refused before the run's graph is built,
-/// an HGL error with code `run.end_and_length`"). A start before the
-/// earliest start fails.
+/// an HGL error with code `run.end_and_length`"). CRUN-3: "a run's start is
+/// no earlier than the first [`earliest_start`] and its end no later than the
+/// second [`latest_end`]": a start before the one and an end, given or from
+/// a length, after the other each fail with no code.
 std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds, Mode mode = Mode::simulation);
 
 /// What wires a run's entry: given the run's graph and the instant it
@@ -178,9 +180,10 @@ class Run {
 /// Runs the entry `entry` within `bounds`, in simulation or in real time
 /// (CRUN-1: "It builds the entry's graph, starts it, evaluates zero or more
 /// cycles, and stops it, once each"; CRUN-2: "`start` is inclusive and `end`
-/// exclusive"). A run whose end is not after its start runs no cycle, and
-/// its graph is not built; its entry is still wired, so that what the entry
-/// checks as it is wired, the traces it replays, is checked. A run of a test
+/// exclusive"). A run with no end ends at the latest end (CRUN-3: "no cycle
+/// runs at" `forever`). A run whose end is not after its start runs no
+/// cycle, and its graph is not built; its entry is still wired, so that
+/// what the entry checks as it is wired, the traces it replays, is checked. A run of a test
 /// whose time limit has passed (TST-17, host.h) is stopped, at once where it
 /// starts after the limit, and ends as it does at its end. A failure of the
 /// run escapes, as hgraph gives it.

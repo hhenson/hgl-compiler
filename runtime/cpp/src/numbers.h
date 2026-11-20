@@ -1,6 +1,7 @@
 // Numbers as exact quantities: an `i64` or a finite `f64` as a sign and an
 // integer times a power of two, so that arithmetic on them can be made
-// exact before it is rounded once (NUM-2, NUM-5, OPS-10). Private to
+// exact before it is rounded once (NUM-2, NUM-5, OPS-10); and the checked
+// `i64` arithmetic every count of the library is made with. Private to
 // libhglrt.
 #pragma once
 
@@ -10,8 +11,58 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <optional>
 
 namespace hglrt::detail {
+
+// ---- Checked i64 arithmetic ------------------------------------------------
+//
+// The sum, difference, product and negation of `i64`, each none where the
+// exact result is outside the signed 64-bit range (NUM-2: "An
+// unrepresentable i64 result produces an HGL error with code
+// `numeric.out_of_range`; it neither wraps nor silently promotes"): the
+// integers, the durations' microseconds and the tenors' counts are each
+// checked through these. GCC's and clang's overflow builtins are used here
+// and nowhere else, so that a compiler without them changes this file
+// alone.
+
+/// `lhs + rhs`, where it is an `i64`.
+inline std::optional<i64> checked_add(i64 lhs, i64 rhs) noexcept {
+    i64 out = 0;
+    if (__builtin_add_overflow(lhs, rhs, &out)) {
+        return std::nullopt;
+    }
+    return out;
+}
+
+/// `lhs - rhs`, where it is an `i64`.
+inline std::optional<i64> checked_sub(i64 lhs, i64 rhs) noexcept {
+    i64 out = 0;
+    if (__builtin_sub_overflow(lhs, rhs, &out)) {
+        return std::nullopt;
+    }
+    return out;
+}
+
+/// `lhs * rhs`, where it is an `i64`.
+inline std::optional<i64> checked_mul(i64 lhs, i64 rhs) noexcept {
+    i64 out = 0;
+    if (__builtin_mul_overflow(lhs, rhs, &out)) {
+        return std::nullopt;
+    }
+    return out;
+}
+
+/// `-value`, where it is an `i64`: that of the least is not.
+inline std::optional<i64> checked_neg(i64 value) noexcept {
+    if (value == std::numeric_limits<i64>::min()) {
+        return std::nullopt;
+    }
+    return -value;
+}
+
+// ---- Exact quantities --------------------------------------------------------
 
 // An unsigned 128-bit integer, GCC's: the product of two 64-bit integers.
 // `__extension__` keeps `-Wpedantic` quiet about a type ISO C++ lacks.
