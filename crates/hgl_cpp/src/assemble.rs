@@ -427,22 +427,29 @@ fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
         .filter_map(|piece| piece.layout.as_deref())
         .collect();
     let mut ordered: Vec<&crate::emit::Layout> = Vec::new();
+    // `visiting` holds the structs whose dependencies are being placed: one
+    // met again there is not followed, so that no order is looked for
+    // without end.
     fn visit<'l>(
         layout: &'l crate::emit::Layout,
         structs: &[&'l crate::emit::Layout],
         ordered: &mut Vec<&'l crate::emit::Layout>,
+        visiting: &mut Vec<usize>,
     ) {
-        if ordered
-            .iter()
-            .any(|done| done.declaration == layout.declaration)
+        if visiting.contains(&layout.declaration)
+            || ordered
+                .iter()
+                .any(|done| done.declaration == layout.declaration)
         {
             return;
         }
+        visiting.push(layout.declaration);
         for held in &layout.holds {
             if let Some(first) = structs.iter().find(|other| other.declaration == *held) {
-                visit(first, structs, ordered);
+                visit(first, structs, ordered, visiting);
             }
         }
+        visiting.pop();
         if !ordered
             .iter()
             .any(|done| done.declaration == layout.declaration)
@@ -451,7 +458,7 @@ fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
         }
     }
     for layout in &structs {
-        visit(layout, &structs, &mut ordered);
+        visit(layout, &structs, &mut ordered, &mut Vec::new());
     }
     let within =
         |body: String| format!("\nnamespace {declared}\n{{\n{body}\n}}  // namespace {declared}\n");

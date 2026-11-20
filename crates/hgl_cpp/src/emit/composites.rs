@@ -738,12 +738,19 @@ impl Emitter<'_> {
                 self.unsupported(at, &format!("the type `{ancestor}`"));
                 return;
             };
-            if is_abstract {
-                for (module, held) in structs_in(ancestor) {
-                    if module == self.module {
-                        holds.insert(held);
-                    }
-                }
+            // An abstract struct converts to each struct it inherits
+            // from, whose definition its own needs; the arguments it gives
+            // that struct are named, and need none.
+            if is_abstract
+                && let Type::Named {
+                    module,
+                    declaration,
+                    ..
+                } = ancestor
+                && *module == self.module
+                && *declaration != index
+            {
+                holds.insert(*declaration);
             }
             parents.push(written);
         }
