@@ -218,7 +218,7 @@ impl Emitter<'_> {
     /// TYPE-16's `dict<i64, delta<V>>`.
     ///
     /// TYPE-10: "`list<T>` denotes a growing shape": hgraph's unbounded
-    /// `TSL`, `Size[-1]` (hgraph 0.9.7), a child for each position it
+    /// `TSL`, `Size[-1]` (hgraph 0.9.8), a child for each position it
     /// holds, each temporalized in turn, valid on its own, whose tick is
     /// a `TSLDelta` of each position that changed, those that lost their
     /// value and the new size where it moved: TYPE-16's list delta.
@@ -231,7 +231,7 @@ impl Emitter<'_> {
     ) -> Option<String> {
         match size.map(|size| &size.value) {
             // TYPE-10 allows a list of no position, and TIME-9 has a
-            // published empty list valid, but hgraph 0.9.7's `TSL` of
+            // published empty list valid, but hgraph 0.9.8's `TSL` of
             // none publishes nothing ("unresolved element type").
             Some(ConstantValue::Int(0)) => {
                 self.unsupported(at, &format!("the type `{ty}`"));
@@ -271,7 +271,7 @@ impl Emitter<'_> {
     /// "one that arrived at t is held at t + Max and leaves one smallest
     /// step later (RUN-3), whether or not a value arrives then. The window
     /// ticks for that exit", and "A minimum of `0s` is held by the first
-    /// value, and an empty window is not all valid": hgraph 0.9.7's `TSW`
+    /// value, and an empty window is not all valid": hgraph 0.9.8's `TSW`
     /// does each (hhenson/hgraph#1818), so each size is written as the
     /// program writes it.
     ///

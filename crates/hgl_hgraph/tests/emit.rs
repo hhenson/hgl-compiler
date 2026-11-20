@@ -3821,7 +3821,7 @@ fn a_window_is_hgraphs_tsw() {
         format!("_output: _hg.TSW_OUT[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]] = None) -> {ticks}:"),
         "    if ((not _output.valid) and ".to_string(),
         "    _output.value = price.value\n".to_string(),
-        // A minimum of `0s` is written as it is (hgraph 0.9.7).
+        // A minimum of `0s` is written as it is (hgraph 0.9.8).
         concat!(
         "-> _hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], ",
         "_hg.WindowSize[_dt.timedelta(microseconds=0)]]:"
@@ -3952,7 +3952,7 @@ fn a_window_a_target_cannot_carry_is_reported() {
 /// fewer than its minimum included", and all valid "where it holds at
 /// least its minimum": hgraph's `TSW`'s own `valid` and `all_valid`, of
 /// ticks and of a duration's span, each size written as the program
-/// writes it, a minimum of `0s` among them (hgraph 0.9.7).
+/// writes it, a minimum of `0s` among them (hgraph 0.9.8).
 /// Its value, "read in a hook or given to a lifted helper (FN-12), is a
 /// `list<V>` of the values held, oldest first, and the read before
 /// `all_valid` fails with `value.unset_read`" (`_core.window_values`): an
@@ -5001,7 +5001,7 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
 /// element of a fixed list published whole, and a list's element at a
 /// position that ticks. A removed position written to a fixed list, an
 /// unsized list's delta read, an unsized list of composite elements and
-/// one as the child of a dictionary are written (hgraph 0.9.7's `TSL`).
+/// one as the child of a dictionary are written (hgraph 0.9.8's `TSL`).
 #[test]
 fn a_temporal_collection_form_not_written_yet_is_reported() {
     let emitted = emit(&[fixture!(
@@ -5114,7 +5114,7 @@ fn the_run_provider_checks_a_zone() {
 /// `size_modified` and no `removed` shrinks the list": an unsized list,
 /// hgraph's unbounded `TSL`, counts its size from what its `_output`
 /// holds, and a source's node applies what it yields as it is due. A
-/// fixed list's `removed` is read: hgraph 0.9.7's bounded `TSL` reports
+/// fixed list's `removed` is read: hgraph 0.9.8's bounded `TSL` reports
 /// it.
 #[test]
 fn collection_validity_and_a_lists_delta_are_written() {
@@ -5154,7 +5154,7 @@ fn a_negative_list_size_reduces_the_list_as_the_graph_runs() {
 }
 
 /// TYPE-10: "`list<T>` denotes a growing shape", TYPE-16 its delta and
-/// END-3 the delta read, on hgraph 0.9.7's unbounded `TSL`.
+/// END-3 the delta read, on hgraph 0.9.8's unbounded `TSL`.
 const LIST_DELTA: (&str, &str) = fixture!("demo.list_delta.hgl");
 
 /// A growing list is hgraph's unbounded `TSL`, `Size[-1]`, as an input,
@@ -5243,7 +5243,7 @@ fn a_growing_lists_delta_runs_on_hgraph() {
 /// none catalogued is one for it; an index of `out` past the list
 /// (EXPR-3: "An index outside a list fails where it is evaluated"), which
 /// hgraph would grow the list to; and, named as not written, an empty
-/// list assigned to a position of `out`, which hgraph 0.9.7's `TSL` does
+/// list assigned to a position of `out`, which hgraph 0.9.8's `TSL` does
 /// not tick for and which has no port of its own where it is written
 /// (TIME-9).
 #[test]
@@ -5280,7 +5280,7 @@ fn a_list_form_not_written_fails_as_the_graph_runs() {
     }
 }
 
-/// What hgraph 0.9.7 takes of a growing list in no way the language
+/// What hgraph 0.9.8 takes of a growing list in no way the language
 /// has is reported: an unsized list's delta inside a list's or a
 /// dictionary's delta the program makes, which hgraph applies with no
 /// negative size and whose position or key the delta may add, with no
@@ -5637,9 +5637,10 @@ const REFERENCES: (&str, &str) = fixture!("demo.references.hgl");
 /// `Designation` keeps what it designates. An input that is no `ref`
 /// parameter, is designated through a hidden `REF` input that a graph of
 /// the function's name gives it the input twice, and a fixed list's
-/// position through one for each position, which the graph, taking the
-/// list as a `REF`, gives each position: each is active, and the node
-/// returns before its handlers where no input of its own woke it. A graph passes a `ref` result on as it is, and hgraph
+/// position through one for each position, which the graph gives each
+/// position: each is active, and the node returns before its handlers
+/// where no input of its own woke it. A graph passes a `ref` result on as
+/// it is, and hgraph
 /// binds an ordinary input, a lifted node's among them, to what it
 /// designates. A generic input is written for the connection's type. A
 /// `signal?` left out is bound to an output that never ticks (UNIT-8), by
@@ -5673,7 +5674,7 @@ fn a_ref_is_a_ref_and_a_signal_a_signal() {
             .to_string(),
         "        return _designation.returned(\"_ref_items\", idx.value)\n".to_string(),
         format!(
-            "def route(idx: _hg.TS[_py.int], items: _hg.REF[_hg.TSL[_hg.TS[_py.int], _hg.Size[3]]]) \
+            "def route(idx: _hg.TS[_py.int], items: _hg.TSL[_hg.TS[_py.int], _hg.Size[3]]) \
              -> {reference}:\n    return _node_route(idx=idx, items=items, _ref0_items=items[0], \
              _ref1_items=items[1], _ref2_items=items[2])\n"
         ),
@@ -6154,7 +6155,7 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
 
 /// What this target does not write of a collection is reported: an
 /// unsized list of a nullable published whole (TYPE-14, TIME-7); a
-/// fixed list of no position, which hgraph 0.9.7's `TSL` cannot publish
+/// fixed list of no position, which hgraph 0.9.8's `TSL` cannot publish
 /// (TYPE-10, TIME-9); an assignment inside a child of a node's `out`
 /// (TIME-7); and a trace cell written whole whose parts are composites,
 /// a struct's or a tuple's, or a list's that are nullable, or of a
@@ -6377,7 +6378,7 @@ fn a_constant_under_any_is_written_whole() {
 /// TYPE-11: in a window of a duration "a value is held while its age is
 /// at most Max ... and leaves one smallest step later (RUN-3), whether or
 /// not a value arrives then. The window ticks for that exit", as hgraph
-/// 0.9.7's `TSW` does (hhenson/hgraph#1818): its sizes are written as the
+/// 0.9.8's `TSW` does (hhenson/hgraph#1818): its sizes are written as the
 /// program writes them, "A minimum of `0s` is held by the first value".
 /// "Proposed: where a value leaves and none arrives, `delta_value` of the
 /// window ... has no value, and its read fails with `value.unset_read`":

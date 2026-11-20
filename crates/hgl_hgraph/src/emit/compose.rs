@@ -1181,7 +1181,7 @@ impl Emitter<'_> {
     /// added again has a child that starts afresh. A dictionary's `TSD`
     /// is given as it is, and each child has its value's port. A set's
     /// `TSS` is the keys, `__keys__`. A list's unbounded `TSL` is given as
-    /// it is: hgraph 0.9.7's `map_` over it has a child for each position
+    /// it is: hgraph 0.9.8's `map_` over it has a child for each position
     /// the list holds, one that has lost its value among them, stops the
     /// children of the positions a shrink drops and starts fresh ones
     /// where it grows. Its `map_` of a graph with no output fails the run

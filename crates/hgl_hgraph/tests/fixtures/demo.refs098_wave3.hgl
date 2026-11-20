@@ -1,0 +1,25 @@
+module demo.refs098_wave3
+
+# END-4: "Invalidation clears validity, modification, payload, and
+# delta ... The transition to invalid notifies active subscribers".
+# FN-16, proposed: "`out` of a `ref` result is as a `ref` parameter is:
+# the endpoint operations take it". An ordinary input bound through a
+# `ref` result that `invalidate(out)` leaves designating nothing is woken
+# and is not valid: hgraph 0.9.8 notifies it (hhenson/hgraph#1826).
+fn maybe(flag: bool, ref x: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        if flag { return x }
+        invalidate(out)
+    }
+}
+
+fn watch(input: i64) -> bool {
+    when valid([]) { return valid(input) }
+}
+
+fn watched(flag: bool, x: i64) -> bool => watch(maybe(flag, x))
+
+test invalidate_reaches_a_follower {
+    assert eval(watched(flag: [true, false, true], x: [1, _, _])) == [true, false, true]
+}
