@@ -15,9 +15,9 @@ fn pick(use_left: bool, ref left: i64, ref right: i64) -> ref i64 {
     }
 }
 
-# TIME-10: a reference ticks where its designation changes, not at
-# every tick of its target, and a designation published again unchanged
-# is no tick (END-10).
+# TIME-10: "a `ref` parameter is passive to what it designates": a
+# publication of the target does not wake the node, and a designation
+# given to it does (END-10).
 fn designations(ref target: i64) -> i64 {
     state seen: i64 = 0
     when {
@@ -33,9 +33,9 @@ fn kept(ref target: i64) -> ref i64 {
     }
 }
 
-# FN-16: the endpoint operations take a `ref` parameter. TIME-10, as
-# hgraph has it: it is valid where it designates something, and
-# modified where its designation changed.
+# FN-16: the endpoint operations take a `ref` parameter. TIME-10:
+# "`valid` of a `ref` parameter is whether a reference is present"; core's
+# END-10, `modified` "whether the parameter was given a designation".
 fn checked(ref target: i64) -> bool {
     when modified(target) { return valid(target) }
 }
@@ -200,7 +200,6 @@ fn routed(idx: i64, slot: i64, reading: i64) -> i64 => follow(route(idx, set_one
 fn routed_out(idx: i64, slot: i64, reading: i64) -> i64 =>
     follow(route_out(idx, set_one(slot, reading)))
 fn followed_hold(flag: bool, value: i64) -> i64 => follow(hold(flag, value))
-fn held_designations(flag: bool, value: i64) -> i64 => designations(hold(flag, value))
 
 fn sampled_of(value: i64, probe: bool) -> i64 => sample(value, probe)
 fn woken(value: i64) -> i64 => counted(value)
@@ -226,12 +225,10 @@ fn bids(value: i64, bid: i64, ask: i64) -> i64 => bid_or(value, snapshot(bid, as
 fn bids_left_out(value: i64) -> i64 => bid_or(value)
 fn snapshots(bid: i64, ask: i64) -> i64 => counted(snapshot(bid, ask))
 
-test a_reference_ticks_on_a_changed_designation {
+test a_reader_observes_what_a_reference_designates {
     assert eval(followed(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
         [1, 2, 10, 11]
     assert eval(repointed(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
-        [1, _, 2, _]
-    assert eval(repointed(use_left: [true, true, false, _], left: [1, _, _, 4], right: [2, _, _, _])) ==
         [1, _, 2, _]
     assert eval(kept_of(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
         [1, 2, 10, 11]
@@ -264,7 +261,6 @@ test a_ref_result_designates_what_its_return_names {
         reading: [20, 21, 10, _, 30, 11],
     )) ==        [20, 21,  _, _, 30, 11]
     assert eval(followed_hold(flag: [true, _, true], value: [1, 2, 3])) == [1, 2, 3]
-    assert eval(held_designations(flag: [true, _, true], value: [1, 2, 3])) == [1, _, _]
 }
 
 test a_signal_wakes_its_node {

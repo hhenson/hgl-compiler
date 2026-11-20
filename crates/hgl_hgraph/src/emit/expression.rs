@@ -109,10 +109,12 @@ impl Emitter<'_> {
                 let input = endpoint_name(endpoint);
                 // FN-16: "the endpoint operations take" a `ref`
                 // parameter, and `out` of a `ref` result, each hgraph's
-                // `REF`. TIME-10, proposed: its `valid` is where it
-                // designates something, its `modified` where its
-                // designation changed, and its `last_modified` when it
-                // last did, which are the `REF`'s own.
+                // `REF`. TIME-10: "`valid` of a `ref` parameter is
+                // whether a reference is present"; core's END-10, its
+                // `modified` "whether the parameter was given a
+                // designation", and its `last_modified` "when the
+                // parameter was last given a designation", which are the
+                // `REF`'s own.
                 if function.designates(inputs[0]) {
                     // `out` of a `ref` result in a `when`: what it
                     // designates is the provider's `Designation`'s, which
@@ -1064,11 +1066,9 @@ impl Emitter<'_> {
 
     /// What `value` designates, a designation (`designates`) given to a
     /// `ref` result by a `return` or `out =` (FN-16), as the provider's
-    /// `Designation` is told it: the name of the hidden `REF` input the
-    /// node is given for the input it names (`Designated`), and the
-    /// index of a fixed list's position where it names one. `None`,
-    /// reported, for one not written yet.
-    pub(super) fn designation(&mut self, function: &Function, value: &Expr) -> Option<String> {
+    /// `Designation` is told it (`Designating`). `None`, reported, for
+    /// one not written yet.
+    pub(super) fn designation(&mut self, function: &Function, value: &Expr) -> Option<Designating> {
         let port = |emitter: &Self, local: usize| {
             emitter
                 .designated
@@ -1080,14 +1080,17 @@ impl Emitter<'_> {
             designated(function.locals, function.signature, value),
             &value.kind,
         ) {
-            (Some((local, Designated::Whole)), _) => port(self, local),
+            (Some((local, Designated::Whole)), _) if function.is_reference(local) => {
+                Some(Designating::Sampled(endpoint_name(&function.locals[local])))
+            }
+            (Some((local, Designated::Whole)), _) => port(self, local).map(Designating::Followed),
             (Some((local, Designated::Position)), ExprKind::ChildEndpointOf(child)) => {
                 let ExprKind::Index { index, .. } = &child.kind else {
                     return None;
                 };
                 let port = port(self, local)?;
                 let index = self.expression(function, index);
-                Some(format!("{port}, {index}"))
+                Some(Designating::Followed(format!("{port}, {index}")))
             }
             _ => {
                 // hgraph gives a `REF` input of a list no reference of
@@ -1981,6 +1984,34 @@ impl Emitter<'_> {
             return format!("_harness.timed([{}])", entries.join(", "));
         }
         format!("[{}]", written.join(", "))
+    }
+}
+
+/// What a `return` to a `ref` result, or an `out =` of one, designates,
+/// as the provider's `Designation` is told it (FN-16).
+pub(super) enum Designating {
+    /// An ordinary input or a child path: the name of the hidden `REF`
+    /// input the node is given for the input (`Designated`), and the
+    /// index of a fixed list's position where it names one. "Readers
+    /// follow a later rebinding of that endpoint without waking the node
+    /// for it."
+    Followed(String),
+    /// A whole `ref` parameter, its own `REF` input: "Returning a whole
+    /// `ref` parameter samples its current designation when the `return`
+    /// executes".
+    Sampled(String),
+}
+
+impl Designating {
+    /// The provider's call that writes it: `returning` where it is a
+    /// `return`, which gives what the node then returns too.
+    pub(super) fn call(&self, returning: bool) -> String {
+        match (self, returning) {
+            (Self::Followed(key), false) => format!("_designation.designate({key})"),
+            (Self::Followed(key), true) => format!("_designation.returned({key})"),
+            (Self::Sampled(port), false) => format!("_designation.sample({port})"),
+            (Self::Sampled(port), true) => format!("_designation.sampled({port})"),
+        }
     }
 }
 

@@ -1320,8 +1320,8 @@ impl<'a> Emitter<'a> {
                 value: assigned,
                 ..
             } if function.is_out(*local) && designates(assigned) => {
-                if let Some(key) = self.designation(function, assigned) {
-                    self.line(depth, &format!("_designation.designate({key})"));
+                if let Some(designating) = self.designation(function, assigned) {
+                    self.line(depth, &designating.call(false));
                 }
             }
             Stmt::Assign {
@@ -1436,17 +1436,15 @@ impl<'a> Emitter<'a> {
                 self.line(depth, &format!("return {given}"));
             }
             // FN-16: "a `return` to a `ref` result designates" the
-            // endpoint it names, and TIME-10: "A designation published
-            // again unchanged is no tick" (`_core.Designation`). Core's
-            // END-10: "A publication of the designation it holds is no
-            // tick: unlike a value's (END-2, END-5), it leaves the endpoint
-            // unmodified and notifies no subscriber."
+            // endpoint it names: it samples a whole `ref` parameter, and
+            // designates an ordinary input or a child path, whose
+            // re-binding its readers follow (`_core.Designation`).
             Stmt::Return {
                 value: Some(returned),
                 ..
             } if designates(returned) => match self.designation(function, returned) {
-                Some(key) => {
-                    self.line(depth, &format!("return _designation.returned({key})"));
+                Some(designating) => {
+                    self.line(depth, &format!("return {}", designating.call(true)));
                 }
                 None => self.line(depth, "return _designation.published()"),
             },
