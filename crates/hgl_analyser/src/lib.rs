@@ -537,9 +537,16 @@ pub mod codes {
         /// no node and has no schedule of its own (FN-9, TIME-9). Local:
         /// the catalogue's `inject.no_scheduler` names a node alone.
         pub const SCHEDULED_OUTSIDE_NODE: &str = "scheduled.outside_node";
+        /// A statement whose judging reads its expressions again more
+        /// often than this compiler does for one: an expression that
+        /// takes its type from its place is tried for each candidate
+        /// (EXPR-5, GEN-5), and those nest. What is past that many is not
+        /// judged, and the statement is rejected. Local: the language
+        /// sets no limit.
+        pub const READING_LIMIT: &str = "reading.limit";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 8] = [
+        pub const ALL: [&str; 9] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
@@ -548,6 +555,7 @@ pub mod codes {
             CONSTANT_FAILURE,
             INSTANCE_LIMIT,
             SCHEDULED_OUTSIDE_NODE,
+            READING_LIMIT,
         ];
     }
 }

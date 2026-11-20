@@ -373,9 +373,18 @@ struct Typer<'a> {
     /// For each local, whether every path to here has given it a value
     /// (EXPR-3).
     assigned: Vec<bool>,
-    /// How many more expressions of the function may be read a second
-    /// time: see [`REREADS`].
+    /// How many more expressions of the construct being read may be
+    /// read a second time: see [`REREADS`].
     rereads: u32,
+    /// How many expressions are being read around what is read now. A
+    /// statement read where there is none is read once, and is a
+    /// construct of its own ([`Typer::begin_construct`]).
+    expressing: u32,
+    /// Where the construct being read is written, for the report of a
+    /// spent allowance.
+    construct: Location,
+    /// True once the construct's allowance has been spent and reported.
+    spent: bool,
     /// True when every path to here has returned from the function
     /// (CTRL-5).
     returned: bool,
@@ -484,13 +493,29 @@ struct Typer<'a> {
     diagnostics: &'a mut Diagnostics,
 }
 
-/// How many expressions of one function are read a second time: as the
-/// type their place turns out to have, or to try them as a candidate's
-/// parameter (GEN-5). An expression read again may hold others that
-/// are, so the count is for the whole function: past it an expression
-/// keeps its first reading, a call that needs a trial is not judged,
-/// and the pass ends whatever it is given.
-const REREADS: u32 = 1_000;
+/// How many expressions of one construct are read a second time, beside
+/// [`REREADS_PER_NODE`] for each node of its syntax: as the type their
+/// place turns out to have (EXPR-5), to try them as a candidate's
+/// parameter (GEN-5), or to learn what a generic parameter or a
+/// sequence's entries are (GEN-2, EXPR-9). An expression read again may
+/// hold others that are, so the readings of a construct nested that way
+/// grow with each level, and a bound is kept so that the pass ends
+/// whatever it is given.
+///
+/// A construct is a statement read where no expression is being read,
+/// which is read once: a statement of a body, of a hook, of a block a
+/// statement holds; a node's declaration; a body written as one
+/// expression. Each has an allowance of its own, so what one is judged
+/// to be does not depend on what is read before it. One that needs more
+/// is reported (local `reading.limit`), and is never left unjudged.
+const REREADS: u32 = 10_000;
+
+/// How many more expressions of a construct may be read a second time
+/// for each node of its syntax: see [`REREADS`]. A construct that tries
+/// each of its operands once as each candidate's parameter needs about
+/// that many, so one that is long and not nested is judged whatever its
+/// length.
+const REREADS_PER_NODE: u32 = 16;
 
 /// How deep a requirement's test may go. Testing `requires add_(T, T)`
 /// tries the candidates of `add_`, one of which may state a requirement
@@ -551,7 +576,10 @@ impl<'a> Typer<'a> {
             locals: Vec::new(),
             declared: HashMap::new(),
             assigned: Vec::new(),
-            rereads: REREADS,
+            rereads: allowance(&declaration.syntax),
+            expressing: 0,
+            construct: declaration.at,
+            spent: false,
             returned: false,
             unsure: false,
             graph: false,
@@ -652,13 +680,30 @@ impl<'a> Typer<'a> {
     /// one reading's worth of each.
     fn take_back(&mut self, mark: Mark, keep_flow: bool) -> bool {
         let clean = self.diagnostics.len() == mark.diagnostics;
+        // A construct's spent allowance is reported once, and the report
+        // stands though the reading it was spent in is taken back.
+        let spent: Vec<_> = self.diagnostics.as_slice()[mark.diagnostics..]
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == hgl_diagnostics::Code::Local(crate::codes::local::READING_LIMIT)
+            })
+            .cloned()
+            .collect();
         self.diagnostics.truncate(mark.diagnostics);
-        self.locals.truncate(mark.locals);
-        self.declared.retain(|_, local| *local < mark.locals);
-        // What was noted of a local that is taken back goes with it:
-        // its number is given to the next local declared.
-        self.aliases.retain(|local, _| *local < mark.locals);
-        self.captures.retain(|local, _| *local < mark.locals);
+        for diagnostic in spent {
+            self.diagnostics.emit(diagnostic);
+        }
+        // A reading that declared nothing has nothing of its own in the
+        // tables of locals, and they are not walked: a reading taken
+        // back costs what was read, not what the function holds.
+        if self.locals.len() > mark.locals {
+            self.locals.truncate(mark.locals);
+            self.declared.retain(|_, local| *local < mark.locals);
+            // What was noted of a local that is taken back goes with it:
+            // its number is given to the next local declared.
+            self.aliases.retain(|local, _| *local < mark.locals);
+            self.captures.retain(|local, _| *local < mark.locals);
+        }
         self.present.truncate(mark.present);
         if keep_flow {
             self.assigned.truncate(mark.locals);
@@ -670,13 +715,87 @@ impl<'a> Typer<'a> {
         clean
     }
 
-    /// True when one more expression of the function may be read a
-    /// second time, which this counts.
+    /// True when one more expression of the construct being read may be
+    /// read a second time, which this counts.
+    ///
+    /// Where the construct's allowance is spent, it is reported once
+    /// (local `reading.limit`) and this is false. The last of the
+    /// allowance is not given, so `rereads` is 0 only once that report
+    /// is made: a call a site then leaves unjudged for want of a reading
+    /// is in a construct that is rejected (ERR-9).
     fn may_reread(&mut self) -> bool {
-        let may = self.rereads > 0;
-        self.rereads = self.rereads.saturating_sub(1);
-        may
+        if self.rereads > 1 {
+            self.rereads -= 1;
+            return true;
+        }
+        self.rereads = 0;
+        if !self.spent {
+            self.spent = true;
+            self.diagnostics.emit(
+                crate::local_error(
+                    hgl_diagnostics::Category::Type,
+                    crate::codes::local::READING_LIMIT,
+                    self.construct,
+                    "judging this reads its expressions again more often than this compiler \
+                     does for one statement: an expression that takes its type from its place \
+                     is tried for each candidate, and these nest"
+                        .to_string(),
+                    "EXPR-5",
+                )
+                .with_note("written as smaller statements, each `let` its own, it is judged"),
+            );
+        }
+        false
     }
+
+    /// Starts a construct at `node`, a statement or a node's declaration,
+    /// where no expression is being read: it has its own allowance of
+    /// rereads ([`REREADS`]). Inside an expression, which may be read
+    /// again, `node` is part of the construct around it, and nothing
+    /// starts. What is given back is the construct around it, which
+    /// [`Typer::end_construct`] takes up again once `node` is read.
+    fn begin_construct(&mut self, node: &SyntaxNode) -> Option<Construct> {
+        if self.expressing > 0 {
+            return None;
+        }
+        let outer = Construct {
+            rereads: self.rereads,
+            spent: self.spent,
+            at: self.construct,
+        };
+        self.rereads = allowance(node);
+        self.spent = false;
+        self.construct = self.at(node);
+        Some(outer)
+    }
+
+    /// Takes up again the construct `outer` that [`Typer::begin_construct`]
+    /// gave back: a statement in a block a statement holds, `if c { ... }`,
+    /// spends none of the allowance of the one that holds it.
+    fn end_construct(&mut self, outer: Option<Construct>) {
+        if let Some(outer) = outer {
+            self.rereads = outer.rereads;
+            self.spent = outer.spent;
+            self.construct = outer.at;
+        }
+    }
+}
+
+/// A construct's allowance of rereads as it stands: see
+/// [`Typer::begin_construct`].
+struct Construct {
+    /// How many more expressions of it may be read a second time.
+    rereads: u32,
+    /// True once its allowance has been spent and reported.
+    spent: bool,
+    /// Where it is written.
+    at: Location,
+}
+
+/// The rereads a construct written at `node` may make: see [`REREADS`].
+fn allowance(node: &SyntaxNode) -> u32 {
+    let nodes = u32::try_from(node.descendants().count()).unwrap_or(u32::MAX);
+    REREADS.saturating_add(nodes.saturating_mul(REREADS_PER_NODE))
 }
 
 /// `bool`.
