@@ -1,6 +1,19 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include "demo.calc.h"
 
+// Names this file writes, which no macro of a header above takes.
+#undef a
+#undef b
+#undef calc
+#undef demo
+#undef doubled
+#undef large
+#undef overflows
+#undef sums
+#undef total
+#undef twice
+#undef value
+
 namespace hgl::demo::calc::m_
 {
 

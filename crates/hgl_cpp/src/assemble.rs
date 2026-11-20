@@ -16,7 +16,7 @@ use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Location};
 use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
-use crate::emit::{Piece, Written, identifier, module_namespace, test_namespace};
+use crate::emit::{Piece, Written, identifier, module_namespace, program_names, test_namespace};
 use crate::{
     Application, Executable, File, Output, Test, Unit, entry_path, header_path, runtime, unit_path,
 };
@@ -314,6 +314,21 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         }
     }
 
+    // No macro of a platform's headers takes a name the files write.
+    // The lines a unit's block adds move each test's statements in it.
+    let names = program_names(program);
+    for file in &mut files {
+        let (text, added) = undefined(&file.text, &names);
+        file.text = text;
+        for test in tests
+            .iter_mut()
+            .filter(|test| unit_path(&test.module) == file.path)
+        {
+            for (line, _) in &mut test.statements {
+                *line += added;
+            }
+        }
+    }
     let output = Output {
         files,
         units,
@@ -322,6 +337,72 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         applications,
     };
     (output, blocking)
+}
+
+/// `text` with an `#undef` of each of `names` it writes, after its last
+/// `#include`, and how many lines that adds: a header included there may
+/// define any as a macro, and none is one where the file writes it. A
+/// macro already expanded in those headers is not changed by it, and
+/// `#undef` of a name no macro has does nothing.
+fn undefined(text: &str, names: &BTreeSet<String>) -> (String, usize) {
+    let split = text.rfind("#include ").map_or(0, |at| {
+        text[at..].find('\n').map_or(text.len(), |end| at + end + 1)
+    });
+    let (head, body) = text.split_at(split);
+    let written: BTreeSet<&str> = identifiers(body)
+        .into_iter()
+        .filter(|word| names.contains(*word))
+        .collect();
+    if written.is_empty() {
+        return (text.to_string(), 0);
+    }
+    let mut block =
+        String::from("\n// Names this file writes, which no macro of a header above takes.\n");
+    for name in written {
+        block.push_str(&format!("#undef {name}\n"));
+    }
+    let added = block.matches('\n').count();
+    (format!("{head}{block}{body}"), added)
+}
+
+/// The identifiers of C++ text, outside its comments and its string and
+/// character literals, in the order written.
+fn identifiers(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'/' if bytes.get(at + 1) == Some(&b'/') => {
+                while at < bytes.len() && bytes[at] != b'\n' {
+                    at += 1;
+                }
+            }
+            quote @ (b'"' | b'\'') => {
+                at += 1;
+                while at < bytes.len() && bytes[at] != quote {
+                    at += if bytes[at] == b'\\' { 2 } else { 1 };
+                }
+                at += 1;
+            }
+            byte if byte.is_ascii_alphabetic() || byte == b'_' => {
+                let begin = at;
+                while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+                    at += 1;
+                }
+                found.push(&text[begin..at]);
+            }
+            byte if byte.is_ascii_digit() => {
+                while at < bytes.len()
+                    && (bytes[at].is_ascii_alphanumeric() || matches!(bytes[at], b'_' | b'.'))
+                {
+                    at += 1;
+                }
+            }
+            _ => at += 1,
+        }
+    }
+    found
 }
 
 /// The declarations of `pieces`, in the namespace `namespace`, the
