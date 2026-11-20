@@ -6,10 +6,11 @@
 // (OPS-4): `convert(value: i64) -> f64` and `convert(value: i64) -> str` are
 // both named `convert_i64` by the emitter's scheme. Each such name is one
 // function template here whose first argument is the type converted to,
-// `convert_i64<f64>`, the `T` of the call `convert<T>(value)`. A
-// conversion that can fail takes `invalid` (OPS-8) as the template argument
-// after it, as a division takes `zero`: under `.error`, the default, it
-// gives `result<T, error>`, a failure an `err` carrying the code
+// `convert_i64<f64>`, the `T` of the call `convert<T>(value)`; where only one
+// candidate has a name, the type it converts to is that argument's default.
+// A conversion that can fail takes `invalid` (OPS-8) as the template
+// argument after it, as a division takes `zero`: under `.error`, the
+// default, it gives `result<T, error>`, a failure an `err` carrying the code
 // `convert.invalid`, and under `.fail` the plain `T`, a failure raised with
 // that code.
 #pragma once
@@ -154,15 +155,17 @@ To convert_bool(bool value) {
     }
 }
 
-/// `convert(value: date) -> datetime`: "The start of that date, in UTC".
-template <class To>
+/// `convert(value: date) -> datetime`: "The start of that date, in UTC". The
+/// one type it converts to is its template argument's default: the emitter
+/// gives none to a candidate whose name no other has.
+template <class To = datetime>
 To convert_date(date value) {
     static_assert(std::same_as<To, datetime>, "OPS-4: a date converts to a datetime");
     return datetime{std::chrono::sys_days{value}};
 }
 
 /// `convert(value: datetime) -> date`: "The date of the instant, in UTC".
-template <class To>
+template <class To = date>
 To convert_datetime(datetime value) {
     static_assert(std::same_as<To, date>, "OPS-4: a datetime converts to a date");
     return date{std::chrono::floor<std::chrono::days>(value)};
@@ -209,7 +212,7 @@ auto convert_str(const str& value, std::source_location where = std::source_loca
 
 /// `convert<invalid>(value: bytes) -> str`: the text the bytes are in UTF-8;
 /// bytes that are not well-formed UTF-8 are invalid (OPS-7).
-template <class To, InvalidPolicy invalid = InvalidPolicy::error>
+template <class To = str, InvalidPolicy invalid = InvalidPolicy::error>
 detail::converted<str, invalid> convert_bytes(const bytes& value,
                                               std::source_location where = std::source_location::current()) {
     static_assert(std::same_as<To, str>, "OPS-4: bytes convert to a str");

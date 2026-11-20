@@ -458,7 +458,8 @@ std::size_t size_after(std::size_t size, const list_delta<L>& delta) {
         }
         return static_cast<std::size_t>(written);
     }
-    if (delta.updated.empty()) {
+    // A position below zero is in no list (EXPR-3), and moves no size.
+    if (delta.updated.empty() || delta.updated.rbegin()->first < 0) {
         return size;
     }
     return std::max(size, static_cast<std::size_t>(delta.updated.rbegin()->first) + 1);
