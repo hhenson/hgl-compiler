@@ -2214,6 +2214,7 @@ not use.
 | `endpoints.h` | Core's nine operations on an endpoint, each a template over the hgraph view it is given; `delta_value` plain and where a `result` is taken (`fn_delta_value_checked`); `endpoint_read`, through which a temporal form says how its delta is read, a scalar's and a nullable scalar's written | TIME-9, END-1 to END-10, ERR-14 |
 | `capabilities.h` | `Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`, each made from its hook's hgraph view, a member function for each property; `log`, `schedule` four ways, `un_schedule`, `reset`, the store's `get`, `has`, `put`; core's `LogLevel` | CAP-1 to CAP-6, TIME-8 |
 | `sources.h` | `constant`, a node that publishes a value once at the start; `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
+| `generator.h` | `generator<T>`, the coroutine type of a source's body: `std::generator<T>`'s shape for a value type (a move-only view whose input iterator resumes the body to its next `co_yield`, and throws again what it lets out), which not every standard library has | SOURCE-1 |
 | `host.h` | What the entry unit of a test executable needs, and no hgraph header: registration and `main`, which holds a test to its time limit | TST-14, TST-15, TST-17 |
 | `traces.h` | Traces, dense and timed, of scalars, nullables, tuples and lists, each cell whole or a delta; their comparison and where two first differ; replay items and what a `const fn` is given; the text of a value | TST-4 to TST-7, TST-9, TST-16, CEVAL-2 |
 | `testing.h` | The rest of the test host: `check`, `raises`, `expect_same`, a run in simulation or in real time, its recording, and the values its result held | TST-2 to TST-11, TST-17, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
@@ -2280,7 +2281,7 @@ Built with CMake, once for each SDK. A build is given:
 | `BUILD_TESTING` | The unit tests (default on) |
 | `HGLRT_SANITIZE` | The library and its tests under the address and undefined-behaviour sanitizers, which what links it inherits (default off) |
 
-and gives `libhglrt.so`, the target `hglrt::hglrt`, and a CMake package of
+and gives `libhglrt.so` (`libhglrt.dylib` on macOS), the target `hglrt::hglrt`, and a CMake package of
 it (`-Dhglrt_DIR=` the build directory, or its install prefix). The unit
 tests use [doctest](https://github.com/doctest/doctest): hgraph's own use
 Catch2, which its SDK does not install, and doctest is the smallest
@@ -2302,12 +2303,22 @@ into its runtime library, so that what the SDK is does not turn on what
 else a prefix holds. The SDK's libraries are given the prefix's library
 directory as their run path. Where the prefix does not exist the script
 makes it with micromamba from conda-forge: fmt, spdlog and simdjson, with
-CMake and Ninja, at fixed versions. The compiler is the caller's: GCC 15
-or later. `DIR/hgl-sdk.txt` says the tag, its commit, `arrow=off`, the
-compiler and the prefix; an SDK of the tag built otherwise is not taken
-for one. The SDK is 14 MB (54 MB with Arrow), and its runtime and wiring
-libraries need fmt and spdlog alone; it builds in 28 s with 12 jobs here
-(77 s with Arrow).
+CMake and Ninja, at fixed versions, with micromamba given a home directory
+of its own, so that nothing outside the prefix and a temporary directory
+is written. The compiler is the caller's: GCC 15 or later on Linux, Apple
+clang 21 or later on macOS (`clang++`, the default there); the script runs
+under macOS's own bash 3.2. `DIR/hgl-sdk.txt` says the tag, its commit,
+`arrow=off`, the compiler and the prefix; an SDK of the tag built
+otherwise is not taken for one. The SDK is 14 MB (54 MB with Arrow), and
+its runtime and wiring libraries need fmt and spdlog alone; it builds in
+28 to 33 s with 12 jobs here (77 s with Arrow). On a macOS machine (Apple
+Silicon, Apple clang 21) it is 12 MB and builds in 34 s with 12 jobs, 56 s
+with the prefix made and hgraph cloned. On macOS conda-forge's fmt,
+spdlog and simdjson bring conda-forge's own libc++ into a process beside
+the system's, which the SDK and everything built against it link; it
+re-exports the system's libc++abi, so exceptions and type information
+have one runtime, and an exception thrown in fmt is caught by type
+elsewhere.
 
 CI's job `cpp` makes the prefix and the SDK with the script and caches
 both with `actions/cache`, under a key of the tag, the script and the
@@ -2317,8 +2328,8 @@ sanitizers. The test `hglrt_takes_no_stdlib` fails where the library takes
 anything of hgraph's standard library or of Arrow: a header of either that
 the public headers bring in at any depth (their include set, preprocessed),
 a source that includes one, or a library that `libhglrt`, its tests or
-hgraph's runtime and wiring libraries need; an SDK built with Arrow fails
-it. It runs on GitHub's Ubuntu 26.04 image, whose GCC 15.2 is
+hgraph's runtime and wiring libraries need, read with `readelf` (with
+`otool -L` on macOS); an SDK built with Arrow fails it. It runs on GitHub's Ubuntu 26.04 image, whose GCC 15.2 is
 Ubuntu's own: nothing is installed for it, it is the compiler a developer
 on that release has, and neither a container (which the cache and the
 checkout would run inside) nor a compiler in the conda prefix (which adds
@@ -2408,7 +2419,7 @@ The C++ target's runtime library, `runtime/cpp`:
 | --- | --- |
 | hgraph's C++ SDK, its runtime and wiring libraries | the graph, node, type and runtime layers the library and generated code are built on |
 | fmt, spdlog, simdjson | hgraph's own dependencies without Arrow: fmt's and spdlog's headers are in hgraph's, and its runtime library needs both when it runs. Its date/tz library is its own pinned release, built into it |
-| GCC 15 or later | C++23, and the libstdc++ the SDK links |
+| GCC 15 or later on Linux, Apple clang 21 or later on macOS | C++23, and the standard library the SDK links: libstdc++, or the system's libc++ |
 | CMake, Ninja | building the SDK and the library |
 | micromamba, conda-forge | making the dependency prefix where there is none |
 | doctest | the library's unit tests |
