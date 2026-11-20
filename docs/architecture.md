@@ -2122,12 +2122,20 @@ cpp` runs over any program to its end.
 
 Every C++ name an HGL name gives is made by one function,
 `emit::names::identifier`: a plain name (a letter first, a letter or
-digit last, no `__`, a lowercase letter in it, no C++ word or known
-macro) is written as it is, and any other with each `_` as `_1` and a
-`_` after it, so no two names give one identifier and none is
-reserved. The target's own namespaces, `m_`, `t_`, `c_` and `i_`, are of
-a form no name gives, and so are the names it makes for what a
-statement holds, `argument_00_` (a `0` after the `_`).
+digit last, no `__`, a lowercase letter in it, none of the words the
+C++ standard keeps: its keywords, alternative tokens, attribute tokens,
+the identifiers it gives a meaning in places, and its own library's
+lowercase macros) is written as it is, and any other with each `_` as
+`_1` and a `_` after it, so no two names give one identifier and none
+is reserved. The macros one platform's headers define (`issubnormal`,
+`htobe16`, `min`) are not listed: every generated file `#undef`s each
+plain name of the program it writes, once, after its last `#include`
+(`emit::names::program_names`, `assemble::undefined`), and units are
+compiled as strict C++23 (`-std=c++23`, never GNU's dialect, in which
+`typeof` is a keyword and `linux` a macro). The target's own
+namespaces, `m_`, `t_`, `c_` and `i_`, are of a form no name gives, and
+so are the names it makes for what a statement holds, `argument_00_` (a
+`0` after the `_`).
 
 C++ compiles a unit whole, so a piece that calls one not written is
 left out too, and a test that reaches one is listed with the first form

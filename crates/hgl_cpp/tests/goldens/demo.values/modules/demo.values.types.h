@@ -3,6 +3,17 @@
 
 #include <hglrt/hglrt.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef Level
+#undef Side
+#undef buy
+#undef demo
+#undef high
+#undef hold
+#undef low
+#undef sell
+#undef values
+
 namespace hgl::demo::values::m_
 {
 

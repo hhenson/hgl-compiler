@@ -26,10 +26,10 @@ use hgl_lower::copies::Copies;
 use hgl_lower::graphs::may_return;
 
 use super::Emitter;
-use super::calls::changes;
+use super::calls::{changes, may_fail};
 use super::expressions::{held_read, reads_an_element};
 use super::names::{self, identifier};
-use super::types::by_value;
+use super::types::{by_value, cpp_type};
 use super::values::INDENT;
 
 /// What the code of one body is written with.
@@ -224,9 +224,10 @@ impl Emitter<'_> {
                 ));
             }
             // The place is the one its indices name before the value is
-            // evaluated (EXPR-2, EXPR-3), which C++ evaluates first: where
-            // the value or the place runs statements, each index is held
-            // first. A compound assignment
+            // evaluated (EXPR-2, EXPR-3), and C++ evaluates the value
+            // first: where the value or the place runs statements, or the
+            // place is an element and the value or one of its indices may
+            // fail, each index is held, and the place checked, first. A compound assignment
             // reads the place it writes, as its value's left operand: it
             // is read where the held indices name it, so that each index
             // is evaluated once.
@@ -236,7 +237,9 @@ impl Emitter<'_> {
                 value,
                 at,
             } => {
-                let holds = changes(value) || changes(place);
+                let holds = changes(value)
+                    || changes(place)
+                    || (reads_an_element(place) && (may_fail(value) || indexed_may_fail(place)));
                 scope.assigning = Some(operator.is_none());
                 let written = self.place_held(scope, place, holds);
                 scope.assigning = None;
@@ -464,6 +467,20 @@ impl Emitter<'_> {
                     text.push_str(&format!("{inner}else\n{inner}{{\n"));
                     text.push_str(&format!("{inner}{INDENT}std::unreachable();\n"));
                     text.push_str(&format!("{inner}}}\n"));
+                } else {
+                    // CTRL-6: "An unmatched selector uses default or
+                    // fails", with no code, as the hgraph target fails.
+                    let fail = format!(
+                        "::{}::fail_uncoded(\"no case of the `switch` has the selector's value\");",
+                        crate::runtime::NAMESPACE
+                    );
+                    if first {
+                        text.push_str(&format!("{inner}{fail}\n"));
+                    } else {
+                        text.push_str(&format!(
+                            "{inner}else\n{inner}{{\n{inner}{INDENT}{fail}\n{inner}}}\n"
+                        ));
+                    }
                 }
                 text.push_str(&format!("{indent}}}\n"));
             }
@@ -574,22 +591,36 @@ impl Emitter<'_> {
                     let base = self.place_held(scope, base, holds)?;
                     Some(format!("std::get<{position}>({base})"))
                 }
+                // EXPR-2: the list, then the index. Where the indices are
+                // held before the statement, the list's own place is
+                // checked there before its index is held; where they are
+                // not, and both the list's place and the index may fail,
+                // the element is a reference made by a lambda that takes
+                // them in that order.
                 Type::List { .. } => {
-                    let base = self.place_held(scope, base, holds)?;
+                    let item = format!("::{}::item", crate::runtime::NAMESPACE);
+                    let listed = self.place_held(scope, base, holds)?;
+                    let held = holds && !matches!(index.kind, ExprKind::Literal(_));
+                    if held && reads_an_element(base) {
+                        scope.before.push(format!("static_cast<void>({listed});"));
+                    }
                     let written = self.expression(scope, index);
-                    let index = if holds && !matches!(index.kind, ExprKind::Literal(_)) {
-                        let held = names::temporary("index", self.temporary());
+                    if held {
+                        let name = names::temporary("index", self.temporary());
                         scope
                             .before
-                            .push(format!("const ::hgraph::Int {held} = {written};"));
-                        held
-                    } else {
-                        written
-                    };
-                    Some(format!(
-                        "::{}::item({base}, {index})",
-                        crate::runtime::NAMESPACE
-                    ))
+                            .push(format!("const ::hgraph::Int {name} = {written};"));
+                        return Some(format!("{item}({listed}, {name})"));
+                    }
+                    if !holds && reads_an_element(base) && may_fail(index) {
+                        let ty = cpp_type(self.program, &place.ty)?;
+                        let list = names::temporary("list", self.temporary());
+                        let at = names::temporary("index", self.temporary());
+                        return Some(format!(
+                            "[&]() -> {ty}& {{ auto& {list} = {listed}; const auto {at} = {written}; return {item}({list}, {at}); }}()"
+                        ));
+                    }
+                    Some(format!("{item}({listed}, {written})"))
                 }
                 // EXPR-3: "A key the dictionary has not is added"
                 // (`composites`).
@@ -606,6 +637,15 @@ impl Emitter<'_> {
             }
             _ => None,
         }
+    }
+}
+
+/// True where an index of the place `place`, at any depth, may fail.
+fn indexed_may_fail(place: &Expr) -> bool {
+    match &place.kind {
+        ExprKind::Index { base, index } => may_fail(index) || indexed_may_fail(base),
+        ExprKind::Field { base, .. } => indexed_may_fail(base),
+        _ => false,
     }
 }
 

@@ -235,6 +235,12 @@ impl Emitter<'_> {
                     if self.expanding.contains(&key) {
                         return self.missing(default.at, "a default that leaves itself out");
                     }
+                    // The analyser keeps a default as a value with no
+                    // locals of its own, so a block in it that runs
+                    // statements cannot be written.
+                    if changes(default) {
+                        return self.missing(default.at, "a default that runs statements");
+                    }
                     let cold = Body {
                         locals: Vec::new(),
                         statements: Vec::new(),

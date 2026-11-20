@@ -1,6 +1,11 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include <hglrt/host.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef demo
+#undef natives
+#undef natives_are_called
+
 namespace hgl::demo::natives::m_::t_
 {
 void natives_are_called();

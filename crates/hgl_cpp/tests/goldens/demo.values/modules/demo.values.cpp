@@ -1,6 +1,108 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include "demo.values.h"
 
+// Names this file writes, which no macro of a header above takes.
+#undef Level
+#undef Side
+#undef ZeroPolicy
+#undef a
+#undef a_list_fails_before_its_index
+#undef a_place_fails_at_its_list_first
+#undef a_place_is_checked_before_its_value
+#undef a_switch_compares_by_value
+#undef a_type_declared_after_its_use
+#undef a_var_parameter_is_its_place
+#undef an_overflow_fails_with_its_code
+#undef assigned
+#undef at
+#undef b
+#undef big
+#undef bump
+#undef bumped
+#undef bumped_at
+#undef buy
+#undef by
+#undef changed
+#undef checked
+#undef checked_value
+#undef code_first
+#undef conditions_choose
+#undef count
+#undef defaults_and_nulls
+#undef demo
+#undef divisor
+#undef doubled
+#undef element
+#undef entry
+#undef error
+#undef evaluation_follows_the_order_written
+#undef evens
+#undef factor
+#undef fail
+#undef first
+#undef first_row_total
+#undef from_a_made_row
+#undef generics_by_instance
+#undef get
+#undef given
+#undef grown
+#undef held
+#undef held_text
+#undef high
+#undef hold
+#undef i
+#undef in_order
+#undef index_first
+#undef index_once
+#undef indices_in_order
+#undef item
+#undef items
+#undef kept
+#undef larger
+#undef level
+#undef limit
+#undef list_first
+#undef loops_run
+#undef made
+#undef made_error
+#undef made_rows
+#undef message
+#undef never_null
+#undef null_is_null
+#undef null_tests_of_any_value
+#undef offset
+#undef one
+#undef opposite
+#undef pair
+#undef pick
+#undef picked
+#undef placed
+#undef placed_at
+#undef present
+#undef read_first
+#undef replaced
+#undef replaced_first
+#undef results_propagate
+#undef rows
+#undef same_level
+#undef scaled
+#undef sell
+#undef side
+#undef sign
+#undef step
+#undef swapped
+#undef text
+#undef text_first
+#undef total
+#undef triangle
+#undef tuple_first
+#undef tuples_and_constants
+#undef value
+#undef values
+#undef words
+#undef x
+#undef zero
+
 namespace hgl::demo::values::m_
 {
 
@@ -89,14 +191,16 @@ const ::hgraph::TimeDelta& step()
 ::hglrt::list<::hgraph::Int> bumped([[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values, [[maybe_unused]] ::hgraph::Int at)
 {
     [[maybe_unused]] ::hglrt::list<::hgraph::Int> changed = values;
-    ::hglrt::item(changed, at) = ::hglrt::add__i64_i64(::hglrt::item(changed, at), 1);
+    const ::hgraph::Int index_00_ = at;
+    static_cast<void>(::hglrt::item(changed, index_00_));
+    ::hglrt::item(changed, index_00_) = ::hglrt::add__i64_i64(::hglrt::item(changed, index_00_), 1);
     return changed;
 }
 
 // scaled(value: i64, factor: i64 = ..., offset: i64? = ...) -> i64 (`const fn`), module demo.values, line 66
 ::hgraph::Int scaled([[maybe_unused]] ::hgraph::Int value, [[maybe_unused]] ::hgraph::Int factor, [[maybe_unused]] std::optional<::hgraph::Int> offset)
 {
-    if ((!(offset).has_value()))
+    if ((!offset.has_value()))
     {
         return ::hglrt::mul__i64_i64(value, factor);
     }
@@ -194,7 +298,64 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tup
     return items;
 }
 
-// index_first() -> list<i64> (`const fn`), module demo.values, line 143
+// placed_at(divisor: i64) -> list<list<i64>> (`const fn`), module demo.values, line 144
+::hglrt::list<::hglrt::list<::hgraph::Int>> placed_at([[maybe_unused]] ::hgraph::Int divisor)
+{
+    [[maybe_unused]] ::hglrt::list<::hglrt::list<::hgraph::Int>> rows = ::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{10}};
+    static_cast<void>(::hglrt::item(rows, 2));
+    const ::hgraph::Int index_00_ = ::hglrt::floordiv__i64_i64<::hglrt::ZeroPolicy::fail>(1, divisor);
+    static_cast<void>(::hglrt::item(::hglrt::item(rows, 2), index_00_));
+    ::hglrt::item(::hglrt::item(rows, 2), index_00_) = 0;
+    return rows;
+}
+
+// bumped_at(divisor: i64) -> list<list<i64>> (`const fn`), module demo.values, line 150
+::hglrt::list<::hglrt::list<::hgraph::Int>> bumped_at([[maybe_unused]] ::hgraph::Int divisor)
+{
+    [[maybe_unused]] ::hglrt::list<::hglrt::list<::hgraph::Int>> rows = ::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{10}};
+    ::hgl::demo::values::m_::bump([&]() -> ::hgraph::Int& { auto& list_00_ = ::hglrt::item(rows, 2); const auto index_01_ = ::hglrt::floordiv__i64_i64<::hglrt::ZeroPolicy::fail>(1, divisor); return ::hglrt::item(list_00_, index_01_); }(), 1);
+    return rows;
+}
+
+// indices_in_order() -> list<list<i64>> (`const fn`), module demo.values, line 158
+::hglrt::list<::hglrt::list<::hgraph::Int>> indices_in_order()
+{
+    [[maybe_unused]] ::hglrt::list<::hglrt::list<::hgraph::Int>> rows = ::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2}, ::hglrt::list<::hgraph::Int>{3, 4}};
+    [[maybe_unused]] ::hgraph::Int i = 0;
+    const ::hgraph::Int index_00_ = i;
+    static_cast<void>(::hglrt::item(rows, index_00_));
+    const ::hgraph::Int index_01_ = [&]() -> ::hgraph::Int {
+        i = 1;
+        return 0;
+    }();
+    static_cast<void>(::hglrt::item(::hglrt::item(rows, index_00_), index_01_));
+    ::hglrt::item(::hglrt::item(rows, index_00_), index_01_) = 5;
+    return rows;
+}
+
+// present(a: i64?) -> bool (`const fn`), module demo.values, line 170
+::hgraph::Bool present([[maybe_unused]] std::optional<::hgraph::Int> a)
+{
+    if ((!a.has_value()))
+    {
+        return false;
+    }
+    return a.has_value();
+}
+
+// never_null(a: i64) -> bool (`const fn`), module demo.values, line 177
+::hgraph::Bool never_null([[maybe_unused]] ::hgraph::Int a)
+{
+    return (static_cast<void>(a), false);
+}
+
+// null_is_null() -> bool (`const fn`), module demo.values, line 179
+::hgraph::Bool null_is_null()
+{
+    return true;
+}
+
+// index_first() -> list<i64> (`const fn`), module demo.values, line 182
 ::hglrt::list<::hgraph::Int> index_first()
 {
     [[maybe_unused]] ::hglrt::list<::hgraph::Int> items = ::hglrt::list<::hgraph::Int>{10, 20};
@@ -208,7 +369,7 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tup
     return items;
 }
 
-// index_once() -> tuple<list<i64>, i64> (`const fn`), module demo.values, line 154
+// index_once() -> tuple<list<i64>, i64> (`const fn`), module demo.values, line 193
 std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once()
 {
     [[maybe_unused]] ::hglrt::list<::hgraph::Int> items = ::hglrt::list<::hgraph::Int>{10, 20, 30};
@@ -222,7 +383,7 @@ std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once()
     return std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int>{items, at};
 }
 
-// held_text() -> str (`const fn`), module demo.values, line 166
+// held_text() -> str (`const fn`), module demo.values, line 205
 ::hgraph::Str held_text()
 {
     [[maybe_unused]] const ::hglrt::list<::hglrt::list<::hgraph::Str>> rows = ::hglrt::list<::hglrt::list<::hgraph::Str>>{::hglrt::list<::hgraph::Str>{::hgraph::Str{"text"}}};
@@ -233,7 +394,7 @@ std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once()
     return held;
 }
 
-// tuple_first() -> tuple<i64, i64> (`const fn`), module demo.values, line 177
+// tuple_first() -> tuple<i64, i64> (`const fn`), module demo.values, line 216
 std::tuple<::hgraph::Int, ::hgraph::Int> tuple_first()
 {
     [[maybe_unused]] ::hgraph::Int x = 1;
@@ -243,7 +404,7 @@ std::tuple<::hgraph::Int, ::hgraph::Int> tuple_first()
 }(); return std::tuple<::hgraph::Int, ::hgraph::Int>{entry_00_, entry_01_}; }();
 }
 
-// text_first() -> tuple<str, i64> (`const fn`), module demo.values, line 185
+// text_first() -> tuple<str, i64> (`const fn`), module demo.values, line 224
 std::tuple<::hgraph::Str, ::hgraph::Int> text_first()
 {
     [[maybe_unused]] ::hglrt::list<::hgraph::Str> words = ::hglrt::list<::hgraph::Str>{::hgraph::Str{"before"}};
@@ -253,19 +414,19 @@ std::tuple<::hgraph::Str, ::hgraph::Int> text_first()
 }(); return std::tuple<::hgraph::Str, ::hgraph::Int>{entry_00_, entry_01_}; }();
 }
 
-// from_a_made_row(one: i64) -> i64 (`const fn`), module demo.values, line 195
+// from_a_made_row(one: i64) -> i64 (`const fn`), module demo.values, line 234
 ::hgraph::Int from_a_made_row([[maybe_unused]] ::hgraph::Int one)
 {
     return [&]() -> ::hgraph::Int { const auto list_00_ = ::hglrt::item(::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{7}}, 0); const auto index_01_ = ::hglrt::floordiv__i64_i64<::hglrt::ZeroPolicy::fail>(0, one); return ::hglrt::item(list_00_, index_01_); }();
 }
 
-// made_rows() -> list<list<i64>> (`const fn`), module demo.values, line 198
+// made_rows() -> list<list<i64>> (`const fn`), module demo.values, line 237
 ::hglrt::list<::hglrt::list<::hgraph::Int>> made_rows()
 {
     return ::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2}, ::hglrt::list<::hgraph::Int>{3}};
 }
 
-// first_row_total() -> i64 (`const fn`), module demo.values, line 200
+// first_row_total() -> i64 (`const fn`), module demo.values, line 239
 ::hgraph::Int first_row_total()
 {
     [[maybe_unused]] ::hgraph::Int total = 0;
@@ -277,13 +438,13 @@ std::tuple<::hgraph::Str, ::hgraph::Int> text_first()
     return total;
 }
 
-// grown(by: i64) -> list<i64> (`const fn`), module demo.values, line 209
+// grown(by: i64) -> list<i64> (`const fn`), module demo.values, line 248
 ::hglrt::list<::hgraph::Int> grown([[maybe_unused]] ::hgraph::Int by)
 {
     return ::hglrt::list<::hgraph::Int>{::hglrt::add__i64_i64(by, 9223372036854775807)};
 }
 
-// made_error() -> str (`const fn`), module demo.values, line 211
+// made_error() -> str (`const fn`), module demo.values, line 250
 ::hgraph::Str made_error()
 {
     [[maybe_unused]] ::hgraph::Str message = ::hgraph::Str{"before"};
@@ -294,7 +455,7 @@ std::tuple<::hgraph::Str, ::hgraph::Int> text_first()
     return (made).message;
 }
 
-// code_first() -> str (`const fn`), module demo.values, line 221
+// code_first() -> str (`const fn`), module demo.values, line 260
 ::hgraph::Str code_first()
 {
     [[maybe_unused]] ::hgraph::Str text = ::hgraph::Str{"before"};
@@ -305,13 +466,13 @@ std::tuple<::hgraph::Str, ::hgraph::Int> text_first()
     return (made).message;
 }
 
-// same_level(level: Level) -> Level (`const fn`), module demo.values, line 231
+// same_level(level: Level) -> Level (`const fn`), module demo.values, line 270
 ::hgl::demo::values::m_::Level same_level([[maybe_unused]] ::hgl::demo::values::m_::Level level)
 {
     return level;
 }
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 236
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 275
 void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int by)
 {
     count = ::hglrt::add__i64_i64(count, by);
@@ -394,6 +555,16 @@ void tuples_and_constants()
     ::hglrt::testing::check((::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::limit(), 10, 0.0, 0.0) && ::hglrt::eq__T_T<::hgraph::TimeDelta>(::hgl::demo::values::m_::step(), ::hgraph::TimeDelta{5000000})));
 }
 
+void null_tests_of_any_value()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check((::hgl::demo::values::m_::present(3) && (!::hgl::demo::values::m_::present(std::nullopt))));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check((!::hgl::demo::values::m_::never_null(1)));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hgl::demo::values::m_::null_is_null());
+}
+
 void results_propagate()
 {
     ::hglrt::testing::statement();
@@ -414,6 +585,8 @@ void evaluation_follows_the_order_written()
     ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::list_first(), 20, 0.0, 0.0));
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hgraph::Int>>(::hgl::demo::values::m_::index_first(), ::hglrt::list<::hgraph::Int>{10, 1}));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hglrt::list<::hgraph::Int>>>(::hgl::demo::values::m_::indices_in_order(), ::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{5, 2}, ::hglrt::list<::hgraph::Int>{3, 4}}));
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int>>(::hgl::demo::values::m_::index_once(), std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int>{::hglrt::list<::hgraph::Int>{10, 25, 30}, 1}));
     ::hglrt::testing::statement();
@@ -461,6 +634,18 @@ void a_place_is_checked_before_its_value()
     ::hglrt::testing::statement();
     ::hglrt::testing::raises("value.index_out_of_range", [&] {
         [[maybe_unused]] const ::hglrt::list<::hgraph::Int> replaced = ::hgl::demo::values::m_::replaced_first();
+    });
+}
+
+void a_place_fails_at_its_list_first()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::raises("value.index_out_of_range", [&] {
+        [[maybe_unused]] const ::hglrt::list<::hglrt::list<::hgraph::Int>> assigned = ::hgl::demo::values::m_::placed_at(0);
+    });
+    ::hglrt::testing::statement();
+    ::hglrt::testing::raises("value.index_out_of_range", [&] {
+        [[maybe_unused]] const ::hglrt::list<::hglrt::list<::hgraph::Int>> given = ::hgl::demo::values::m_::bumped_at(0);
     });
 }
 

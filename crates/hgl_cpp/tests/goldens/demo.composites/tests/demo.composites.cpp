@@ -1,6 +1,22 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include <hglrt/host.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef a_failing_value_adds_no_key
+#undef a_missing_key_fails
+#undef a_struct_holding_nan_is_not_equal_to_itself
+#undef a_var_place_is_taken_where_the_call_is_made
+#undef arguments_are_evaluated_in_the_order_written
+#undef composites
+#undef deltas_are_values
+#undef demo
+#undef dictionaries_read_add_and_loop
+#undef enums_zones_and_nullables
+#undef fields_default_and_nest
+#undef generic_and_abstract_structs
+#undef sets_have_no_order
+#undef structs_are_values
+
 namespace hgl::demo::composites::m_::t_
 {
 void structs_are_values();

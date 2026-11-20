@@ -395,7 +395,7 @@ fn value_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 13 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 15 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -607,5 +607,74 @@ fn two_modules_whose_headers_name_each_others_enums_are_built() {
     assert!(
         stdout.contains("passed   executable  demo.right::each_names_the_other"),
         "{stdout}"
+    );
+}
+
+/// CTRL-6: "An unmatched selector uses default or fails": a `switch`
+/// with no `default` whose selector no case has fails its test.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn an_unmatched_switch_fails() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("unmatched");
+    let file = write(
+        &root,
+        "src/demo.unmatched.hgl",
+        concat!(
+            "module demo.unmatched\n",
+            "const fn matched(x: i64) -> i64 {\n",
+            "    var r = 0\n",
+            "    switch x {\n",
+            "        case 1:\n",
+            "            r = 10\n",
+            "    }\n",
+            "    return r\n",
+            "}\n",
+            "test matched_one { assert matched(1) == 10 }\n",
+            "test unmatched_two { assert matched(2) == 0 }\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(
+        stdout.contains("passed   executable  demo.unmatched::matched_one")
+            && stdout.contains("FAILED   executable  demo.unmatched::unmatched_two")
+            && stdout.contains("no case of the `switch` has the selector's value"),
+        "{stdout}"
+    );
+}
+
+/// Plain names that a platform's compiler or headers take, a GNU keyword
+/// and the macros of glibc's headers among them, are built as they are
+/// written: units are strict C++23, and each file `#undef`s its names.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn names_a_platform_takes_are_built() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("platform-names");
+    let file = write(
+        &root,
+        "src/demo.names.hgl",
+        concat!(
+            "module demo.names\n",
+            "const fn issubnormal(typeof: i64) -> i64 => typeof\n",
+            "const fn htobe16(alloca: i64, major: i64) -> i64 => alloca + major\n",
+            "const fn linux(unix: i64) -> i64 => unix\n",
+            "test each_is_its_own {\n",
+            "    let timerclear = issubnormal(1)\n",
+            "    assert htobe16(timerclear, 2) == 3 && linux(4) == 4\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(
+        stdout.contains("passed   executable  demo.names::each_is_its_own"),
+        "{stdout}{}",
+        text(&output.stderr)
     );
 }

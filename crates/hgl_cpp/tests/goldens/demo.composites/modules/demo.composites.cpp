@@ -1,6 +1,120 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include "demo.composites.h"
 
+// Names this file writes, which no macro of a header above takes.
+#undef Base
+#undef Book
+#undef Box
+#undef Empty
+#undef Line
+#undef Point
+#undef Round
+#undef Shape
+#undef Side
+#undef Tagged
+#undef ZeroPolicy
+#undef a_failing_value_adds_no_key
+#undef a_missing_key_fails
+#undef a_struct_holding_nan_is_not_equal_to_itself
+#undef a_var_place_is_taken_where_the_call_is_made
+#undef again
+#undef arguments_are_evaluated_in_the_order_written
+#undef arrived
+#undef as_base
+#undef as_shapes
+#undef at
+#undef base
+#undef base_id
+#undef book
+#undef booked
+#undef books
+#undef bump
+#undef bump_after_growth
+#undef bumped
+#undef buy
+#undef by
+#undef change
+#undef changed
+#undef cleared
+#undef composites
+#undef count
+#undef counted
+#undef counts
+#undef deltas_are_values
+#undef demo
+#undef dictionaries_read_add_and_loop
+#undef doubled_all
+#undef empty
+#undef end
+#undef enums_zones_and_nullables
+#undef failing
+#undef fields_default_and_nest
+#undef first_price
+#undef first_x
+#undef generic_and_abstract_structs
+#undef holds
+#undef id
+#undef ieee
+#undef is_one
+#undef item
+#undef items
+#undef joined
+#undef key
+#undef lhs
+#undef line
+#undef listed
+#undef london
+#undef longer
+#undef made
+#undef member
+#undef members
+#undef more
+#undef moved
+#undef moved_in
+#undef name
+#undef named
+#undef next
+#undef none
+#undef note
+#undef nudged
+#undef number
+#undef odd
+#undef opening
+#undef origin
+#undef pair_change
+#undef point
+#undef points
+#undef price_of
+#undef prices
+#undef read_before
+#undef rhs
+#undef round
+#undef rounds
+#undef rows
+#undef same
+#undef sell
+#undef sets_have_no_order
+#undef seven
+#undef shape
+#undef shelf
+#undef side_named
+#undef side_of
+#undef size
+#undef stretched
+#undef structs_are_values
+#undef sum
+#undef tag
+#undef tag_count
+#undef tags
+#undef total
+#undef value
+#undef wanted
+#undef word
+#undef words
+#undef written_order
+#undef x
+#undef y
+
 namespace hgl::demo::composites::m_
 {
 
@@ -105,7 +219,9 @@ namespace c_
         }
         else
         {
-            ::hglrt::entry_at(counts, word) = ::hglrt::add__i64_i64(::hglrt::entry_at(counts, word), 1);
+            const ::hgraph::Str key_00_ = word;
+            static_cast<void>(::hglrt::entry_at(counts, key_00_));
+            ::hglrt::entry_at(counts, key_00_) = ::hglrt::add__i64_i64(::hglrt::entry_at(counts, key_00_), 1);
         }
     }
     return counts;
@@ -115,7 +231,9 @@ namespace c_
 ::hglrt::dict<::hgraph::Str, ::hgraph::Int> bumped([[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book, [[maybe_unused]] const ::hgraph::Str& key)
 {
     [[maybe_unused]] ::hglrt::dict<::hgraph::Str, ::hgraph::Int> changed = book;
-    ::hglrt::entry_at(changed, key) = ::hglrt::add__i64_i64(::hglrt::entry_at(changed, key), 1);
+    const ::hgraph::Str key_00_ = key;
+    static_cast<void>(::hglrt::entry_at(changed, key_00_));
+    ::hglrt::entry_at(changed, key_00_) = ::hglrt::add__i64_i64(::hglrt::entry_at(changed, key_00_), 1);
     return changed;
 }
 
@@ -179,7 +297,9 @@ namespace c_
     const ::hglrt::dict<::hgraph::Str, ::hgraph::Int> items_00_ = changed;
     for ([[maybe_unused]] const auto& [key, value] : items_00_)
     {
-        ::hglrt::entry(changed, key) = ::hglrt::mul__i64_i64(value, 2);
+        const ::hgraph::Str key_01_ = key;
+        static_cast<void>(::hglrt::entry(changed, key_01_));
+        ::hglrt::entry(changed, key_01_) = ::hglrt::mul__i64_i64(value, 2);
         ::hglrt::entry(changed, ::hgraph::Str{"extra"}) = 0;
     }
     return changed;
@@ -483,6 +603,7 @@ void a_failing_value_adds_no_key()
     [[maybe_unused]] ::hglrt::dict<::hgraph::Str, ::hgraph::Int> book = ::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}});
     ::hglrt::testing::statement();
     ::hglrt::testing::raises("value.index_out_of_range", [&] {
+        static_cast<void>(::hglrt::entry(book, ::hgraph::Str{"b"}));
         ::hglrt::entry(book, ::hgraph::Str{"b"}) = ::hgl::demo::composites::m_::failing();
     });
     ::hglrt::testing::statement();

@@ -37,7 +37,9 @@ mod types;
 mod values;
 
 pub(crate) use composites::Layout;
-pub(crate) use names::{identifier, module_namespace, string, test_namespace, testing};
+pub(crate) use names::{
+    identifier, module_namespace, program_names, string, test_namespace, testing,
+};
 
 /// What writing a module gave.
 pub(crate) struct Written {

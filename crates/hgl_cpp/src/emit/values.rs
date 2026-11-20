@@ -26,6 +26,7 @@ use hgl_analyser::{Detail, Signature, Type};
 use hgl_diagnostics::Location;
 
 use super::Emitter;
+use super::calls::changes;
 use super::names::{self, identifier};
 use super::statements::Scope;
 use super::types::by_value;
@@ -189,6 +190,12 @@ impl Emitter<'_> {
             self.unsupported(at, "a constant with no value");
             return;
         };
+        // The analyser keeps a constant's value with no locals of its
+        // own, so a block in it that runs statements cannot be written.
+        if changes(value) {
+            self.unsupported(at, "a constant whose value runs statements");
+            return;
+        }
         let Some(written) = self.written_type(ty, at) else {
             return;
         };

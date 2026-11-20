@@ -3,6 +3,41 @@
 
 #include <hglrt/hglrt.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef Base
+#undef Book
+#undef Box
+#undef Empty
+#undef Line
+#undef Point
+#undef Round
+#undef Shape
+#undef Side
+#undef Tagged
+#undef buy
+#undef composites
+#undef count
+#undef demo
+#undef end
+#undef id
+#undef lhs
+#undef members
+#undef name
+#undef note
+#undef owner
+#undef points
+#undef prices
+#undef radius
+#undef rhs
+#undef sell
+#undef side
+#undef start
+#undef tag
+#undef tags
+#undef value
+#undef x
+#undef y
+
 namespace hgl::demo::composites::m_
 {
 struct Point;
