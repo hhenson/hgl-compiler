@@ -51,6 +51,15 @@ enum class Hook { start, evaluation, stop };
 /// `warning`, or `error`").
 enum class LogLevel { debug, info, warning, error };
 
+/// The names of core's `LogLevel` (values.h, `EnumNames`).
+constexpr EnumNames<LogLevel, 4> hgl_enum(LogLevel) noexcept {
+    return {"core::LogLevel",
+            {{LogLevel::debug, "debug"},
+             {LogLevel::info, "info"},
+             {LogLevel::warning, "warning"},
+             {LogLevel::error, "error"}}};
+}
+
 /// `Logger` (CAP-2), what `inject logger` binds: the run's logger, as the
 /// hook's `hgraph::LoggerView` gives it.
 class Logger {
@@ -153,14 +162,22 @@ class Scheduler {
     bool due_now_ = false;
 };
 
+// The wall-clock option, `on_wall_clock: true`, is hgraph's own, as CAP-4
+// has it: in a run in real time the request "is measured from ... the later
+// of the evaluation time and `clock.now`", and "A wake of the option that is
+// already due where it is asked for ... is not dropped: it comes in the next
+// cycle, at the later of that time and the evaluation time plus the engine's
+// smallest step, and in `start` at that time"; "In simulation the option
+// changes nothing".
+
 /// `schedule(capability: Scheduler, at: duration, tag: str? = null,
 /// on_wall_clock: bool = false)` (CAP-4): asks for a wake `at` after the
-/// current evaluation time, on the engine's clock or, where `on_wall_clock`
-/// is true and the engine runs in real time, after the wall clock's time,
-/// as hgraph counts one. TIME-8: "A wake asked for with a `duration` takes
-/// one more than zero, but in `start`, which takes zero too ... A duration
-/// that is not admitted, a negative one in `start` included, ... fails the
-/// call as the program runs, with `schedule.non_positive_duration`". A wake
+/// current evaluation time, or with the wall-clock option in real time
+/// after the later of it and `clock.now`. TIME-8: "A wake asked for with a
+/// `duration` takes one more than zero, but in `start`, which takes zero too
+/// ... A duration that is not admitted, a negative one in `start` included,
+/// ... fails the call as the program runs, with
+/// `schedule.non_positive_duration`". A wake
 /// asked for under a tag replaces the pending wake of that tag. A tag is
 /// any text, the empty one included: null is no tag (CAP-4: "a `str?` that
 /// is null when omitted"), and hgraph keeps no wake under the empty tag, so
@@ -173,10 +190,11 @@ void schedule_Scheduler_duration_str__bool(const Scheduler& capability, duration
 /// `schedule(capability: Scheduler, at: datetime, tag: str? = null,
 /// on_wall_clock: bool = false)` (CAP-4): asks for a wake at `at`. "One
 /// asked for at a `datetime` before the current evaluation time is
-/// dropped: there is no wake, and no failure", on either clock. One at the
-/// current evaluation time is a wake at the start in `start`, and is
-/// dropped in an evaluation, where no cycle can still run then (CRUN-3), as
-/// hgraph drops it.
+/// dropped: there is no wake, and no failure", but a wake of the wall-clock
+/// option in real time, which comes in the next cycle. One at the current
+/// evaluation time is a wake at the start in `start`, and is dropped in an
+/// evaluation, where no cycle can still run then (CRUN-3), as hgraph drops
+/// it.
 void schedule_Scheduler_datetime_str__bool(const Scheduler& capability, datetime at,
                                            const std::optional<str>& tag = std::nullopt,
                                            bool on_wall_clock = false);

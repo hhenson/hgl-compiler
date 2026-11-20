@@ -67,6 +67,15 @@ void raises_out_of_range() {
     (void)hglrt::add__i64_i64(std::numeric_limits<i64>::max(), 1);
 }
 
+/// The text of a failure whose message holds a NUL and the other control
+/// characters (LEX-24 admits `\u{0}` in a string).
+const std::string controls("before \0\x01\x0b\x0c\x1b\x1f\x7f\n\r after", 22);
+
+void raises_with_controls() {
+    hglrt::testing::statement();
+    hglrt::raise(hglrt::make_error("said " + controls, "user.code"));
+}
+
 // Tests held to a time limit (TST-17).
 
 /// Where the statement of `runs_past_its_limit` that is running at its
@@ -113,6 +122,8 @@ void runs_within_its_limit() {
 const hglrt::testing::Registration registered_passes{"host.cases::passes", &passes};
 const hglrt::testing::Registration registered_fails{"host.cases::fails_an_assertion", &fails_an_assertion};
 const hglrt::testing::Registration registered_raises{"host.cases::raises_out_of_range", &raises_out_of_range};
+const hglrt::testing::Registration registered_controls{"host.cases::raises_with_controls",
+                                                       &raises_with_controls};
 const hglrt::testing::Registration registered_past{"host.cases::runs_past_its_limit", &runs_past_its_limit};
 const hglrt::testing::Registration registered_after{"host.cases::starts_a_run_after_its_limit",
                                                     &starts_a_run_after_its_limit};
@@ -252,6 +263,53 @@ TEST_CASE("a run's bounds (CRUN-2, CRUN-3)") {
     CHECK(code_raised([] { (void)hglrt::testing::resolved({.start = datetime{}}); }) == "(no code)");
 }
 
+TEST_CASE("a run's end is no later than the latest end, and no cycle is at or after forever (CRUN-3)") {
+    using hglrt::testing::evaluate;
+    using hglrt::testing::resolved;
+    using hglrt_test::Counted;
+    using hglrt_test::entry_of;
+    namespace c = std::chrono;
+    // "`forever`, `2262-04-11T00:00:00Z` ... the latest end, `latest_end`,
+    // one smallest step before `forever`".
+    const datetime forever{c::sys_days{c::year{2262} / 4 / 11}};
+    const datetime latest = hglrt::testing::latest_end();
+    CHECK(latest == forever - 1us);
+    CHECK(resolved({.end = latest}).second == latest);
+    CHECK(resolved({.start = latest - 1s, .length = 1s}).second == latest);
+    CHECK(hglrt::testing::same(evaluate<i64>(entry_of<Counted>(Dense<i64>{7}), {.end = latest}),
+                               Dense<i64>{1}));
+
+    // An end after it fails as a start before the earliest start does, with
+    // no code: one given, and one a length gives, a length so long that no
+    // instant holds the end among them.
+    const i64 most = std::numeric_limits<i64>::max();
+    for (const hglrt::testing::Bounds& past :
+         {hglrt::testing::Bounds{.end = latest + 1us}, hglrt::testing::Bounds{.end = forever + c::years{100}},
+          hglrt::testing::Bounds{.start = latest, .length = 1us},
+          hglrt::testing::Bounds{.start = forever + c::years{1}, .length = 1s},
+          hglrt::testing::Bounds{.start = datetime{c::sys_days{c::year{2300} / 1 / 1}}, .length = 1s},
+          hglrt::testing::Bounds{.length = c::days{1'000'000}},
+          hglrt::testing::Bounds{.length = hglrt::duration{most}},
+          hglrt::testing::Bounds{.start = latest, .length = hglrt::duration{most}}}) {
+        CHECK(code_raised([&] { (void)resolved(past); }) == "(no code)");
+        CHECK(code_raised([&] { (void)evaluate<i64>(entry_of<Counted>(Dense<i64>{7}), past); }) ==
+              "(no code)");
+    }
+
+    // A run with no end ends at the latest end: a start at it or after it,
+    // after forever and after hgraph's own last time among them, runs no
+    // cycle, and a publication timed after forever is not made.
+    for (const datetime late : {latest, forever + c::years{1}, datetime{c::sys_days{c::year{2300} / 1 / 1}},
+                                datetime{c::sys_days{c::year{9999} / 12 / 31}}}) {
+        const auto ran = evaluate<i64>(entry_of<Counted>(Dense<i64>{7}), {.start = late});
+        CHECK(ran.start == late);
+        CHECK(ran.entries.empty());
+    }
+    const auto ran =
+        evaluate<i64>(entry_of<Counted>(Timed<i64>{{{0s, 7}, {latest - 1us, 7}, {forever + 1s, 7}}}));
+    CHECK(hglrt::testing::same(ran, Timed<i64>{{{0s, 1}, {latest - 1us, 2}}}));
+}
+
 TEST_CASE("an eval runs its entry in simulation and reads its recording (CEVAL-1, CEVAL-4)") {
     using hglrt_test::Counted;
     using hglrt_test::entry_of;
@@ -335,8 +393,44 @@ TEST_CASE("the host runs the tests named and writes what became of each") {
     CHECK_FALSE(std::filesystem::exists(results));
 }
 
+TEST_CASE("a failure's text is one results line, whatever characters it holds") {
+    const std::filesystem::path results = "hglrt-host-controls.txt";
+    std::string program = "tests";
+    std::string file = results.string();
+    std::string name = "host.cases::raises_with_controls";
+    std::vector<char*> argv{program.data(), file.data(), name.data()};
+    REQUIRE(hglrt::testing::main(static_cast<int>(argv.size()), argv.data()) == 0);
+    const std::vector<std::string> lines = lines_of(results);
+    REQUIRE(lines.size() == 2);
+    // A line feed and a carriage return are escaped, and every other
+    // character is written as it is: a NUL ends no line.
+    const std::string written("before \0\x01\x0b\x0c\x1b\x1f\x7f\\n\\r after", 24);
+    CHECK(lines[1].starts_with("failed 0 "));
+    CHECK(lines[1].find(" user.code: said " + written + ", raised at ") != std::string::npos);
+}
+
+TEST_CASE("a time limit too long for the host's clock is one that cannot pass (TST-17)") {
+    const std::filesystem::path results = "hglrt-host-limits.txt";
+    std::string program = "tests";
+    std::string file = results.string();
+    // 2^63 - 1 microseconds, about 317 years, and about 32 years.
+    std::vector<std::string> names{"host.cases::passes@9223372036854775807",
+                                   "host.cases::passes@10000000000000000",
+                                   "host.cases::passes@1000000000000000"};
+    std::vector<char*> argv{program.data(), file.data()};
+    for (std::string& name : names) {
+        argv.push_back(name.data());
+    }
+    REQUIRE(hglrt::testing::detail::main_with_grace(static_cast<int>(argv.size()), argv.data(), 200) == 0);
+    const std::vector<std::string> lines = lines_of(results);
+    REQUIRE(lines.size() == 6);
+    for (std::size_t test = 0; test < 3; ++test) {
+        CHECK(lines[2 * test + 1] == "passed " + std::to_string(test));
+    }
+}
+
 TEST_CASE("a test past its time limit has its runs stopped, and has failed (TST-17)") {
-    // The run in real time is stopped at the limit of 0.1s and ends as at
+    // The run in real time is stopped at the limit of 100ms and ends as at
     // its end; the test goes on to its end, and has failed; the next test
     // is not stopped.
     const auto [status, lines] =
@@ -347,7 +441,7 @@ TEST_CASE("a test past its time limit has its runs stopped, and has failed (TST-
     REQUIRE(lines.size() == 6);
     CHECK(lines[0] == "start 0");
     CHECK(lines[1] == "failed 0 " + std::to_string(limited_at.line()) +
-                          " timed out: it was still running after its limit of 0.1s");
+                          " timed out: it was still running after its limit of 100ms");
     CHECK(lines[2] == "start 1");
     CHECK(lines[3] == "passed 1");
     CHECK(lines[4] == "start 2");
@@ -360,7 +454,7 @@ TEST_CASE("a run a test starts after its limit is stopped as it starts (TST-17)"
     CHECK(status == 0);
     REQUIRE(lines.size() == 4);
     CHECK(lines[1].starts_with("failed 0 "));
-    CHECK(lines[1].ends_with(" timed out: it was still running after its limit of 0.05s"));
+    CHECK(lines[1].ends_with(" timed out: it was still running after its limit of 50ms"));
     CHECK(lines[3] == "passed 1");
 }
 
@@ -370,7 +464,7 @@ TEST_CASE("a test that cannot be stopped ends the process at its limit and grace
     REQUIRE(lines.size() == 2);
     CHECK(lines[0] == "start 0");
     CHECK(lines[1].starts_with("failed 0 "));
-    CHECK(lines[1].ends_with(" timed out: it was still running after its limit of 0.05s"));
+    CHECK(lines[1].ends_with(" timed out: it was still running after its limit of 50ms"));
 }
 
 TEST_CASE("a run in real time starts at the host clock's present (CRUN-2, RUN-3)") {

@@ -79,6 +79,11 @@ datetime earliest_start() noexcept {
     return hgraph::MIN_ST;
 }
 
+datetime latest_end() noexcept {
+    return datetime{std::chrono::sys_days{std::chrono::year{2262} / std::chrono::April / 11}} -
+           smallest_step();
+}
+
 void detail::unordered_keys() {
     fail_uncoded("the keys of a timed trace must strictly increase");
 }
@@ -150,11 +155,11 @@ std::string day_and_clock_text(std::int64_t microseconds) {
 } // namespace
 
 std::string detail::scalar_text(i64 value) {
-    return hglrt::detail::text_of(value);
+    return hglrt::detail::number_text(value);
 }
 
 std::string detail::scalar_text(f64 value) {
-    return hglrt::detail::text_of(value);
+    return hglrt::detail::number_text(value);
 }
 
 std::string detail::scalar_text(bool value) {
@@ -247,7 +252,8 @@ namespace {
 
 /// The runs of the test under way, which its host stops once its limit has
 /// passed (TST-17): the executor of the run under way, whether runs are
-/// watched, and whether they are to stop.
+/// watched (a run made while they are has `StopAtStart` observe it), and
+/// whether they are to stop.
 struct Runs {
     std::mutex mutex;
     std::optional<hgraph::GraphExecutorView> under_way;
@@ -317,13 +323,26 @@ std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds, Mode
                                   ? earliest_start()
                                   : std::chrono::floor<duration>(hgraph::engine_clock::now());
     const datetime start = bounds.start.value_or(unstated);
-    // CRUN-3 reserves the epoch itself for `never`.
+    // CRUN-3: "a run's start is no earlier than the first [`earliest_start`]
+    // and its end no later than the second [`latest_end`]". CRUN-3 reserves
+    // the epoch itself for `never`. Neither rule names the failure of a run
+    // outside them: each fails with no code.
     if (start < earliest_start()) {
         fail_uncoded("the run's start is before the earliest evaluation time");
     }
+    const auto past_latest_end = [] { fail_uncoded("the run's end is after the latest end"); };
     std::optional<datetime> end = bounds.end;
     if (bounds.length.has_value()) {
+        // A length that puts the end after the latest end, one too long for
+        // any instant among them, fails before the sum is taken. The start
+        // is after the epoch, so `latest_end() - start` does not overflow.
+        if (*bounds.length > latest_end() - start) {
+            past_latest_end();
+        }
         end = add__datetime_duration(start, *bounds.length);
+    }
+    if (end.has_value() && *end > latest_end()) {
+        past_latest_end();
     }
     return {start, end};
 }
@@ -342,24 +361,28 @@ hgraph::GlobalStateView Run::store() const {
 }
 
 Run run(const Entry& entry, const Bounds& bounds, Mode mode) {
-    const auto [start, end] = resolved(bounds, mode);
+    const auto [start, given_end] = resolved(bounds, mode);
     hgraph::Wiring wiring;
     entry(wiring, start);
-    if (end.has_value() && *end <= start) {
+    // CRUN-3: "`forever` ... after every [evaluation time]: no cycle runs at
+    // either": a run with no end ends at the latest end, which hgraph's own
+    // last time is later than.
+    const datetime end = given_end.value_or(latest_end());
+    if (end <= start) {
         // hgraph has no run that ends where it starts, so none is made.
         return Run(start);
     }
-    // One for the process: an executor keeps its observers for as long as
-    // it lives, and a run's is kept for its store.
-    static StopAtStart stopper;
     hgraph::GraphExecutorBuilder builder;
     builder.graph_builder(std::move(wiring).finish())
         .mode(mode == Mode::simulation ? hgraph::GraphExecutorMode::Simulation
                                        : hgraph::GraphExecutorMode::RealTime)
         .start_time(start)
-        .add_lifecycle_observer(&stopper);
-    if (end.has_value()) {
-        builder.end_time(*end);
+        .end_time(end);
+    if (runs().watched) {
+        // One for the process: an executor keeps its observers for as long
+        // as it lives, and a run's is kept for its store.
+        static StopAtStart stopper;
+        builder.add_lifecycle_observer(&stopper);
     }
     hgraph::GraphExecutorValue executor = builder.make_executor();
     {

@@ -127,11 +127,12 @@ The scheduler is such a case (CAP-4), and `libhglrt` builds core's rule
 over hgraph's `NodeScheduler`, as the Python-writing target does: hgraph
 keeps the wake it delivers until the node has run, so in that evaluation
 it counts as pending, `un_schedule()` cancels it, and `is_scheduled_now`
-is false after `reset`; it keeps no wake under the empty tag; and it keeps
-a wall-clock wake at a time before the evaluation time for the next
-cycle. hgraph's alarm, which the target's is, drops a wake still to come
-where an input's tick evaluates the node first, which CAP-5's "best
-effort" admits.
+is false after `reset`; and it keeps no wake under the empty tag. The
+wall-clock option is hgraph's own, as CAP-4 has it since the owner's
+ruling: in real time a wake of it already due comes in the next cycle, and
+in simulation the option changes nothing. hgraph's alarm, which the
+target's is, drops a wake still to come where an input's tick evaluates
+the node first, which CAP-5's "best effort" admits.
 
 ## Progress and acceptance
 
