@@ -135,12 +135,12 @@ jobs:
         # core's module from the pinned hgl_core submodule.
         with:
           submodules: recursive
-      # What the two are made from: the tag, the script, which names every
-      # package of the prefix and how the SDK is configured, and the image
-      # they are built on.
+      # What the two are made from: how the SDK is configured (without
+      # Arrow), the tag, the script, which names every package of the
+      # prefix, and the image they are built on.
       - id: key
         shell: bash
-        run: echo "key=hgraph-sdk-$ImageOS-$RUNNER_ARCH-$HGRAPH_TAG-${{ hashFiles('scripts/provision-hgraph-sdk.sh') }}" >> "$GITHUB_OUTPUT"
+        run: echo "key=hgraph-sdk-noarrow-$ImageOS-$RUNNER_ARCH-$HGRAPH_TAG-${{ hashFiles('scripts/provision-hgraph-sdk.sh') }}" >> "$GITHUB_OUTPUT"
       # A run with this key restores both and builds neither. A run that
       # builds them saves them, from a pull request too: the key changes
       # only with the tag, the script or the image, and a pull request that
@@ -152,8 +152,8 @@ jobs:
             .hgraph/deps
             .hgraph/sdk
           key: ${{ steps.key.outputs.key }}
-      # micromamba makes the dependency prefix from conda-forge: hgraph's
-      # dependencies, with CMake and Ninja, as hgraph's own CI has them.
+      # micromamba makes the dependency prefix from conda-forge: what hgraph
+      # needs without Arrow, fmt, spdlog and simdjson, with CMake and Ninja.
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: mamba-org/setup-micromamba@v3
         with:

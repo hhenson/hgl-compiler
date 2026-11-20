@@ -2,11 +2,15 @@
 # Builds hgraph's shared C++ SDK at a release tag and installs it into a
 # directory: the SDK that runtime/cpp (libhglrt) and the C++ target's
 # generated programs are built against (docs/architecture.md, "The C++
-# runtime library").
+# runtime library"). It is built without Arrow: hgraph's graph, node, type
+# and runtime layers, its runtime and wiring libraries, and nothing of its
+# standard library, which is all the C++ target takes from hgraph
+# (docs/cpp-target.md).
 #
 # Usage: scripts/provision-hgraph-sdk.sh TAG DIR
 #
-#   TAG  an hgraph release tag, such as 0.9.8
+#   TAG  an hgraph release tag, 0.9.12 or later (the first that builds
+#        without Arrow)
 #   DIR  where the SDK is installed: the value of HGL_HGRAPH_SDK for what
 #        is built against it. It must not exist yet, or be empty, or hold
 #        an SDK this script installed for TAG against the same dependency
@@ -14,10 +18,11 @@
 #
 # Environment:
 #
-#   HGL_HGRAPH_DEPS    (required) the dependency prefix: Arrow with its
-#                      Compute and Acero libraries, fmt, spdlog and simdjson.
-#                      Where it does not exist it is made, with micromamba,
-#                      from the conda-forge packages DEPENDENCIES lists.
+#   HGL_HGRAPH_DEPS    (required) the dependency prefix: fmt, spdlog and
+#                      simdjson, with CMake and Ninja. Where it does not
+#                      exist it is made, with micromamba, from the
+#                      conda-forge packages DEPENDENCIES lists. A prefix that
+#                      holds more, Arrow among it, does: nothing more is used.
 #   HGL_HGRAPH_SOURCE  a checkout of hgraph at TAG to build. Without it, TAG
 #                      is cloned from GitHub into a temporary directory.
 #   CXX                the C++ compiler, GCC 15 or later (default: g++).
@@ -26,39 +31,42 @@
 #   MAMBA_EXE          micromamba, where it is not `micromamba` on the path.
 #                      Needed only to make the dependency prefix.
 #
-# The SDK is configured as hgraph's own CI builds its shared install (the
-# job `native-shared-install` of `.github/workflows/native-cpp.yml` at the
-# tag): a Release build of shared libraries against the dependency prefix,
-# with the Python bindings, Python user nodes and IDE header hints off and
-# the date/tz library fetched where no package has it. That job also builds
-# hgraph's tests and extensions, with warnings as errors; the SDK needs
-# neither, and hgraph's warnings are hgraph's to fix, so they are left out.
-# PyArrow's Arrow is not used: the dependency prefix has Arrow. Where that
-# job runs its consumers with the prefix on LD_LIBRARY_PATH, the SDK's
-# libraries are given the prefix's library directory as their own run path
-# (CMAKE_INSTALL_RPATH, which hgraph puts before its `$ORIGIN`), so that a
-# program built against the SDK finds them with no setting of its own.
+# The SDK is configured as hgraph's own CI builds its runtime without Arrow
+# (the step "Build and test the native runtime without Arrow" of
+# `.github/workflows/native-cpp.yml` at the tag): a Release build of shared
+# libraries with `HGRAPH_WITH_ARROW=OFF`, which leaves out Frame, Series,
+# the table codecs, the standard library, Python and the extensions, and
+# with Arrow's packages kept from being found at all. The date/tz library
+# is always hgraph's own pinned release, fetched and built into its runtime
+# library, and never a package of the prefix: what the SDK is does not turn
+# on what else a prefix holds. hgraph's tests and warnings are hgraph's, so
+# they are left out. The SDK's libraries are given the prefix's library
+# directory as their own run path (CMAKE_INSTALL_RPATH, which hgraph puts
+# before its `$ORIGIN`), so that a program built against the SDK finds fmt
+# and spdlog with no setting of its own.
 #
-# DIR/hgl-sdk.txt says what was built: the tag, its commit, the compiler and
-# the dependency prefix. It is written last, so that a DIR without it holds
-# no whole SDK.
+# DIR/hgl-sdk.txt says what was built: the tag, its commit, how it was
+# configured (`arrow=off`), the compiler and the dependency prefix. It is
+# written last, so that a DIR without it holds no whole SDK, and an SDK of
+# the tag built otherwise, with Arrow, is not taken for this one.
 
 set -euo pipefail
 
-# The dependency prefix made where there is none: what hgraph's CI job
-# installs at 0.9.8 (`libarrow=25`, `libarrow-compute=25`, `libarrow-acero=25`,
-# `fmt`, `spdlog>=1.15`, `simdjson>=4.5`, `cmake>=3.26`, `ninja`), each at the
-# version the SDK was first built with.
+# The dependency prefix made where there is none: what hgraph's build
+# without Arrow finds as packages (fmt 11 or later, spdlog 1.15 or later,
+# simdjson 4.5 or later), and CMake and Ninja to build it, each at the
+# version the SDK was first built with. The date/tz library is not among
+# them: hgraph fetches its own.
 DEPENDENCIES=(
-    "libarrow=25.0.0"
-    "libarrow-compute=25.0.0"
-    "libarrow-acero=25.0.0"
     "fmt=12.1.0"
     "spdlog=1.17.0"
     "simdjson=4.6.4"
     "cmake=4.2.3"
     "ninja=1.13.2"
 )
+
+# How the SDK is configured, as hgl-sdk.txt says it.
+CONFIGURATION="arrow=off"
 
 # The oldest GCC the SDK is built with: hgraph's headers need C++23, and the
 # SDK's library needs GCC 15's libstdc++ (GLIBCXX_3.4.34) to link.
@@ -105,9 +113,10 @@ main() {
     deps=$(absolute "$HGL_HGRAPH_DEPS")
     local stamp=$dir/hgl-sdk.txt
 
-    # An SDK this script installed for the tag is kept; anything else in
-    # the way is not replaced.
-    if [[ -f $stamp ]] && grep -qx "tag=$tag" "$stamp" && grep -qxF "dependencies=$deps" "$stamp"; then
+    # An SDK this script installed for the tag, configured as it configures
+    # one, is kept; anything else in the way is not replaced.
+    if [[ -f $stamp ]] && grep -qx "tag=$tag" "$stamp" && grep -qxF "$CONFIGURATION" "$stamp" &&
+        grep -qxF "dependencies=$deps" "$stamp"; then
         say "$dir already holds hgraph $tag's SDK"
         return 0
     fi
@@ -154,6 +163,9 @@ main() {
     commit=$(git -C "$source" rev-parse HEAD)
     tagged=$(git -C "$source" rev-parse "refs/tags/$tag^{commit}") || fail "$source has no tag $tag"
     [[ $commit == "$tagged" ]] || fail "$source is at $commit, not at the tag $tag ($tagged)"
+    # A release with no such option builds Arrow in whatever it is told.
+    grep -q 'option(HGRAPH_WITH_ARROW' "$source/CMakeLists.txt" ||
+        fail "hgraph $tag cannot be built without Arrow: 0.9.12 or later is needed"
 
     local jobs=${HGL_BUILD_JOBS:-$(nproc)}
     say "building hgraph $tag ($commit) with GCC $version, $jobs jobs"
@@ -167,15 +179,20 @@ main() {
         -DCMAKE_INSTALL_RPATH="$deps/lib" \
         -DBUILD_TESTING=OFF \
         -DHGRAPH_BUILD_SHARED=ON \
+        -DHGRAPH_WITH_ARROW=OFF \
+        -DCMAKE_DISABLE_FIND_PACKAGE_Arrow=ON \
+        -DCMAKE_DISABLE_FIND_PACKAGE_ArrowCompute=ON \
+        -DCMAKE_DISABLE_FIND_PACKAGE_ArrowAcero=ON \
         -DHGRAPH_BUILD_PYTHON_BINDINGS=OFF \
         -DHGRAPH_ENABLE_PYTHON_USER_NODES=OFF \
         -DHGRAPH_ENABLE_IDE_PYTHON_HEADER_HINTS=OFF \
-        -DHGRAPH_USE_PYARROW_ARROW=OFF \
-        -DHGRAPH_FETCH_DATE=ON
+        -DHGRAPH_FETCH_DATE=ON \
+        -DCMAKE_DISABLE_FIND_PACKAGE_date=ON
     "$cmake" --build "$work/build" --parallel "$jobs"
     "$cmake" --install "$work/build"
 
-    printf 'tag=%s\ncommit=%s\ncompiler=GCC %s\ndependencies=%s\n' "$tag" "$commit" "$version" "$deps" >"$stamp"
+    printf 'tag=%s\ncommit=%s\n%s\ncompiler=GCC %s\ndependencies=%s\n' "$tag" "$commit" "$CONFIGURATION" "$version" \
+        "$deps" >"$stamp"
     say "installed hgraph $tag's SDK into $dir in $((SECONDS - started)) s"
 }
 
