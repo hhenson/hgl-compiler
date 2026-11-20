@@ -13,8 +13,10 @@ use hgl_analyser::{DeclarationKind, Program, Signature, Type};
 /// The words C++ keeps for itself, its alternative tokens, the names it
 /// gives a meaning in some places (`final`, `module`, `import`), and
 /// the lowercase macros the generated code's headers define or the
-/// compiler predefines in its GNU mode (`linux`, `unix`), in the order
-/// of the alphabet. No plain identifier is one of them.
+/// compiler predefines in its GNU mode (`linux`, `unix`), and
+/// `hgl_enum`, by which the runtime library finds an enum's names beside
+/// it (`types`), in the order of the alphabet. No plain identifier is one
+/// of them.
 const RESERVED: &[&str] = &[
     "alignas",
     "alignof",
@@ -67,6 +69,7 @@ const RESERVED: &[&str] = &[
     "for",
     "friend",
     "goto",
+    "hgl_enum",
     "i386",
     "if",
     "import",
