@@ -431,53 +431,93 @@ pub fn run_within(
         .unwrap_or("it printed no error");
     let stopped = format!("the interpreter stopped ({}): {last}", finished.status);
 
-    // What the driver recorded of each test: the last line that names
-    // it. A file that is not there is one with nothing in it.
+    // What the driver recorded of each test. A file that is not there
+    // is one with nothing in it.
     let recorded = fs::read_to_string(&results).unwrap_or_default();
-    let mut outcomes: Vec<Option<Ran>> = vec![None; tests.len()];
-    let mut started = vec![false; tests.len()];
+    read_results(&recorded, tests.len())
+        .into_iter()
+        .zip(tests)
+        .map(|(recorded, &test)| match recorded.said {
+            Some(Said::Passed) => Ran::Passed,
+            Some(Said::Failed { line, message }) => Ran::Failed {
+                at: line.and_then(|line| output.tests[test].statement_at(line)),
+                message,
+            },
+            Some(Said::Unloaded(reason)) => {
+                Ran::NotRun(format!("its module could not be loaded: {reason}"))
+            }
+            None => {
+                let when = if recorded.started {
+                    "while running"
+                } else {
+                    "before"
+                };
+                Ran::NotRun(format!("{stopped} {when} this test"))
+            }
+        })
+        .collect()
+}
+
+/// What a results file says of one test of the plan: the protocol the
+/// drivers of both targets write, described at the head of this file
+/// and of `support/run_tests.py`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Recorded {
+    /// True once a `start` line names it.
+    pub started: bool,
+    /// What the last line that names it with an outcome says, if one
+    /// does.
+    pub said: Option<Said>,
+}
+
+/// An outcome a results file gives a test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Said {
+    /// `passed N`: it ran to its end.
+    Passed,
+    /// `failed N LINE TEXT`: it failed in the statement that starts at
+    /// or before `line` of the file its test is written in; `None`
+    /// where the line is not a number.
+    Failed {
+        /// The line, counted from 1; 0 where the driver did not know.
+        line: Option<usize>,
+        /// What the host said, with the protocol's escapes undone.
+        message: String,
+    },
+    /// `unloaded N TEXT`: it could not be found or loaded, with why.
+    Unloaded(String),
+}
+
+/// What `recorded`, the text of a results file, says of each of the
+/// `count` tests of its plan, in the plan's order. A line that names
+/// no test of the plan, or says nothing known, is passed over, and of
+/// the lines that name a test with an outcome the last one counts.
+pub fn read_results(recorded: &str, count: usize) -> Vec<Recorded> {
+    let mut read = vec![Recorded::default(); count];
     for line in recorded.lines() {
         let mut parts = line.splitn(3, ' ');
         let (Some(what), Some(number)) = (parts.next(), parts.next()) else {
             continue;
         };
-        let Some(number) = number.parse::<usize>().ok().filter(|&n| n < tests.len()) else {
+        let Some(number) = number.parse::<usize>().ok().filter(|&n| n < count) else {
             continue;
         };
         let rest = parts.next().unwrap_or("");
         match what {
-            "start" => started[number] = true,
-            "passed" => outcomes[number] = Some(Ran::Passed),
+            "start" => read[number].started = true,
+            "passed" => read[number].said = Some(Said::Passed),
             "failed" => {
                 let (line, text) = rest.split_once(' ').unwrap_or((rest, ""));
-                let at = line
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|line| output.tests[tests[number]].statement_at(line));
-                outcomes[number] = Some(Ran::Failed {
-                    at,
+                read[number].said = Some(Said::Failed {
+                    line: line.parse::<usize>().ok(),
                     message: unescaped(text),
                 });
             }
-            "unloaded" => {
-                outcomes[number] = Some(Ran::NotRun(format!(
-                    "its module could not be loaded: {}",
-                    unescaped(rest)
-                )));
-            }
+            "unloaded" => read[number].said = Some(Said::Unloaded(unescaped(rest))),
             _ => {}
         }
     }
-    outcomes
-        .into_iter()
-        .zip(started)
-        .map(|(outcome, started)| {
-            outcome.unwrap_or_else(|| {
-                let when = if started { "while running" } else { "before" };
-                Ran::NotRun(format!("{stopped} {when} this test"))
-            })
-        })
-        .collect()
+    read
 }
 
 /// The text the driver wrote with `\\`, `\n` and `\r` for a backslash,
@@ -502,12 +542,39 @@ fn unescaped(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::unescaped;
+    use super::{Recorded, Said, read_results, unescaped};
 
     #[test]
     fn the_drivers_text_reads_back() {
         assert_eq!(unescaped(r"a\\b\nc\rd"), "a\\b\nc\rd");
         // A backslash the driver would not write is kept.
         assert_eq!(unescaped(r"end\"), "end\\");
+    }
+
+    /// Each test's last outcome counts; a line naming no test of the
+    /// plan is passed over.
+    #[test]
+    fn a_results_file_reads_back() {
+        let recorded = "start 0\npassed 0\nstart 1\nfailed 1 12 a\\nb\nstart 2\nunloaded 9 x\n";
+        assert_eq!(
+            read_results(recorded, 3),
+            [
+                Recorded {
+                    started: true,
+                    said: Some(Said::Passed),
+                },
+                Recorded {
+                    started: true,
+                    said: Some(Said::Failed {
+                        line: Some(12),
+                        message: "a\nb".to_string(),
+                    }),
+                },
+                Recorded {
+                    started: true,
+                    said: None,
+                },
+            ]
+        );
     }
 }

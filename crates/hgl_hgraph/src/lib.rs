@@ -66,7 +66,10 @@ use std::time::Duration;
 use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location};
 
-pub use host::{Ran, RanApplication, Stop, run, run_application, run_within, write};
+pub use host::{
+    Ran, RanApplication, Recorded, Said, Stop, read_results, run, run_application, run_within,
+    write,
+};
 
 /// The name `hgl emit --target` takes for this target.
 pub const TARGET: &str = "hgraph";
