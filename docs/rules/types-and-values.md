@@ -178,6 +178,7 @@ parser: done
 analyser: done
 
 - `ref` is no type but a mark of a node's parameter and result, whose type is the T after it (FN-16); a graph gives a `ref` parameter of T a connection of T
+- A `signal` parameter marked `ref` is `ref.position`, a code whose row is proposed (FN-16)
 - `rolling_window`, `atomic` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)
 - A `signal` takes no default but `null` (`type.mismatch`), and a hook gives it to an endpoint operation and reads it nowhere else (`type.not_ordinary`)
 

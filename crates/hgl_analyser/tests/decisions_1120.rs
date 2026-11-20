@@ -183,3 +183,98 @@ fn a_test_of_modified_guards_a_child_as_the_read_names_it() {
         ]
     );
 }
+
+/// FN-16: "A `ref` result designates one endpoint whole: an assignment to
+/// a part of its `out`, `out.bid = x` or `out[0] = x`, rejects.
+/// Proposed: that assignment rejects with the code `binding.immutable`."
+/// A field, a position, one known only when the program runs, one at
+/// depth and a compound assignment are each such a part; `out =` of a
+/// `ref` result designates, and a part of `out` of a result that is not
+/// `ref` is assigned.
+#[test]
+fn a_part_of_out_of_a_ref_result_is_not_assigned() {
+    let checked = module(concat!(
+        "struct Quote {\n",
+        "    bid: i64\n",
+        "    ask: i64\n",
+        "}\n",
+        "struct Book {\n",
+        "    top: Quote\n",
+        "}\n",
+        "fn designated_bid(quote: Quote) -> ref Quote {\n",
+        "    inject out\n",
+        "    when all_valid(quote) {\n",
+        "        out.bid = quote.bid\n",
+        "    }\n",
+        "}\n",
+        "fn firsts(items: list<i64, 3>, at: i64) -> ref list<i64, 3> {\n",
+        "    inject out\n",
+        "    when all_valid(items) {\n",
+        "        out[0] = items[0]\n",
+        "        out[1] += 1\n",
+        "        out[at] = 2\n",
+        "    }\n",
+        "}\n",
+        "fn deep(book: Book) -> ref Book {\n",
+        "    inject out\n",
+        "    when all_valid(book.top) { out.top.bid = book.top.bid }\n",
+        "}\n",
+        "fn whole(items: list<i64, 3>) -> ref i64 {\n",
+        "    inject out\n",
+        "    when { out = items[0] }\n",
+        "}\n",
+        "fn plain(quote: Quote) -> Quote {\n",
+        "    inject out\n",
+        "    when all_valid(quote) { out.bid = quote.bid }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:9 name/binding.immutable FN-16",
+            "m.hgl:18:9 name/binding.immutable FN-16",
+            "m.hgl:19:9 name/binding.immutable FN-16",
+            "m.hgl:20:9 name/binding.immutable FN-16",
+            "m.hgl:25:32 name/binding.immutable FN-16",
+        ]
+    );
+}
+
+/// FN-16: "A `signal` parameter is not marked either, and a mark on one
+/// rejects: a signal has no payload to designate (TYPE-12) ...
+/// Proposed: ... a mark on what is no node, or on a `signal` parameter,
+/// with `ref.position`." TYPE-12: "A `signal` input takes no default but
+/// `null`, and is not marked `ref` (FN-16)". Of a node, of a native
+/// node's contract, and one that may be left out; a `signal` beside a
+/// `ref` parameter of another type is accepted, and a value function's
+/// mark is reported once.
+#[test]
+fn a_signal_parameter_is_not_marked_ref() {
+    let checked = module(concat!(
+        "fn counted_ticks(ref tick: signal) -> i64 {\n",
+        "    state count: i64 = 0\n",
+        "    when {\n",
+        "        count += 1\n",
+        "        return count\n",
+        "    }\n",
+        "}\n",
+        "fn maybe_ticks(ref price: i64, ref tick: signal? = null) -> ref i64 {\n",
+        "    when { return price }\n",
+        "}\n",
+        "native fn native_ticks(ref tick: signal) -> i64\n",
+        "fn routed(ref price: i64, tick: signal) -> ref i64 {\n",
+        "    when { return price }\n",
+        "}\n",
+        "const fn helper(ref tick: signal) -> i64 => 1\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:18 function-kind/ref.position FN-16",
+            "m.hgl:9:32 function-kind/ref.position FN-16",
+            "m.hgl:12:24 function-kind/ref.position FN-16",
+            "m.hgl:16:17 function-kind/ref.position FN-16",
+            "m.hgl:16:27 type/type.not_ordinary TYPE-12",
+        ]
+    );
+}

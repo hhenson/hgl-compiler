@@ -434,6 +434,7 @@ transpiler: partial
 analyser: done
 
 - A `ref` parameter of T is given a connection of T, and a `ref` result designates what its `return` names, a child of an input valid or not, read as `EndpointOf` or `ChildEndpointOf` with no payload read (FN-16)
+- An assignment to a part of a `ref` result's `out` is `binding.immutable`, and `ref` on a `signal` parameter `ref.position`, each code proposed (FN-16, TYPE-12)
 
 transpiler: partial
 
