@@ -515,6 +515,58 @@ fn a_value_that_may_fail_in_a_branch_is_reported() {
     assert_eq!(emitted.blocked("lifted_once"), None);
 }
 
+/// FN-9: a graph a branch calls is composed as the branch is, so what its
+/// own body computes is computed while the graph around the branch is
+/// built: an ordinary value that may fail there is reported at the call,
+/// through any depth of graphs, and one in a node's body, which runs only
+/// when the node is evaluated, is not.
+#[test]
+fn a_value_that_may_fail_in_a_graph_a_branch_calls_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn divided(value: i64, const d: i64) -> i64 {\n",
+                "    let q = 1 // d\n",
+                "    return value + q\n",
+                "}\n",
+                "\n",
+                "fn relayed(value: i64, const d: i64) -> i64 {\n",
+                "    return divided(value, d: d)\n",
+                "}\n",
+                "\n",
+                "fn guarded(open: bool, value: i64) -> i64 {\n",
+                "    if open { return relayed(value, d: 0) }\n",
+                "    return value\n",
+                "}\n",
+                "\n",
+                "fn counted(value: i64, const d: i64) -> i64 {\n",
+                "    when { return value + 1 // d }\n",
+                "}\n",
+                "\n",
+                "fn evaluated(open: bool, value: i64) -> i64 {\n",
+                "    if open { return counted(value, d: 0) }\n",
+                "    return value\n",
+                "}\n",
+                "\n",
+                "test guarded_once { assert eval(guarded(open: [false], value: [1])) == [1] }\n",
+                "\n",
+                "test evaluated_once { assert eval(evaluated(open: [false], value: [1])) == [1] }\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("guarded_once").as_deref(),
+        Some(
+            "m.hgl:13:22 the cpp target does not write an ordinary value that may fail computed in a branch or a loop's body, which hgraph computes while the graph around it is built yet"
+        )
+    );
+    assert_eq!(emitted.blocked("evaluated_once"), None);
+}
+
 /// FN-9: a child of a `switch` "is built then, and its calls are
 /// evaluated then". hgraph compiles a child graph on a wiring of its own,
 /// which neither sees nor sets the store of the run's root, so a branch

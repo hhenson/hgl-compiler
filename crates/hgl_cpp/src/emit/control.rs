@@ -40,7 +40,8 @@
 //! key read other than as the argument of a temporal parameter, the
 //! store read in a branch or a loop's body (hgraph builds a child graph
 //! on a wiring of its own, which neither sees nor sets the root's store),
-//! an ordinary value that may fail computed there (hgraph compiles every
+//! an ordinary value that may fail computed there, or in a graph called
+//! there at any depth (hgraph compiles every
 //! child as the graph around it is built, where FN-9 has its calls
 //! evaluated as the child is built), a
 //! `return` under a branch selected at runtime in a loop unrolled while
@@ -49,7 +50,7 @@
 //! declared before it.
 
 use hgl_analyser::hir::{Case, Expr, ExprKind, Node, Stmt, ValueCategory, walk_statement_nodes};
-use hgl_analyser::{LocalKind, Type};
+use hgl_analyser::{LocalKind, Phase, Program, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::graphs::{
     alternative_statements, always_returns, assigned_outside, continued, key_read_as_value,
@@ -855,41 +856,12 @@ impl Emitter<'_> {
     /// a temporal collection "is built then, and its calls are evaluated
     /// then", as the branch or the member starts; hgraph compiles every
     /// child once, while the graph around it is built, and so would compute
-    /// it then, where no branch may be selected, and fail before the run. A
-    /// value that cannot fail is the same computed either way; what can is
-    /// a call that is no temporal function's, an element read and a
-    /// constant (`calls::may_fail`).
+    /// it then, where no branch may be selected, and fail before the run
+    /// ([`computed_while_built`]).
     fn computes_while_built(&mut self, statements: &[Stmt], tails: &[&Expr]) -> bool {
-        let program = self.program;
-        let mut found: Option<Location> = None;
-        let mut visit = |node: Node| {
-            let Node::Expression(value) = node else {
-                return;
-            };
-            if found.is_some() || value.is_connection() {
-                return;
-            }
-            let computed = match &value.kind {
-                ExprKind::Call { callee, .. } => {
-                    !callee.declaration().is_some_and(|(module, declaration)| {
-                        program.modules[module].declarations[declaration]
-                            .kind
-                            .role()
-                            == Some(hgl_analyser::Role::Temporal)
-                    })
-                }
-                ExprKind::Index { .. } | ExprKind::Constant { .. } => true,
-                _ => false,
-            };
-            if computed && may_fail(value) {
-                found = Some(value.at);
-            }
-        };
-        walk_statement_nodes(statements, &mut visit);
-        for tail in tails {
-            tail.walk_nodes(&mut visit);
-        }
-        let Some(computed) = found else {
+        let mut composed = Vec::new();
+        let Some(computed) = computed_while_built(self.program, statements, tails, &mut composed)
+        else {
             return false;
         };
         self.unsupported(
@@ -1598,4 +1570,83 @@ impl Emitter<'_> {
         }
         Some(text)
     }
+}
+
+/// Where composing `statements` and `tails` computes an ordinary value
+/// that may fail, or `None` (`Emitter::computes_while_built`). A value
+/// that cannot fail is the same computed either way; what can is a call
+/// that is no temporal function's, an element read and a constant
+/// (`calls::may_fail`). A graph they call is composed with them, so what
+/// its own body computes is computed then too, at any depth: where that
+/// may fail, the place is the call. A node's body runs only as the node is
+/// evaluated, and is not looked into. `composed` holds the graphs already
+/// looked into, each `(module, declaration)`, so that each is looked into
+/// once.
+fn computed_while_built(
+    program: &Program,
+    statements: &[Stmt],
+    tails: &[&Expr],
+    composed: &mut Vec<(usize, usize)>,
+) -> Option<Location> {
+    let mut found: Option<Location> = None;
+    // Each graph called, with the place of its call.
+    let mut graphs: Vec<(Location, usize, usize)> = Vec::new();
+    let mut visit = |node: Node| {
+        let Node::Expression(value) = node else {
+            return;
+        };
+        if found.is_some() {
+            return;
+        }
+        if let ExprKind::Call { callee, .. } = &value.kind
+            && let Some((module, declaration)) = callee.declaration()
+            && program.modules[module]
+                .phases
+                .get(declaration)
+                .copied()
+                .flatten()
+                == Some(Phase::Graph)
+        {
+            graphs.push((value.at, module, declaration));
+            return;
+        }
+        if value.is_connection() {
+            return;
+        }
+        let computed = match &value.kind {
+            ExprKind::Call { callee, .. } => {
+                !callee.declaration().is_some_and(|(module, declaration)| {
+                    program.modules[module].declarations[declaration]
+                        .kind
+                        .role()
+                        == Some(hgl_analyser::Role::Temporal)
+                })
+            }
+            ExprKind::Index { .. } | ExprKind::Constant { .. } => true,
+            _ => false,
+        };
+        if computed && may_fail(value) {
+            found = Some(value.at);
+        }
+    };
+    walk_statement_nodes(statements, &mut visit);
+    for tail in tails {
+        tail.walk_nodes(&mut visit);
+    }
+    if found.is_some() {
+        return found;
+    }
+    for (at, module, declaration) in graphs {
+        if composed.contains(&(module, declaration)) {
+            continue;
+        }
+        composed.push((module, declaration));
+        let Some(Some(body)) = program.modules[module].bodies.get(declaration) else {
+            continue;
+        };
+        if computed_while_built(program, &body.statements, &[], composed).is_some() {
+            return Some(at);
+        }
+    }
+    None
 }
