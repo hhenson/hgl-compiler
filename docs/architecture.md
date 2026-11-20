@@ -2444,8 +2444,7 @@ which `check_core.py --target cpp` checks as it checks the hgraph
 target's list, and `--write-list` writes from a run. Today it lists 73
 of core's 198 runtime cases, each with the form it needs that the
 target does not write: a temporal value of a collection, a struct or a
-nullable, control flow over connections,
-and the rest the step-2 lanes take.
+nullable, and the rest the step-2 lanes take.
 
 ### The C++ runtime library
 
