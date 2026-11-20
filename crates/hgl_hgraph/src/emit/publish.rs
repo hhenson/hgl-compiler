@@ -81,9 +81,8 @@ impl Emitter<'_> {
         // set is "published as that change", and TYPE-16: "A `removed`
         // that names a key a dictionary does not hold is ignored, and is
         // no failure, as one that names a member a set does not hold is."
-        // TIME-7 on the specification's `main` (hhenson/hgl_spec#124): a
-        // delta that names no change "ticks only where it changes
-        // validity". The provider publishes it on the node's `_output`
+        // TIME-7: "A delta that names no change ... ticks only where it
+        // changes validity". The provider publishes it on the node's `_output`
         // (`entries_published`).
         if function.mode == Mode::Node
             && let Some(result) = result
@@ -119,7 +118,11 @@ impl Emitter<'_> {
         // unsized list's delta is published through the node's output,
         // each list's size counted from what it holds (`published_into`),
         // as a list's own is. A source's node publishes what its
-        // statements yield so when it is due.
+        // statements yield so when it is due. Where the value holds a
+        // dictionary or a set too, the provider is told where
+        // (`entries_shape`), and publishes each as a node's delta of one
+        // is (`entries_published`): TIME-7's delta that names no change
+        // "Where it is valid ... is no tick".
         let parts = result.and_then(|result| list_parts_shape(self.program, result));
         if let (Some(result), Some(shape)) = (result, &parts)
             && !whole_value(result, value)
@@ -129,7 +132,9 @@ impl Emitter<'_> {
                 return written;
             }
             self.natives = true;
-            return format!("_core.published_into(_output, {written}, {shape})");
+            let entries = entries_shape(self.program, result)
+                .map_or(String::new(), |entries| format!(", entries={entries}"));
+            return format!("_core.published_into(_output, {written}, {shape}{entries})");
         }
         // An unsized list in a whole value ticks through its own port of
         // the node's output (`_whole_list`); a source's statements leave

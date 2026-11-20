@@ -700,11 +700,10 @@ def _pruned(port, change, shape):
     what it names for a dictionary or a set within that is valid and that
     the change leaves as it was.
 
-    TIME-7, as the specification's `main` has it (hhenson/hgl_spec#124):
-    a delta that names no change, published where the value is valid, "is
-    no tick"; proposed there, "a delta whose every entry is ignored, the
-    removal of a key, a member or a position that is not held (TYPE-16),
-    names no change". hgraph does not tick a `TSD` or a `TSS` for one,
+    TIME-7: a delta that names no change, published where the value is
+    valid, "is no tick"; proposed there, "a delta whose every entry is
+    ignored, the removal of a key, a member or a position that is not
+    held (TYPE-16), names no change". hgraph does not tick a `TSD` or a `TSS` for one,
     but ticks what holds it, a `TSD`, a bundle or a `TSL`, where it is
     given one for that child: so a child whose change names nothing is
     left out of its holder's change. Where the child is not valid it is
@@ -775,14 +774,13 @@ def _validated(port):
     and empty where a delta that names no change is published to it and
     it is not valid.
 
-    TIME-7, as the specification's `main` has it (the owner's decision on
-    hhenson/hgl_spec#124, written there by hhenson/hgl_spec#141): "A
-    delta that names no change ... ticks only where it changes validity.
-    Where a `list<V>`, a dictionary or a set is not valid, never published
-    or invalidated, it makes the value valid and empty, and ticks. Where
-    it is valid the delta changes nothing, and is no tick". Proposed
-    there: a delta whose every entry is an ignored removal names no
-    change. hgraph 0.9.5's `TSD` and `TSS` tick for neither, which is
+    TIME-7: "A delta that names no change ... ticks only where it changes
+    validity. Where a `list<V>`, a dictionary or a set is not valid, never
+    published or invalidated, it makes the value valid and empty, and
+    ticks. Where it is valid the delta changes nothing, and is no tick";
+    core's END-3: "it makes the endpoint valid, empty and modified".
+    Proposed in both: a delta whose every entry is an ignored removal
+    names no change. hgraph 0.9.5's `TSD` and `TSS` tick for neither, which is
     right where they are valid; where they are not, `clear` makes them
     valid, empty and modified. An invalidated one holds nothing
     (`invalidated`)."""
@@ -952,12 +950,10 @@ def list_applied(port, delta):
     position the list does not hold lost no value, and is ignored (the
     owner's decision there).
 
-    TIME-7, as the specification's `main` has it (the owner's decision on
-    hhenson/hgl_spec#124, written there by hhenson/hgl_spec#141): "A
-    delta that names no change ... ticks only where it changes validity.
-    Where a `list<V>` ... is not valid, never published or invalidated, it
-    makes the value valid and empty, and ticks. Where it is valid the
-    delta changes nothing, and is no tick". Proposed there: a delta whose
+    TIME-7: "A delta that names no change ... ticks only where it changes
+    validity. Where a `list<V>` ... is not valid, never published or
+    invalidated, it makes the value valid and empty, and ticks. Where it
+    is valid the delta changes nothing, and is no tick". Proposed there: a delta whose
     every entry is an ignored removal names no change. hgraph's `TSL`
     does not tick for either, valid or not: where the list is not valid it
     is made to (`_ticked`)."""
@@ -1008,28 +1004,82 @@ def list_published(port, published):
     return list_replaced(port, published)
 
 
-def published_into(port, value, shape):
+def published_into(port, value, shape, entries=None):
     """What is published through `port`, a node's output, for `value`, a
     whole value bundled (`bundled`) or a delta, of a struct or a tuple
     that holds an unsized list, or of the list itself (TIME-7): each list
     in it as `list_published` makes it, counted from the size it holds
-    (TYPE-16), and every other part as it is.
+    (TYPE-16), and every other part as it is. Where the value holds a
+    dictionary or a set too, `entries` is where, as `_entries_change`
+    has it: it is published to `port` here (`_published_through`), and
+    nothing more is given to publish.
 
     `shape` is what the compiler wrote for where the lists are: `"list"`
     for one, a `dict` of the fields that hold one for a struct, a tuple
     of each position's for a tuple, and `None` for a part that holds
     none. A struct's value and its delta are each a `dict` of its fields,
-    a tuple's each a tuple, a null where a position did not change."""
+    a tuple's each a tuple, a null where a position did not change; what
+    is published has each such tuple as `_by_position` gives it."""
+    if entries is None:
+        return _by_position(_published_parts(port, value, shape), shape)
+    if value is not None:
+        _published_through(port, value, shape, entries)
+    return None
+
+
+def _published_through(port, value, shape, entries):
+    """Publishes `value` to `port`, as `published_into` has it for
+    `shape`, and each dictionary and set in it as `entries_published`
+    publishes one, `entries` saying where (`_entries_change`): a key
+    removed given `REMOVE_IF_EXISTS`, a child that a change leaves as it
+    was left out (`_pruned`), and one that is not valid made valid where
+    the change names nothing (`_validated_parts`), once it is published,
+    since a key it adds is a child only then."""
+    published = _pruned(port, _entries_change(_published_parts(port, value, shape), entries), entries)
+    port.value = _by_position(published, shape)
+    _validated_parts(port, published, entries)
+
+
+def _published_parts(port, value, shape):
+    """`published_into`'s value, each tuple in it still a tuple, as
+    `_entries_change`, `_pruned` and `_validated_parts` take it."""
     if value is None or shape is None:
         return value
     if shape == "list":
         return list_published(port, value)
     if isinstance(shape, dict):
-        return {field: published_into(port[field], part, shape.get(field)) for field, part in value.items()}
+        return {field: _published_parts(port[field], part, shape.get(field)) for field, part in value.items()}
     return tuple(
-        published_into(port[position(index)], part, within)
+        _published_parts(port[position(index)], part, within)
         for index, (part, within) in enumerate(zip(value, shape))
     )
+
+
+def _by_position(value, shape):
+    """`value`, what `_published_parts` gives for `shape`, with each tuple
+    at a place `shape` gives a tuple's shape published as a `dict` of the
+    positions it gives, by their fields, `_0`, `_1`, as a struct's is.
+
+    TIME-7: a delta that names no change, "Where it is valid ... is no
+    tick", and a tuple's that sets no position "sets no child: it changes
+    no validity, and is never a tick". hgraph 0.9.5's bundle given a
+    tuple ticks where any position is given, a delta that changes nothing
+    a valid child holds among them, and fails the run for a dictionary's
+    `REMOVE_IF_EXISTS` in it; given a `dict` it ticks only where a child
+    does."""
+    if value is None or shape is None or shape == "list":
+        return value
+    if isinstance(shape, dict):
+        if not isinstance(value, dict):
+            return value
+        return {field: _by_position(part, shape.get(field)) for field, part in value.items()}
+    if not isinstance(value, tuple):
+        return value
+    return {
+        position(index): _by_position(part, within)
+        for index, (part, within) in enumerate(zip(value, shape))
+        if part is not None
+    }
 
 
 def _emptied(port, shape):
@@ -1823,9 +1873,7 @@ def resume(source, now, scheduler, port, shape=None, entries=None):
     def publish(value):
         if port is None or value is None:
             return
-        published = _pruned(port, _entries_change(published_into(port, value, shape), entries), entries)
-        port.value = published
-        _validated_parts(port, published, entries)
+        _published_through(port, value, shape, entries)
 
     if source.pending is not None:
         if source.target != now:

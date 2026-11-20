@@ -7,7 +7,8 @@
 analyser: partial
 
 - Generic scope covers the whole declaration; a repeated type parameter is one type at a call of a value function
-- Left: equal constants; occurrence requirements; temporal bodies
+- A repeated generic value parameter is one constant (UNIT-13) at a call of a value function and of a temporal one: `Scaled<1>` and `Scaled<1.00>` given to two `Scaled<k>` are one, and so are two NaNs, and `Scaled<0.0>` beside `Scaled<-0.0>`, or `list<i64, 2>` beside `list<i64, 3>`, is `type.mismatch`
+- Left: occurrence requirements; temporal bodies
 
 ## GEN-2
 
@@ -25,7 +26,7 @@ transpiler: partial
 
 - hgraph: a temporal function with generic parameters, and a temporal candidate with them, is written once for each set of generic arguments the program calls it with, in the declaration's module, and a call names the instance for its arguments; one the program calls with none is not written
 - So is a value function or candidate whose body calls an operation it requires or hands a requirement on (GEN-16), reads a generic value as a value (GEN-13), or calls one written by instance with its own generic parameters; any other value function with generic parameters is written once
-- A generic value read as a value is the constant the call gives (GEN-13)
+- A generic value read as a value is the constant the call gives (GEN-13): one constant is one instance however it is written, and two are two (UNIT-13), `reciprocal<0.0>()` and `reciprocal<-0.0>()` each written with its own whichever is called first
 - Each instance is a piece of its own: one with a form that is not written is left out, and a test that reaches it is not run
 - Left: a call whose generic arguments are not known, an enum member given to a function's generic value among them; an application's run statement is not read for the instances it asks for
 
@@ -35,7 +36,7 @@ analyser: partial
 
 - A parameter compared in a constraint is a const option or is rejected, and each constant it is compared with is a value of the option's type (`type.mismatch`, `member.unknown`, `enum.context_type`, at the declaration)
 - At a named operator call in a value function, a candidate's `T in {types}` and `T == type` are checked against what `T` stands for, and a named operator requirement is tested with the call's types (GEN-16)
-- A call of a function, a construction of a struct, and a type written that applies one, whose `requires` does not hold with its generic arguments, is `requires.unmet`: a membership or an equality of a type, told in three answers (`declared::same_type`: `FBox<X>` is not known to be `FBox<2.0>` while `X` is not given), and a generic value parameter compared with constants and with another such parameter (`N == M`, `N in {M, 5}`) as the language's `==` compares them (`ConstantValue::equals`), its value read as one of the parameter's type however it is written, after the callee's name, by name, in a type, or left to its default
+- A call of a function, a construction of a struct, and a type written that applies one, whose `requires` does not hold with its generic arguments, is `requires.unmet`: a membership or an equality of a type, told in three answers (`declared::same_type`: `FBox<X>` is not known to be `FBox<2.0>` while `X` is not given), and a generic value parameter compared with constants and with another such parameter (`N == M`, `N in {M, 5}`) as the language's `==` compares them (`ConstantValue::equals`), not by their sameness (UNIT-13): `requires k == 0.0` admits `reciprocal<0.0>()` and `reciprocal<-0.0>()`; its value read as one of the parameter's type however it is written, after the callee's name, by name, in a type, or left to its default
 - A `requires` not told where a call passes on a generic parameter of its own, `one_only<Y>(v)` in `outer<const Y: f64>`, is told for each instance a call that gives every argument makes, through calls at any depth, in a value function, a graph, an operator's selected candidate, the candidate a named operator requirement is answered with (GEN-16, `Answer`, through each caller that states it again) and a struct a type written in the declaration applies (a field's `Only<FBox<X>>`), and reported at that call (`requires.unmet`): `outer<2.0>(5.0)` makes `one_only<2.0>`. Not told is never taken to hold: one not told for a constant this compiler does not work out, as one computed by a `const fn`, is `requires.unmet` too, once no parameter the call passes on may still settle it. Only the calls that reach a `requires` are followed, each instance once however many calls make it, and no more than 4096 instances from one, with arguments no longer than 65536 characters written out: a call past that is local `generic.instance_limit`, as `grow<N * 2>` and `grow<N * 2 + 1>` in `grow<const N: i64>` make instances without end
 - Left: every other form `requires` admits; binding equalities solved to a fixed point; a membership of a generic parameter of the declaration a call is written in, which is not told (GEN-7); a function with a type pack or a pack parameter
 
@@ -92,7 +93,7 @@ analyser: partial
 - A call's generic arguments, all or the first of them, for a value function and for the output requested of an operator's candidates; a call that leaves a parameter unresolved rejected
 - A generic value parameter given by name or after the callee's name, and one a type gives, read as a value of the parameter's type (EXPR-5, `type.mismatch`): a literal, an enum member however it is written (TYPE-7), a constant, a generic value parameter in scope, and a constant expression of those, of numbers, durations, tenors, strings, bools, lists and tuples (`constant`); one that is no compile-time constant, and one whose value this compiler does not work out, is `generic.argument_constant`
 - An operator's generics are resolved from what the call writes, then its place, then its arguments, then a default, and the output so requested is matched as far as it is known
-- Two generic value arguments are one where they are the same constant (`ConstantValue::same`), which for an `f64` is not `==`: `Scaled<-0.0>` is not `Scaled<0.0>`, and a NaN is the same constant as a NaN (hhenson/hgl_spec#139, written in UNIT-13); hgraph writes each as an instance of its own. A comparison of a NaN constant is the language's: false, but `!=` (NUM-5)
+- Two generic value arguments are one where they are the same constant (`ConstantValue::same`), which for an `f64` is not `==`: `Scaled<-0.0>` is not `Scaled<0.0>`, and any two NaNs are one constant (UNIT-13, GEN-13); hgraph writes each as an instance of its own. A comparison of a NaN constant is the language's: false, but `!=` (NUM-5)
 - Left: an operator's own generic value parameter given by name; `instantiate`; packs; what an operator's generic arguments say of its operands; temporal bodies; an operation the reader does not work out, a symbol given configuration and a date moved by a tenor
 
 ## GEN-9
@@ -144,6 +145,7 @@ analyser: partial
 
 - A plain parameter is a type or a value by its uses in the signature; uses that disagree are rejected, and a struct's parameter nothing uses; a value parameter or a pack is not named as a type; a generic value parameter's default, a callable's or a struct's, is of its declared type, as far as how the default is written says what it is, and of the type a call resolves where that names a type parameter: an implied member, `.slow`, is held to the enum the call resolves, so is no `i64` and no member of an enum that lacks it (`type.mismatch`, TYPE-7)
 - A default that names a generic parameter before its own is of what that one takes, at a call and in a struct written with no arguments (`W2` of `<const A: i64 = 1, const B: i64 = A>` is `W2<1, 1>`); one that names its own, or one after it, gives it no value, so a call that leaves it is `generic.unresolved` (GEN-8); a call in the function's own body that gives a parameter its own, `rec<N>(v)`, gives the default that one and a struct written with no arguments `generic.argument_count`
+- Generic arguments that are the same, each type canonical and each value one constant (UNIT-13), make one type or one instance, and arguments that differ another: of the worked fragment, `Scaled<1>`, `Scaled<1.0>` and `Scaled<1.00>` are one type, and a `Scaled<-0.0>` where a `Scaled<0.0>` is expected is `type.mismatch`
 - Left: a default that names anything else; the kind a constraint gives; `type(N)`; a call that supplies no type for a function's parameter its signature does not settle
 
 ## GEN-14
