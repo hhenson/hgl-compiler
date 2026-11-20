@@ -665,10 +665,12 @@ A `when` reads an input's payload only where the input is valid
 | `valid(a)`, `valid(a, b)` | Those named | `a` free; any other needs a guard |
 | `valid([])` | None: manual admission | Every one needs a guard |
 
-A guard is `valid(input)`, on the input by its name, proved where the
-read stands (TIME-4) by the paths a null test is followed along: the
-branch it holds for, the right operand of the `&&` it guards, and from a
-branch that returns to the end of its block. A read with none is
+A guard is `valid(input)` or `modified(input)`, on the input by its
+name, proved where the read stands (TIME-4) by the paths a null test is
+followed along: the branch it holds for, the right operand of the `&&`
+it guards, a header's top-level conjunct, `when modified(a) &&
+valid([])`, and from a branch that returns to the end of its block.
+`modified(a, b)` guards neither. A read with none is
 `payload.unguarded`. A saved bool proves nothing. A header that is
 itself rejected says nothing sure of what it admits, and its body's
 reads are not judged.

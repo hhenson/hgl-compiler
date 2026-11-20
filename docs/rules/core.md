@@ -335,6 +335,7 @@ transpiler: done
 transpiler: done
 
 - hgraph: a publication marks the input modified for its cycle, an equal one included; an idle cycle leaves it unmodified with its value; an input bound to a node's output observes that output
+- `modified(x)`, as a guard, admits a read of `x` as `valid(x)` does (TIME-4): the read stands under `(x.modified and x.valid)`
 
 ## END-3
 

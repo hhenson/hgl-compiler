@@ -1,0 +1,74 @@
+module demo.decisions_1120
+
+# ---- A test of `modified` guards the read of its input (TIME-4, END-2) ----
+
+# TIME-4: "A guard is a test of `valid(input)` or of `modified(input)`,
+# on the input by its name ... An input is not modified without being
+# valid, so `modified` of it guards what `valid` of it does". Every
+# input wakes the node, and nothing is required valid: the probe wakes
+# it where `value` is silent, before it is valid and after.
+fn forward_when_modified(value: i64, probe: bool) -> i64 {
+    when valid([]) {
+        if modified(value) { return value }
+        return -1
+    }
+}
+
+# TIME-4: "A `when` header that has the test alone or as a top-level
+# conjunct guards its body, ... `when modified(a) && valid([])`." `b`
+# cannot wake it, and nothing is required valid.
+fn latest_a(a: f64, b: f64) -> f64 {
+    when modified(a) && valid([]) { return a }
+}
+
+# In the right operand of the `&&` it guards, and after a branch that
+# returns where it does not hold.
+fn positive_when_modified(value: i64, probe: bool) -> i64 {
+    when valid([]) {
+        if modified(value) && value > 0 { return value }
+        if !modified(value) { return -1 }
+        return 0
+    }
+}
+
+# A nullable input published null is valid, and modified.
+fn null_when_modified(probe: bool, value: i64?) -> str {
+    when valid([]) {
+        if modified(value) {
+            if value == null { return "null" }
+            return "value"
+        }
+        return "silent"
+    }
+}
+
+# TIME-4: "or of `valid` or `modified` of the child as the read names
+# it". The quote's bid is published alone, and its ask never.
+struct Quote {
+    bid: f64
+    ask: f64
+}
+
+fn bids(bid: f64) -> Quote {
+    inject out
+    when { out.bid = bid }
+}
+
+fn bid_when_modified(quote: Quote, probe: bool) -> f64 {
+    when valid([]) {
+        if modified(quote.bid) { return quote.bid }
+        return -1.0
+    }
+}
+
+fn quoted_bid(bid: f64, probe: bool) -> f64 => bid_when_modified(bids(bid), probe)
+
+test a_modified_test_guards_the_read_of_the_input_it_names {
+    assert eval(forward_when_modified(value: [_, 7, _], probe: [true, true, true])) == [-1, 7, -1]
+    assert eval(latest_a(a: [1.0, _, 3.0], b: [_, 10.0, 20.0])) == [1.0, _, 3.0]
+    assert eval(positive_when_modified(value: [_, 7, -2, _], probe: [true, _, _, true])) ==
+        [-1, 7, 0, -1]
+    assert eval(null_when_modified(probe: [true, true, true], value: [_, null, 3])) ==
+        ["silent", "null", "value"]
+    assert eval(quoted_bid(bid: [_, 1.5, _], probe: [true, true, true])) == [-1.0, 1.5, -1.0]
+}

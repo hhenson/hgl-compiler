@@ -65,6 +65,8 @@ analyser: partial
 - A child's guard is `all_valid` of its collection or `valid` of the child as the read names it, in a body or as a header's test; a child's `valid` in a header names no input, and the default admission stands with it
 - An endpoint argument is read through its grouping (EXPR-1) by every check: `valid((quote.bid))` is `valid(quote.bid)`
 - The guard of a whole read of a struct, a tuple or a fixed list, a child among them, is `all_valid` of what it reads (TIME-1)
+- A test of `modified(input)` guards what `valid(input)` does, in a header's top-level conjunct, `when modified(a) && valid([])`, and in a body, in `stop` too, and `modified` of a child as the read names it guards that child: "An input is not modified without being valid"; `modified(a, b)` and `modified()` guard none, nor does a saved bool
+- Not settled: whether `modified` of a collection admits a read of its child, which `valid` of it does not; such a read is left rejected (`payload.unguarded`)
 - Left: aggregate subscriptions; node-wide validity
 
 transpiler: partial
@@ -72,6 +74,7 @@ transpiler: partial
 - hgraph: the node subscribes to the union of handler subscriptions and requires the validity common to all handlers
 - Each handler checks any additional validity requirements
 - On an active invalidation, `when valid([])` admits the wake, and a modification guard reads each selected input's current publication flags
+- A read under a test of `modified(input)` is the input's value: the test is hgraph's `(a.modified and a.valid)`, and of a child `_core.child_modified`, so an invalidation is no modification and admits no read
 - Left: `all_valid` and structural inputs
 
 ## TIME-5
