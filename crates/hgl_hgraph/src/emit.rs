@@ -1728,11 +1728,7 @@ fn designates(value: &Expr) -> bool {
 
 /// How a node designates a temporal input (FN-16: "A parameter that is
 /// not `ref` may be designated too"): whole, or by a position of it, a
-/// fixed list. hgraph makes a reference only from a `REF` input, so the
-/// node is given the input a second time as a hidden `REF` input,
-/// `_ref_name`, or one for each position, `_ref0_name` (`node`), which
-/// is active whatever the node's own activity is: a `ref` parameter
-/// that may be passive among them.
+/// fixed list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Designated {
     /// `return value`
@@ -1742,17 +1738,23 @@ enum Designated {
 }
 
 /// What `value`, a designation (`designates`), designates of a temporal
-/// input of `function`: the input, and how. `None` for a child of a
-/// `ref` parameter, and for a child of another shape.
-fn designated(function: &Function, value: &Expr) -> Option<(usize, Designated)> {
+/// input of the node whose locals are `locals` and whose signature is
+/// `signature`: the input, and how. `None` for a child of a `ref`
+/// parameter, and for a child of another shape.
+fn designated(
+    locals: &[Local],
+    signature: Option<&Signature>,
+    value: &Expr,
+) -> Option<(usize, Designated)> {
     match &value.kind {
-        ExprKind::EndpointOf(local) if function.is_input(*local) => {
+        ExprKind::EndpointOf(local) if is_input(locals, signature, *local) => {
             Some((*local, Designated::Whole))
         }
         ExprKind::ChildEndpointOf(child) => match &child.kind {
             ExprKind::Index { base, .. } => match (&base.kind, &base.ty) {
                 (ExprKind::Local(local), Type::List { size: Some(_), .. })
-                    if function.is_input(*local) && !function.is_reference(*local) =>
+                    if is_input(locals, signature, *local)
+                        && !is_reference(locals, signature, *local) =>
                 {
                     Some((*local, Designated::Position))
                 }
@@ -1766,8 +1768,12 @@ fn designated(function: &Function, value: &Expr) -> Option<(usize, Designated)> 
 
 /// The name of the hidden `REF` input a node designates `input` through
 /// (`Designated`), and the name the provider is told it by where there
-/// is one for each position. Every name the target makes up starts with
-/// `_`, and a program's own never does.
+/// is one for each position. hgraph makes a reference only from a `REF`
+/// input, so the node is given the input a second time as a hidden `REF`
+/// input, `_ref_name`, or one for each position, `_ref0_name` (`node`),
+/// which is active whatever the node's own activity is: a `ref`
+/// parameter that may be passive among them. Every name the target makes
+/// up starts with `_`, and a program's own never does.
 fn designated_name(input: &Local) -> String {
     format!("_ref_{}", name(&input.name))
 }

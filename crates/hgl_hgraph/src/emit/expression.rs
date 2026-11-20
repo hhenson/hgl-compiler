@@ -1079,7 +1079,10 @@ impl Emitter<'_> {
                 .find(|(designated, _)| *designated == local)
                 .map(|(_, port)| string(port))
         };
-        match (designated(function, value), &value.kind) {
+        match (
+            designated(function.locals, function.signature, value),
+            &value.kind,
+        ) {
             (Some((local, Designated::Whole)), _) => port(self, local),
             (Some((local, Designated::Position)), ExprKind::ChildEndpointOf(child)) => {
                 let ExprKind::Index { index, .. } = &child.kind else {
