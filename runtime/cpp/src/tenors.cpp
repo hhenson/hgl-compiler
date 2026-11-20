@@ -170,11 +170,10 @@ std::optional<i64> fn_business_days(const tenor& value) {
 
 date fn_moved(date day, const tenor& by, std::source_location where) {
     using namespace std::chrono;
-    // TEN-4 (hhenson/hgl_core#86): "Only the result is held to the range:
-    // the date the months give may lie outside it where the days bring the
-    // result back within it." The months and then the days are taken in 128
-    // bits, which hold the date any count of either gives, and the result
-    // alone is checked.
+    // TEN-4: "Only the result is held to the range: the date the months give
+    // may lie outside it where the days bring the result back within it."
+    // The months and then the days are taken in 128 bits, which hold the
+    // date any count of either gives, and the result alone is checked.
     //
     // The months first, counted from the year 0 so that a floor division
     // gives the year.

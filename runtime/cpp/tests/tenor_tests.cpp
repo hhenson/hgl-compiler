@@ -312,10 +312,9 @@ TEST_CASE("a date takes the months first, to the last day of a shorter month, an
 }
 
 TEST_CASE("only the result of a date moved by a tenor is held to the date range (TEN-4)") {
-    // TEN-4 (hhenson/hgl_core#86): "Only the result is held to the range: the
-    // date the months give may lie outside it where the days bring the
-    // result back within it." Core's case: 10000-01-15 less 30 days, and
-    // 0000-12-15 and 30 days.
+    // TEN-4: "Only the result is held to the range: the date the months give
+    // may lie outside it where the days bring the result back within it."
+    // Core's case: 10000-01-15 less 30 days, and 0000-12-15 and 30 days.
     CHECK(plus(year{9999} / 12 / 15, hglrt::sub__tenor_tenor(months(1), days(30))) == year{9999} / 12 / 16);
     CHECK(plus(year{1} / 1 / 15, hglrt::sub__tenor_tenor(days(30), months(1))) == year{1} / 1 / 14);
     CHECK(code_raised([] { (void)plus(year{9999} / 12 / 15, months(1)); }) == "numeric.out_of_range");
