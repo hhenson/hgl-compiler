@@ -188,3 +188,139 @@ test a_default_does_not_stand_for_a_window_below_its_minimum {
     assert eval(offset_flow(offset: [10, _, _, 20], reading: [_, 1, 2, _])) == [10, _, 13, 23]
     assert eval(nullable_flow(offset: [10, _, _, 20], reading: [_, 1, 2, _])) == [-10, _, 13, 23]
 }
+
+# ---- A branch started while the program runs (CTRL-2, CTRL-7, TIME-3, END-2) ----
+
+# CTRL-2's worked example: "`value` publishes 10 in the first cycle and
+# nothing after, and `open` publishes false, true, false, true. Each true
+# starts the branch fresh: `value`, valid since the first cycle, counts
+# as modified in that cycle, and `counted` runs once with 10 and
+# publishes 1. While `open` is false the result never ticks (CTRL-3)."
+fn counted(value: i64) -> i64 {
+    state count: i64 = 0
+    when {
+        count += 1
+        return count
+    }
+}
+
+fn counted_while(open: bool, value: i64) -> i64 {
+    if open { counted(value) }
+}
+
+# TIME-3: "An input that counts as modified as its branch starts (CTRL-2)
+# wakes its node and satisfies these tests as a publication on it does":
+# a `modified` selector, and the value held, read under it (TIME-4). The
+# branch kept on a repeated true counts the next publication.
+fn counted_on_modified(value: i64) -> i64 {
+    state count: i64 = 0
+    when modified(value) {
+        count += 1
+        return count
+    }
+}
+
+fn selected_count(open: bool, value: i64) -> i64 {
+    if open { counted_on_modified(value) }
+}
+
+fn held_value(value: i64) -> i64 {
+    when modified(value) { return value }
+}
+
+fn held_while(open: bool, value: i64) -> i64 {
+    if open { held_value(value) }
+}
+
+test a_branch_runs_once_with_the_values_held_when_it_starts {
+    assert eval(counted_while(open: [false, true, false, true], value: [10, _, _, _])) ==
+        [_, 1, _, 1]
+    assert eval(selected_count(open: [false, true, true, false, true], value: [10, _, 20, _, _])) ==
+        [_, 1, 2, _, 1]
+    assert eval(held_while(open: [false, true, false, true], value: [10, _, _, _])) ==
+        [_, 10, _, 10]
+}
+
+# CTRL-2: "A branch started while the program runs is the child a
+# temporal `if` or `switch` selects". Each label starts its branch fresh,
+# and an equal label keeps it.
+fn switched_count(route: str, value: i64, fallback: i64) -> i64 {
+    var selected = fallback
+    switch route {
+        case "on": selected = counted(value)
+        default: selected = counted(fallback)
+    }
+    return selected
+}
+
+test a_switched_branch_runs_once_with_the_values_held_when_it_starts {
+    assert eval(switched_count(
+        route:    ["off", "on", "on", "off", "on"],
+        value:    [   10,    _,   20,     _,    _],
+        fallback: [  100,    _,    _,     _,    _])) ==
+                  [    1,    1,    2,     1,    1]
+}
+
+# TIME-3: `modified([])` "Elsewhere, in another body or under a negation
+# or a disjunction, it is true in a cycle where no temporal input was
+# modified, and so false where one counts as modified as its branch
+# starts." The wake asked for in `start` lands in the next cycle, where
+# no input is modified.
+fn nothing_modified(value: i64) -> bool {
+    inject scheduler
+    start { schedule(scheduler, 1us) }
+    when { return modified([]) }
+    when scheduled() { return modified([]) }
+}
+
+fn quiet_while(open: bool, value: i64) -> bool {
+    if open { nothing_modified(value) }
+}
+
+test nothing_is_unmodified_in_the_cycle_a_branch_starts {
+    assert eval(quiet_while(open: [false, true, _], value: [10, _, _])) == [_, false, true]
+}
+
+# CTRL-7: "Dynamic independent dictionary/list bodies create one child
+# per member key/index ... A child created while the program runs starts
+# as CTRL-2 says." The child of "b", made in the third cycle, is given
+# `level`, captured and valid since the first: it counts as modified, and
+# the child records it. The store is read a cycle later.
+fn priced(key: str, price: i64) -> dict<str, i64> {
+    when {
+        if price < 0 { return delta<dict<str, i64>>(removed: [key]) }
+        return delta<dict<str, i64>>(updated: [key: price])
+    }
+}
+
+fn level_seen(name: str, price: i64, level: i64) {
+    inject global_state
+    when modified(level) {
+        if name == "b" { put(global_state, "b", level) }
+    }
+}
+
+fn stored_level(tick: bool, const key: str) -> i64 {
+    inject global_state
+    when modified(tick) {
+        if has(global_state, key) { return get<i64>(global_state, key) }
+        return 0
+    }
+}
+
+fn each_level(key: str, price: i64, level: i64, tick: bool, const shown: str) -> i64 {
+    for name, value in priced(key, price) {
+        level_seen(name, value, level)
+    }
+    return stored_level(tick, shown)
+}
+
+test a_keyed_child_runs_once_with_the_values_held_when_it_starts {
+    assert eval(each_level(
+        key:   ["a",    _, "b",    _],
+        price: [  1,    _,   2,    _],
+        level: [  5,    _,   _,    _],
+        tick:  [  _, true,   _, true],
+        shown: "b")) ==
+               [  _,    0,   _,    5]
+}

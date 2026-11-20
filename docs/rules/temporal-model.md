@@ -55,6 +55,7 @@ transpiler: partial
 - `scheduled()` under a negation or in a disjunction sets nothing: the handler keeps the defaults, is run by an input's wake and not by a wake of the scheduler or alarm alone, and requires every input valid
 - In a node that injects neither, a handler that subscribes to no input is never run, and not written: a node no handler of which subscribes to an input is `active=()`, and one with no input is given one that never wakes it
 - `modified([])` read as a bool is `True` in the body of a handler whose header selects it, at a wake that lands with an input's tick too; elsewhere, in another body or under a negation or a disjunction, it is that no temporal input is modified as `modified(input)` asks it, `(not ((a.modified and a.valid) or ...))`, so an invalidation is none and a `ref` parameter is modified where its designation changed, and `True` in a node with no input
+- An input that counts as modified as its branch starts (CTRL-2) wakes its node, satisfies a `modified` selector and makes `modified([])` false, as hgraph samples an input it binds in that cycle
 - Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])` in `start` or `stop`, which are no cycle of the node, and is reported; `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
 
 ## TIME-4

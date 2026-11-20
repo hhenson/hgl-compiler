@@ -336,6 +336,8 @@ transpiler: done
 
 - hgraph: a publication marks the input modified for its cycle, an equal one included; an idle cycle leaves it unmodified with its value; an input bound to a node's output observes that output
 - `modified(x)`, as a guard, admits a read of `x` as `valid(x)` does (TIME-4): the read stands under `(x.modified and x.valid)`
+- An input of a node in a branch started while the program runs, bound to an endpoint already valid, is modified in the cycle the branch starts and wakes its node, as hgraph samples an input it binds: of an `if`, a `switch` and a dictionary's child (CTRL-2, CTRL-7); core's conditional case passes
+- Not written as a rule, since the pinned text leaves it out: a `ref` parameter, a collection's children, and `delta_value` and `last_modified` of such an input as its branch starts
 
 ## END-3
 
