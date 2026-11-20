@@ -167,7 +167,7 @@ class Run {
         if (!executor_.has_value()) {
             hglrt::detail::store_missing(key, std::source_location::current());
         }
-        return get_GlobalState_str<V>(store(), key);
+        return get_GlobalState_str<V>(GlobalState{store()}, key);
     }
 
   private:

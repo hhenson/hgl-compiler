@@ -104,7 +104,7 @@ against it, so the header stays.
 
 ## What hgraph is asked for
 
-The SDK is hgraph 0.9.12. Nothing is asked of hgraph now. What was asked
+The SDK is hgraph 0.9.13. Nothing is asked of hgraph now. What was asked
 is in it, and each is taken up where the order of work reaches it:
 
 | Issue | In hgraph | Here |
@@ -122,6 +122,16 @@ was given, which is the specification's rule for a returned `ref`
 parameter. Where the pinned specification and hgraph differ, this target
 builds the specification's rule, and the difference goes to the
 specification's issue tracker to be decided there, not here.
+
+The scheduler is such a case (CAP-4), and `libhglrt` builds core's rule
+over hgraph's `NodeScheduler`, as the Python-writing target does: hgraph
+keeps the wake it delivers until the node has run, so in that evaluation
+it counts as pending, `un_schedule()` cancels it, and `is_scheduled_now`
+is false after `reset`; it keeps no wake under the empty tag; and it keeps
+a wall-clock wake at a time before the evaluation time for the next
+cycle. hgraph's alarm, which the target's is, drops a wake still to come
+where an input's tick evaluates the node first, which CAP-5's "best
+effort" admits.
 
 ## Progress and acceptance
 

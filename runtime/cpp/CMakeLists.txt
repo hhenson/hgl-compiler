@@ -123,9 +123,11 @@ if(BUILD_TESTING)
         tests/capabilities_tests.cpp
         tests/checked_tests.cpp
         tests/conversion_tests.cpp
+        tests/endpoint_tests.cpp
         tests/failure_tests.cpp
         tests/generator_tests.cpp
         tests/scalar_tests.cpp
+        tests/scheduler_tests.cpp
         tests/sources_tests.cpp
         tests/temporal_tests.cpp
         tests/tenor_tests.cpp
