@@ -510,12 +510,16 @@ execution code of the catalogue, as a string literal written out
 (TST-10, `catalogue::EXECUTION_CODES`); anything else is
 `test.raises_code`.
 
-A test's block is then read as a graph's body is (`Typer::test`, into
-`Module::test_bodies`): a test has a name and neither a parameter nor a
-result. `assert` is a statement there (TST-4): its condition is a `bool`
-(`type.mismatch`) known when the test is built, and no connection
-(`connection.as_constant`). The block of an `assert raises` is read with
-the test's scope.
+A test's block is then read as value code (`Typer::test`, into
+`Module::test_bodies`), as an application's statements are (TST-3,
+UNIT-14): a test has a name and neither a parameter nor a result. It
+calls `const fn`s only, a temporal call there being `call.role`; an
+operator selects among all its candidates, a value one outranking a
+temporal one of the same parameter types, and a temporal one selected is
+`call.role` too (GEN-5, the typer's `value_code`); nothing is lifted. The call
+an `eval` or a `run` takes is read as composition is. `assert` is a
+statement there (TST-4): its condition is a `bool` (`type.mismatch`).
+The block of an `assert raises` is read with the test's scope.
 
 ### Eval
 
