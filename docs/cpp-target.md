@@ -108,11 +108,11 @@ saving ([hgraph 1838](https://github.com/hhenson/hgraph/issues/1838)).
 
 The measure is cases passing on this target: core's runtime cases (182 today)
 and the tests of the fixture programs (about 370 in about 100 programs), all
-of which are HGL with their own expectations and need no change. A case this target cannot yet write is
-listed with its reason, as `unsupported_cases.toml` lists them today; a case
-that passes and is listed fails the check. The Python target runs the same
-cases in the same CI run while it exists; where the two disagree, the
-specification decides which is wrong.
+of which are HGL with their own expectations and need no change. A case this
+target cannot yet write is listed with its reason, as `unsupported_cases.toml`
+lists them today; a case that passes and is listed fails the check. The
+Python target runs the same cases in the same CI run while it exists; where
+the two disagree, the specification decides which is wrong.
 
 ## Order of work
 
