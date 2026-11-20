@@ -263,23 +263,31 @@ impl<'a> Typer<'a> {
         if temporal {
             // FN-3: "A runtime body calls only value functions, and so
             // does a value function." FN-4: "A bad selected signature
-            // is an error, not fallback to the other role."
+            // is an error, not fallback to the other role." TST-3, and
+            // the owner on hhenson/hgl_spec#162: "inside of a test,
+            // outside of eval / run only const fns can be called", as in
+            // an application's statements (UNIT-14); the code is
+            // proposed as `call.role`.
+            let (place, rule) = if self.testing {
+                ("a test, outside an `eval` or a `run`,", "TST-3")
+            } else if self.value_code {
+                ("an application's statement", "UNIT-14")
+            } else if self.hook.is_some() {
+                ("a hook", "FN-3")
+            } else if self.generating {
+                ("a source", "FN-3")
+            } else {
+                ("a value function", "FN-3")
+            };
             self.diagnostics.emit(error(
                 Category::FunctionKind,
                 codes::CALL_ROLE,
                 Location::new(self.file, name.span()),
                 format!(
-                    "`{}` is a temporal function, and a {} calls value functions",
-                    name.text(),
-                    if self.hook.is_some() {
-                        "hook"
-                    } else if self.generating {
-                        "source"
-                    } else {
-                        "value function"
-                    }
+                    "`{}` is a temporal function, and {place} calls value functions",
+                    name.text()
                 ),
-                "FN-3",
+                rule,
             ));
         }
         self.unread_call(list)

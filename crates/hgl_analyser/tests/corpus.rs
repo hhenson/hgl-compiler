@@ -48,6 +48,17 @@ fn expected_rejections(text: &str) -> Vec<(usize, String)> {
     expected
 }
 
+/// The examples whose rejection the specification states in its prose and
+/// not with an `expect-error` annotation, each by its module's path, with
+/// each finding's line within the example and its `category/code`. TST-3:
+/// "Deliberate rejection, complete module, value code in a test ... In
+/// `t`, outside an `eval`, `pass(1)` is a call of a graph in value code,
+/// and rejects ... Proposed: both reject with `call.role`."
+const STATED_IN_PROSE: &[(&str, &[(usize, &str)])] = &[(
+    "examples.test_value_code",
+    &[(8, "function-kind/call.role")],
+)];
+
 /// The rejection cases of core the compiler does not yet reject, each as
 /// `(file, declaration)`, the file under `tests/conformance/`: the
 /// `[rejections]` of `crates/hgl_hgraph/ci/unsupported_cases.toml`, which
@@ -138,8 +149,15 @@ fn every_example_module_is_accepted_but_for_its_stated_rejections() {
         let mut expected: Vec<String> = files
             .iter()
             .flat_map(|(name, text)| {
+                let (path, _) = header(text);
+                let stated = STATED_IN_PROSE
+                    .iter()
+                    .filter(move |(module, _)| *module == path)
+                    .flat_map(|(_, findings)| findings.iter())
+                    .map(|&(line, code)| (line, code.to_string()));
                 expected_rejections(text)
                     .into_iter()
+                    .chain(stated)
                     .map(move |(line, code)| format!("{name}:{line} {code}"))
             })
             .collect();
