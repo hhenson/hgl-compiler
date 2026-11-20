@@ -2,9 +2,8 @@
 //! types: structs, enums and native types. Part of the transpiler, the
 //! last stage.
 //!
-//! The scalars are hgraph's own (`primitive_types.h`): `i64` is
-//! `hgraph::Int`, `f64` `hgraph::Float`, `bool` `hgraph::Bool`. Every
-//! other type, and every declaration of one, is not written yet.
+//! The available scalars use hgraph's public types, including its two-form
+//! tenor (TYPE-17). Other types and type declarations are still reported.
 
 use hgl_analyser::{DeclarationKind, Scalar, Type};
 use hgl_diagnostics::Location;
@@ -18,6 +17,7 @@ pub(super) fn cpp_type(ty: &Type) -> Option<&'static str> {
         Type::Scalar(Scalar::I64) => Some("::hgraph::Int"),
         Type::Scalar(Scalar::F64) => Some("::hgraph::Float"),
         Type::Scalar(Scalar::Bool) => Some("::hgraph::Bool"),
+        Type::Scalar(Scalar::Tenor) => Some("::hgraph::Tenor"),
         _ => None,
     }
 }

@@ -15,7 +15,9 @@
 //! literals, locals, `&&`, `||`, `!`, an `i64` widened to `f64`, and
 //! calls. The rest is reported.
 
-use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Stmt, UnaryOperator, Value};
+use hgl_analyser::hir::{
+    Argument, Body, Callee, Expr, ExprKind, Stmt, Tenor, UnaryOperator, Value,
+};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role, Signature};
 use hgl_diagnostics::Location;
 use hgl_lower::calls::{LeftOut, left_out};
@@ -234,11 +236,19 @@ impl Emitter<'_> {
     /// A literal as C++.
     fn literal(&mut self, literal: &Value, at: Location) -> String {
         match literal {
-            // The least `i64` has no C++ literal: its negation is out
-            // of range.
-            Value::Int(i64::MIN) => "(-9223372036854775807 - 1)".to_string(),
-            Value::Int(number) if *number < 0 => format!("({number})"),
-            Value::Int(number) => number.to_string(),
+            Value::Int(number) => integer_literal(*number),
+            // TYPE-17: zero months and days and zero business days are distinct.
+            Value::Tenor(Tenor::Moves { months, days }) => format!(
+                "::hgraph::Tenor::months_days({}, {})",
+                integer_literal(*months),
+                integer_literal(*days),
+            ),
+            Value::Tenor(Tenor::BusinessDays(count)) => {
+                format!(
+                    "::hgraph::Tenor::business_days({})",
+                    integer_literal(*count)
+                )
+            }
             // `{:?}` writes the shortest text that reads back as the
             // same `f64`, always with a `.` or an exponent, as C++ reads
             // a double.
@@ -457,4 +467,13 @@ impl Emitter<'_> {
 /// expression but a literal and a local.
 fn may_fail(value: &Expr) -> bool {
     !matches!(value.kind, ExprKind::Literal(_) | ExprKind::Local(_))
+}
+
+/// The least signed 64-bit integer has no positive C++ literal of its magnitude.
+fn integer_literal(number: i64) -> String {
+    match number {
+        i64::MIN => "(-9223372036854775807 - 1)".to_string(),
+        n if n < 0 => format!("({n})"),
+        n => n.to_string(),
+    }
 }

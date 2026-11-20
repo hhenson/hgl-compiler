@@ -49,7 +49,7 @@ one executable for each test module or application
 | --- | --- |
 | Module | One translation unit and one header; its generic instances with it, collected for the whole program before anything is written |
 | Value function, each concrete instance | A function. `var` parameters are references; a `let` or a parameter is a `const` reference; a copy is made where the copy rule says and nowhere else |
-| Scalars | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `ZonedDateTime`. `tenor`: a type of this library until hgraph has one |
+| Scalars | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `ZonedDateTime` and `Tenor`. Tenor literals keep their calendar or business-day form |
 | Struct | A generated struct with HGL's equality. As a temporal value, a nominal bundle whose whole value is the struct |
 | Enum, tuple, optional, list, fixed list, result | `enum class`, `std::tuple`, `std::optional`, `std::vector`, `std::array`, `std::expected` |
 | Set, dictionary, abstract struct, `delta<T>` | To be designed with the collections work: the containers must give the order and equality the specification states, and a delta converts to and from hgraph's own delta value |
