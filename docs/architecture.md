@@ -3,7 +3,9 @@
 Status: the lexer, the parser, the analyser, the test runner and the
 hgraph transpiler are implemented, the last three in part:
 [rules.md](rules.md) says what each leaves. Everything marked *planned* is
-a plan, not a contract; it changes as stages are built.
+a plan, not a contract; it changes as stages are built. The native target
+is designed in [cpp-target.md](cpp-target.md): C++ on hgraph's own layers,
+with the Python-writing target kept as the reference until it is replaced.
 
 ## Pipeline
 
