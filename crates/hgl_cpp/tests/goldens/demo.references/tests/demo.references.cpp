@@ -1,6 +1,15 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include <hglrt/host.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef a_designated_input_is_followed_through_its_rebinding
+#undef a_reader_observes_the_input_designated
+#undef a_ref_parameter_is_present_and_wakes_once
+#undef a_relay_keeps_what_it_sampled
+#undef an_eval_records_a_ref_result_as_a_reader_does
+#undef demo
+#undef references
+
 namespace hgl::demo::references::m_::t_
 {
 void a_reader_observes_the_input_designated();

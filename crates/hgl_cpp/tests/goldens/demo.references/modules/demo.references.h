@@ -3,6 +3,28 @@
 
 #include <hglrt/hglrt.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef a
+#undef b
+#undef choose
+#undef chosen
+#undef demo
+#undef flag
+#undef follow
+#undef high
+#undef item
+#undef low
+#undef pick
+#undef picked
+#undef present
+#undef probe
+#undef references
+#undef sample_picked
+#undef sampled
+#undef sel
+#undef take
+#undef target
+
 namespace hgl::demo::references::m_
 {
 

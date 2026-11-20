@@ -1,6 +1,15 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
 #include <hglrt/host.h>
 
+// Names this file writes, which no macro of a header above takes.
+#undef adds_one
+#undef an_outputless_target_runs
+#undef demo
+#undef handlers_run_in_order
+#undef sources_and_constants
+#undef temporal
+#undef the_clock_is_read
+
 namespace hgl::demo::temporal::m_::t_
 {
 void adds_one();

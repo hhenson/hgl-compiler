@@ -2,6 +2,38 @@
 #include "demo.references.h"
 #include "core.h"
 
+// Names this file writes, which no macro of a header above takes.
+#undef a
+#undef a_designated_input_is_followed_through_its_rebinding
+#undef a_reader_observes_the_input_designated
+#undef a_ref_parameter_is_present_and_wakes_once
+#undef a_relay_keeps_what_it_sampled
+#undef an_eval_records_a_ref_result_as_a_reader_does
+#undef b
+#undef choose
+#undef chosen
+#undef core
+#undef demo
+#undef flag
+#undef follow
+#undef high
+#undef item
+#undef low
+#undef modified
+#undef pick
+#undef picked
+#undef present
+#undef probe
+#undef record
+#undef references
+#undef replay
+#undef sample_picked
+#undef sampled
+#undef sel
+#undef take
+#undef target
+#undef wakes
+
 namespace hgl::demo::references::m_
 {
 
@@ -91,22 +123,22 @@ struct present
     static constexpr auto name = "demo.references::present";
 
     // The node's `state` and `cache` (TIME-6).
-    struct state_type
+    struct state_type_
     {
         ::hgraph::Int wakes{};
     };
 
-    static void start([[maybe_unused]] ::hgraph::State<state_type> state_)
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
     {
-        state_.set(state_type{});
-        state_type& kept_ = state_.modify();
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& wakes = kept_.wakes;
         wakes = 0;
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"probe", ::hgraph::TS<::hgraph::Bool>> probe, [[maybe_unused]] ::hgraph::In<"target", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> target, [[maybe_unused]] ::hgraph::State<state_type> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    static void eval([[maybe_unused]] ::hgraph::In<"probe", ::hgraph::TS<::hgraph::Bool>> probe, [[maybe_unused]] ::hgraph::In<"target", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> target, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        state_type& kept_ = state_.modify();
+        state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& wakes = kept_.wakes;
         // when, line 39 (TIME-3)
         if (::hglrt::fn_valid(target) && ::hglrt::fn_modified(target))
@@ -131,12 +163,12 @@ struct present
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::references::m_::n_::present::state_type>
+struct hgraph::scalar_descriptor<::hgl::demo::references::m_::n_::present::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::references::m_::n_::present::state_type>("hgl:demo.references::present.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::references::m_::n_::present::state_type_>("hgl:demo.references::present.state");
     }
 };
 
@@ -179,19 +211,19 @@ struct choose
     static constexpr auto name = "demo.references::choose";
 
     // The node's `state` and `cache` (TIME-6).
-    struct state_type
+    struct state_type_
     {
         // FN-16: the input the `ref` result follows, by its place among
         // those it designates, or -1 for none.
         ::hgraph::Int designates_{-1};
     };
 
-    static void start([[maybe_unused]] ::hgraph::State<state_type> state_)
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
     {
-        state_.set(state_type{});
+        state_.set(state_type_{});
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"flag", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> flag, [[maybe_unused]] ::hgraph::In<"low", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> low, [[maybe_unused]] ::hgraph::In<"high", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> high, [[maybe_unused]] ::hgraph::In<"designated:low", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_, [[maybe_unused]] ::hgraph::In<"designated:high", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_02_, [[maybe_unused]] ::hgraph::State<state_type> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Int>>> out_)
+    static void eval([[maybe_unused]] ::hgraph::In<"flag", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> flag, [[maybe_unused]] ::hgraph::In<"low", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> low, [[maybe_unused]] ::hgraph::In<"high", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> high, [[maybe_unused]] ::hgraph::In<"designated:low", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_, [[maybe_unused]] ::hgraph::In<"designated:high", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_02_, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Int>>> out_)
     {
         // FN-16: the input the `ref` result follows, kept in the node's state.
         ::hgraph::Int& designates_ = state_.modify().designates_;
@@ -236,12 +268,12 @@ struct choose
 
 // The state of the node, as hgraph holds it (TIME-6).
 template <>
-struct hgraph::scalar_descriptor<::hgl::demo::references::m_::n_::choose::state_type>
+struct hgraph::scalar_descriptor<::hgl::demo::references::m_::n_::choose::state_type_>
 {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta()
     {
-        return TypeRegistry::instance().register_scalar<::hgl::demo::references::m_::n_::choose::state_type>("hgl:demo.references::choose.state");
+        return TypeRegistry::instance().register_scalar<::hgl::demo::references::m_::n_::choose::state_type_>("hgl:demo.references::choose.state");
     }
 };
 
