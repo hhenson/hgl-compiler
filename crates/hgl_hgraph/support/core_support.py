@@ -701,9 +701,9 @@ def _pruned(port, change, shape):
     the change leaves as it was.
 
     TIME-7: a delta that names no change, published where the value is
-    valid, "is no tick"; proposed there, "a delta whose every entry is
-    ignored, the removal of a key, a member or a position that is not
-    held (TYPE-16), names no change". hgraph does not tick a `TSD` or a `TSS` for one,
+    valid, "is no tick", and "A delta whose every entry is ignored, the
+    removal of a key, a member or a position that is not held (TYPE-16),
+    names no change too". hgraph does not tick a `TSD` or a `TSS` for one,
     but ticks what holds it, a `TSD`, a bundle or a `TSL`, where it is
     given one for that child: so a child whose change names nothing is
     left out of its holder's change. Where the child is not valid it is
@@ -779,8 +779,8 @@ def _validated(port):
     published or invalidated, it makes the value valid and empty, and
     ticks. Where it is valid the delta changes nothing, and is no tick";
     core's END-3: "it makes the endpoint valid, empty and modified".
-    Proposed in both: a delta whose every entry is an ignored removal
-    names no change. hgraph 0.9.5's `TSD` and `TSS` tick for neither, which is
+    And in both: a delta whose every entry is an ignored removal names
+    no change too. hgraph 0.9.5's `TSD` and `TSS` tick for neither, which is
     right where they are valid; where they are not, `clear` makes them
     valid, empty and modified. An invalidated one holds nothing
     (`invalidated`)."""
@@ -953,8 +953,8 @@ def list_applied(port, delta):
     TIME-7: "A delta that names no change ... ticks only where it changes
     validity. Where a `list<V>` ... is not valid, never published or
     invalidated, it makes the value valid and empty, and ticks. Where it
-    is valid the delta changes nothing, and is no tick". Proposed there: a delta whose
-    every entry is an ignored removal names no change. hgraph's `TSL`
+    is valid the delta changes nothing, and is no tick", and a delta whose
+    every entry is an ignored removal names no change too. hgraph's `TSL`
     does not tick for either, valid or not: where the list is not valid it
     is made to (`_ticked`)."""
     held = _held_size(port)

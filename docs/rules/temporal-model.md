@@ -121,7 +121,7 @@ transpiler: partial
 - A whole dictionary published removes each key it has not (`_core.dict_replaced`); a whole empty dictionary or set ticks where it changes nothing (`_core.set_replaced`), as hgraph's do not
 - A delta that names no change, `delta<set<i64>>()`, `delta<dict<str, i64>>()` or `delta<list<i64>>()`, ticks only where it makes the value valid and empty, never published or invalidated, and is otherwise no tick: it marks nothing `modified`, wakes no subscriber and is recorded by no trace; at the top, within a collection, and beside an unsized list in a struct or a tuple (END-3)
 - Such a delta of a struct, a tuple or a fixed list, `delta<Quote>()`, `(null, null)`, `delta<list<i64, 2>>()`, sets no child and is never a tick
-- So, as TIME-7 proposes, is one whose every entry is an ignored removal
+- So, as TIME-7 has it, agreed, is one whose every entry is an ignored removal: core's three cases for it pass
 - Not settled: a struct with no field, which has no child to be valid (TIME-9), is published as hgraph's `TS` of its class, and `delta<Empty>()` ticks and makes it valid, as `Empty()` does
 - Left: a whole set published the same again, not empty, which hgraph's `TSS` does not tick for
 - An unsized list's `out`, hgraph 0.9.5's unbounded `TSL`: a whole value replaces what it held, a delta's size is counted from what it holds, `out[i] = v` is `_core.list_child(_output, i)`, which fails past the list, and two writes in one evaluation publish their sum (END-5); a whole value that changes nothing hgraph sees, an empty list first among them, still ticks

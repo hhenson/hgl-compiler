@@ -357,8 +357,8 @@ test a_value_published_whole_the_same_again_ticks {
 # dictionary or a set is not valid ... it makes the value valid and
 # empty, and ticks". A tuple's delta that sets no position sets no child
 # and is never a tick. TYPE-16: "A `removed` that names a key a
-# dictionary does not hold is ignored, and is no failure", and proposed
-# in TIME-7, such a delta "names no change". 0 writes a delta that names
+# dictionary does not hold is ignored, and is no failure", and TIME-7:
+# such a delta "names no change too". 0 writes a delta that names
 # no change to the dictionary or the set, 1 sets the list's first
 # position, 2 removes what is not held, 3 writes a delta that names no
 # change to the list, 4 sets no position, and any other step
@@ -462,7 +462,7 @@ test a_sources_delta_that_names_no_change_beside_an_unsized_list_ticks_only_wher
 # delta names no change, where the entry is valid, is left out, as a
 # dictionary given one for a key ticks (core's END-3: "it ticks what holds
 # one given such a change"); one that removes only what it does not hold
-# names no change, as proposed.
+# names no change, as TIME-7 has it.
 fn publish_shelved_books(step: i64) -> tuple<list<i64>, dict<str, dict<str, i64>>> {
     inject out
     when {
