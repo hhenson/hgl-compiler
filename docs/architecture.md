@@ -2111,7 +2111,7 @@ test --target cpp` runs over any program to its end.
 | Another module's enum or struct, named | The header includes that module's types header, and no header includes another module's header: an instance (written in its declaration's module) may name a type of a module that imports that one, and a types header includes only the types headers of the modules its types name, which its module imports (UNIT-3: "Import cycles are rejected") |
 | A struct (TYPE-3 to TYPE-5) | An aggregate of its fields, a parent's first, with `==` of each (OPS-2); a generic one a class template, `Box<::hgraph::Int>`; `hglrt::fields<S>` naming its members, which its hash and its identity as a key are made from, and `std::hash<S>`. Built as `Point{x, y}`, its fields given in their order, defaults and nulls among them, each held first in the order written where that shows (EXPR-2) |
 | An abstract struct (TYPE-3) | A class that holds any struct that inherits from it (`hglrt::held_value`), with a function of each field's name and a conversion to each struct it inherits from; `hglrt::parents<S>` lists what a struct inherits from. A struct that holds itself (TYPE-6) is not written yet |
-| `set<K>`, `dict<K, V>` (TYPE-14, CTRL-12) | `hglrt::set<K>`, `hglrt::dict<K, V>`: hash containers in no order, equal where their members are (OPS-2); a key's identity is `==` but that every NaN is one key. `book[key]` is `hglrt::entry_at`, which fails with `value.missing_key` (ERR-6); assigned whole it is `hglrt::entry(book, key) = value`, which adds the key as the value is assigned (EXPR-3); `for` binds each member, or key and value, of the container or of a copy of it where the copy rule says or it is made in the loop's line |
+| `set<K>`, `dict<K, V>` (TYPE-14, CTRL-12) | `hglrt::set<K>`, `hglrt::dict<K, V>`: hash containers in no order, equal where their members are (OPS-2); a key is told apart by `==` of its type (NUM-5: a key that holds a NaN is no key's). A dictionary written out with more than one entry is written where its keys are constants that are not `==`: the pinned text does not say what one key written twice gives. `book[key]` is `hglrt::entry_at`, which fails with `value.missing_key` (ERR-6); assigned whole it is `hglrt::entry(book, key) = value`, which adds the key as the value is assigned (EXPR-3); `for` binds each member, or key and value, of the container or of a copy of it where the copy rule says or it is made in the loop's line |
 | `delta<T>` (TYPE-16) | A nullable's an optional; a list's `hglrt::list_delta`, its `updated` and `removed` read as a dictionary and a set; a set's and a dictionary's `hglrt::set_delta`, `hglrt::dict_delta`; a struct's `d_::S` of its module, an optional of each field's delta; a tuple's a tuple |
 | `Side(n)`, `Side("buy")` (TYPE-7) | `hglrt::enum_member`, from a table of the members' numbers or names; none matching fails uncoded: the catalogue has no code for it |
 | `timezone`, `zoned_time` (TYPE-2) | hgraph's `ZoneId` and `ZonedTime` |
@@ -2430,15 +2430,16 @@ The crate's tests compare the C++ written for its fixture programs,
 store and applications), `demo.timing` (schedulers, alarms and
 sources with hooks), `demo.activity` (an input's activity and an
 enum's temporal form), `demo.lifting` (lifted calls and captures) and
-`demo.control` (control flow over connections) and `demo.keyed` (a
-temporal set and dictionary), with goldens under
+`demo.control` (control flow over connections), `demo.composites`
+(structs, sets, dictionaries and deltas) and `demo.keyed` (a temporal
+set and dictionary), with goldens under
 `crates/hgl_cpp/tests/goldens/` (`HGL_UPDATE_GOLDENS=1 cargo test -p
 hgl_cpp --test emit` writes them again; core's module is left out of
 them) and check what blocks what. `crates/hgl_cli/tests/cpp.rs` checks
 the driver: what is said with no SDK and with a compiler not of the
 platform's family, `emit` and `run`; and, given an
 SDK, the whole route, that a failed build runs no older executable,
-that `demo.values`, `demo.composites`, `demo.temporal`, `demo.windows`, `demo.references`, `demo.timing`, `demo.activity`, `demo.lifting`, `demo.control` and `demo.keyed` pass, where a failure is
+that `demo.values`, `demo.temporal`, `demo.windows`, `demo.references`, `demo.timing`, `demo.activity`, `demo.lifting`, `demo.control`, `demo.composites` and `demo.keyed` pass, where a failure is
 reported, applications run with their output, the store and a failure,
 and a run in real time stopped by an interrupt of `hgl` alone, with `cargo
 test -p hgl_cli --test cpp -- --ignored`, which the `cpp` job of the CI
@@ -2485,7 +2486,7 @@ hgraph declares `try_except_`, until the front end has it
 | `conversions.h` | Every `convert` of core's: those that cannot fail, and those that can under `invalid`; core's `Rounding` and `InvalidPolicy` | OPS-4, OPS-6 to OPS-8 |
 | `tenors.h` | Core's natives of `tenor`, which is hgraph's `Tenor` (counts and form alone): its arithmetic, order and text, and the parts core's calendar candidates use, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-9 |
 | `lists.h` | `append`, `extend` | LIST-1 to LIST-3 |
-| `collections.h` | `set<K>`, `dict<K, V>`; a key's identity (`same`) and hash; `entry_at`, `entry`, core's `get`; `set_delta`, `dict_delta`, a list's delta's properties as HGL's; `fields<S>`, `held_value`, `held_as`, `parents<S>`, `inherits`; `enum_member` | TYPE-3, TYPE-7, TYPE-14, TYPE-16, EXPR-3, ERR-6, OPS-2 |
+| `collections.h` | `set<K>`, `dict<K, V>`; a key's hash, alike for keys that are `==`; `entry_at`, `entry`, core's `get`; `set_delta`, `dict_delta`, a list's delta's properties as HGL's; `fields<S>`, `held_value`, `held_as`, `parents<S>`, `inherits`; `enum_member` | TYPE-3, TYPE-7, TYPE-14, TYPE-16, EXPR-3, ERR-6, OPS-2 |
 | `keyed.h` | The temporal form of a set and of a dictionary, hgraph's `TSS` and `TSD`: `keyed_form`, an HGL value of a form to and from hgraph's; `endpoint_read` of each, its delta as `set_delta` or `dict_delta` and a dictionary's `all_valid`; `keyed_value`, a whole read checked when it runs; `keyed_entry_value`, `keyed_entry_valid` and the like, an entry of a dictionary as an endpoint whether or not it is held; `keyed_publish`, of a whole value through hgraph's `apply_current_value` and of a delta through its `apply_delta`; `fn_invalidate` of each; a trace's whole cell of each published as its change (`testing::detail::Publisher`); their names and text (`value_form`) | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, END-1 to END-4, END-6, TST-9 |
 | `endpoints.h` | Core's nine operations on an endpoint, each a template over the hgraph view it is given; `delta_value` plain and where a `result` is taken (`fn_delta_value_checked`); `endpoint_read`, through which a temporal form says how its delta is read, a scalar's and a nullable scalar's written | TIME-9, END-1 to END-10, ERR-14 |
 | `capabilities.h` | `Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`, each made from its hook's hgraph view, a member function for each property; `log`, `schedule` four ways, `un_schedule`, `reset`, the store's `get`, `has`, `put`; core's `LogLevel` | CAP-1 to CAP-6, TIME-8 |

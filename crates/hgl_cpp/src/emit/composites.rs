@@ -36,7 +36,7 @@ use hgl_lower::types::inherited;
 
 use super::Emitter;
 use super::calls::{changes, may_fail};
-use super::expressions::{held_read, integer_literal};
+use super::expressions::{held_read, integer_literal, reads_an_element};
 use super::names::{self, identifier, module_namespace};
 use super::statements::{Scope, refers};
 use super::types::{cpp_type, cpp_type_in, enum_name};
@@ -130,6 +130,9 @@ fn template_arguments(
     {
         return None;
     }
+    if !template_keeps(&read.generics, &read.members, arguments) {
+        return None;
+    }
     let written: Option<Vec<String>> = arguments
         .iter()
         .map(|argument| match argument {
@@ -140,6 +143,141 @@ fn template_arguments(
         })
         .collect();
     Some(format!("<{}>", written?.join(", ")))
+}
+
+/// True where the C++ template of a generic struct, applied to the C++
+/// types of `arguments`, is the struct HGL's application is. Two cases
+/// are not, and such an application is not written yet:
+///
+/// * An argument that holds a nullable's delta, `delta<i64?>`, which is
+///   an optional in C++ as `i64?` is, or an atomic, `atomic<list<i64>>`,
+///   which is the value it holds in C++: the two applications would be
+///   one C++ struct, though TYPE-3 tells them apart by their arguments,
+///   and an atomic's delta is the whole value (TYPE-16), which the
+///   template's would not be.
+/// * A field written `T?`, or one that holds `T` under an `atomic<...>`,
+///   whose `T` is given a nullable, `i64?`: HGL keeps one nullable, the
+///   field's `i64?` (TYPE-14: the suffix makes no nullable of a
+///   nullable), and its delta's property, the atomic's whole value
+///   (TYPE-16), where the template's would be an optional of an optional.
+fn template_keeps(
+    generics: &[GenericParameter],
+    members: &[hgl_analyser::Member],
+    arguments: &[GenericArgument],
+) -> bool {
+    fn erased_in_cpp(ty: &Type) -> bool {
+        match ty {
+            Type::Atomic(_) => true,
+            Type::Delta(of) => matches!(**of, Type::Nullable(_)) || erased_in_cpp(of),
+            Type::Named { arguments, .. } => arguments.iter().any(
+                |argument| matches!(argument, GenericArgument::Type(inner) if erased_in_cpp(inner)),
+            ),
+            Type::Nullable(inner) | Type::List { element: inner, .. } | Type::Set(inner) => {
+                erased_in_cpp(inner)
+            }
+            Type::Dict { key, value } => erased_in_cpp(key) || erased_in_cpp(value),
+            Type::Tuple(positions) => positions.iter().any(erased_in_cpp),
+            Type::Result { value, error } => erased_in_cpp(value) || erased_in_cpp(error),
+            _ => false,
+        }
+    }
+    /// The generic parameters `ty` writes `T?` of, at any depth, and each
+    /// under an `atomic<...>`, whose delta is its payload whole (TYPE-16):
+    /// a nullable given either is one HGL keeps one nullable, where the
+    /// template would hold an optional of an optional.
+    fn made_nullable(ty: &Type, found: &mut Vec<Location>) {
+        match ty {
+            Type::Nullable(inner) => {
+                if let Type::Parameter { at, .. } = &**inner {
+                    found.push(*at);
+                }
+                made_nullable(inner, found);
+            }
+            Type::Atomic(inner) => {
+                let mut every = |part: &Type| {
+                    if let Type::Parameter { at, .. } = part {
+                        found.push(*at);
+                    }
+                };
+                walk_types(inner, &mut every);
+                made_nullable(inner, found);
+            }
+            Type::Named { arguments, .. } => {
+                for argument in arguments {
+                    if let GenericArgument::Type(inner) = argument {
+                        made_nullable(inner, found);
+                    }
+                }
+            }
+            Type::List { element: inner, .. } | Type::Set(inner) | Type::Delta(inner) => {
+                made_nullable(inner, found)
+            }
+            Type::Dict { key, value }
+            | Type::Result {
+                value: key,
+                error: value,
+            } => {
+                made_nullable(key, found);
+                made_nullable(value, found);
+            }
+            Type::Tuple(positions) => {
+                for position in positions {
+                    made_nullable(position, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument, GenericArgument::Type(ty) if erased_in_cpp(ty)))
+    {
+        return false;
+    }
+    let mut nullable_of = Vec::new();
+    for member in members {
+        made_nullable(&member.ty, &mut nullable_of);
+    }
+    !nullable_of.iter().any(|at| {
+        generics
+            .iter()
+            .position(|generic| generic.at == *at)
+            .and_then(|position| arguments.get(position))
+            .is_some_and(|argument| matches!(argument, GenericArgument::Type(Type::Nullable(_))))
+    })
+}
+
+/// Calls `visit` with `ty` and each type inside it, at any depth.
+fn walk_types(ty: &Type, visit: &mut dyn FnMut(&Type)) {
+    visit(ty);
+    match ty {
+        Type::Named { arguments, .. } => {
+            for argument in arguments {
+                if let GenericArgument::Type(inner) = argument {
+                    walk_types(inner, visit);
+                }
+            }
+        }
+        Type::Nullable(inner)
+        | Type::List { element: inner, .. }
+        | Type::Set(inner)
+        | Type::Delta(inner)
+        | Type::Atomic(inner) => walk_types(inner, visit),
+        Type::Dict { key, value }
+        | Type::Result {
+            value: key,
+            error: value,
+        } => {
+            walk_types(key, visit);
+            walk_types(value, visit);
+        }
+        Type::Tuple(positions) => {
+            for position in positions {
+                walk_types(position, visit);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A constant generic argument of a struct (GEN-8) as a C++ template
@@ -368,9 +506,17 @@ fn substituted(ty: &Type, generics: &[GenericParameter], arguments: &[GenericArg
         Type::Set(inner) => Type::Set(again(inner)),
         Type::Delta(inner) => Type::Delta(again(inner)),
         Type::Atomic(inner) => Type::Atomic(again(inner)),
+        // A size that is a generic value parameter of `generics` is the
+        // constant its argument gives (GEN-13).
         Type::List { element, size } => Type::List {
             element: again(element),
-            size: size.clone(),
+            size: size.as_ref().map(|size| match &size.value {
+                ConstantValue::Parameter { at, .. } => match argument_of(at) {
+                    Some(GenericArgument::Constant(given)) => given.clone(),
+                    _ => size.clone(),
+                },
+                _ => size.clone(),
+            }),
         },
         Type::Dict { key, value } => Type::Dict {
             key: again(key),
@@ -522,6 +668,13 @@ impl Emitter<'_> {
             self.unsupported(at, "a generic parameter of this kind of a struct");
             return;
         };
+        // A generic value parameter's type, an enum of another module's
+        // among them, is named where the struct is declared.
+        for generic in &read.generics {
+            if let GenericKind::Value(ty) = &generic.kind {
+                self.note_types(ty);
+            }
+        }
         let name = identifier(&declaration.name);
         let namespace = module_namespace(&declared.path);
         let arguments = if parameters.is_empty() {
@@ -750,7 +903,7 @@ impl Emitter<'_> {
             };
             given.push(text);
         }
-        self.made_in_order(scope, &ty, read.members.len(), given, ("{", "}"))
+        self.made_in_order(scope, (&ty, &ty), read.members.len(), given, ("{", "}"))
     }
 
     /// What `argument`, given to `slot`, is written as; `None` where its
@@ -814,16 +967,18 @@ impl Emitter<'_> {
         Some(text)
     }
 
-    /// `ty` made of `slots` values, `open` and `close` around them, each
-    /// given by one of `given`, which are in the order HGL evaluates them.
-    /// Where more than one of them may fail, or one runs statements, which
-    /// may change what another reads, each is first held in that order, as
-    /// a value of its own where one runs statements: C++ evaluates them in
-    /// the order of the slots.
+    /// A value of the C++ type `ty`, made by `made` (the type itself for
+    /// an aggregate, or a function that gives one) of `slots` values,
+    /// `open` and `close` around them, each given by one of `given`, which
+    /// are in the order HGL evaluates them. Where more than one of them
+    /// may fail, or one runs statements, which may change what another
+    /// reads, each is first held in that order, as a value of its own where
+    /// one runs statements: C++ evaluates them in the order of the slots.
+    #[allow(clippy::too_many_arguments)]
     fn made_in_order(
         &mut self,
         scope: &mut Scope,
-        ty: &str,
+        (ty, made): (&str, &str),
         slots: usize,
         given: Vec<Given>,
         (open, close): (&str, &str),
@@ -835,7 +990,7 @@ impl Emitter<'_> {
             for value in given {
                 filled[value.slot] = value.text;
             }
-            return format!("{ty}{open}{}{close}", filled.join(", "));
+            return format!("{made}{open}{}{close}", filled.join(", "));
         }
         let mut steps = String::new();
         for value in given {
@@ -850,7 +1005,7 @@ impl Emitter<'_> {
         }
         scope.acted = true;
         format!(
-            "[&]() -> {ty} {{ {steps}return {ty}{open}{}{close}; }}()",
+            "[&]() -> {ty} {{ {steps}return {made}{open}{}{close}; }}()",
             filled.join(", ")
         )
     }
@@ -1048,11 +1203,11 @@ impl Emitter<'_> {
                     }
                 );
                 let slots = empty.len();
-                self.made_in_order(scope, &made, slots, given, ("(", ")"))
+                self.made_in_order(scope, (&ty, &made), slots, given, ("(", ")"))
             }
             _ => {
                 let slots = empty.len();
-                self.made_in_order(scope, &ty, slots, given, ("{", "}"))
+                self.made_in_order(scope, (&ty, &ty), slots, given, ("{", "}"))
             }
         }
     }
@@ -1076,10 +1231,13 @@ impl Emitter<'_> {
     }
 
     /// `[key: value, ...]` where a dictionary is expected (EXPR-9): each
-    /// key and each value evaluated in the order written; a key written
-    /// twice has the value written last. Where an entry after the first
-    /// runs statements, which may change what an earlier one read, each
-    /// is first held as a value of its own.
+    /// key and each value evaluated in the order written. Where an entry
+    /// after the first runs statements, which may change what an earlier
+    /// one read, each is first held as a value of its own. The pinned text
+    /// does not say what a dictionary written with one key twice holds, so
+    /// one of more than one entry is written only where its keys are
+    /// constants that are not `==` ([`distinct_keys`]), and reported
+    /// otherwise.
     pub(super) fn dict_literal(
         &mut self,
         scope: &mut Scope,
@@ -1105,6 +1263,9 @@ impl Emitter<'_> {
             "::{}::dict_of<{key_type}, {value_type}>",
             runtime::NAMESPACE
         );
+        if !distinct_keys(entries) {
+            return self.missing(value.at, "a dictionary written with keys that may be one");
+        }
         let flattened: Vec<&Expr> = entries
             .iter()
             .flat_map(|(key, value)| [key, value])
@@ -1189,34 +1350,58 @@ impl Emitter<'_> {
     /// `book[key]` as a place (EXPR-3): "A key the dictionary has not is
     /// added" where `adds`, the place the assignment writes whole;
     /// otherwise the key must be there, as a compound assignment reads
-    /// the place first. `base` is the dictionary's place, written; the key
-    /// is held before the statement where `holds` is true.
+    /// the place first. `base` is the dictionary's place, `listed` it
+    /// written. EXPR-2: the dictionary's place, then the key. Where the
+    /// key is held before the statement (`holds`), a dictionary's place
+    /// that is read checked (an element or an entry) is checked there
+    /// first; where it is not, and both that place and the key may fail,
+    /// the entry is made by a lambda that takes them in that order, as a
+    /// list's element is (`statements::place_held`).
     pub(super) fn dict_place(
         &mut self,
         scope: &mut Scope,
-        base: String,
+        (base, listed): (&Expr, String),
         index: &Expr,
         holds: bool,
         adds: bool,
     ) -> Option<String> {
-        let written = self.expression(scope, index);
-        let key = if holds
+        let function = format!(
+            "::{}::{}",
+            runtime::NAMESPACE,
+            if adds { "entry" } else { "entry_at" }
+        );
+        let held = holds
             && !matches!(
                 index.kind,
                 ExprKind::Literal(_) | ExprKind::EnumMember { .. }
-            ) {
-            let ty = self.named_type(&index.ty)?;
-            let held = names::temporary("key", self.temporary());
-            scope.before.push(format!("const {ty} {held} = {written};"));
-            held
-        } else {
-            written
-        };
-        let function = if adds { "entry" } else { "entry_at" };
-        Some(format!(
-            "::{}::{function}({base}, {key})",
-            runtime::NAMESPACE
-        ))
+            );
+        if held && reads_an_element(base) {
+            scope.before.push(format!("static_cast<void>({listed});"));
+        }
+        let written = self.expression(scope, index);
+        let key_type = self.named_type(&index.ty)?;
+        if held {
+            let key = names::temporary("key", self.temporary());
+            scope
+                .before
+                .push(format!("const {key_type} {key} = {written};"));
+            return Some(format!("{function}({listed}, {key})"));
+        }
+        if !holds && reads_an_element(base) && may_fail(index) {
+            // A reference to the entry, or the place that adds it, which
+            // holds its dictionary by reference and its key as a value.
+            let result = match &base.ty {
+                _ if adds => String::new(),
+                Type::Dict { value, .. } => format!(" -> {}&", self.named_type(value)?),
+                _ => return None,
+            };
+            let book = names::temporary("book", self.temporary());
+            let key = names::temporary("key", self.temporary());
+            return Some(format!(
+                "[&](){result} {{ auto& {book} = {listed}; const {key_type} {key} = {written}; return {function}({book}, {key}); }}()"
+            ));
+        }
+        Some(format!("{function}({listed}, {written})"))
     }
 
     /// The C++ place a field of the struct `base` is (EXPR-3), `base`
@@ -1351,8 +1536,9 @@ impl Emitter<'_> {
     /// expected"; OPS-2: "`==` and `!=` compare two values of one type"):
     /// two nullables are equal where both are null or both hold equal
     /// values. C++'s comparison of optionals is that. The two are
-    /// evaluated in the order written (EXPR-2). `None` for operands of any
-    /// other types.
+    /// evaluated in the order written (EXPR-2), each held as a value of its
+    /// own where either runs statements or both may fail. `None` for
+    /// operands of any other types.
     pub(super) fn nullable_equality(
         &mut self,
         scope: &mut Scope,
@@ -1365,7 +1551,10 @@ impl Emitter<'_> {
             return None;
         }
         let symbol = if equal { "==" } else { "!=" };
-        let ordered = changes(right) || (may_fail(left) && may_fail(right));
+        // Either side running statements may change what the other reads,
+        // a field of an abstract struct read by reference among it: both
+        // are then held as values, in the order written.
+        let ordered = changes(left) || changes(right) || (may_fail(left) && may_fail(right));
         let left_text = self.expression(scope, left);
         let right_text = self.expression(scope, right);
         if !ordered {
@@ -1429,6 +1618,12 @@ impl Emitter<'_> {
                 }
                 Type::List { .. } => {
                     let (mut steps, written) = self.held_place(scope, base)?;
+                    // EXPR-2: the list's own place, an element or an
+                    // entry, is checked before this index is evaluated;
+                    // the place is taken again at the call.
+                    if reads_an_element(base) {
+                        steps.push_str(&format!("static_cast<void>({written}); "));
+                    }
                     let at = self.expression(scope, index);
                     let held = names::temporary("index", self.temporary());
                     steps.push_str(&format!("const ::hgraph::Int {held} = {at}; "));
@@ -1442,6 +1637,48 @@ impl Emitter<'_> {
             _ => None,
         }
     }
+}
+
+/// True where the keys of `entries`, a dictionary written out, are known
+/// to be distinct: there is at most one, or each is a literal or an enum's
+/// member and no two are `==` (OPS-2: the two zeros are one).
+fn distinct_keys(entries: &[(Expr, Expr)]) -> bool {
+    /// A key as a constant, where it is one that is told apart here.
+    #[derive(PartialEq)]
+    enum Key<'e> {
+        Value(&'e Value),
+        Float(f64),
+        Member(usize, usize, usize),
+    }
+    fn key(expr: &Expr) -> Option<Key<'_>> {
+        match &expr.kind {
+            ExprKind::Literal(Value::Float(number)) => Some(Key::Float(*number)),
+            ExprKind::Literal(
+                value @ (Value::Int(_) | Value::Str(_) | Value::Bool(_) | Value::Duration(_)),
+            ) => Some(Key::Value(value)),
+            // An integer literal where an `f64` is expected (EXPR-5).
+            ExprKind::Widen(inner) => match inner.kind {
+                ExprKind::Literal(Value::Int(number)) => Some(Key::Float(number as f64)),
+                _ => None,
+            },
+            ExprKind::EnumMember {
+                module,
+                declaration,
+                member,
+            } => Some(Key::Member(*module, *declaration, *member)),
+            _ => None,
+        }
+    }
+    if entries.len() <= 1 {
+        return true;
+    }
+    let keys: Option<Vec<Key>> = entries.iter().map(|(written, _)| key(written)).collect();
+    let Some(keys) = keys else {
+        return false;
+    };
+    keys.iter()
+        .enumerate()
+        .all(|(at, one)| keys[at + 1..].iter().all(|other| other != one))
 }
 
 /// A struct of `members` (each a name, a type and a property's type),

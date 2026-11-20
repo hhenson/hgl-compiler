@@ -699,7 +699,8 @@ fn activity_and_enums_are_written() {
         assert!(unit.contains(written), "{written} in\n{unit}");
     }
     // The library names an enum through what the compiler writes beside
-    // it, and registers it with hgraph so (`values.h`).
+    // it, in its module's types header, and registers it with hgraph so
+    // (`values.h`).
     let header = &emitted
         .output
         .files
@@ -1238,6 +1239,101 @@ fn timing_is_written() {
     // SOURCE-1, TIME-8: a source's body is lent each capability it reads
     // for one resumption.
     assert!(unit.contains("::hglrt::Lending<::hglrt::Clock>"));
+}
+
+/// The temporal form of a set and of a dictionary (TYPE-9): each
+/// published whole and as a delta (TIME-7), read whole and by its delta
+/// (TIME-1, END-3), `all_valid` of a dictionary (TIME-9), invalidation
+/// (END-4), a lifted call given one whole, and their traces, a cell
+/// written whole among them (TST-5, TST-9). Everything is written, and
+/// each test can be run.
+#[test]
+fn keyed_temporal_code_is_written() {
+    let emitted = emit_with(
+        &[("demo.keyed.hgl", include_str!("fixtures/demo.keyed.hgl"))],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.keyed", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    // CEVAL-1: core's `replay` of a set is a source whose body yields the
+    // set's delta, which the set's form publishes as that change (TIME-7).
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    assert!(
+        core.contains("using yielded_type_ = ::hglrt::Yielded<::hglrt::set_delta<::hgraph::Int>>;"),
+        "{core}"
+    );
+}
+
+/// A dictionary's key of a type the family does not write, a constant
+/// connection of a set, an entry of a dictionary's entry in a hook, and a
+/// key's child as a connection of a graph are reported, and block what
+/// reaches them.
+#[test]
+fn a_keyed_form_not_written_yet_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "enum Side { buy, sell }\n",
+                "\n",
+                "fn sides(values: dict<Side, i64>) -> i64 {\n",
+                "    when { return 1 }\n",
+                "}\n",
+                "\n",
+                "fn constant_members() -> set<i64> => [1, 2]\n",
+                "\n",
+                "fn entry_a(book: dict<str, dict<str, i64>>) -> i64 {\n",
+                "    when { if valid(book[\"A\"][\"B\"]) { return book[\"A\"][\"B\"] } }\n",
+                "}\n",
+                "\n",
+                "fn child_a(book: dict<str, i64>) -> i64 => book[\"A\"]\n",
+                "\n",
+                "test enum_keys {\n",
+                "    assert eval(sides(values: [[Side.buy: 1]])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_constant_set {\n",
+                "    assert eval(constant_members()) == [[1, 2]]\n",
+                "}\n",
+                "\n",
+                "test an_entry_of_an_entry {\n",
+                "    assert eval(entry_a(book: [[\"A\": [\"B\": 1]]])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_child_in_a_graph {\n",
+                "    assert eval(child_a(book: [[\"A\": 1]])) == [1]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("enum_keys").as_deref(),
+        Some("m.hgl:18:31 the cpp target does not write a temporal value of `dict<Side, i64>` yet")
+    );
+    assert_eq!(
+        emitted.blocked("a_constant_set").as_deref(),
+        Some("m.hgl:9:38 the cpp target does not write a constant connection of `set<i64>` yet")
+    );
+    assert_eq!(
+        emitted.blocked("an_entry_of_an_entry").as_deref(),
+        Some("m.hgl:12:21 the cpp target does not write an entry of a dictionary's entry yet")
+    );
+    assert_eq!(
+        emitted.blocked("a_child_in_a_graph").as_deref(),
+        Some("m.hgl:15:44 the cpp target does not write a child of a connection yet")
+    );
 }
 
 #[test]
@@ -1789,6 +1885,47 @@ fn natives_are_called_with_their_templates() {
     assert_eq!(emitted.blocked("natives_are_called"), None);
 }
 
+/// FN-15, EXPR-2: a place held for a `var` parameter could be one that a
+/// later argument, running statements of its own, replaces or grows: the
+/// place's index is held in turn, and the place is taken where the call
+/// is made.
+#[test]
+fn a_place_beside_an_argument_that_runs_statements_is_taken_at_the_call() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn bump(var count: i64, by: i64) {\n",
+            "    count = by\n",
+            "}\n",
+            "const fn grown() -> i64 {\n",
+            "    var items = [10]\n",
+            "    bump(items[0], {\n",
+            "        items = [20, 30]\n",
+            "        1\n",
+            "    })\n",
+            "    return 0\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    assert!(
+        unit.contains(
+            "[&] { const ::hgraph::Int index_00_ = 0; const ::hgraph::Int argument_01_ = "
+        ) && unit.contains(
+            "return ::hgl::m::m_::bump(::hglrt::item(items, index_00_), argument_01_); }();"
+        ),
+        "{unit}"
+    );
+}
+
 /// ERR-5, EXPR-2: a `?` is run before its statement, so one after a read
 /// in its statement would run before the read, and could change what it
 /// reads; it is reported, and not written.
@@ -2001,142 +2138,6 @@ fn a_bit_given_to_a_var_parameter_is_reported() {
     );
 }
 
-/// The temporal form of a set and of a dictionary (TYPE-9): each
-/// published whole and as a delta (TIME-7), read whole and by its delta
-/// (TIME-1, END-3), `all_valid` of a dictionary (TIME-9), invalidation
-/// (END-4), a lifted call given one whole, and their traces, a cell
-/// written whole among them (TST-5, TST-9). Everything is written, and
-/// each test can be run.
-#[test]
-fn keyed_temporal_code_is_written() {
-    let emitted = emit_with(
-        &[("demo.keyed.hgl", include_str!("fixtures/demo.keyed.hgl"))],
-        &hgl_cpp::runtime::provides,
-    );
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    assert_goldens("demo.keyed", &emitted.output);
-    for test in &emitted.output.tests {
-        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
-    }
-    // CEVAL-1: core's `replay` of a set is a source whose body yields the
-    // set's delta, which the set's form publishes as that change (TIME-7).
-    let core = &emitted
-        .output
-        .files
-        .iter()
-        .find(|file| file.path == "modules/core.cpp")
-        .unwrap()
-        .text;
-    assert!(
-        core.contains("using yielded_type_ = ::hglrt::Yielded<::hglrt::set_delta<::hgraph::Int>>;"),
-        "{core}"
-    );
-}
-
-/// A dictionary's key of a type the family does not write, a constant
-/// connection of a set, an entry of a dictionary's entry in a hook, and a
-/// key's child as a connection of a graph are reported, and block what
-/// reaches them.
-#[test]
-fn a_keyed_form_not_written_yet_is_reported() {
-    let emitted = emit_with(
-        &[(
-            "m.hgl",
-            concat!(
-                "module m\n",
-                "\n",
-                "enum Side { buy, sell }\n",
-                "\n",
-                "fn sides(values: dict<Side, i64>) -> i64 {\n",
-                "    when { return 1 }\n",
-                "}\n",
-                "\n",
-                "fn constant_members() -> set<i64> => [1, 2]\n",
-                "\n",
-                "fn entry_a(book: dict<str, dict<str, i64>>) -> i64 {\n",
-                "    when { if valid(book[\"A\"][\"B\"]) { return book[\"A\"][\"B\"] } }\n",
-                "}\n",
-                "\n",
-                "fn child_a(book: dict<str, i64>) -> i64 => book[\"A\"]\n",
-                "\n",
-                "test enum_keys {\n",
-                "    assert eval(sides(values: [[Side.buy: 1]])) == [1]\n",
-                "}\n",
-                "\n",
-                "test a_constant_set {\n",
-                "    assert eval(constant_members()) == [[1, 2]]\n",
-                "}\n",
-                "\n",
-                "test an_entry_of_an_entry {\n",
-                "    assert eval(entry_a(book: [[\"A\": [\"B\": 1]]])) == [1]\n",
-                "}\n",
-                "\n",
-                "test a_child_in_a_graph {\n",
-                "    assert eval(child_a(book: [[\"A\": 1]])) == [1]\n",
-                "}\n",
-            ),
-        )],
-        &hgl_cpp::runtime::provides,
-    );
-    assert_eq!(
-        emitted.blocked("enum_keys").as_deref(),
-        Some("m.hgl:18:31 the cpp target does not write a temporal value of `dict<Side, i64>` yet")
-    );
-    assert_eq!(
-        emitted.blocked("a_constant_set").as_deref(),
-        Some("m.hgl:9:38 the cpp target does not write a constant connection of `set<i64>` yet")
-    );
-    assert_eq!(
-        emitted.blocked("an_entry_of_an_entry").as_deref(),
-        Some("m.hgl:12:21 the cpp target does not write an entry of a dictionary's entry yet")
-    );
-    assert_eq!(
-        emitted.blocked("a_child_in_a_graph").as_deref(),
-        Some("m.hgl:15:44 the cpp target does not write a child of a connection yet")
-    );
-}
-
-/// FN-15, EXPR-2: a place held for a `var` parameter could be one that a
-/// later argument, running statements of its own, replaces or grows: the
-/// place's index is held in turn, and the place is taken where the call
-/// is made.
-#[test]
-fn a_place_beside_an_argument_that_runs_statements_is_taken_at_the_call() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "const fn bump(var count: i64, by: i64) {\n",
-            "    count = by\n",
-            "}\n",
-            "const fn grown() -> i64 {\n",
-            "    var items = [10]\n",
-            "    bump(items[0], {\n",
-            "        items = [20, 30]\n",
-            "        1\n",
-            "    })\n",
-            "    return 0\n",
-            "}\n",
-        ),
-    )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let unit = &emitted
-        .output
-        .files
-        .iter()
-        .find(|file| file.path == "modules/m.cpp")
-        .unwrap()
-        .text;
-    assert!(
-        unit.contains(
-            "[&] { const ::hgraph::Int index_00_ = 0; const ::hgraph::Int argument_01_ = "
-        ) && unit.contains(
-            "return ::hgl::m::m_::bump(::hglrt::item(items, index_00_), argument_01_); }();"
-        ),
-        "{unit}"
-    );
-}
-
 /// Structs, sets, dictionaries and deltas as values (TYPE-3 to TYPE-6,
 /// TYPE-14, TYPE-16, EXPR-3, ERR-6, CTRL-12), an enum's member made from a
 /// value (TYPE-7), a zone and a time in it (TYPE-2), a `T?` compared with
@@ -2174,8 +2175,10 @@ fn composite_values_are_written() {
 /// What the target does not write of the composites yet is reported
 /// where it is written, and nothing is miswritten: a struct that holds
 /// itself (TYPE-6), a field's default that runs statements of its own,
-/// a field of an abstract struct assigned, a dictionary's entry given to
-/// a `var` parameter.
+/// a field of an abstract struct assigned, a dictionary written with keys
+/// that may be one, which the pinned text does not say what it holds, a
+/// dictionary's entry given to a `var` parameter, and an application of a
+/// generic struct that its C++ template would not be.
 #[test]
 fn composite_forms_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -2202,12 +2205,21 @@ fn composite_forms_not_written_yet_are_reported() {
             "const fn bump(var count: i64, by: i64) {\n",
             "    count = by\n",
             "}\n",
+            "const fn twice(name: str) -> dict<str, i64> => [name: 1, \"b\": 2]\n",
             "const fn given(book: dict<str, i64>) -> dict<str, i64> {\n",
             "    var changed = book\n",
             "    bump(changed[\"a\"], 1)\n",
             "    return changed\n",
             "}\n",
             "const fn made() -> i64 => Made().value\n",
+            "struct Maybe<T> { value: T? }\n",
+            "abstract struct Marked {}\n",
+            "struct Mark<T> : Marked { tag: list<T> = [] }\n",
+            "const fn read(box: Maybe<i64?>) -> i64? => box.value\n",
+            "const fn marked() -> Mark<delta<i64?>> => Mark<delta<i64?>>()\n",
+            "const fn whole(change: delta<Maybe<atomic<list<i64>>>>) -> bool => change.value == null\n",
+            "struct Snapshot<T> { value: atomic<T> }\n",
+            "const fn snapped(change: delta<Snapshot<list<i64>?>>) -> list<i64>? => change.value\n",
             "test noded {\n",
             "    assert Node(value: 1).value == 1\n",
             "}\n",
@@ -2219,17 +2231,31 @@ fn composite_forms_not_written_yet_are_reported() {
         [
             holds_itself,
             "m.hgl:16:5 the cpp target does not write an assignment to this place yet",
-            "m.hgl:24:10 the cpp target does not write this place given to a `var` parameter yet",
+            "m.hgl:22:48 the cpp target does not write a dictionary written with keys that may be one yet",
+            "m.hgl:25:10 the cpp target does not write this place given to a `var` parameter yet",
             // Where the default is written, which a construction that
             // leaves the field out reaches.
             "m.hgl:7:18 the cpp target does not write a default that runs statements yet",
+            // TYPE-14: `T?` of an `i64?` is an `i64?`, where the template's
+            // field would be an optional of one.
+            "m.hgl:32:15 the cpp target does not write the type `Maybe<i64?>` yet",
+            // TYPE-3: `Mark<delta<i64?>>` is no `Mark<i64?>`, which would be
+            // one C++ struct.
+            "m.hgl:33:10 the cpp target does not write the type `Mark<delta<i64?>>` yet",
+            // TYPE-16: an atomic's delta is the whole value, which the
+            // template, given the value the atomic holds, would not have.
+            "m.hgl:34:16 the cpp target does not write the type `delta<Maybe<atomic<list<i64>>>>` yet",
+            // A nullable given a parameter an atomic holds: its delta's
+            // property is the nullable whole.
+            "m.hgl:36:18 the cpp target does not write the type `delta<Snapshot<list<i64>?>>` yet",
         ]
     );
     assert_eq!(emitted.blocked("noded").as_deref(), Some(holds_itself));
 }
 
-/// A module's struct that holds another module's, and an instance of a
-/// generic function of the other module over it: each header includes
+/// A module's struct that holds another module's, a struct with a generic
+/// parameter of another module's enum, and an instance of a generic
+/// function of the other module over a struct: each header includes
 /// the types header of the module whose types it names, and no types
 /// header includes a module's header (GEN-2, UNIT-6).
 #[test]
@@ -2240,7 +2266,17 @@ fn a_struct_of_another_module_is_named_through_its_types_header() {
             concat!(
                 "module demo.b\n",
                 "export struct Inner { value: i64 }\n",
+                "export enum Mood { calm, keen }\n",
                 "export const fn same<T>(value: T) -> T => value\n",
+            ),
+        ),
+        (
+            "demo.c.hgl",
+            concat!(
+                "module demo.c\n",
+                "use demo.b::{Mood}\n",
+                "struct Moody<const mood: Mood> { count: i64 = 0 }\n",
+                "const fn counted(moody: Moody<Mood.keen>) -> i64 => moody.count\n",
             ),
         ),
         (
@@ -2267,4 +2303,6 @@ fn a_struct_of_another_module_is_named_through_its_types_header() {
     assert!(file("modules/demo.b.h").contains("#include \"demo.a.types.h\""));
     assert!(file("modules/demo.a.h").contains("#include \"demo.a.types.h\""));
     assert!(!file("modules/demo.b.types.h").contains("demo.a"));
+    // A generic parameter of another module's enum.
+    assert!(file("modules/demo.c.types.h").contains("#include \"demo.b.types.h\""));
 }

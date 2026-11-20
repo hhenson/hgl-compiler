@@ -94,24 +94,24 @@ TEST_CASE("a set holds each member once and is equal whatever the order (TYPE-14
     CHECK(hglrt::set<str>{} == hglrt::set<str>{});
 }
 
-TEST_CASE("a key of f64: the two zeros are one, and so is every NaN") {
+TEST_CASE("a key is told apart by == (OPS-2, NUM-5): the two zeros are one, a NaN is no key's") {
     const f64 nan = std::numeric_limits<f64>::quiet_NaN();
-    hglrt::set<f64> made{0.0, -0.0, nan, -nan};
+    hglrt::set<f64> made{0.0, -0.0, nan};
     CHECK(made.size() == 2);
     CHECK(made.contains(0.0));
-    CHECK(made.contains(nan));
-    // NUM-5 holds of `==`, and not of a key's identity.
-    CHECK_FALSE(nan == nan);
-    CHECK(hglrt::same(nan, nan));
+    CHECK(made.contains(-0.0));
     CHECK(hglrt::key_hash_of(0.0) == hglrt::key_hash_of(-0.0));
-    // A set's members are told apart by their identity, so a set that holds
-    // a NaN is the same set as itself.
-    CHECK(made == made);
+    // A NaN is equal to no value, itself included: no read finds it, a
+    // second is a member of its own, and a set that holds one is not equal
+    // to itself, as `==` has it inside a value.
+    CHECK_FALSE(made.contains(nan));
+    made.insert(nan);
+    CHECK(made.size() == 3);
+    CHECK_FALSE(made == made);
     // A key that holds an f64 at any depth.
-    hglrt::set<std::tuple<f64, i64>> tuples{{nan, 1}, {nan, 1}, {-0.0, 2}, {0.0, 2}};
-    CHECK(tuples.size() == 2);
-    hglrt::set<hglrt::list<f64>> lists{hglrt::list<f64>{nan}, hglrt::list<f64>{nan}};
-    CHECK(lists.size() == 1);
+    hglrt::set<std::tuple<f64, i64>> tuples{{-0.0, 2}, {0.0, 2}};
+    CHECK(tuples.size() == 1);
+    CHECK_FALSE(tuples.contains({nan, 2}));
 }
 
 TEST_CASE("a dictionary is equal where its keys are and each value is equal (OPS-2)") {
@@ -123,13 +123,13 @@ TEST_CASE("a dictionary is equal where its keys are and each value is equal (OPS
     // to itself.
     const hglrt::dict<i64, f64> odd{{1, std::numeric_limits<f64>::quiet_NaN()}};
     CHECK_FALSE(odd == odd);
-    CHECK(hglrt::same(odd, odd));
 }
 
-TEST_CASE("a dictionary written twice for a key has the value written last") {
-    const auto book = hglrt::dict_of<str, i64>({{"a", 1}, {"b", 2}, {"a", 3}});
+TEST_CASE("a dictionary is made of its entries in the order written (EXPR-9)") {
+    const auto book = hglrt::dict_of<str, i64>({{"a", 1}, {"b", 2}});
     CHECK(book.size() == 2);
-    CHECK(hglrt::entry_at(book, "a") == 3);
+    CHECK(hglrt::entry_at(book, "a") == 1);
+    CHECK(hglrt::entry_at(book, "b") == 2);
 }
 
 TEST_CASE("a strict read of a key a dictionary has not fails with value.missing_key (ERR-6)") {
@@ -184,9 +184,55 @@ TEST_CASE("a struct is a key through its fields") {
     const f64 nan = std::numeric_limits<f64>::quiet_NaN();
     const Point odd{nan, 0.0};
     CHECK_FALSE(odd == odd);
-    hglrt::set<Point> points{odd, odd, Point{1.0, -0.0}, Point{1.0, 0.0}};
-    CHECK(points.size() == 2);
+    hglrt::set<Point> points{Point{1.0, -0.0}, Point{1.0, 0.0}};
+    CHECK(points.size() == 1);
     CHECK(points.contains(Point{1.0, 0.0}));
+    // A struct that holds a NaN is equal to no struct: no read finds it.
+    points.insert(odd);
+    CHECK(points.size() == 2);
+    CHECK_FALSE(points.contains(odd));
+}
+
+namespace {
+/// A struct with a field of a `list<bool>`, whose elements libc++ gives as
+/// references to their bits.
+struct Bits {
+    hglrt::list<bool> on;
+
+    friend bool operator==(const Bits&, const Bits&) = default;
+};
+} // namespace
+
+template <>
+struct hglrt::fields<Bits> {
+    static constexpr auto members = std::tuple{&Bits::on};
+};
+
+TEST_CASE("a list<bool> is a key, a member and a field (TYPE-14)") {
+    const hglrt::list<bool> flags{true, false};
+    hglrt::set<hglrt::list<bool>> members{flags, hglrt::list<bool>{true, false}, hglrt::list<bool>{false}};
+    CHECK(members.size() == 2);
+    CHECK(members.contains(flags));
+    const hglrt::dict<hglrt::list<bool>, i64> keyed{{flags, 1}};
+    CHECK(hglrt::entry_at(keyed, hglrt::list<bool>{true, false}) == 1);
+    hglrt::set<Bits> fields{Bits{flags}, Bits{flags}, Bits{{false}}};
+    CHECK(fields.size() == 2);
+    CHECK(hglrt::key_hash_of(Bits{flags}) == hglrt::key_hash_of(Bits{{true, false}}));
+    CHECK(hglrt::hash_of(flags) == hglrt::hash_of(hglrt::list<bool>{true, false}));
+    const hglrt::set<bool> truths{true, false, true};
+    CHECK(truths.size() == 2);
+}
+
+TEST_CASE("a result is a key whatever its failure's type (ERR-2)") {
+    using failing = std::expected<i64, str>;
+    hglrt::set<failing> results{failing{1}, failing{std::unexpect, "no"}, failing{std::unexpect, "no"}};
+    CHECK(results.size() == 2);
+    CHECK(results.contains(failing{std::unexpect, "no"}));
+    hglrt::set<hglrt::result<i64>> errors{hglrt::result<i64>{std::unexpect, hglrt::make_error("a", "x")},
+                                          hglrt::result<i64>{2}};
+    CHECK(errors.size() == 2);
+    CHECK(errors.contains(hglrt::result<i64>{std::unexpect, hglrt::make_error("a", "x")}));
+    CHECK(hglrt::key_hash_of(hglrt::make_error("a")) == hglrt::key_hash_of(hglrt::make_error("a")));
 }
 
 TEST_CASE("the deltas of a set, a dictionary and a list are values (TYPE-16)") {
@@ -216,8 +262,7 @@ TEST_CASE("a value of an abstract struct holds a struct that inherits from it (T
     CHECK(round == Shape{Round{1, 2.0}});
     // One of one struct is no value of another, whatever their fields.
     CHECK_FALSE(round == square);
-    CHECK(hglrt::same(round, Shape{Round{1, 2.0}}));
-    CHECK_FALSE(hglrt::same(round, square));
+    CHECK(hglrt::key_hash_of(round) == hglrt::key_hash_of(Shape{Round{1, 2.0}}));
     hglrt::set<Shape> shapes{round, square, Shape{Round{1, 2.0}}};
     CHECK(shapes.size() == 2);
     // A copy holds the same struct.

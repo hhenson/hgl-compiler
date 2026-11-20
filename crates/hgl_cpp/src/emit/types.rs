@@ -48,15 +48,18 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
             ..
         } => match program.modules[*module].declarations[*declaration].kind {
             DeclarationKind::Enum => enum_name(program, *module, *declaration),
+            DeclarationKind::Struct => {
+                composites::struct_type(program, (*module, *declaration), arguments, generic)?
+            }
             // CAP-1: a capability is the runtime library's (`endpoints`).
             DeclarationKind::NativeType => {
                 super::endpoints::capability_type(program, *module, *declaration)?
             }
-            DeclarationKind::Struct => {
-                composites::struct_type(program, (*module, *declaration), arguments, generic)?
-            }
             _ => return None,
         },
+        // TYPE-16: "`delta<f64>` is `f64`": a scalar publishes whole, and
+        // its delta is itself.
+        Type::Delta(inner) if matches!(**inner, Type::Scalar(_)) => cpp_type(program, inner)?,
         Type::Nullable(inner) => {
             format!("std::optional<{}>", cpp_type_in(program, inner, generic)?)
         }
