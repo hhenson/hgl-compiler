@@ -4,8 +4,11 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -57,6 +60,47 @@ struct Added {
         out.set(hglrt::add__i64_i64(lhs.value(), rhs.value()));
     }
 };
+
+/// `1.0 / value`, as `1.0 / x` of a connection `x` is: a zero divisor gives
+/// the infinity of its sign (NUM-3).
+struct Reciprocal {
+    static constexpr auto name = "test::reciprocal";
+
+    static void eval(hgraph::In<"value", hgraph::TS<hglrt::f64>> value,
+                     hgraph::Out<hgraph::TS<hglrt::f64>> out) {
+        out.set(hglrt::div__f64_f64(1.0, value.value()));
+    }
+};
+
+/// `record<T>`, as core_nodes.h has it at `i64`, at any T.
+template <class T>
+struct RecordOf {
+    static constexpr auto name = "test::record_of";
+
+    static void start(hgraph::State<hglrt::testing::Recorded<T>> state) {
+        state.set(hglrt::testing::Recorded<T>{});
+    }
+
+    static void eval(hgraph::In<"input", hgraph::TS<T>> input, hgraph::Scalar<"key", hglrt::str>,
+                     hgraph::State<hglrt::testing::Recorded<T>> state, hgraph::EvaluationClockView clock) {
+        if (input.valid() && input.modified()) {
+            hglrt::fn_append(state.modify(), std::tuple{clock.evaluation_time(), input.value()});
+        }
+    }
+
+    static void stop(hgraph::Scalar<"key", hglrt::str> key, hgraph::State<hglrt::testing::Recorded<T>> state,
+                     hgraph::GlobalStateView global_state) {
+        hglrt::put_GlobalState_str_V(global_state, key.value(), state.ref());
+    }
+};
+
+/// The one value the run `ran` recorded under `key`.
+template <class T>
+T recorded_once(const hglrt::testing::Run& ran, std::string_view key) {
+    const auto entries = ran.get<hglrt::testing::Recorded<T>>(key);
+    REQUIRE(entries.size() == 1);
+    return std::get<1>(entries[0]);
+}
 
 } // namespace
 
@@ -139,4 +183,47 @@ TEST_CASE("a constant publishes once, as its run starts (FN-3)") {
                                          hglrt::str{hglrt::testing::run_output});
     };
     CHECK(hglrt::testing::evaluate<i64>(alone).entries == hglrt::testing::Recorded<i64>{{start, 9}});
+}
+
+TEST_CASE("constants equal under `==` but of different values publish each its own (FN-3, NUM-2, NUM-3)") {
+    using hglrt::f64;
+    using hglrt::list;
+    // `0.0 == -0.0`, and NUM-2 keeps the sign of a zero: `1.0 / x` of each
+    // is the infinity of its sign, whichever is wired first.
+    for (const bool plus_first : {true, false}) {
+        const auto ran = hglrt::testing::run([plus_first](hgraph::Wiring& wiring, datetime) {
+            std::optional<hgraph::Port<hgraph::TS<f64>>> plus;
+            std::optional<hgraph::Port<hgraph::TS<f64>>> minus;
+            if (plus_first) {
+                plus = hglrt::constant(wiring, 0.0);
+                minus = hglrt::constant(wiring, -0.0);
+            } else {
+                minus = hglrt::constant(wiring, -0.0);
+                plus = hglrt::constant(wiring, 0.0);
+            }
+            hgraph::wire<RecordOf<f64>>(wiring, hgraph::wire<Reciprocal>(wiring, *plus), hglrt::str{"plus"});
+            hgraph::wire<RecordOf<f64>>(wiring, hgraph::wire<Reciprocal>(wiring, *minus),
+                                        hglrt::str{"minus"});
+        });
+        CHECK(recorded_once<f64>(ran, "plus") == std::numeric_limits<f64>::infinity());
+        CHECK(recorded_once<f64>(ran, "minus") == -std::numeric_limits<f64>::infinity());
+    }
+
+    // So too where the zero is inside a value: a list's element and a
+    // tuple's position.
+    using Pair = std::tuple<i64, f64>;
+    const auto ran = hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        hgraph::wire<RecordOf<list<f64>>>(wiring, hglrt::constant(wiring, list<f64>{0.0}),
+                                          hglrt::str{"plus"});
+        hgraph::wire<RecordOf<list<f64>>>(wiring, hglrt::constant(wiring, list<f64>{-0.0}),
+                                          hglrt::str{"minus"});
+        hgraph::wire<RecordOf<list<Pair>>>(wiring, hglrt::constant(wiring, list<Pair>{{1, 0.0}}),
+                                           hglrt::str{"pair plus"});
+        hgraph::wire<RecordOf<list<Pair>>>(wiring, hglrt::constant(wiring, list<Pair>{{1, -0.0}}),
+                                           hglrt::str{"pair minus"});
+    });
+    CHECK_FALSE(std::signbit(recorded_once<list<f64>>(ran, "plus").at(0)));
+    CHECK(std::signbit(recorded_once<list<f64>>(ran, "minus").at(0)));
+    CHECK_FALSE(std::signbit(std::get<1>(recorded_once<list<Pair>>(ran, "pair plus").at(0))));
+    CHECK(std::signbit(std::get<1>(recorded_once<list<Pair>>(ran, "pair minus").at(0))));
 }
