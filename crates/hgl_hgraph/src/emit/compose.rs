@@ -6,6 +6,10 @@
 
 use super::*;
 use hgl_analyser::hir::LabelValue;
+use hgl_lower::graphs::{
+    alternative_statements, always_returns, assigned_outside, continued, joined, key_read_as_value,
+    label_value, may_return, named_in, nested_return, taken,
+};
 
 impl Emitter<'_> {
     /// CTRL-10: "A block whose last statement is an expression has that
@@ -656,7 +660,7 @@ impl Emitter<'_> {
     fn repeated_label(cases: &[Case]) -> Option<Location> {
         let mut seen: Vec<LabelValue> = Vec::new();
         for case in cases {
-            let Some(value) = Self::label_value(case) else {
+            let Some(value) = label_value(case) else {
                 continue;
             };
             if seen.contains(&value) {
@@ -667,22 +671,8 @@ impl Emitter<'_> {
         None
     }
 
-    /// The value of `case`'s label: the one the analyser resolved it to
-    /// (`Case::value`), or, for a label it could not resolve, the
-    /// literal or the member an instance has in its place (GEN-13).
-    /// `None` for any other, a constant a `const fn` computes among them.
-    fn label_value(case: &Case) -> Option<LabelValue> {
-        case.value.clone().or_else(|| match &case.label.kind {
-            ExprKind::Literal(Value::Int(value)) => Some(LabelValue::Int(*value)),
-            ExprKind::Literal(Value::Bool(value)) => Some(LabelValue::Bool(*value)),
-            ExprKind::Literal(Value::Str(value)) => Some(LabelValue::Str(value.clone())),
-            ExprKind::EnumMember { member, .. } => Some(LabelValue::Member(*member)),
-            _ => None,
-        })
-    }
-
     /// Reports a `switch` over a connection with a label whose value is
-    /// not known here ([`Emitter::label_value`]) beside another label,
+    /// not known here ([`label_value`]) beside another label,
     /// and says whether it did. CTRL-6: "Duplicate values reject", and
     /// hgraph's `switch_` keys its branches by each label's value and
     /// keeps the last of two of one value, where a `switch` over an
@@ -693,7 +683,7 @@ impl Emitter<'_> {
         if cases.len() < 2 {
             return false;
         }
-        let Some(case) = cases.iter().find(|case| Self::label_value(case).is_none()) else {
+        let Some(case) = cases.iter().find(|case| label_value(case).is_none()) else {
             return false;
         };
         self.unsupported(
@@ -1026,7 +1016,7 @@ impl Emitter<'_> {
     }
 
     /// What a child graph of a `switch_` or a `map_` takes of the graph
-    /// it is written in (`taken`), from what its statements name and
+    /// it is written in ([`taken`]), from what its statements name and
     /// declare, `read` and `declared`, with each window given to it reported
     /// (`windows_given`): `over` is the loop's sequence, where it is a
     /// loop's.
@@ -1037,29 +1027,9 @@ impl Emitter<'_> {
         over: Option<&Type>,
         at: Location,
     ) -> Vec<usize> {
-        let taken = self.taken(function, read, declared);
+        let taken = taken(function.locals, &self.bound, &self.ported, read, declared);
         self.windows_given(function, &taken, over, at);
         taken
-    }
-
-    /// What a child graph takes of the graph it is written in, from
-    /// what its statements name, `read`, and declare, `declared`
-    /// ([`named_in`]): every connection named, read or assigned, at any
-    /// depth, that has a value where the child is written
-    /// (`Emitter::bound`), less the names the child declares itself.
-    /// One the child does not need is harmless; one with no value yet is
-    /// never given. A key that hgraph gives as a port is a connection
-    /// here (`Emitter::ported`).
-    fn taken(&self, function: &Function, mut read: Vec<usize>, declared: &[usize]) -> Vec<usize> {
-        read.retain(|local| {
-            !declared.contains(local)
-                && self.bound.contains(local)
-                && (function.locals[*local].category == ValueCategory::Connection
-                    || self.ported.contains(local))
-        });
-        read.sort_unstable();
-        read.dedup();
-        read
     }
 
     /// Reports, at `at`, a window given to a child graph: one that a
@@ -1214,7 +1184,7 @@ impl Emitter<'_> {
             }
         };
         if let Some(key) = key
-            && let Some(read) = self.key_read_as_value(key, body)
+            && let Some(read) = key_read_as_value(self.program, key, body)
         {
             self.unsupported(
                 read,
@@ -1315,66 +1285,6 @@ impl Emitter<'_> {
         } else {
             self.line(depth, &format!("_hg.map_({})", given.join(", ")));
         }
-    }
-
-    /// Where `body`, the body of a loop that makes one child for each
-    /// member, reads `key`, the loop's key or member, other than as the
-    /// whole argument of a temporal parameter of a temporal function:
-    /// `None` where it reads it only so. hgraph's `map_` gives a child
-    /// its key as a port, and a port is what such a parameter takes; an
-    /// ordinary value given one is a constant of it (FN-3), which ticks
-    /// where the child starts, as the key's port does. Anywhere else the
-    /// key would be a value known where the child is built, which
-    /// hgraph does not give.
-    fn key_read_as_value(&self, key: usize, body: &[Stmt]) -> Option<Location> {
-        use hgl_analyser::hir::{Node, walk_statement_nodes};
-        let program = self.program;
-        let mut reads = Vec::new();
-        let mut given = Vec::new();
-        walk_statement_nodes(body, &mut |node| match node {
-            Node::Expression(Expr {
-                kind: ExprKind::Local(local),
-                at,
-                ..
-            }) if *local == key => reads.push(*at),
-            Node::Expression(Expr {
-                kind:
-                    ExprKind::Call {
-                        callee:
-                            Callee::Function {
-                                module,
-                                declaration,
-                                ..
-                            },
-                        arguments,
-                        ..
-                    },
-                ..
-            }) => {
-                let declared = &program.modules[*module];
-                let temporal =
-                    declared.declarations[*declaration].kind.role() == Some(Role::Temporal);
-                let Some(Detail::Callable(signature)) = declared.details.get(*declaration) else {
-                    return;
-                };
-                for argument in arguments {
-                    let taken = argument
-                        .parameter
-                        .and_then(|index| signature.parameters.get(index))
-                        .is_some_and(|parameter| {
-                            !parameter.constant && !parameter.var && parameter.pack.is_none()
-                        });
-                    if temporal
-                        && taken
-                        && matches!(argument.value.kind, ExprKind::Local(local) if local == key)
-                    {
-                        given.push(argument.value.at);
-                    }
-                }
-            }
-            _ => {}
-        });
-        reads.into_iter().find(|at| !given.contains(at))
     }
 
     /// CTRL-6: "Switch labels are typed source constants, compared by
@@ -1884,138 +1794,4 @@ fn captured_call_of<'p>(program: &'p Program, call: &'p Expr) -> Option<Captured
         signature,
         bodied,
     })
-}
-
-/// What is bound after branches (`Emitter::bound`): what each of
-/// `reached`, the bindings of a branch that reaches its end, binds.
-/// `None` where no branch reaches it.
-fn joined(reached: impl IntoIterator<Item = Vec<usize>>) -> Option<Vec<usize>> {
-    reached.into_iter().reduce(|mut joined, bound| {
-        joined.retain(|local| bound.contains(local));
-        joined
-    })
-}
-
-/// The statements of a branch of an `if` that stands as a statement:
-/// none with no `else`, a block's, with the block's last expression (a
-/// nested `if`, say) as a statement of its own, and for an `else if`
-/// the nested `if` as its one statement.
-fn alternative_statements(otherwise: Option<&Expr>) -> Vec<Stmt> {
-    match otherwise {
-        None => Vec::new(),
-        Some(Expr {
-            kind: ExprKind::Block { statements, value },
-            ..
-        }) => {
-            let mut all = statements.clone();
-            all.extend(value.iter().map(|value| Stmt::Expr((**value).clone())));
-            all
-        }
-        Some(alternative) => vec![Stmt::Expr(alternative.clone())],
-    }
-}
-
-/// True where some path through `statements` has a `return`, at any
-/// depth.
-fn may_return(statements: &[Stmt]) -> bool {
-    let mut found = false;
-    hgl_analyser::hir::walk_statement_nodes(statements, &mut |node| {
-        found |= matches!(
-            node,
-            hgl_analyser::hir::Node::Statement(Stmt::Return { .. })
-        );
-    });
-    found
-}
-
-/// True where an `if` or a `switch` among `statements` has a `return`
-/// in it: it needs what follows it to lower its other paths.
-fn nested_return(statements: &[Stmt]) -> bool {
-    statements.iter().any(|statement| {
-        matches!(
-            statement,
-            Stmt::Switch { .. }
-                | Stmt::Expr(Expr {
-                    kind: ExprKind::If { .. },
-                    ..
-                })
-        ) && may_return(std::slice::from_ref(statement))
-    })
-}
-
-/// `statements`, and after them `rest` where they can reach their end.
-fn continued(statements: &[Stmt], rest: &[Stmt]) -> Vec<Stmt> {
-    let mut all = statements.to_vec();
-    if !always_returns(statements) {
-        all.extend_from_slice(rest);
-    }
-    all
-}
-
-/// The locals `statements` assign, by name or by a place inside them,
-/// that they do not declare themselves: the `var`s of what encloses
-/// them that they change.
-fn assigned_outside(statements: &[Stmt]) -> Vec<usize> {
-    use hgl_analyser::hir::{Node, walk_statement_nodes};
-    let mut assigned = Vec::new();
-    let mut declared = Vec::new();
-    walk_statement_nodes(statements, &mut |node| match node {
-        Node::Statement(Stmt::Declare { local, .. }) => declared.push(*local),
-        Node::Statement(Stmt::For { names, .. }) => declared.extend(names),
-        Node::Statement(Stmt::Assign { local, .. }) => assigned.push(*local),
-        Node::Statement(Stmt::AssignPlace { place, .. }) => {
-            if let ExprKind::Local(local) = place.place_root().kind {
-                assigned.push(local);
-            }
-        }
-        _ => {}
-    });
-    assigned.retain(|local| !declared.contains(local));
-    assigned.sort_unstable();
-    assigned.dedup();
-    assigned
-}
-
-/// Adds what `node`, a part of a child graph's statements, names to
-/// `read`, and what it declares to `declared`: a local read or
-/// assigned, and a `let`, a `var` or a loop's names.
-fn named_in(node: hgl_analyser::hir::Node, read: &mut Vec<usize>, declared: &mut Vec<usize>) {
-    use hgl_analyser::hir::Node;
-    match node {
-        Node::Statement(Stmt::Declare { local, .. }) => declared.push(*local),
-        Node::Statement(Stmt::For { names, .. }) => declared.extend(names),
-        Node::Statement(Stmt::Assign { local, .. }) => read.push(*local),
-        Node::Expression(Expr {
-            kind: ExprKind::Local(local),
-            ..
-        }) => read.push(*local),
-        _ => {}
-    }
-}
-
-/// True where every path through `statements` ends in a `return`: the
-/// last is one, or an `if` with an `else` or a `switch` with a
-/// `default` each branch of which always returns.
-fn always_returns(statements: &[Stmt]) -> bool {
-    match statements.last() {
-        Some(Stmt::Return { .. }) => true,
-        Some(Stmt::Expr(Expr {
-            kind:
-                ExprKind::If {
-                    then,
-                    otherwise: Some(otherwise),
-                    ..
-                },
-            ..
-        })) => {
-            always_returns(&alternative_statements(Some(then)))
-                && always_returns(&alternative_statements(Some(otherwise)))
-        }
-        Some(Stmt::Switch {
-            cases,
-            default: Some(default),
-            ..
-        }) => cases.iter().all(|case| always_returns(&case.body)) && always_returns(default),
-        _ => false,
-    }
 }

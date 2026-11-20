@@ -24,7 +24,7 @@ impl Emitter<'_> {
         match module.phases.get(index).copied().flatten() {
             // SOURCE-1: "A temporal `fn` whose body has a `yield` is a
             // source".
-            Some(Phase::Node) if yields(&body.statements) => {
+            Some(Phase::Node) if module.is_source(index) => {
                 // SOURCE-1 has a source take no temporal input, and FN-16
                 // a node mark its result `ref`: a source's is not written.
                 if signature.reference {
@@ -112,11 +112,7 @@ impl Emitter<'_> {
                     if injected == "out" {
                         has_out = true;
                     } else if let Some(written) = capability(injected) {
-                        let injects = match injected.as_str() {
-                            "scheduler" => Some(Timer::Scheduler),
-                            "alarm" => Some(Timer::Alarm),
-                            _ => None,
-                        };
+                        let injects = Timer::of(injected);
                         if injects.is_some() && timer.is_some() {
                             // Core's CAP-5: "A node injects it in place
                             // of `scheduler`".
@@ -176,26 +172,10 @@ impl Emitter<'_> {
             parameters.push(output.clone());
         }
         // TIME-4: what the handlers ask together.
-        let active: Vec<usize> = inputs
-            .iter()
-            .copied()
-            .filter(|input| {
-                handlers
-                    .iter()
-                    .any(|handler| handler.subscribed.contains(input))
-            })
-            .collect();
+        let active = subscribed_inputs(&inputs, &handlers);
         // TIME-4: only validity requirements shared by all handlers may
         // prevent the whole node from evaluating.
-        let valid: Vec<usize> = inputs
-            .iter()
-            .copied()
-            .filter(|input| {
-                handlers
-                    .iter()
-                    .all(|handler| handler.required.contains(input))
-            })
-            .collect();
+        let valid = required_inputs(&inputs, &handlers);
         let has_state = !states.is_empty();
         if has_state {
             lifecycle.push("_state: _hg.STATE = None".to_string());
@@ -728,22 +708,7 @@ impl Emitter<'_> {
         active: &[usize],
         changes: bool,
     ) -> Vec<Port> {
-        use hgl_analyser::hir::{Node, walk_statement_nodes};
-        let mut found: Vec<(usize, Designated, Location)> = Vec::new();
-        walk_statement_nodes(&body.statements, &mut |node| {
-            let value = match node {
-                Node::Statement(Stmt::Return {
-                    value: Some(value), ..
-                }) => value,
-                Node::Statement(Stmt::Assign { local, value, .. }) if function.is_out(*local) => {
-                    value
-                }
-                _ => return,
-            };
-            if let Some((local, how)) = designated(function, value) {
-                found.push((local, how, value.at));
-            }
-        });
+        let found = designations(function.locals, function.signature, &body.statements);
         let mut inputs: Vec<Port> = Vec::new();
         let mut kinds: Vec<(usize, Designated)> = Vec::new();
         for (local, how, at) in found {
@@ -1157,101 +1122,6 @@ pub(super) fn capability(injected: &str) -> Option<(&'static str, &'static str)>
         "scheduler" | "alarm" => Some(("_scheduler", "_hg.SCHEDULER")),
         _ => None,
     }
-}
-
-/// What wakes a node beside its inputs (TIME-9): the scheduler or the
-/// alarm it injects.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Timer {
-    /// `inject scheduler`: `scheduled()` is its `is_scheduled_now`.
-    Scheduler,
-    /// `inject alarm`: `scheduled()` "holds where the node is evaluated
-    /// and no temporal input has ticked".
-    Alarm,
-}
-
-/// One `when` of a node: what its header asks, and its body.
-struct Handler<'a> {
-    /// The inputs whose tick wakes it (TIME-3), as local positions.
-    subscribed: Vec<usize>,
-    /// The inputs it requires to be valid.
-    required: Vec<usize>,
-    /// Predicates checked when the node runs, including explicit modification guards.
-    conditions: Vec<&'a Expr>,
-    /// True where its header has `scheduled()`, alone or as a top-level
-    /// conjunct: a wake by the node's scheduler or alarm runs it
-    /// (TIME-3).
-    scheduled: bool,
-    /// True where its header writes a `modified` selector. One that
-    /// writes none "subscribes to every temporal input".
-    selects: bool,
-    /// Where its header has `modified([])` beside a `modified` selector
-    /// that names inputs, each a top-level conjunct: the specification
-    /// does not say what the two ask together, and the target reports it.
-    beside: Option<Location>,
-    /// True where its header has `modified([])` alone or as a top-level
-    /// conjunct: the selector, which a wake of the scheduler or the
-    /// alarm runs, and in its body `modified([])` is true (TIME-3).
-    empty: bool,
-    /// Its statements.
-    body: &'a [Stmt],
-}
-
-impl<'a> Handler<'a> {
-    /// A handler as the analyser read its header (`hir::Header`):
-    /// what it subscribes to and requires, and the conjuncts of its
-    /// condition that are checked when it runs.
-    fn of(header: &'a Header, condition: Option<&'a Expr>, body: &'a [Stmt]) -> Handler<'a> {
-        let conjuncts = condition.map(Expr::conjuncts).unwrap_or_default();
-        let empty = conjuncts.iter().any(|conjunct| {
-            matches!(&conjunct.kind, ExprKind::Endpoint {
-                operation: EndpointOperation::Modified,
-                inputs: Some(inputs),
-            } if inputs.is_empty())
-        });
-        Handler {
-            subscribed: header.subscribed.clone(),
-            required: header.required.clone(),
-            conditions: header
-                .conditions
-                .iter()
-                .filter_map(|&position| conjuncts.get(position).copied())
-                .collect(),
-            scheduled: header.scheduled,
-            selects: header.selects,
-            beside: header.beside,
-            empty,
-            body,
-        }
-    }
-}
-
-/// True when `statements` hold a `yield`, at any depth: in a loop, a
-/// `switch`, an `if` or a block. SOURCE-1: "A temporal `fn` whose body
-/// has a `yield` is a source".
-pub(super) fn yields(statements: &[Stmt]) -> bool {
-    fn within(value: &Expr) -> bool {
-        match &value.kind {
-            // A block ends with an expression where its last statement
-            // is one: an `if` that yields, say.
-            ExprKind::Block { statements, value } => {
-                yields(statements) || value.as_deref().is_some_and(within)
-            }
-            ExprKind::If {
-                then, otherwise, ..
-            } => within(then) || otherwise.as_deref().is_some_and(within),
-            _ => false,
-        }
-    }
-    statements.iter().any(|statement| match statement {
-        Stmt::Yield { .. } => true,
-        Stmt::For { body, .. } | Stmt::While { body, .. } => yields(body),
-        Stmt::Switch { cases, default, .. } => {
-            cases.iter().any(|case| yields(&case.body)) || default.as_deref().is_some_and(yields)
-        }
-        Stmt::Expr(value) => within(value),
-        _ => false,
-    })
 }
 
 /// An input a node designates (FN-16), as the provider's `Designation`

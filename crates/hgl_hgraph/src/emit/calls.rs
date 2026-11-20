@@ -27,8 +27,8 @@ impl<'a> Emitter<'a> {
     /// literal or a constant (UNIT-13), and elsewhere fails the call as
     /// the program runs."
     ///
-    /// In a hook a duration whose value this target works out
-    /// (`known_duration`) and that is admitted there is given as it is;
+    /// In a hook a duration whose value is worked out
+    /// ([`known_duration`]) and that is admitted there is given as it is;
     /// for any other the provider's function checks it (`_wake_delay`),
     /// once every argument of the call is evaluated (EXPR-2), and fails
     /// the call where it is not admitted. One that is worked out
@@ -54,7 +54,7 @@ impl<'a> Emitter<'a> {
             let parameter = signature.parameters.get(argument.parameter?)?;
             (parameter.ty == Type::Scalar(Scalar::Duration)).then_some(&argument.value)
         })?;
-        let known = self.known_duration(given, &mut HashMap::new());
+        let known = known_duration(self.program, given, &mut HashMap::new());
         match function.mode {
             Mode::Node | Mode::Stop | Mode::Lifecycle => {
                 let starting = function.mode == Mode::Lifecycle;
@@ -72,84 +72,6 @@ impl<'a> Emitter<'a> {
                 }
                 None
             }
-        }
-    }
-
-    /// The value of `value` in microseconds, where it is a duration this
-    /// target works out from how it is written: a literal, a constant
-    /// followed to what it is written as, and core's `-value`, `+` and
-    /// `-` of two of them and `*` of one by an `i64` literal (OPS-1), with
-    /// checked arithmetic. `None` for any other: a local, a call of
-    /// another function, one that overflows. The analyser has rejected a
-    /// constant that depends on itself (`constant.cycle`), so a chain of
-    /// constants ends. `known` holds what each constant, by its module
-    /// and declaration, came to, so that one named many times, `D0 + D0`,
-    /// is worked out once.
-    fn known_duration(
-        &self,
-        value: &Expr,
-        known: &mut HashMap<(usize, usize), Option<i64>>,
-    ) -> Option<i64> {
-        let program = self.program;
-        match &value.kind {
-            ExprKind::Literal(Value::Duration(micros)) => Some(*micros),
-            ExprKind::Constant {
-                module,
-                declaration,
-            } => {
-                if let Some(value) = known.get(&(*module, *declaration)) {
-                    return *value;
-                }
-                let value = match program.modules[*module].constants.get(*declaration) {
-                    Some(Some(constant)) => self.known_duration(constant, known),
-                    _ => None,
-                };
-                known.insert((*module, *declaration), value);
-                value
-            }
-            ExprKind::Call {
-                callee, arguments, ..
-            } => {
-                let (module, declaration) = callee.declaration()?;
-                if Some(module) != program.core() {
-                    return None;
-                }
-                // An operand that is a duration, or an `i64` literal.
-                let mut operand =
-                    |argument: &Argument| match (&argument.value.ty, &argument.value.kind) {
-                        (Type::Scalar(Scalar::Duration), _) => self
-                            .known_duration(&argument.value, known)
-                            .map(Operand::Duration),
-                        (Type::Scalar(Scalar::I64), ExprKind::Literal(Value::Int(count))) => {
-                            Some(Operand::Count(*count))
-                        }
-                        _ => None,
-                    };
-                // In the order of the parameters, however they are
-                // written: `sub_(rhs: a, lhs: b)` is `b - a`.
-                let mut ordered: Vec<&Argument> = arguments.iter().collect();
-                ordered.sort_by_key(|argument| argument.parameter);
-                let operands: Option<Vec<Operand>> =
-                    ordered.into_iter().map(&mut operand).collect();
-                let name = program.modules[module].declarations[declaration]
-                    .name
-                    .as_str();
-                match (name, operands?.as_slice()) {
-                    ("neg_", [Operand::Duration(micros)]) => micros.checked_neg(),
-                    ("add_", [Operand::Duration(lhs), Operand::Duration(rhs)]) => {
-                        lhs.checked_add(*rhs)
-                    }
-                    ("sub_", [Operand::Duration(lhs), Operand::Duration(rhs)]) => {
-                        lhs.checked_sub(*rhs)
-                    }
-                    ("mul_", [Operand::Duration(micros), Operand::Count(count)])
-                    | ("mul_", [Operand::Count(count), Operand::Duration(micros)]) => {
-                        micros.checked_mul(*count)
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
         }
     }
 
@@ -363,15 +285,7 @@ impl<'a> Emitter<'a> {
         index: usize,
         parameter: &Parameter,
     ) -> Option<String> {
-        let temporal = self.program.modules[callee.0].declarations[callee.1]
-            .kind
-            .role()
-            == Some(Role::Temporal);
-        if !temporal
-            || parameter.constant
-            || parameter.has_default
-            || !matches!(parameter.ty, Type::Nullable(_))
-        {
+        if !left_out_never_valid(self.program, callee, parameter) {
             return self.left_out(callee, index, parameter);
         }
         let ty = self
@@ -480,8 +394,8 @@ impl<'a> Emitter<'a> {
             && declared_in
                 .bodies
                 .get(declaration)
-                .and_then(Option::as_ref)
-                .is_some_and(|body| !yields(&body.statements))
+                .is_some_and(Option::is_some)
+            && !declared_in.is_source(declaration)
     }
 
     /// What parameter `index` of the function `callee` is given when a
@@ -493,33 +407,24 @@ impl<'a> Emitter<'a> {
         index: usize,
         parameter: &Parameter,
     ) -> Option<String> {
-        let program = self.program;
-        let defaults = program.modules[callee.0]
-            .defaults
-            .get(callee.1)
-            .map_or(&[][..], Vec::as_slice);
-        if let Some(Some(default)) = defaults.get(index) {
-            // A default that calls its own function with that same
-            // argument left out would be written inside itself
-            // without end.
-            let key = (callee.0, callee.1, index);
-            if self.expanding.contains(&key) {
-                self.unsupported(default.at, "a default that leaves itself out");
-                return Some("None".to_string());
+        match left_out(self.program, callee, index, parameter)? {
+            LeftOut::Default(default) => {
+                // A default that calls its own function with that same
+                // argument left out would be written inside itself
+                // without end.
+                let key = (callee.0, callee.1, index);
+                if self.expanding.contains(&key) {
+                    self.unsupported(default.at, "a default that leaves itself out");
+                    return Some("None".to_string());
+                }
+                // A default is read with no local in scope.
+                let cold = Function::cold(Mode::Value);
+                self.expanding.push(key);
+                let value = self.expression(&cold, default);
+                self.expanding.pop();
+                Some(value)
             }
-            // A default is read with no local in scope.
-            let cold = Function::cold(Mode::Value);
-            self.expanding.push(key);
-            let value = self.expression(&cold, default);
-            self.expanding.pop();
-            Some(value)
-        } else if matches!(parameter.ty, Type::Nullable(_)) {
-            // UNIT-8: "A parameter whose type is written `T?` needs
-            // no default to be omitted: it is taken to have a
-            // default of `null`".
-            Some("None".to_string())
-        } else {
-            None
+            LeftOut::Null => Some("None".to_string()),
         }
     }
 
@@ -1126,7 +1031,7 @@ impl<'a> Emitter<'a> {
             // (`run_wiring`), and of the type its trace is of otherwise.
             let own = signature.generics.is_empty();
             let (written, bound) = self.bound(function, signature, arguments, |_, value| {
-                let payload = crate::instances::trace_payload(&value.ty)?;
+                let payload = instances::trace_payload(&value.ty)?;
                 let parameter = arguments
                     .iter()
                     .find(|argument| std::ptr::eq(&argument.value, value))
@@ -1302,12 +1207,12 @@ impl<'a> Emitter<'a> {
     fn run_wired(&mut self, call: &Expr, ty: &Type) -> String {
         let at = call.at;
         let program = self.program;
-        let Some(wiring) = crate::instances::run_wiring(program, call, ty) else {
+        let Some(wiring) = instances::run_wiring(program, call, ty) else {
             self.unsupported(at, "this eval");
             return "{}, None".to_string();
         };
         let instance =
-            |emitter: &mut Self, function: &str, of: &Type| match crate::instances::core_function(
+            |emitter: &mut Self, function: &str, of: &Type| match instances::core_function(
                 program, function,
             ) {
                 Some(found) => emitter.called_name(found, &[GenericArgument::Type(of.clone())], at),
@@ -1416,13 +1321,4 @@ pub(super) fn called(value: &Expr) -> Option<(usize, usize, &[Argument])> {
     };
     let (module, declaration) = callee.declaration()?;
     Some((module, declaration, arguments))
-}
-
-/// An operand of core's arithmetic on durations, as `known_duration`
-/// works it out: a duration in microseconds, or an `i64` count.
-enum Operand {
-    /// A duration, in microseconds.
-    Duration(i64),
-    /// An `i64`.
-    Count(i64),
 }
