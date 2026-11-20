@@ -29,11 +29,11 @@ use std::collections::{HashMap, HashSet};
 use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Local, Node, Stmt, walk_statement_nodes};
 use hgl_analyser::{Detail, LocalKind, NamedKind, Program, Scalar, Type};
 
-use crate::emit::inherited;
+use crate::types::inherited;
 
 /// What one body's `let`s and loop names are bound to.
 #[derive(Clone, Default)]
-pub(crate) struct Copies {
+pub struct Copies {
     /// The `let`s, and the first name of each loop, that are bound to
     /// a copy: the place read is changed while the name is in scope.
     copied: HashSet<usize>,
@@ -55,7 +55,7 @@ pub(crate) struct Copies {
 
 impl Copies {
     /// Reads `body`.
-    pub(crate) fn of(program: &Program, body: &Body) -> Copies {
+    pub fn of(program: &Program, body: &Body) -> Copies {
         let mut copies = Copies::default();
         copies.block(program, &body.locals, &body.statements, &[]);
         copies
@@ -63,7 +63,7 @@ impl Copies {
 
     /// True where the `let` or the loop that binds `local` takes a
     /// copy of what it reads.
-    pub(crate) fn copied(&self, local: usize) -> bool {
+    pub fn copied(&self, local: usize) -> bool {
         self.copied.contains(&local)
     }
 
@@ -78,7 +78,7 @@ impl Copies {
     ///
     /// `parameters` is how many of the locals are parameters: they
     /// come first.
-    pub(crate) fn own(&self, locals: &[Local], parameters: usize, value: &Expr) -> bool {
+    pub fn own(&self, locals: &[Local], parameters: usize, value: &Expr) -> bool {
         let own_place = |local: usize| local >= parameters && locals[local].kind == LocalKind::Var;
         match &value.kind {
             ExprKind::Local(local) => {
@@ -122,7 +122,7 @@ impl Copies {
     /// An expression of any other form may hold a part of what it is
     /// made of, `rows + more` the lists `rows` holds: its places are
     /// those of each part.
-    pub(crate) fn places(&self, program: &Program, locals: &[Local], value: &Expr) -> Vec<usize> {
+    pub fn places(&self, program: &Program, locals: &[Local], value: &Expr) -> Vec<usize> {
         match &value.kind {
             ExprKind::Local(local) => {
                 if is_place(locals, *local) {
@@ -207,7 +207,7 @@ impl Copies {
     /// a place of it, a literal, what a function of the program gives,
     /// a copy, and a value of a type nothing changes where it is. Any
     /// form not known is taken to be held elsewhere.
-    pub(crate) fn elsewhere(&self, program: &Program, locals: &[Local], value: &Expr) -> bool {
+    pub fn elsewhere(&self, program: &Program, locals: &[Local], value: &Expr) -> bool {
         if !changed_in_place(program, &value.ty, 0) {
             return false;
         }
@@ -464,7 +464,7 @@ impl Copies {
 /// native function of core's gives, which may be a part of what it was
 /// given or of the run's store, nor a constant of a module, whose one
 /// value every read of it has.
-pub(crate) fn fresh(program: &Program, value: &Expr) -> bool {
+pub fn fresh(program: &Program, value: &Expr) -> bool {
     if !changed_in_place(program, &value.ty, 0) {
         return true;
     }
@@ -531,7 +531,7 @@ fn fresh_defaults(program: &Program, value: &Expr) -> bool {
 
 /// True for a local that is a place: a `var`, a `var` parameter, a
 /// `state` or a `cache`.
-pub(crate) fn is_place(locals: &[Local], local: usize) -> bool {
+pub fn is_place(locals: &[Local], local: usize) -> bool {
     matches!(
         locals[local].kind,
         LocalKind::Var | LocalKind::State | LocalKind::Cache
@@ -539,7 +539,7 @@ pub(crate) fn is_place(locals: &[Local], local: usize) -> bool {
 }
 
 /// The place a written place is inside: `rows` for `rows[0].orders`.
-pub(crate) fn place_of(locals: &[Local], place: &Expr) -> Option<usize> {
+pub fn place_of(locals: &[Local], place: &Expr) -> Option<usize> {
     match place.place_root().kind {
         ExprKind::Local(local) if is_place(locals, local) => Some(local),
         _ => None,
@@ -563,12 +563,7 @@ fn gives_its_own(program: &Program, callee: &Callee) -> bool {
 
 /// True where `statements` change the place `place`: assign it or a
 /// part of it, or give it or a part of it to a `var` parameter.
-pub(crate) fn changes(
-    program: &Program,
-    locals: &[Local],
-    statements: &[Stmt],
-    place: usize,
-) -> bool {
+pub fn changes(program: &Program, locals: &[Local], statements: &[Stmt], place: usize) -> bool {
     let mut changed = false;
     walk_statement_nodes(statements, &mut |node| match node {
         Node::Statement(Stmt::Assign { local, .. }) => changed |= *local == place,
@@ -689,7 +684,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
 /// struct with one inside it. A generic parameter and `any` may hold
 /// anything. A scalar, an enum and a struct that is a value are copied,
 /// and nothing in them is changed where it is.
-pub(crate) fn changed_in_place(program: &Program, ty: &Type, depth: usize) -> bool {
+pub fn changed_in_place(program: &Program, ty: &Type, depth: usize) -> bool {
     // A struct may hold itself inside a list, which is changed in place.
     if depth > 8 {
         return true;
@@ -736,7 +731,7 @@ pub(crate) fn changed_in_place(program: &Program, ty: &Type, depth: usize) -> bo
 /// The provider's class says it too (`_core.struct(..., by_value=True)`),
 /// so that what changes a field where it is never changes a value of
 /// such a struct that a parent's type stands for.
-pub(crate) fn by_value(program: &Program, module: usize, declaration: usize) -> bool {
+pub fn by_value(program: &Program, module: usize, declaration: usize) -> bool {
     let Some(Detail::Struct(read)) = program.modules[module].details.get(declaration) else {
         return false;
     };
@@ -753,33 +748,9 @@ pub(crate) fn by_value(program: &Program, module: usize, declaration: usize) -> 
         })
 }
 
-/// True for a struct whose value `port_value` makes anew from its
-/// bundle, every part of it: each field is of a type nothing changes
-/// where it is, or such a struct itself. Any other type is not.
-pub(crate) fn built_anew(program: &Program, ty: &Type, depth: usize) -> bool {
-    let Type::Named {
-        module,
-        declaration,
-        kind: NamedKind::Struct,
-        ..
-    } = ty
-    else {
-        return false;
-    };
-    let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
-        return false;
-    };
-    depth < 8
-        && read.generics.is_empty()
-        && !inherited(program, *module, *declaration)
-        && read.members.iter().all(|member| {
-            !changed_in_place(program, &member.ty, 0) || built_anew(program, &member.ty, depth + 1)
-        })
-}
-
 /// True for a type that is a struct changed where it is: one that is
 /// no value ([`by_value`]).
-pub(crate) fn struct_in_place(program: &Program, ty: &Type) -> bool {
+pub fn struct_in_place(program: &Program, ty: &Type) -> bool {
     matches!(
         ty,
         Type::Named { module, declaration, kind: NamedKind::Struct, .. }
@@ -831,7 +802,7 @@ fn held_types<'a>(program: &'a Program, ty: &'a Type) -> Option<Vec<&'a Type>> {
 /// function puts into the place it is given is copied only where this
 /// holds: `append(rows, row)` keeps `row`, and `extend(values, more)`
 /// keeps the numbers `more` holds.
-pub(crate) fn may_hold(program: &Program, holder: &Type, given: &Type) -> bool {
+pub fn may_hold(program: &Program, holder: &Type, given: &Type) -> bool {
     // Every type inside `ty`, itself left out; `None` where a part of
     // it does not say what it holds. A struct may hold itself inside a
     // list: a type this deep is not followed further.

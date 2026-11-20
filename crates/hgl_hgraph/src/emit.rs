@@ -25,15 +25,13 @@ use hgl_analyser::{
     Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
+use hgl_lower::copies::{self, Copies, by_value, changed_in_place, may_hold, struct_in_place};
+use hgl_lower::types::inherited;
 
-use crate::copies::{
-    self, Copies, built_anew, by_value, changed_in_place, may_hold, struct_in_place,
-};
 use crate::instances::Instances;
 use crate::{codes, provides, python_module, test_function};
 
 mod types;
-pub(crate) use types::inherited;
 use types::*;
 
 mod names;

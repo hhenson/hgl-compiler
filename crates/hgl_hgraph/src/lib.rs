@@ -54,7 +54,6 @@
 //!
 //! `docs/architecture.md` says what is covered and what is not.
 
-mod copies;
 mod emit;
 mod host;
 mod instances;

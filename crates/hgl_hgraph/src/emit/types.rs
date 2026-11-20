@@ -48,18 +48,28 @@ pub(super) fn held(ty: &Type) -> bool {
     }
 }
 
-/// True where another struct of the program inherits from the struct
-/// `declaration` of `module`: a value of that type may be of the other
-/// struct, with fields this one has not.
-pub(crate) fn inherited(program: &Program, module: usize, declaration: usize) -> bool {
-    program.modules.iter().any(|module_of| {
-        module_of.details.iter().any(|detail| {
-            matches!(detail, Detail::Struct(other) if other.parents.iter().any(|parent| {
-                matches!(parent, Type::Named { module: parent_module, declaration: parent_declaration, .. }
-                    if *parent_module == module && *parent_declaration == declaration)
-            }))
+/// True for a struct whose value `port_value` makes anew from its
+/// bundle, every part of it: each field is of a type nothing changes
+/// where it is, or such a struct itself. Any other type is not.
+pub(super) fn built_anew(program: &Program, ty: &Type, depth: usize) -> bool {
+    let Type::Named {
+        module,
+        declaration,
+        kind: NamedKind::Struct,
+        ..
+    } = ty
+    else {
+        return false;
+    };
+    let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
+        return false;
+    };
+    depth < 8
+        && read.generics.is_empty()
+        && !inherited(program, *module, *declaration)
+        && read.members.iter().all(|member| {
+            !changed_in_place(program, &member.ty, 0) || built_anew(program, &member.ty, depth + 1)
         })
-    })
 }
 
 /// True for a type written `T?` (TYPE-14).
