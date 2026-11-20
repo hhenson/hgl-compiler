@@ -1,0 +1,126 @@
+module demo.temporal
+
+# The temporal code the cpp target writes: a graph, nodes, a source, and
+# the evals of them. Its goldens are under `tests/goldens/demo.temporal`.
+
+# A graph whose `+` of a connection and a value is lifted (FN-6).
+export fn add_one(value: i64) -> i64 {
+    return value + 1
+}
+
+# A lifted call whose configuration is an `f64`.
+fn scaled(value: f64) -> f64 {
+    return value * 2.5
+}
+
+# A node that keeps a count in its state (TIME-6).
+fn count_publications(value: i64) -> i64 {
+    state count: i64 = 0
+    when {
+        count += 1
+        return count
+    }
+}
+
+# Two handlers, tested in source order (TIME-3): the first requires both
+# inputs, and the second neither.
+fn first_of(a: i64, b: i64) -> i64 {
+    when modified(a) { return delta_value(a) }
+    when valid([]) && modified(b) { return b * 10 }
+}
+
+# A source (SOURCE-1): each of `values`, one a microsecond after another.
+fn ticks(const values: list<i64>) -> i64 {
+    for value in values {
+        yield 1us: value
+    }
+}
+
+# A graph of the source, a node, and a constant connection (FN-3).
+fn counted_ticks(const values: list<i64>) -> i64 {
+    let counted = count_publications(ticks(values))
+    return first_of(counted, 5)
+}
+
+# A node that reads its clock (CAP-3).
+fn stamped(value: i64) -> datetime {
+    inject clock
+    when { return clock.evaluation_time }
+}
+
+# A node with no result, which logs (CAP-2).
+fn noted(value: i64) {
+    inject logger
+    when { log_debug(logger, "noted") }
+}
+
+# Functions named as members C++ gives the structs it writes them as.
+fn name(value: i64) -> i64 {
+    when { return value }
+}
+
+fn compose(value: i64) -> i64 {
+    return name(value)
+}
+
+# A node given an element of a list and then a block that changes it: the
+# element is held as it was (EXPR-2).
+fn pick(value: bool, const first: bool, const second: bool) -> bool {
+    when { return first }
+}
+
+fn chosen(value: bool) -> bool {
+    var flags: list<bool> = [false]
+    return pick(value, flags[0], {
+        flags[0] = true
+        true
+    })
+}
+
+# A handler whose `let` is a block's value: its value is no publication.
+fn bumped(value: i64) -> i64 {
+    when {
+        let next = {
+            let one = 1
+            value + one
+        }
+        return next
+    }
+}
+
+test adds_one {
+    assert eval(add_one(value: [1, _, 3])) == [2, _, 4]
+    assert eval(add_one(value: [1])) != [1]
+    assert eval(scaled(value: [2.0])) == [5.0]
+}
+
+test handlers_run_in_order {
+    assert eval(first_of(a: [1, _, 3], b: [_, 2, 4])) == [_, 20, 3]
+}
+
+test sources_and_constants {
+    assert eval(counted_ticks(values: [10, 20, 30])) == [50, 1, 2, 3]
+}
+
+test the_clock_is_read {
+    assert eval(stamped(value: [0s: 7, 2s: 9])) == [0s: earliest_start, 2s: earliest_start + 2s]
+}
+
+test an_outputless_target_runs {
+    eval(noted(value: [1, 2]))
+}
+
+test a_run_is_bounded {
+    let opening = @2026-01-05T09:30:00Z
+    let seen = eval(add_one(value: [1, 2, 3]), RunConfig(start: opening, length: 2us))
+    assert seen == [2, 3]
+}
+
+test any_name_is_written {
+    assert eval(compose(value: [4])) == [4]
+}
+
+test a_held_value_is_as_it_was {
+    assert eval(chosen(value: [true])) == [false]
+    assert eval(bumped(value: [1, 2])) == [2, 3]
+}

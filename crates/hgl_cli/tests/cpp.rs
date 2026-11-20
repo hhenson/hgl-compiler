@@ -25,7 +25,7 @@ const FLAGS: &str = concat!(
     "\n",
     "const fn yes() -> bool => true\n",
     "\n",
-    "fn pass(value: bool) -> bool {\n",
+    "fn pass(value: bool?) -> bool? {\n",
     "    when { return value }\n",
     "}\n",
     "\n",
@@ -87,7 +87,7 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
              HGL_HGRAPH_SDK is not set: set it to the install prefix of hgraph's C++ SDK, \
              the directory that holds `lib/cmake/hgraph`\n\
              not run  executable  demo.flags::evaluates\n    \
-             {file}:14:12: the cpp target does not write an eval yet\n\
+             {file}:14:29: the cpp target does not write a temporal value of `bool?` yet\n\
              rejection cases: 0 passed, 0 failed\n\
              executable cases: 0 passed, 0 failed, 2 not run\n"
         )
@@ -433,6 +433,36 @@ fn value_code_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 16 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// The temporal code of scalars on the SDK: a graph with lifted calls, a
+/// constant connection, nodes with state, handlers in order and
+/// capabilities, a source, and the evals of them (`demo.temporal`), each
+/// as the hgraph target gives it.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn temporal_code_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("temporal");
+    let file = write(
+        &root,
+        "src/demo.temporal.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.temporal.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

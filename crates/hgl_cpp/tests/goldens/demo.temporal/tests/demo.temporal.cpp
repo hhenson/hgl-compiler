@@ -1,0 +1,44 @@
+// Written by the hgl compiler for hgraph's C++ API. Do not edit.
+#include <hglrt/host.h>
+
+// Names this file writes, which no macro of a header above takes.
+#undef a_held_value_is_as_it_was
+#undef a_run_is_bounded
+#undef adds_one
+#undef an_outputless_target_runs
+#undef any_name_is_written
+#undef demo
+#undef handlers_run_in_order
+#undef sources_and_constants
+#undef temporal
+#undef the_clock_is_read
+
+namespace hgl::demo::temporal::m_::t_
+{
+void adds_one();
+void handlers_run_in_order();
+void sources_and_constants();
+void the_clock_is_read();
+void an_outputless_target_runs();
+void a_run_is_bounded();
+void any_name_is_written();
+void a_held_value_is_as_it_was();
+}  // namespace hgl::demo::temporal::m_::t_
+
+namespace
+{
+// Each test, by its identity, `module.path::name` (TST-15).
+const ::hglrt::testing::Registration test_0{"demo.temporal::adds_one", &::hgl::demo::temporal::m_::t_::adds_one};
+const ::hglrt::testing::Registration test_1{"demo.temporal::handlers_run_in_order", &::hgl::demo::temporal::m_::t_::handlers_run_in_order};
+const ::hglrt::testing::Registration test_2{"demo.temporal::sources_and_constants", &::hgl::demo::temporal::m_::t_::sources_and_constants};
+const ::hglrt::testing::Registration test_3{"demo.temporal::the_clock_is_read", &::hgl::demo::temporal::m_::t_::the_clock_is_read};
+const ::hglrt::testing::Registration test_4{"demo.temporal::an_outputless_target_runs", &::hgl::demo::temporal::m_::t_::an_outputless_target_runs};
+const ::hglrt::testing::Registration test_5{"demo.temporal::a_run_is_bounded", &::hgl::demo::temporal::m_::t_::a_run_is_bounded};
+const ::hglrt::testing::Registration test_6{"demo.temporal::any_name_is_written", &::hgl::demo::temporal::m_::t_::any_name_is_written};
+const ::hglrt::testing::Registration test_7{"demo.temporal::a_held_value_is_as_it_was", &::hgl::demo::temporal::m_::t_::a_held_value_is_as_it_was};
+}  // namespace
+
+int main(int argc, char **argv)
+{
+    return ::hglrt::testing::main(argc, argv);
+}

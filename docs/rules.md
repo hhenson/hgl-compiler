@@ -104,6 +104,14 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A failure with its code, reported at the statement of the test that ran | ERR-1, EXPR-3 |
 | `assert`; `assert raises` | TST-4, TST-10, TST-11 |
 | A call of core's native candidates and functions, the library's | NATIVE-7, OPS-4 |
+| A node of scalars: its inputs' activity and validity, handlers in source order, `state` and `cache`, `start` and `stop` | FN-2, TIME-3, TIME-4, TIME-5, TIME-6 |
+| `return value`, `out = value`, `invalidate(out)` in a handler | TIME-7, FN-7, END-4 |
+| A payload read; `valid`, `modified`, `delta_value` plain and into a `result`, `last_modified` of an input | TIME-1, END-1, END-2, END-3, END-6, ERR-14 |
+| `inject clock`, `logger`, `global_state`, and a property of each | TIME-8, CAP-1, CAP-2, CAP-3 |
+| A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
+| A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
+| `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
 
 Not written yet, and reported: a call that gives a `var` parameter a
 place beside an argument that runs statements (FN-15), a `?` after
@@ -111,8 +119,14 @@ anything its statement reads or runs before it (ERR-5), a
 `switch` case's binding read after the `switch` (UNIT-12), an element
 of a `list<bool>` given to a `var` parameter (a bit, no `bool&`), an enum's
 member made from a value (TYPE-7), a pack, a struct, a set, a
-dictionary, a window, a delta, `timezone`, `zoned_time`, and anything
-temporal.
+dictionary, a window, a delta of any but a scalar, `timezone`,
+`zoned_time`, and of temporal code: a temporal value of any but a
+scalar, `ref` (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
+`all_valid`, `activate`, `passivate`, `scheduled()`, `if`, `switch` and
+`for` over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
+default or a null (FN-11), a source with declarations or hooks, an
+eval's configuration that is no `RunConfig(...)` written in it (RUN-1),
+an eval of a value function (TST-5), and an application.
 
 ## The C++ target's runtime library
 
