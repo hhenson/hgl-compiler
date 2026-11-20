@@ -76,11 +76,14 @@ fn actions(text: &mut String, list: &[Action], depth: usize) {
             ),
             Action::Publish(v) => format!("return {}", val(v)),
             Action::Update(k, v) => format!(
-                "return _core.dict_delta(updated={{{}: {}}})",
+                "return _core.entries_published(_output, _core.dict_delta(updated={{{}: {}}}), \"entries\")",
                 val(k),
                 val(v)
             ),
-            Action::Remove(k) => format!("return _core.dict_delta(removed=({},))", val(k)),
+            Action::Remove(k) => format!(
+                "return _core.entries_published(_output, _core.dict_delta(removed=({},)), \"entries\")",
+                val(k)
+            ),
         };
         writeln!(text, "{indent}{line}").unwrap();
     }
@@ -96,6 +99,10 @@ fn node(text: &mut String, name: &str, k: &Kernel) {
         params.push("_state: _hg.STATE = None".into());
     }
     params.push("_store: _hg.GlobalState = None".into());
+    if k.output == Some(Schema::Dictionary) {
+        let annotation = output_annotation(payload(Schema::Dictionary));
+        params.push(format!("_output: {annotation} = None"));
+    }
     let signature = params.join(", ");
     let (kind, result) = k.output.map_or(("sink_node", String::new()), |t| {
         ("compute_node", format!(" -> {}", payload(t)))
@@ -195,8 +202,11 @@ fn graph(text: &mut String, name: &str, g: &Graph, nested: bool, application: bo
         params.join(", ")
     )
     .unwrap();
-    for l in lines {
-        writeln!(text, "    {l}").unwrap();
+    if lines.is_empty() {
+        lines.push("pass".into());
+    }
+    for line in lines {
+        writeln!(text, "    {line}").unwrap();
     }
 }
 impl Emitter<'_> {

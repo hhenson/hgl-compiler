@@ -328,3 +328,8 @@ test a_struct_is_narrowed_across_a_ref {
     assert eval(narrowed_follow(id: [1, 2])) == [1, 2]
     assert eval(narrowed_designation(id: [1, 2])) == [1, _]
 }
+
+# FN-16, TIME-10: replay publishes three values through one designated endpoint.
+test a_scalar_reference_observes_one_designation {
+    assert eval(designations(target: [1, 2, 3])) == [1, _, _]
+}

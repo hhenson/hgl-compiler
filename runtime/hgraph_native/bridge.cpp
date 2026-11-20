@@ -298,8 +298,13 @@ void hg_update(const CallbackFrame *f, const char *s, std::size_t n,
 void hg_remove(const CallbackFrame *f, const char *s, std::size_t n) noexcept {
   guarded([&] {
     auto out = f->node.output(f->time);
-    static_cast<void>(out.as_dict().begin_mutation(f->time).erase(
-        Value{std::string(s, n)}.view()));
+    auto dict = out.as_dict();
+    Value key{std::string(s, n)};
+    // END-3, TIME-7: an ignored removal ticks only when it establishes validity.
+    if (!out.valid())
+      dict.begin_mutation(f->time).touch();
+    else if (dict.contains(key.view()))
+      static_cast<void>(dict.begin_mutation(f->time).erase(key.view()));
   });
 }
 int hg_run(void (*wire)(Plan *), void *context, Observe observe) noexcept {

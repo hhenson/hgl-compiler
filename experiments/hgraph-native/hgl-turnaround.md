@@ -51,9 +51,11 @@ and native Arrow 25. SDK provisioning is outside these intervals.
 
 ## Reproduce
 
-Use a shared HGraph SDK built from [HGraph PR #1828](https://github.com/hhenson/hgraph/pull/1828) or a revision that includes it. The timing samples used
-the first implementation (`bba44c48d`, based on `c9a70d5e0`). The differential
-tests also pass with the rebased implementation, `4fe47d1da`. Use absolute paths.
+Build the shared SDK from the HGraph `0.9.7` tag using the native Arrow dependency
+prefix below. The timing samples used the first implementation (`bba44c48d`, based
+on `c9a70d5e0`). [HGraph 0.9.7](https://github.com/hhenson/hgraph/releases/tag/0.9.7)
+
+Use absolute paths.
 Set `HG_SRC` to the HGraph checkout, `SDK` to the
 chosen install prefix, `DEPS` to the native dependency prefix, and `WORK` to a
 build directory. Run these commands from the compiler root on Linux.
@@ -105,9 +107,11 @@ and other core types remain outside this slice.
 
 ## Validation scope
 
-The selected scalar and keyed tests pass on both targets. The integration suite also
-changes an imported HGL body, compares the complete timestamped CLI outputs and forces
-a failed link after a successful run. At core `40c3e6f` and spec `a3716cc`, the Python
-target passed all 131 executable conformance cases, all five rejection cases and all
-41 implementation cases. Native validation covers the two migrated cases and the
-finite applications above. [Executable checks](../../crates/hgl_cli/tests/native.rs)
+The scalar, keyed lifecycle and absent-key removal cases pass on both targets. The
+integration suite also edits an imported HGL body, compares the timestamped outputs
+and forces a failed link after a successful run. [Executable checks](../../crates/hgl_cli/tests/native.rs)
+
+At core `6da01f2` and spec `41a2096`, the Python target passed all 135 executable
+conformance cases and all 41 implementation cases. Eight of nine rejection cases
+passed. The analyser's existing GEN-13 instance-limit gap accounts for the ninth.
+[Tracked rejection](../../crates/hgl_hgraph/ci/unsupported_cases.toml)

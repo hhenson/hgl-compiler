@@ -1,0 +1,24 @@
+module demo.dictionary_removals
+
+fn book(price: i64) -> dict<str, i64> {
+    when {
+        if price < 0 { return delta<dict<str, i64>>(removed: ["A"]) }
+        return delta<dict<str, i64>>(updated: ["A": price])
+    }
+}
+
+fn count_publications(prices: dict<str, i64>) -> i64 {
+    state count: i64 = 0
+    when {
+        count += 1
+        return count
+    }
+}
+
+fn counted(price: i64) -> i64 => count_publications(book(price))
+
+# TIME-7, END-3: the first ignored removal makes the dictionary valid.
+# A later ignored removal is silent, including after the held key is removed.
+test an_absent_key_removal_ticks_only_on_initial_validity {
+    assert eval(counted(price: [-1, -1, 7, -1, -1, 9])) == [1, _, 2, 3, _, 4]
+}

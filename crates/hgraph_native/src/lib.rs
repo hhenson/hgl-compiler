@@ -72,7 +72,21 @@ pub fn emit(entries: &[Entry]) -> Vec<(String, String)> {
             }
             Entry::Application(_, g) => {
                 wire(&mut app, g, id, &mut kernels);
-                writeln!(dispatch,"            let trace = rt::run(wire_{id})?;\n            for &(step, value) in &trace {{rt::print_publication(step,value);}}\n            println!(\"ran {{name}} on hgraph-native: {{}} publication{{}}\",trace.len(),if trace.len()==1 {{\"\"}} else {{\"s\"}});").unwrap();
+                if g.result.is_some() {
+                    writeln!(dispatch, "            let trace = rt::run(wire_{id})?;").unwrap();
+                    dispatch.push_str(
+                        r#"            for &(step, value) in &trace {
+                rt::print_publication(step, value);
+            }
+            let count = trace.len();
+            let suffix = if count == 1 { "" } else { "s" };
+            println!("ran {name} on hgraph-native: {count} publication{suffix}");
+"#,
+                    );
+                } else {
+                    writeln!(dispatch, "            rt::run(wire_{id})?;").unwrap();
+                    dispatch.push_str("            println!(\"ran {name} on hgraph-native: its entry has no result\");\n");
+                }
                 id += 1;
             }
         }

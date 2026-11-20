@@ -1,3 +1,4 @@
 # Test fixtures are read byte for byte: keep their line breaks as committed
 # on every platform.
 crates/*/tests/fixtures/** -text
+crates/hgl_lower/tests/*.golden text eol=lf

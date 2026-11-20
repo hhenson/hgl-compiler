@@ -30,6 +30,7 @@ fn both_targets_check_the_same_scalar_and_keyed_publications() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let scalar = root.join("spec/hgl_core/tests/conformance/scalar_eval.hgl");
     let keyed = root.join("crates/hgl_hgraph/tests/fixtures/demo.graph_for.hgl");
+    let removal = root.join("crates/hgl_hgraph/tests/fixtures/demo.dictionary_removals.hgl");
     let keep = tempdir().unwrap();
     for target in ["hgraph", "hgraph-native"] {
         let dir = keep.path().join(target);
@@ -45,11 +46,41 @@ fn both_targets_check_the_same_scalar_and_keyed_publications() {
             "a_dictionary_has_a_child_for_each_key",
             scalar.to_str().unwrap(),
             keyed.to_str().unwrap(),
+            "--test",
+            "an_absent_key_removal_ticks_only_on_initial_validity",
+            removal.to_str().unwrap(),
         ]));
-        // END-2, TST-6, CTRL-7 and CTRL-15. Both targets must execute all five assertions.
+        // END-2, TST-6, CTRL-7 and CTRL-15. Both targets run the same publications and lifecycle assertions.
         assert!(
-            text.contains("executable cases: 2 passed, 0 failed, 0 not run"),
+            text.contains("executable cases: 3 passed, 0 failed, 0 not run"),
             "{text}"
+        );
+    }
+}
+
+// CRUN-8: an outputless entry still executes its graph.
+#[test]
+fn an_empty_outputless_application_runs_on_both_targets() {
+    let work = tempdir().unwrap();
+    let source = work.path().join("empty.hgl");
+    fs::write(
+        &source,
+        "application sample.empty\nfn idle() {}\neval(idle())\n",
+    )
+    .unwrap();
+    for target in ["hgraph", "hgraph-native"] {
+        let keep = work.path().join(target);
+        let output = success(hgl(&[
+            "run",
+            "--target",
+            target,
+            "--keep",
+            keep.to_str().unwrap(),
+            source.to_str().unwrap(),
+        ]));
+        assert_eq!(
+            output.trim_end(),
+            format!("ran sample.empty on {target}: its entry has no result")
         );
     }
 }

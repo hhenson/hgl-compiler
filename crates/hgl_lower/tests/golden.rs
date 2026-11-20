@@ -9,7 +9,8 @@ fn check(name: &str, source: &str, test: &str, golden: &str) {
     let mut diagnostics = Diagnostics::new();
     let mut files = vec![];
     for (name, text) in [(name, source)].iter().chain(&hgl_analyser::CORE_FILES) {
-        let file = sources.add(*name, *text).unwrap();
+        // Golden spans use byte offsets in LF source, including the core submodule fixtures.
+        let file = sources.add(*name, text.replace("\r\n", "\n")).unwrap();
         let tokens = hgl_lexer::lex(&sources, file, &mut diagnostics);
         let tree = parse(
             &sources,

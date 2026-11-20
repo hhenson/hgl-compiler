@@ -48,6 +48,10 @@ impl<'a> Lower<'a> {
         let Detail::Callable(sig) = &m.details[id.1] else {
             return Err(Unsupported(at, "this callable"));
         };
+        // FN-16, TIME-10: a reference observes designations, even when its payload is scalar.
+        if sig.reference || sig.parameters.iter().any(|p| p.reference) {
+            return Err(Unsupported(at, "a reference parameter or result"));
+        }
         if !sig.generics.is_empty() || sig.parameters.iter().any(|p| p.var || p.pack.is_some()) {
             return Err(Unsupported(at, "a generic, var or packed callable"));
         }

@@ -53,7 +53,7 @@ the two comparison cases. Thereafter both emitters accept only the lowered progr
 
 ## Milestone 0 — builder and provider inventory
 
-The upstream implementation is in review. The provider audit and hand-written
+HGraph 0.9.7 provides the prepared-builder API. The provider audit and hand-written
 comparison record their original pins. [Prepared-builder implementation](https://github.com/hhenson/hgraph/pull/1828) · [HGraph issue 1824](https://github.com/hhenson/hgraph/issues/1824) ·
 [Provider audit](hgraph-adaptations.md#milestone-0-audit) · [Comparison and measurements](../experiments/hgraph-native/README.md)
 
