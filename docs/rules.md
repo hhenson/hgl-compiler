@@ -110,7 +110,8 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | `inject clock`, `logger`, `global_state`, and a property of each | TIME-8, CAP-1, CAP-2, CAP-3 |
 | A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
-| `eval` with no configuration, dense and timed traces, their comparison, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
 | A temporal list, growing and fixed, and a temporal tuple: published whole and by delta, read whole, `valid`, `all_valid` and `delta_value` of one; a child read, at a constant index and one that runs, plain and into a `result`, given to `valid` and the other operations, and wired; a trace cell of one, whole or a delta, an input of one replayed, and a whole cell compared with the value the result holds | TYPE-9, TYPE-10, TYPE-16, TIME-1, TIME-7, TIME-9, END-3, END-7, END-8, ERR-14, TST-5, TST-9 |
 | A struct, a generic one and an abstract one, with `==` of each field; its construction by named fields, defaults and nulls, in the order written; its fields read and assigned; structs in lists, tuples, optionals, sets and dictionaries; a candidate of an operator over one | TYPE-3, TYPE-4, TYPE-5, OPS-2, GEN-4 |
 | A set and a dictionary, in no order, equal whatever the order; their literals; a strict read that fails with `value.missing_key`, an assignment that adds a key, core's `get`; `for` over each | TYPE-14, EXPR-3, EXPR-9, ERR-6, CTRL-12, OPS-2 |
@@ -125,14 +126,13 @@ or runs before it (ERR-5), a `switch` case's binding read after the
 default that runs statements, a field of an abstract struct assigned, a
 dictionary's entry given to a `var` parameter, a pack, a window, and of
 temporal code: a temporal value of any but a scalar, a list or a
-tuple, `ref` (FN-16),
-`inject scheduler` and `alarm` (CAP-4, CAP-5), `all_valid`, `activate`,
-`passivate`, `scheduled()`, `if`, `switch` and `for` over connections
-(CTRL-7), `capture` (ERR-7), a lifted input with a default or a null
-(FN-11), a source with declarations or hooks, an eval with a
-configuration or of a value function (RUN-1, TST-5), and an
-application. A call of a function with a pack, core's `all_` and
-`any_`, has no callee the analyser reads.
+tuple, `ref` (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
+`activate`, `passivate`, `scheduled()`, `if`, `switch` and `for` over
+connections (CTRL-7), `capture` (ERR-7), a lifted input with a default or
+a null (FN-11), a source with declarations or hooks, an eval's
+configuration that is no `RunConfig(...)` written in it (RUN-1), an eval
+of a value function (TST-5), and an application. A call of a function
+with a pack, core's `all_` and `any_`, has no callee the analyser reads.
 
 ## The C++ target's runtime library
 

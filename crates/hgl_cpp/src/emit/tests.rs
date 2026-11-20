@@ -19,15 +19,17 @@
 //! | `[7, _, 9]`, `[0s: 7, 2s: 9]` (TST-6, TST-7) | `::hglrt::testing::Dense<T>{7, std::nullopt, 9}`, `::hglrt::testing::Timed<T>{...}`, each cell as its type's family writes it |
 //! | `assert left == right` of two traces (TST-4) | `::hglrt::testing::expect_same(left, right)`, the left one evaluated first; `!=` is `expect_different`; either as a value is `::hglrt::testing::same` |
 //! | A trace given to a `const fn` (TST-16) | `::hglrt::testing::publications(trace)`, its publications as a list |
+//! | `let seen = eval(...)`, a `let` of a trace | `const auto seen = ...;`: the recording, or the trace written out, as the test host has it |
 //!
-//! An eval with a configuration (RUN-1), and one of a value function,
-//! are not written yet, and are reported.
+//! An eval's configuration is the lifecycle's (`lifecycle`); an eval of a
+//! value function is not written yet, and is reported.
 
 use hgl_analyser::hir::{Cell, Expr, ExprKind, Stmt};
 use hgl_analyser::{Argument as GenericArgument, Type};
 use hgl_lower::instances::{core_function, run_wiring, trace_payload};
 
 use super::Emitter;
+use super::calls::{changes, may_fail};
 use super::forms::Family;
 use super::graphs::WIRING;
 use super::names::{self, identifier};
@@ -77,9 +79,6 @@ impl Emitter<'_> {
         else {
             return self.missing(value.at, "an eval");
         };
-        if let Some(config) = config {
-            return self.missing(config.at, "an eval's configuration");
-        }
         let program = self.program;
         let ExprKind::Call {
             callee, arguments, ..
@@ -100,6 +99,21 @@ impl Emitter<'_> {
         };
         let library = names::testing("");
         let library = library.trim_end_matches("::");
+        // EXPR-2: the call's arguments in the order written, then the
+        // configuration (RUN-1). Where more than one of them may fail, or
+        // one runs statements, each is held first, in that order, before
+        // the run that reads them; a trace's cells are read where the
+        // entry is wired otherwise.
+        let held = arguments
+            .iter()
+            .map(|argument| &argument.value)
+            .chain(config.as_deref())
+            .filter(|part| may_fail(part))
+            .count()
+            > 1
+            || arguments.iter().any(|argument| changes(&argument.value))
+            || config.as_deref().is_some_and(changes);
+        let mut steps = String::new();
         let mut text = format!(
             "[&](::hgraph::Wiring& {WIRING}, [[maybe_unused]] ::hgraph::DateTime start_) {{\n"
         );
@@ -110,6 +124,22 @@ impl Emitter<'_> {
         let mut context = Context::new(Kind::Entry, scope.body.locals.len());
         for (position, argument) in arguments.iter().enumerate() {
             if !matches!(argument.value.kind, ExprKind::Trace(_)) {
+                // A `const` parameter's configuration, held as a value; a
+                // value given to a temporal one is wired as a constant
+                // where the entry is (FN-3).
+                let constant = argument
+                    .parameter
+                    .and_then(|index| callee_parameter(program, callee, index))
+                    .is_some_and(|parameter| parameter.constant);
+                if held && constant {
+                    let mut written = String::new();
+                    self.in_context(&mut context, |emitter| {
+                        written = emitter.expression(scope, &argument.value);
+                    });
+                    let name = names::temporary("argument", self.temporary());
+                    steps.push_str(&format!("{indent}const auto {name} = {written};\n"));
+                    given.push((position, name));
+                }
                 continue;
             }
             let parameter = argument.parameter.and_then(|index| {
@@ -133,6 +163,11 @@ impl Emitter<'_> {
             self.in_context(&mut context, |emitter| {
                 trace = emitter.trace(scope, &argument.value, &ty);
             });
+            if held {
+                let name = names::temporary("trace", self.temporary());
+                steps.push_str(&format!("{indent}const auto {name} = {trace};\n"));
+                trace = name;
+            }
             let port = names::temporary("input", self.temporary());
             text.push_str(&format!(
                 "{indent}const ::hgraph::Port<{schema}> {port} = {replay}({WIRING}, {library}::replay_items({trace}, start_));\n"
@@ -143,39 +178,59 @@ impl Emitter<'_> {
         self.in_context(&mut context, |emitter| {
             target = emitter.temporal_call(scope, call, &given);
         });
+        // RUN-1: the run's configuration, core's `RunConfig`, gives its
+        // bounds (CRUN-2), and an integration test's `run` its mode.
+        let mut bounds = match config {
+            Some(config) => self.run_bounds(scope, config),
+            None => "{}".to_string(),
+        };
+        if held && config.is_some() {
+            let name = names::temporary("bounds", self.temporary());
+            steps.push_str(&format!("{indent}const auto {name} = {bounds};\n"));
+            bounds = name;
+        }
+        let configured = match (config.is_some(), *real_time) {
+            (_, true) => format!(", {bounds}, {library}::Mode::real_time"),
+            (true, false) => format!(", {bounds}"),
+            (false, false) => String::new(),
+        };
         // CEVAL-1: "and the target's result as the entry's", recorded by
         // core's `record` under the run's key (CRUN-8).
-        let mode = if *real_time {
-            format!(", {{}}, {library}::Mode::real_time")
+        let run = match &wiring.result {
+            None => {
+                text.push_str(&format!("{indent}{target};\n{INDENT}}}"));
+                format!("{library}::run({text}{configured})")
+            }
+            Some(result) => {
+                let Some(record) = self.core_instance("record", result, call.at) else {
+                    return "0".to_string();
+                };
+                let Some(written) = self.written_type(result, call.at) else {
+                    return "0".to_string();
+                };
+                // TST-5: a cell written whole, of a T whose delta is no T, is
+                // compared "with the value the result holds once its cycle
+                // has published": the entry keeps that value beside the
+                // recording (`hglrt::testing::hold_result`).
+                let delta = super::types::cpp_type(program, &Type::delta(result.clone()));
+                if delta.is_some_and(|delta| delta != written) {
+                    let held = names::temporary("result", self.temporary());
+                    text.push_str(&format!(
+                        "{indent}const auto {held} = {target};\n{indent}{record}({WIRING}, {held}, ::hgraph::Str{{{library}::run_output}});\n{indent}{library}::hold_result({WIRING}, {held});\n{INDENT}}}"
+                    ));
+                } else {
+                    text.push_str(&format!(
+                        "{indent}{record}({WIRING}, {target}, ::hgraph::Str{{{library}::run_output}});\n{INDENT}}}"
+                    ));
+                }
+                format!("{library}::evaluate<{written}>({text}{configured})")
+            }
+        };
+        if steps.is_empty() {
+            run
         } else {
-            String::new()
-        };
-        let Some(result) = &wiring.result else {
-            text.push_str(&format!("{indent}{target};\n{INDENT}}}"));
-            return format!("{library}::run({text}{mode})");
-        };
-        let Some(record) = self.core_instance("record", result, call.at) else {
-            return "0".to_string();
-        };
-        let Some(written) = self.written_type(result, call.at) else {
-            return "0".to_string();
-        };
-        // TST-5: a cell written whole, of a T whose delta is no T, is
-        // compared "with the value the result holds once its cycle has
-        // published": the entry keeps that value beside the recording
-        // (`hglrt::testing::hold_result`).
-        let delta = super::types::cpp_type(program, &Type::delta(result.clone()));
-        if delta.is_some_and(|delta| delta != written) {
-            let held = names::temporary("result", self.temporary());
-            text.push_str(&format!(
-                "{indent}const auto {held} = {target};\n{indent}{record}({WIRING}, {held}, ::hgraph::Str{{{library}::run_output}});\n{indent}{library}::hold_result({WIRING}, {held});\n{INDENT}}}"
-            ));
-            return format!("{library}::evaluate<{written}>({text}{mode})");
+            format!("[&]() {{\n{steps}{indent}return {run};\n{INDENT}}}()")
         }
-        text.push_str(&format!(
-            "{indent}{record}({WIRING}, {target}, ::hgraph::Str{{{library}::run_output}});\n{INDENT}}}"
-        ));
-        format!("{library}::evaluate<{written}>({text}{mode})")
     }
 
     /// The wiring function of the instance of core's temporal function
@@ -258,6 +313,8 @@ impl Emitter<'_> {
                 Some(ty) => self.trace(scope, side, &ty),
                 None => self.missing(side.at, "this trace"),
             },
+            // A `let` that holds a trace, read as it is.
+            ExprKind::Local(_) => self.expression(scope, side),
             _ => self.missing(side.at, "a comparison of this trace"),
         }
     }
@@ -335,6 +392,22 @@ impl Family for Tests {
         depth: usize,
         text: &mut String,
     ) -> bool {
+        // TST-16: a `let` of a trace, an eval's or one written out, holds
+        // it as the test host has it: a recording, or a trace of cells.
+        if let Stmt::Declare {
+            local,
+            value: Some(value),
+        } = statement
+            && matches!(scope.body.locals[*local].ty, Type::Trace { .. })
+        {
+            let name = identifier(&scope.body.locals[*local].name);
+            let written = emitter.expression(scope, value);
+            text.push_str(&format!(
+                "{}[[maybe_unused]] const auto {name} = {written};\n",
+                INDENT.repeat(depth)
+            ));
+            return true;
+        }
         let Stmt::Assert {
             condition:
                 Expr {

@@ -316,7 +316,8 @@ fn a_form_not_written_yet_blocks_what_reaches_it() {
 /// its lifted calls (FN-6), a constant connection (FN-3), nodes with
 /// state, handlers tested in order and capabilities (TIME-3, TIME-6,
 /// CAP-2, CAP-3), a source (SOURCE-1), and the evals of them, dense and
-/// timed, compared (TST-4 to TST-8). Everything is written, and each test
+/// timed, compared, one of them bounded by a `RunConfig` (TST-4 to TST-8,
+/// CRUN-2). Everything is written, and each test
 /// can be run, against the runtime library `hgl` carries.
 #[test]
 fn temporal_code_is_written() {
