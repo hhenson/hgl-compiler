@@ -21,7 +21,8 @@
 //     unloaded N TEXT    no test of the program has that name
 //
 // where N is the test's position among those named, from 0, and TEXT has
-// `\\`, `\n` and `\r` for a backslash, a line feed and a carriage return.
+// `\\`, `\n` and `\r` for a backslash, a line feed and a carriage return,
+// and every other character as it is, a NUL among them.
 // Each line is written as it happens, so that a test that stops the process
 // shows a `start` and nothing after it. The results are a file, and not what
 // the process prints, so that nothing a program or hgraph prints can be
@@ -30,7 +31,8 @@
 // Each TEST is a test's name, and for one held to a time limit (TST-17) its
 // name, `@`, and the limit in whole microseconds: `demo.live::beats@5000000`.
 // Such a test runs on a thread of its own, and the host waits for it no
-// longer than its limit: then the run under way, and each the test starts
+// longer than its limit (a limit too long for the host's steady clock to
+// count is one that cannot pass): then the run under way, and each the test starts
 // after it, is asked to stop, as its host stops a run in real time, and ends
 // as it does at its end; the test goes on to its own end, and has failed
 // whatever it then does ("One still running when its limit passes is

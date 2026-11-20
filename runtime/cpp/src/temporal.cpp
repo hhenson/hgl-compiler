@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 
 namespace hglrt {
@@ -40,22 +41,26 @@ constexpr i64 last_instant =
 /// The microsecond `at` moved by `by` microseconds, forward or `back`, where
 /// it is one of the years 1 to 9999.
 i64 moved(i64 at, i64 by, bool back, std::source_location where) {
-    i64 out = 0;
-    const bool overflow = back ? __builtin_sub_overflow(at, by, &out) : __builtin_add_overflow(at, by, &out);
-    if (overflow || out < first_instant || out > last_instant) {
+    const std::optional<i64> out = back ? detail::checked_sub(at, by) : detail::checked_add(at, by);
+    if (!out.has_value() || *out < first_instant || *out > last_instant) {
         instant_out_of_range(where);
     }
-    return out;
+    return *out;
+}
+
+/// `computed`, a count of microseconds made with checked arithmetic, as a
+/// duration where it is one, and otherwise a failure at `where`.
+duration in_range(std::optional<i64> computed, std::source_location where) {
+    if (!computed.has_value()) {
+        duration_out_of_range(where);
+    }
+    return duration{*computed};
 }
 
 /// The duration from the microsecond `rhs` to the microsecond `lhs`,
 /// checked.
 duration between(i64 lhs, i64 rhs, std::source_location where) {
-    i64 out = 0;
-    if (__builtin_sub_overflow(lhs, rhs, &out)) {
-        duration_out_of_range(where);
-    }
-    return duration{out};
+    return in_range(detail::checked_sub(lhs, rhs), where);
 }
 
 /// The microsecond the date `day` starts at, on its own clock.
@@ -100,19 +105,11 @@ zoned_datetime in_zone(i64 instant, const zoned_datetime& like, std::source_loca
 // ---- Durations -------------------------------------------------------------
 
 duration neg__duration(duration value, std::source_location where) {
-    i64 out = 0;
-    if (__builtin_sub_overflow(i64{0}, value.count(), &out)) {
-        duration_out_of_range(where);
-    }
-    return duration{out};
+    return in_range(detail::checked_neg(value.count()), where);
 }
 
 duration add__duration_duration(duration lhs, duration rhs, std::source_location where) {
-    i64 out = 0;
-    if (__builtin_add_overflow(lhs.count(), rhs.count(), &out)) {
-        duration_out_of_range(where);
-    }
-    return duration{out};
+    return in_range(detail::checked_add(lhs.count(), rhs.count()), where);
 }
 
 duration sub__duration_duration(duration lhs, duration rhs, std::source_location where) {
@@ -120,11 +117,7 @@ duration sub__duration_duration(duration lhs, duration rhs, std::source_location
 }
 
 duration mul__duration_i64(duration lhs, i64 rhs, std::source_location where) {
-    i64 out = 0;
-    if (__builtin_mul_overflow(lhs.count(), rhs, &out)) {
-        duration_out_of_range(where);
-    }
-    return duration{out};
+    return in_range(detail::checked_mul(lhs.count(), rhs), where);
 }
 
 duration mul__duration_f64(duration lhs, f64 rhs, std::source_location where) {
