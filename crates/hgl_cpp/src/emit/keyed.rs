@@ -208,7 +208,9 @@ impl Family for Keyed {
                     Err(reported) => return Some(reported),
                 };
                 scope.acted = true;
-                Some(format!("::{library}::keyed_entry_delta_checked({view}, {key})"))
+                Some(format!(
+                    "::{library}::keyed_entry_delta_checked({view}, {key})"
+                ))
             }
             // TIME-1: "a child that is not valid fails it
             // (`value.unset_read`), or gives an `err` where its place takes

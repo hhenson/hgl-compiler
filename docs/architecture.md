@@ -510,12 +510,16 @@ execution code of the catalogue, as a string literal written out
 (TST-10, `catalogue::EXECUTION_CODES`); anything else is
 `test.raises_code`.
 
-A test's block is then read as a graph's body is (`Typer::test`, into
-`Module::test_bodies`): a test has a name and neither a parameter nor a
-result. `assert` is a statement there (TST-4): its condition is a `bool`
-(`type.mismatch`) known when the test is built, and no connection
-(`connection.as_constant`). The block of an `assert raises` is read with
-the test's scope.
+A test's block is then read as value code (`Typer::test`, into
+`Module::test_bodies`), as an application's statements are (TST-3,
+UNIT-14): a test has a name and neither a parameter nor a result. It
+calls `const fn`s only, a temporal call there being `call.role`; an
+operator selects among all its candidates, a value one outranking a
+temporal one of the same parameter types, and a temporal one selected is
+`call.role` too (GEN-5, the typer's `value_code`); nothing is lifted. The call
+an `eval` or a `run` takes is read as composition is. `assert` is a
+statement there (TST-4): its condition is a `bool` (`type.mismatch`).
+The block of an `assert raises` is read with the test's scope.
 
 ### Eval
 
@@ -2132,9 +2136,11 @@ test --target cpp` runs over any program to its end.
 | A value where a connection is expected (FN-3) | Its temporal form's constant, `::hglrt::constant<::hgraph::Int>(wiring_, 5)` |
 | A node whose configuration holds an `f64` | Wired with `Wiring::add_unique_node` and not `hgraph::wire`: hgraph interns two nodes whose configurations are `==`, as `0.0` and `-0.0` are ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)), until it tells them apart |
 | `eval(target(value: [1, _, 3]))` (TST-5 to TST-8, CEVAL-1) | `::hglrt::testing::evaluate<T>` of an entry that wires core's `replay` instance of each trace written to its input, the target's wiring function, and core's `record` of the result under `"run.output"`; for a result whose delta is no T, a node of the entry's own, `held_00_`, which keeps the result read whole at each publication (`::hglrt::testing::hold`, none where the read fails), so that a cell written whole is compared with it (TST-5); `run(...)` in real time; a target with no result `::hglrt::testing::run` |
+| `eval(call, RunConfig(start: s, length: l))` (RUN-1, CRUN-2) | The run given `::hglrt::testing::Bounds{.start = s, .length = l}`, each field the configuration writes (`lifecycle`); the call's arguments and the configuration held first, in the order written, where more than one may fail (EXPR-2) |
+| `let seen = eval(...)` | `const auto seen = ...;`, the recording, read where a trace is |
 | A trace written out; `==` and `!=` of two (TST-4, TST-6, TST-7, TST-16) | `::hglrt::testing::Dense<T>`, `Timed<T>`, each cell as its type's family writes it; in an `assert`, `expect_same` or `expect_different` of the two held in order, elsewhere `same`; a trace given to a `const fn`, `publications` |
 | A temporal value of `set<K>`, `dict<K, V>` (TYPE-9, TIME-1, TIME-7, TIME-9, END-3, END-4) | The `keyed` family: hgraph's `TSS<K>`, `TSD<K, V'>`, `V'` the form of `V`, a scalar, a set or a dictionary, and K a scalar; read whole with `::hglrt::keyed_value(view)`; `return value`, `out = value` as `::hglrt::keyed_publish(view, value)`, hgraph's whole write of a value and its write of a delta (`apply_current_value`, `apply_delta`); `delta_value` an `::hglrt::set_delta` or `dict_delta`; `all_valid` of a dictionary `::hglrt::fn_all_valid`; an entry of a dictionary input in a hook, `book[key]`, read checked as `::hglrt::keyed_entry_value(book, key)` (`keyed_entry_result` into a `result`), and given to `valid`, `modified`, `last_modified` and `delta_value` as `keyed_entry_valid(book, key)` and the like, a key the dictionary does not hold an entry that is not valid (TIME-1, EXPR-7); a trace's cell written whole `::hglrt::testing::Whole<T>{...}`, replayed as its change from the cells before it |
-| Everything else | Reported: `the cpp target does not write ... yet`: a window; a temporal value of any but a scalar, a set and a dictionary; a set's element or a dictionary's key of any but a scalar, a constant connection of a set or a dictionary, an entry of a dictionary's entry, a key's child as a connection of a graph (EXPR-7); a `ref` parameter or result, `inject scheduler` and `alarm`, `all_valid`, `activate`, `passivate`, `scheduled()`; `if`, `switch` and `for` over connections, `capture`, a lifted input with a default or a null; a source with declarations or hooks; an eval with a configuration or of a value function; an application |
+| Everything else | Reported: `the cpp target does not write ... yet`: a window; a temporal value of any but a scalar, a set and a dictionary; a set's element or a dictionary's key of any but a scalar, a constant connection of a set or a dictionary, an entry of a dictionary's entry, a key's child as a connection of a graph (EXPR-7); a `ref` parameter or result, `inject scheduler` and `alarm`, `all_valid`, `activate`, `passivate`, `scheduled()`; `if`, `switch` and `for` over connections, `capture`, a lifted input with a default or a null; a source with declarations or hooks; an eval's configuration that is no `RunConfig(...)` written in it; an eval of a value function; an application |
 
 Every C++ name an HGL name gives is made by one function,
 `emit::names::identifier`: a plain name (a letter first, a letter or
@@ -2367,11 +2373,11 @@ later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
 which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists 113
+target's list, and `--write-list` writes from a run. Today it lists 109
 of core's 198 runtime cases, each with the form it needs that the
 target does not write: a temporal value of a collection, a struct or a
-nullable, the scheduler, `ref`, control flow over connections, an eval
-with a configuration, and the rest the step-2 lanes take.
+nullable, the scheduler, `ref`, control flow over connections,
+and the rest the step-2 lanes take.
 
 ### The C++ runtime library
 

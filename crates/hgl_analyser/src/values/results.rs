@@ -411,7 +411,13 @@ impl<'a> Typer<'a> {
             .parent()
             .map_or(Location::new(self.file, name.span()), |call| self.at(&call));
         if !self.graph {
-            let place = if self.hook.is_some() {
+            // TST-3: a test's statements outside an `eval` or a `run`
+            // are value code.
+            let place = if self.testing {
+                "a test, outside an `eval` or a `run`"
+            } else if self.value_code {
+                "an application's statement"
+            } else if self.hook.is_some() {
                 "a hook"
             } else if self.generating {
                 "a source"

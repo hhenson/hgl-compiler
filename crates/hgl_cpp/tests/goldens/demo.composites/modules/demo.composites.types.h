@@ -132,6 +132,10 @@ enum class Side
     buy,
     sell,
 };
+constexpr ::hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept
+{
+    return {"demo.composites::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}};
+}
 
 // struct Point (TYPE-3), module demo.composites, line 17
 struct Point

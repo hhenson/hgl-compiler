@@ -25,6 +25,7 @@ analyser: done
 analyser: partial
 
 - A value function calls only value functions (with FN-4), and an operator through a value candidate (GEN-5)
+- So does value code, a test's outside an `eval` or a `run` and an application's statements, where a temporal function called is `call.role`, the code proposed (TST-3, UNIT-14)
 - A node's hook is read as value code: a temporal parameter that is not `ref` is a value of its declared type, a `ref` one an endpoint (FN-16), and a temporal function called there is rejected (`call.role`)
 - A graph's body calls any function: a temporal parameter and the result of a temporal or lifted call are connections, and a connection given to a `const` parameter is rejected (`connection.as_constant`)
 - What each expression is, a connection or an ordinary value, is recorded on it for the stages after the analyser, and on an instance's body with its candidates in place: a symbol, `&&`, `||` and `!` among them, and a construction, a result form, an element or a field of a connection is one

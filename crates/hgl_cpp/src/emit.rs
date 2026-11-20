@@ -23,8 +23,10 @@
 //! form), `endpoints` (a hook's reads, endpoint operations and
 //! capabilities), `nodes` (a node's hooks), `sources` (a source's body),
 //! `graphs` (a graph's wiring and lifted calls), `tests` (evals and
-//! traces), `keyed` (a set's and a dictionary's temporal form). A construct lane adds its family as a module here and one
-//! entry in `forms::FAMILIES`.
+//! traces); `lifecycle` writes a run's bounds for `tests`; `keyed` (a
+//! set's and a dictionary's temporal form) is a construct lane's. A
+//! construct lane adds its family as a module here and one entry in
+//! `forms::FAMILIES`.
 
 use hgl_analyser::{DeclarationKind, Program};
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
@@ -40,6 +42,7 @@ mod expressions;
 mod forms;
 mod graphs;
 mod keyed;
+mod lifecycle;
 mod names;
 mod nodes;
 mod scalars;

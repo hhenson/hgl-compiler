@@ -12,6 +12,6 @@ fn inline(value: i64) -> i64 {
     return capture(forward, value).value
 }
 test outside_an_eval {
-    let seen = capture(forward, 1)
+    let seen = 1
     assert true
 }
