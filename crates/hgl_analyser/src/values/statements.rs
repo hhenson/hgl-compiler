@@ -500,6 +500,7 @@ impl<'a> Typer<'a> {
                     kind,
                     ty: result,
                     at,
+                    category: ValueCategory::Unsettled,
                 }
             }
         };
@@ -715,6 +716,7 @@ impl<'a> Typer<'a> {
                     kind,
                     ty: result,
                     at,
+                    category: ValueCategory::Unsettled,
                 }
             }
         };

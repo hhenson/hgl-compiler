@@ -15,7 +15,7 @@ use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, unreadable};
 use super::{REQUIRING, Typer};
 use crate::declared::{names_parameter, same_type, substitute_within};
-use crate::hir::{self, Callee, Expr, ExprKind, Form};
+use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
 use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Program, Role};
 use crate::read::is_type;
 use crate::syntax::{child, has_token, name_token, tokens};
@@ -907,6 +907,7 @@ impl<'a> Typer<'a> {
                     kind: ExprKind::Unread,
                     ty,
                     at,
+                    category: ValueCategory::Unsettled,
                 };
                 Given::read(position, node, value)
             })
@@ -1273,6 +1274,7 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            lifted: false,
         };
         (kind, result.unwrap_or(Type::Unknown))
     }

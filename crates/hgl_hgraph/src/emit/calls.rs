@@ -189,7 +189,7 @@ impl<'a> Emitter<'a> {
                 };
                 let value = if parameter.reference
                     && function.mode == Mode::Graph
-                    && !self.connects(function, &argument.value)
+                    && !argument.value.is_connection()
                 {
                     self.designated_constant(
                         callee,
@@ -879,11 +879,7 @@ impl<'a> Emitter<'a> {
         // provider's own helpers are kept apart from by the `fn_`.
         if let DeclarationKind::NativeFunction(Role::Value) = declared.kind {
             let native = self.native_function(module, format!("fn_{}", declared.name));
-            let lifted = function.mode == Mode::Graph
-                && arguments
-                    .iter()
-                    .any(|argument| self.connects(function, &argument.value));
-            let (Some(native), false) = (native, lifted) else {
+            let (Some(native), false) = (native, whole.is_lifted()) else {
                 self.unsupported(at, &format!("the native function `{}`", declared.name));
                 return "None".to_string();
             };
@@ -910,16 +906,10 @@ impl<'a> Emitter<'a> {
         // called as it is, where the graph is built.
         // GEN-5: "a value candidate it selects for temporal arguments
         // is lifted (FN-6)". A temporal candidate is the node or the
-        // graph itself.
-        let lifted = function.mode == Mode::Graph
-            && declared.kind.role() != Some(Role::Temporal)
-            && (candidate || declared.kind.role() == Some(Role::Value))
-            && arguments
-                .iter()
-                .any(|argument| self.connects(function, &argument.value));
-        if lifted {
-            let (written, bound) = self.bound(function, signature, arguments, |emitter, value| {
-                emitter.connects(function, value).then(|| value.ty.clone())
+        // graph itself. The analyser says which calls are lifted.
+        if whole.is_lifted() {
+            let (written, bound) = self.bound(function, signature, arguments, |_, value| {
+                value.is_connection().then(|| value.ty.clone())
             });
             let result = signature.result.as_ref().map(|_| &whole.ty);
             let lifts = match &native {

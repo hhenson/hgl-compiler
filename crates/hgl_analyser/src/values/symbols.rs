@@ -13,7 +13,7 @@ use super::fit::{open, whole};
 use super::operators::{options_of, unreadable};
 use super::{BOOL, Typer};
 use crate::constant::is_least_magnitude;
-use crate::hir::{BinaryOperator, Expr, ExprKind, Form, UnaryOperator, Value};
+use crate::hir::{BinaryOperator, Expr, ExprKind, Form, UnaryOperator, Value, ValueCategory};
 use crate::program::{DeclarationKind, OperatorRef};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{Detail, Scalar, Type};
@@ -157,6 +157,7 @@ impl<'a> Typer<'a> {
                 kind,
                 ty,
                 at: self.at(&link),
+                category: ValueCategory::Unsettled,
             });
         }
     }

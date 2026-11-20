@@ -455,7 +455,7 @@ impl Emitter<'_> {
                 }
             )
         );
-        let connected = self.connects(function, value);
+        let connected = value.is_connection();
         let mut part = match &place.ty {
             // TYPE-14: "a T is a value where a T? is expected". A place of
             // a nullable scalar is hgraph's `TS[T | None]`: a connection

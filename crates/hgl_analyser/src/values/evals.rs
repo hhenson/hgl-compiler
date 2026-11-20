@@ -473,7 +473,12 @@ impl<'a> Typer<'a> {
             self.program.modules[module].details.get(declaration),
             Some(Detail::Callable(signature)) if signature.result.is_some()
         );
-        let call = Expr { kind, ty, at };
+        let call = Expr {
+            kind,
+            ty,
+            at,
+            category: ValueCategory::Unsettled,
+        };
         if !has_result {
             // "Its eval stands as a statement and has no value". One in
             // parentheses is the same statement (EXPR-1).
@@ -712,6 +717,7 @@ impl<'a> Typer<'a> {
             kind,
             ty,
             at: self.at(&target),
+            category: ValueCategory::Unsettled,
         };
         // EXPR-13: the call is read before the configuration.
         let config = self
@@ -812,6 +818,7 @@ impl<'a> Typer<'a> {
                         kind: ExprKind::Literal(Value::Null),
                         ty: cell.clone(),
                         at: self.at(&value),
+                        category: ValueCategory::Unsettled,
                     })
                 } else if let Type::Delta(of) = cell
                     && matches!(
@@ -990,6 +997,7 @@ pub(super) fn publications(value: hir::Expr) -> hir::Expr {
         kind: ExprKind::Publications(Box::new(value)),
         ty,
         at,
+        category: ValueCategory::Unsettled,
     }
 }
 
