@@ -104,7 +104,7 @@ against it, so the header stays.
 
 ## What hgraph is asked for
 
-The SDK is hgraph 0.9.12. Nothing is asked of hgraph now. What was asked
+The SDK is hgraph 0.9.13. Nothing is asked of hgraph now. What was asked
 is in it, and each is taken up where the order of work reaches it:
 
 | Issue | In hgraph | Here |
