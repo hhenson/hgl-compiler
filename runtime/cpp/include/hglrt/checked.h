@@ -1,6 +1,7 @@
 // The reads that are checked when they run, which the generated code calls
 // where the compiler cannot prove the read sound: a payload that may not be
-// there (TIME-1, ERR-14) and a position that may be outside a list (EXPR-3).
+// there (TIME-1, ERR-14) and a position that may be outside a list (EXPR-3,
+// EXPR-7).
 #pragma once
 
 #include <hglrt/failure.h>
@@ -48,14 +49,20 @@ auto checked_result(const Input& input) -> result<std::remove_cvref_t<decltype(i
 }
 
 namespace detail {
-/// Fails unless `index` is a position of a sequence of `size` elements
-/// (EXPR-3: "An index outside a list fails where it is evaluated"). The
-/// catalogue has no code for it, so the failure has none.
+/// Fails unless `index` is a position of an ordinary list of `size`
+/// elements, unsized or fixed (EXPR-3: "An index outside a list, below zero
+/// or at or past its size, fails where it is evaluated, with code
+/// `value.index_out_of_range`"; EXPR-7: "An index outside an ordinary list
+/// fails the read with code `value.index_out_of_range`, as it fails an
+/// assignment"). `item` alone calls it: a tuple's index is a constant within
+/// its length, and a temporal collection's child is read through
+/// `checked_value`.
 void check_index(i64 index, std::size_t size, std::source_location where);
 } // namespace detail
 
 /// `values[index]` (EXPR-7): the element of a list at an `i64` position. An
-/// index outside the list fails (EXPR-3), a negative one among them.
+/// index outside the list, a negative one among them, fails with
+/// `value.index_out_of_range` (EXPR-3).
 template <class T>
 const T& item(const std::vector<T>& values, i64 index,
               std::source_location where = std::source_location::current()) {

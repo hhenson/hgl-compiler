@@ -128,4 +128,21 @@ if(BUILD_TESTING)
     target_link_libraries(hglrt_tests PRIVATE hglrt doctest::doctest)
     target_compile_options(hglrt_tests PRIVATE ${HGLRT_WARNINGS})
     add_test(NAME hglrt_tests COMMAND hglrt_tests WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
+    # Nothing of hgraph's standard library and nothing of Arrow, included or
+    # linked (docs/cpp-target.md). The include set of the public headers is
+    # preprocessed, its "object" the preprocessed text, so that every header
+    # it brings in at any depth is checked.
+    add_library(hglrt_include_set OBJECT tests/include_set.cpp)
+    target_link_libraries(hglrt_include_set PRIVATE hglrt)
+    target_compile_options(hglrt_include_set PRIVATE -E)
+    if(CMAKE_READELF)
+        add_test(NAME hglrt_takes_no_stdlib
+            COMMAND "${CMAKE_COMMAND}"
+                "-DPREPROCESSED=$<TARGET_OBJECTS:hglrt_include_set>"
+                "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DREADELF=${CMAKE_READELF}"
+                "-DBINARIES=$<TARGET_FILE:hglrt>$<SEMICOLON>$<TARGET_FILE:hglrt_tests>$<SEMICOLON>$<TARGET_FILE:hgraph::runtime>$<SEMICOLON>$<TARGET_FILE:hgraph::wiring>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_no_stdlib.cmake")
+    endif()
 endif()

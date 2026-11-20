@@ -44,7 +44,11 @@ namespace codes {
 /// A read needs a value that is not there: a payload, a child that is not
 /// valid, a whole that is not all valid (TIME-1, ERR-14).
 inline constexpr std::string_view unset_read = "value.unset_read";
-/// A result outside its type's range (NUM-2, OPS-10).
+/// An index outside an ordinary list, below zero or at or past its size,
+/// where a read or an assignment evaluates it (EXPR-3, EXPR-7).
+inline constexpr std::string_view index_out_of_range = "value.index_out_of_range";
+/// A result outside its type's range (NUM-2, OPS-10), and text repeated a
+/// count below zero (OPS-1).
 inline constexpr std::string_view out_of_range = "numeric.out_of_range";
 /// A zero divisor under `.fail`, or `?` on the `err` of one under `.error`
 /// (NUM-3, NUM-9).

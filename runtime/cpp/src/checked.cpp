@@ -13,7 +13,8 @@ void unset_read(std::string message, std::source_location where) {
 
 void detail::check_index(i64 index, std::size_t size, std::source_location where) {
     if (index < 0 || static_cast<std::uint64_t>(index) >= size) {
-        fail_uncoded(std::format("the index {} is outside a sequence of {}", index, size), where);
+        fail(codes::index_out_of_range, std::format("the index {} is outside a list of {}", index, size),
+             where);
     }
 }
 

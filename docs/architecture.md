@@ -2193,7 +2193,11 @@ not have. It is
 a skeleton that the target's first step fills. It is built on hgraph's
 runtime and wiring libraries alone (`hgraph::runtime`, `hgraph::wiring`):
 `hgraph::core` would bring hgraph's standard library, which no generated
-code uses.
+code uses. Its headers take hgraph's front end for generated code,
+`<hgraph/types/generated.h>` (static nodes, `wire<Node>` with complete
+positional arguments, compiled children), and not `graph_wiring.h`, whose
+operator dispatch, named arguments and type resolution generated code does
+not use.
 
 | Header (`include/hglrt/`) | Holds | Rules |
 | --- | --- | --- |
@@ -2249,9 +2253,9 @@ last statement the test marked with `statement()`. A test held to a time
 limit (TST-17) is named `NAME@MICROSECONDS`: it runs on a thread of its
 own, and at its limit its runs are asked to stop, as a host stops a run in
 real time, and it has failed; one that has not ended five seconds later
-ends the process, with the status 3. Its entry unit includes `host.h`
+ends the process, with the status 3. Its entry unit can include `host.h`
 alone, which compiles in 0.06 s where `hglrt.h` through the precompiled
-header takes 0.86 s (GCC 15, `-O0`).
+header takes 0.57 s (GCC 15, `-O0`).
 
 Built with CMake, once for each SDK. A build is given:
 
@@ -2273,24 +2277,34 @@ release is fetched. The library's own C++ is built with `-Wall -Wextra
 #### The SDK
 
 `scripts/provision-hgraph-sdk.sh TAG DIR` builds hgraph's shared C++ SDK
-at the tag `TAG` and installs it into `DIR`, as hgraph's CI job
-`native-shared-install` builds it: Release, shared libraries, no Python,
-against the dependency prefix `HGL_HGRAPH_DEPS`. It differs from that job
-in leaving out hgraph's tests and extensions, and in giving the SDK's
-libraries the prefix's library directory as their run path, where that job
-sets `LD_LIBRARY_PATH`. Where the prefix does not exist the script makes it
-with micromamba from conda-forge, with the packages hgraph's job installs
-(Arrow 25 with Compute and Acero, fmt, spdlog, simdjson, CMake, Ninja), at
-fixed versions. The compiler is the caller's: GCC 15 or later. The SDK is
-54 MB; its runtime library needs `libarrow` at run time, though no
-generated code includes an Arrow header
-([hgraph 1839](https://github.com/hhenson/hgraph/issues/1839)).
+at the tag `TAG`, 0.9.12 or later, and installs it into `DIR`, as hgraph's
+CI builds its runtime without Arrow: Release, shared libraries,
+`HGRAPH_WITH_ARROW=OFF` ([hgraph 1839](https://github.com/hhenson/hgraph/issues/1839)),
+which leaves out Frame, Series, the table codecs, the standard library,
+Python and the extensions, against the dependency prefix
+`HGL_HGRAPH_DEPS`. Arrow's packages are kept from being found, and the
+date/tz library is always hgraph's own pinned release, fetched and built
+into its runtime library, so that what the SDK is does not turn on what
+else a prefix holds. The SDK's libraries are given the prefix's library
+directory as their run path. Where the prefix does not exist the script
+makes it with micromamba from conda-forge: fmt, spdlog and simdjson, with
+CMake and Ninja, at fixed versions. The compiler is the caller's: GCC 15
+or later. `DIR/hgl-sdk.txt` says the tag, its commit, `arrow=off`, the
+compiler and the prefix; an SDK of the tag built otherwise is not taken
+for one. The SDK is 14 MB (54 MB with Arrow), and its runtime and wiring
+libraries need fmt and spdlog alone; it builds in 28 s with 12 jobs here
+(77 s with Arrow).
 
 CI's job `cpp` makes the prefix and the SDK with the script and caches
 both with `actions/cache`, under a key of the tag, the script and the
 runner's image, so that a run with that key builds neither. It then builds
 `runtime/cpp` and runs its unit tests, and does both again under the
-sanitizers. It runs on GitHub's Ubuntu 26.04 image, whose GCC 15.2 is
+sanitizers. The test `hglrt_takes_no_stdlib` fails where the library takes
+anything of hgraph's standard library or of Arrow: a header of either that
+the public headers bring in at any depth (their include set, preprocessed),
+a source that includes one, or a library that `libhglrt`, its tests or
+hgraph's runtime and wiring libraries need; an SDK built with Arrow fails
+it. It runs on GitHub's Ubuntu 26.04 image, whose GCC 15.2 is
 Ubuntu's own: nothing is installed for it, it is the compiler a developer
 on that release has, and neither a container (which the cache and the
 checkout would run inside) nor a compiler in the conda prefix (which adds
@@ -2379,7 +2393,7 @@ The C++ target's runtime library, `runtime/cpp`:
 | Dependency | For |
 | --- | --- |
 | hgraph's C++ SDK, its runtime and wiring libraries | the graph, node, type and runtime layers the library and generated code are built on |
-| Arrow 25 with Compute and Acero, fmt, spdlog, simdjson, date | hgraph's own dependencies: fmt's and spdlog's headers are in hgraph's, and its runtime library needs Arrow when it runs |
+| fmt, spdlog, simdjson | hgraph's own dependencies without Arrow: fmt's and spdlog's headers are in hgraph's, and its runtime library needs both when it runs. Its date/tz library is its own pinned release, built into it |
 | GCC 15 or later | C++23, and the libstdc++ the SDK links |
 | CMake, Ninja | building the SDK and the library |
 | micromamba, conda-forge | making the dependency prefix where there is none |
