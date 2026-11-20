@@ -7,6 +7,7 @@
 #undef a_struct_holding_nan_is_not_equal_to_itself
 #undef a_var_place_is_taken_where_the_call_is_made
 #undef arguments_are_evaluated_in_the_order_written
+#undef bits_are_held_as_they_were_read
 #undef composites
 #undef deltas_are_values
 #undef demo
@@ -30,6 +31,7 @@ void a_missing_key_fails();
 void a_failing_value_adds_no_key();
 void deltas_are_values();
 void enums_zones_and_nullables();
+void bits_are_held_as_they_were_read();
 void a_var_place_is_taken_where_the_call_is_made();
 }  // namespace hgl::demo::composites::m_::t_
 
@@ -47,7 +49,8 @@ const ::hglrt::testing::Registration test_7{"demo.composites::a_missing_key_fail
 const ::hglrt::testing::Registration test_8{"demo.composites::a_failing_value_adds_no_key", &::hgl::demo::composites::m_::t_::a_failing_value_adds_no_key};
 const ::hglrt::testing::Registration test_9{"demo.composites::deltas_are_values", &::hgl::demo::composites::m_::t_::deltas_are_values};
 const ::hglrt::testing::Registration test_10{"demo.composites::enums_zones_and_nullables", &::hgl::demo::composites::m_::t_::enums_zones_and_nullables};
-const ::hglrt::testing::Registration test_11{"demo.composites::a_var_place_is_taken_where_the_call_is_made", &::hgl::demo::composites::m_::t_::a_var_place_is_taken_where_the_call_is_made};
+const ::hglrt::testing::Registration test_11{"demo.composites::bits_are_held_as_they_were_read", &::hgl::demo::composites::m_::t_::bits_are_held_as_they_were_read};
+const ::hglrt::testing::Registration test_12{"demo.composites::a_var_place_is_taken_where_the_call_is_made", &::hgl::demo::composites::m_::t_::a_var_place_is_taken_where_the_call_is_made};
 }  // namespace
 
 int main(int argc, char **argv)

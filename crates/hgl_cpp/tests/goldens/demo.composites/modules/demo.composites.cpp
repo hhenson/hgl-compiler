@@ -6,6 +6,7 @@
 #undef Book
 #undef Box
 #undef Empty
+#undef Flags
 #undef Line
 #undef Point
 #undef Round
@@ -25,6 +26,7 @@
 #undef at
 #undef base
 #undef base_id
+#undef bits_are_held_as_they_were_read
 #undef book
 #undef booked
 #undef books
@@ -49,6 +51,7 @@
 #undef enums_zones_and_nullables
 #undef failing
 #undef fields_default_and_nest
+#undef first
 #undef first_price
 #undef first_x
 #undef generic_and_abstract_structs
@@ -79,6 +82,7 @@
 #undef nudged
 #undef number
 #undef odd
+#undef on
 #undef opening
 #undef origin
 #undef pair_change
@@ -120,20 +124,20 @@ namespace hgl::demo::composites::m_
 
 namespace c_
 {
-// add_(lhs: Point, rhs: Point) -> Point (candidate `impl const fn`), module demo.composites, line 56
+// add_(lhs: Point, rhs: Point) -> Point (candidate `impl const fn`), module demo.composites, line 61
 ::hgl::demo::composites::m_::Point add_1_([[maybe_unused]] ::hgl::demo::composites::m_::Point lhs, [[maybe_unused]] ::hgl::demo::composites::m_::Point rhs)
 {
-    return [&]() -> ::hgl::demo::composites::m_::Point { const auto field_00_ = ::hglrt::add__f64_f64((lhs).x, (rhs).x); const auto field_01_ = ::hglrt::add__f64_f64((lhs).y, (rhs).y); return ::hgl::demo::composites::m_::Point{field_00_, field_01_}; }();
+    return [&]() -> ::hgl::demo::composites::m_::Point { const ::hgraph::Float field_00_ = ::hglrt::add__f64_f64((lhs).x, (rhs).x); const ::hgraph::Float field_01_ = ::hglrt::add__f64_f64((lhs).y, (rhs).y); return ::hgl::demo::composites::m_::Point{field_00_, field_01_}; }();
 }
 }  // namespace c_
 
-// origin() -> Point (`const fn`), module demo.composites, line 58
+// origin() -> Point (`const fn`), module demo.composites, line 63
 ::hgl::demo::composites::m_::Point origin()
 {
     return ::hgl::demo::composites::m_::Point{0.0, 0.0};
 }
 
-// moved(point: Point, by: f64) -> Point (`const fn`), module demo.composites, line 61
+// moved(point: Point, by: f64) -> Point (`const fn`), module demo.composites, line 66
 ::hgl::demo::composites::m_::Point moved([[maybe_unused]] ::hgl::demo::composites::m_::Point point, [[maybe_unused]] ::hgraph::Float by)
 {
     [[maybe_unused]] ::hgl::demo::composites::m_::Point next = point;
@@ -142,7 +146,7 @@ namespace c_
     return next;
 }
 
-// stretched(line: Line, by: f64) -> Line (`const fn`), module demo.composites, line 68
+// stretched(line: Line, by: f64) -> Line (`const fn`), module demo.composites, line 73
 ::hgl::demo::composites::m_::Line stretched([[maybe_unused]] const ::hgl::demo::composites::m_::Line& line, [[maybe_unused]] ::hgraph::Float by)
 {
     [[maybe_unused]] ::hgl::demo::composites::m_::Line next = line;
@@ -151,63 +155,63 @@ namespace c_
     return next;
 }
 
-// points() -> list<Point> (`const fn`), module demo.composites, line 75
+// points() -> list<Point> (`const fn`), module demo.composites, line 80
 ::hglrt::list<::hgl::demo::composites::m_::Point> points()
 {
     return ::hglrt::list<::hgl::demo::composites::m_::Point>{::hgl::demo::composites::m_::Point{1.0, 2.0}, ::hgl::demo::composites::m_::Point{3.0, 0.0}};
 }
 
-// first_x() -> f64 (`const fn`), module demo.composites, line 78
+// first_x() -> f64 (`const fn`), module demo.composites, line 83
 ::hgraph::Float first_x()
 {
     return (::hglrt::item(::hgl::demo::composites::m_::points(), 0)).x;
 }
 
-// named(shape: Shape) -> str (`const fn`), module demo.composites, line 80
+// named(shape: Shape) -> str (`const fn`), module demo.composites, line 85
 ::hgraph::Str named([[maybe_unused]] const ::hgl::demo::composites::m_::Shape& shape)
 {
     return (shape).name();
 }
 
-// same(lhs: Shape, rhs: Shape) -> bool (`const fn`), module demo.composites, line 82
+// same(lhs: Shape, rhs: Shape) -> bool (`const fn`), module demo.composites, line 87
 ::hgraph::Bool same([[maybe_unused]] const ::hgl::demo::composites::m_::Shape& lhs, [[maybe_unused]] const ::hgl::demo::composites::m_::Shape& rhs)
 {
     return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Shape>(lhs, rhs);
 }
 
-// as_base(shape: Shape) -> Base (`const fn`), module demo.composites, line 84
+// as_base(shape: Shape) -> Base (`const fn`), module demo.composites, line 89
 ::hgl::demo::composites::m_::Base as_base([[maybe_unused]] const ::hgl::demo::composites::m_::Shape& shape)
 {
     return shape;
 }
 
-// base_id(base: Base) -> i64 (`const fn`), module demo.composites, line 86
+// base_id(base: Base) -> i64 (`const fn`), module demo.composites, line 91
 ::hgraph::Int base_id([[maybe_unused]] const ::hgl::demo::composites::m_::Base& base)
 {
     return (base).id();
 }
 
-// written_order() -> Point (`const fn`), module demo.composites, line 90
+// written_order() -> Point (`const fn`), module demo.composites, line 95
 ::hgl::demo::composites::m_::Point written_order()
 {
     [[maybe_unused]] ::hgraph::Float at = 1.0;
-    return [&]() -> ::hgl::demo::composites::m_::Point { const auto field_00_ = [&]() -> ::hgraph::Float {
+    return [&]() -> ::hgl::demo::composites::m_::Point { const ::hgraph::Float field_00_ = [&]() -> ::hgraph::Float {
     at = 2.0;
     return at;
-}(); const auto field_01_ = at; return ::hgl::demo::composites::m_::Point{field_01_, field_00_}; }();
+}(); const ::hgraph::Float field_01_ = at; return ::hgl::demo::composites::m_::Point{field_01_, field_00_}; }();
 }
 
-// read_before() -> Point (`const fn`), module demo.composites, line 98
+// read_before() -> Point (`const fn`), module demo.composites, line 103
 ::hgl::demo::composites::m_::Point read_before()
 {
     [[maybe_unused]] ::hgraph::Float at = 1.0;
-    return [&]() -> ::hgl::demo::composites::m_::Point { const auto field_00_ = at; const auto field_01_ = [&]() -> ::hgraph::Float {
+    return [&]() -> ::hgl::demo::composites::m_::Point { const ::hgraph::Float field_00_ = at; const ::hgraph::Float field_01_ = [&]() -> ::hgraph::Float {
     at = 5.0;
     return at;
 }(); return ::hgl::demo::composites::m_::Point{field_00_, field_01_}; }();
 }
 
-// counted(words: list<str>) -> dict<str, i64> (`const fn`), module demo.composites, line 108
+// counted(words: list<str>) -> dict<str, i64> (`const fn`), module demo.composites, line 113
 ::hglrt::dict<::hgraph::Str, ::hgraph::Int> counted([[maybe_unused]] const ::hglrt::list<::hgraph::Str>& words)
 {
     [[maybe_unused]] ::hglrt::dict<::hgraph::Str, ::hgraph::Int> counts = ::hglrt::dict<::hgraph::Str, ::hgraph::Int>{};
@@ -227,7 +231,7 @@ namespace c_
     return counts;
 }
 
-// bumped(book: dict<str, i64>, key: str) -> dict<str, i64> (`const fn`), module demo.composites, line 120
+// bumped(book: dict<str, i64>, key: str) -> dict<str, i64> (`const fn`), module demo.composites, line 125
 ::hglrt::dict<::hgraph::Str, ::hgraph::Int> bumped([[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book, [[maybe_unused]] const ::hgraph::Str& key)
 {
     [[maybe_unused]] ::hglrt::dict<::hgraph::Str, ::hgraph::Int> changed = book;
@@ -237,7 +241,7 @@ namespace c_
     return changed;
 }
 
-// total(book: dict<str, i64>) -> i64 (`const fn`), module demo.composites, line 127
+// total(book: dict<str, i64>) -> i64 (`const fn`), module demo.composites, line 132
 ::hgraph::Int total([[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book)
 {
     [[maybe_unused]] ::hgraph::Int sum = 0;
@@ -248,7 +252,7 @@ namespace c_
     return sum;
 }
 
-// size(members: set<f64>) -> i64 (`const fn`), module demo.composites, line 135
+// size(members: set<f64>) -> i64 (`const fn`), module demo.composites, line 140
 ::hgraph::Int size([[maybe_unused]] const ::hglrt::set<::hgraph::Float>& members)
 {
     [[maybe_unused]] ::hgraph::Int count = 0;
@@ -259,7 +263,7 @@ namespace c_
     return count;
 }
 
-// holds(members: set<str>, wanted: str) -> bool (`const fn`), module demo.composites, line 143
+// holds(members: set<str>, wanted: str) -> bool (`const fn`), module demo.composites, line 148
 ::hgraph::Bool holds([[maybe_unused]] const ::hglrt::set<::hgraph::Str>& members, [[maybe_unused]] const ::hgraph::Str& wanted)
 {
     for ([[maybe_unused]] const ::hgraph::Str& member : members)
@@ -272,13 +276,13 @@ namespace c_
     return false;
 }
 
-// tags() -> set<str> (`const fn`), module demo.composites, line 153
+// tags() -> set<str> (`const fn`), module demo.composites, line 158
 ::hglrt::set<::hgraph::Str> tags()
 {
     return ::hglrt::set<::hgraph::Str>{::hgraph::Str{"a"}, ::hgraph::Str{"b"}};
 }
 
-// tag_count() -> i64 (`const fn`), module demo.composites, line 155
+// tag_count() -> i64 (`const fn`), module demo.composites, line 160
 ::hgraph::Int tag_count()
 {
     [[maybe_unused]] ::hgraph::Int count = 0;
@@ -290,7 +294,7 @@ namespace c_
     return count;
 }
 
-// doubled_all(book: dict<str, i64>) -> dict<str, i64> (`const fn`), module demo.composites, line 165
+// doubled_all(book: dict<str, i64>) -> dict<str, i64> (`const fn`), module demo.composites, line 170
 ::hglrt::dict<::hgraph::Str, ::hgraph::Int> doubled_all([[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book)
 {
     [[maybe_unused]] ::hglrt::dict<::hgraph::Str, ::hgraph::Int> changed = book;
@@ -305,19 +309,19 @@ namespace c_
     return changed;
 }
 
-// price_of(book: Book, key: str) -> i64 (`const fn`), module demo.composites, line 175
+// price_of(book: Book, key: str) -> i64 (`const fn`), module demo.composites, line 180
 ::hgraph::Int price_of([[maybe_unused]] const ::hgl::demo::composites::m_::Book& book, [[maybe_unused]] const ::hgraph::Str& key)
 {
     return ::hglrt::entry_at((book).prices, key);
 }
 
-// first_price(books: list<Book>) -> i64 (`const fn`), module demo.composites, line 177
+// first_price(books: list<Book>) -> i64 (`const fn`), module demo.composites, line 182
 ::hgraph::Int first_price([[maybe_unused]] const ::hglrt::list<::hgl::demo::composites::m_::Book>& books)
 {
     return ::hglrt::entry_at((::hglrt::item(books, 0)).prices, ::hgraph::Str{"a"});
 }
 
-// moved_in(book: dict<str, Point>) -> dict<str, Point> (`const fn`), module demo.composites, line 180
+// moved_in(book: dict<str, Point>) -> dict<str, Point> (`const fn`), module demo.composites, line 185
 ::hglrt::dict<::hgraph::Str, ::hgl::demo::composites::m_::Point> moved_in([[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgl::demo::composites::m_::Point>& book)
 {
     [[maybe_unused]] ::hglrt::dict<::hgraph::Str, ::hgl::demo::composites::m_::Point> changed = book;
@@ -325,108 +329,108 @@ namespace c_
     return changed;
 }
 
-// arrived(change: delta<set<str>>) -> set<str> (`const fn`), module demo.composites, line 187
+// arrived(change: delta<set<str>>) -> set<str> (`const fn`), module demo.composites, line 192
 ::hglrt::set<::hgraph::Str> arrived([[maybe_unused]] const ::hglrt::set_delta<::hgraph::Str>& change)
 {
     return (change).added;
 }
 
-// joined(name: str) -> delta<set<str>> (`const fn`), module demo.composites, line 189
+// joined(name: str) -> delta<set<str>> (`const fn`), module demo.composites, line 194
 ::hglrt::set_delta<::hgraph::Str> joined([[maybe_unused]] const ::hgraph::Str& name)
 {
     return ::hglrt::set_delta<::hgraph::Str>{::hglrt::set<::hgraph::Str>{name}, ::hglrt::set<::hgraph::Str>{}};
 }
 
-// cleared() -> delta<f64?> (`const fn`), module demo.composites, line 191
+// cleared() -> delta<f64?> (`const fn`), module demo.composites, line 196
 std::optional<::hgraph::Float> cleared()
 {
     return std::optional<::hgraph::Float>{};
 }
 
-// seven() -> delta<i64?> (`const fn`), module demo.composites, line 193
+// seven() -> delta<i64?> (`const fn`), module demo.composites, line 198
 std::optional<::hgraph::Int> seven()
 {
     return std::optional<::hgraph::Int>{7};
 }
 
-// booked() -> delta<dict<str, i64>> (`const fn`), module demo.composites, line 195
+// booked() -> delta<dict<str, i64>> (`const fn`), module demo.composites, line 200
 ::hglrt::dict_delta<::hgraph::Str, ::hgraph::Int> booked()
 {
     return ::hglrt::dict_delta<::hgraph::Str, ::hgraph::Int>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}}), ::hglrt::set<::hgraph::Str>{::hgraph::Str{"b"}}};
 }
 
-// listed() -> delta<list<i64>> (`const fn`), module demo.composites, line 197
+// listed() -> delta<list<i64>> (`const fn`), module demo.composites, line 202
 ::hglrt::list_delta<::hglrt::list<::hgraph::Int>> listed()
 {
     return ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, 4}}), ::hglrt::set<::hgraph::Int>{1}, std::nullopt);
 }
 
-// nudged() -> delta<Point> (`const fn`), module demo.composites, line 199
+// nudged() -> delta<Point> (`const fn`), module demo.composites, line 204
 ::hgl::demo::composites::m_::d_::Point nudged()
 {
     return ::hgl::demo::composites::m_::d_::Point{1.0, std::nullopt};
 }
 
-// pair_change() -> tuple<f64?, i64?> (`const fn`), module demo.composites, line 201
+// pair_change() -> tuple<f64?, i64?> (`const fn`), module demo.composites, line 206
 std::tuple<std::optional<::hgraph::Float>, std::optional<::hgraph::Int>> pair_change()
 {
     return std::tuple<std::optional<::hgraph::Float>, std::optional<::hgraph::Int>>{1.0, std::nullopt};
 }
 
-// side_of(number: i64) -> Side (`const fn`), module demo.composites, line 204
+// side_of(number: i64) -> Side (`const fn`), module demo.composites, line 209
 ::hgl::demo::composites::m_::Side side_of([[maybe_unused]] ::hgraph::Int number)
 {
     return ::hglrt::enum_member<::hgl::demo::composites::m_::Side, ::hgraph::Int>(number, {{0, ::hgl::demo::composites::m_::Side::buy}, {5, ::hgl::demo::composites::m_::Side::sell}});
 }
 
-// side_named(name: str) -> Side (`const fn`), module demo.composites, line 206
+// side_named(name: str) -> Side (`const fn`), module demo.composites, line 211
 ::hgl::demo::composites::m_::Side side_named([[maybe_unused]] const ::hgraph::Str& name)
 {
     return ::hglrt::enum_member<::hgl::demo::composites::m_::Side, ::hgraph::Str>(name, {{"buy", ::hgl::demo::composites::m_::Side::buy}, {"sell", ::hgl::demo::composites::m_::Side::sell}});
 }
 
-// london() -> timezone (`const fn`), module demo.composites, line 209
+// london() -> timezone (`const fn`), module demo.composites, line 214
 ::hgraph::ZoneId london()
 {
     return ::hgraph::ZoneId{"Europe/London"};
 }
 
-// opening() -> zoned_time (`const fn`), module demo.composites, line 211
+// opening() -> zoned_time (`const fn`), module demo.composites, line 216
 ::hgraph::ZonedTime opening()
 {
     return ::hgraph::ZonedTime{::hgraph::time_of_day(9, 30, 0, 0), ::hgraph::ZoneId{"Europe/London"}};
 }
 
-// is_one(value: i64?) -> bool (`const fn`), module demo.composites, line 214
+// is_one(value: i64?) -> bool (`const fn`), module demo.composites, line 219
 ::hgraph::Bool is_one([[maybe_unused]] std::optional<::hgraph::Int> value)
 {
     return (value == 1);
 }
 
-// bump(count: i64, by: i64) (`const fn`), module demo.composites, line 218
+// bump(count: i64, by: i64) (`const fn`), module demo.composites, line 223
 void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int by)
 {
     count = by;
 }
 
-// bump_after_growth() -> list<i64> (`const fn`), module demo.composites, line 222
+// bump_after_growth() -> list<i64> (`const fn`), module demo.composites, line 227
 ::hglrt::list<::hgraph::Int> bump_after_growth()
 {
     [[maybe_unused]] ::hglrt::list<::hgraph::Int> items = ::hglrt::list<::hgraph::Int>{10};
-    [&] { const ::hgraph::Int index_00_ = 0; const auto argument_01_ = [&]() -> ::hgraph::Int {
+    [&] { const ::hgraph::Int index_00_ = 0; const ::hgraph::Int argument_01_ = [&]() -> ::hgraph::Int {
     items = ::hglrt::list<::hgraph::Int>{20, 30};
     return 1;
 }(); return ::hgl::demo::composites::m_::bump(::hglrt::item(items, index_00_), argument_01_); }();
     return items;
 }
 
-// as_shapes(rounds: list<Round>) -> list<Shape> (`const fn`), module demo.composites, line 232
+// as_shapes(rounds: list<Round>) -> list<Shape> (`const fn`), module demo.composites, line 237
 ::hglrt::list<::hgl::demo::composites::m_::Shape> as_shapes([[maybe_unused]] const ::hglrt::list<::hgl::demo::composites::m_::Round>& rounds)
 {
     return ::hglrt::parent_list<::hgl::demo::composites::m_::Shape>(rounds);
 }
 
-// failing() -> i64 (`const fn`), module demo.composites, line 324
+// failing() -> i64 (`const fn`), module demo.composites, line 329
 ::hgraph::Int failing()
 {
     return ::hglrt::item(::hglrt::list<::hgraph::Int>{1}, 5);
@@ -444,23 +448,23 @@ void structs_are_values()
     ::hglrt::testing::statement();
     ::hglrt::testing::check((::hglrt::eq__f64_f64_f64_f64((point).x, 1.0, 0.0, 0.0) && ::hglrt::eq__f64_f64_f64_f64((point).y, 2.0, 0.0, 0.0)));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check([&] { const auto argument_00_ = ::hgl::demo::composites::m_::origin(); const auto argument_01_ = ::hgl::demo::composites::m_::Point{0.0, 0.0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_00_, argument_01_); }());
+    ::hglrt::testing::check([&] { const ::hgl::demo::composites::m_::Point argument_00_ = ::hgl::demo::composites::m_::origin(); const ::hgl::demo::composites::m_::Point argument_01_ = ::hgl::demo::composites::m_::Point{0.0, 0.0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_00_, argument_01_); }());
     ::hglrt::testing::statement();
-    ::hglrt::testing::check([&] { const auto argument_02_ = ::hgl::demo::composites::m_::moved(point, 1.5); const auto argument_03_ = ::hgl::demo::composites::m_::Point{2.5, 3.5}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_02_, argument_03_); }());
+    ::hglrt::testing::check([&] { const ::hgl::demo::composites::m_::Point argument_02_ = ::hgl::demo::composites::m_::moved(point, 1.5); const ::hgl::demo::composites::m_::Point argument_03_ = ::hgl::demo::composites::m_::Point{2.5, 3.5}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_02_, argument_03_); }());
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(point, ::hgl::demo::composites::m_::Point{1.0, 2.0}));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check([&] { const auto argument_04_ = ::hgl::demo::composites::m_::c_::add_1_(point, ::hgl::demo::composites::m_::Point{3.0, 0.0}); const auto argument_05_ = ::hgl::demo::composites::m_::Point{4.0, 2.0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_04_, argument_05_); }());
+    ::hglrt::testing::check([&] { const ::hgl::demo::composites::m_::Point argument_04_ = ::hgl::demo::composites::m_::c_::add_1_(point, ::hgl::demo::composites::m_::Point{3.0, 0.0}); const ::hgl::demo::composites::m_::Point argument_05_ = ::hgl::demo::composites::m_::Point{4.0, 2.0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_04_, argument_05_); }());
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__f64_f64_f64_f64(::hgl::demo::composites::m_::first_x(), 1.0, 0.0, 0.0));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check([&] { const auto argument_06_ = ::hgl::demo::composites::m_::Empty{}; const auto argument_07_ = ::hgl::demo::composites::m_::Empty{}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Empty>(argument_06_, argument_07_); }());
+    ::hglrt::testing::check([&] { const ::hgl::demo::composites::m_::Empty argument_06_ = ::hgl::demo::composites::m_::Empty{}; const ::hgl::demo::composites::m_::Empty argument_07_ = ::hgl::demo::composites::m_::Empty{}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Empty>(argument_06_, argument_07_); }());
 }
 
 void fields_default_and_nest()
 {
     ::hglrt::testing::statement();
-    [[maybe_unused]] const ::hgl::demo::composites::m_::Line line = [&]() -> ::hgl::demo::composites::m_::Line { const auto field_00_ = ::hgl::demo::composites::m_::origin(); const auto field_01_ = ::hgl::demo::composites::m_::Point{1.0, 0.0}; const auto field_02_ = 3; const auto field_03_ = std::nullopt; return ::hgl::demo::composites::m_::Line{field_00_, field_01_, field_02_, field_03_}; }();
+    [[maybe_unused]] const ::hgl::demo::composites::m_::Line line = [&]() -> ::hgl::demo::composites::m_::Line { const ::hgl::demo::composites::m_::Point field_00_ = ::hgl::demo::composites::m_::origin(); const ::hgl::demo::composites::m_::Point field_01_ = ::hgl::demo::composites::m_::Point{1.0, 0.0}; const ::hgraph::Int field_02_ = 3; const std::optional<::hgraph::Str> field_03_ = std::nullopt; return ::hgl::demo::composites::m_::Line{field_00_, field_01_, field_02_, field_03_}; }();
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>((line).end, ::hgl::demo::composites::m_::Point{1.0, 0.0}));
     ::hglrt::testing::statement();
@@ -474,7 +478,7 @@ void fields_default_and_nest()
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__f64_f64_f64_f64(((line).end).x, 1.0, 0.0, 0.0));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check((([&]() -> ::hgl::demo::composites::m_::Line { const auto field_04_ = ::hgl::demo::composites::m_::origin(); const auto field_05_ = ::hgraph::Str{"n"}; const auto field_06_ = ::hgl::demo::composites::m_::Point{1.0, 0.0}; const auto field_07_ = 3; return ::hgl::demo::composites::m_::Line{field_04_, field_06_, field_07_, field_05_}; }()).note).has_value());
+    ::hglrt::testing::check((([&]() -> ::hgl::demo::composites::m_::Line { const ::hgl::demo::composites::m_::Point field_04_ = ::hgl::demo::composites::m_::origin(); const ::hgraph::Str field_05_ = ::hgraph::Str{"n"}; const ::hgl::demo::composites::m_::Point field_06_ = ::hgl::demo::composites::m_::Point{1.0, 0.0}; const ::hgraph::Int field_07_ = 3; return ::hgl::demo::composites::m_::Line{field_04_, field_06_, field_07_, field_05_}; }()).note).has_value());
 }
 
 void a_struct_holding_nan_is_not_equal_to_itself()
@@ -490,7 +494,7 @@ void a_struct_holding_nan_is_not_equal_to_itself()
 void generic_and_abstract_structs()
 {
     ::hglrt::testing::statement();
-    ::hglrt::testing::check([&] { const auto argument_00_ = ::hgl::demo::composites::m_::Box<::hgraph::Int>{3, 0}; const auto argument_01_ = ::hgl::demo::composites::m_::Box<::hgraph::Int>{3, 0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Box<::hgraph::Int>>(argument_00_, argument_01_); }());
+    ::hglrt::testing::check([&] { const ::hgl::demo::composites::m_::Box<::hgraph::Int> argument_00_ = ::hgl::demo::composites::m_::Box<::hgraph::Int>{3, 0}; const ::hgl::demo::composites::m_::Box<::hgraph::Int> argument_01_ = ::hgl::demo::composites::m_::Box<::hgraph::Int>{3, 0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Box<::hgraph::Int>>(argument_00_, argument_01_); }());
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64((::hgl::demo::composites::m_::Box<::hgraph::Str>{::hgraph::Str{"a"}, 0}).count, 0, 0.0, 0.0));
     ::hglrt::testing::statement();
@@ -502,7 +506,7 @@ void generic_and_abstract_structs()
     ::hglrt::testing::statement();
     ::hglrt::testing::check((!::hgl::demo::composites::m_::same(round, ::hgl::demo::composites::m_::Round{2, ::hgraph::Str{"shape"}, 2.0})));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check((![&] { const auto argument_02_ = ::hgl::demo::composites::m_::Tagged<::hgraph::Int>{1, ::hgraph::Str{"shape"}, 1}; const auto argument_03_ = ::hgl::demo::composites::m_::Tagged<::hgraph::Float>{1, ::hgraph::Str{"shape"}, 1.0}; return ::hgl::demo::composites::m_::same(argument_02_, argument_03_); }()));
+    ::hglrt::testing::check((![&] { const ::hgl::demo::composites::m_::Tagged<::hgraph::Int> argument_02_ = ::hgl::demo::composites::m_::Tagged<::hgraph::Int>{1, ::hgraph::Str{"shape"}, 1}; const ::hgl::demo::composites::m_::Tagged<::hgraph::Float> argument_03_ = ::hgl::demo::composites::m_::Tagged<::hgraph::Float>{1, ::hgraph::Str{"shape"}, 1.0}; return ::hgl::demo::composites::m_::same(argument_02_, argument_03_); }()));
     ::hglrt::testing::statement();
     ::hglrt::testing::check((!::hgl::demo::composites::m_::same(round, ::hgl::demo::composites::m_::Tagged<::hgraph::Float>{1, ::hgraph::Str{"shape"}, 2.0})));
     ::hglrt::testing::statement();
@@ -516,9 +520,9 @@ void generic_and_abstract_structs()
 void arguments_are_evaluated_in_the_order_written()
 {
     ::hglrt::testing::statement();
-    ::hglrt::testing::check([&] { const auto argument_00_ = ::hgl::demo::composites::m_::written_order(); const auto argument_01_ = ::hgl::demo::composites::m_::Point{2.0, 2.0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_00_, argument_01_); }());
+    ::hglrt::testing::check([&] { const ::hgl::demo::composites::m_::Point argument_00_ = ::hgl::demo::composites::m_::written_order(); const ::hgl::demo::composites::m_::Point argument_01_ = ::hgl::demo::composites::m_::Point{2.0, 2.0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_00_, argument_01_); }());
     ::hglrt::testing::statement();
-    ::hglrt::testing::check([&] { const auto argument_02_ = ::hgl::demo::composites::m_::read_before(); const auto argument_03_ = ::hgl::demo::composites::m_::Point{1.0, 5.0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_02_, argument_03_); }());
+    ::hglrt::testing::check([&] { const ::hgl::demo::composites::m_::Point argument_02_ = ::hgl::demo::composites::m_::read_before(); const ::hgl::demo::composites::m_::Point argument_03_ = ::hgl::demo::composites::m_::Point{1.0, 5.0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_02_, argument_03_); }());
 }
 
 void sets_have_no_order()
@@ -576,7 +580,7 @@ void dictionaries_read_add_and_loop()
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::composites::m_::first_price(::hglrt::list<::hgl::demo::composites::m_::Book>{shelf}), 5, 0.0, 0.0));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check([&] { const auto argument_00_ = ::hgl::demo::composites::m_::moved_in(::hglrt::dict_of<::hgraph::Str, ::hgl::demo::composites::m_::Point>({{::hgraph::Str{"a"}, ::hgl::demo::composites::m_::Point{1.0, 0.0}}})); const auto argument_01_ = ::hglrt::dict_of<::hgraph::Str, ::hgl::demo::composites::m_::Point>({{::hgraph::Str{"a"}, ::hgl::demo::composites::m_::Point{9.0, 0.0}}}); return ::hglrt::eq__T_T<::hglrt::dict<::hgraph::Str, ::hgl::demo::composites::m_::Point>>(argument_00_, argument_01_); }());
+    ::hglrt::testing::check([&] { const ::hglrt::dict<::hgraph::Str, ::hgl::demo::composites::m_::Point> argument_00_ = ::hgl::demo::composites::m_::moved_in(::hglrt::dict_of<::hgraph::Str, ::hgl::demo::composites::m_::Point>({{::hgraph::Str{"a"}, ::hgl::demo::composites::m_::Point{1.0, 0.0}}})); const ::hglrt::dict<::hgraph::Str, ::hgl::demo::composites::m_::Point> argument_01_ = ::hglrt::dict_of<::hgraph::Str, ::hgl::demo::composites::m_::Point>({{::hgraph::Str{"a"}, ::hgl::demo::composites::m_::Point{9.0, 0.0}}}); return ::hglrt::eq__T_T<::hglrt::dict<::hgraph::Str, ::hgl::demo::composites::m_::Point>>(argument_00_, argument_01_); }());
     ::hglrt::testing::statement();
     [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Float> odd = ::hglrt::dict_of<::hgraph::Str, ::hgraph::Float>({{::hgraph::Str{"n"}, ::hglrt::div__f64_f64<::hglrt::ZeroPolicy::ieee>(0.0, 0.0)}});
     ::hglrt::testing::statement();
@@ -668,6 +672,23 @@ void enums_zones_and_nullables()
     ::hglrt::testing::check((!::hgl::demo::composites::m_::is_one(2)));
     ::hglrt::testing::statement();
     ::hglrt::testing::check((!::hgl::demo::composites::m_::is_one(std::nullopt)));
+}
+
+void bits_are_held_as_they_were_read()
+{
+    ::hglrt::testing::statement();
+    [[maybe_unused]] ::hglrt::list<::hgraph::Bool> on = ::hglrt::list<::hgraph::Bool>{true, false};
+    ::hglrt::testing::statement();
+    [[maybe_unused]] const ::hgl::demo::composites::m_::Flags made = [&]() -> ::hgl::demo::composites::m_::Flags { const ::hgraph::Bool field_00_ = ::hglrt::item(on, 1); const ::hglrt::list<::hgraph::Bool> field_01_ = [&]() -> ::hglrt::list<::hgraph::Bool> {
+    ::hglrt::item(on, 1) = true;
+    return on;
+}(); return ::hgl::demo::composites::m_::Flags{field_01_, field_00_}; }();
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(((!(made).first) && ::hglrt::eq__T_T<::hglrt::list<::hgraph::Bool>>((made).on, ::hglrt::list<::hgraph::Bool>{true, true})));
+    ::hglrt::testing::statement();
+    [[maybe_unused]] const ::hglrt::set<::hgraph::Bool> members = ::hglrt::set<::hgraph::Bool>{true, false, true};
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::set<::hgraph::Bool>>(members, ::hglrt::set<::hgraph::Bool>{false, true}));
 }
 
 void a_var_place_is_taken_where_the_call_is_made()

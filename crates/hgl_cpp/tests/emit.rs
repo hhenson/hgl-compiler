@@ -421,8 +421,8 @@ fn arguments_that_may_fail_are_evaluated_in_order() {
     let pair = "::hgl::demo::order::m_::pair";
     assert!(
         unit.contains(&format!(
-            "return [&] {{ const auto argument_00_ = {one}; \
-             const auto argument_01_ = {one}; \
+            "return [&] {{ const ::hgraph::Int argument_00_ = {one}; \
+             const ::hgraph::Int argument_01_ = {one}; \
              return {pair}(argument_00_, argument_01_); }}();"
         )),
         "{unit}"
@@ -541,10 +541,11 @@ fn a_place_beside_an_argument_that_runs_statements_is_taken_at_the_call() {
         .unwrap()
         .text;
     assert!(
-        unit.contains("[&] { const ::hgraph::Int index_00_ = 0; const auto argument_01_ = ")
-            && unit.contains(
-                "return ::hgl::m::m_::bump(::hglrt::item(items, index_00_), argument_01_); }();"
-            ),
+        unit.contains(
+            "[&] { const ::hgraph::Int index_00_ = 0; const ::hgraph::Int argument_01_ = "
+        ) && unit.contains(
+            "return ::hgl::m::m_::bump(::hglrt::item(items, index_00_), argument_01_); }();"
+        ),
         "{unit}"
     );
 }
@@ -732,6 +733,32 @@ fn names_a_platform_may_take_are_kept_and_undefined() {
     assert!(
         header.contains("::hgraph::Int errno_(::hgraph::Int x);"),
         "{header}"
+    );
+}
+
+/// TYPE-4: a `list<bool>` is a `std::vector<bool>`, which holds bits: an
+/// element given to a `var` parameter, a `bool&`, is reported.
+#[test]
+fn a_bit_given_to_a_var_parameter_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn set_flag(var flag: bool) {\n",
+            "    flag = true\n",
+            "}\n",
+            "const fn flags_set() -> list<bool> {\n",
+            "    var flags = [false, false]\n",
+            "    set_flag(flags[1])\n",
+            "    return flags\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:7:14 the cpp target does not write an element of a `list<bool>` given to a `var` parameter yet"
+        ]
     );
 }
 

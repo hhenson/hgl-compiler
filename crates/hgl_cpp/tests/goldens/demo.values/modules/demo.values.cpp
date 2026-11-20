@@ -17,6 +17,8 @@
 #undef at
 #undef b
 #undef big
+#undef bit_kept
+#undef bits_are_values
 #undef bump
 #undef bumped
 #undef bumped_at
@@ -40,7 +42,12 @@
 #undef factor
 #undef fail
 #undef first
+#undef first_bit_as_it_was
+#undef first_flag
 #undef first_row_total
+#undef flag
+#undef flags
+#undef flipped
 #undef from_a_made_row
 #undef generics_by_instance
 #undef get
@@ -75,6 +82,7 @@
 #undef opposite
 #undef pair
 #undef pick
+#undef pick_flag
 #undef picked
 #undef placed
 #undef placed_at
@@ -87,6 +95,7 @@
 #undef same_level
 #undef scaled
 #undef sell
+#undef set_bits
 #undef side
 #undef sign
 #undef step
@@ -245,7 +254,7 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tup
 ::hgraph::Int in_order()
 {
     [[maybe_unused]] ::hgraph::Int x = 1;
-    return [&] { const auto argument_00_ = x; const auto argument_01_ = [&]() -> ::hgraph::Int {
+    return [&] { const ::hgraph::Int argument_00_ = x; const ::hgraph::Int argument_01_ = [&]() -> ::hgraph::Int {
     x = 2;
     return 0;
 }(); return ::hgl::demo::values::m_::pick(argument_00_, argument_01_); }();
@@ -258,7 +267,7 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tup
     [[maybe_unused]] ::hgraph::Int at = 0;
     const ::hgraph::Int index_00_ = at;
     static_cast<void>(::hglrt::item(items, index_00_));
-    ::hglrt::item(items, index_00_) = [&] { const auto argument_01_ = ::hglrt::item(items, index_00_); const auto argument_02_ = [&]() -> ::hgraph::Int {
+    ::hglrt::item(items, index_00_) = [&] { const ::hgraph::Int argument_01_ = ::hglrt::item(items, index_00_); const ::hgraph::Int argument_02_ = [&]() -> ::hgraph::Int {
     at = 1;
     return 5;
 }(); return ::hglrt::add__i64_i64(argument_01_, argument_02_); }();
@@ -379,7 +388,7 @@ std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once()
         return at;
     }();
     static_cast<void>(::hglrt::item(items, index_00_));
-    ::hglrt::item(items, index_00_) = [&] { const auto argument_01_ = ::hglrt::item(items, index_00_); const auto argument_02_ = 5; return ::hglrt::add__i64_i64(argument_01_, argument_02_); }();
+    ::hglrt::item(items, index_00_) = [&] { const ::hgraph::Int argument_01_ = ::hglrt::item(items, index_00_); const ::hgraph::Int argument_02_ = 5; return ::hglrt::add__i64_i64(argument_01_, argument_02_); }();
     return std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int>{items, at};
 }
 
@@ -472,7 +481,61 @@ std::tuple<::hgraph::Str, ::hgraph::Int> text_first()
     return level;
 }
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 275
+// flipped(flags: list<bool>) -> list<bool> (`const fn`), module demo.values, line 276
+::hglrt::list<::hgraph::Bool> flipped([[maybe_unused]] const ::hglrt::list<::hgraph::Bool>& flags)
+{
+    [[maybe_unused]] ::hglrt::list<::hgraph::Bool> changed = flags;
+    static_cast<void>(::hglrt::item(changed, 0));
+    ::hglrt::item(changed, 0) = (!::hglrt::item(changed, 0));
+    return changed;
+}
+
+// first_flag(flags: list<bool>) -> bool (`const fn`), module demo.values, line 282
+::hgraph::Bool first_flag([[maybe_unused]] const ::hglrt::list<::hgraph::Bool>& flags)
+{
+    return ::hglrt::item(flags, 0);
+}
+
+// pick_flag(a: bool, b: bool) -> bool (`const fn`), module demo.values, line 284
+::hgraph::Bool pick_flag([[maybe_unused]] ::hgraph::Bool a, [[maybe_unused]] ::hgraph::Bool b)
+{
+    return a;
+}
+
+// first_bit_as_it_was() -> bool (`const fn`), module demo.values, line 286
+::hgraph::Bool first_bit_as_it_was()
+{
+    [[maybe_unused]] ::hglrt::list<::hgraph::Bool> flags = ::hglrt::list<::hgraph::Bool>{false};
+    return [&] { const ::hgraph::Bool argument_00_ = ::hglrt::item(flags, 0); const ::hgraph::Bool argument_01_ = [&]() -> ::hgraph::Bool {
+    ::hglrt::item(flags, 0) = true;
+    return false;
+}(); return ::hgl::demo::values::m_::pick_flag(argument_00_, argument_01_); }();
+}
+
+// bit_kept() -> bool (`const fn`), module demo.values, line 294
+::hgraph::Bool bit_kept()
+{
+    [[maybe_unused]] ::hglrt::list<::hgraph::Bool> flags = ::hglrt::list<::hgraph::Bool>{false};
+    [[maybe_unused]] const ::hgraph::Bool kept = ::hglrt::item(flags, 0);
+    ::hglrt::item(flags, 0) = true;
+    return kept;
+}
+
+// set_bits(flags: list<bool>) -> i64 (`const fn`), module demo.values, line 301
+::hgraph::Int set_bits([[maybe_unused]] const ::hglrt::list<::hgraph::Bool>& flags)
+{
+    [[maybe_unused]] ::hgraph::Int count = 0;
+    for (const ::hgraph::Bool& flag : flags)
+    {
+        if (flag)
+        {
+            count = ::hglrt::add__i64_i64(count, 1);
+        }
+    }
+    return count;
+}
+
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 312
 void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int by)
 {
     count = ::hglrt::add__i64_i64(count, by);
@@ -496,6 +559,15 @@ namespace i_::first
 }
 }  // namespace i_::first
 
+namespace i_::first
+{
+// first<T>(values: list<T>) -> T (`const fn`), the instance `bool`, module demo.values, line 74
+::hgraph::Bool of_bool([[maybe_unused]] const ::hglrt::list<::hgraph::Bool>& values)
+{
+    return ::hglrt::item(values, 0);
+}
+}  // namespace i_::first
+
 }  // namespace hgl::demo::values::m_
 
 namespace hgl::demo::values::m_::t_
@@ -504,11 +576,11 @@ namespace hgl::demo::values::m_::t_
 void conditions_choose()
 {
     ::hglrt::testing::statement();
-    ::hglrt::testing::check((([&] { const auto argument_00_ = ::hgl::demo::values::m_::sign(::hglrt::neg__i64(5)); const auto argument_01_ = ::hglrt::neg__i64(1); const auto argument_02_ = 0.0; const auto argument_03_ = 0.0; return ::hglrt::eq__i64_i64_f64_f64(argument_00_, argument_01_, argument_02_, argument_03_); }() && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::sign(0), 0, 0.0, 0.0)) && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::sign(7), 1, 0.0, 0.0)));
+    ::hglrt::testing::check((([&] { const ::hgraph::Int argument_00_ = ::hgl::demo::values::m_::sign(::hglrt::neg__i64(5)); const ::hgraph::Int argument_01_ = ::hglrt::neg__i64(1); const ::hgraph::Float argument_02_ = 0.0; const ::hgraph::Float argument_03_ = 0.0; return ::hglrt::eq__i64_i64_f64_f64(argument_00_, argument_01_, argument_02_, argument_03_); }() && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::sign(0), 0, 0.0, 0.0)) && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::sign(7), 1, 0.0, 0.0)));
     ::hglrt::testing::statement();
     ::hglrt::testing::check((::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::larger(2, 9), 9, 0.0, 0.0) && ::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::larger(9, 2), 9, 0.0, 0.0)));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64([&] { const auto argument_04_ = ::hglrt::item(::hglrt::list<::hgraph::Int>{7}, 0); const auto argument_05_ = ::hgl::demo::values::m_::sign(1); return ::hgl::demo::values::m_::larger(argument_04_, argument_05_); }(), 7, 0.0, 0.0));
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64([&] { const ::hgraph::Int argument_04_ = ::hglrt::item(::hglrt::list<::hgraph::Int>{7}, 0); const ::hgraph::Int argument_05_ = ::hgl::demo::values::m_::sign(1); return ::hgl::demo::values::m_::larger(argument_04_, argument_05_); }(), 7, 0.0, 0.0));
 }
 
 void a_switch_compares_by_value()
@@ -563,6 +635,18 @@ void null_tests_of_any_value()
     ::hglrt::testing::check((!::hgl::demo::values::m_::never_null(1)));
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hgl::demo::values::m_::null_is_null());
+}
+
+void bits_are_values()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hgraph::Bool>>(::hgl::demo::values::m_::flipped(::hglrt::list<::hgraph::Bool>{true, false}), ::hglrt::list<::hgraph::Bool>{false, false}));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check((::hgl::demo::values::m_::first_flag(::hglrt::list<::hgraph::Bool>{true, false}) && ::hglrt::eq__T_T<::hgraph::Bool>(::hgl::demo::values::m_::i_::first::of_bool(::hglrt::list<::hgraph::Bool>{false, true}), false)));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(((!::hgl::demo::values::m_::first_bit_as_it_was()) && (!::hgl::demo::values::m_::bit_kept())));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::set_bits(::hglrt::list<::hgraph::Bool>{true, false, true}), 2, 0.0, 0.0));
 }
 
 void results_propagate()
