@@ -73,9 +73,12 @@ pub(crate) struct Piece {
     /// For a test, where each of its statements starts: the line of
     /// its text, counted from 0, and the place in the source.
     pub(crate) statements: Vec<(usize, Location)>,
-    /// The other modules whose types it names, an enum's among them: the
-    /// header that declares it includes theirs.
-    pub(crate) types: std::collections::BTreeSet<usize>,
+    /// The enums of other modules it names, each as its module and its
+    /// declaration: the header that declares the piece declares each
+    /// opaque, and the unit includes the header that defines it. A
+    /// header includes no other module's, as an instance may name an enum
+    /// of a module that imports its own (GEN-2).
+    pub(crate) types: std::collections::BTreeSet<(usize, usize)>,
     /// True for the declaration of a type: the module's header declares
     /// each before any function, which may name it wherever it is
     /// declared (UNIT-6).

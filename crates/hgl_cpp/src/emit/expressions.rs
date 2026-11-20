@@ -39,6 +39,11 @@ impl Emitter<'_> {
     /// `value` as a C++ expression. A form that is not written yet is
     /// reported, and `0` stands in its place: the piece is left out.
     pub(super) fn expression(&mut self, scope: &mut Scope, value: &Expr) -> String {
+        if let Some((place, written)) = &scope.read_as
+            && place == value
+        {
+            return written.clone();
+        }
         match &value.kind {
             ExprKind::Literal(literal) => self.literal(literal, &value.ty, value.at),
             ExprKind::Local(local) => {
@@ -154,11 +159,11 @@ impl Emitter<'_> {
                     let base = self.expression(scope, base);
                     format!("std::get<{position}>({base})")
                 }
-                // EXPR-2: the list, then the index; where the index runs
-                // statements that may change the list, the list is held
-                // as it was first, and the element read is a value of its
-                // own.
-                Type::List { .. } if changes(index) => {
+                // EXPR-2: the list, then the index; where either runs
+                // statements, which may change what the other reads, the
+                // list is held as it was first, then the index, and the
+                // element read is a value of its own.
+                Type::List { .. } if changes(base) || changes(index) => {
                     let Some(ty) = self.written_type(&value.ty, value.at) else {
                         return "0".to_string();
                     };

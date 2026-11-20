@@ -144,16 +144,16 @@ impl Emitter<'_> {
         written
     }
 
-    /// The C++ type of `ty`, as [`cpp_type`] gives it, noting each other
-    /// module whose type it names: the piece's header includes theirs.
+    /// The C++ type of `ty`, as [`cpp_type`] gives it, noting each enum
+    /// of another module it names ([`Emitter::note_types`]).
     pub(super) fn named_type(&mut self, ty: &Type) -> Option<String> {
         let written = cpp_type(self.program, ty)?;
         self.note_types(ty);
         Some(written)
     }
 
-    /// Notes each module other than this one whose enum `ty` names, at
-    /// any depth, and that the runtime library does not declare.
+    /// Notes each enum of a module other than this one that `ty` names,
+    /// at any depth, and that the runtime library does not declare.
     pub(super) fn note_types(&mut self, ty: &Type) {
         match ty {
             Type::Named {
@@ -175,13 +175,13 @@ impl Emitter<'_> {
         }
     }
 
-    /// Notes the module of enum `declaration` of `module`, where it is
-    /// another module's and declared by no library.
+    /// Notes enum `declaration` of `module`, where it is another module's
+    /// and declared by no library.
     pub(super) fn note_enum(&mut self, module: usize, declaration: usize) {
         let name = &self.program.modules[module].declarations[declaration].name;
         let library = Some(module) == self.program.core() && runtime::declares_enum(name);
         if module != self.module && !library {
-            self.piece.types.insert(module);
+            self.piece.types.insert((module, declaration));
         }
     }
 

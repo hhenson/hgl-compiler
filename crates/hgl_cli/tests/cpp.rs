@@ -399,9 +399,8 @@ fn value_code_runs_on_the_sdk() {
 }
 
 /// EXPR-3: "An index outside a list fails where it is evaluated". The
-/// failure has no code (the catalogue has none for it), and the test is
-/// reported at the statement of it that was running, inside a function
-/// it called.
+/// test is reported at the statement of it that was running, inside a
+/// function it called, with the runtime library's text of the failure.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn a_failure_is_reported_at_its_statement() {
@@ -432,14 +431,14 @@ fn a_failure_is_reported_at_its_statement() {
     );
     assert!(
         rows[1].starts_with(&format!("    {file}:7:5: "))
-            && rows[1].contains("the index 0 is outside a sequence of 0"),
+            && rows[1].contains("the index 0 is outside a"),
         "{stdout}"
     );
 }
 
-/// A module whose declarations name another's enum: its header includes
-/// the other's, which declares the enum (TYPE-7); and its unit includes
-/// it where a test alone names it.
+/// A module whose declarations name another's enum: its header declares
+/// the enum opaque, and its unit includes the other's header, which
+/// defines it (TYPE-7), as it does where a test alone names it.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn a_module_that_names_anothers_enum_is_built() {
@@ -480,6 +479,54 @@ fn a_module_that_names_anothers_enum_is_built() {
     assert!(
         stdout.contains("passed   executable  demo.right::it_finds_the_enum")
             && stdout.contains("passed   executable  demo.right::a_test_alone_names_it"),
+        "{stdout}"
+    );
+}
+
+/// An instance of a generic function is written with its declaration,
+/// so it may name an enum of a module that imports the declaring one:
+/// each of the two headers then names the other's enum.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn two_modules_whose_headers_name_each_others_enums_are_built() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("enum-cycle");
+    write(
+        &root,
+        "src/demo.left.hgl",
+        concat!(
+            "module demo.left\n",
+            "export enum Side { up, down }\n",
+            "export const fn same<T>(value: T) -> T => value\n",
+        ),
+    );
+    write(
+        &root,
+        "src/demo.right.hgl",
+        concat!(
+            "module demo.right\n",
+            "use demo.left::{Side, same}\n",
+            "export enum Mood { calm, keen }\n",
+            "const fn flip(side: Side) -> Side => if side == .up { .down } else { .up }\n",
+            "test each_names_the_other {\n",
+            "    assert flip(.up) == .down\n",
+            "    assert same(Mood.keen) == Mood.keen\n",
+            "}\n",
+        ),
+    );
+    let source = argument(&root.join("src"));
+    let output = hgl_in(&["test", &source, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("passed   executable  demo.right::each_names_the_other"),
         "{stdout}"
     );
 }

@@ -16,7 +16,7 @@ use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Location};
 use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
-use crate::emit::{Piece, Written, module_namespace, test_namespace};
+use crate::emit::{Piece, Written, identifier, module_namespace, test_namespace};
 use crate::{
     Application, Executable, File, Output, Test, Unit, entry_path, header_path, runtime, unit_path,
 };
@@ -126,35 +126,43 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             continue;
         }
         // The headers of the other modules whose functions its pieces
-        // call, and of those whose types its tests name.
+        // call, and of those whose enums they name.
         let included: BTreeSet<usize> = defined
             .iter()
             .copied()
             .chain(tests.iter().map(|(_, piece)| *piece))
-            .flat_map(|piece| &piece.reach.uses)
-            .map(|(module, _, _)| *module)
-            .chain(
-                tests
+            .flat_map(|piece| {
+                piece
+                    .reach
+                    .uses
                     .iter()
-                    .flat_map(|(_, piece)| piece.types.iter().copied()),
-            )
+                    .map(|(module, _, _)| *module)
+                    .chain(piece.types.iter().map(|(module, _)| *module))
+            })
             .filter(|&used| used != index)
             .collect();
-        // The other modules whose types its pieces name: its header
-        // includes theirs. Modules import no cycle (UNIT-3,
-        // `import.cycle`), so no header includes itself.
-        let typed: BTreeSet<usize> = defined
+        // The enums of other modules its declarations name: its header
+        // declares each opaque (TYPE-7: an `enum class`, whose values are
+        // `int`'s), and includes no other module's header. An instance is
+        // written in its declaration's module (GEN-2), and may name an
+        // enum of a module that imports that one, so two headers could
+        // otherwise include each other.
+        let typed: BTreeSet<(usize, usize)> = defined
             .iter()
             .flat_map(|piece| &piece.types)
             .copied()
-            .filter(|&used| used != index)
             .collect();
         let mut header = format!(
             "{WRITTEN}\n#pragma once\n\n#include <{}>\n",
             runtime::HEADER
         );
-        for &used in &typed {
-            header.push_str(&format!("#include \"{}.h\"\n", program.modules[used].path));
+        for &(module, declaration) in &typed {
+            let namespace = module_namespace(&program.modules[module].path);
+            header.push_str(&format!(
+                "\nnamespace {}\n{{\nenum class {};\n}}\n",
+                namespace.trim_start_matches("::"),
+                identifier(&program.modules[module].declarations[declaration].name)
+            ));
         }
         let mut unit = format!("{WRITTEN}\n#include \"{path}.h\"\n");
         for &used in &included {

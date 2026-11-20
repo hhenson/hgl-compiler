@@ -69,13 +69,22 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped(const std::tuple<::hgraph::Int,
 // read_first() -> i64 (`const fn`), module demo.values, line 115
 ::hgraph::Int read_first();
 
-// made_error() -> str (`const fn`), module demo.values, line 123
+// list_first() -> i64 (`const fn`), module demo.values, line 123
+::hgraph::Int list_first();
+
+// index_once() -> tuple<list<i64>, i64> (`const fn`), module demo.values, line 133
+std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once();
+
+// held_text() -> str (`const fn`), module demo.values, line 145
+::hgraph::Str held_text();
+
+// made_error() -> str (`const fn`), module demo.values, line 154
 ::hgraph::Str made_error();
 
-// same_level(level: Level) -> Level (`const fn`), module demo.values, line 133
+// same_level(level: Level) -> Level (`const fn`), module demo.values, line 164
 ::hgl::demo::values::m_::Level same_level(::hgl::demo::values::m_::Level level);
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 138
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 169
 void bump(::hgraph::Int& count, ::hgraph::Int by);
 
 namespace i_::first

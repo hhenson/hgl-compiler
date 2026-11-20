@@ -55,6 +55,10 @@ pub(super) struct Scope<'b> {
     /// True while the call that is the whole of a statement is written,
     /// until it starts: only it may assign places (FN-15).
     pub(super) statement_call: bool,
+    /// While a compound assignment's value is written, its place and the
+    /// C++ place it is: the value reads the place as its left operand,
+    /// and reads it where the statement's held indices name it.
+    pub(super) read_as: Option<(Expr, String)>,
 }
 
 impl<'b> Scope<'b> {
@@ -69,6 +73,7 @@ impl<'b> Scope<'b> {
             conditional: 0,
             acted: false,
             statement_call: false,
+            read_as: None,
         }
     }
 
@@ -85,6 +90,7 @@ impl<'b> Scope<'b> {
             conditional: 0,
             acted: false,
             statement_call: false,
+            read_as: None,
         }
     }
 }
@@ -199,17 +205,29 @@ impl Emitter<'_> {
             }
             // The place is the one its indices name before the value is
             // evaluated: where the value runs statements that may change
-            // an index, each index is held first.
+            // an index, each index is held first. A compound assignment
+            // reads the place it writes, as its value's left operand: it
+            // is read where the held indices name it, so that each index
+            // is evaluated once.
             Stmt::AssignPlace {
-                place, value, at, ..
+                place,
+                operator,
+                value,
+                at,
             } => {
                 let holds = changes(value);
-                let Some(place) = self.place_held(scope, place, holds) else {
+                let Some(written) = self.place_held(scope, place, holds) else {
                     self.unsupported(*at, "an assignment to this place");
                     return;
                 };
+                let outer = operator
+                    .is_some()
+                    .then(|| scope.read_as.replace((place.clone(), written.clone())));
                 let value = self.expression(scope, value);
-                text.push_str(&format!("{indent}{place} = {value};\n"));
+                if let Some(outer) = outer {
+                    scope.read_as = outer;
+                }
+                text.push_str(&format!("{indent}{written} = {value};\n"));
             }
             // CTRL-10: an `if` that stands as a statement, whose
             // branches' values are dropped.
@@ -509,11 +527,13 @@ impl Emitter<'_> {
 
 /// True where `value` reads what something else holds, as it is: a
 /// local, an element or a position of one, a constant. A `let` of it may
-/// be a reference; any other value is made where it is read.
+/// be a reference; any other value is made where it is read, an element
+/// read with an index that runs statements among them (it is read from
+/// a list held for the read alone).
 pub(super) fn refers(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Local(_) | ExprKind::Constant { .. } => true,
-        ExprKind::Index { base, .. } => refers(base),
+        ExprKind::Index { base, index } => !changes(index) && refers(base),
         _ => false,
     }
 }

@@ -2100,6 +2100,7 @@ cpp` runs over any program to its end.
 | A parameter; a `var` parameter (FN-15) | By value where it is small (`types::by_value`), a `const` reference otherwise; a reference to the place the call gives |
 | `i64`, `f64`, `bool`, `str`, `bytes`, `date`, `time`, `datetime`, `duration`, `civil_datetime`, `zoned_datetime`, `tenor` | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `CivilDateTime`, `ZonedDateTime`, `Tenor`, and their literals |
 | An enum (TYPE-7); one of core's the library declares | An `enum class` of the module's; the library's, `::hglrt::ZeroPolicy` |
+| Another module's enum, named | Declared opaque in the header, `enum class Side;`, whose unit includes the header that defines it: no header includes another module's, as an instance (written in its declaration's module) may name an enum of a module that imports that one |
 | `T?`, `tuple<A, B>`, `list<T>`, `list<T, N>` | `std::optional<T>`, `std::tuple<A, B>`, `hglrt::list<T>`, `std::array<T, N>` |
 | `error`, `result<T, error>`, `?` (ERR-2 to ERR-5) | `hglrt::error`, `hglrt::result<T>`; the result held before its statement, the function left with its failure |
 | A constant (UNIT-13) | A function giving a reference to one `static` value, made where it is first read |

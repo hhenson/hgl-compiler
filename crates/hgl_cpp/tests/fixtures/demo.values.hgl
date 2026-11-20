@@ -120,6 +120,37 @@ const fn read_first() -> i64 {
     }]
 }
 
+const fn list_first() -> i64 {
+    var at = 0
+    let picked = ({
+        at = 1
+        [10, 20]
+    })[at]
+    return picked
+}
+
+# A compound assignment reads the place it writes: its index once.
+const fn index_once() -> tuple<list<i64>, i64> {
+    var items = [10, 20, 30]
+    var at = 0
+    items[{
+        at += 1
+        at
+    }] += 5
+    return (items, at)
+}
+
+# An element read with an index that runs statements is a value of its
+# own: the list it is read from is held for the read alone.
+const fn held_text() -> str {
+    let rows = [["text"]]
+    let held = rows[{
+        let zero = 0
+        zero
+    }][0]
+    return held
+}
+
 const fn made_error() -> str {
     var message = "before"
     let made = error(message: message, code: {
@@ -183,6 +214,9 @@ test evaluation_follows_the_order_written {
     assert in_order() == 1
     assert placed() == [15, 20]
     assert read_first() == 1
+    assert list_first() == 20
+    assert index_once() == ([10, 25, 30], 1)
+    assert held_text() == "text"
     assert made_error() == "before"
 }
 
