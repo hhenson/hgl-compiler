@@ -501,7 +501,7 @@ pub(super) fn held_read(base: &Expr, index: &Expr) -> bool {
 
 /// True where the place `place` is, at any depth, an element of a list,
 /// whose read is checked (EXPR-7).
-fn reads_an_element(place: &Expr) -> bool {
+pub(super) fn reads_an_element(place: &Expr) -> bool {
     match &place.kind {
         ExprKind::Index { base, .. } => {
             matches!(base.ty, Type::List { .. }) || reads_an_element(base)

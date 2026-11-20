@@ -72,34 +72,46 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped(const std::tuple<::hgraph::Int,
 // list_first() -> i64 (`const fn`), module demo.values, line 123
 ::hgraph::Int list_first();
 
-// index_once() -> tuple<list<i64>, i64> (`const fn`), module demo.values, line 133
+// replaced_first() -> list<i64> (`const fn`), module demo.values, line 133
+::hglrt::list<::hgraph::Int> replaced_first();
+
+// index_first() -> list<i64> (`const fn`), module demo.values, line 143
+::hglrt::list<::hgraph::Int> index_first();
+
+// index_once() -> tuple<list<i64>, i64> (`const fn`), module demo.values, line 154
 std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once();
 
-// held_text() -> str (`const fn`), module demo.values, line 145
+// held_text() -> str (`const fn`), module demo.values, line 166
 ::hgraph::Str held_text();
 
-// tuple_first() -> tuple<i64, i64> (`const fn`), module demo.values, line 156
+// tuple_first() -> tuple<i64, i64> (`const fn`), module demo.values, line 177
 std::tuple<::hgraph::Int, ::hgraph::Int> tuple_first();
 
-// text_first() -> tuple<str, i64> (`const fn`), module demo.values, line 164
+// text_first() -> tuple<str, i64> (`const fn`), module demo.values, line 185
 std::tuple<::hgraph::Str, ::hgraph::Int> text_first();
 
-// from_a_made_row(one: i64) -> i64 (`const fn`), module demo.values, line 174
+// from_a_made_row(one: i64) -> i64 (`const fn`), module demo.values, line 195
 ::hgraph::Int from_a_made_row(::hgraph::Int one);
 
-// grown(by: i64) -> list<i64> (`const fn`), module demo.values, line 177
+// made_rows() -> list<list<i64>> (`const fn`), module demo.values, line 198
+::hglrt::list<::hglrt::list<::hgraph::Int>> made_rows();
+
+// first_row_total() -> i64 (`const fn`), module demo.values, line 200
+::hgraph::Int first_row_total();
+
+// grown(by: i64) -> list<i64> (`const fn`), module demo.values, line 209
 ::hglrt::list<::hgraph::Int> grown(::hgraph::Int by);
 
-// made_error() -> str (`const fn`), module demo.values, line 179
+// made_error() -> str (`const fn`), module demo.values, line 211
 ::hgraph::Str made_error();
 
-// code_first() -> str (`const fn`), module demo.values, line 189
+// code_first() -> str (`const fn`), module demo.values, line 221
 ::hgraph::Str code_first();
 
-// same_level(level: Level) -> Level (`const fn`), module demo.values, line 199
+// same_level(level: Level) -> Level (`const fn`), module demo.values, line 231
 ::hgl::demo::values::m_::Level same_level(::hgl::demo::values::m_::Level level);
 
-// bump(count: i64, by: i64) (`const fn`), module demo.values, line 204
+// bump(count: i64, by: i64) (`const fn`), module demo.values, line 236
 void bump(::hgraph::Int& count, ::hgraph::Int by);
 
 namespace i_::first
