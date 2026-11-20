@@ -21,6 +21,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{SyntaxKind, SyntaxNode};
 
 use super::fit::{not_null, nullable, window_value};
+use super::node::RefRead;
 use super::{BOOL, Fact, Typer};
 use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LabelValue, LocalId, ValueCategory};
 use crate::syntax::tokens;
@@ -353,7 +354,7 @@ impl Typer<'_> {
             && self.child_of(&value).is_some()
         {
             let written = node.text().to_string();
-            self.ref_read(input, Some(&written), false, value.at);
+            self.ref_read(input, Some(&written), RefRead::Value, value.at);
             return value;
         }
         // TYPE-11: a window's value, "read in a hook ... is a `list<V>` of
@@ -567,7 +568,7 @@ impl Typer<'_> {
             && let Some(input) = reference
         {
             let written = super::endpoint_argument(given).text().to_string();
-            self.ref_read(input, Some(&written), true, child.at);
+            self.ref_read(input, Some(&written), RefRead::Delta, child.at);
             return (
                 ExprKind::ChildEndpoint {
                     operation,

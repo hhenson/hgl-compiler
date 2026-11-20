@@ -8,12 +8,16 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::calls::arguments_of;
-use super::fit::{not_null, nullable, whole};
+use super::fit::{not_null, nullable, reads_cycle, whole};
+use super::node::RefRead;
 use super::{BOOL, Fact, Typer, children};
-use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LocalId, ValueCategory};
+use crate::hir::{
+    EndpointOperation, Expr, ExprKind, Hook, LocalId, Node, Stmt, ValueCategory,
+    walk_statement_nodes,
+};
 use crate::program::{DeclarationKind, Role};
 use crate::syntax::{child, tokens, ungrouped};
-use crate::types::{Argument, CallArguments, NamedKind, Scalar, Type};
+use crate::types::{Argument, CallArguments, ConstantValue, NamedKind, Scalar, Type};
 use crate::{codes, error, local_error};
 
 impl<'a> Typer<'a> {
@@ -325,7 +329,7 @@ impl<'a> Typer<'a> {
                 // `delta_value` aside ... A read of the value or of the
                 // `delta_value` of one rejects".
                 if let Some(input) = input.filter(|&input| self.designates(input)) {
-                    self.ref_read(input, None, true, at);
+                    self.ref_read(input, None, RefRead::Delta, at);
                     Type::Unknown
                 } else if none {
                     self.diagnostics.emit(
@@ -600,6 +604,91 @@ impl<'a> Typer<'a> {
             }
         }
     }
+}
+
+impl Typer<'_> {
+    /// Reports each read of what an endpoint published or lost in the
+    /// cycle, among a node's `statements`, whose place does not take a
+    /// `result` (ERR-14, TYPE-11). A window of a duration has no delta at
+    /// a tick where a value only leaves it, so `delta_value` of one is
+    /// read where a `result` is taken, `ok` of the delta or an `err`
+    /// coded `value.unset_read` (`ExprKind::CheckedDelta`): "A read of
+    /// the delta of a window of a duration whose place is not a `result`
+    /// rejects (`payload.unguarded`) ... One of a window of a tick count
+    /// is not rejected". Core's `removed_value` "rejects for every window
+    /// (`payload.unguarded`), since in most cycles no value leaves".
+    pub(super) fn plain_cycle_reads(&mut self, statements: &[Stmt]) {
+        // The reads a `result` takes, by their address: the walk visits
+        // the `CheckedDelta` before the read it holds.
+        let mut taken: Vec<*const Expr> = Vec::new();
+        let mut plain: Vec<(Location, String)> = Vec::new();
+        let program = self.program;
+        walk_statement_nodes(statements, &mut |node| {
+            let Node::Expression(value) = node else {
+                return;
+            };
+            if let ExprKind::CheckedDelta(read) = &value.kind {
+                taken.push(&**read);
+                return;
+            }
+            if !reads_cycle(program, value) || taken.contains(&std::ptr::from_ref(value)) {
+                return;
+            }
+            let delta = match &value.kind {
+                ExprKind::Endpoint {
+                    inputs: Some(inputs),
+                    ..
+                } => inputs.first().map(|&input| self.locals[input].ty.clone()),
+                ExprKind::ChildEndpoint { child, .. } => Some(child.ty.clone()),
+                // `removed_value`, of any window.
+                _ => {
+                    plain.push((
+                        value.at,
+                        "this is `removed_value`, which has no value in a cycle in which nothing \
+                         leaves the window, and its place takes no `result`"
+                            .to_string(),
+                    ));
+                    None
+                }
+            };
+            if let Some(of) = delta
+                && duration_window(of.omission_removed())
+            {
+                plain.push((
+                    value.at,
+                    format!(
+                        "this is the `delta_value` of a `{of}`, a window of a duration, which \
+                         has no delta where a value only leaves it, and its place takes no \
+                         `result`"
+                    ),
+                ));
+            }
+        });
+        for (at, message) in plain {
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::PAYLOAD_UNGUARDED,
+                    at,
+                    message,
+                    "TYPE-11",
+                )
+                .with_note(
+                    "read it where a `result<V, error>` is taken: `ok` of the value, or an \
+                     `err` coded `value.unset_read` where there is none (ERR-14)",
+                ),
+            );
+        }
+    }
+}
+
+/// True for a window of a duration, `rolling_window<f64, 3s, 1s>`, which
+/// a value leaves by its age, whether or not one arrives (TYPE-11).
+fn duration_window(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::RollingWindow { maximum, .. } if matches!(maximum.value, ConstantValue::Duration(_))
+    )
 }
 
 /// An argument of an endpoint operation or an `endpoint<T>` parameter as
