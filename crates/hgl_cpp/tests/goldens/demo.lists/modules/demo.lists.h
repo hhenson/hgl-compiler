@@ -10,12 +10,19 @@
 #undef count
 #undef demo
 #undef first
+#undef first_of
+#undef first_slot
+#undef head
 #undef high
 #undef lists
 #undef low
+#undef nested
+#undef nested_of
+#undef nested_valid
 #undef observe
 #undef observe_parts
 #undef pair
+#undef part_sum
 #undef part_validity
 #undef parts
 #undef probe
@@ -24,6 +31,8 @@
 #undef reading
 #undef readings
 #undef relay
+#undef second_changed
+#undef second_delta
 #undef set_part
 #undef set_slot
 #undef slot
@@ -31,9 +40,11 @@
 #undef span
 #undef span_of
 #undef sum
+#undef sum_of_parts
 #undef total
 #undef value
 #undef values
+#undef whole_or_part
 
 namespace hgl::demo::lists::m_
 {
@@ -124,7 +135,67 @@ namespace w_
 
 namespace w_
 {
-// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 88
+// first_of(pair: list<i64, 2>) -> i64 (node), module demo.lists, line 88
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> first_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> pair);
+}  // namespace w_
+
+namespace w_
+{
+// first_slot(slot: i64, reading: i64) -> i64 (graph), module demo.lists, line 92
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> first_slot(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
+}  // namespace w_
+
+namespace w_
+{
+// second_delta(pair: list<i64, 2>) -> bool (node), module demo.lists, line 95
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> second_delta(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> pair);
+}  // namespace w_
+
+namespace w_
+{
+// second_changed(slot: i64, reading: i64) -> bool (graph), module demo.lists, line 102
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> second_changed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
+}  // namespace w_
+
+namespace w_
+{
+// whole_or_part(head: bool, value: i64) -> tuple<i64, i64> (node), module demo.lists, line 106
+::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"_0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"_1", ::hgraph::TS<::hgraph::Int>>>> whole_or_part(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> head, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
+}  // namespace w_
+
+namespace w_
+{
+// part_sum(parts: tuple<i64, i64>) -> i64 (node), module demo.lists, line 114
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> part_sum(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"_0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"_1", ::hgraph::TS<::hgraph::Int>>>> parts);
+}  // namespace w_
+
+namespace w_
+{
+// sum_of_parts(head: bool, value: i64) -> i64 (graph), module demo.lists, line 121
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> sum_of_parts(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> head, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
+}  // namespace w_
+
+namespace w_
+{
+// nested(count: i64) -> list<list<i64>> (node), module demo.lists, line 124
+::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> nested(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count);
+}  // namespace w_
+
+namespace w_
+{
+// nested_valid(values: list<list<i64>>) -> list<bool, 3> (node), module demo.lists, line 131
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Bool>, 3>> nested_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> values);
+}  // namespace w_
+
+namespace w_
+{
+// nested_of(count: i64) -> list<bool, 3> (graph), module demo.lists, line 135
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Bool>, 3>> nested_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count);
+}  // namespace w_
+
+namespace w_
+{
+// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 138
 ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> relay(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values);
 }  // namespace w_
 

@@ -84,6 +84,56 @@ fn part_validity(probe: bool, parts: tuple<i64, i64>) -> list<bool, 2> {
 fn observe_parts(probe: bool, first: bool, value: i64) -> list<bool, 2> =>
     part_validity(probe, set_part(first, value))
 
+# A child read at a constant index, admitted by its own `valid` (TIME-1).
+fn first_of(pair: list<i64, 2>) -> i64 {
+    when valid(pair[0]) { return pair[0] }
+}
+
+fn first_slot(slot: i64, reading: i64) -> i64 => first_of(set_slot(slot, reading))
+
+# A child's delta read into a `result` (ERR-14), and its `last_modified`.
+fn second_delta(pair: list<i64, 2>) -> bool {
+    when valid(pair[1]) {
+        let change: result<i64, error> = delta_value(pair[1])
+        return is_ok(change) && last_modified(pair[1]) != null
+    }
+}
+
+fn second_changed(slot: i64, reading: i64) -> bool => second_delta(set_slot(slot, reading))
+
+# A tuple published whole, or by a delta; its position read, and the tuple
+# read whole.
+fn whole_or_part(head: bool, value: i64) -> tuple<i64, i64> {
+    when {
+        if head { return (value, 0) }
+        let only_second: delta<tuple<i64, i64>> = (null, value)
+        return only_second
+    }
+}
+
+fn part_sum(parts: tuple<i64, i64>) -> i64 {
+    when all_valid(parts) {
+        let whole = parts
+        return parts[1] + whole[0]
+    }
+}
+
+fn sum_of_parts(head: bool, value: i64) -> i64 => part_sum(whole_or_part(head, value))
+
+# A growing list of growing lists, a child of a child among them.
+fn nested(count: i64) -> list<list<i64>> {
+    when {
+        if count == 0 { return [[1], []] }
+        return delta<list<list<i64>>>(updated: [1: delta<list<i64>>(updated: [0: count])])
+    }
+}
+
+fn nested_valid(values: list<list<i64>>) -> list<bool, 3> {
+    when { return [valid(values[1]), all_valid(values), valid(values[1][0])] }
+}
+
+fn nested_of(count: i64) -> list<bool, 3> => nested_valid(nested(count))
+
 # A list input replayed from a trace, its cells whole and a delta (TST-9).
 fn relay(values: list<i64>) -> list<i64> {
     when { return values }
@@ -112,6 +162,13 @@ test fixed_list_children {
     assert raises("value.index_out_of_range") {
         eval(slot_of(slot: [0], reading: [3], at: [2]))
     }
+}
+
+test children_named_in_a_hook {
+    assert eval(first_slot(slot: [1, 0], reading: [5, 3])) == [_, 3]
+    assert eval(second_changed(slot: [0, 1, 0], reading: [3, 8, 4])) == [_, true, false]
+    assert eval(sum_of_parts(head: [true, false], value: [3, 8])) == [3, 11]
+    assert eval(nested_of(count: [0, 7])) == [[true, true, false], [true, true, true]]
 }
 
 test tuple_positions {

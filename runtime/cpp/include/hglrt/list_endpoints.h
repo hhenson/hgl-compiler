@@ -3,11 +3,10 @@
 // publish to one, and to read what one published in a cycle as HGL's delta
 // (TYPE-16, TIME-1, TIME-7, TIME-9; core's END-3, END-7, END-8).
 //
-// | HGL | hgraph |
-// | --- | --- |
-// | `list<V>`, a growing list | `TSL<S>`, its size `unbounded_tsl_size`, a child for each position, S the
-// temporal form of V | | `list<V, N>` | `TSL<S, N>` | | `tuple<A, B>` | `UnNamedTSB<Field<"_0", SA>,
-// Field<"_1", SB>>`: a field for each position, each valid on its own |
+// A growing `list<V>` is hgraph's `TSL<S>`, of the size `unbounded_tsl_size`,
+// a child for each position, S the temporal form of V; a `list<V, N>` is
+// `TSL<S, N>`; and a `tuple<A, B>` is `UnNamedTSB<Field<"_0", SA>,
+// Field<"_1", SB>>`, a field for each position, each valid on its own.
 //
 // hgraph 0.9.13's `TSL` gives what TIME-7, TIME-9 and TYPE-16 say of a list,
 // and this library builds on it with no adaptation: an empty list published

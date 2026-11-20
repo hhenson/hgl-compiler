@@ -5,23 +5,33 @@
 // Names this file writes, which no macro of a header above takes.
 #undef a_list_input_replays_its_cells
 #undef at
+#undef change
 #undef changes
 #undef changes_of
+#undef children_named_in_a_hook
 #undef core
 #undef count
 #undef demo
 #undef first
+#undef first_of
+#undef first_slot
 #undef fixed_list_children
+#undef get
+#undef head
 #undef high
 #undef lists
 #undef low
 #undef made
+#undef nested
+#undef nested_of
+#undef nested_valid
 #undef next
 #undef observe
 #undef observe_parts
 #undef only_first
 #undef only_second
 #undef pair
+#undef part_sum
 #undef part_validity
 #undef parts
 #undef probe
@@ -34,6 +44,8 @@
 #undef relay
 #undef replay
 #undef running
+#undef second_changed
+#undef second_delta
 #undef set_part
 #undef set_slot
 #undef slot
@@ -41,10 +53,13 @@
 #undef span
 #undef span_of
 #undef sum
+#undef sum_of_parts
 #undef total
 #undef tuple_positions
 #undef value
 #undef values
+#undef whole
+#undef whole_or_part
 
 namespace hgl::demo::lists::m_
 {
@@ -419,14 +434,266 @@ namespace w_
 
 namespace n_
 {
-// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 88
+// first_of(pair: list<i64, 2>) -> i64 (node), module demo.lists, line 88
+struct first_of
+{
+    static constexpr auto name = "demo.lists::first_of";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"pair", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> pair, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        // when, line 89 (TIME-3)
+        if (::hglrt::fn_valid(::hglrt::child(pair, 0)))
+        {
+            out_.set(::hglrt::checked_whole(::hglrt::child(pair, 0)));
+            return;
+        }
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// first_of(pair: list<i64, 2>) -> i64 (node), module demo.lists, line 88
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> first_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> pair)
+{
+    return ::hgraph::wire<::hgl::demo::lists::m_::n_::first_of>(wiring_, pair);
+}
+}  // namespace w_
+
+namespace n_
+{
+// first_slot(slot: i64, reading: i64) -> i64 (graph), module demo.lists, line 92
+struct first_slot
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> slot, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+    {
+        return ::hgl::demo::lists::m_::w_::first_of(wiring_, ::hgl::demo::lists::m_::w_::set_slot(wiring_, slot, reading));
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// first_slot(slot: i64, reading: i64) -> i64 (graph), module demo.lists, line 92
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> first_slot(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+{
+    return ::hgl::demo::lists::m_::n_::first_slot::compose(wiring_, slot, reading);
+}
+}  // namespace w_
+
+namespace n_
+{
+// second_delta(pair: list<i64, 2>) -> bool (node), module demo.lists, line 95
+struct second_delta
+{
+    static constexpr auto name = "demo.lists::second_delta";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"pair", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> pair, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_)
+    {
+        // when, line 96 (TIME-3)
+        if (::hglrt::fn_valid(::hglrt::child(pair, 1)))
+        {
+            [[maybe_unused]] const ::hglrt::result<::hgraph::Int> change = ::hglrt::fn_delta_value_checked(::hglrt::child(pair, 1));
+            out_.set(((change).has_value() && (::hglrt::fn_last_modified(::hglrt::child(pair, 1))).has_value()));
+            return;
+        }
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// second_delta(pair: list<i64, 2>) -> bool (node), module demo.lists, line 95
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> second_delta(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> pair)
+{
+    return ::hgraph::wire<::hgl::demo::lists::m_::n_::second_delta>(wiring_, pair);
+}
+}  // namespace w_
+
+namespace n_
+{
+// second_changed(slot: i64, reading: i64) -> bool (graph), module demo.lists, line 102
+struct second_changed
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> slot, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+    {
+        return ::hgl::demo::lists::m_::w_::second_delta(wiring_, ::hgl::demo::lists::m_::w_::set_slot(wiring_, slot, reading));
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// second_changed(slot: i64, reading: i64) -> bool (graph), module demo.lists, line 102
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> second_changed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+{
+    return ::hgl::demo::lists::m_::n_::second_changed::compose(wiring_, slot, reading);
+}
+}  // namespace w_
+
+namespace n_
+{
+// whole_or_part(head: bool, value: i64) -> tuple<i64, i64> (node), module demo.lists, line 106
+struct whole_or_part
+{
+    static constexpr auto name = "demo.lists::whole_or_part";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"head", ::hgraph::TS<::hgraph::Bool>> head, [[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::UnNamedTSB<::hgraph::Field<"_0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"_1", ::hgraph::TS<::hgraph::Int>>>> out_)
+    {
+        // when, line 107 (TIME-3)
+        {
+            if (::hglrt::checked_value(head))
+            {
+                ::hglrt::publish(out_, std::tuple<::hgraph::Int, ::hgraph::Int>{::hglrt::checked_value(value), 0});
+                return;
+            }
+            [[maybe_unused]] const std::tuple<std::optional<::hgraph::Int>, std::optional<::hgraph::Int>> only_second = std::tuple<std::optional<::hgraph::Int>, std::optional<::hgraph::Int>>{std::nullopt, ::hglrt::checked_value(value)};
+            ::hglrt::publish(out_, only_second);
+            return;
+        }
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// whole_or_part(head: bool, value: i64) -> tuple<i64, i64> (node), module demo.lists, line 106
+::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"_0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"_1", ::hgraph::TS<::hgraph::Int>>>> whole_or_part(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> head, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hgraph::wire<::hgl::demo::lists::m_::n_::whole_or_part>(wiring_, head, value);
+}
+}  // namespace w_
+
+namespace n_
+{
+// part_sum(parts: tuple<i64, i64>) -> i64 (node), module demo.lists, line 114
+struct part_sum
+{
+    static constexpr auto name = "demo.lists::part_sum";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"parts", ::hgraph::UnNamedTSB<::hgraph::Field<"_0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"_1", ::hgraph::TS<::hgraph::Int>>>> parts, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        // when, line 115 (TIME-3)
+        if (::hglrt::fn_all_valid(parts))
+        {
+            [[maybe_unused]] const std::tuple<::hgraph::Int, ::hgraph::Int>& whole = ::hglrt::checked_whole(parts);
+            out_.set([&] { const auto& argument_00_ = ::hglrt::checked_whole(::hglrt::position<1>(parts)); const auto& argument_01_ = std::get<0>(whole); return ::hglrt::add__i64_i64(argument_00_, argument_01_); }());
+            return;
+        }
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// part_sum(parts: tuple<i64, i64>) -> i64 (node), module demo.lists, line 114
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> part_sum(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"_0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"_1", ::hgraph::TS<::hgraph::Int>>>> parts)
+{
+    return ::hgraph::wire<::hgl::demo::lists::m_::n_::part_sum>(wiring_, parts);
+}
+}  // namespace w_
+
+namespace n_
+{
+// sum_of_parts(head: bool, value: i64) -> i64 (graph), module demo.lists, line 121
+struct sum_of_parts
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> head, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+    {
+        return ::hgl::demo::lists::m_::w_::part_sum(wiring_, ::hgl::demo::lists::m_::w_::whole_or_part(wiring_, head, value));
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// sum_of_parts(head: bool, value: i64) -> i64 (graph), module demo.lists, line 121
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> sum_of_parts(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> head, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hgl::demo::lists::m_::n_::sum_of_parts::compose(wiring_, head, value);
+}
+}  // namespace w_
+
+namespace n_
+{
+// nested(count: i64) -> list<list<i64>> (node), module demo.lists, line 124
+struct nested
+{
+    static constexpr auto name = "demo.lists::nested";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"count", ::hgraph::TS<::hgraph::Int>> count, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> out_)
+    {
+        // when, line 125 (TIME-3)
+        {
+            if (::hglrt::eq__i64_i64_f64_f64(::hglrt::checked_value(count), 0, 0.0, 0.0))
+            {
+                ::hglrt::publish(out_, ::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}, ::hglrt::list<::hgraph::Int>{}});
+                return;
+            }
+            ::hglrt::publish(out_, ::hglrt::list_delta_of<::hglrt::list<::hglrt::list<::hgraph::Int>>>(::hglrt::dict_of<::hgraph::Int, ::hglrt::list_delta<::hglrt::list<::hgraph::Int>>>({{1, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, ::hglrt::checked_value(count)}}), ::hglrt::set<::hgraph::Int>{}, std::nullopt)}}), ::hglrt::set<::hgraph::Int>{}, std::nullopt));
+            return;
+        }
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// nested(count: i64) -> list<list<i64>> (node), module demo.lists, line 124
+::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> nested(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count)
+{
+    return ::hgraph::wire<::hgl::demo::lists::m_::n_::nested>(wiring_, count);
+}
+}  // namespace w_
+
+namespace n_
+{
+// nested_valid(values: list<list<i64>>) -> list<bool, 3> (node), module demo.lists, line 131
+struct nested_valid
+{
+    static constexpr auto name = "demo.lists::nested_valid";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"values", ::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> values, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::TS<::hgraph::Bool>, 3>> out_)
+    {
+        // when, line 132 (TIME-3)
+        {
+            ::hglrt::publish(out_, std::array<::hgraph::Bool, 3>{::hglrt::fn_valid(::hglrt::child(values, 1)), ::hglrt::fn_all_valid(values), ::hglrt::fn_valid(::hglrt::child(::hglrt::child(values, 1), 0))});
+            return;
+        }
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// nested_valid(values: list<list<i64>>) -> list<bool, 3> (node), module demo.lists, line 131
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Bool>, 3>> nested_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> values)
+{
+    return ::hgraph::wire<::hgl::demo::lists::m_::n_::nested_valid>(wiring_, values);
+}
+}  // namespace w_
+
+namespace n_
+{
+// nested_of(count: i64) -> list<bool, 3> (graph), module demo.lists, line 135
+struct nested_of
+{
+    static ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Bool>, 3>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count)
+    {
+        return ::hgl::demo::lists::m_::w_::nested_valid(wiring_, ::hgl::demo::lists::m_::w_::nested(wiring_, count));
+    }
+};
+}  // namespace n_
+namespace w_
+{
+// nested_of(count: i64) -> list<bool, 3> (graph), module demo.lists, line 135
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Bool>, 3>> nested_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count)
+{
+    return ::hgl::demo::lists::m_::n_::nested_of::compose(wiring_, count);
+}
+}  // namespace w_
+
+namespace n_
+{
+// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 138
 struct relay
 {
     static constexpr auto name = "demo.lists::relay";
 
     static void eval([[maybe_unused]] ::hgraph::In<"values", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> out_)
     {
-        // when, line 89 (TIME-3)
+        // when, line 139 (TIME-3)
         {
             ::hglrt::publish(out_, ::hglrt::checked_whole(values));
             return;
@@ -436,7 +703,7 @@ struct relay
 }  // namespace n_
 namespace w_
 {
-// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 88
+// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 138
 ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> relay(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values)
 {
     return ::hgraph::wire<::hgl::demo::lists::m_::n_::relay>(wiring_, values);
@@ -527,6 +794,51 @@ void fixed_list_children()
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_034_ = input_031_; const auto argument_035_ = input_032_; const auto argument_036_ = input_033_; return ::hgl::demo::lists::m_::w_::slot_of(wiring_, argument_034_, argument_035_, argument_036_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     }));
     });
+}
+
+void children_named_in_a_hook()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 0}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{5, 3}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_02_ = input_00_; const auto argument_03_ = input_01_; return ::hgl::demo::lists::m_::w_::first_slot(wiring_, argument_02_, argument_03_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 3};
+        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_010_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_06_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{0, 1, 0}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_07_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{3, 8, 4}, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, [&] { const auto argument_08_ = input_06_; const auto argument_09_ = input_07_; return ::hgl::demo::lists::m_::w_::second_changed(wiring_, argument_08_, argument_09_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, false};
+        ::hglrt::testing::expect_same(left_010_, right_011_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_016_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_012_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, false}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_013_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{3, 8}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_014_ = input_012_; const auto argument_015_ = input_013_; return ::hgl::demo::lists::m_::w_::sum_of_parts(wiring_, argument_014_, argument_015_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_017_ = ::hglrt::testing::Dense<::hgraph::Int>{3, 11};
+        ::hglrt::testing::expect_same(left_016_, right_017_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_020_ = ::hglrt::testing::evaluate<std::array<::hgraph::Bool, 3>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_018_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{0, 7}, start_));
+        const auto result_019_ = ::hgl::demo::lists::m_::w_::nested_of(wiring_, input_018_);
+        ::hgl::core::m_::w_::i_::record::of_1list_1bool_1_13_1_(wiring_, result_019_, ::hgraph::Str{::hglrt::testing::run_output});
+        ::hglrt::testing::hold_result(wiring_, result_019_);
+    });
+        const auto right_021_ = ::hglrt::testing::Dense<std::array<::hgraph::Bool, 3>>{::hglrt::testing::Cell<std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<std::array<::hgraph::Bool, 3>>{std::array<::hgraph::Bool, 3>{true, true, false}}}, ::hglrt::testing::Cell<std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<std::array<::hgraph::Bool, 3>>{std::array<::hgraph::Bool, 3>{true, true, true}}}};
+        ::hglrt::testing::expect_same(left_020_, right_021_);
+    }();
 }
 
 void tuple_positions()
