@@ -42,9 +42,13 @@ include(GNUInstallDirs)
 add_library(hglrt SHARED
     src/capabilities.cpp
     src/checked.cpp
+    src/conversions.cpp
     src/failure.cpp
+    src/host.cpp
     src/scalar.cpp
+    src/temporal.cpp
     src/testing.cpp
+    src/text.cpp
 )
 add_library(hglrt::hglrt ALIAS hglrt)
 target_include_directories(hglrt PUBLIC
@@ -109,10 +113,14 @@ if(BUILD_TESTING)
         tests/main.cpp
         tests/capabilities_tests.cpp
         tests/checked_tests.cpp
+        tests/conversion_tests.cpp
         tests/failure_tests.cpp
         tests/scalar_tests.cpp
         tests/sources_tests.cpp
+        tests/temporal_tests.cpp
         tests/testing_tests.cpp
+        tests/text_tests.cpp
+        tests/traces_tests.cpp
     )
     target_link_libraries(hglrt_tests PRIVATE hglrt doctest::doctest)
     target_compile_options(hglrt_tests PRIVATE ${HGLRT_WARNINGS})

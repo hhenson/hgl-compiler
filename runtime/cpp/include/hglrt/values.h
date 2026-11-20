@@ -10,17 +10,27 @@
 // standard library gives no `std::vector`, and which no program may give
 // it for one. So a list is a type of this library until hgraph hashes a
 // value through a trait of its own.
+//
+// What a temporal value publishes in one cycle, its `delta<T>` (TYPE-16), is
+// an ordinary value too: `delta_t<T>`. It is T itself for a scalar and for
+// a nullable one, a tuple of optionals for a tuple, and `list_delta` for a
+// list. A set's, a dictionary's and a struct's are the collections' and the
+// structs' work (docs/cpp-target.md, "Not decided here").
 #pragma once
 
 #include <hgraph/types/metadata/type_registry.h>
 #include <hgraph/types/primitive_types.h>
 #include <hgraph/types/static_schema.h>
+#include <hgraph/types/temporal.h>
 #include <hgraph/util/date_time.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -34,10 +44,21 @@ using i64 = hgraph::Int;
 using f64 = hgraph::Float;
 /// `str` (TYPE-1): UTF-8 text.
 using str = hgraph::Str;
+/// `bytes` (TYPE-1): a sequence of octets.
+using bytes = hgraph::Bytes;
+/// `date` (TYPE-2): a Gregorian date of the years 1 to 9999.
+using date = hgraph::Date;
+/// `time` (TYPE-2): a time of day, in microseconds from midnight.
+using time = hgraph::Time;
 /// `datetime` (TYPE-2): an instant, in microseconds from the epoch in UTC.
 using datetime = hgraph::DateTime;
 /// `duration` (TYPE-2): a signed count of microseconds.
 using duration = hgraph::TimeDelta;
+/// `civil_datetime` (TYPE-2): a local date and time, in no zone.
+using civil_datetime = hgraph::CivilDateTime;
+/// `zoned_datetime` (TYPE-2): an instant, the zone it is resolved in, and
+/// that zone's offset at it.
+using zoned_datetime = hgraph::ZonedDateTime;
 
 /// `list<T>` (TYPE-4): a `std::vector<T>` with a hash, so that hgraph can
 /// hold it as configuration (see the head of this file). It is a vector in
@@ -45,6 +66,69 @@ using duration = hgraph::TimeDelta;
 template <class T>
 struct list : std::vector<T> {
     using std::vector<T>::vector;
+};
+
+template <class L>
+struct list_delta;
+
+/// `delta<T>` (TYPE-16): what a temporal value of T publishes in one cycle.
+/// "For most T it is another type the language has: `delta<f64>` is `f64`,
+/// and `delta<tuple<f64, i64>>` is `tuple<f64?, i64?>` ... A nullable's
+/// delta is an optional: it holds what was published, a null among them"; a
+/// list's is a type of its own, `list_delta`.
+template <class T>
+struct delta_of {
+    using type = T;
+};
+
+/// `delta_of`'s type.
+template <class T>
+using delta_t = typename delta_of<T>::type;
+
+template <class T>
+struct delta_of<std::optional<T>> {
+    using type = std::optional<delta_t<T>>;
+};
+
+/// A tuple's delta: each position's delta, or null where the position does
+/// not change ("In a tuple's position or a struct's field, null leaves the
+/// position or the field as it was").
+template <class... T>
+struct delta_of<std::tuple<T...>> {
+    using type = std::tuple<std::optional<delta_t<T>>...>;
+};
+
+template <class T>
+struct delta_of<list<T>> {
+    using type = list_delta<list<T>>;
+};
+
+template <class T, std::size_t N>
+struct delta_of<std::array<T, N>> {
+    using type = list_delta<std::array<T, N>>;
+};
+
+/// `delta<list<V>>` and `delta<list<V, N>>`, `L` (TYPE-16): "`updated`, each
+/// changed position with its delta; `removed`, the positions that lost their
+/// value, so a fixed list can say a position became invalid; and
+/// `size_modified`, set only when the size moves up or down, to the new
+/// size". It keeps its list's type whole in its own: the delta of a
+/// `list<i64>` is no delta of a `list<i64, 2>`. Two are equal where they name
+/// the same changes.
+template <class L>
+struct list_delta {
+    /// The list it is the delta of.
+    using list_type = L;
+
+    /// Each position updated, with its delta, by position.
+    std::map<i64, delta_t<typename L::value_type>> updated{};
+    /// Each position that lost its value.
+    std::set<i64> removed{};
+    /// The list's new size, where it moved; a negative one written shrinks
+    /// the list by that count.
+    std::optional<i64> size_modified{};
+
+    friend bool operator==(const list_delta&, const list_delta&) = default;
 };
 
 /// The hash of `value`, part by part: what `std::hash` gives a list (TYPE-8:
@@ -76,6 +160,17 @@ struct is_list : std::false_type {};
 template <class T>
 struct is_list<list<T>> : std::true_type {};
 
+/// A fixed list, `list<T, N>` (TYPE-4), is a `std::array<T, N>`.
+template <class T>
+struct is_fixed_list : std::false_type {};
+template <class T, std::size_t N>
+struct is_fixed_list<std::array<T, N>> : std::true_type {};
+
+template <class T>
+struct is_list_delta : std::false_type {};
+template <class L>
+struct is_list_delta<list_delta<L>> : std::true_type {};
+
 } // namespace detail
 
 template <class T>
@@ -87,12 +182,21 @@ std::size_t hash_of(const T& value) {
         return seed;
     } else if constexpr (detail::is_optional<T>::value) {
         return value.has_value() ? detail::combined(1, hash_of(*value)) : 0;
-    } else if constexpr (detail::is_list<T>::value) {
+    } else if constexpr (detail::is_list<T>::value || detail::is_fixed_list<T>::value) {
         std::size_t seed = value.size();
         for (const auto& element : value) {
             seed = detail::combined(seed, hash_of(element));
         }
         return seed;
+    } else if constexpr (detail::is_list_delta<T>::value) {
+        std::size_t seed = detail::combined(value.updated.size(), value.removed.size());
+        for (const auto& [position, change] : value.updated) {
+            seed = detail::combined(detail::combined(seed, hash_of(position)), hash_of(change));
+        }
+        for (const i64 position : value.removed) {
+            seed = detail::combined(seed, hash_of(position));
+        }
+        return detail::combined(seed, hash_of(value.size_modified));
     } else {
         return std::hash<T>{}(value);
     }
@@ -111,12 +215,27 @@ std::string type_name() {
         return "bool";
     } else if constexpr (std::is_same_v<T, str>) {
         return "str";
+    } else if constexpr (std::is_same_v<T, bytes>) {
+        return "bytes";
+    } else if constexpr (std::is_same_v<T, date>) {
+        return "date";
+    } else if constexpr (std::is_same_v<T, time>) {
+        return "time";
     } else if constexpr (std::is_same_v<T, datetime>) {
         return "datetime";
     } else if constexpr (std::is_same_v<T, duration>) {
         return "duration";
+    } else if constexpr (std::is_same_v<T, civil_datetime>) {
+        return "civil_datetime";
+    } else if constexpr (std::is_same_v<T, zoned_datetime>) {
+        return "zoned_datetime";
     } else if constexpr (detail::is_list<T>::value) {
         return "list<" + type_name<typename T::value_type>() + ">";
+    } else if constexpr (detail::is_fixed_list<T>::value) {
+        return "list<" + type_name<typename T::value_type>() + ", " + std::to_string(std::tuple_size_v<T>) +
+               ">";
+    } else if constexpr (detail::is_list_delta<T>::value) {
+        return "delta<" + type_name<typename T::list_type>() + ">";
     } else if constexpr (detail::is_optional<T>::value) {
         return type_name<typename T::value_type>() + "?";
     } else if constexpr (detail::is_tuple<T>::value) {

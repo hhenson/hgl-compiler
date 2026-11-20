@@ -1,9 +1,11 @@
-// Core's native scalar operators (scalar.h).
+// Core's native scalar operators of numbers and of the ordered types
+// (scalar.h).
+#include "numbers.h"
+
 #include <hglrt/scalar.h>
 
 #include <array>
 #include <bit>
-#include <chrono>
 #include <cmath>
 #include <compare>
 #include <cstddef>
@@ -16,9 +18,10 @@ namespace hglrt {
 
 namespace {
 
-// An unsigned 128-bit integer, GCC's: the product of two 64-bit integers.
-// `__extension__` keeps `-Wpedantic` quiet about a type ISO C++ lacks.
-__extension__ typedef unsigned __int128 u128;
+using detail::Magnitude;
+using detail::Number;
+using detail::number_of;
+using detail::u128;
 
 constexpr i64 least_i64 = std::numeric_limits<i64>::min();
 
@@ -128,42 +131,11 @@ class Wide {
     std::array<std::uint64_t, digits> digits_{};
 };
 
-/// A finite number's magnitude, `mantissa` times two to the `exponent`.
-struct Magnitude {
-    std::uint64_t mantissa = 0;
-    int exponent = 0;
-};
-
-/// A finite number: its sign and magnitude.
-struct Number {
-    bool negative = false;
-    Magnitude magnitude;
-};
-
 /// A nonnegative exact quantity, `value` times two to the `exponent`.
 struct Exact {
     Wide value;
     int exponent = 0;
 };
-
-Number number_of(i64 value) {
-    // The least i64's magnitude, 2^63, is a 64-bit unsigned integer.
-    const auto bits = static_cast<std::uint64_t>(value);
-    return Number{value < 0, Magnitude{value < 0 ? 0 - bits : bits, 0}};
-}
-
-/// `value`, which is finite.
-Number number_of(f64 value) {
-    if (value == 0.0) {
-        return Number{};
-    }
-    int exponent = 0;
-    // `fraction` is in [0.5, 1) and has at most 53 significant bits, so it
-    // times 2^53 is an integer, a subnormal's as well.
-    const f64 fraction = std::frexp(std::fabs(value), &exponent);
-    const auto mantissa = static_cast<std::uint64_t>(std::ldexp(fraction, 53));
-    return Number{value < 0.0, Magnitude{mantissa, exponent - 53}};
-}
 
 /// `|lhs - rhs|`, exactly.
 Exact distance(const Number& lhs, const Number& rhs) {
@@ -269,15 +241,6 @@ std::partial_ordering compare_exactly(i64 lhs, f64 rhs) {
     }
     return std::partial_ordering::equivalent;
 }
-
-// TYPE-2's instants, the years 1 to 9999: the first and the last microsecond.
-constexpr i64 first_instant = std::chrono::duration_cast<duration>(
-                                  std::chrono::sys_days{std::chrono::year{1} / 1 / 1}.time_since_epoch())
-                                  .count();
-constexpr i64 last_instant = std::chrono::duration_cast<duration>(
-                                 std::chrono::sys_days{std::chrono::year{10000} / 1 / 1}.time_since_epoch())
-                                 .count() -
-                             1;
 
 } // namespace
 
@@ -391,6 +354,61 @@ i64 detail::floor_remainder(i64 lhs, i64 rhs) {
     return remainder;
 }
 
+f64 detail::floor_quotient(f64 lhs, f64 rhs) {
+    // NUM-1: "Where an f64 operand is an infinity or NaN and the divisor is
+    // not zero, `//` is the floor of the IEEE quotient": an infinity or a NaN
+    // is its own floor, and a finite one here is a zero, a finite numerator
+    // over an infinity, whose floor keeps its sign.
+    if (!std::isfinite(lhs) || !std::isfinite(rhs)) {
+        const f64 quotient = lhs / rhs;
+        if (!std::isfinite(quotient)) {
+            return quotient;
+        }
+        return std::copysign(std::floor(quotient), quotient);
+    }
+    // The floor of the exact quotient of two finite numbers, as the
+    // reference provider's Python computes it (CPython's `float_floor_div`):
+    // the remainder `fmod` gives is exact, so `lhs - remainder` is a
+    // multiple of `rhs`, and the quotient of the two is the floor or one
+    // above it.
+    f64 remainder = std::fmod(lhs, rhs);
+    f64 whole = (lhs - remainder) / rhs;
+    if (remainder != 0.0 && ((rhs < 0.0) != (remainder < 0.0))) {
+        whole -= 1.0;
+    }
+    if (whole == 0.0) {
+        return std::copysign(0.0, lhs / rhs);
+    }
+    f64 floored = std::floor(whole);
+    if (whole - floored > 0.5) {
+        floored += 1.0;
+    }
+    return floored;
+}
+
+f64 detail::floor_remainder(f64 lhs, f64 rhs) {
+    // NUM-1: "`%` what IEEE `fmod` gives: a remainder by an infinity is the
+    // numerator as it is, whatever its sign"; of an infinite numerator, and
+    // with a NaN operand, it is a NaN.
+    if (!std::isfinite(lhs) || !std::isfinite(rhs)) {
+        if (std::isnan(lhs) || std::isnan(rhs) || std::isinf(lhs)) {
+            return std::numeric_limits<f64>::quiet_NaN();
+        }
+        return lhs;
+    }
+    // "modulo has the divisor's sign when nonzero. So do `//` and `%` of
+    // finite f64 operands": a zero remainder is the zero of the divisor's
+    // sign, as CPython's `float_rem` has it.
+    f64 remainder = std::fmod(lhs, rhs);
+    if (remainder == 0.0) {
+        return std::copysign(0.0, rhs);
+    }
+    if ((rhs < 0.0) != (remainder < 0.0)) {
+        remainder += rhs;
+    }
+    return remainder;
+}
+
 // ---- f64 arithmetic --------------------------------------------------------
 
 f64 add__f64_f64(f64 lhs, f64 rhs) {
@@ -409,15 +427,22 @@ f64 neg__f64(f64 value) {
     return -value;
 }
 
-// ---- Instants --------------------------------------------------------------
+// ---- Mixed arithmetic ------------------------------------------------------
 
-datetime add__datetime_duration(datetime lhs, duration rhs, std::source_location where) {
-    i64 moved = 0;
-    if (__builtin_add_overflow(lhs.time_since_epoch().count(), rhs.count(), &moved) ||
-        moved < first_instant || moved > last_instant) {
-        fail(codes::out_of_range, "an instant result is outside the years 1 to 9999", where);
-    }
-    return datetime{duration{moved}};
+f64 add__i64_f64(i64 lhs, f64 rhs) {
+    return static_cast<f64>(lhs) + rhs;
+}
+
+f64 sub__i64_f64(i64 lhs, f64 rhs) {
+    return static_cast<f64>(lhs) - rhs;
+}
+
+f64 sub__f64_i64(f64 lhs, i64 rhs) {
+    return lhs - static_cast<f64>(rhs);
+}
+
+f64 mul__i64_f64(i64 lhs, f64 rhs) {
+    return static_cast<f64>(lhs) * rhs;
 }
 
 // ---- Numeric equality ------------------------------------------------------
@@ -469,6 +494,71 @@ bool eq__i64_f64_f64_f64(i64 lhs, f64 rhs, f64 abs, f64 rel, std::source_locatio
 
 bool ne__i64_f64_f64_f64(i64 lhs, f64 rhs, f64 abs, f64 rel, std::source_location where) {
     return !eq__i64_f64_f64_f64(lhs, rhs, abs, rel, where);
+}
+
+// ---- Order and comparison of an i64 and an f64 --------------------------------
+
+namespace {
+
+/// What `<=>` gives for the order `order` (NUM-6).
+CmpResult outcome_of(std::partial_ordering order) {
+    if (order == std::partial_ordering::less) {
+        return CmpResult::less;
+    }
+    if (order == std::partial_ordering::greater) {
+        return CmpResult::greater;
+    }
+    if (order == std::partial_ordering::equivalent) {
+        return CmpResult::equivalent;
+    }
+    return CmpResult::unordered;
+}
+
+/// How the `f64` `lhs` compares with the `i64` `rhs`, exactly.
+std::partial_ordering compare_exactly(f64 lhs, i64 rhs) {
+    return 0 <=> compare_exactly(rhs, lhs);
+}
+
+} // namespace
+
+bool lt__i64_f64(i64 lhs, f64 rhs) {
+    return compare_exactly(lhs, rhs) < 0;
+}
+
+bool lt__f64_i64(f64 lhs, i64 rhs) {
+    return compare_exactly(lhs, rhs) < 0;
+}
+
+bool le__i64_f64(i64 lhs, f64 rhs) {
+    return compare_exactly(lhs, rhs) <= 0;
+}
+
+bool le__f64_i64(f64 lhs, i64 rhs) {
+    return compare_exactly(lhs, rhs) <= 0;
+}
+
+bool gt__i64_f64(i64 lhs, f64 rhs) {
+    return compare_exactly(lhs, rhs) > 0;
+}
+
+bool gt__f64_i64(f64 lhs, i64 rhs) {
+    return compare_exactly(lhs, rhs) > 0;
+}
+
+bool ge__i64_f64(i64 lhs, f64 rhs) {
+    return compare_exactly(lhs, rhs) >= 0;
+}
+
+bool ge__f64_i64(f64 lhs, i64 rhs) {
+    return compare_exactly(lhs, rhs) >= 0;
+}
+
+CmpResult compare__i64_f64(i64 lhs, f64 rhs) {
+    return outcome_of(compare_exactly(lhs, rhs));
+}
+
+CmpResult compare__f64_i64(f64 lhs, i64 rhs) {
+    return outcome_of(compare_exactly(lhs, rhs));
 }
 
 // ---- Boolean forms ---------------------------------------------------------
