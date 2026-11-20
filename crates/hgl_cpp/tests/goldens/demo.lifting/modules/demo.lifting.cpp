@@ -11,6 +11,7 @@
 #undef a_sink_fails_and_a_capture_of_it_publishes_the_error
 #undef again
 #undef an_earlier_write_stands
+#undef an_evals_configuration_is_evaluated_once
 #undef attempt
 #undef boundary
 #undef by
@@ -19,6 +20,7 @@
 #undef checked_errors
 #undef code
 #undef core
+#undef count
 #undef demo
 #undef describe
 #undef earliest_start
@@ -34,6 +36,7 @@
 #undef kept_time
 #undef lifting
 #undef message
+#undef multiplied
 #undef never
 #undef offset
 #undef original
@@ -69,12 +72,18 @@ namespace hgl::demo::lifting::m_
     return ::hglrt::add__i64_i64(::hglrt::mul__i64_i64(value, factor), offset);
 }
 
+// multiplied(value: i64, const factor: i64) -> i64 (`const fn`), module demo.lifting, line 12
+::hgraph::Int multiplied([[maybe_unused]] ::hgraph::Int value, [[maybe_unused]] ::hgraph::Int factor)
+{
+    return ::hglrt::mul__i64_i64(value, factor);
+}
+
 namespace n_::scaled_by
 {
-// scaled_by(value: i64, factor: i64) -> i64 (graph), module demo.lifting, line 13
+// scaled_by(value: i64, factor: i64) -> i64 (graph), module demo.lifting, line 16
 struct impl_
 {
-    // The call of `scaled` on line 14, lifted (FN-6).
+    // The call of `scaled` on line 17, lifted (FN-6).
     struct lifted_01_
     {
         static constexpr auto name = "demo.lifting:scaled";
@@ -94,14 +103,14 @@ struct impl_
 }  // namespace n_::scaled_by
 namespace w_
 {
-// scaled_by(value: i64, factor: i64) -> i64 (graph), module demo.lifting, line 13
+// scaled_by(value: i64, factor: i64) -> i64 (graph), module demo.lifting, line 16
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> scaled_by(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> factor)
 {
     return ::hgl::demo::lifting::m_::n_::scaled_by::impl_::compose(wiring_, value, factor);
 }
 }  // namespace w_
 
-// check(value: i64) (`const fn`), module demo.lifting, line 19
+// check(value: i64) (`const fn`), module demo.lifting, line 22
 void check([[maybe_unused]] ::hgraph::Int value)
 {
     [[maybe_unused]] const ::hgraph::Int quotient = ::hglrt::floordiv__i64_i64<::hglrt::ZeroPolicy::fail>(1, value);
@@ -109,10 +118,10 @@ void check([[maybe_unused]] ::hgraph::Int value)
 
 namespace n_::checked
 {
-// checked(value: i64) (graph), module demo.lifting, line 23
+// checked(value: i64) (graph), module demo.lifting, line 26
 struct impl_
 {
-    // The call of `check` on line 24, lifted (FN-6).
+    // The call of `check` on line 27, lifted (FN-6).
     struct lifted_00_
     {
         static constexpr auto name = "demo.lifting:check";
@@ -130,7 +139,7 @@ struct impl_
 }  // namespace n_::checked
 namespace w_
 {
-// checked(value: i64) (graph), module demo.lifting, line 23
+// checked(value: i64) (graph), module demo.lifting, line 26
 void checked(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     ::hgl::demo::lifting::m_::n_::checked::impl_::compose(wiring_, value);
@@ -139,14 +148,14 @@ void checked(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::In
 
 namespace n_::describe
 {
-// describe(failure: error, sample: i64) -> str (node), module demo.lifting, line 28
+// describe(failure: error, sample: i64) -> str (node), module demo.lifting, line 31
 struct impl_
 {
     static constexpr auto name = "demo.lifting::describe";
 
     static void eval([[maybe_unused]] ::hgraph::In<"failure", ::hgraph::TS<::hglrt::error>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> failure, [[maybe_unused]] ::hgraph::In<"sample", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> sample, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_)
     {
-        // when, line 29 (TIME-3)
+        // when, line 32 (TIME-3)
         if (::hglrt::fn_modified(sample))
         {
             if (::hglrt::fn_valid(failure))
@@ -173,7 +182,7 @@ struct impl_
 }  // namespace n_::describe
 namespace w_
 {
-// describe(failure: error, sample: i64) -> str (node), module demo.lifting, line 28
+// describe(failure: error, sample: i64) -> str (node), module demo.lifting, line 31
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> describe(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hglrt::error>> failure, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> sample)
 {
     return ::hgraph::wire<::hgl::demo::lifting::m_::n_::describe::impl_>(wiring_, failure, sample);
@@ -182,10 +191,10 @@ namespace w_
 
 namespace n_::checked_errors
 {
-// checked_errors(value: i64) -> str (graph), module demo.lifting, line 40
+// checked_errors(value: i64) -> str (graph), module demo.lifting, line 43
 struct impl_
 {
-    // The call of `check` on line 41, lifted (FN-6).
+    // The call of `check` on line 44, lifted (FN-6).
     struct lifted_01_
     {
         static constexpr auto name = "demo.lifting:check";
@@ -195,7 +204,7 @@ struct impl_
         }
     };
 
-    // The `capture` of `check` on line 41 (ERR-7): the graph hgraph's
+    // The `capture` of `check` on line 44 (ERR-7): the graph hgraph's
     // `try_except_` evaluates as its child.
     struct captured_02_
     {
@@ -215,14 +224,14 @@ struct impl_
 }  // namespace n_::checked_errors
 namespace w_
 {
-// checked_errors(value: i64) -> str (graph), module demo.lifting, line 40
+// checked_errors(value: i64) -> str (graph), module demo.lifting, line 43
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> checked_errors(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     return ::hgl::demo::lifting::m_::n_::checked_errors::impl_::compose(wiring_, value);
 }
 }  // namespace w_
 
-// attempt(value: i64) -> result<i64, error> (`const fn`), module demo.lifting, line 47
+// attempt(value: i64) -> result<i64, error> (`const fn`), module demo.lifting, line 50
 ::hglrt::result<::hgraph::Int> attempt([[maybe_unused]] ::hgraph::Int value)
 {
     if (::hglrt::lt__T_T<::hgraph::Int>(value, 0))
@@ -234,14 +243,14 @@ namespace w_
 
 namespace n_::raised
 {
-// raised(value: i64) -> i64 (node), module demo.lifting, line 52
+// raised(value: i64) -> i64 (node), module demo.lifting, line 55
 struct impl_
 {
     static constexpr auto name = "demo.lifting::raised";
 
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 53 (TIME-3)
+        // when, line 56 (TIME-3)
         {
             const auto propagated_00_ = ::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value));
             if (!propagated_00_.has_value())
@@ -256,7 +265,7 @@ struct impl_
 }  // namespace n_::raised
 namespace w_
 {
-// raised(value: i64) -> i64 (node), module demo.lifting, line 52
+// raised(value: i64) -> i64 (node), module demo.lifting, line 55
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> raised(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     return ::hgraph::wire<::hgl::demo::lifting::m_::n_::raised::impl_>(wiring_, value);
@@ -265,14 +274,14 @@ namespace w_
 
 namespace n_::returned
 {
-// returned(value: i64) -> result<i64, error> (node), module demo.lifting, line 56
+// returned(value: i64) -> result<i64, error> (node), module demo.lifting, line 59
 struct impl_
 {
     static constexpr auto name = "demo.lifting::returned";
 
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hglrt::result<::hgraph::Int>>> out_)
     {
-        // when, line 57 (TIME-3)
+        // when, line 60 (TIME-3)
         {
             out_.set(::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value)));
             return;
@@ -282,7 +291,7 @@ struct impl_
 }  // namespace n_::returned
 namespace w_
 {
-// returned(value: i64) -> result<i64, error> (node), module demo.lifting, line 56
+// returned(value: i64) -> result<i64, error> (node), module demo.lifting, line 59
 ::hgraph::Port<::hgraph::TS<::hglrt::result<::hgraph::Int>>> returned(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     return ::hgraph::wire<::hgl::demo::lifting::m_::n_::returned::impl_>(wiring_, value);
@@ -291,14 +300,14 @@ namespace w_
 
 namespace n_::outcome
 {
-// outcome(taken: result<i64, error>) -> str (node), module demo.lifting, line 60
+// outcome(taken: result<i64, error>) -> str (node), module demo.lifting, line 63
 struct impl_
 {
     static constexpr auto name = "demo.lifting::outcome";
 
     static void eval([[maybe_unused]] ::hgraph::In<"taken", ::hgraph::TS<::hglrt::result<::hgraph::Int>>> taken, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_)
     {
-        // when, line 61 (TIME-3)
+        // when, line 64 (TIME-3)
         {
             if ((!(::hglrt::checked_value(taken)).has_value()))
             {
@@ -313,7 +322,7 @@ struct impl_
 }  // namespace n_::outcome
 namespace w_
 {
-// outcome(taken: result<i64, error>) -> str (node), module demo.lifting, line 60
+// outcome(taken: result<i64, error>) -> str (node), module demo.lifting, line 63
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> outcome(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hglrt::result<::hgraph::Int>>> taken)
 {
     return ::hgraph::wire<::hgl::demo::lifting::m_::n_::outcome::impl_>(wiring_, taken);
@@ -322,7 +331,7 @@ namespace w_
 
 namespace n_::outcomes
 {
-// outcomes(value: i64) -> str (graph), module demo.lifting, line 67
+// outcomes(value: i64) -> str (graph), module demo.lifting, line 70
 struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Str>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
@@ -333,7 +342,7 @@ struct impl_
 }  // namespace n_::outcomes
 namespace w_
 {
-// outcomes(value: i64) -> str (graph), module demo.lifting, line 67
+// outcomes(value: i64) -> str (graph), module demo.lifting, line 70
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> outcomes(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     return ::hgl::demo::lifting::m_::n_::outcomes::impl_::compose(wiring_, value);
@@ -342,14 +351,14 @@ namespace w_
 
 namespace n_::shifted
 {
-// shifted(value: i64, const by: i64) -> i64 (node), module demo.lifting, line 72
+// shifted(value: i64, const by: i64) -> i64 (node), module demo.lifting, line 75
 struct impl_
 {
     static constexpr auto name = "demo.lifting::shifted";
 
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Scalar<"by", ::hgraph::Int> by, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 73 (TIME-3)
+        // when, line 76 (TIME-3)
         {
             const auto propagated_00_ = ::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value));
             if (!propagated_00_.has_value())
@@ -364,7 +373,7 @@ struct impl_
 }  // namespace n_::shifted
 namespace w_
 {
-// shifted(value: i64, const by: i64) -> i64 (node), module demo.lifting, line 72
+// shifted(value: i64, const by: i64) -> i64 (node), module demo.lifting, line 75
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> shifted(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, ::hgraph::Int by)
 {
     return ::hgraph::wire<::hgl::demo::lifting::m_::n_::shifted::impl_>(wiring_, value, by);
@@ -373,10 +382,10 @@ namespace w_
 
 namespace n_::shifted_values
 {
-// shifted_values(value: i64) -> i64 (graph), module demo.lifting, line 76
+// shifted_values(value: i64) -> i64 (graph), module demo.lifting, line 79
 struct impl_
 {
-    // The `capture` of `shifted` on line 77 (ERR-7): the graph hgraph's
+    // The `capture` of `shifted` on line 80 (ERR-7): the graph hgraph's
     // `try_except_` evaluates as its child.
     struct captured_02_
     {
@@ -396,7 +405,7 @@ struct impl_
 }  // namespace n_::shifted_values
 namespace w_
 {
-// shifted_values(value: i64) -> i64 (graph), module demo.lifting, line 76
+// shifted_values(value: i64) -> i64 (graph), module demo.lifting, line 79
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> shifted_values(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     return ::hgl::demo::lifting::m_::n_::shifted_values::impl_::compose(wiring_, value);
@@ -405,7 +414,7 @@ namespace w_
 
 namespace n_::guarded
 {
-// guarded(value: i64) -> i64 (graph), module demo.lifting, line 81
+// guarded(value: i64) -> i64 (graph), module demo.lifting, line 84
 struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
@@ -416,7 +425,7 @@ struct impl_
 }  // namespace n_::guarded
 namespace w_
 {
-// guarded(value: i64) -> i64 (graph), module demo.lifting, line 81
+// guarded(value: i64) -> i64 (graph), module demo.lifting, line 84
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> guarded(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     return ::hgl::demo::lifting::m_::n_::guarded::impl_::compose(wiring_, value);
@@ -425,10 +434,10 @@ namespace w_
 
 namespace n_::guarded_values
 {
-// guarded_values(value: i64) -> i64 (graph), module demo.lifting, line 85
+// guarded_values(value: i64) -> i64 (graph), module demo.lifting, line 88
 struct impl_
 {
-    // The `capture` of `guarded` on line 86 (ERR-7): the graph hgraph's
+    // The `capture` of `guarded` on line 89 (ERR-7): the graph hgraph's
     // `try_except_` evaluates as its child.
     struct captured_01_
     {
@@ -447,7 +456,7 @@ struct impl_
 }  // namespace n_::guarded_values
 namespace w_
 {
-// guarded_values(value: i64) -> i64 (graph), module demo.lifting, line 85
+// guarded_values(value: i64) -> i64 (graph), module demo.lifting, line 88
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> guarded_values(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     return ::hgl::demo::lifting::m_::n_::guarded_values::impl_::compose(wiring_, value);
@@ -456,14 +465,14 @@ namespace w_
 
 namespace n_::write_then_fail
 {
-// write_then_fail(value: i64) -> i64 (node), module demo.lifting, line 91
+// write_then_fail(value: i64) -> i64 (node), module demo.lifting, line 94
 struct impl_
 {
     static constexpr auto name = "demo.lifting::write_then_fail";
 
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 93 (TIME-3)
+        // when, line 96 (TIME-3)
         {
             out_.set(::hglrt::checked_value(value));
             const auto propagated_00_ = ::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value));
@@ -479,7 +488,7 @@ struct impl_
 }  // namespace n_::write_then_fail
 namespace w_
 {
-// write_then_fail(value: i64) -> i64 (node), module demo.lifting, line 91
+// write_then_fail(value: i64) -> i64 (node), module demo.lifting, line 94
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> write_then_fail(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     return ::hgraph::wire<::hgl::demo::lifting::m_::n_::write_then_fail::impl_>(wiring_, value);
@@ -488,10 +497,10 @@ namespace w_
 
 namespace n_::written_values
 {
-// written_values(value: i64) -> i64 (graph), module demo.lifting, line 100
+// written_values(value: i64) -> i64 (graph), module demo.lifting, line 103
 struct impl_
 {
-    // The `capture` of `write_then_fail` on line 101 (ERR-7): the graph hgraph's
+    // The `capture` of `write_then_fail` on line 104 (ERR-7): the graph hgraph's
     // `try_except_` evaluates as its child.
     struct captured_01_
     {
@@ -511,7 +520,7 @@ struct impl_
 }  // namespace n_::written_values
 namespace w_
 {
-// written_values(value: i64) -> i64 (graph), module demo.lifting, line 100
+// written_values(value: i64) -> i64 (graph), module demo.lifting, line 103
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> written_values(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     return ::hgl::demo::lifting::m_::n_::written_values::impl_::compose(wiring_, value);
@@ -520,20 +529,20 @@ namespace w_
 
 namespace n_::raise_again
 {
-// raise_again(first: error, repeat: bool) -> error (node), module demo.lifting, line 107
+// raise_again(first: error, repeat: bool) -> error (node), module demo.lifting, line 110
 struct impl_
 {
     static constexpr auto name = "demo.lifting::raise_again";
 
     static void eval([[maybe_unused]] ::hgraph::In<"first", ::hgraph::TS<::hglrt::error>> first, [[maybe_unused]] ::hgraph::In<"repeat", ::hgraph::TS<::hgraph::Bool>, ::hgraph::InputValidity::Unchecked> repeat, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hglrt::error>> out_)
     {
-        // when, line 108 (TIME-3)
+        // when, line 111 (TIME-3)
         if (::hglrt::fn_modified(first))
         {
             out_.set(::hglrt::checked_value(first));
             return;
         }
-        // when, line 109 (TIME-3)
+        // when, line 112 (TIME-3)
         if (::hglrt::fn_modified(repeat))
         {
             [[maybe_unused]] const ::hglrt::result<::hglrt::error> failure = ::hglrt::result<::hglrt::error>{std::unexpect, ::hglrt::checked_value(first)};
@@ -550,7 +559,7 @@ struct impl_
 }  // namespace n_::raise_again
 namespace w_
 {
-// raise_again(first: error, repeat: bool) -> error (node), module demo.lifting, line 107
+// raise_again(first: error, repeat: bool) -> error (node), module demo.lifting, line 110
 ::hgraph::Port<::hgraph::TS<::hglrt::error>> raise_again(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hglrt::error>> first, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> repeat)
 {
     return ::hgraph::wire<::hgl::demo::lifting::m_::n_::raise_again::impl_>(wiring_, first, repeat);
@@ -559,10 +568,10 @@ namespace w_
 
 namespace n_::handled
 {
-// handled(value: i64, repeat: bool) -> error (graph), module demo.lifting, line 115
+// handled(value: i64, repeat: bool) -> error (graph), module demo.lifting, line 118
 struct impl_
 {
-    // The `capture` of `raised` on line 116 (ERR-7): the graph hgraph's
+    // The `capture` of `raised` on line 119 (ERR-7): the graph hgraph's
     // `try_except_` evaluates as its child.
     struct captured_01_
     {
@@ -582,7 +591,7 @@ struct impl_
 }  // namespace n_::handled
 namespace w_
 {
-// handled(value: i64, repeat: bool) -> error (graph), module demo.lifting, line 115
+// handled(value: i64, repeat: bool) -> error (graph), module demo.lifting, line 118
 ::hgraph::Port<::hgraph::TS<::hglrt::error>> handled(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> repeat)
 {
     return ::hgl::demo::lifting::m_::n_::handled::impl_::compose(wiring_, value, repeat);
@@ -591,14 +600,14 @@ namespace w_
 
 namespace n_::kept_time
 {
-// kept_time(first: error, repeated: error) -> datetime (node), module demo.lifting, line 120
+// kept_time(first: error, repeated: error) -> datetime (node), module demo.lifting, line 123
 struct impl_
 {
     static constexpr auto name = "demo.lifting::kept_time";
 
     static void eval([[maybe_unused]] ::hgraph::In<"first", ::hgraph::TS<::hglrt::error>, ::hgraph::InputActivity::Passive> first, [[maybe_unused]] ::hgraph::In<"repeated", ::hgraph::TS<::hglrt::error>> repeated, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::DateTime>> out_)
     {
-        // when, line 121 (TIME-3)
+        // when, line 124 (TIME-3)
         if (::hglrt::fn_modified(repeated))
         {
             [[maybe_unused]] const std::optional<::hgraph::ErrorContext> original = (::hglrt::checked_value(first)).context;
@@ -621,7 +630,7 @@ struct impl_
 }  // namespace n_::kept_time
 namespace w_
 {
-// kept_time(first: error, repeated: error) -> datetime (node), module demo.lifting, line 120
+// kept_time(first: error, repeated: error) -> datetime (node), module demo.lifting, line 123
 ::hgraph::Port<::hgraph::TS<::hgraph::DateTime>> kept_time(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hglrt::error>> first, ::hgraph::Port<::hgraph::TS<::hglrt::error>> repeated)
 {
     return ::hgraph::wire<::hgl::demo::lifting::m_::n_::kept_time::impl_>(wiring_, first, repeated);
@@ -630,10 +639,10 @@ namespace w_
 
 namespace n_::provenance
 {
-// provenance(value: i64, repeat: bool) -> datetime (graph), module demo.lifting, line 130
+// provenance(value: i64, repeat: bool) -> datetime (graph), module demo.lifting, line 133
 struct impl_
 {
-    // The `capture` of `handled` on line 131 (ERR-7): the graph hgraph's
+    // The `capture` of `handled` on line 134 (ERR-7): the graph hgraph's
     // `try_except_` evaluates as its child.
     struct captured_02_
     {
@@ -653,7 +662,7 @@ struct impl_
 }  // namespace n_::provenance
 namespace w_
 {
-// provenance(value: i64, repeat: bool) -> datetime (graph), module demo.lifting, line 130
+// provenance(value: i64, repeat: bool) -> datetime (graph), module demo.lifting, line 133
 ::hgraph::Port<::hgraph::TS<::hgraph::DateTime>> provenance(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> repeat)
 {
     return ::hgl::demo::lifting::m_::n_::provenance::impl_::compose(wiring_, value, repeat);
@@ -665,8 +674,8 @@ namespace w_
 namespace hgl::demo::lifting::m_::t_
 {
 
-// The call of `scaled` on line 137, lifted (FN-6).
-struct lifted_00_3862_
+// The call of `scaled` on line 140, lifted (FN-6).
+struct lifted_00_4004_
 {
     static constexpr auto name = "demo.lifting:scaled";
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::In<"factor", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> input_014_, [[maybe_unused]] ::hgraph::In<"offset", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> input_015_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
@@ -678,8 +687,8 @@ struct lifted_00_3862_
     }
 };
 
-// The call of `scaled` on line 138, lifted (FN-6).
-struct lifted_00_3940_
+// The call of `scaled` on line 141, lifted (FN-6).
+struct lifted_00_4082_
 {
     static constexpr auto name = "demo.lifting:scaled";
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor, [[maybe_unused]] ::hgraph::Scalar<"offset", ::hgraph::Int> offset, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
@@ -715,7 +724,7 @@ void a_default_binds_until_its_input_publishes()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_08_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_011_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_010_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_013_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_012_, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_3862_>(wiring_, input_09_, input_011_, input_013_), ::hgraph::Str{::hglrt::testing::run_output});
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_4004_>(wiring_, input_09_, input_011_, input_013_), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
         const auto right_017_ = ::hglrt::testing::Dense<::hgraph::Int>{3, 7};
@@ -725,11 +734,46 @@ void a_default_binds_until_its_input_publishes()
     [&] {
         const auto left_019_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_018_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_3940_>(wiring_, input_018_, static_cast<::hgraph::Int>(2), static_cast<::hgraph::Int>(0)), ::hgraph::Str{::hglrt::testing::run_output});
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_4082_>(wiring_, input_018_, static_cast<::hgraph::Int>(2), static_cast<::hgraph::Int>(0)), ::hgraph::Str{::hglrt::testing::run_output});
     });
         const auto right_020_ = ::hglrt::testing::Dense<::hgraph::Int>{2, 4};
         ::hglrt::testing::expect_same(left_019_, right_020_);
     }();
+}
+
+// The call of `multiplied` on line 146, lifted (FN-6).
+struct lifted_00_4200_
+{
+    static constexpr auto name = "demo.lifting:multiplied";
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        out_.set(::hgl::demo::lifting::m_::multiplied(::hglrt::checked_value(value), factor.value()));
+        return;
+    }
+};
+
+void an_evals_configuration_is_evaluated_once()
+{
+    ::hglrt::testing::statement();
+    [[maybe_unused]] ::hgraph::Int count = 0;
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_03_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2};
+        const ::hgraph::Int argument_02_ = [&]() -> ::hgraph::Int {
+    count = ::hglrt::add__i64_i64(count, 1);
+    return ::hglrt::add__i64_i64(count, 2);
+}();
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_4200_>(wiring_, input_01_, static_cast<::hgraph::Int>(argument_02_)), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_04_ = ::hglrt::testing::Dense<::hgraph::Int>{3, 6};
+        ::hglrt::testing::expect_same(left_03_, right_04_);
+    }();
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(count, 1, 0.0, 0.0));
 }
 
 void a_sink_fails_and_a_capture_of_it_publishes_the_error()

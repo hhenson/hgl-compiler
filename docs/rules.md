@@ -109,8 +109,10 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A payload read; `valid`, `modified`, `delta_value` plain and into a `result`, `last_modified` of an input | TIME-1, END-1, END-2, END-3, END-6, ERR-14 |
 | `inject clock`, `logger`, `global_state`, and a property of each | TIME-8, CAP-1, CAP-2, CAP-3 |
 | A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
-| A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
-| `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| A graph; a value where a connection is expected; a lifted call, an input that binds its default or null where it is not valid, a parameter left out bound as configuration, a sink | FN-2, FN-3, FN-6, FN-11 |
+| `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn`; an eval of a value function | TST-4 to TST-8, TST-16 |
+| `capture`, its `.value` and `.error`; an `error` and a `result` as temporal values; `?` in a `when`; an error's `.context` | ERR-2, ERR-4, ERR-5, ERR-7, ERR-8 |
+| A temporal candidate of an operator | GEN-4, OPS-9 |
 | A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
 
 Not written yet, and reported: a call that gives a `var` parameter a
@@ -121,12 +123,13 @@ of a `list<bool>` given to a `var` parameter (a bit, no `bool&`), an enum's
 member made from a value (TYPE-7), a pack, a struct, a set, a
 dictionary, a window, a delta of any but a scalar, `timezone`,
 `zoned_time`, and of temporal code: a temporal value of any but a
-scalar, `ref` (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
-`all_valid`, `activate`, `passivate`, `scheduled()`, `if`, `switch` and
-`for` over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
-default or a null (FN-11), a source with declarations or hooks, an
-eval's configuration that is no `RunConfig(...)` written in it (RUN-1),
-an eval of a value function (TST-5), and an application.
+scalar, an `error` and a `result`, `ref` (FN-16), `inject scheduler` and
+`alarm` (CAP-4, CAP-5), `all_valid`, `activate`, `passivate`,
+`scheduled()`, `if`, `switch` and `for` over connections (CTRL-7), a
+`capture` given an `f64` configuration (ERR-7, hgraph issue 1866), a
+lifted call that leaves out a `T?` whose default may fail (FN-6), a source
+with declarations or hooks, an eval's configuration that is no
+`RunConfig(...)` written in it (RUN-1), and an application.
 
 ## The C++ target's runtime library
 

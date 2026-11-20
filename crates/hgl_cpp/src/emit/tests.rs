@@ -163,6 +163,8 @@ impl Emitter<'_> {
         // CEVAL-1: "core's `replay` wired to each temporal input of the
         // target", each given the trace written for it (CEVAL-2).
         let mut given: Vec<(usize, String)> = Vec::new();
+        // What a lifted target is given (`lifting`): the replays, and the
+        // configuration held.
         let mut replayed: Vec<Given> = Vec::new();
         let mut context = Context::new(Kind::Entry, scope.body.locals.len());
         for (position, argument) in arguments.iter().enumerate() {
@@ -196,6 +198,13 @@ impl Emitter<'_> {
                         return "0".to_string();
                     };
                     steps.push_str(&format!("{indent}const {ty} {name} = {written};\n"));
+                    // A lifted target is given it as configuration, so that
+                    // it is evaluated once (EXPR-2).
+                    replayed.push(Given {
+                        position,
+                        written: name.clone(),
+                        input: None,
+                    });
                     given.push((position, name));
                 }
                 continue;
