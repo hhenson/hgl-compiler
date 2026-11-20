@@ -3,7 +3,7 @@
 //! (GEN-2, GEN-5, GEN-6). Part of the typing pass ([`super`]): a symbol
 //! and a call of an operator by its name both select here.
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Typer;
@@ -860,6 +860,73 @@ impl<'a> Typer<'a> {
             (&given, &wanted),
             (!candidates.is_empty(), &selected),
         ))
+    }
+}
+
+impl<'a> Typer<'a> {
+    /// The rejection of the call `selecting` in the instance being read
+    /// where a generic option it gives, worked out from the generic
+    /// body's own parameters, has no value there: `K: (M *
+    /// 4611686018427387904)` at `M = 4`. ERR-9: "Failure during argument
+    /// evaluation precedes later admission checks"; GEN-8: what a call
+    /// gives a generic value parameter is a compile-time constant, "Any
+    /// other rejects". It points at the option in the generic body.
+    pub(super) fn option_fails(&mut self, selecting: &Selecting) -> Option<Diagnostic> {
+        let operator = selecting.operator;
+        let program = self.program;
+        let Some(Detail::Callable(public)) = program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return None;
+        };
+        let candidates = self.value_candidates(operator);
+        let (options, _) = super::operators::options_of(public, &candidates);
+        let own: Vec<Location> = self.instance.iter().map(|(at, _)| *at).collect();
+        let given = |at: Location| {
+            self.instance
+                .iter()
+                .find(|(declared, _)| *declared == at)
+                .and_then(|(_, given)| match given {
+                    Argument::Constant(given) => Some(given.value.clone()),
+                    Argument::Type(_) => None,
+                })
+        };
+        for (name, node, _) in &selecting.arguments {
+            let Some(name) = name.as_ref().filter(|name| options.contains(name.as_str())) else {
+                continue;
+            };
+            let Ok(value) = self.read_constant(node, None) else {
+                continue;
+            };
+            if !value.names_one_of(&own) || matches!(value, ConstantValue::Parameter { .. }) {
+                continue;
+            }
+            if crate::constant::worked_out(&value.substituted(&given)) {
+                continue;
+            }
+            let why = if crate::constant::fails_when_given(&value, &given) {
+                "fails when it is evaluated for this call: an operation in it is out of its \
+                 type's range, or divides by zero"
+            } else {
+                "is no compile-time constant for this call: this compiler does not work out its \
+                 value"
+            };
+            let operator_name =
+                &program.modules[operator.module].declarations[operator.declaration].name;
+            return Some(error(
+                Category::Type,
+                codes::GENERIC_ARGUMENT_CONSTANT,
+                Location::new(self.file, node.span()),
+                format!(
+                    "`{name}` of `{operator_name}` is a generic value parameter, and what it is \
+                     given, `{}`, {why}",
+                    constant_text(node)
+                ),
+                "GEN-8",
+            ));
+        }
+        None
     }
 }
 

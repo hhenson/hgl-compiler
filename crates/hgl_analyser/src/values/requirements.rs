@@ -1388,14 +1388,76 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     .copied()
                     .zip(made.generics.iter().cloned())
                     .collect();
+                // The body's locals, which the calls' arguments read, of
+                // their types in this instance.
+                if let Some(Some(body)) = unit.bodies.get(declaration) {
+                    typer.locals = body
+                        .locals
+                        .iter()
+                        .map(|local| hir::Local {
+                            ty: placed(substitute_within(&local.ty, &map), &declared),
+                            ..local.clone()
+                        })
+                        .collect();
+                    typer.assigned = vec![true; body.locals.len()];
+                }
                 for call in selecting {
+                    let name = &program.modules[call.operator.module].declarations
+                        [call.operator.declaration]
+                        .name;
+                    // What is rejected of the call in this instance is
+                    // reported at each call that makes the instance, with
+                    // the call in the body, and where it points there,
+                    // beside it.
+                    let rejected =
+                        |typer: &mut super::Typer, reports: Vec<hgl_diagnostics::Diagnostic>| {
+                            for report in reports {
+                                for &root in &from {
+                                    let mut report = report.clone();
+                                    let within = report.primary;
+                                    report.primary = root;
+                                    let mut report = report.with_related(
+                                        call.name,
+                                        format!(
+                                            "`{name}` is called here, with the generic arguments \
+                                         this call gives the function it calls"
+                                        ),
+                                    );
+                                    if within != call.name {
+                                        report = report.with_related(within, "here, in that call");
+                                    }
+                                    if !typer.diagnostics.as_slice().contains(&report) {
+                                        typer.diagnostics.emit(report);
+                                    }
+                                }
+                            }
+                        };
+                    // ERR-9: "Failure during argument evaluation precedes
+                    // later admission checks."
+                    if let Some(report) = typer.option_fails(call) {
+                        rejected(&mut typer, vec![report]);
+                        continue;
+                    }
                     match typer.select_at_instance(call, None) {
-                        AtInstance::Selected(chosen, _) => {
-                            let answers =
-                                typer.answers(chosen.module, chosen.declaration, &chosen.generics);
+                        AtInstance::Selected(chosen, given) => {
+                            let (module, declaration, generics) =
+                                (chosen.module, chosen.declaration, chosen.generics.clone());
+                            // What the call is held to once its candidate
+                            // is selected (`Typer::called`): a `var`
+                            // parameter's place among them (FN-15).
+                            let mark = typer.diagnostics.len();
+                            typer.called(call.operator, chosen, given, (call.form, call.name));
+                            let reports = typer.diagnostics.as_slice()[mark..].to_vec();
+                            typer.diagnostics.truncate(mark);
+                            let fails = !reports.is_empty();
+                            rejected(&mut typer, reports);
+                            if fails {
+                                continue;
+                            }
+                            let answers = typer.answers(module, declaration, &generics);
                             calls.push(Resolved {
-                                callee: (chosen.module, chosen.declaration),
-                                generics: chosen.generics,
+                                callee: (module, declaration),
+                                generics,
                                 answers,
                                 at: call.name,
                             });
@@ -1403,25 +1465,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                         // GEN-5: "No match rejects; tied most-specific
                         // candidates are ambiguous", at each call that
                         // makes the instance.
-                        AtInstance::Rejected(report) => {
-                            let name = &program.modules[call.operator.module].declarations
-                                [call.operator.declaration]
-                                .name;
-                            for &root in &from {
-                                let mut report = report.clone();
-                                report.primary = root;
-                                let report = report.with_related(
-                                    call.name,
-                                    format!(
-                                        "`{name}` is called here, with the generic arguments \
-                                         this call gives the function it calls"
-                                    ),
-                                );
-                                if !typer.diagnostics.as_slice().contains(&report) {
-                                    typer.diagnostics.emit(report);
-                                }
-                            }
-                        }
+                        AtInstance::Rejected(report) => rejected(&mut typer, vec![report]),
                         AtInstance::Untold => {}
                     }
                 }

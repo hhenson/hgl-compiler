@@ -489,3 +489,46 @@ fn a_call_selected_for_each_instance_keeps_its_literals() {
     assert_eq!(called(&checked, &instance("slow")), ["scale(f64, Mode)"]);
     assert_eq!(called(&checked, &instance("picked")), ["pick(i64, Mode)"]);
 }
+
+/// A call selected for each instance is held there to what any call is
+/// held to once its candidate is selected, as the same call written in
+/// place is: FN-15, a `var` parameter takes a place, so `poke(1, mode:
+/// M)` at `go<.slow>()`, whose candidate's `value` is `var`, rejects as
+/// `poke(1, mode: .slow)` does. ERR-9, GEN-8: a generic option it gives
+/// and works out from the body's own parameters, `K: (M *
+/// 4611686018427387904)`, is worked out for the instance before any
+/// candidate is admitted, and rejects where it fails (`go<4, .slow>`);
+/// `go<1, .slow>` selects.
+#[test]
+fn a_call_selected_for_each_instance_is_held_to_its_candidate() {
+    let checked = module(concat!(
+        "enum Mode { slow, fast }\n",
+        "operator poke(value: i64, const mode: Mode) -> i64\n",
+        "impl const fn poke(var value: i64, const mode: Mode) -> i64 requires mode == .slow {\n",
+        "    value = value + 1\n",
+        "    return value\n",
+        "}\n",
+        "const fn go<const M: Mode>() -> i64 => poke(1, mode: M)\n",
+        "const fn direct() -> i64 => poke(1, mode: .slow)\n",
+        "const fn a() -> i64 => go<.slow>()\n",
+        "operator step(value: i64, const mode: Mode) -> i64\n",
+        "impl const fn step<const K: i64>(value: i64, const mode: Mode) -> i64 requires mode == .slow => value + K\n",
+        "const fn far<const M: i64, const S: Mode>(v: i64) -> i64 => step(v, K: (M * 4611686018427387904), mode: S)\n",
+        "const fn b() -> i64 => far<4, .slow>(1)\n",
+        "const fn c() -> i64 => far<1, .slow>(1)\n",
+    ));
+    let codes: Vec<String> = checked.summary();
+    assert_eq!(codes.len(), 3, "{}", checked.report);
+    // The call written in place, and the instance, are rejected alike.
+    let direct = codes[0].split(' ').nth(1).expect("a code").to_string();
+    assert!(codes[0].starts_with("m.hgl:9:"), "{codes:?}");
+    assert_eq!(
+        codes[1..],
+        [
+            format!("m.hgl:10:24 {direct} FN-15"),
+            "m.hgl:14:24 type/generic.argument_constant GEN-8".to_string(),
+        ],
+        "{}",
+        checked.report
+    );
+}
