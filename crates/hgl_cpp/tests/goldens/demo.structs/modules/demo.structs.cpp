@@ -927,7 +927,7 @@ struct spread
     {
         // when, line 309 (TIME-3)
         {
-            out_.set([&] { const auto argument_00_ = ::hglrt::sub__i64_i64((::hglrt::checked_value(quote)).ask, (::hglrt::checked_value(quote)).bid); const auto argument_01_ = (::hglrt::fn_delta_value(quote)).bid; return ::hglrt::add__i64_i64(argument_00_, argument_01_); }());
+            out_.set([&] { const ::hgraph::Int argument_00_ = ::hglrt::sub__i64_i64((::hglrt::checked_value(quote)).ask, (::hglrt::checked_value(quote)).bid); const ::hgraph::Int argument_01_ = (::hglrt::fn_delta_value(quote)).bid; return ::hglrt::add__i64_i64(argument_00_, argument_01_); }());
             return;
         }
     }
@@ -974,7 +974,7 @@ struct pair_sum
         // when, line 319 (TIME-3)
         if (::hglrt::fn_all_valid(pair))
         {
-            out_.set([&] { const auto& argument_00_ = ::hglrt::checked_value(::hglrt::child<0>(pair)); const auto& argument_01_ = ::hglrt::checked_value(::hglrt::child<1>(pair)); return ::hglrt::add__i64_i64(argument_00_, argument_01_); }());
+            out_.set([&] { const ::hgraph::Int& argument_00_ = ::hglrt::checked_value(::hglrt::child<0>(pair)); const ::hgraph::Int& argument_01_ = ::hglrt::checked_value(::hglrt::child<1>(pair)); return ::hglrt::add__i64_i64(argument_00_, argument_01_); }());
             return;
         }
     }
@@ -1018,13 +1018,17 @@ void changing_a_sibling_field_does_not_publish_a_bid()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, false, true}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, 13, 11}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_02_ = input_00_; const auto argument_03_ = input_01_; return ::hgl::demo::structs::m_::w_::bid_ticks(wiring_, argument_02_, argument_03_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_06_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, false, true};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 13, 11};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::structs::m_::w_::bid_ticks(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 11};
-        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 11};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 
@@ -1032,13 +1036,17 @@ void an_atomic_quote_wakes_its_bid_projection()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 11}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{12, 13, std::nullopt}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_02_ = input_00_; const auto argument_03_ = input_01_; return ::hgl::demo::structs::m_::w_::atomic_bid_ticks(wiring_, argument_02_, argument_03_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_06_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 11};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{12, 13, std::nullopt};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::structs::m_::w_::atomic_bid_ticks(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 10, 11};
-        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 10, 11};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 
@@ -1046,15 +1054,19 @@ void a_struct_delta_keeps_the_final_write_to_each_field()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_04_ = ::hglrt::testing::evaluate<::hgl::demo::structs::m_::MarketQuote>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 11}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{12, std::nullopt, 14}, start_));
-        const auto held_ = [&] { const auto argument_02_ = input_00_; const auto argument_03_ = input_01_; return ::hgl::demo::structs::m_::w_::write_quote_fields(wiring_, argument_02_, argument_03_); }();
+        const auto left_06_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 11};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{12, std::nullopt, 14};
+        return ::hglrt::testing::evaluate<::hgl::demo::structs::m_::MarketQuote>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const auto held_ = [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::structs::m_::w_::write_quote_fields(wiring_, argument_04_, argument_05_); }();
         ::hglrt::testing::keep_held<::hgl::demo::structs::m_::MarketQuote>(wiring_, held_);
         ::hgl::core::m_::w_::i_::record::of_1demo_1structs_1_1MarketQuote_(wiring_, held_, ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgl::demo::structs::m_::MarketQuote>{::hglrt::testing::Cell<::hgl::demo::structs::m_::MarketQuote>{::hgl::demo::structs::m_::d_::MarketQuote{10, 12}}, std::nullopt, ::hglrt::testing::Cell<::hgl::demo::structs::m_::MarketQuote>{::hgl::demo::structs::m_::d_::MarketQuote{11, 14}}};
-        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+        const auto right_07_ = ::hglrt::testing::Dense<::hgl::demo::structs::m_::MarketQuote>{::hglrt::testing::Cell<::hgl::demo::structs::m_::MarketQuote>{::hgl::demo::structs::m_::d_::MarketQuote{10, 12}}, std::nullopt, ::hglrt::testing::Cell<::hgl::demo::structs::m_::MarketQuote>{::hgl::demo::structs::m_::d_::MarketQuote{11, 14}}};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 
@@ -1062,14 +1074,19 @@ void a_struct_is_valid_once_one_field_is()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_06_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, std::nullopt, false}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_02_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 10, std::nullopt, 12}, start_));
-        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, [&] { const auto argument_03_ = input_00_; const auto argument_04_ = input_01_; const auto argument_05_ = input_02_; return ::hgl::demo::structs::m_::w_::observe_quote_valid(wiring_, argument_03_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_09_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, std::nullopt, false};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 10, std::nullopt, 12};
+        return ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, [&] { const auto argument_06_ = input_01_; const auto argument_07_ = input_03_; const auto argument_08_ = input_05_; return ::hgl::demo::structs::m_::w_::observe_quote_valid(wiring_, argument_06_, argument_07_, argument_08_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, true, true, true};
-        ::hglrt::testing::expect_same(left_06_, right_07_);
+    }();
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, true, true, true};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
     }();
 }
 
@@ -1077,14 +1094,19 @@ void a_struct_is_all_valid_once_every_field_is()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_06_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, std::nullopt, false}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_02_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 10, std::nullopt, 12}, start_));
-        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, [&] { const auto argument_03_ = input_00_; const auto argument_04_ = input_01_; const auto argument_05_ = input_02_; return ::hgl::demo::structs::m_::w_::observe_quote_all_valid(wiring_, argument_03_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_09_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, std::nullopt, false};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 10, std::nullopt, 12};
+        return ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, [&] { const auto argument_06_ = input_01_; const auto argument_07_ = input_03_; const auto argument_08_ = input_05_; return ::hgl::demo::structs::m_::w_::observe_quote_all_valid(wiring_, argument_06_, argument_07_, argument_08_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, false, false, true};
-        ::hglrt::testing::expect_same(left_06_, right_07_);
+    }();
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, false, false, true};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
     }();
 }
 
@@ -1107,16 +1129,21 @@ void a_tuple_is_valid_once_one_position_is_and_all_valid_once_both_are()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_06_ = ::hglrt::testing::evaluate<std::tuple<::hgraph::Bool, ::hgraph::Bool>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, std::nullopt, false}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_02_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 3, std::nullopt, 8}, start_));
-        const auto held_ = [&] { const auto argument_03_ = input_00_; const auto argument_04_ = input_01_; const auto argument_05_ = input_02_; return ::hgl::demo::structs::m_::w_::observe_part_validity(wiring_, argument_03_, argument_04_, argument_05_); }();
+        const auto left_09_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, std::nullopt, false};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 3, std::nullopt, 8};
+        return ::hglrt::testing::evaluate<std::tuple<::hgraph::Bool, ::hgraph::Bool>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        const auto held_ = [&] { const auto argument_06_ = input_01_; const auto argument_07_ = input_03_; const auto argument_08_ = input_05_; return ::hgl::demo::structs::m_::w_::observe_part_validity(wiring_, argument_06_, argument_07_, argument_08_); }();
         ::hglrt::testing::keep_held<std::tuple<::hgraph::Bool, ::hgraph::Bool>>(wiring_, held_);
         ::hgl::core::m_::w_::i_::record::of_1tuple_1bool_1_1bool_1_(wiring_, held_, ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_07_ = ::hglrt::testing::Dense<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Cell<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Whole<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{std::tuple<::hgraph::Bool, ::hgraph::Bool>{false, false}}}, ::hglrt::testing::Cell<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Whole<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{std::tuple<::hgraph::Bool, ::hgraph::Bool>{true, false}}}, ::hglrt::testing::Cell<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Whole<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{std::tuple<::hgraph::Bool, ::hgraph::Bool>{true, false}}}, ::hglrt::testing::Cell<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Whole<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{std::tuple<::hgraph::Bool, ::hgraph::Bool>{true, true}}}};
-        ::hglrt::testing::expect_same(left_06_, right_07_);
+    }();
+        const auto right_010_ = ::hglrt::testing::Dense<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Cell<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Whole<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{std::tuple<::hgraph::Bool, ::hgraph::Bool>{false, false}}}, ::hglrt::testing::Cell<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Whole<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{std::tuple<::hgraph::Bool, ::hgraph::Bool>{true, false}}}, ::hglrt::testing::Cell<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Whole<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{std::tuple<::hgraph::Bool, ::hgraph::Bool>{true, false}}}, ::hglrt::testing::Cell<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Whole<std::tuple<::hgraph::Bool, ::hgraph::Bool>>{std::tuple<::hgraph::Bool, ::hgraph::Bool>{true, true}}}};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
     }();
 }
 
@@ -1124,15 +1151,19 @@ void a_struct_with_an_optional_field_is_all_valid_and_read_whole()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_04_ = ::hglrt::testing::evaluate<std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, true}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 5}, start_));
-        const auto held_ = [&] { const auto argument_02_ = input_00_; const auto argument_03_ = input_01_; return ::hgl::demo::structs::m_::w_::observe_noted_quote(wiring_, argument_02_, argument_03_); }();
+        const auto left_06_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 5};
+        return ::hglrt::testing::evaluate<std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const auto held_ = [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::structs::m_::w_::observe_noted_quote(wiring_, argument_04_, argument_05_); }();
         ::hglrt::testing::keep_held<std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>>(wiring_, held_);
         ::hgl::core::m_::w_::i_::record::of_1tuple_1bool_1_1bool_1_1bool_1_(wiring_, held_, ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>>{std::nullopt, ::hglrt::testing::Cell<std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Whole<std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>>{std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>{true, true, false}}}};
-        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+        const auto right_07_ = ::hglrt::testing::Dense<std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>>{std::nullopt, ::hglrt::testing::Cell<std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>>{::hglrt::testing::Whole<std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>>{std::tuple<::hgraph::Bool, ::hgraph::Bool, ::hgraph::Bool>{true, true, false}}}};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 
@@ -1198,13 +1229,17 @@ void publication_establishes_validity()
 {
     ::hglrt::testing::statement();
     [&] {
-        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 0, std::nullopt, 7}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true}, start_));
-        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, [&] { const auto argument_02_ = input_00_; const auto argument_03_ = input_01_; return ::hgl::demo::structs::m_::w_::observe_validity(wiring_, argument_02_, argument_03_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+        const auto left_06_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 0, std::nullopt, 7};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true};
+        return ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::structs::m_::w_::observe_validity(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, true, true, true};
-        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, true, true, true};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 
@@ -1242,15 +1277,19 @@ void last_modified_follows_the_last_publication()
     [[maybe_unused]] const ::hgraph::DateTime t = ::hgl::core::m_::earliest_start();
     ::hglrt::testing::statement();
     [&] {
-        const auto left_04_ = ::hglrt::testing::evaluate<std::optional<::hgraph::DateTime>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 0, std::nullopt, 0, 2, 1}, start_));
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true, true, true}, start_));
-        const auto held_ = [&] { const auto argument_02_ = input_00_; const auto argument_03_ = input_01_; return ::hgl::demo::structs::m_::w_::scalar_timestamp(wiring_, argument_02_, argument_03_); }();
+        const auto left_06_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 0, std::nullopt, 0, 2, 1};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true, true, true};
+        return ::hglrt::testing::evaluate<std::optional<::hgraph::DateTime>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const auto held_ = [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::structs::m_::w_::scalar_timestamp(wiring_, argument_04_, argument_05_); }();
         ::hglrt::testing::keep_held<std::optional<::hgraph::DateTime>>(wiring_, held_);
         ::hgl::core::m_::w_::i_::record::of_1datetime_1_(wiring_, held_, ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<std::optional<::hgraph::DateTime>>{std::optional<::hgraph::DateTime>{std::nullopt}, std::optional<::hgraph::DateTime>{::hglrt::add__datetime_duration(t, ::hgraph::TimeDelta{1})}, std::optional<::hgraph::DateTime>{::hglrt::add__datetime_duration(t, ::hgraph::TimeDelta{1})}, std::optional<::hgraph::DateTime>{::hglrt::add__datetime_duration(t, ::hgraph::TimeDelta{3})}, std::optional<::hgraph::DateTime>{std::nullopt}, std::optional<::hgraph::DateTime>{::hglrt::add__datetime_duration(t, ::hgraph::TimeDelta{5})}};
-        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+        const auto right_07_ = ::hglrt::testing::Dense<std::optional<::hgraph::DateTime>>{std::optional<::hgraph::DateTime>{std::nullopt}, std::optional<::hgraph::DateTime>{::hglrt::add__datetime_duration(t, ::hgraph::TimeDelta{1})}, std::optional<::hgraph::DateTime>{::hglrt::add__datetime_duration(t, ::hgraph::TimeDelta{1})}, std::optional<::hgraph::DateTime>{::hglrt::add__datetime_duration(t, ::hgraph::TimeDelta{3})}, std::optional<::hgraph::DateTime>{std::nullopt}, std::optional<::hgraph::DateTime>{::hglrt::add__datetime_duration(t, ::hgraph::TimeDelta{5})}};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 

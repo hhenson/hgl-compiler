@@ -2,6 +2,7 @@
 #include <hglrt/host.h>
 
 // Names this file writes, which no macro of a header above takes.
+#undef a_run_is_bounded
 #undef adds_one
 #undef an_outputless_target_runs
 #undef demo
@@ -17,6 +18,7 @@ void handlers_run_in_order();
 void sources_and_constants();
 void the_clock_is_read();
 void an_outputless_target_runs();
+void a_run_is_bounded();
 }  // namespace hgl::demo::temporal::m_::t_
 
 namespace
@@ -27,6 +29,7 @@ const ::hglrt::testing::Registration test_1{"demo.temporal::handlers_run_in_orde
 const ::hglrt::testing::Registration test_2{"demo.temporal::sources_and_constants", &::hgl::demo::temporal::m_::t_::sources_and_constants};
 const ::hglrt::testing::Registration test_3{"demo.temporal::the_clock_is_read", &::hgl::demo::temporal::m_::t_::the_clock_is_read};
 const ::hglrt::testing::Registration test_4{"demo.temporal::an_outputless_target_runs", &::hgl::demo::temporal::m_::t_::an_outputless_target_runs};
+const ::hglrt::testing::Registration test_5{"demo.temporal::a_run_is_bounded", &::hgl::demo::temporal::m_::t_::a_run_is_bounded};
 }  // namespace
 
 int main(int argc, char **argv)

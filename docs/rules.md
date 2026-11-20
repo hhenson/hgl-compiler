@@ -110,7 +110,8 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | `inject clock`, `logger`, `global_state`, and a property of each | TIME-8, CAP-1, CAP-2, CAP-3 |
 | A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
-| `eval` with no configuration, dense and timed traces, their comparison, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn` | TST-4 to TST-8, TST-16 |
+| A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
 | A struct, a generic one and an abstract one, with `==` of each field; its construction by named fields, defaults and nulls, in the order written; its fields read and assigned; structs in lists, tuples, optionals, sets and dictionaries; a candidate of an operator over one | TYPE-3, TYPE-4, TYPE-5, OPS-2, GEN-4 |
 | A set and a dictionary, in no order, equal whatever the order; their literals; a strict read that fails with `value.missing_key`, an assignment that adds a key, core's `get`; `for` over each | TYPE-14, EXPR-3, EXPR-9, ERR-6, CTRL-12, OPS-2 |
 | The delta of a nullable, a list, a set, a dictionary and a struct, built by its properties and read through them; a tuple's as a tuple | TYPE-16 |
@@ -122,20 +123,21 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 
 Not written yet, and reported: a `?` after anything its statement reads
 or runs before it (ERR-5), a `switch` case's binding read after the
-`switch` (UNIT-12), a struct that holds itself (TYPE-6), a field's
-default that runs statements, a field of an abstract struct assigned, a
-dictionary's entry given to a `var` parameter, a window, and of temporal
-code: a temporal list, set, dictionary or window, a generic or an abstract
-struct as a temporal value, a struct or a tuple with a part of a form the
-library does not read whole, a nullable put in the run's store, `ref`
-(FN-16), `inject
-scheduler` and `alarm` (CAP-4, CAP-5), `all_valid` of a list, `activate`,
-`passivate`, `scheduled()`, `if`, `switch` and `for` over connections
-(CTRL-7), `capture` (ERR-7), a lifted input with a default or a null
-(FN-11), a source with declarations or hooks, an eval with a
-configuration or of a value function (RUN-1, TST-5), and an application.
-A call of a function with a pack, core's `all_` and `any_`, has no
-callee the analyser reads.
+`switch` (UNIT-12), an element of a `list<bool>` given to a `var`
+parameter (a bit, no `bool&`), a struct that holds itself (TYPE-6), a
+field's default that runs statements, a field of an abstract struct
+assigned, a dictionary's entry given to a `var` parameter, a window, and
+of temporal code: a temporal list, set, dictionary or window, a generic or
+an abstract struct as a temporal value, a struct or a tuple with a part of
+a form the library does not read whole, a nullable put in the run's
+store, `ref` (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
+`all_valid` of a list, `activate`, `passivate`, `scheduled()`, `if`,
+`switch` and `for` over connections (CTRL-7), `capture` (ERR-7), a lifted
+input with a default or a null (FN-11), a source with declarations or
+hooks, an eval's configuration that is no `RunConfig(...)` written in it
+(RUN-1), an eval of a value function (TST-5), and an application. A call
+of a function with a pack, core's `all_` and `any_`, has no callee the
+analyser reads.
 
 ## The C++ target's runtime library
 
