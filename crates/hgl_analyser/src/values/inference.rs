@@ -12,7 +12,7 @@ use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
 use super::evals::{holds_trace, publications};
 use super::expressions::{holds_block, takes_its_type};
-use super::fit::whole;
+use super::fit::{not_null, whole};
 use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
 use crate::hir::{self, Expr};
@@ -846,6 +846,29 @@ pub(super) fn infer(
             infer(error, actual_error, generics, found);
         }
         _ => {}
+    }
+}
+
+/// What a place that expects `expected` says of a callee's declared
+/// result `result`, for [`infer`] to match the result with: the type
+/// the result is asked to be.
+///
+/// GEN-2: a call resolves a generic of its callee "from the type its
+/// place expects of the result". A result that is a type parameter and
+/// nothing more may itself be nullable, so it is that type whole, `?`
+/// and all: the `V` of core's `get<V>(store: GlobalState, const key:
+/// str) -> V` is an `i64?` in `let saved: i64? = get(global_state,
+/// key)` (core's CAP-6: "of the type the call writes or its place
+/// expects"). So is a result that is nullable itself, whose `?` the
+/// place's matches. A result of any other form, a `list<T>`, is never
+/// null, so the `?` of a place that expects it nullable is the place's
+/// (TYPE-14: "A T is a value where a `T?` is expected"), and the result
+/// is asked to be what is under it: `repeat(3)` given to a
+/// `list<str>?` is a `list<str>`.
+pub(super) fn asked_of_result<'t>(result: &Type, expected: &'t Type) -> &'t Type {
+    match result {
+        Type::Nullable(_) | Type::Parameter { .. } => expected,
+        _ => not_null(Some(expected)).unwrap_or(expected),
     }
 }
 

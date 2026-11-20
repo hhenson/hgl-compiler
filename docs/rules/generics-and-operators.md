@@ -19,6 +19,7 @@ parser: done
 analyser: partial
 
 - A generic type in a type position or constructor is given all its arguments; a type pack is no single type; a value function's generics resolved at a call from what the call writes, then the type its place expects, then its arguments in declared parameter order; an abstract struct a later argument has widens what an earlier argument decided
+- A result that is a type parameter and nothing more is the type written or expected whole, `?` and all, for a function, an operator and a candidate: `let h: i64? = first(xs)` makes `T` an `i64?`, and a `list<i64>` is then no `list<i64?>`; a result of another form is what is under a `?` the place expects (TYPE-14), `list<str>` for `let n: list<str>? = repeat(3)`
 - A generic value parameter takes its default where nothing else says what it is: a function's and a candidate's at a call, a struct's where it is named bare or constructed, an operator's in the output requested
 - Left: packs; solvable equalities; temporal bodies
 

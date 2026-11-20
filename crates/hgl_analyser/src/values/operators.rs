@@ -8,8 +8,8 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::candidates::{Chosen, Given, Key, Settled, Wanted, typed_by_place};
 use super::constants::generic_default;
-use super::fit::{not_null, open};
-use super::inference::{bare_parameter, fixed, infer, placed, unsaid};
+use super::fit::open;
+use super::inference::{asked_of_result, bare_parameter, fixed, infer, placed, unsaid};
 use super::{Candidate, Typer};
 use crate::declared::{agree, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
@@ -802,9 +802,11 @@ pub(super) struct Unfit {
 }
 
 /// What the place a call stands in says of the operator's generic
-/// parameters: its result is the type the place expects (GEN-8). A `T`
-/// is a value of a `T?` (TYPE-14), so a place that expects an optional
-/// type says what a result that is not optional is.
+/// parameters: its result is the type the place expects (GEN-8). A
+/// result that is a type parameter and nothing more is that type whole,
+/// `?` and all, and one of another form that is not optional is what is
+/// under the `?` of a place that expects it optional (TYPE-14):
+/// see [`asked_of_result`].
 pub(super) fn from_place(
     public: &Signature,
     expected: Option<&Type>,
@@ -813,11 +815,12 @@ pub(super) fn from_place(
     if let (Some(result), Some(expected)) = (&public.result, expected)
         && !open(expected)
     {
-        let place = match result {
-            Type::Nullable(_) => expected,
-            _ => not_null(Some(expected)).unwrap_or(expected),
-        };
-        infer(result, place, &public.generics, found);
+        infer(
+            result,
+            asked_of_result(result, expected),
+            &public.generics,
+            found,
+        );
     }
 }
 

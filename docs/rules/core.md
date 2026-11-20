@@ -515,7 +515,7 @@ transpiler: partial
 
 analyser: partial
 
-- `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get`'s type what the call writes or its place expects
+- `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get`'s type what the call writes or its place expects, a nullable one whole: `get<i64?>(...)` and `let saved: i64? = get(...)` give core's candidate an `i64?`
 - The run's own key, `"run.output"`, written out as a key is rejected (`store.reserved_key`)
 - Left: one key's type across a program; the run's key where it is a `const` parameter, which is known when the graph is built
 

@@ -10,8 +10,8 @@ use super::Typer;
 use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::expressions::takes_its_type;
-use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, not_null, whole};
-use super::inference::{bare_parameter, infer, mentions, placed};
+use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, whole};
+use super::inference::{asked_of_result, bare_parameter, infer, mentions, placed};
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use crate::constant::Fault;
@@ -1537,12 +1537,13 @@ fn instance<'s>(
             }));
         }
     }
+    // GEN-5: "Match candidates against the requested output before
+    // inputs". The `V` of core's `get<V>(store: GlobalState, const key:
+    // str) -> V` is the `i64?` that `get<i64?>(global_state, key)`
+    // requests, or that the place of `get(global_state, key)` expects
+    // (core's CAP-6): see `asked_of_result`.
     if let (Some(place), Some(result)) = (wanted.place, &signature.result) {
-        let place = match result {
-            Type::Nullable(_) => place,
-            _ => not_null(Some(place)).unwrap_or(place),
-        };
-        infer(result, place, generics, &mut found);
+        infer(result, asked_of_result(result, place), generics, &mut found);
     }
     // The generic parameters an argument decided: what the call writes,
     // or its place expects, is not widened (GEN-2).
