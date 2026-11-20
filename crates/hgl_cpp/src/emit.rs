@@ -14,15 +14,16 @@
 //! C++ name), `types` (types, and the declarations of structs and
 //! enums), `values` (value functions, their instances and constants),
 //! `statements`, `expressions` and `calls` (value code, a test's among
-//! it), `nodes` and `graphs` (temporal functions and applications),
-//! `tests` (named tests).
+//! it), `nodes` and `graphs` (temporal functions), `tests` (named
+//! tests), `apps` (applications).
 //!
 //! The temporal forms are written by families, which `forms`, the
 //! dispatch point, looks each form up in: `scalars` (a scalar's temporal
 //! form), `endpoints` (a hook's reads, endpoint operations and
 //! capabilities), `nodes` (a node's hooks), `sources` (a source's body),
 //! `graphs` (a graph's wiring and lifted calls), `tests` (evals and
-//! traces). A construct lane adds its family as a module here and one
+//! traces), `apps` (the run's store where a graph or an application
+//! sets it). A construct lane adds its family as a module here and one
 //! entry in `forms::FAMILIES`.
 
 use hgl_analyser::{DeclarationKind, Program};
@@ -32,6 +33,7 @@ use hgl_lower::pieces::Reach;
 
 use crate::codes;
 
+mod apps;
 mod calls;
 mod endpoints;
 mod expressions;
@@ -46,6 +48,7 @@ mod tests;
 mod types;
 mod values;
 
+pub(crate) use apps::APPLICATION;
 pub(crate) use names::{
     identifier, module_namespace, program_names, string, test_namespace, testing,
 };

@@ -363,6 +363,96 @@ fn temporal_code_is_written() {
     assert!(units.contains(&"modules/core.cpp"), "{units:?}");
 }
 
+/// The run's store where a graph is built (FN-9) and where an application
+/// sets it (UNIT-14), and the applications themselves: each a function in
+/// its module's unit and an entry unit of its own, whose executable links
+/// what it calls (RUN-1, RUN-3).
+#[test]
+fn the_store_and_applications_are_written() {
+    let emitted = emit_with(
+        &[
+            ("demo.apps.hgl", include_str!("fixtures/demo.apps.hgl")),
+            (
+                "demo.apps.backtest.hgl",
+                include_str!("fixtures/demo.apps.backtest.hgl"),
+            ),
+            (
+                "demo.apps.live.hgl",
+                include_str!("fixtures/demo.apps.live.hgl"),
+            ),
+        ],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.apps", &emitted.output);
+    assert_eq!(
+        emitted.blocked("the_store_is_set_where_the_graph_is_built"),
+        None
+    );
+    let applications = &emitted.output.applications;
+    assert_eq!(applications.len(), 2);
+    for (application, real_time) in applications.iter().zip([false, true]) {
+        assert!(application.blocked.is_none(), "{}", application.path);
+        assert_eq!(application.real_time, real_time, "{}", application.path);
+        assert_eq!(
+            application.source,
+            Some(format!("applications/{}.cpp", application.path))
+        );
+        // Linked from its own module's unit, the entry's and core's.
+        let units: Vec<&str> = application
+            .units
+            .iter()
+            .map(|&unit| emitted.output.units[unit].source.as_str())
+            .collect();
+        for unit in [
+            "modules/core.cpp",
+            "modules/demo.apps.cpp",
+            &format!("modules/{}.cpp", application.path),
+        ] {
+            assert!(units.contains(&unit), "{unit} in {units:?}");
+        }
+    }
+}
+
+/// An application that needs a form the target does not write yet is
+/// written with no entry unit, and says what it lacks.
+#[test]
+fn an_application_that_needs_what_is_not_written_is_blocked() {
+    let emitted = emit_with(
+        &[(
+            "m.app.hgl",
+            concat!(
+                "application m.app\n",
+                "\n",
+                "fn first(values: list<i64>) -> list<i64> {\n",
+                "    when { return values }\n",
+                "}\n",
+                "\n",
+                "fn listed() -> list<i64> => first([1, 2])\n",
+                "\n",
+                "eval(listed())\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    let application = &emitted.output.applications[0];
+    let blocked = application.blocked.as_ref().expect("it is blocked");
+    // The first form it reaches, in the entry or in core's `record` of
+    // its result.
+    assert_eq!(
+        blocked.message,
+        "the cpp target does not write a temporal value of `list<i64>` yet"
+    );
+    assert_eq!(application.source, None);
+    assert!(
+        emitted
+            .output
+            .files
+            .iter()
+            .all(|file| !file.path.starts_with("applications/"))
+    );
+}
+
 /// A temporal form the target does not write yet is reported through the
 /// dispatch point, where it is written, and blocks what reaches it: a
 /// temporal value of a type no family writes, and a capability no family

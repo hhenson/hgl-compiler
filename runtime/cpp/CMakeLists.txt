@@ -48,6 +48,7 @@ find_package(hgraph CONFIG REQUIRED)
 include(GNUInstallDirs)
 
 add_library(hglrt SHARED
+    src/application.cpp
     src/capabilities.cpp
     src/checked.cpp
     src/conversions.cpp
@@ -120,6 +121,7 @@ if(BUILD_TESTING)
 
     add_executable(hglrt_tests
         tests/main.cpp
+        tests/application_tests.cpp
         tests/capabilities_tests.cpp
         tests/checked_tests.cpp
         tests/conversion_tests.cpp

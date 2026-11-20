@@ -170,7 +170,7 @@ impl Emitter<'_> {
     /// `name`, `replay` or `record`, for `ty` (CEVAL-1), which the piece
     /// then reaches. `None` where there is none, which is reported at
     /// `at`.
-    fn core_instance(
+    pub(super) fn core_instance(
         &mut self,
         name: &str,
         ty: &Type,
