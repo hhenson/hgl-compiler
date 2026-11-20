@@ -259,6 +259,9 @@ impl Toolchain {
             .args(self.configure_flags())
             .arg("-DCMAKE_BUILD_TYPE=Release")
             .arg(format!("-DCMAKE_INSTALL_PREFIX={}", installed.display()))
+            // The library is installed in `lib` on every system, where the
+            // description's program finds it.
+            .arg("-DCMAKE_INSTALL_LIBDIR=lib")
             .arg("-DBUILD_TESTING=OFF")
             .arg("-DHGLRT_TESTS=OFF");
         run("the runtime library's configuration", &mut configure)?;

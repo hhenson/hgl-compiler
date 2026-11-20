@@ -225,13 +225,15 @@ impl Workspace {
         }
         let printed = String::from_utf8_lossy(&finished.stdout).into_owned()
             + &String::from_utf8_lossy(&finished.stderr);
-        // What failed first, and what the compiler said of it.
+        // What failed first and what the compiler said of it, without
+        // the command `ninja` prints on the line after.
         let failure = match printed.find("FAILED:") {
-            Some(first) => printed[first..]
-                .lines()
-                .take(30)
-                .collect::<Vec<_>>()
-                .join("\n"),
+            Some(first) => {
+                let mut lines = printed[first..].lines();
+                let head = lines.next().unwrap_or_default().trim_end();
+                let said: Vec<&str> = lines.skip(1).take(20).collect();
+                format!("{head}\n{}", said.join("\n"))
+            }
             None => last_lines(&printed, 20),
         };
         // `ninja -n` does nothing and says what it would do: an
