@@ -13,14 +13,14 @@
 //! A source with a declaration or a hook (`inject`, `cache`, `state`,
 //! `start`, `stop`; SOURCE-1) is not written yet, and is reported.
 
+use hgl_analyser::Signature;
 use hgl_analyser::hir::{Body, Stmt};
-use hgl_analyser::{LocalKind, Signature};
 
 use super::Emitter;
 use super::forms::Family;
 use super::names::{self, identifier};
 use super::nodes::{Context, Kind, OUT, Placed, nested, registration};
-use super::statements::{Scope, statement_at};
+use super::statements::Scope;
 use super::values::INDENT;
 use crate::runtime;
 
@@ -80,20 +80,11 @@ impl Emitter<'_> {
     ) {
         let program = self.program;
         let at = program.modules[self.module].declarations[index].at;
-        // SOURCE-1: "One with an `inject`, a `cache`, a `state`, a `start`,
-        // or a `stop` has its declarations, then `start`, then one block
-        // that holds every `yield`, then `stop`".
-        if let Some(statement) = body.statements.iter().find(|statement| {
-            matches!(statement, Stmt::Inject { .. } | Stmt::Hook { .. })
-                || matches!(statement, Stmt::Declare { local, .. }
-                    if matches!(body.locals[*local].kind, LocalKind::State | LocalKind::Cache))
-        }) {
-            self.unsupported(
-                statement_at(statement, &body.locals),
-                "a source with a declaration or a hook",
-            );
+        // SOURCE-1: what the source's declarations and hooks add to its
+        // node (`scheduling`): nothing for one that has none.
+        let Some(hooked) = self.source_hooks(signature, body) else {
             return;
-        }
+        };
         let Some(result) = &signature.result else {
             self.unsupported(at, "a source with no result");
             return;
@@ -106,9 +97,9 @@ impl Emitter<'_> {
         };
         // SOURCE-1: a source "has no temporal parameters"; the body takes
         // each `const` one by value, which its frame then holds.
-        let mut taken = Vec::new();
+        let mut taken = hooked.taken.clone();
         let mut views = Vec::new();
-        let mut given = Vec::new();
+        let mut given = hooked.given.clone();
         for (local, parameter) in signature.parameters.iter().enumerate() {
             let name = identifier(&body.locals[local].name);
             let Some(ty) = self.written_type(&parameter.ty, parameter.at) else {
@@ -124,9 +115,9 @@ impl Emitter<'_> {
         let mut context = Context::new(Kind::Source, body.locals.len());
         context.result = Some(result.clone());
         let mut scope = Scope::cold(program, body);
-        let mut statements = String::new();
+        let mut statements = hooked.prologue.clone();
         self.in_context(&mut context, |emitter| {
-            emitter.statements(&mut scope, &body.statements, 2, &mut statements);
+            emitter.statements(&mut scope, &hooked.yielding, 2, &mut statements);
         });
         let placed = Placed::of(program, self.module, index, instance);
         let qualified = placed.qualified(program, self.module);
@@ -135,6 +126,7 @@ impl Emitter<'_> {
         let state = "::hgraph::State<state_type> state_".to_string();
         let mut start = views.clone();
         start.push(state.clone());
+        start.extend(hooked.start_parameters.iter().cloned());
         let mut eval: Vec<String> = views
             .iter()
             .map(|view| format!("[[maybe_unused]] {view}"))
@@ -143,6 +135,9 @@ impl Emitter<'_> {
         eval.push("::hgraph::DateTime now_".to_string());
         eval.push("::hgraph::NodeScheduler scheduler_".to_string());
         eval.push(format!("::hgraph::Out<{schema}> {OUT}"));
+        eval.extend(hooked.eval_parameters.iter().cloned());
+        let mut stop = vec![state.clone()];
+        stop.extend(hooked.stop_parameters.iter().cloned());
         let text = format!(
             "// {shown}\n\
              struct {name}\n{{\n\
@@ -151,24 +146,29 @@ impl Emitter<'_> {
              {INDENT}static constexpr bool schedule_on_start = true;\n\
              {INDENT}using yielded_type = ::{library}::Yielded<{payload}>;\n\
              {INDENT}using body_type = ::{library}::generator<yielded_type>;\n\n\
+             {declared}\
              {INDENT}// The body (SOURCE-1), given its configuration by value.\n\
              {INDENT}static body_type body({taken})\n{INDENT}{{\n{statements}{INDENT}}}\n\n\
              {INDENT}// The node's state (TIME-6): the body, where it is, and the\n\
              {INDENT}// timing of its yields.\n\
              {INDENT}struct state_type\n{INDENT}{{\n\
              {INDENT}{INDENT}::{library}::Source<{payload}> source_{{}};\n\
+             {kept}\
              {INDENT}{INDENT}std::optional<body_type> body_{{}};\n\
              {INDENT}{INDENT}std::optional<body_type::iterator> at_{{}};\n\
              {INDENT}}};\n\n\
              {INDENT}static void start({start})\n{INDENT}{{\n\
              {INDENT}{INDENT}state_.set(state_type{{}});\n\
              {INDENT}{INDENT}state_type& kept_ = state_.modify();\n\
+             {start_before}\
              {INDENT}{INDENT}kept_.body_.emplace(body({given}));\n\
+             {start_after}\
              {INDENT}}}\n\n\
              {INDENT}// SOURCE-3: what is due now is published, and the node asks for\n\
              {INDENT}// a wake at the next target.\n\
              {INDENT}static void eval({eval})\n{INDENT}{{\n\
              {INDENT}{INDENT}state_type& kept_ = state_.modify();\n\
+             {eval_before}\
              {INDENT}{INDENT}::{library}::resume(\n\
              {INDENT}{INDENT}{INDENT}kept_.source_, now_, scheduler_,\n\
              {INDENT}{INDENT}{INDENT}[&kept_]() -> std::optional<yielded_type> {{\n\
@@ -189,10 +189,11 @@ impl Emitter<'_> {
              {INDENT}{INDENT}{INDENT}[&{OUT}]({payload} value_) {{ {published} }});\n\
              {INDENT}}}\n\n\
              {INDENT}// SOURCE-4: the body's frame, and the locals in it, end with the run.\n\
-             {INDENT}static void stop(::hgraph::State<state_type> state_)\n{INDENT}{{\n\
+             {INDENT}static void stop({stop})\n{INDENT}{{\n\
              {INDENT}{INDENT}state_type& kept_ = state_.modify();\n\
              {INDENT}{INDENT}kept_.at_.reset();\n\
              {INDENT}{INDENT}kept_.body_.reset();\n\
+             {stop_after}\
              {INDENT}}}\n\
              }};\n",
             name = placed.name,
@@ -200,7 +201,14 @@ impl Emitter<'_> {
             taken = taken.join(", "),
             start = start.join(", "),
             eval = eval.join(", "),
+            stop = stop.join(", "),
             given = given.join(", "),
+            declared = hooked.declared,
+            kept = hooked.kept,
+            start_before = hooked.start_before,
+            start_after = hooked.start_after,
+            eval_before = hooked.eval_before,
+            stop_after = hooked.stop_after,
         );
         let mut whole = nested(&placed.structs, &text);
         whole.push_str(&registration(

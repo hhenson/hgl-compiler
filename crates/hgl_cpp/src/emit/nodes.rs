@@ -27,7 +27,7 @@
 use hgl_analyser::hir::{Body, Expr, ExprKind, Hook, Local, Stmt};
 use hgl_analyser::{Detail, LocalKind, Phase, Signature, Type};
 use hgl_diagnostics::Location;
-use hgl_lower::nodes::{Handler, is_input, is_out, required_inputs, subscribed_inputs};
+use hgl_lower::nodes::{Handler, Timer, is_input, is_out, required_inputs, subscribed_inputs};
 
 use super::Emitter;
 use super::forms::Family;
@@ -61,6 +61,13 @@ pub(super) struct Context {
     /// The nodes of a graph's lifted calls written so far, each a struct
     /// written in the graph's own (`graphs`).
     pub(super) lifted: Vec<String>,
+    /// What wakes the node beside its inputs, the scheduler or the alarm
+    /// it injects (TIME-9), which `scheduling` writes.
+    pub(super) timer: Option<Timer>,
+    /// True while the body of a handler whose header selects
+    /// `modified([])` is written, where it is `true` read as a value
+    /// (TIME-3, `scheduling`).
+    pub(super) selected_empty: bool,
 }
 
 impl Context {
@@ -71,6 +78,8 @@ impl Context {
             roles: vec![Role::Plain; locals],
             result: None,
             lifted: Vec::new(),
+            timer: None,
+            selected_empty: false,
         }
     }
 }
@@ -287,6 +296,7 @@ impl Emitter<'_> {
         // (FN-2).
         let mut states: Vec<(usize, Option<&Expr>)> = Vec::new();
         let mut injected: Vec<usize> = Vec::new();
+        let mut timed: Vec<usize> = Vec::new();
         let mut start: Option<&[Stmt]> = None;
         let mut stop: Option<&[Stmt]> = None;
         let mut running: Vec<Handler> = Vec::new();
@@ -306,9 +316,15 @@ impl Emitter<'_> {
                     if name == "out" {
                         continue;
                     }
-                    if super::endpoints::capability(name).is_none() {
+                    if capability(name).is_none() {
                         self.unsupported(*at, &format!("an injected `{name}`"));
                         return;
+                    }
+                    // TIME-9: the scheduler or the alarm, which wakes the
+                    // node beside its inputs (`scheduling`).
+                    if let Some(timer) = Timer::of(name) {
+                        context.timer = Some(timer);
+                        timed.push(*local);
                     }
                     injected.push(*local);
                 }
@@ -339,10 +355,12 @@ impl Emitter<'_> {
                     // TIME-3: "A wake by the scheduler or alarm wakes the
                     // handlers that subscribe to no input and those whose
                     // header has `scheduled()` ... Where the node injects
-                    // neither ... nothing wakes it". No node here injects
-                    // either, so such a handler is never run, and is not
+                    // neither ... nothing wakes it": in a node that injects
+                    // neither such a handler is never run, and is not
                     // written.
-                    if handler.scheduled || handler.subscribed.is_empty() {
+                    if (handler.scheduled || handler.subscribed.is_empty())
+                        && context.timer.is_none()
+                    {
                         continue;
                     }
                     running.push(handler);
@@ -421,7 +439,9 @@ impl Emitter<'_> {
                 written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type{{}});\n"));
             }
             written.push_str(&prologue(body, &states));
-            let Some(made) = self.capabilities(body, &injected, statements, &mut hook) else {
+            let Some(made) =
+                self.capabilities(body, &injected, &[], statements, Hook::Start, &mut hook)
+            else {
                 return;
             };
             context.kind = Kind::Hook(Hook::Start);
@@ -472,10 +492,14 @@ impl Emitter<'_> {
                 used
             })
             .collect();
-        let Some(made) = self.capabilities(body, &injected, &all, &mut hook) else {
+        // The scheduler or the alarm is made in every evaluation: what woke
+        // the node is read from it (`scheduling`).
+        let Some(made) = self.capabilities(body, &injected, &timed, &all, Hook::When, &mut hook)
+        else {
             return;
         };
         written.push_str(&made);
+        written.push_str(&super::scheduling::woken(&context, body, &inputs));
         context.kind = Kind::Hook(Hook::When);
         for (handler, at) in running.iter().zip(&places) {
             if !self.handler(
@@ -508,7 +532,9 @@ impl Emitter<'_> {
                 hook.push(output.clone());
             }
             let mut written = prologue(body, &states);
-            let Some(made) = self.capabilities(body, &injected, statements, &mut hook) else {
+            let Some(made) =
+                self.capabilities(body, &injected, &[], statements, Hook::Stop, &mut hook)
+            else {
                 return;
             };
             written.push_str(&made);
@@ -595,32 +621,38 @@ impl Emitter<'_> {
         self.temporal = outer;
     }
 
-    /// The capabilities of `injected` that `statements` use, each made
-    /// at the top of its hook from the view hgraph gives it, which is
-    /// added to `parameters` (TIME-8). `None` where one is not written
-    /// yet, which is reported.
-    fn capabilities(
+    /// The capabilities of `injected` that `statements` use, and those of
+    /// `always` whether they do or not, each made at the top of its hook,
+    /// `hook`, from the view hgraph gives it, which is added to
+    /// `parameters` (TIME-8). `None` where one is not written yet, which
+    /// is reported.
+    pub(super) fn capabilities(
         &mut self,
         body: &Body,
         injected: &[usize],
+        always: &[usize],
         statements: &[Stmt],
+        hook: Hook,
         parameters: &mut Vec<String>,
     ) -> Option<String> {
         let mut written = String::new();
         for &local in injected {
-            if !uses(statements, local) {
+            if !uses(statements, local) && !always.contains(&local) {
                 continue;
             }
             let name = &body.locals[local].name;
-            let Some((view, made)) = super::endpoints::capability(name) else {
+            let Some((view, made)) = capability(name) else {
                 self.unsupported(body.locals[local].at, &format!("an injected `{name}`"));
                 return None;
             };
             let parameter = names::temporary("capability", local);
             parameters.push(format!("{view} {parameter}"));
+            // A scheduler and an alarm are made with the hook they are
+            // used in (`scheduling`).
             written.push_str(&format!(
-                "{INDENT}{INDENT}[[maybe_unused]] const {made} {}{{{parameter}}};\n",
-                identifier(name)
+                "{INDENT}{INDENT}[[maybe_unused]] const {made} {}{{{parameter}{}}};\n",
+                identifier(name),
+                super::scheduling::made_in(name, hook)
             ));
         }
         Some(written)
@@ -644,6 +676,9 @@ impl Emitter<'_> {
     ) -> bool {
         let indent = INDENT.repeat(2);
         let mut guards: Vec<String> = Vec::new();
+        // TIME-3: in a node with a scheduler or an alarm, what woke the
+        // node decides which handlers it runs (`scheduling`).
+        guards.extend(super::scheduling::wake_guard(context.timer, handler));
         let mut scope = Scope::cold(self.program, body);
         let mut written = String::new();
         let mut broken = false;
@@ -697,7 +732,15 @@ impl Emitter<'_> {
                     guards.push(guard);
                 }
             }
+            // TIME-3: "In that handler's body `modified([])`, as a bool, is
+            // true" where its header selects it (`scheduling`).
+            if let Some(current) = emitter.temporal.as_mut() {
+                current.selected_empty = handler.empty;
+            }
             emitter.statements(&mut scope, handler.body, 3, &mut written);
+            if let Some(current) = emitter.temporal.as_mut() {
+                current.selected_empty = false;
+            }
         });
         if broken {
             return false;
@@ -923,8 +966,16 @@ fn maybe_unused(parameters: &[String]) -> String {
         .join(", ")
 }
 
+/// The capability `inject name` binds (TIME-8), as the hook's hgraph
+/// view of it and the library's type made from that: the endpoints'
+/// (`clock`, `logger`, `global_state`), and the scheduler and the alarm
+/// (`scheduling`). `None` for any other name.
+fn capability(name: &str) -> Option<(&'static str, &'static str)> {
+    super::endpoints::capability(name).or_else(|| super::scheduling::capability(name))
+}
+
 /// True where `statements` name `local`.
-fn uses(statements: &[Stmt], local: usize) -> bool {
+pub(super) fn uses(statements: &[Stmt], local: usize) -> bool {
     let mut found = false;
     hgl_analyser::hir::walk_statements(statements, &mut |value| {
         found |= matches!(value.kind, ExprKind::Local(named) if named == local);

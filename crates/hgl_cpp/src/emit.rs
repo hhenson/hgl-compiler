@@ -40,6 +40,7 @@ mod graphs;
 mod names;
 mod nodes;
 mod scalars;
+mod scheduling;
 mod sources;
 mod statements;
 mod tests;
