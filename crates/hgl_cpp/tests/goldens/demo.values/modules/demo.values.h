@@ -2,6 +2,7 @@
 #pragma once
 
 #include <hglrt/hglrt.h>
+#include "demo.values.types.h"
 
 // Names this file writes, which no macro of a header above takes.
 #undef Level
@@ -12,7 +13,6 @@
 #undef bump
 #undef bumped
 #undef bumped_at
-#undef buy
 #undef by
 #undef checked
 #undef code_first
@@ -27,8 +27,6 @@
 #undef from_a_made_row
 #undef grown
 #undef held_text
-#undef high
-#undef hold
 #undef in_order
 #undef index_first
 #undef index_once
@@ -37,7 +35,6 @@
 #undef level
 #undef limit
 #undef list_first
-#undef low
 #undef made_error
 #undef made_rows
 #undef never_null
@@ -54,7 +51,6 @@
 #undef replaced_first
 #undef same_level
 #undef scaled
-#undef sell
 #undef side
 #undef sign
 #undef step
@@ -67,21 +63,6 @@
 
 namespace hgl::demo::values::m_
 {
-
-// enum Side (TYPE-7)
-enum class Side
-{
-    buy,
-    sell,
-    hold,
-};
-
-// enum Level (TYPE-7)
-enum class Level
-{
-    low,
-    high,
-};
 
 // const limit: i64 (UNIT-13), module demo.values, line 9
 const ::hgraph::Int& limit();

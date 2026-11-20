@@ -586,11 +586,12 @@ fn natives_are_called_with_their_templates() {
     assert_eq!(emitted.blocked("natives_are_called"), None);
 }
 
-/// FN-15: a place held for a `var` parameter could be one that a later
-/// argument, running statements of its own, replaces or grows; such a
-/// call is reported, and not written.
+/// FN-15, EXPR-2: a place held for a `var` parameter could be one that a
+/// later argument, running statements of its own, replaces or grows: the
+/// place's index is held in turn, and the place is taken where the call
+/// is made.
 #[test]
-fn a_place_beside_an_argument_that_runs_statements_is_reported() {
+fn a_place_beside_an_argument_that_runs_statements_is_taken_at_the_call() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
@@ -608,11 +609,20 @@ fn a_place_beside_an_argument_that_runs_statements_is_reported() {
             "}\n",
         ),
     )]);
-    assert_eq!(
-        emitted.reported,
-        [
-            "m.hgl:7:5 the cpp target does not write a call that gives a `var` parameter a place, beside an argument that runs statements yet"
-        ]
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    assert!(
+        unit.contains("[&] { const ::hgraph::Int index_00_ = 0; const auto argument_01_ = ")
+            && unit.contains(
+                "return ::hgl::m::m_::bump(::hglrt::item(items, index_00_), argument_01_); }();"
+            ),
+        "{unit}"
     );
 }
 
@@ -800,4 +810,136 @@ fn names_a_platform_may_take_are_kept_and_undefined() {
         header.contains("::hgraph::Int errno_(::hgraph::Int x);"),
         "{header}"
     );
+}
+
+/// Structs, sets, dictionaries and deltas as values (TYPE-3 to TYPE-6,
+/// TYPE-14, TYPE-16, EXPR-3, ERR-6, CTRL-12), an enum's member made from a
+/// value (TYPE-7), a zone and a time in it (TYPE-2), a `T?` compared with
+/// a `T`, and a `var` place beside an argument that runs statements
+/// (FN-15), as the target writes them, with the runtime library's
+/// natives. Everything is written, and each test can be run. A struct is
+/// in its module's types header, after the structs it holds.
+#[test]
+fn composite_values_are_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.composites.hgl",
+            include_str!("fixtures/demo.composites.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.composites", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let types = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.composites.types.h")
+        .unwrap()
+        .text;
+    // UNIT-6: `Line` is declared before `Point`, which it holds.
+    let point = types.find("\nstruct Point\n").unwrap();
+    let line = types.find("\nstruct Line\n").unwrap();
+    assert!(point < line, "{types}");
+}
+
+/// What the target does not write of the composites yet is reported
+/// where it is written, and nothing is miswritten: a struct that holds
+/// itself (TYPE-6), a field's default that runs statements of its own,
+/// a field of an abstract struct assigned, a dictionary's entry given to
+/// a `var` parameter.
+#[test]
+fn composite_forms_not_written_yet_are_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Node {\n",
+            "    value: i64\n",
+            "    next: atomic<Node?> = null\n",
+            "}\n",
+            "struct Made {\n",
+            "    value: i64 = {\n",
+            "        let a = 20\n",
+            "        a + 1\n",
+            "    }\n",
+            "}\n",
+            "abstract struct Shape { id: i64 }\n",
+            "struct Round : Shape { radius: f64 }\n",
+            "const fn renumbered(shape: Shape) -> Shape {\n",
+            "    var changed = shape\n",
+            "    changed.id = 2\n",
+            "    return changed\n",
+            "}\n",
+            "const fn bump(var count: i64, by: i64) {\n",
+            "    count = by\n",
+            "}\n",
+            "const fn given(book: dict<str, i64>) -> dict<str, i64> {\n",
+            "    var changed = book\n",
+            "    bump(changed[\"a\"], 1)\n",
+            "    return changed\n",
+            "}\n",
+            "const fn made() -> i64 => Made().value\n",
+            "test noded {\n",
+            "    assert Node(value: 1).value == 1\n",
+            "}\n",
+        ),
+    )]);
+    let holds_itself = "m.hgl:2:8 the cpp target does not write a struct that holds itself yet";
+    assert_eq!(
+        emitted.reported,
+        [
+            holds_itself,
+            "m.hgl:16:5 the cpp target does not write an assignment to this place yet",
+            "m.hgl:24:10 the cpp target does not write this place given to a `var` parameter yet",
+            // Where the default is written, which a construction that
+            // leaves the field out reaches.
+            "m.hgl:7:18 the cpp target does not write a default that runs statements yet",
+        ]
+    );
+    assert_eq!(emitted.blocked("noded").as_deref(), Some(holds_itself));
+}
+
+/// A module's struct that holds another module's, and an instance of a
+/// generic function of the other module over it: each header includes
+/// the types header of the module whose types it names, and no types
+/// header includes a module's header (GEN-2, UNIT-6).
+#[test]
+fn a_struct_of_another_module_is_named_through_its_types_header() {
+    let emitted = emit(&[
+        (
+            "demo.b.hgl",
+            concat!(
+                "module demo.b\n",
+                "export struct Inner { value: i64 }\n",
+                "export const fn same<T>(value: T) -> T => value\n",
+            ),
+        ),
+        (
+            "demo.a.hgl",
+            concat!(
+                "module demo.a\n",
+                "use demo.b::{Inner, same}\n",
+                "struct Outer { inner: Inner }\n",
+                "const fn kept(outer: Outer) -> Outer => same(outer)\n",
+            ),
+        ),
+    ]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let file = |path: &str| {
+        &emitted
+            .output
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap_or_else(|| panic!("no {path}"))
+            .text
+    };
+    assert!(file("modules/demo.a.types.h").contains("#include \"demo.b.types.h\""));
+    assert!(file("modules/demo.b.h").contains("#include \"demo.a.types.h\""));
+    assert!(file("modules/demo.a.h").contains("#include \"demo.a.types.h\""));
+    assert!(!file("modules/demo.b.types.h").contains("demo.a"));
 }
