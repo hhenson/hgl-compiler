@@ -107,6 +107,8 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A node of scalars: its inputs' activity and validity, handlers in source order, `state` and `cache`, `start` and `stop` | FN-2, TIME-3, TIME-4, TIME-5, TIME-6 |
 | `return value`, `out = value`, `invalidate(out)` in a handler | TIME-7, FN-7, END-4 |
 | A payload read; `valid`, `modified`, `delta_value` plain and into a `result`, `last_modified` of an input | TIME-1, END-1, END-2, END-3, END-6, ERR-14 |
+| `is_active`, `activate` and `passivate` of a direct input in a handler, `is_active` in `stop` too | TIME-9, END-5 |
+| A temporal value of an enum: read, published, replayed, recorded, wired as a constant | TYPE-7, TYPE-16 |
 | `inject clock`, `logger`, `global_state`, and a property of each | TIME-8, CAP-1, CAP-2, CAP-3 |
 | A source with no declaration and no hook | SOURCE-1, SOURCE-2, SOURCE-3, SOURCE-4 |
 | A graph; a value where a connection is expected; a lifted call of inputs required valid | FN-2, FN-3, FN-6, FN-11 |
@@ -125,8 +127,8 @@ of a `list<bool>` given to a `var` parameter (a bit, no `bool&`), an enum's
 member made from a value (TYPE-7), a pack, a struct, a set, a
 dictionary, a window of any but a scalar, a delta of any but a scalar, `timezone`,
 `zoned_time`, and of temporal code: a temporal value of any but a
-scalar, a designation of a child of an input (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
-`all_valid` of any but a window, `activate`, `passivate`, `scheduled()`, `if`, `switch` and
+scalar or an enum, a designation of a child of an input (FN-16), `inject scheduler` and `alarm` (CAP-4, CAP-5),
+`all_valid` of any but a window, a change of an input's activity in `stop` (END-5), `scheduled()`, `if`, `switch` and
 `for` over connections (CTRL-7), `capture` (ERR-7), a lifted input with a
 default or a null (FN-11), a source with declarations or hooks, an
 eval's or an application's configuration that is no `RunConfig(...)`

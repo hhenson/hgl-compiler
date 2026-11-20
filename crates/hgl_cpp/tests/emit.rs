@@ -383,6 +383,99 @@ fn temporal_code_is_written() {
     assert!(units.contains(&"modules/core.cpp"), "{units:?}");
 }
 
+/// The activity of a node's inputs (TIME-9, END-5) and the temporal form
+/// of an enum (TYPE-7, TYPE-16): `activate` and `passivate` in a handler,
+/// `is_active` in a handler's condition and in its body, of two bindings
+/// of one output, an enum published, read, replayed and wired as a
+/// constant. Everything is written, and each test can be run.
+#[test]
+fn activity_and_enums_are_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.activity.hgl",
+            include_str!("fixtures/demo.activity.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.activity", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.activity.cpp")
+        .unwrap()
+        .text;
+    // END-5: "Activity belongs to each input binding": the input's own
+    // hgraph view is changed and read.
+    for written in [
+        "::hglrt::fn_activate(data);",
+        "::hglrt::fn_passivate(data);",
+        "if (::hglrt::fn_modified(data) && ::hglrt::fn_is_active(data))",
+        "(::hglrt::fn_is_active(driving) && (!::hglrt::fn_is_active(sampled)))",
+        "::hgraph::In<\"mode\", ::hgraph::TS<::hgl::demo::activity::m_::Mode>> mode",
+    ] {
+        assert!(unit.contains(written), "{written} in\n{unit}");
+    }
+    // The library names an enum through what the compiler writes beside
+    // it, and registers it with hgraph so (`values.h`).
+    let header = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.activity.h")
+        .unwrap()
+        .text;
+    assert!(
+        header.contains(
+            "return {\"demo.activity::Mode\", {{Mode::listen, \"listen\"}, {Mode::ignore, \"ignore\"}}};"
+        ),
+        "{header}"
+    );
+}
+
+/// A change of an input's activity in `stop` is reported: hgraph makes
+/// passive at stop only the inputs a node declares active, so an input
+/// it activated would stay subscribed. `is_active` there is written.
+#[test]
+fn a_change_of_activity_in_stop_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn stopping(value: i64) -> i64 {\n",
+                "    when { return value }\n",
+                "    stop { passivate(value) }\n",
+                "}\n",
+                "\n",
+                "fn asking(value: i64) -> i64 {\n",
+                "    when { return value }\n",
+                "    stop { let active = is_active(value) }\n",
+                "}\n",
+                "\n",
+                "test a_change {\n",
+                "    assert eval(stopping(value: [1])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_read {\n",
+                "    assert eval(asking(value: [1])) == [1]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("a_change").as_deref(),
+        Some("m.hgl:5:12 the cpp target does not write `passivate` here yet")
+    );
+    assert_eq!(emitted.blocked("a_read"), None);
+}
+
 /// The windows' family (TYPE-11; core's END-9): a window of a tick count
 /// is hgraph's `TSW` and one of a duration its `TSWDuration`; a window's
 /// value, its delta and `removed_value` are read through the runtime

@@ -166,6 +166,7 @@ static FAMILIES: &[&dyn Family] = &[
     &super::references::References,
     &super::apps::Apps,
     &super::scheduling::Scheduling,
+    &super::activity::Activity,
     &super::scalars::Scalars,
     &super::tests::Tests,
     &super::sources::Sources,
