@@ -3,10 +3,9 @@
 // SOURCE-4), which core's `replay` is.
 //
 // A constant is a node of this library. A source is a node the compiler
-// writes, whose body is a step that gives its next `yield`, or nothing when
-// the body completes; `resume` drives that step under the timing SOURCE-2 and
-// SOURCE-3 give. Whether the step is a coroutine or a state machine is the
-// compiler's: `resume` takes either.
+// writes, whose body is a C++23 coroutine kept in the node's state
+// (docs/cpp-target.md); `resume` takes the step that runs it on to its next
+// `yield`, and drives it under the timing SOURCE-2 and SOURCE-3 give.
 #pragma once
 
 #include <hglrt/failure.h>

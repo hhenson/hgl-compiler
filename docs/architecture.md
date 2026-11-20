@@ -2040,8 +2040,9 @@ passing. The backend owns this list alongside its target tests.
 
 ### The C++ runtime library
 
-`runtime/cpp` is `libhglrt`, the C++ library that the C++ target's
-generated code links: what that code calls and hgraph does not have. It is
+`runtime/cpp` is `libhglrt`, the C++ library that the code of the
+[C++ target](cpp-target.md) links: what that code calls and hgraph does
+not have. It is
 a skeleton that the target's first step fills. It is built on hgraph's
 runtime and wiring libraries alone (`hgraph::runtime`, `hgraph::wiring`):
 `hgraph::core` would bring hgraph's standard library, which no generated
