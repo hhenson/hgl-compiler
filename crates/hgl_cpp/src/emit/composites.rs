@@ -155,9 +155,11 @@ fn template_arguments(
 ///   one C++ struct, though TYPE-3 tells them apart by their arguments,
 ///   and an atomic's delta is the whole value (TYPE-16), which the
 ///   template's would not be.
-/// * A field written `T?` whose `T` is given a nullable, `i64?`: its type
-///   is `i64?` (TYPE-14: the suffix makes no nullable of a nullable),
-///   where the template's would be an optional of an optional.
+/// * A field written `T?`, or one that holds `T` under an `atomic<...>`,
+///   whose `T` is given a nullable, `i64?`: HGL keeps one nullable, the
+///   field's `i64?` (TYPE-14: the suffix makes no nullable of a
+///   nullable), and its delta's property, the atomic's whole value
+///   (TYPE-16), where the template's would be an optional of an optional.
 fn template_keeps(
     generics: &[GenericParameter],
     members: &[hgl_analyser::Member],
@@ -179,13 +181,25 @@ fn template_keeps(
             _ => false,
         }
     }
-    /// The generic parameters `ty` writes `T?` of, at any depth.
+    /// The generic parameters `ty` writes `T?` of, at any depth, and each
+    /// under an `atomic<...>`, whose delta is its payload whole (TYPE-16):
+    /// a nullable given either is one HGL keeps one nullable, where the
+    /// template would hold an optional of an optional.
     fn made_nullable(ty: &Type, found: &mut Vec<Location>) {
         match ty {
             Type::Nullable(inner) => {
                 if let Type::Parameter { at, .. } = &**inner {
                     found.push(*at);
                 }
+                made_nullable(inner, found);
+            }
+            Type::Atomic(inner) => {
+                let mut every = |part: &Type| {
+                    if let Type::Parameter { at, .. } = part {
+                        found.push(*at);
+                    }
+                };
+                walk_types(inner, &mut every);
                 made_nullable(inner, found);
             }
             Type::Named { arguments, .. } => {
@@ -195,10 +209,9 @@ fn template_keeps(
                     }
                 }
             }
-            Type::List { element: inner, .. }
-            | Type::Set(inner)
-            | Type::Delta(inner)
-            | Type::Atomic(inner) => made_nullable(inner, found),
+            Type::List { element: inner, .. } | Type::Set(inner) | Type::Delta(inner) => {
+                made_nullable(inner, found)
+            }
             Type::Dict { key, value }
             | Type::Result {
                 value: key,
@@ -232,6 +245,39 @@ fn template_keeps(
             .and_then(|position| arguments.get(position))
             .is_some_and(|argument| matches!(argument, GenericArgument::Type(Type::Nullable(_))))
     })
+}
+
+/// Calls `visit` with `ty` and each type inside it, at any depth.
+fn walk_types(ty: &Type, visit: &mut dyn FnMut(&Type)) {
+    visit(ty);
+    match ty {
+        Type::Named { arguments, .. } => {
+            for argument in arguments {
+                if let GenericArgument::Type(inner) = argument {
+                    walk_types(inner, visit);
+                }
+            }
+        }
+        Type::Nullable(inner)
+        | Type::List { element: inner, .. }
+        | Type::Set(inner)
+        | Type::Delta(inner)
+        | Type::Atomic(inner) => walk_types(inner, visit),
+        Type::Dict { key, value }
+        | Type::Result {
+            value: key,
+            error: value,
+        } => {
+            walk_types(key, visit);
+            walk_types(value, visit);
+        }
+        Type::Tuple(positions) => {
+            for position in positions {
+                walk_types(position, visit);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A constant generic argument of a struct (GEN-8) as a C++ template
