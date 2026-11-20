@@ -127,4 +127,7 @@ void bump(::hgraph::Int& count, ::hgraph::Int by);
 // as_shapes(rounds: list<Round>) -> list<Shape> (`const fn`), module demo.composites, line 232
 ::hglrt::list<::hgl::demo::composites::m_::Shape> as_shapes(const ::hglrt::list<::hgl::demo::composites::m_::Round>& rounds);
 
+// failing() -> i64 (`const fn`), module demo.composites, line 324
+::hgraph::Int failing();
+
 }  // namespace hgl::demo::composites::m_

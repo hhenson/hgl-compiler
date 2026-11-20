@@ -321,6 +321,26 @@ test a_missing_key_fails {
     }
 }
 
+const fn failing() -> i64 => [1][5]
+
+# EXPR-3: the key is added where the value is assigned; a value that
+# fails adds none.
+test a_failing_value_adds_no_key {
+    var book: dict<str, i64> = ["a": 1]
+    assert raises("value.index_out_of_range") {
+        book["b"] = failing()
+    }
+    assert book == ["a": 1]
+    var rows: list<dict<str, i64>> = [["a": 1]]
+    assert raises("value.index_out_of_range") {
+        rows[0]["b"] = {
+            let none = 0
+            failing()
+        }
+    }
+    assert rows == [["a": 1]]
+}
+
 test deltas_are_values {
     assert arrived(joined("a")) == ["a"]
     assert joined("a").removed == []

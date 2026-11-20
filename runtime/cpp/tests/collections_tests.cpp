@@ -163,6 +163,15 @@ TEST_CASE("an assignment adds a key the dictionary has not (EXPR-3)") {
     // An entry assigned from another of the same dictionary.
     hglrt::entry(book, "c") = hglrt::entry_at(book, "b");
     CHECK(hglrt::entry_at(book, "c") == hglrt::list<i64>{2, 3});
+    hglrt::entry(book, "c") = hglrt::entry_at(book, "c");
+    CHECK(hglrt::entry_at(book, "c") == hglrt::list<i64>{2, 3});
+    // Naming the place adds nothing: a value that fails leaves the
+    // dictionary as it was.
+    const auto size = book.size();
+    static_cast<void>(hglrt::entry(book, "never"));
+    CHECK_THROWS_AS(hglrt::entry(book, "never") = hglrt::entry_at(book, "missing"), hglrt::Failure);
+    CHECK(book.size() == size);
+    CHECK_FALSE(book.contains("never"));
 }
 
 TEST_CASE("get gives the value of a key, or null (ERR-6)") {

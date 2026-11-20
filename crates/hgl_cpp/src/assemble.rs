@@ -155,8 +155,8 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         // header. An instance is written in its declaration's module
         // (GEN-2), and may name a type of a module that imports that one;
         // a types header includes only the types headers of the modules
-        // its own types name, which its module imports (UNIT-5: no import
-        // cycle), so no two headers include each other.
+        // its own types name, which its module imports (UNIT-3: "Import
+        // cycles are rejected"), so no two headers include each other.
         let named: BTreeSet<usize> = functions
             .iter()
             .flat_map(|piece| piece.types.iter().map(|(module, _)| *module))

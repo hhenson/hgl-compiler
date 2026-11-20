@@ -11,6 +11,7 @@ void arguments_are_evaluated_in_the_order_written();
 void sets_have_no_order();
 void dictionaries_read_add_and_loop();
 void a_missing_key_fails();
+void a_failing_value_adds_no_key();
 void deltas_are_values();
 void enums_zones_and_nullables();
 void a_var_place_is_taken_where_the_call_is_made();
@@ -27,9 +28,10 @@ const ::hglrt::testing::Registration test_4{"demo.composites::arguments_are_eval
 const ::hglrt::testing::Registration test_5{"demo.composites::sets_have_no_order", &::hgl::demo::composites::m_::t_::sets_have_no_order};
 const ::hglrt::testing::Registration test_6{"demo.composites::dictionaries_read_add_and_loop", &::hgl::demo::composites::m_::t_::dictionaries_read_add_and_loop};
 const ::hglrt::testing::Registration test_7{"demo.composites::a_missing_key_fails", &::hgl::demo::composites::m_::t_::a_missing_key_fails};
-const ::hglrt::testing::Registration test_8{"demo.composites::deltas_are_values", &::hgl::demo::composites::m_::t_::deltas_are_values};
-const ::hglrt::testing::Registration test_9{"demo.composites::enums_zones_and_nullables", &::hgl::demo::composites::m_::t_::enums_zones_and_nullables};
-const ::hglrt::testing::Registration test_10{"demo.composites::a_var_place_is_taken_where_the_call_is_made", &::hgl::demo::composites::m_::t_::a_var_place_is_taken_where_the_call_is_made};
+const ::hglrt::testing::Registration test_8{"demo.composites::a_failing_value_adds_no_key", &::hgl::demo::composites::m_::t_::a_failing_value_adds_no_key};
+const ::hglrt::testing::Registration test_9{"demo.composites::deltas_are_values", &::hgl::demo::composites::m_::t_::deltas_are_values};
+const ::hglrt::testing::Registration test_10{"demo.composites::enums_zones_and_nullables", &::hgl::demo::composites::m_::t_::enums_zones_and_nullables};
+const ::hglrt::testing::Registration test_11{"demo.composites::a_var_place_is_taken_where_the_call_is_made", &::hgl::demo::composites::m_::t_::a_var_place_is_taken_where_the_call_is_made};
 }  // namespace
 
 int main(int argc, char **argv)

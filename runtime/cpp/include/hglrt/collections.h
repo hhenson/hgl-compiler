@@ -187,12 +187,31 @@ HGLRT_NO_DANGLING V& entry_at(dict<K, V>& book, const std::type_identity_t<K>& k
     return found->second;
 }
 
-/// `book[key]` as the place an assignment writes (EXPR-3): "A key the
-/// dictionary has not is added". The value it is added with is never read:
-/// the assignment gives it its value.
+/// `book[key]` as the place an assignment writes whole (EXPR-3): "A key the
+/// dictionary has not is added". The key is added, or its value replaced,
+/// where the value is assigned, and not before: naming the place changes
+/// nothing, so a value that fails leaves the dictionary as it was. It lives
+/// only in the statement that assigns it.
 template <class K, class V>
-HGLRT_NO_DANGLING V& entry(dict<K, V>& book, const std::type_identity_t<K>& key) {
-    return book.try_emplace(key).first->second;
+class entry_place {
+  public:
+    entry_place(dict<K, V>& book, const K& key) : book_(book), key_(key) {}
+
+    /// Gives the key `value`, adding the key where the dictionary has not.
+    entry_place& operator=(V value) {
+        book_.insert_or_assign(key_, std::move(value));
+        return *this;
+    }
+
+  private:
+    dict<K, V>& book_;
+    const K& key_;
+};
+
+/// The place `book[key]` an assignment writes whole (`entry_place`).
+template <class K, class V>
+entry_place<K, V> entry(dict<K, V>& book, const std::type_identity_t<K>& key) {
+    return {book, key};
 }
 
 /// `get<K, T>(store: dict<K, T>, key: K) -> T?` (core's capabilities.hgl,

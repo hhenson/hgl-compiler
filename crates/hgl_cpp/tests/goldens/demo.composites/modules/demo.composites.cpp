@@ -306,6 +306,12 @@ void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int 
     return ::hglrt::parent_list<::hgl::demo::composites::m_::Shape>(rounds);
 }
 
+// failing() -> i64 (`const fn`), module demo.composites, line 324
+::hgraph::Int failing()
+{
+    return ::hglrt::item(::hglrt::list<::hgraph::Int>{1}, 5);
+}
+
 }  // namespace hgl::demo::composites::m_
 
 namespace hgl::demo::composites::m_::t_
@@ -469,6 +475,30 @@ void a_missing_key_fails()
     ::hglrt::testing::raises("value.missing_key", [&] {
         [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int> more = ::hgl::demo::composites::m_::bumped(book, ::hgraph::Str{"b"});
     });
+}
+
+void a_failing_value_adds_no_key()
+{
+    ::hglrt::testing::statement();
+    [[maybe_unused]] ::hglrt::dict<::hgraph::Str, ::hgraph::Int> book = ::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}});
+    ::hglrt::testing::statement();
+    ::hglrt::testing::raises("value.index_out_of_range", [&] {
+        ::hglrt::entry(book, ::hgraph::Str{"b"}) = ::hgl::demo::composites::m_::failing();
+    });
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(book, ::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}})));
+    ::hglrt::testing::statement();
+    [[maybe_unused]] ::hglrt::list<::hglrt::dict<::hgraph::Str, ::hgraph::Int>> rows = ::hglrt::list<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}})};
+    ::hglrt::testing::statement();
+    ::hglrt::testing::raises("value.index_out_of_range", [&] {
+        static_cast<void>(::hglrt::entry(::hglrt::item(rows, 0), ::hgraph::Str{"b"}));
+        ::hglrt::entry(::hglrt::item(rows, 0), ::hgraph::Str{"b"}) = [&]() -> ::hgraph::Int {
+    [[maybe_unused]] const ::hgraph::Int none = 0;
+    return ::hgl::demo::composites::m_::failing();
+}();
+    });
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>>(rows, ::hglrt::list<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, 1}})}));
 }
 
 void deltas_are_values()

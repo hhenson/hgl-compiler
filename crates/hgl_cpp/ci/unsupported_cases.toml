@@ -84,6 +84,7 @@
     "conformance::a_zero_duration_in_start_wakes_the_alarm_at_the_first_evaluation",
     "conformance::a_zero_duration_in_start_wakes_the_first_evaluation",
     "conformance::a_zero_minimum_is_held_by_the_first_value",
+    "conformance::absolute_targets_before_at_and_after_start",
     "conformance::activity_belongs_to_the_binding",
     "conformance::an_active_invalidation_wakes_the_node_without_a_data_tick",
     "conformance::an_active_only_handler_queries_its_input",
@@ -140,6 +141,7 @@
     "conformance::runs_are_independent",
     "conformance::set_writes_coalesce",
     "conformance::silence_preserves_validity",
+    "conformance::skipped_targets_still_establish_source_order",
     "conformance::start_failures_escape_an_empty_run",
     "conformance::start_runs_after_initialization_and_before_ticks",
     "conformance::stop_can_distinguish_input_and_output_publication_times",
@@ -169,19 +171,6 @@
     "core_implementation::record_retains_each_delta",
     "core_implementation::repeated_invalidation_is_silent",
     "core_implementation::unconfigured_arithmetic_uses_lifting",
-]
-"the type `Closed`" = [
-    "core_implementation::a_calendar_says_what_a_business_day_is",
-    "core_implementation::a_rule_rolls_to_a_business_day",
-]
-"the type `RunConfig`" = [
-    "conformance::absolute_targets_before_at_and_after_start",
-    "conformance::skipped_targets_still_establish_source_order",
-]
-"the type `Weekdays`" = [
-    "core_implementation::business_days_start_from_a_business_day",
-    "core_implementation::months_end_at_the_months_last_day",
-    "core_implementation::only_the_result_of_a_move_is_held_to_the_range",
 ]
 "this expression" = [
     "conformance::a_wake_stays_due_after_a_reset_inside_it",

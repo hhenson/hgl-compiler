@@ -2088,20 +2088,26 @@ cpp` runs over any program to its end.
 
 | Part | Where | What it does |
 | --- | --- | --- |
-| Emitter | `crates/hgl_cpp/src/emit.rs` and `emit/` by concern: `names`, `types`, `values`, `statements`, `expressions`, `calls`, `nodes`, `graphs`, `tests` | Writes each declaration, instance and named test as a piece: a prototype for the module's header, a definition for its unit, the functions it calls, and the first form in it not written |
-| Assembly | `crates/hgl_cpp/src/assemble.rs` | Leaves out each piece that is not written or reaches one that is not, puts the rest into each module's header and unit, and writes an entry unit for each module with a test that can be run |
+| Emitter | `crates/hgl_cpp/src/emit.rs` and `emit/` by concern: `names`, `types`, `composites`, `values`, `statements`, `expressions`, `calls`, `nodes`, `graphs`, `tests` | Writes each declaration, instance and named test as a piece: a prototype for the module's header, a definition for its unit, the functions it calls, and the first form in it not written |
+| Assembly | `crates/hgl_cpp/src/assemble.rs` | Leaves out each piece that is not written or reaches one that is not, puts the rest into each module's types header, header and unit, and writes an entry unit for each module with a test that can be run |
 | Runtime library | `crates/hgl_cpp/src/runtime.rs`, `build.rs` | Carries `runtime/cpp` in `hgl`, and reads from its headers which of core's natives it defines |
 | Build driver | `crates/hgl_cli/src/cpp.rs` and `cpp/` | Finds the toolchain, prepares it once, builds a program in a workspace kept between runs, runs the executables and reads their results |
 
 | HGL | C++ |
 | --- | --- |
-| Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, namespace `hgl::demo::calc::m_` |
+| Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, namespace `hgl::demo::calc::m_`; `modules/demo.calc.types.h` where it declares a type: its enums, and its structs, each after those it holds (UNIT-6), which its header includes |
 | `const fn` (FN-1); an HGL candidate of an operator (GEN-4) | A function, with its HGL name, signature and line in a comment; a candidate an overload of its operator's name in `c_` |
 | A generic one (GEN-2) | One function for each instance `hgl_lower` collects (`Instances::typed`), named by its suffix in `i_::name`: `i_::first::of_i64` |
 | A parameter; a `var` parameter (FN-15) | By value where it is small (`types::by_value`), a `const` reference otherwise; a reference to the place the call gives |
 | `i64`, `f64`, `bool`, `str`, `bytes`, `date`, `time`, `datetime`, `duration`, `civil_datetime`, `zoned_datetime`, `tenor` | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `CivilDateTime`, `ZonedDateTime`, `Tenor`, and their literals |
 | An enum (TYPE-7); one of core's the library declares | An `enum class` of the module's; the library's, `::hglrt::ZeroPolicy` |
-| Another module's enum, named | Declared opaque in the header, `enum class Side;`, whose unit includes the header that defines it: no header includes another module's, as an instance (written in its declaration's module) may name an enum of a module that imports that one |
+| Another module's enum or struct, named | The header includes that module's types header, and no header includes another module's header: an instance (written in its declaration's module) may name a type of a module that imports that one, and a types header includes only the types headers of the modules its types name, which its module imports (UNIT-3: "Import cycles are rejected") |
+| A struct (TYPE-3 to TYPE-5) | An aggregate of its fields, a parent's first, with `==` of each (OPS-2); a generic one a class template, `Box<::hgraph::Int>`; `hglrt::fields<S>` naming its members, which its hash and its identity as a key are made from, and `std::hash<S>`. Built as `Point{x, y}`, its fields given in their order, defaults and nulls among them, each held first in the order written where that shows (EXPR-2) |
+| An abstract struct (TYPE-3) | A class that holds any struct that inherits from it (`hglrt::held_value`), with a function of each field's name and a conversion to each struct it inherits from; `hglrt::parents<S>` lists what a struct inherits from. A struct that holds itself (TYPE-6) is not written yet |
+| `set<K>`, `dict<K, V>` (TYPE-14, CTRL-12) | `hglrt::set<K>`, `hglrt::dict<K, V>`: hash containers in no order, equal where their members are (OPS-2); a key's identity is `==` but that every NaN is one key. `book[key]` is `hglrt::entry_at`, which fails with `value.missing_key` (ERR-6); assigned whole it is `hglrt::entry(book, key) = value`, which adds the key as the value is assigned (EXPR-3); `for` binds each member, or key and value, of the container or of a copy of it where the copy rule says or it is made in the loop's line |
+| `delta<T>` (TYPE-16) | A nullable's an optional; a list's `hglrt::list_delta`, its `updated` and `removed` read as a dictionary and a set; a set's and a dictionary's `hglrt::set_delta`, `hglrt::dict_delta`; a struct's `d_::S` of its module, an optional of each field's delta; a tuple's a tuple |
+| `Side(n)`, `Side("buy")` (TYPE-7) | `hglrt::enum_member`, from a table of the members' numbers or names; none matching fails uncoded: the catalogue has no code for it |
+| `timezone`, `zoned_time` (TYPE-2) | hgraph's `ZoneId` and `ZonedTime` |
 | `T?`, `tuple<A, B>`, `list<T>`, `list<T, N>` | `std::optional<T>`, `std::tuple<A, B>`, `hglrt::list<T>`, `std::array<T, N>` |
 | `error`, `result<T, error>`, `?` (ERR-2 to ERR-5) | `hglrt::error`, `hglrt::result<T>`; the result held before its statement, the function left with its failure; a `?` only where it is the first thing its statement evaluates, and reported anywhere else |
 | A constant (UNIT-13) | A function giving a reference to one `static` value, made where it is first read; a read of one whose value may fail is one that may fail, which a `?` after it is not run before |
@@ -2112,7 +2118,7 @@ cpp` runs over any program to its end.
 | A tuple or a list with an entry after the first that runs statements; an element read whose list and index both may fail, or either runs statements | Each entry held as a value of its own type first, in order; the list held, then the index (`expressions::held_read`), the element a value of its own |
 | Named test | A function of `hgl::demo::calc::m_::t_`; each statement told to the library's test host first, `::hglrt::testing::statement()`; `assert` is `::hglrt::testing::check`, `assert raises` `::hglrt::testing::raises` of a lambda (TST-10) |
 | The tests of a module | `tests/demo.calc.cpp`: a `hglrt::testing::Registration` of each by its identity, and a `main` that is `hglrt::testing::main`; one executable |
-| Everything else | Reported: `the cpp target does not write ... yet`: a struct, a set, a dictionary, a window, a delta, `timezone`, `zoned_time`, and anything temporal |
+| Everything else | Reported: `the cpp target does not write ... yet`: a window, and anything temporal |
 
 Every C++ name an HGL name gives is made by one function,
 `emit::names::identifier`: a plain name (a letter first, a letter or
@@ -2185,14 +2191,15 @@ Executables run side by side.
 cpp` says what the application needs that is not written: no
 application is written yet.
 
-The crate's tests compare the C++ written for two programs, `demo.calc`
-and `demo.values` (value code of every form written), with goldens under
+The crate's tests compare the C++ written for three programs, `demo.calc`,
+`demo.values` (value code of every form written) and `demo.composites`
+(structs, sets, dictionaries and deltas), with goldens under
 `crates/hgl_cpp/tests/goldens/` (`HGL_UPDATE_GOLDENS=1 cargo test -p
 hgl_cpp --test emit` writes them again; core's module is left out of
 them) and check what blocks what. `crates/hgl_cli/tests/cpp.rs` checks
 the driver: what is said with no SDK, `emit` and `run`; and, given an
 SDK, the whole route, that a failed build runs no older executable,
-that `demo.values` passes, and where a failure is reported, with `cargo
+that `demo.values` and `demo.composites` pass, and where a failure is reported, with `cargo
 test -p hgl_cli --test cpp -- --ignored`, which the `cpp` job of the CI
 workflow runs, with `check_core.py --target cpp`, and then both again
 with `HGL_CPP_FLAGS` naming the address and undefined-behaviour
@@ -2203,9 +2210,9 @@ later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
 which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists 170
-of core's 198 runtime cases: 162 evals, 7 that need a struct, and one
-that gives an eval's trace to a `const fn` (TST-16).
+target's list, and `--write-list` writes from a run. Today it lists 165
+of core's 198 runtime cases: 164 evals, and one that gives an eval's
+trace to a `const fn` (TST-16).
 
 ### The C++ runtime library
 
@@ -2233,6 +2240,7 @@ not use.
 | `conversions.h` | Every `convert` of core's: those that cannot fail, and those that can under `invalid`; core's `Rounding` and `InvalidPolicy` | OPS-4, OPS-6 to OPS-8 |
 | `tenors.h` | Core's natives of `tenor`, which is hgraph's `Tenor` (counts and form alone): its arithmetic, order and text, and the parts core's calendar candidates use, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-9 |
 | `lists.h` | `append`, `extend` | LIST-1 to LIST-3 |
+| `collections.h` | `set<K>`, `dict<K, V>`; a key's identity (`same`) and hash; `entry_at`, `entry`, core's `get`; `set_delta`, `dict_delta`, a list's delta's properties as HGL's; `fields<S>`, `held_value`, `held_as`, `parents<S>`, `inherits`; `enum_member` | TYPE-3, TYPE-7, TYPE-14, TYPE-16, EXPR-3, ERR-6, OPS-2 |
 | `endpoints.h` | Core's nine operations on an endpoint, each a template over the hgraph view it is given; `delta_value` plain and where a `result` is taken (`fn_delta_value_checked`); `endpoint_read`, through which a temporal form says how its delta is read, a scalar's and a nullable scalar's written | TIME-9, END-1 to END-10, ERR-14 |
 | `capabilities.h` | `Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`, each made from its hook's hgraph view, a member function for each property; `log`, `schedule` four ways, `un_schedule`, `reset`, the store's `get`, `has`, `put`; core's `LogLevel` | CAP-1 to CAP-6, TIME-8 |
 | `sources.h` | `constant`, a node that publishes a value once at the start; `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
