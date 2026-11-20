@@ -333,10 +333,9 @@ std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds, Mode
     const auto past_latest_end = [] { fail_uncoded("the run's end is after the latest end"); };
     std::optional<datetime> end = bounds.end;
     if (bounds.length.has_value()) {
-        // An end the length puts after the latest end, one no instant holds
-        // among them, is after it whatever the sum would be. The start is
-        // after the epoch, so the room before the latest end is a count of
-        // microseconds.
+        // A length that puts the end after the latest end, one too long for
+        // any instant among them, fails before the sum is taken. The start
+        // is after the epoch, so `latest_end() - start` does not overflow.
         if (*bounds.length > latest_end() - start) {
             past_latest_end();
         }

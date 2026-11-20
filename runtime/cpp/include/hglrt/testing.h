@@ -182,8 +182,8 @@ class Run {
 /// cycles, and stops it, once each"; CRUN-2: "`start` is inclusive and `end`
 /// exclusive"). A run with no end ends at the latest end (CRUN-3: "no cycle
 /// runs at" `forever`). A run whose end is not after its start runs no
-/// cycle, and its graph is not built; its entry is still wired, so that what the entry
-/// checks as it is wired, the traces it replays, is checked. A run of a test
+/// cycle, and its graph is not built; its entry is still wired, so that
+/// what the entry checks as it is wired, the traces it replays, is checked. A run of a test
 /// whose time limit has passed (TST-17, host.h) is stopped, at once where it
 /// starts after the limit, and ends as it does at its end. A failure of the
 /// run escapes, as hgraph gives it.
