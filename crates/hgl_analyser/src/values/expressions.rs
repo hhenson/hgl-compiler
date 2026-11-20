@@ -25,7 +25,19 @@ impl<'a> Typer<'a> {
     /// The expression `node`, typed. `expected` is the type its place
     /// expects, which gives a literal or a sequence its type (EXPR-5);
     /// whether the result fits is for [`Typer::fit`].
+    ///
+    /// What is read inside it, a block's statements among them, is part
+    /// of the construct around it, which may read it again
+    /// ([`Typer::begin_construct`]): so it is counted while it is read.
     pub(super) fn expression(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> Expr {
+        self.expressing += 1;
+        let value = self.expression_read(node, expected);
+        self.expressing -= 1;
+        value
+    }
+
+    /// [`Typer::expression`], counted.
+    fn expression_read(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> Expr {
         // TIME-9: a place that expects an endpoint is given one, and no
         // value: the argument of an `endpoint<T>` parameter.
         if let Some(Type::Endpoint(_)) = expected {

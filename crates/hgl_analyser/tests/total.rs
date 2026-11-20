@@ -187,10 +187,10 @@ fn the_analyser_fits_the_stack_it_asks_for() {
 /// A value read before a generic struct's arguments are found is read
 /// again once they are, when its first reading gave it no whole type
 /// (GEN-2). One such value inside another would double the work at each
-/// level, so the pass counts them for the whole function and stops
-/// reading again past its bound: the analysis ends.
+/// level, so the pass counts them for each statement and stops reading
+/// again past its bound: the analysis ends.
 #[test]
-fn values_read_again_are_counted_for_the_whole_function() {
+fn values_read_again_are_counted_for_each_statement() {
     let depth = 40;
     let mut text =
         String::from("module m\nstruct Box<T> { value: T }\nconst fn deep() {\n    let nested = ");
@@ -215,10 +215,11 @@ fn values_read_again_are_counted_for_the_whole_function() {
 /// GEN-5: an argument written as a sequence is tried as each candidate's
 /// parameter, and read once more as the selected one's. A call inside
 /// such an argument is tried in turn, which would multiply the work at
-/// each level; the readings are counted for the whole function, and a
-/// call past the bound is not judged.
+/// each level; the readings are counted for each statement, and one that
+/// needs more than its bound is reported (local `reading.limit`): what is
+/// past it is not judged, and is never accepted.
 #[test]
-fn candidate_trials_are_counted_for_the_whole_function() {
+fn candidate_trials_past_a_statements_bound_are_reported() {
     let depth = 40;
     let mut text = String::from(concat!(
         "module m\n",
@@ -238,6 +239,9 @@ fn candidate_trials_are_counted_for_the_whole_function() {
     let started = std::time::Instant::now();
     let checked = check_broken(&[("m.hgl", text.as_str())]);
     assert_eq!(checked.front_end_errors, 0, "{}", checked.report);
-    assert_eq!(checked.summary(), [] as [&str; 0]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:5 local:type/reading.limit EXPR-5"]
+    );
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
