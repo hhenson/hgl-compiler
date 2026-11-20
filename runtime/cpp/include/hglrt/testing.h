@@ -20,7 +20,7 @@
 
 #include <hgraph/runtime/executor.h>
 #include <hgraph/runtime/global_state.h>
-#include <hgraph/types/graph_wiring.h>
+#include <hgraph/types/generated.h>
 
 #include <cstddef>
 #include <exception>
@@ -165,7 +165,7 @@ class Run {
         if (!executor_.has_value()) {
             hglrt::detail::store_missing(key, std::source_location::current());
         }
-        return get_GlobalState_str<V>(store(), key);
+        return get_GlobalState_str<V>(GlobalState{store()}, key);
     }
 
   private:
