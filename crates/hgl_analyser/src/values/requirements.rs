@@ -912,9 +912,11 @@ impl<'a> Typer<'a> {
                 Given::read(position, node, value)
             })
             .collect();
+        // A requirement writes no generic argument (GEN-16).
         let wanted = Wanted {
             place: asked.as_ref(),
             among,
+            written: false,
         };
         self.requiring += 1;
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);

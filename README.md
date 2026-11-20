@@ -92,8 +92,8 @@ run.
 functions over `i64`, `f64` and `bool` and tests that assert on them,
 and reports every other form as not written yet. It builds against
 hgraph's C++ SDK, whose install prefix `HGL_HGRAPH_SDK` names and whose
-dependency prefix `HGL_HGRAPH_DEPS` names, with GCC 15 or later and
-`ninja`; see [docs/architecture.md](docs/architecture.md#cpp).
+dependency prefix `HGL_HGRAPH_DEPS` names, with GCC 15 or later on
+Linux or Apple clang 21 or later on macOS, and `ninja`; see [docs/architecture.md](docs/architecture.md#cpp).
 
 The compiler reports nesting deeper than 100 levels and a syntax tree deeper
 than 500. `--nesting-limit` and `--tree-depth-limit` raise them.

@@ -201,11 +201,12 @@ impl Family for Nullables {
                 })
             }
             // CAP-6: a nullable put in the run's store is read back by a
-            // `get` whose `V` the analyser gives as the payload's type,
-            // `i64` for `let saved: i64? = get(...)` and for
-            // `get<i64?>(...)` alike, so that a stored null would be read
-            // as a value of another type, which fails. Until the two
-            // agree, such a `put` is not written.
+            // `get`, which the analyser gives the type written after its
+            // name (`get<i64?>(...)` is an `i64?`), but, read through a
+            // nullable place, `let saved: i64? = get(...)`, the payload's,
+            // `i64`, so that a stored null would be read as a value of
+            // another type, which fails. Until the specification says which
+            // (hgl_spec issue 165), such a `put` is not written.
             ExprKind::Call {
                 callee:
                     Callee::Candidate {
@@ -218,7 +219,10 @@ impl Family for Nullables {
                     matches!(argument, GenericArgument::Type(Type::Nullable(_)))
                 }) =>
             {
-                Some(emitter.missing(value.at, "a nullable value put in the run's store"))
+                Some(emitter.missing(
+                    value.at,
+                    "a nullable value put in the run's store (hgl_spec issue 165)",
+                ))
             }
             _ => None,
         }

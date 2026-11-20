@@ -48,6 +48,7 @@ find_package(hgraph CONFIG REQUIRED)
 include(GNUInstallDirs)
 
 add_library(hglrt SHARED
+    src/application.cpp
     src/capabilities.cpp
     src/checked.cpp
     src/collections.cpp
@@ -121,13 +122,17 @@ if(BUILD_TESTING)
 
     add_executable(hglrt_tests
         tests/main.cpp
+        tests/application_tests.cpp
         tests/capabilities_tests.cpp
+        tests/capture_tests.cpp
         tests/checked_tests.cpp
         tests/collections_tests.cpp
+        tests/control_tests.cpp
         tests/conversion_tests.cpp
         tests/endpoint_tests.cpp
         tests/failure_tests.cpp
         tests/generator_tests.cpp
+        tests/references_tests.cpp
         tests/scalar_tests.cpp
         tests/scheduler_tests.cpp
         tests/structs_tests.cpp
@@ -136,11 +141,26 @@ if(BUILD_TESTING)
         tests/tenor_tests.cpp
         tests/testing_tests.cpp
         tests/text_tests.cpp
+        tests/timing_tests.cpp
         tests/traces_tests.cpp
+        tests/window_tests.cpp
     )
     target_link_libraries(hglrt_tests PRIVATE hglrt doctest::doctest)
     target_compile_options(hglrt_tests PRIVATE ${HGLRT_WARNINGS})
     add_test(NAME hglrt_tests COMMAND hglrt_tests WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
+    # hgraph alone, with no libhglrt: the read of a window in which HGL's
+    # text leads hgraph's, which windows.h guards. It fails once hgraph reads
+    # as HGL does (tests/hgraph_window_read.cpp).
+    add_executable(hgraph_window_read tests/hgraph_window_read.cpp)
+    target_link_libraries(hgraph_window_read PRIVATE hgraph::runtime hgraph::wiring)
+    target_compile_features(hgraph_window_read PRIVATE cxx_std_23)
+    target_compile_options(hgraph_window_read PRIVATE ${HGLRT_WARNINGS})
+    if(HGLRT_SANITIZE)
+        target_compile_options(hgraph_window_read PRIVATE ${HGLRT_SANITIZERS})
+        target_link_options(hgraph_window_read PRIVATE ${HGLRT_SANITIZERS})
+    endif()
+    add_test(NAME hgraph_window_read COMMAND hgraph_window_read)
 
     # Nothing of hgraph's standard library and nothing of Arrow, included or
     # linked (docs/cpp-target.md). The include set of the public headers is

@@ -7,12 +7,19 @@
 #undef a
 #undef add_one
 #undef b
+#undef bumped
+#undef chosen
+#undef compose
 #undef count_publications
 #undef counted_ticks
 #undef demo
+#undef first
 #undef first_of
+#undef name
 #undef noted
+#undef pick
 #undef scaled
+#undef second
 #undef stamped
 #undef temporal
 #undef ticks
@@ -68,6 +75,36 @@ namespace w_
 {
 // noted(value: i64) (node), module demo.temporal, line 52
 void noted(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
+}  // namespace w_
+
+namespace w_
+{
+// name(value: i64) -> i64 (node), module demo.temporal, line 58
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> name(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
+}  // namespace w_
+
+namespace w_
+{
+// compose(value: i64) -> i64 (graph), module demo.temporal, line 62
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
+}  // namespace w_
+
+namespace w_
+{
+// pick(value: bool, const first: bool, const second: bool) -> bool (node), module demo.temporal, line 68
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> pick(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> value, ::hgraph::Bool first, ::hgraph::Bool second);
+}  // namespace w_
+
+namespace w_
+{
+// chosen(value: bool) -> bool (graph), module demo.temporal, line 72
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> chosen(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> value);
+}  // namespace w_
+
+namespace w_
+{
+// bumped(value: i64) -> i64 (node), module demo.temporal, line 81
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> bumped(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
 }  // namespace w_
 
 }  // namespace hgl::demo::temporal::m_

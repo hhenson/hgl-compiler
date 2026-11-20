@@ -1,0 +1,49 @@
+module demo.apps
+
+# The run's store where a graph is built and where an application sets
+# it, and the applications over its entries (demo.apps.*.hgl). Their
+# goldens are under `tests/goldens/demo.apps`.
+
+# A source: each of `values`, `every` apart.
+export fn ticks(const values: list<i64>, const every: duration = 1s) -> i64 {
+    for value in values {
+        yield every: value
+    }
+}
+
+# A node that passes a value no greater than the store's limit (CAP-6).
+fn limited(value: i64) -> i64 {
+    inject global_state
+    when {
+        if value <= get<i64>(global_state, "limit") { return value }
+    }
+}
+
+# A graph that sets the store where it is built, and reads it there
+# (FN-9): its source's step is the limit it put.
+export fn seeded(const limit: i64, const values: list<i64>) -> i64 {
+    inject global_state
+    put(global_state, "limit", limit)
+    let seen = get<i64>(global_state, "limit")
+    return limited(ticks(values, every: seen * 1s))
+}
+
+# An entry that reads the store an application sets.
+export fn bounded(const values: list<i64>) -> i64 {
+    return limited(ticks(values))
+}
+
+# A node with no result, which keeps what it is given in the store.
+fn kept(value: i64) {
+    inject global_state
+    when { put(global_state, "last", value) }
+}
+
+# An entry with no result.
+export fn quiet(const values: list<i64>) {
+    kept(ticks(values))
+}
+
+test the_store_is_set_where_the_graph_is_built {
+    assert eval(seeded(limit: 2, values: [1, 2, 3])) == [2s: 1, 4s: 2]
+}

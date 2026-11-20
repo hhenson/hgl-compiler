@@ -105,10 +105,10 @@
 namespace hgl::demo::structs::m_
 {
 
-namespace n_
+namespace n_::update_quote
 {
 // update_quote(is_bid: bool, price: i64) -> MarketQuote (node), module demo.structs, line 14
-struct update_quote
+struct impl_
 {
     static constexpr auto name = "demo.structs::update_quote";
 
@@ -126,40 +126,40 @@ struct update_quote
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::update_quote
 namespace w_
 {
 // update_quote(is_bid: bool, price: i64) -> MarketQuote (node), module demo.structs, line 14
 ::hgraph::Port<::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>> update_quote(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> is_bid, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::update_quote>(wiring_, is_bid, price);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::update_quote::impl_>(wiring_, is_bid, price);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::bid_ticks
 {
 // bid_ticks(is_bid: bool, price: i64) -> i64 (graph), module demo.structs, line 21
-struct bid_ticks
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> is_bid, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
     {
         return ::hglrt::field_port<0>(::hgl::demo::structs::m_::w_::update_quote(wiring_, is_bid, price));
     }
 };
-}  // namespace n_
+}  // namespace n_::bid_ticks
 namespace w_
 {
 // bid_ticks(is_bid: bool, price: i64) -> i64 (graph), module demo.structs, line 21
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid_ticks(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> is_bid, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
 {
-    return ::hgl::demo::structs::m_::n_::bid_ticks::compose(wiring_, is_bid, price);
+    return ::hgl::demo::structs::m_::n_::bid_ticks::impl_::compose(wiring_, is_bid, price);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::whole_quote
 {
 // whole_quote(bid: i64, ask: i64) -> atomic<MarketQuote> (node), module demo.structs, line 30
-struct whole_quote
+struct impl_
 {
     static constexpr auto name = "demo.structs::whole_quote";
 
@@ -172,40 +172,40 @@ struct whole_quote
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::whole_quote
 namespace w_
 {
 // whole_quote(bid: i64, ask: i64) -> atomic<MarketQuote> (node), module demo.structs, line 30
 ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::MarketQuote>> whole_quote(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> ask)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::whole_quote>(wiring_, bid, ask);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::whole_quote::impl_>(wiring_, bid, ask);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::atomic_bid_ticks
 {
 // atomic_bid_ticks(bid: i64, ask: i64) -> i64 (graph), module demo.structs, line 34
-struct atomic_bid_ticks
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> ask)
     {
         return ::hglrt::atomic_field<0, ::hgraph::TS<::hgraph::Int>>(wiring_, ::hgl::demo::structs::m_::w_::whole_quote(wiring_, bid, ask));
     }
 };
-}  // namespace n_
+}  // namespace n_::atomic_bid_ticks
 namespace w_
 {
 // atomic_bid_ticks(bid: i64, ask: i64) -> i64 (graph), module demo.structs, line 34
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> atomic_bid_ticks(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> ask)
 {
-    return ::hgl::demo::structs::m_::n_::atomic_bid_ticks::compose(wiring_, bid, ask);
+    return ::hgl::demo::structs::m_::n_::atomic_bid_ticks::impl_::compose(wiring_, bid, ask);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::write_quote_fields
 {
 // write_quote_fields(bid: i64, ask: i64) -> MarketQuote (node), module demo.structs, line 43
-struct write_quote_fields
+struct impl_
 {
     static constexpr auto name = "demo.structs::write_quote_fields";
 
@@ -219,20 +219,20 @@ struct write_quote_fields
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::write_quote_fields
 namespace w_
 {
 // write_quote_fields(bid: i64, ask: i64) -> MarketQuote (node), module demo.structs, line 43
 ::hgraph::Port<::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>> write_quote_fields(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> ask)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::write_quote_fields>(wiring_, bid, ask);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::write_quote_fields::impl_>(wiring_, bid, ask);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::quote_valid
 {
 // quote_valid(probe: bool, quote: MarketQuote) -> bool (node), module demo.structs, line 63
-struct quote_valid
+struct impl_
 {
     static constexpr auto name = "demo.structs::quote_valid";
 
@@ -246,20 +246,20 @@ struct quote_valid
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::quote_valid
 namespace w_
 {
 // quote_valid(probe: bool, quote: MarketQuote) -> bool (node), module demo.structs, line 63
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> quote_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>> quote)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::quote_valid>(wiring_, probe, quote);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::quote_valid::impl_>(wiring_, probe, quote);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::quote_all_valid
 {
 // quote_all_valid(probe: bool, quote: MarketQuote) -> bool (node), module demo.structs, line 67
-struct quote_all_valid
+struct impl_
 {
     static constexpr auto name = "demo.structs::quote_all_valid";
 
@@ -273,60 +273,60 @@ struct quote_all_valid
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::quote_all_valid
 namespace w_
 {
 // quote_all_valid(probe: bool, quote: MarketQuote) -> bool (node), module demo.structs, line 67
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> quote_all_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>> quote)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::quote_all_valid>(wiring_, probe, quote);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::quote_all_valid::impl_>(wiring_, probe, quote);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::observe_quote_valid
 {
 // observe_quote_valid(probe: bool, is_bid: bool, price: i64) -> bool (graph), module demo.structs, line 71
-struct observe_quote_valid
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> is_bid, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
     {
         return ::hgl::demo::structs::m_::w_::quote_valid(wiring_, probe, ::hgl::demo::structs::m_::w_::update_quote(wiring_, is_bid, price));
     }
 };
-}  // namespace n_
+}  // namespace n_::observe_quote_valid
 namespace w_
 {
 // observe_quote_valid(probe: bool, is_bid: bool, price: i64) -> bool (graph), module demo.structs, line 71
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> observe_quote_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> is_bid, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
 {
-    return ::hgl::demo::structs::m_::n_::observe_quote_valid::compose(wiring_, probe, is_bid, price);
+    return ::hgl::demo::structs::m_::n_::observe_quote_valid::impl_::compose(wiring_, probe, is_bid, price);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::observe_quote_all_valid
 {
 // observe_quote_all_valid(probe: bool, is_bid: bool, price: i64) -> bool (graph), module demo.structs, line 74
-struct observe_quote_all_valid
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> is_bid, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
     {
         return ::hgl::demo::structs::m_::w_::quote_all_valid(wiring_, probe, ::hgl::demo::structs::m_::w_::update_quote(wiring_, is_bid, price));
     }
 };
-}  // namespace n_
+}  // namespace n_::observe_quote_all_valid
 namespace w_
 {
 // observe_quote_all_valid(probe: bool, is_bid: bool, price: i64) -> bool (graph), module demo.structs, line 74
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> observe_quote_all_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> is_bid, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
 {
-    return ::hgl::demo::structs::m_::n_::observe_quote_all_valid::compose(wiring_, probe, is_bid, price);
+    return ::hgl::demo::structs::m_::n_::observe_quote_all_valid::impl_::compose(wiring_, probe, is_bid, price);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::relay_quote
 {
 // relay_quote(quote: MarketQuote) -> MarketQuote (node), module demo.structs, line 93
-struct relay_quote
+struct impl_
 {
     static constexpr auto name = "demo.structs::relay_quote";
 
@@ -340,20 +340,20 @@ struct relay_quote
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::relay_quote
 namespace w_
 {
 // relay_quote(quote: MarketQuote) -> MarketQuote (node), module demo.structs, line 93
 ::hgraph::Port<::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>> relay_quote(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>> quote)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::relay_quote>(wiring_, quote);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::relay_quote::impl_>(wiring_, quote);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::set_one_part
 {
 // set_one_part(first: bool, value: i64) -> tuple<i64, i64> (node), module demo.structs, line 111
-struct set_one_part
+struct impl_
 {
     static constexpr auto name = "demo.structs::set_one_part";
 
@@ -373,20 +373,20 @@ struct set_one_part
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::set_one_part
 namespace w_
 {
 // set_one_part(first: bool, value: i64) -> tuple<i64, i64> (node), module demo.structs, line 111
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> set_one_part(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> first, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::set_one_part>(wiring_, first, value);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::set_one_part::impl_>(wiring_, first, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::part_validity
 {
 // part_validity(probe: bool, parts: tuple<i64, i64>) -> tuple<bool, bool> (node), module demo.structs, line 120
-struct part_validity
+struct impl_
 {
     static constexpr auto name = "demo.structs::part_validity";
 
@@ -400,40 +400,40 @@ struct part_validity
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::part_validity
 namespace w_
 {
 // part_validity(probe: bool, parts: tuple<i64, i64>) -> tuple<bool, bool> (node), module demo.structs, line 120
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Bool>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>>> part_validity(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> parts)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::part_validity>(wiring_, probe, parts);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::part_validity::impl_>(wiring_, probe, parts);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::observe_part_validity
 {
 // observe_part_validity(probe: bool, first: bool, value: i64) -> tuple<bool, bool> (graph), module demo.structs, line 124
-struct observe_part_validity
+struct impl_
 {
     static ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Bool>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> first, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
     {
         return ::hgl::demo::structs::m_::w_::part_validity(wiring_, probe, ::hgl::demo::structs::m_::w_::set_one_part(wiring_, first, value));
     }
 };
-}  // namespace n_
+}  // namespace n_::observe_part_validity
 namespace w_
 {
 // observe_part_validity(probe: bool, first: bool, value: i64) -> tuple<bool, bool> (graph), module demo.structs, line 124
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Bool>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>>> observe_part_validity(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> first, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgl::demo::structs::m_::n_::observe_part_validity::compose(wiring_, probe, first, value);
+    return ::hgl::demo::structs::m_::n_::observe_part_validity::impl_::compose(wiring_, probe, first, value);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::write_bid
 {
 // write_bid(bid: i64) -> NotedQuote (node), module demo.structs, line 140
-struct write_bid
+struct impl_
 {
     static constexpr auto name = "demo.structs::write_bid";
 
@@ -446,13 +446,13 @@ struct write_bid
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::write_bid
 namespace w_
 {
 // write_bid(bid: i64) -> NotedQuote (node), module demo.structs, line 140
 ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>> write_bid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::write_bid>(wiring_, bid);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::write_bid::impl_>(wiring_, bid);
 }
 }  // namespace w_
 
@@ -462,10 +462,10 @@ namespace w_
     return (!((quote).note).has_value());
 }
 
-namespace n_
+namespace n_::read_noted_quote
 {
 // read_noted_quote(probe: bool, quote: NotedQuote) -> tuple<bool, bool, bool> (node), module demo.structs, line 146
-struct read_noted_quote
+struct impl_
 {
     static constexpr auto name = "demo.structs::read_noted_quote";
 
@@ -479,40 +479,40 @@ struct read_noted_quote
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::read_noted_quote
 namespace w_
 {
 // read_noted_quote(probe: bool, quote: NotedQuote) -> tuple<bool, bool, bool> (node), module demo.structs, line 146
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Bool>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>, ::hgraph::Field<"2", ::hgraph::TS<::hgraph::Bool>>>> read_noted_quote(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>> quote)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::read_noted_quote>(wiring_, probe, quote);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::read_noted_quote::impl_>(wiring_, probe, quote);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::observe_noted_quote
 {
 // observe_noted_quote(probe: bool, bid: i64) -> tuple<bool, bool, bool> (graph), module demo.structs, line 152
-struct observe_noted_quote
+struct impl_
 {
     static ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Bool>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>, ::hgraph::Field<"2", ::hgraph::TS<::hgraph::Bool>>>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
     {
         return ::hgl::demo::structs::m_::w_::read_noted_quote(wiring_, probe, ::hgl::demo::structs::m_::w_::write_bid(wiring_, bid));
     }
 };
-}  // namespace n_
+}  // namespace n_::observe_noted_quote
 namespace w_
 {
 // observe_noted_quote(probe: bool, bid: i64) -> tuple<bool, bool, bool> (graph), module demo.structs, line 152
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Bool>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>, ::hgraph::Field<"2", ::hgraph::TS<::hgraph::Bool>>>> observe_noted_quote(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
 {
-    return ::hgl::demo::structs::m_::n_::observe_noted_quote::compose(wiring_, probe, bid);
+    return ::hgl::demo::structs::m_::n_::observe_noted_quote::impl_::compose(wiring_, probe, bid);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::relay_pair
 {
 // relay_pair(pair: tuple<i64, str>) -> tuple<i64, str> (node), module demo.structs, line 162
-struct relay_pair
+struct impl_
 {
     static constexpr auto name = "demo.structs::relay_pair";
 
@@ -526,20 +526,20 @@ struct relay_pair
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::relay_pair
 namespace w_
 {
 // relay_pair(pair: tuple<i64, str>) -> tuple<i64, str> (node), module demo.structs, line 162
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>> relay_pair(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>> pair)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::relay_pair>(wiring_, pair);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::relay_pair::impl_>(wiring_, pair);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::make_outer
 {
 // make_outer(size: i64) -> Outer (node), module demo.structs, line 180
-struct make_outer
+struct impl_
 {
     static constexpr auto name = "demo.structs::make_outer";
 
@@ -557,20 +557,20 @@ struct make_outer
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::make_outer
 namespace w_
 {
 // make_outer(size: i64) -> Outer (node), module demo.structs, line 180
 ::hgraph::Port<::hgraph::NativeTSB<::hgl::demo::structs::m_::Outer>> make_outer(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> size)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::make_outer>(wiring_, size);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::make_outer::impl_>(wiring_, size);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::read_outer
 {
 // read_outer(outer: Outer) -> i64 (node), module demo.structs, line 189
-struct read_outer
+struct impl_
 {
     static constexpr auto name = "demo.structs::read_outer";
 
@@ -590,40 +590,40 @@ struct read_outer
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::read_outer
 namespace w_
 {
 // read_outer(outer: Outer) -> i64 (node), module demo.structs, line 189
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> read_outer(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::NativeTSB<::hgl::demo::structs::m_::Outer>> outer)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::read_outer>(wiring_, outer);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::read_outer::impl_>(wiring_, outer);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::outer_ticks
 {
 // outer_ticks(size: i64) -> i64 (graph), module demo.structs, line 197
-struct outer_ticks
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> size)
     {
         return ::hgl::demo::structs::m_::w_::read_outer(wiring_, ::hgl::demo::structs::m_::w_::make_outer(wiring_, size));
     }
 };
-}  // namespace n_
+}  // namespace n_::outer_ticks
 namespace w_
 {
 // outer_ticks(size: i64) -> i64 (graph), module demo.structs, line 197
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> outer_ticks(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> size)
 {
-    return ::hgl::demo::structs::m_::n_::outer_ticks::compose(wiring_, size);
+    return ::hgl::demo::structs::m_::n_::outer_ticks::impl_::compose(wiring_, size);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::outer_deltas
 {
 // outer_deltas(size: i64) -> Outer (node), module demo.structs, line 203
-struct outer_deltas
+struct impl_
 {
     static constexpr auto name = "demo.structs::outer_deltas";
 
@@ -641,20 +641,20 @@ struct outer_deltas
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::outer_deltas
 namespace w_
 {
 // outer_deltas(size: i64) -> Outer (node), module demo.structs, line 203
 ::hgraph::Port<::hgraph::NativeTSB<::hgl::demo::structs::m_::Outer>> outer_deltas(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> size)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::outer_deltas>(wiring_, size);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::outer_deltas::impl_>(wiring_, size);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::bid_delta
 {
 // bid_delta(quote: NotedQuote) -> i64? (node), module demo.structs, line 217
-struct bid_delta
+struct impl_
 {
     static constexpr auto name = "demo.structs::bid_delta";
 
@@ -667,20 +667,20 @@ struct bid_delta
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::bid_delta
 namespace w_
 {
 // bid_delta(quote: NotedQuote) -> i64? (node), module demo.structs, line 217
 ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> bid_delta(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>> quote)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::bid_delta>(wiring_, quote);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::bid_delta::impl_>(wiring_, quote);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::publish_nullable
 {
 // publish_nullable(command: i64) -> i64? (node), module demo.structs, line 231
-struct publish_nullable
+struct impl_
 {
     static constexpr auto name = "demo.structs::publish_nullable";
 
@@ -698,20 +698,20 @@ struct publish_nullable
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::publish_nullable
 namespace w_
 {
 // publish_nullable(command: i64) -> i64? (node), module demo.structs, line 231
 ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> publish_nullable(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> command)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::publish_nullable>(wiring_, command);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::publish_nullable::impl_>(wiring_, command);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::read_validity
 {
 // read_validity(probe: bool, watched: i64?) -> bool (node), module demo.structs, line 238
-struct read_validity
+struct impl_
 {
     static constexpr auto name = "demo.structs::read_validity";
 
@@ -725,40 +725,40 @@ struct read_validity
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::read_validity
 namespace w_
 {
 // read_validity(probe: bool, watched: i64?) -> bool (node), module demo.structs, line 238
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> read_validity(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> watched)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::read_validity>(wiring_, probe, watched);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::read_validity::impl_>(wiring_, probe, watched);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::observe_validity
 {
 // observe_validity(command: i64, probe: bool) -> bool (graph), module demo.structs, line 242
-struct observe_validity
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> command, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe)
     {
         return ::hgl::demo::structs::m_::w_::read_validity(wiring_, probe, ::hgl::demo::structs::m_::w_::publish_nullable(wiring_, command));
     }
 };
-}  // namespace n_
+}  // namespace n_::observe_validity
 namespace w_
 {
 // observe_validity(command: i64, probe: bool) -> bool (graph), module demo.structs, line 242
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> observe_validity(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> command, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe)
 {
-    return ::hgl::demo::structs::m_::n_::observe_validity::compose(wiring_, command, probe);
+    return ::hgl::demo::structs::m_::n_::observe_validity::impl_::compose(wiring_, command, probe);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::nullable_delta_payload
 {
 // nullable_delta_payload(input: i64?) -> i64? (node), module demo.structs, line 251
-struct nullable_delta_payload
+struct impl_
 {
     static constexpr auto name = "demo.structs::nullable_delta_payload";
 
@@ -772,20 +772,20 @@ struct nullable_delta_payload
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::nullable_delta_payload
 namespace w_
 {
 // nullable_delta_payload(input: i64?) -> i64? (node), module demo.structs, line 251
 ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> nullable_delta_payload(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> input)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::nullable_delta_payload>(wiring_, input);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::nullable_delta_payload::impl_>(wiring_, input);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::doubled
 {
 // doubled(reading: i64?) -> i64 (node), module demo.structs, line 262
-struct doubled
+struct impl_
 {
     static constexpr auto name = "demo.structs::doubled";
 
@@ -803,20 +803,20 @@ struct doubled
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::doubled
 namespace w_
 {
 // doubled(reading: i64?) -> i64 (node), module demo.structs, line 262
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> doubled(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> reading)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::doubled>(wiring_, reading);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::doubled::impl_>(wiring_, reading);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::action
 {
 // action(code: i64) -> i64? (node), module demo.structs, line 273
-struct action
+struct impl_
 {
     static constexpr auto name = "demo.structs::action";
 
@@ -841,20 +841,20 @@ struct action
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::action
 namespace w_
 {
 // action(code: i64) -> i64? (node), module demo.structs, line 273
 ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> action(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> code)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::action>(wiring_, code);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::action::impl_>(wiring_, code);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::sample_timestamp
 {
 // sample_timestamp(sample: bool, watched: i64?) -> datetime? (node), module demo.structs, line 282
-struct sample_timestamp
+struct impl_
 {
     static constexpr auto name = "demo.structs::sample_timestamp";
 
@@ -868,40 +868,40 @@ struct sample_timestamp
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::sample_timestamp
 namespace w_
 {
 // sample_timestamp(sample: bool, watched: i64?) -> datetime? (node), module demo.structs, line 282
 ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::DateTime>>> sample_timestamp(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> sample, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> watched)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::sample_timestamp>(wiring_, sample, watched);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::sample_timestamp::impl_>(wiring_, sample, watched);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::scalar_timestamp
 {
 // scalar_timestamp(code: i64, sample: bool) -> datetime? (graph), module demo.structs, line 286
-struct scalar_timestamp
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::DateTime>>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> code, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> sample)
     {
         return ::hgl::demo::structs::m_::w_::sample_timestamp(wiring_, sample, ::hgl::demo::structs::m_::w_::action(wiring_, code));
     }
 };
-}  // namespace n_
+}  // namespace n_::scalar_timestamp
 namespace w_
 {
 // scalar_timestamp(code: i64, sample: bool) -> datetime? (graph), module demo.structs, line 286
 ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::DateTime>>> scalar_timestamp(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> code, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> sample)
 {
-    return ::hgl::demo::structs::m_::n_::scalar_timestamp::compose(wiring_, code, sample);
+    return ::hgl::demo::structs::m_::n_::scalar_timestamp::impl_::compose(wiring_, code, sample);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::whole_plain
 {
 // whole_plain(bid: i64) -> atomic<PlainQuote> (node), module demo.structs, line 304
-struct whole_plain
+struct impl_
 {
     static constexpr auto name = "demo.structs::whole_plain";
 
@@ -914,20 +914,20 @@ struct whole_plain
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::whole_plain
 namespace w_
 {
 // whole_plain(bid: i64) -> atomic<PlainQuote> (node), module demo.structs, line 304
 ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::PlainQuote>> whole_plain(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::whole_plain>(wiring_, bid);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::whole_plain::impl_>(wiring_, bid);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::spread
 {
 // spread(quote: atomic<PlainQuote>) -> i64 (node), module demo.structs, line 308
-struct spread
+struct impl_
 {
     static constexpr auto name = "demo.structs::spread";
 
@@ -940,40 +940,40 @@ struct spread
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::spread
 namespace w_
 {
 // spread(quote: atomic<PlainQuote>) -> i64 (node), module demo.structs, line 308
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> spread(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::PlainQuote>> quote)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::spread>(wiring_, quote);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::spread::impl_>(wiring_, quote);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::spread_of
 {
 // spread_of(bid: i64) -> i64 (graph), module demo.structs, line 312
-struct spread_of
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
     {
         return ::hgl::demo::structs::m_::w_::spread(wiring_, ::hgl::demo::structs::m_::w_::whole_plain(wiring_, bid));
     }
 };
-}  // namespace n_
+}  // namespace n_::spread_of
 namespace w_
 {
 // spread_of(bid: i64) -> i64 (graph), module demo.structs, line 312
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> spread_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
 {
-    return ::hgl::demo::structs::m_::n_::spread_of::compose(wiring_, bid);
+    return ::hgl::demo::structs::m_::n_::spread_of::impl_::compose(wiring_, bid);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::pair_sum
 {
 // pair_sum(pair: tuple<i64, i64>) -> i64 (node), module demo.structs, line 318
-struct pair_sum
+struct impl_
 {
     static constexpr auto name = "demo.structs::pair_sum";
 
@@ -987,40 +987,40 @@ struct pair_sum
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::pair_sum
 namespace w_
 {
 // pair_sum(pair: tuple<i64, i64>) -> i64 (node), module demo.structs, line 318
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> pair_sum(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> pair)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::pair_sum>(wiring_, pair);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::pair_sum::impl_>(wiring_, pair);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::first_of
 {
 // first_of(pair: tuple<i64, str>) -> i64 (graph), module demo.structs, line 322
-struct first_of
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>> pair)
     {
         return ::hglrt::field_port<0>(pair);
     }
 };
-}  // namespace n_
+}  // namespace n_::first_of
 namespace w_
 {
 // first_of(pair: tuple<i64, str>) -> i64 (graph), module demo.structs, line 322
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> first_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>> pair)
 {
-    return ::hgl::demo::structs::m_::n_::first_of::compose(wiring_, pair);
+    return ::hgl::demo::structs::m_::n_::first_of::impl_::compose(wiring_, pair);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::wrap
 {
 // wrap(bid: i64) -> Wrapped (node), module demo.structs, line 335
-struct wrap
+struct impl_
 {
     static constexpr auto name = "demo.structs::wrap";
 
@@ -1033,20 +1033,20 @@ struct wrap
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::wrap
 namespace w_
 {
 // wrap(bid: i64) -> Wrapped (node), module demo.structs, line 335
 ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::Wrapped, ::hgraph::Field<"noted", ::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> wrap(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::wrap>(wiring_, bid);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::wrap::impl_>(wiring_, bid);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::wrapped_sum
 {
 // wrapped_sum(wrapped: Wrapped) -> i64 (node), module demo.structs, line 339
-struct wrapped_sum
+struct impl_
 {
     static constexpr auto name = "demo.structs::wrapped_sum";
 
@@ -1061,33 +1061,33 @@ struct wrapped_sum
         }
     }
 };
-}  // namespace n_
+}  // namespace n_::wrapped_sum
 namespace w_
 {
 // wrapped_sum(wrapped: Wrapped) -> i64 (node), module demo.structs, line 339
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wrapped_sum(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::Wrapped, ::hgraph::Field<"noted", ::hgraph::NominalTSB<::hgl::demo::structs::m_::NotedQuote, ::hgraph::Field<"bid", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"note", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> wrapped)
 {
-    return ::hgraph::wire<::hgl::demo::structs::m_::n_::wrapped_sum>(wiring_, wrapped);
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::wrapped_sum::impl_>(wiring_, wrapped);
 }
 }  // namespace w_
 
-namespace n_
+namespace n_::wrapped_of
 {
 // wrapped_of(bid: i64) -> i64 (graph), module demo.structs, line 346
-struct wrapped_of
+struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
     {
         return ::hgl::demo::structs::m_::w_::wrapped_sum(wiring_, ::hgl::demo::structs::m_::w_::wrap(wiring_, bid));
     }
 };
-}  // namespace n_
+}  // namespace n_::wrapped_of
 namespace w_
 {
 // wrapped_of(bid: i64) -> i64 (graph), module demo.structs, line 346
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wrapped_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
 {
-    return ::hgl::demo::structs::m_::n_::wrapped_of::compose(wiring_, bid);
+    return ::hgl::demo::structs::m_::n_::wrapped_of::impl_::compose(wiring_, bid);
 }
 }  // namespace w_
 

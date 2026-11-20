@@ -28,7 +28,8 @@
 //! with a part whose form is not a scalar's, an enum's, a nullable's or
 //! another of this family's (a list, a set, a dictionary, a window), an
 //! atomic struct that holds an optional field (hgraph's own conversion of
-//! a struct does not map a C++ optional to its `Optional`), a constant
+//! a struct does not map a C++ optional to its `Optional`: hgraph issue
+//! 1874), a constant
 //! connection of one (FN-3), and a read of a part of `out`.
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook, Stmt, Value};
@@ -155,6 +156,24 @@ fn holds_optional(program: &Program, ty: &Type, depth: usize) -> bool {
         }),
         _ => false,
     }
+}
+
+/// What is reported where a temporal value of `ty` is a struct this
+/// family does not write for a reason hgraph gives: an atomic struct, or
+/// a struct with an atomic field, that holds an optional field, which
+/// hgraph's own conversion of a mapped aggregate does not take, as
+/// `native_bundle` maps no C++ optional member to its `Optional` (hgraph
+/// issue 1874). `None` for any other.
+pub(super) fn unwritten(program: &Program, ty: &Type) -> Option<&'static str> {
+    let atomic_optional = |ty: &Type| {
+        matches!(ty, Type::Atomic(payload) if bundled(program, payload).is_some())
+            && holds_optional(program, ty, 0)
+    };
+    let fields = || fields_of(program, ty).unwrap_or_default();
+    (atomic_optional(ty)
+        || (bundled(program, ty).is_some()
+            && fields().iter().any(|(_, field)| atomic_optional(field))))
+    .then_some("an atomic struct that holds an optional field (hgraph issue 1874)")
 }
 
 /// The form of a part of a struct or a tuple, a field or a position, of
