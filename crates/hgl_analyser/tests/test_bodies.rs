@@ -65,10 +65,10 @@ fn an_assert_takes_a_wiring_time_bool() {
         "    assert bound\n",
         "    assert \"text\"\n",
         "    assert []\n",
-        // A connection: what `forward` publishes is known only as the
-        // graph runs.
+        // A node called outside an `eval`: a test's statements are
+        // value code there (TST-3), which calls `const fn`s only.
         "    assert forward(bound) == 3\n",
-        // What any composition block rejects.
+        // What any block rejects.
         "    assert missing == 3\n",
         "    let wrong: str = bound\n",
         "}\n",
@@ -79,7 +79,7 @@ fn an_assert_takes_a_wiring_time_bool() {
             "m.hgl:22:12 type/type.mismatch TST-4",
             "m.hgl:23:12 type/type.mismatch TST-4",
             "m.hgl:24:12 type/type.mismatch TST-4",
-            "m.hgl:25:12 phase/connection.as_constant TST-4",
+            "m.hgl:25:12 function-kind/call.role TST-3",
             "m.hgl:26:12 name/name.unknown UNIT-10",
             "m.hgl:27:22 type/type.mismatch EXPR-5",
         ]

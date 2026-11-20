@@ -457,6 +457,11 @@ struct Typer<'a> {
     /// is a statement, and what the test may not hold is reported by the
     /// phase pass and not read.
     testing: bool,
+    /// True while value code is read that selects among all of an
+    /// operator's candidates (GEN-5): a test's statements outside an
+    /// `eval` or a `run` (TST-3) and an application's statements
+    /// (UNIT-14).
+    value_code: bool,
     /// True while the block read is an integration test's (TST-17):
     /// there `run(...)` is written beside `eval(...)`.
     integration: bool,
@@ -503,10 +508,11 @@ struct Typer<'a> {
     /// The operator of core's module each symbol met so far stands for,
     /// by the operator's name; `None` for one the program has not.
     identities: HashMap<&'static str, Option<OperatorRef>>,
-    /// The value candidates of each operator called so far, by the
-    /// operator's module and declaration. A chain of symbols asks for
-    /// the same operator's at every link.
-    candidates: HashMap<(usize, usize), Vec<Candidate<'a>>>,
+    /// The candidates of each operator called so far, by the operator's
+    /// module and declaration and whether the temporal ones are among
+    /// them. A chain of symbols asks for the same operator's at every
+    /// link.
+    candidates: HashMap<(usize, usize, bool), Vec<Candidate<'a>>>,
     /// The values of the module constants this function's constants
     /// have named (UNIT-13): a constant named twice is read once.
     constants: crate::constant::Constants,
@@ -625,6 +631,7 @@ impl<'a> Typer<'a> {
             present: Vec::new(),
             aliases: HashMap::new(),
             testing: false,
+            value_code: false,
             integration: false,
             generating: false,
             valued: 0,
