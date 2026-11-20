@@ -473,3 +473,37 @@ fn value_code_is_written() {
         assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
     }
 }
+
+/// The natives `demo.natives` reaches, by the names the runtime library
+/// gives them.
+fn provides_natives(name: &str) -> bool {
+    provides(name)
+        || [
+            "div__f64_f64",
+            "convert_i64",
+            "convert_f64_Rounding_i64_",
+            "eq__T_T",
+            "eq__f64_f64_f64_f64",
+        ]
+        .contains(&name)
+}
+
+/// Core's native candidates as the target calls them: a generic one's
+/// arguments are its template's, a zero policy (NUM-3) and the type of
+/// an equality (OPS-2); a candidate of `convert`, whose candidates are
+/// told apart by what they give (OPS-4), that takes the value alone is
+/// given that type first, and the one that takes options is given its
+/// `invalid` policy.
+#[test]
+fn natives_are_called_with_their_templates() {
+    let emitted = emit_with(
+        &[(
+            "demo.natives.hgl",
+            include_str!("fixtures/demo.natives.hgl"),
+        )],
+        &provides_natives,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.natives", &emitted.output);
+    assert_eq!(emitted.blocked("natives_are_called"), None);
+}

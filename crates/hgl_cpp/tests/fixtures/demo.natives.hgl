@@ -1,0 +1,21 @@
+module demo.natives
+
+# Core's native candidates as the cpp target calls them: a generic one's
+# arguments are its template's (NUM-3: a zero policy; OPS-2: the type of
+# an equality), and a conversion of one value is given the type it gives
+# first (OPS-4).
+
+const fn ratio(a: f64, b: f64) -> f64 => a /{zero: .nan} b
+
+const fn text(value: i64) -> str => convert<str>(value)
+
+const fn whole(value: f64) -> i64 => convert<i64>(value, rounding: .half_even, invalid: .fail)
+
+const fn same(a: str, b: str) -> bool => a == b
+
+test natives_are_called {
+    assert ratio(1.0, 2.0) == 0.5
+    assert text(42) == "42"
+    assert whole(2.5) == 2
+    assert same("a", "a")
+}
