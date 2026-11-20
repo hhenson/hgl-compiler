@@ -109,7 +109,7 @@ the chapters' entries stay the hgraph target's.
 | `append`, `extend` | LIST-1, LIST-2, LIST-3 | `lists.h` | `capabilities_tests.cpp` |
 | The operations on an endpoint of a scalar or a nullable scalar, input or result: `valid`, `modified`, `delta_value` plain and where a `result` is taken, `last_modified`, `invalidate` of the result, `is_active`, `activate`, `passivate`; `all_valid` and a form's own delta wait for their forms | TIME-9, END-1 to END-6, ERR-14 | `endpoints.h` | `endpoint_tests.cpp` |
 | `Logger` and `log`, `Clock` and its four properties | CAP-1, CAP-2, CAP-3 | `capabilities.h` | `capabilities_tests.cpp` |
-| `Scheduler`: its three properties, `schedule` with a duration or a datetime under a tag or none, `un_schedule`, `reset`; `Alarm` and its `schedule`; what may be asked of each | CAP-4, CAP-5, TIME-8 | `capabilities.h` | `scheduler_tests.cpp` |
+| `Scheduler`: its three properties, `schedule` with a duration or a datetime under a tag or none, on the wall clock in real time and unchanged by it in simulation, `un_schedule`, `reset`; `Alarm` and its `schedule`; what may be asked of each | CAP-4, CAP-5, TIME-8 | `capabilities.h` | `scheduler_tests.cpp` |
 | `get`, `has`, `put` of the global store, in a node and where a graph is built | CAP-6, FN-9 | `capabilities.h` | `capabilities_tests.cpp` |
 | A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |

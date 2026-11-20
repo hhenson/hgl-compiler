@@ -113,7 +113,12 @@ void start_wakes(i64 case_, const hglrt::Scheduler& scheduler) {
         break;
     case 10: // a wake at the start whose evaluation asks for one of zero
     case 11: // ... for one before now, and one at it, as datetimes
+    case 13: // ... for one before now with the wall-clock option
         schedule_Scheduler_duration_str__bool(scheduler, 0s);
+        break;
+    case 12: // core's wall_clock_wakes
+        schedule_Scheduler_duration_str__bool(scheduler, 1us, "early", true);
+        hglrt::schedule_Scheduler_datetime_str__bool(scheduler, scheduler.view().now() + 3us, "late", true);
         break;
     default:
         break;
@@ -145,6 +150,9 @@ struct Wakes {
         if (case_.value() == 11) {
             hglrt::schedule_Scheduler_datetime_str__bool(scheduler, now - 1us);
             hglrt::schedule_Scheduler_datetime_str__bool(scheduler, now, "at now");
+        }
+        if (case_.value() == 13) {
+            hglrt::schedule_Scheduler_datetime_str__bool(scheduler, now - 1us, std::nullopt, true);
         }
         woken.push_back(Woken{now, scheduler.is_scheduled_now(), scheduler.is_scheduled(),
                               scheduler.next_scheduled_time()});
@@ -195,6 +203,55 @@ TEST_CASE("a zero duration in start wakes the node's first evaluation (TIME-8, C
     // clock is the engine's in simulation.
     run_alone<Wakes>(8);
     CHECK(woken == std::vector<Woken>{{start, true, false, std::nullopt}});
+}
+
+TEST_CASE("in simulation the wall-clock option changes nothing (CAP-4)") {
+    // core's the_wall_clock_option_changes_nothing_in_simulation: "the
+    // duration 1us after the start, and the datetime at 3us from it".
+    run_alone<Wakes>(12);
+    CHECK(woken == std::vector<Woken>{{start + 1us, true, true, start + 3us},
+                                      {start + 3us, true, false, std::nullopt}});
+    // A datetime before the evaluation time is dropped, as one asked for
+    // without the option.
+    run_alone<Wakes>(13);
+    CHECK(woken == std::vector<Woken>{{start, true, false, std::nullopt}});
+}
+
+/// `fn wall_clock_late() { inject scheduler, clock; start { schedule(
+/// scheduler, 0s) } when { ... } }`, run in real time: its first evaluation
+/// asks for a wake at a wall-clock time already past, and its second stops
+/// the run.
+struct WallClockLate {
+    static constexpr auto name = "test::wall_clock_late";
+
+    static void start(hgraph::NodeScheduler view) {
+        hglrt::schedule_Scheduler_duration_str__bool(made(view, Hook::start), 0s);
+    }
+
+    static void eval(hgraph::NodeScheduler view, hgraph::EvaluationClockView clock_view,
+                     hgraph::EngineControlView engine, hgraph::DateTime now) {
+        const hglrt::Scheduler scheduler = made(view, Hook::evaluation);
+        const hglrt::Clock clock{clock_view};
+        woken.push_back(Woken{now, scheduler.is_scheduled_now(), false, std::nullopt});
+        if (woken.size() == 1) {
+            hglrt::schedule_Scheduler_datetime_str__bool(scheduler, clock.now() - 1ms, std::nullopt, true);
+        } else {
+            engine.request_stop();
+        }
+    }
+};
+
+TEST_CASE("in real time a wall-clock wake already due comes in the next cycle (CAP-4)") {
+    // CAP-4: "A wake of the option that is already due where it is asked
+    // for ... is not dropped: it comes in the next cycle, at the later of
+    // that time and the evaluation time plus the engine's smallest step".
+    // The second evaluation stops the run, which its length only bounds.
+    woken.clear();
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) { hgraph::wire<WallClockLate>(wiring); },
+                              {.length = 10s}, hglrt::testing::Mode::real_time);
+    REQUIRE(woken.size() == 2);
+    CHECK(woken[1].now);
+    CHECK(woken[1].at > woken[0].at);
 }
 
 TEST_CASE("a duration not admitted fails, and a datetime past is dropped (TIME-8, CAP-4)") {
