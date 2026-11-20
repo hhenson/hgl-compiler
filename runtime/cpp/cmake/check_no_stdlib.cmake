@@ -6,10 +6,12 @@
 #                 preprocessed (tests/include_set.cpp): every header they
 #                 bring in, at any depth, is named in it
 #   SOURCE_DIR    runtime/cpp, whose sources are read for an include of one
-#   READELF       readelf, and BINARIES the library, its tests and hgraph's
-#                 runtime and wiring libraries they link, whose dynamic
-#                 sections are read for a library they need: an SDK built
-#                 with Arrow fails it (scripts/provision-hgraph-sdk.sh)
+#   READELF       readelf, or on macOS OTOOL, otool; and BINARIES the
+#                 library, its tests and hgraph's runtime and wiring
+#                 libraries they link, whose dynamic sections (load
+#                 commands, on macOS) are read for a library they need: an
+#                 SDK built with Arrow fails it
+#                 (scripts/provision-hgraph-sdk.sh)
 #
 # Arrow's headers are under `arrow/`, hgraph's standard library's under
 # `hgraph/lib/`, and their shared objects are `libarrow*`, `libparquet*` and
@@ -32,8 +34,15 @@ foreach(source IN LISTS sources)
 endforeach()
 
 foreach(binary IN LISTS BINARIES)
-    execute_process(COMMAND "${READELF}" -d "${binary}" OUTPUT_VARIABLE dynamic COMMAND_ERROR_IS_FATAL ANY)
-    if(dynamic MATCHES "NEEDED[^\n]*(libarrow|libparquet|libhgraph_stdlib)[^\n]*")
+    if(OTOOL)
+        # `otool -L`: the binary's own name, then each library it loads.
+        execute_process(COMMAND "${OTOOL}" -L "${binary}" OUTPUT_VARIABLE needed COMMAND_ERROR_IS_FATAL ANY)
+        set(needs "[^\n]*(libarrow|libparquet|libhgraph_stdlib)[^\n]*")
+    else()
+        execute_process(COMMAND "${READELF}" -d "${binary}" OUTPUT_VARIABLE needed COMMAND_ERROR_IS_FATAL ANY)
+        set(needs "NEEDED[^\n]*(libarrow|libparquet|libhgraph_stdlib)[^\n]*")
+    endif()
+    if(needed MATCHES "${needs}")
         message(FATAL_ERROR "${binary} needs ${CMAKE_MATCH_0}")
     endif()
 endforeach()
