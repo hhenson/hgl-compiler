@@ -253,6 +253,55 @@ fn the_whole_route_runs_on_the_sdk() {
     );
 }
 
+/// TYPE-17, TEN-2 and TEN-3 through generated C++ against the released SDK.
+/// The two zero forms are unordered, arithmetic keeps its form, and mixing
+/// forms is an HGL execution failure.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn tenors_use_the_shared_sdk_scalar() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("shared_tenor");
+    let file = write(
+        &root,
+        "src/tenors.hgl",
+        r#"module demo.tenors
+const fn plus(a: tenor, b: tenor) -> tenor => a + b
+const fn before(a: tenor, b: tenor) -> bool => a < b
+const fn at_most(a: tenor, b: tenor) -> bool => a <= b
+
+test counts {
+    assert before(plus(1Y2M, 1D), 1Y2M2D)
+    assert before(plus(2B, 1B), 4B)
+    assert !at_most(0D, 0B)
+    assert !at_most(0B, 0D)
+}
+
+test mixed {
+    assert at_most(plus(0B, 0D), 0D)
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let report = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{report}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        report.contains("passed   executable  demo.tenors::counts"),
+        "{report}"
+    );
+    assert!(
+        report.contains("FAILED   executable  demo.tenors::mixed"),
+        "{report}"
+    );
+    assert!(report.contains("tenor.mixed_units"), "{report}");
+}
+
 /// A build that fails runs no executable it did not finish, even where
 /// an older one is there: after a run that passed, the place of the
 /// module's object is taken by a directory, so that `ninja` compiles it
