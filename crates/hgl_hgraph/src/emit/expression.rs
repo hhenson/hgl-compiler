@@ -10,6 +10,19 @@ impl Emitter<'_> {
     /// An expression as Python. One with no Python here yet is reported
     /// and written `None`.
     pub(super) fn expression(&mut self, function: &Function, value: &Expr) -> String {
+        // Core's TEN-4: "Only the result is held to the range: the date
+        // the months give may lie outside it where the days bring the
+        // result back within it." The provider holds the months' date to
+        // the range, so a move of a date written in the range's first or
+        // last year is reported (`edge_move`).
+        if edge_move(self.program, value) {
+            self.unsupported(
+                value.at,
+                "a move of a date in the first or last year of the range, which only its \
+                 result is held to (TEN-4)",
+            );
+            return "None".to_string();
+        }
         // In a graph a value may be a connection, and Python's `and`,
         // `not` and `if` would act on the port: only a name, a literal,
         // a member of an enum, a constant, a call and a widening are
@@ -247,6 +260,49 @@ impl Emitter<'_> {
             // `all_valid` ... gives an `err` of an `error` with that code
             // where its place takes a `result<list<V>, error>`" (ERR-14).
             ExprKind::CheckedWindow(read) => self.window_result(function, read, value.at),
+            // ERR-14: `delta_value` read where the place takes a
+            // `result`: `ok` of the delta, or an `err` coded
+            // `value.unset_read` where the endpoint has none in the
+            // cycle. "An endpoint that has not ticked in the cycle has
+            // none. Of those that tick, only a window of a duration has a
+            // tick with no delta": of a direct input or `out` of any
+            // other type it is `ok` of the delta read as a plain one is
+            // where the endpoint published, modified and valid as
+            // `modified` is written (hgraph marks modified the cycle that
+            // invalidates an input), core's `record` among them, and that
+            // `err` elsewhere. A child's, a window of a
+            // duration's, one that holds such a window, and core's
+            // `removed_value` are reported.
+            ExprKind::CheckedDelta(read) => {
+                let direct = match &read.kind {
+                    ExprKind::Endpoint {
+                        operation: EndpointOperation::DeltaValue,
+                        inputs: Some(inputs),
+                    } if inputs.len() == 1 => Some(&function.locals[inputs[0]]),
+                    _ => None,
+                };
+                let written = direct.filter(|endpoint| {
+                    !windows_in(self.program, endpoint.ty.omission_removed())
+                        .iter()
+                        .any(duration_window)
+                });
+                let Some(endpoint) = written else {
+                    self.unsupported(
+                        value.at,
+                        "`delta_value` of a child or of a window of a duration, or \
+                         `removed_value`, read where a `result` is taken (ERR-14)",
+                    );
+                    return "None".to_string();
+                };
+                let input = endpoint_name(endpoint);
+                let read = self.expression(function, read);
+                self.natives = true;
+                format!(
+                    "(_core.Ok({read}) if ({input}.modified and {input}.valid) else \
+                     _core.Err(_core.Error(\
+                     \"the endpoint has not ticked in the cycle\", code=\"value.unset_read\")))"
+                )
+            }
             // TIME-9: `scheduled()` as a bool, where it sets no
             // subscription (TIME-3: "Selectors under negation or
             // disjunction leave the default in place"): what woke the
@@ -2095,4 +2151,34 @@ pub(super) fn constant_position(index: &Expr) -> Option<usize> {
 /// True for the literal `null`.
 fn is_null(value: &Expr) -> bool {
     matches!(value.kind, ExprKind::Literal(Value::Null))
+}
+
+/// True where `value` moves a date written in the first or the last
+/// year of the range, 1 or 9999, by a tenor: a call of core's `add_` or
+/// `sub_` of a date literal there and a `tenor`, `@9999-12-15 + 1M`.
+/// Core's TEN-4 holds only the move's result to the range, and the
+/// provider holds the date the months give too: within those years the
+/// two may differ.
+fn edge_move(program: &Program, value: &Expr) -> bool {
+    if !matches!(core_operator(program, value), Some("add_" | "sub_")) {
+        return false;
+    }
+    let ExprKind::Call { arguments, .. } = &value.kind else {
+        return false;
+    };
+    let edge = |argument: &Expr| {
+        matches!(
+            &argument.kind,
+            ExprKind::Literal(Value::Temporal(Temporal {
+                date: Some(date),
+                time: None,
+                ..
+            })) if date.year == 1 || date.year == 9999
+        )
+    };
+    let tenor = |argument: &Expr| argument.ty == Type::Scalar(Scalar::Tenor);
+    matches!(
+        arguments.as_slice(),
+        [first, second, ..] if edge(&first.value) && tenor(&second.value)
+    )
 }

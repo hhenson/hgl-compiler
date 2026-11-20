@@ -13,9 +13,13 @@
 #   HGLRT_SANITIZE   the library and its tests built with the address and
 #                    undefined-behaviour sanitizers (default OFF)
 #
-# What it gives: the shared library `libhglrt.so` (target `hglrt`, also
-# `hglrt::hglrt`), whose one header for generated code is <hglrt/hglrt.h>,
-# and a CMake package of it, in the build tree and where it is installed.
+# The compiler is GCC 15 or later on Linux and Apple clang 21 or later on
+# macOS, as the SDK's is (scripts/provision-hgraph-sdk.sh).
+#
+# What it gives: the shared library `libhglrt.so` (`libhglrt.dylib` on
+# macOS; target `hglrt`, also `hglrt::hglrt`), whose one header for
+# generated code is <hglrt/hglrt.h>, and a CMake package of it, in the
+# build tree and where it is installed.
 cmake_minimum_required(VERSION 3.25)
 
 project(hglrt VERSION 0.1.0 LANGUAGES CXX)
@@ -30,8 +34,12 @@ endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 15)
     message(FATAL_ERROR "libhglrt needs GCC 15 or later; ${CMAKE_CXX_COMPILER} is GCC ${CMAKE_CXX_COMPILER_VERSION}")
 endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 21)
+    message(FATAL_ERROR
+        "libhglrt needs Apple clang 21 or later; ${CMAKE_CXX_COMPILER} is Apple clang ${CMAKE_CXX_COMPILER_VERSION}")
+endif()
 
-# hgraph's package finds Arrow, fmt, spdlog and simdjson in the dependency
+# hgraph's package finds fmt, spdlog and simdjson in the dependency
 # prefix, and would fetch a missing one: none may be missing.
 list(PREPEND CMAKE_PREFIX_PATH "${HGL_HGRAPH_SDK}" "${HGL_HGRAPH_DEPS}")
 set(HGRAPH_FETCH_MISSING_DEPENDENCIES OFF CACHE BOOL "hgraph's dependencies come from HGL_HGRAPH_DEPS")
@@ -115,8 +123,11 @@ if(BUILD_TESTING)
         tests/capabilities_tests.cpp
         tests/checked_tests.cpp
         tests/conversion_tests.cpp
+        tests/endpoint_tests.cpp
         tests/failure_tests.cpp
+        tests/generator_tests.cpp
         tests/scalar_tests.cpp
+        tests/scheduler_tests.cpp
         tests/sources_tests.cpp
         tests/temporal_tests.cpp
         tests/tenor_tests.cpp
@@ -127,4 +138,33 @@ if(BUILD_TESTING)
     target_link_libraries(hglrt_tests PRIVATE hglrt doctest::doctest)
     target_compile_options(hglrt_tests PRIVATE ${HGLRT_WARNINGS})
     add_test(NAME hglrt_tests COMMAND hglrt_tests WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
+    # Nothing of hgraph's standard library and nothing of Arrow, included or
+    # linked (docs/cpp-target.md). The include set of the public headers is
+    # preprocessed, its "object" the preprocessed text, so that every header
+    # it brings in at any depth is checked.
+    add_library(hglrt_include_set OBJECT tests/include_set.cpp)
+    target_link_libraries(hglrt_include_set PRIVATE hglrt)
+    # Clang would warn that `-c` goes unused, as `-E` stops before compiling.
+    target_compile_options(hglrt_include_set PRIVATE -E $<$<CXX_COMPILER_ID:AppleClang,Clang>:-Qunused-arguments>)
+    # The libraries a binary needs are read with readelf from an ELF
+    # binary's dynamic section, and with otool from a Mach-O binary's load
+    # commands on macOS.
+    if(APPLE)
+        find_program(HGLRT_OTOOL otool)
+        if(HGLRT_OTOOL)
+            set(HGLRT_NEEDED_TOOL "-DOTOOL=${HGLRT_OTOOL}")
+        endif()
+    elseif(CMAKE_READELF)
+        set(HGLRT_NEEDED_TOOL "-DREADELF=${CMAKE_READELF}")
+    endif()
+    if(HGLRT_NEEDED_TOOL)
+        add_test(NAME hglrt_takes_no_stdlib
+            COMMAND "${CMAKE_COMMAND}"
+                "-DPREPROCESSED=$<TARGET_OBJECTS:hglrt_include_set>"
+                "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "${HGLRT_NEEDED_TOOL}"
+                "-DBINARIES=$<TARGET_FILE:hglrt>$<SEMICOLON>$<TARGET_FILE:hglrt_tests>$<SEMICOLON>$<TARGET_FILE:hgraph::runtime>$<SEMICOLON>$<TARGET_FILE:hgraph::wiring>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_no_stdlib.cmake")
+    endif()
 endif()

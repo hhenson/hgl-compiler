@@ -309,7 +309,7 @@ What the pass checks as it reads:
 | A name in a type position | UNIT-10, GEN-2, GEN-13 | Names a struct, an enum, a native type or a generic parameter that is a type. A function, operator, local, generic value parameter, or a type pack where one type is needed, is rejected |
 | A generic type's arguments | GEN-2, GEN-10 | As many as it declares, within its pack's cardinality. An argument that names a type pack counts for what the pack may hold, and is rejected only when no such length fits. A parent and a constructor are no different |
 | An ordinary value type | TYPE-12, FN-1, grammar `value_type` | A set's element, a dictionary's key, a window's value, an atomic or result payload, a `const` parameter, a value function's parameters and result, a generic value parameter and a property domain hold no `rolling`, `atomic` or `signal`, at any depth. `ref` is no type: the parser rejects `ref<T>` |
-| `ref` | FN-16, TYPE-12 | A mode of a node's temporal parameter, `ref low: f64`, and of its result, `-> ref f64`, recorded as `Parameter::reference` and `Signature::reference`; the type is the T after it. A value function, a value candidate, a graph, an operator and a native implementation part that is a graph take none, and no `signal` parameter takes it (`ref.position`); a part of `out` of a `ref` result is not assigned (`binding.immutable`), each code proposed |
+| `ref` | FN-16, TYPE-12 | A mode of a node's temporal parameter, `ref low: f64`, and of its result, `-> ref f64`, recorded as `Parameter::reference` and `Signature::reference`; the type is the T after it. A value function, a value candidate, a graph, an operator and a native implementation part that is a graph take none, and no `signal` parameter takes it (`ref.position`); a part of `out` of a `ref` result is not assigned (`binding.immutable`) |
 | `signal` | TYPE-12 | The whole type of a temporal function's input, or of each input of a positional pack. Not a local's annotation or an anonymous function's parameter |
 | `T?` | TYPE-14, TYPE-15 | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal function's input, where `rolling_window<f64, 5>?`, `atomic<Quote>?` and `signal?` are inputs that may be omitted, and of a struct field, which is then optional. In a result, a local's annotation or a part of another type they are rejected. A set's element and a dictionary's key take no `?` |
 | `atomic<S>` | TYPE-9 | `Type::atomic` forms it: S itself where S is no composite, a scalar, an enum, a native type, a `result`, an `error`, a delta that is a type of its own, or a nullable of one; `Type::Atomic` for a tuple, a struct, a list, a dictionary, a set, a nullable of one, and a type not yet known. It is formed where the type is written and again where a generic parameter is replaced, and an `atomic<T>` given a value of a type that is its own atomic says what `T` is |
@@ -619,7 +619,8 @@ hook is a `Stmt::Hook` with its condition and its statements.
 | --- | --- | --- |
 | A temporal parameter | A value of its declared type, as in a value function | FN-3 |
 | `valid(value)`, `modified(value)`, `scheduled()` | A bool: an operation on the endpoint, which is the language's own and no call of a function | TIME-9 |
-| `delta_value(value)`, `last_modified(value)` | The endpoint's `delta<T>` and its retained publication time as a `datetime?`, respectively | TIME-9, END-3, END-6 |
+| `delta_value(value)`, `last_modified(value)` | The endpoint's `delta<T>` and its retained publication time as a `datetime?`, respectively. Where its place takes `result<delta<T>, error>`, `delta_value` is of that result, the read held as `ExprKind::CheckedDelta` (ERR-14); a plain read of the delta of a window of a duration is `payload.unguarded`, found once a node's body is typed (`Typer::plain_cycle_reads`) | TIME-9, END-3, END-6, ERR-14, TYPE-11 |
+| `removed_value(window)` | Core's native function, typed by its declaration, `endpoint<rolling_window<V, Max, Min>>` to V; where its place takes `result<V, error>` the place says what V is, and the read is a `CheckedDelta`; a plain read of it is `payload.unguarded` | TIME-9, TYPE-11, ERR-14 |
 | `is_active(input)` | A bool for a direct temporal input. In a guard it adds no subscription or validity requirement | TIME-9, END-5 |
 | `valid()`, `valid(a, b)`, `valid([])` | A selector of a `when` header: every temporal input, those named, none | TIME-3 |
 | No `modified` selector | Subscribes to every temporal input. An active invalidation can wake the node and reach a handler whose other conditions hold | TIME-3 |
@@ -741,8 +742,8 @@ anything else is `endpoint.argument`, and so is any argument in a graph
 or a value function, which have no input of their own to give. A
 generic `T` under the endpoint is inferred from what the input holds.
 
-The endpoint operations are core's, declared as such functions: all but
-`delta_value`, whose result core has not settled. In a node's hooks
+The endpoint operations are core's, declared as such functions,
+`delta_value` and `removed_value` among them. In a node's hooks
 their names are read as the forms they are, a selector or a guard among
 them, where core's module binds the name or nothing does: a node reads
 the same either way.
@@ -874,7 +875,7 @@ UNIT-13). Type identity and a target's instances ask it (TYPE-3,
 GEN-13). `ConstantValue::equals` says whether they are equal as the
 language's `==` compares them, `-0.0` equal to `0.0` and a NaN to
 nothing: what the program compares asks it, a `requires` (GEN-3), and,
-as CTRL-6 and TYPE-16 propose, a `switch` label's duplicates and a
+as CTRL-6 and TYPE-16 have it, a `switch` label's duplicates and a
 delta's overlap. Each gives `None` where either
 is not known, which is neither equal nor unequal. `ConstantValue::key`
 is the text a target keys an instance by, one for each constant.
@@ -925,7 +926,7 @@ The pass is built form by form. So far it reads:
 | An assignment into a place, `point.x = 1`, `row[0] += 1` | EXPR-3 | `Stmt::AssignPlace`. The place is read as the expression it is, so a field or an element takes what it is said to be where it is read. Its root is a `var`, a `state`, a `cache` or `out`; a `let`, a parameter and an iteration binding are read-only all the way down. A compound assignment is the symbol with the place as its left operand. In a graph it is copy on write (EXPR-15): the same statement, held as an assignment to the `var`, to its category (CTRL-14) and to what a loop that makes one child for each member admits (CTRL-15) |
 | `delta<T>` | TYPE-16 | `Type::delta` forms it: for most T another type of the language, and `Type::Delta` for a set, a dictionary, a struct, and a T not yet known. It is formed where the type is written and again where a generic parameter is replaced, so `TimedValue<f64>` has a `value: f64`. A named type carries what it is declared as, `NamedKind`, so that this needs no look at the program. A trace's cell is `Type::trace_cell` of what the trace is of: its `delta<T>`, and for a tuple `Type::Delta` of the tuple, which names T where the tuple's delta would not, so that a cell written as a T is read whole (TST-5) |
 | A delta's property, `change.added`, `change.value`, `change.bid`; its constructor, `delta<set<i64>>(added: [1, 2])`, `delta<i64?>()` | TYPE-16 | `ExprKind::Field`, the property by its position, and `ExprKind::Delta`, each property given at its position and one left out empty or null. `Typer::delta_properties` says what a delta has: a set's `added` and `removed`; a dictionary's `updated`, a `dict<K, delta<V>>`, and `removed`; a nullable's `value`, a `delta<V>?`; a struct's one for each field, a `delta<F>?`. A nullable's delta is an optional of its own type, `Type::Delta` of the nullable: a `delta<V>` is admitted where it is expected (`Typer::admits`), and null is not, since null in a delta's place is nothing published. A trace's cell of a nullable type is read as the nullable it publishes (TST-5) |
-| What a node publishes | TIME-7, TYPE-9, END-3 | A `return` in a hook, an assignment to `out` and a source's `yield` take a complete value of the result, a V for an `atomic<V>`, or the result's `delta<T>`. `delta_value(input)` is the `delta<T>` of the input's type |
+| What a node publishes | TIME-7, TYPE-9, TYPE-11, END-3 | A window's result takes a V, which arrives, and nothing else. A `return` in a hook, an assignment to `out` and a source's `yield` take a complete value of the result, a V for an `atomic<V>`, or the result's `delta<T>`. `delta_value(input)` is the `delta<T>` of the input's type |
 | `return`, `=> value` | FN-7 | Of the function's result type. A `return` with no value is rejected where a result is declared, and one with a value where none is |
 | A call | EXPR-2, FN-4, UNIT-8, FN-7 | Of the value function its name is bound to. Each argument is given to a parameter, by place and then by name; one given twice, to no parameter, or too many is rejected, and so is a parameter left with nothing that has no default and no `?`. A temporal function is not called from a value function. A callee that names no declaration is read as any expression, for what it reads (FN-14), and one that is a value of a type, `plus_one(x)()` or `(1 + 2)()`, is `type.mismatch`: no value is callable |
 | A construction | TYPE-5, TYPE-3, GEN-2 | Its arguments are named, each for a field the struct has, a parent's included, in any order; one with no name is rejected. A generic struct takes its arguments from `Name<...>`, from the type expected, or from the fields given. An abstract struct is not constructed |
@@ -1257,7 +1258,7 @@ the calls that reach one of those are followed, each instance once
 however many calls make it, and at most `hgl_analyser::INSTANCES`
 (4096) instances of one declaration from one call, whose arguments are
 no longer than 65536 characters written out; a call whose instances go
-past that is `generic.instance_limit` (GEN-13, proposed), for what is
+past that is `generic.instance_limit` (GEN-13), for what is
 past it is not told. The hgraph target makes no more than that many either. What
 is not told for a constant this compiler does not work out is reported
 as not known to hold; nothing else that cannot be told is reported.
@@ -1720,7 +1721,7 @@ only where the program reaches it, at core's source.
 | A child of a temporal input or of `out` in a hook, `parts[1]`, `quote.bid`, `prices["a"]` (TIME-1, END-8) | Its endpoint is hgraph's child of the input, a fixed or an unsized list's position among them, `_core.list_position` one an unsized list does not hold, which is not valid: `_core.position_of(parts, 1)`, `quote["bid"]`, `_core.entry_port(prices, "a")`, one that is not valid where the key is absent; `valid(parts[1])` is `.valid` of it, `modified`, `delta_value` and `last_modified` `_core.child_modified`, `_core.child_delta`, `_core.child_last_modified`. A read admitted is of the value read whole; one at an index known when it runs is `_core.checked_child(port, lambda _port: ...)`, which fails with `value.unset_read` where the child is not valid, and `_core.checked_child_result` where a `result<T, error>` is expected (ERR-14) |
 | A trace's cell written whole, for a list, a set, a dictionary, a struct or a tuple (TST-5, TST-9) | `_harness.whole(value)`, and a tuple's `_harness.whole(value, shape=(None, None,))`: an input publishes `_core.whole_delta(value, keys)`, which removes each key or member the input held that the value has not, and sets each position of a tuple as hgraph's bundle takes it (`bundled`), a null one to a published null; an expectation's is compared with the value the result holds once its cycle has published, which `_harness.evaluate(..., _hold=lambda _port: ...)` reads from the result's port, as a part is read whole (`part_value`): null where an optional part is not valid, and no whole value, `value.unset_read`, where a required one is not (hhenson/hgl_spec#126) |
 | `delta<dict<str, i64>>(updated: u, removed: r)`, `change.updated`, `change.removed` (TYPE-16) | `_core.dict_delta(updated=u, removed=r)`, `_core.updated(change)`, `_core.removed(change)`: hgraph's delta of a `TSD`, one `dict` with `REMOVE_IF_EXISTS` for each removed key, so that one not held is ignored (TYPE-16). A node publishes a delta of a dictionary or a set, or of what holds one, as `_core.entries_published(_output, change, shape)`, and a source's node by `_core.resume(..., entries=shape)`: a `REMOVE` read from an input is published as `REMOVE_IF_EXISTS`; a dictionary or a set within that is valid and that the change leaves as it was is left out, so that what holds it does not tick (TIME-7: such a delta "is no tick"), and so is a struct's, a tuple's or a fixed list's that names no change in a dictionary's value, whose shape is written out there, `("entries", ("fields", {}))`, as hgraph's `TSD` ticks for one; and one that is not valid is made valid and empty by `clear`. A whole empty dictionary given to a valid empty one, and a whole set given the members it holds, are no tick, as hgraph's `TSD` and `TSS` take them (TIME-7); and `invalidate(out)` of one, or of a struct, a tuple or a fixed list that holds one at any depth, is `_core.invalidated(_output, shape)`, which empties each first, `{"book": "entries"}` for a struct's dictionary |
-| A temporal `rolling_window<f64, 3, 1>`, `rolling_window<f64, 5s, 0s>` (TYPE-11) | `_hg.TSW[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]]`, `_hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], _hg.WindowSize[_dt.timedelta(microseconds=0)]]`, and `_hg.TSW[_py.float, _hg.WindowSize[3]]` where no minimum is written, hgraph's one size for both; `_hg.TSW_OUT[...]` for `out`. `return price` adds the value that arrived (TYPE-16), and `delta_value(prices)` is `prices.delta_value`, that value, or of a window of a duration `_core.window_delta(prices)`, which fails where a value leaves and none arrives. A window within a struct, a list, a dictionary or a tuple is its child: `_core.schema(Book, {"prices": _hg.TSW[...], ...})`, `_hg.TSL[_hg.TSW[...], _hg.Size[2]]`, read by the port of a part that is no window, `book["last"].value`. `valid` and `all_valid` are the `TSW`'s; a window's value, an input's, `out`'s or a child's, is `_core.window_values(port)`, the `list<V>` it holds, which fails with `value.unset_read` where the window is not all valid, and where its place takes a `result<list<V>, error>` is `_core.window_result(port)`, that failure's `err` (ERR-14); a lifted helper given one requires it valid and is invoked where `port.all_valid`, and one whose parameter has a default or is a `list<V>?` binds that fallback where the window is not valid, `(_core.window_values(port) if port.valid else [])`, and is not invoked where it is valid and not all valid (FN-11). A position of that list, `book.prices[0]`, is `_core.item(_core.window_values(book["prices"]), 0)`, no child of the window. A window that a generic type parameter stands for, read in an instance's hook or given to a value function there, a value that holds a window read whole, a window given to a branch's or a loop's graph, and a window `out` the evaluation may write again are not written: each is reported |
+| A temporal `rolling_window<f64, 3, 1>`, `rolling_window<f64, 5s, 0s>` (TYPE-11) | `_hg.TSW[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]]`, `_hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], _hg.WindowSize[_dt.timedelta(microseconds=0)]]`, and `_hg.TSW[_py.float, _hg.WindowSize[3]]` where no minimum is written, hgraph's one size for both; `_hg.TSW_OUT[...]` for `out`. `return price` adds the value that arrived (TYPE-16), and `delta_value(prices)` is `prices.delta_value`, that value; where a `result` is taken it is `_core.Ok(prices.delta_value)`, as of any endpoint that always has a delta, core's `record` among them (ERR-14). That of a window of a duration, read where a `result` is taken, and `removed_value`, are reported. A window within a struct, a list, a dictionary or a tuple is its child: `_core.schema(Book, {"prices": _hg.TSW[...], ...})`, `_hg.TSL[_hg.TSW[...], _hg.Size[2]]`, read by the port of a part that is no window, `book["last"].value`. `valid` and `all_valid` are the `TSW`'s; a window's value, an input's, `out`'s or a child's, is `_core.window_values(port)`, the `list<V>` it holds, which fails with `value.unset_read` where the window is not all valid, and where its place takes a `result<list<V>, error>` is `_core.window_result(port)`, that failure's `err` (ERR-14); a lifted helper given one requires it valid and is invoked where `port.all_valid`, and one whose parameter has a default or is a `list<V>?` binds that fallback where the window is not valid, `(_core.window_values(port) if port.valid else [])`, and is not invoked where it is valid and not all valid (FN-11). A position of that list, `book.prices[0]`, is `_core.item(_core.window_values(book["prices"]), 0)`, no child of the window. A window that a generic type parameter stands for, read in an instance's hook or given to a value function there, a value that holds a window read whole, a window given to a branch's or a loop's graph, and a window `out` the evaluation may write again are not written: each is reported |
 | A name | Itself, but where Python or the target would take it. A Python keyword, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
 | A value and a temporal definition of one name (FN-4) | The temporal one keeps the name; the value one is `_value_name` |
 
@@ -2202,8 +2203,8 @@ later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
 which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists 166
-of core's 191 runtime cases: 159 evals, 6 that need a struct, and one
+target's list, and `--write-list` writes from a run. Today it lists 170
+of core's 198 runtime cases: 162 evals, 7 that need a struct, and one
 that gives an eval's trace to a `const fn` (TST-16).
 
 ### The C++ runtime library
@@ -2214,7 +2215,11 @@ not have. It is
 a skeleton that the target's first step fills. It is built on hgraph's
 runtime and wiring libraries alone (`hgraph::runtime`, `hgraph::wiring`):
 `hgraph::core` would bring hgraph's standard library, which no generated
-code uses.
+code uses. Its headers take hgraph's front end for generated code,
+`<hgraph/types/generated.h>` (static nodes, `wire<Node>` with complete
+positional arguments, compiled children), and not `graph_wiring.h`, whose
+operator dispatch, named arguments and type resolution generated code does
+not use.
 
 | Header (`include/hglrt/`) | Holds | Rules |
 | --- | --- | --- |
@@ -2227,8 +2232,11 @@ code uses.
 | `text.h` | Core's natives of `str`: concatenation and repetition | OPS-1 |
 | `conversions.h` | Every `convert` of core's: those that cannot fail, and those that can under `invalid`; core's `Rounding` and `InvalidPolicy` | OPS-4, OPS-6 to OPS-8 |
 | `tenors.h` | Core's natives of `tenor`, which is hgraph's `Tenor` (counts and form alone): its arithmetic, order and text, and the parts core's calendar candidates use, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-9 |
-| `lists.h`, `capabilities.h` | `append`, `extend`; the global store's `get`, `has`, `put` | LIST-1 to LIST-3, CAP-6 |
+| `lists.h` | `append`, `extend` | LIST-1 to LIST-3 |
+| `endpoints.h` | Core's nine operations on an endpoint, each a template over the hgraph view it is given; `delta_value` plain and where a `result` is taken (`fn_delta_value_checked`); `endpoint_read`, through which a temporal form says how its delta is read, a scalar's and a nullable scalar's written | TIME-9, END-1 to END-10, ERR-14 |
+| `capabilities.h` | `Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`, each made from its hook's hgraph view, a member function for each property; `log`, `schedule` four ways, `un_schedule`, `reset`, the store's `get`, `has`, `put`; core's `LogLevel` | CAP-1 to CAP-6, TIME-8 |
 | `sources.h` | `constant`, a node that publishes a value once at the start; `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
+| `generator.h` | `generator<T>`, the coroutine type of a source's body: `std::generator<T>`'s shape for a value type (a move-only view whose input iterator resumes the body to its next `co_yield`, and throws again what it lets out), which not every standard library has | SOURCE-1 |
 | `host.h` | What the entry unit of a test executable needs, and no hgraph header: registration and `main`, which holds a test to its time limit | TST-14, TST-15, TST-17 |
 | `traces.h` | Traces, dense and timed, of scalars, nullables, tuples and lists, each cell whole or a delta; their comparison and where two first differ; replay items and what a `const fn` is given; the text of a value | TST-4 to TST-7, TST-9, TST-16, CEVAL-2 |
 | `testing.h` | The rest of the test host: `check`, `raises`, `expect_same`, a run in simulation or in real time, its recording, and the values its result held | TST-2 to TST-11, TST-17, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
@@ -2256,6 +2264,19 @@ time-zone provider for the process, as hgraph's own codecs do: a value
 function is given no run's store, which a provider of the run's would be
 in.
 
+An endpoint operation is given the view the hook has, `In<"price",
+TS<i64>>`, `Out<TS<i64>>` or a child of one, and is named as an exported
+native is, `fn_valid`. A capability is made at the top of the hook that
+injects it, once, from the view hgraph gives that hook:
+`hglrt::Scheduler scheduler{view, hglrt::Hook::evaluation}`. The
+scheduler made in an evaluation takes the wakes due then from hgraph's
+`NodeScheduler`, which keeps them until the node has run, so that what
+is pending is what is still to come and `is_scheduled_now` stays true
+after `un_schedule` or `reset` (CAP-4); a tag goes to hgraph after a mark,
+since hgraph keeps no wake under the empty tag. An evaluation with no wake
+due and no input modified is no wake: hgraph evaluates the node at a
+wake that was cancelled. The alarm is hgraph's `SingleShotScheduler`.
+
 A list is `hglrt::list<T>` and not a bare `std::vector<T>` because hgraph
 hashes a value it holds as configuration, a source's items, through
 `std::hash`, which no program may give a `std::vector`.
@@ -2269,9 +2290,9 @@ last statement the test marked with `statement()`. A test held to a time
 limit (TST-17) is named `NAME@MICROSECONDS`: it runs on a thread of its
 own, and at its limit its runs are asked to stop, as a host stops a run in
 real time, and it has failed; one that has not ended five seconds later
-ends the process, with the status 3. Its entry unit includes `host.h`
+ends the process, with the status 3. Its entry unit can include `host.h`
 alone, which compiles in 0.06 s where `hglrt.h` through the precompiled
-header takes 0.86 s (GCC 15, `-O0`).
+header takes 0.57 s (GCC 15, `-O0`).
 
 Built with CMake, once for each SDK. A build is given:
 
@@ -2282,7 +2303,7 @@ Built with CMake, once for each SDK. A build is given:
 | `BUILD_TESTING` | The unit tests (default on) |
 | `HGLRT_SANITIZE` | The library and its tests under the address and undefined-behaviour sanitizers, which what links it inherits (default off) |
 
-and gives `libhglrt.so`, the target `hglrt::hglrt`, and a CMake package of
+and gives `libhglrt.so` (`libhglrt.dylib` on macOS), the target `hglrt::hglrt`, and a CMake package of
 it (`-Dhglrt_DIR=` the build directory, or its install prefix). The unit
 tests use [doctest](https://github.com/doctest/doctest): hgraph's own use
 Catch2, which its SDK does not install, and doctest is the smallest
@@ -2293,24 +2314,44 @@ release is fetched. The library's own C++ is built with `-Wall -Wextra
 #### The SDK
 
 `scripts/provision-hgraph-sdk.sh TAG DIR` builds hgraph's shared C++ SDK
-at the tag `TAG` and installs it into `DIR`, as hgraph's CI job
-`native-shared-install` builds it: Release, shared libraries, no Python,
-against the dependency prefix `HGL_HGRAPH_DEPS`. It differs from that job
-in leaving out hgraph's tests and extensions, and in giving the SDK's
-libraries the prefix's library directory as their run path, where that job
-sets `LD_LIBRARY_PATH`. Where the prefix does not exist the script makes it
-with micromamba from conda-forge, with the packages hgraph's job installs
-(Arrow 25 with Compute and Acero, fmt, spdlog, simdjson, CMake, Ninja), at
-fixed versions. The compiler is the caller's: GCC 15 or later. The SDK is
-54 MB; its runtime library needs `libarrow` at run time, though no
-generated code includes an Arrow header
-([hgraph 1839](https://github.com/hhenson/hgraph/issues/1839)).
+at the tag `TAG`, 0.9.12 or later, and installs it into `DIR`, as hgraph's
+CI builds its runtime without Arrow: Release, shared libraries,
+`HGRAPH_WITH_ARROW=OFF` ([hgraph 1839](https://github.com/hhenson/hgraph/issues/1839)),
+which leaves out Frame, Series, the table codecs, the standard library,
+Python and the extensions, against the dependency prefix
+`HGL_HGRAPH_DEPS`. Arrow's packages are kept from being found, and the
+date/tz library is always hgraph's own pinned release, fetched and built
+into its runtime library, so that what the SDK is does not turn on what
+else a prefix holds. The SDK's libraries are given the prefix's library
+directory as their run path. Where the prefix does not exist the script
+makes it with micromamba from conda-forge: fmt, spdlog and simdjson, with
+CMake and Ninja, at fixed versions, with micromamba given a home directory
+of its own, so that nothing outside the prefix and a temporary directory
+is written. The compiler is the caller's: GCC 15 or later on Linux, Apple
+clang 21 or later on macOS (`clang++`, the default there); the script runs
+under macOS's own bash 3.2. `DIR/hgl-sdk.txt` says the tag, its commit,
+`arrow=off`, the compiler and the prefix; an SDK of the tag built
+otherwise is not taken for one. The SDK is 14 MB (54 MB with Arrow), and
+its runtime and wiring libraries need fmt and spdlog alone; it builds in
+28 to 33 s with 12 jobs here (77 s with Arrow). On a macOS machine (Apple
+Silicon, Apple clang 21) it is 12 MB and builds in 34 s with 12 jobs, 56 s
+with the prefix made and hgraph cloned. On macOS conda-forge's fmt,
+spdlog and simdjson bring conda-forge's own libc++ into a process beside
+the system's, which the SDK and everything built against it link; it
+re-exports the system's libc++abi, so exceptions and type information
+have one runtime, and an exception thrown in fmt is caught by type
+elsewhere.
 
 CI's job `cpp` makes the prefix and the SDK with the script and caches
 both with `actions/cache`, under a key of the tag, the script and the
 runner's image, so that a run with that key builds neither. It then builds
 `runtime/cpp` and runs its unit tests, and does both again under the
-sanitizers. It runs on GitHub's Ubuntu 26.04 image, whose GCC 15.2 is
+sanitizers. The test `hglrt_takes_no_stdlib` fails where the library takes
+anything of hgraph's standard library or of Arrow: a header of either that
+the public headers bring in at any depth (their include set, preprocessed),
+a source that includes one, or a library that `libhglrt`, its tests or
+hgraph's runtime and wiring libraries need, read with `readelf` (with
+`otool -L` on macOS); an SDK built with Arrow fails it. It runs on GitHub's Ubuntu 26.04 image, whose GCC 15.2 is
 Ubuntu's own: nothing is installed for it, it is the compiler a developer
 on that release has, and neither a container (which the cache and the
 checkout would run inside) nor a compiler in the conda prefix (which adds
@@ -2399,8 +2440,8 @@ The C++ target's runtime library, `runtime/cpp`:
 | Dependency | For |
 | --- | --- |
 | hgraph's C++ SDK, its runtime and wiring libraries | the graph, node, type and runtime layers the library and generated code are built on |
-| Arrow 25 with Compute and Acero, fmt, spdlog, simdjson, date | hgraph's own dependencies: fmt's and spdlog's headers are in hgraph's, and its runtime library needs Arrow when it runs |
-| GCC 15 or later | C++23, and the libstdc++ the SDK links |
+| fmt, spdlog, simdjson | hgraph's own dependencies without Arrow: fmt's and spdlog's headers are in hgraph's, and its runtime library needs both when it runs. Its date/tz library is its own pinned release, built into it |
+| GCC 15 or later on Linux, Apple clang 21 or later on macOS | C++23, and the standard library the SDK links: libstdc++, or the system's libc++ |
 | CMake, Ninja | building the SDK and the library |
 | micromamba, conda-forge | making the dependency prefix where there is none |
 | doctest | the library's unit tests |

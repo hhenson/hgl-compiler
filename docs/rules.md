@@ -125,7 +125,7 @@ the chapters' entries stay the hgraph target's.
 | What | Rules or core declarations | Header | Tests |
 | --- | --- | --- | --- |
 | An execution failure: hgraph's `ExecutionFailure` carrying the error, its code or none, and the place it was raised at; `?` raising a retained error with its provenance | ERR-1, ERR-4, ERR-5, ERR-8 | `failure.h` | `failure_tests.cpp` |
-| Reads checked when they run: `value.unset_read`, or `err` of it where the place takes a result; an index outside a list | TIME-1, ERR-14, EXPR-3 | `checked.h` | `checked_tests.cpp` |
+| Reads checked when they run: `value.unset_read`, or `err` of it where the place takes a result; an index outside an ordinary list, read or assigned, `value.index_out_of_range` | TIME-1, ERR-14, EXPR-3, EXPR-7 | `checked.h` | `checked_tests.cpp` |
 | `add_`, `sub_`, `mul_`, `neg_`, `floordiv_`, `mod_` of `i64`, checked, with their zero policies | NUM-1, NUM-2, NUM-3, NUM-9, NUM-12 | `scalar.h` | `scalar_tests.cpp` |
 | `add_`, `sub_`, `mul_`, `neg_` of `f64`; `div_` of two `f64` and of two `i64` under each zero policy | NUM-1, NUM-2, NUM-3, NUM-9, NUM-12 | `scalar.h` | `scalar_tests.cpp` |
 | `add_`, `sub_`, `mul_` of an `i64` and an `f64`; `div_`, `floordiv_`, `mod_` of an `i64` and an `f64`, and `floordiv_`, `mod_` of two `f64`, under each zero policy, special values included | NUM-1, NUM-2, NUM-3, NUM-9, NUM-12 | `scalar.h` | `scalar_tests.cpp` |
@@ -134,13 +134,17 @@ the chapters' entries stay the hgraph target's.
 | `and_`, `or_`, `not_`, `all_`, `any_` | OPS-5 | `scalar.h` | `scalar_tests.cpp` |
 | A duration's `neg_`, `add_`, `sub_`, `mul_` by an `i64` or an `f64`, `div_` by a number or a duration under each zero policy it admits, and `floordiv_` of two: rounded to the microsecond, a tie to the even one, checked | OPS-1, OPS-10, NUM-12 | `temporal.h` | `temporal_tests.cpp` |
 | An instant moved by a duration, and the duration between two: `datetime`, `civil_datetime`, a `date` as a `civil_datetime`, a `zoned_datetime` in its zone; `date + time`; two zoned datetimes equal by instant and zone, or as UTC | OPS-1, OPS-2, OPS-10, TYPE-2 | `temporal.h` | `temporal_tests.cpp` |
-| `str` concatenation and repetition | OPS-1 | `text.h` | `text_tests.cpp` |
+| `str` concatenation and repetition, a count below zero `numeric.out_of_range` | OPS-1 | `text.h` | `text_tests.cpp` |
 | Every `convert` of the scalars: those that cannot fail, and those that can under `invalid`, with `rounding` and `nan` | OPS-4, OPS-6, OPS-7, OPS-8 | `conversions.h` | `conversion_tests.cpp` |
 | A tenor, hgraph's `Tenor`: its arithmetic, count by count and checked; its order and `compare_`; its text; and the parts core's calendar candidates are written with, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-6, TEN-8, TEN-9 | `tenors.h` | `tenor_tests.cpp` |
 | `append`, `extend` | LIST-1, LIST-2, LIST-3 | `lists.h` | `capabilities_tests.cpp` |
-| `get`, `has`, `put` of the global store | CAP-6 | `capabilities.h` | `capabilities_tests.cpp` |
+| The operations on an endpoint of a scalar or a nullable scalar, input or result: `valid`, `modified`, `delta_value` plain and where a `result` is taken, `last_modified`, `invalidate` of the result, `is_active`, `activate`, `passivate`; `all_valid` and a form's own delta wait for their forms | TIME-9, END-1 to END-6, ERR-14 | `endpoints.h` | `endpoint_tests.cpp` |
+| `Logger` and `log`, `Clock` and its four properties | CAP-1, CAP-2, CAP-3 | `capabilities.h` | `capabilities_tests.cpp` |
+| `Scheduler`: its three properties, `schedule` with a duration or a datetime under a tag or none, `un_schedule`, `reset`; `Alarm` and its `schedule`; what may be asked of each | CAP-4, CAP-5, TIME-8 | `capabilities.h` | `scheduler_tests.cpp` |
+| `get`, `has`, `put` of the global store, in a node and where a graph is built | CAP-6, FN-9 | `capabilities.h` | `capabilities_tests.cpp` |
 | A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
+| A source's body as a coroutine, `generator<T>`: run on to each `yield` as it is resumed, in loops and branches, giving what it yields; what it lets out thrown again where it was resumed; its frame and the locals in it destroyed wherever it stopped | SOURCE-1 | `generator.h` | `generator_tests.cpp` |
 | Tests registered by name and run as named, from an entry unit that includes no hgraph header; `assert`; `assert raises`; a test held to a time limit, failed once past it and its runs stopped | TST-2, TST-10, TST-11, TST-15, TST-17 | `host.h`, `testing.h` | `testing_tests.cpp` |
 | Traces of scalars, nullables, tuples and lists, written dense and timed, each cell whole or a delta; their comparison with an eval's recording and the values its result held, and where two first differ; what one written out replays to an input and gives a `const fn` | TST-4, TST-5, TST-6, TST-7, TST-9, TST-16, CEVAL-2, TYPE-16 | `traces.h`, `testing.h` | `traces_tests.cpp`, `testing_tests.cpp` |
 | A run's bounds, the run in simulation and in real time, its store and its recording; an eval and its failure | CRUN-1, CRUN-2, CRUN-3, CRUN-7, CRUN-8, CEVAL-1, CEVAL-4, CEVAL-5, CEVAL-6, RUN-3 | `testing.h` | `testing_tests.cpp`, `sources_tests.cpp` |

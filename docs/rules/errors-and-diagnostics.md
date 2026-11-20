@@ -159,9 +159,12 @@ analyser: done
 
 - A child read checked when it runs (`CheckedChild`) where the place expects `result<T, error>`, T the child's type, is of that result (EXPR-5); elsewhere it is the T
 - So is a read of a window's value, of an input, `out` or a child named when compiled (`CheckedWindow`), where the place expects `result<list<V>, error>`, "T being the `list<V>` it reads as (TYPE-11)"
+- So is `delta_value` of any endpoint, an input, `out` or a child, where the place expects `result<delta<T>, error>`, and core's `removed_value` of a window where it expects `result<V, error>` (`CheckedDelta`), the place saying what V is; where the place takes no `result` a window of a duration's delta and any `removed_value` are `payload.unguarded` (TYPE-11)
 
 transpiler: partial
 
 - hgraph: `ok` of the child's value, or `err` of an `error` coded `value.unset_read` where the child is not valid (`_core.checked_child_result`); elsewhere the read fails with that code.; a dictionary's entry whose key is absent is a child that is not valid (TIME-1), and is read as one
 - A struct, a tuple or a fixed list read whole there that is valid and not all valid gives the same, a required part that is not valid failing the read
 - A window's value read there before it is all valid gives that `err` too (`_core.window_result`, and `_core.checked_child_result` of a window child known when it runs)
+- `delta_value` of a direct input or `out` read there is `ok` of the delta (`_core.Ok`) where the endpoint is modified and valid, as `modified` is written, and that `err` where it has not ticked or was invalidated, for every endpoint but a window of a duration, core's `record` among them
+- Left, reported: `delta_value` of a child, of a window of a duration or of a value that holds one, and `removed_value`, read there
