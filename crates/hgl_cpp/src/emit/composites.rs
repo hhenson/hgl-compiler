@@ -480,6 +480,10 @@ struct Given {
     changes: bool,
     /// True where it reads what a local or a constant holds ([`refers`]).
     refers: bool,
+    /// The C++ type it is held as where it is held: its own, never `auto`
+    /// of what was read, which for an element of a `list<bool>` is the
+    /// vector's reference to its bit.
+    ty: String,
 }
 
 impl Emitter<'_> {
@@ -689,7 +693,10 @@ impl Emitter<'_> {
             let Some(slot) = argument.parameter.filter(|&slot| slot < read.members.len()) else {
                 return self.missing(argument.value.at, "an argument given to no field");
             };
-            given.push(self.given(scope, slot, &argument.value));
+            let Some(written) = self.given(scope, slot, &argument.value) else {
+                return "0".to_string();
+            };
+            given.push(written);
         }
         // Each field left out, in the order of the fields: its default, or
         // null.
@@ -698,6 +705,9 @@ impl Emitter<'_> {
                 continue;
             }
             let field_type = &field_types[slot];
+            let Some(slot_type) = self.written_type(field_type, value.at) else {
+                return "0".to_string();
+            };
             let default = member
                 .default
                 .and_then(|default| field_default(program, default));
@@ -719,6 +729,7 @@ impl Emitter<'_> {
                         fails: may_fail(default),
                         changes: false,
                         refers: false,
+                        ty: slot_type,
                     }
                 }
                 None if hgl_lower::types::is_nullable(field_type)
@@ -730,6 +741,7 @@ impl Emitter<'_> {
                         fails: false,
                         changes: false,
                         refers: false,
+                        ty: slot_type,
                     }
                 }
                 None => {
@@ -744,16 +756,19 @@ impl Emitter<'_> {
         self.made_in_order(scope, &ty, read.members.len(), given, ("{", "}"))
     }
 
-    /// What `argument`, given to `slot`, is written as.
-    fn given(&mut self, scope: &mut Scope, slot: usize, argument: &Expr) -> Given {
+    /// What `argument`, given to `slot`, is written as; `None` where its
+    /// type is not written yet, which is reported.
+    fn given(&mut self, scope: &mut Scope, slot: usize, argument: &Expr) -> Option<Given> {
         let text = self.expression(scope, argument);
-        Given {
+        let ty = self.written_type(&argument.ty, argument.at)?;
+        Some(Given {
             slot,
             text,
             fails: may_fail(argument),
             changes: changes(argument),
             refers: refers(argument),
-        }
+            ty,
+        })
     }
 
     /// The default `default` of a field of type `field_type` (TYPE-5),
@@ -829,9 +844,9 @@ impl Emitter<'_> {
         for value in given {
             let name = names::temporary("field", self.temporary());
             let held = if value.refers && !changing {
-                "const auto&"
+                format!("const {}&", value.ty)
             } else {
-                "const auto"
+                format!("const {}", value.ty)
             };
             steps.push_str(&format!("{held} {name} = {}; ", value.text));
             filled[value.slot] = name;
@@ -930,13 +945,16 @@ impl Emitter<'_> {
         let Some(ty) = self.written_type(&value.ty, value.at) else {
             return "0".to_string();
         };
-        // What each property is when it is left out.
-        let empty: Vec<String> = match &**of {
+        // Each property's type, and what it is when it is left out.
+        let empty: Vec<(String, String)> = match &**of {
             Type::Set(element) => {
                 let Some(set) = self.written_type(&Type::Set(element.clone()), value.at) else {
                     return "0".to_string();
                 };
-                vec![format!("{set}{{}}"), format!("{set}{{}}")]
+                vec![
+                    (set.clone(), format!("{set}{{}}")),
+                    (set.clone(), format!("{set}{{}}")),
+                ]
             }
             Type::Dict { key, value: held } => {
                 let updated = Type::Dict {
@@ -949,7 +967,10 @@ impl Emitter<'_> {
                 ) else {
                     return "0".to_string();
                 };
-                vec![format!("{updated}{{}}"), format!("{removed}{{}}")]
+                vec![
+                    (updated.clone(), format!("{updated}{{}}")),
+                    (removed.clone(), format!("{removed}{{}}")),
+                ]
             }
             Type::List { element, .. } => {
                 let position = Box::new(Type::Scalar(hgl_analyser::Scalar::I64));
@@ -964,19 +985,31 @@ impl Emitter<'_> {
                     return "0".to_string();
                 };
                 vec![
-                    format!("{updated}{{}}"),
-                    format!("{removed}{{}}"),
-                    "std::nullopt".to_string(),
+                    (updated.clone(), format!("{updated}{{}}")),
+                    (removed.clone(), format!("{removed}{{}}")),
+                    (
+                        "std::optional<::hgraph::Int>".to_string(),
+                        "std::nullopt".to_string(),
+                    ),
                 ]
             }
-            Type::Nullable(_) => vec![String::new()],
+            Type::Nullable(_) => vec![(ty.clone(), String::new())],
             Type::Named {
                 kind: NamedKind::Struct,
                 ..
-            } => match program.field_types(of) {
-                Some(fields) => vec!["std::nullopt".to_string(); fields.len()],
-                None => return self.missing(value.at, "this delta"),
-            },
+            } => {
+                let Some(fields) = program.field_types(of) else {
+                    return self.missing(value.at, "this delta");
+                };
+                let mut properties = Vec::new();
+                for field in &fields {
+                    let Some(property) = self.written_type(&property_type(field), value.at) else {
+                        return "0".to_string();
+                    };
+                    properties.push((property, "std::nullopt".to_string()));
+                }
+                properties
+            }
             _ => return self.missing(value.at, "this delta"),
         };
         let mut given = Vec::new();
@@ -984,9 +1017,12 @@ impl Emitter<'_> {
             let Some(slot) = argument.parameter.filter(|&slot| slot < empty.len()) else {
                 return self.missing(argument.value.at, "an argument given to no property");
             };
-            given.push(self.given(scope, slot, &argument.value));
+            let Some(written) = self.given(scope, slot, &argument.value) else {
+                return "0".to_string();
+            };
+            given.push(written);
         }
-        for (slot, left_out) in empty.iter().enumerate() {
+        for (slot, (property, left_out)) in empty.iter().enumerate() {
             if !given.iter().any(|written| written.slot == slot) {
                 given.push(Given {
                     slot,
@@ -994,6 +1030,7 @@ impl Emitter<'_> {
                     fails: false,
                     changes: false,
                     refers: false,
+                    ty: property.clone(),
                 });
             }
         }
@@ -1125,10 +1162,16 @@ impl Emitter<'_> {
             let Some(ty) = self.written_type(&value.ty, value.at) else {
                 return "0".to_string();
             };
+            let (Some(book_type), Some(key_type)) = (
+                self.written_type(&base.ty, base.at),
+                self.written_type(&index.ty, index.at),
+            ) else {
+                return "0".to_string();
+            };
             let held = if refers(base) && !changes(index) {
-                "const auto&"
+                format!("const {book_type}&")
             } else {
-                "const auto"
+                format!("const {book_type}")
             };
             let base = self.expression(scope, base);
             let index = self.expression(scope, index);
@@ -1136,7 +1179,7 @@ impl Emitter<'_> {
             let book = names::temporary("book", self.temporary());
             let key = names::temporary("key", self.temporary());
             return format!(
-                "[&]() -> {ty} {{ {held} {book} = {base}; const auto {key} = {index}; return ::{}::entry_at({book}, {key}); }}()",
+                "[&]() -> {ty} {{ {held} {book} = {base}; const {key_type} {key} = {index}; return ::{}::entry_at({book}, {key}); }}()",
                 runtime::NAMESPACE
             );
         }
@@ -1331,11 +1374,13 @@ impl Emitter<'_> {
         if !ordered {
             return Some(format!("({left_text} {symbol} {right_text})"));
         }
+        let left_type = self.written_type(&left.ty, left.at)?;
+        let right_type = self.written_type(&right.ty, right.at)?;
         let first = names::temporary("left", self.temporary());
         let second = names::temporary("right", self.temporary());
         scope.acted = true;
         Some(format!(
-            "[&] {{ const auto {first} = {left_text}; const auto {second} = {right_text}; return {first} {symbol} {second}; }}()"
+            "[&] {{ const {left_type} {first} = {left_text}; const {right_type} {second} = {right_text}; return {first} {symbol} {second}; }}()"
         ))
     }
 

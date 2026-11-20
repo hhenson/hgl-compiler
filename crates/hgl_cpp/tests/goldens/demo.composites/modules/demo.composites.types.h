@@ -8,6 +8,7 @@
 #undef Book
 #undef Box
 #undef Empty
+#undef Flags
 #undef Line
 #undef Point
 #undef Round
@@ -19,11 +20,13 @@
 #undef count
 #undef demo
 #undef end
+#undef first
 #undef id
 #undef lhs
 #undef members
 #undef name
 #undef note
+#undef on
 #undef owner
 #undef points
 #undef prices
@@ -46,6 +49,7 @@ struct Book;
 template <class T_>
 struct Box;
 struct Empty;
+struct Flags;
 class Base;
 class Shape;
 struct Round;
@@ -59,6 +63,7 @@ struct Book;
 template <class T_>
 struct Box;
 struct Empty;
+struct Flags;
 struct Base;
 struct Shape;
 struct Round;
@@ -91,6 +96,11 @@ template <>
 struct hglrt::delta_of<::hgl::demo::composites::m_::Empty>
 {
     using type = ::hgl::demo::composites::m_::d_::Empty;
+};
+template <>
+struct hglrt::delta_of<::hgl::demo::composites::m_::Flags>
+{
+    using type = ::hgl::demo::composites::m_::d_::Flags;
 };
 template <>
 struct hglrt::delta_of<::hgl::demo::composites::m_::Base>
@@ -248,7 +258,28 @@ struct Empty
 };
 }  // namespace d_
 
-// abstract struct Base (TYPE-3), module demo.composites, line 39
+// struct Flags (TYPE-3), module demo.composites, line 37
+struct Flags
+{
+    ::hglrt::list<::hgraph::Bool> on;
+    ::hgraph::Bool first;
+
+    friend bool operator==(const Flags&, const Flags&) = default;
+};
+
+namespace d_
+{
+// delta<Flags> (TYPE-16)
+struct Flags
+{
+    std::optional<::hglrt::list_delta<::hglrt::list<::hgraph::Bool>>> on;
+    std::optional<::hgraph::Bool> first;
+
+    friend bool operator==(const Flags&, const Flags&) = default;
+};
+}  // namespace d_
+
+// abstract struct Base (TYPE-3), module demo.composites, line 44
 class Base
 {
   public:
@@ -287,7 +318,7 @@ struct Base
 };
 }  // namespace d_
 
-// abstract struct Shape (TYPE-3), module demo.composites, line 43
+// abstract struct Shape (TYPE-3), module demo.composites, line 48
 class Shape
 {
   public:
@@ -333,7 +364,7 @@ struct Shape
 };
 }  // namespace d_
 
-// struct Round (TYPE-3), module demo.composites, line 47
+// struct Round (TYPE-3), module demo.composites, line 52
 struct Round
 {
     ::hgraph::Int id;
@@ -356,7 +387,7 @@ struct Round
 };
 }  // namespace d_
 
-// struct Tagged (TYPE-3), module demo.composites, line 51
+// struct Tagged (TYPE-3), module demo.composites, line 56
 template <class T_>
 struct Tagged
 {
@@ -524,6 +555,26 @@ template <>
 struct std::hash<::hgl::demo::composites::m_::d_::Empty>
 {
     std::size_t operator()(const ::hgl::demo::composites::m_::d_::Empty& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct hglrt::fields<::hgl::demo::composites::m_::Flags>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::Flags::on, &::hgl::demo::composites::m_::Flags::first};
+};
+template <>
+struct hglrt::fields<::hgl::demo::composites::m_::d_::Flags>
+{
+    static constexpr auto members = std::tuple{&::hgl::demo::composites::m_::d_::Flags::on, &::hgl::demo::composites::m_::d_::Flags::first};
+};
+template <>
+struct std::hash<::hgl::demo::composites::m_::Flags>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::Flags& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct std::hash<::hgl::demo::composites::m_::d_::Flags>
+{
+    std::size_t operator()(const ::hgl::demo::composites::m_::d_::Flags& value) const { return ::hglrt::key_hash_of(value); }
 };
 template <>
 struct hglrt::fields<::hgl::demo::composites::m_::d_::Base>

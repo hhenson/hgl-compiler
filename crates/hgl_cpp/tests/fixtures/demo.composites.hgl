@@ -34,6 +34,11 @@ struct Box<T> {
 
 struct Empty {}
 
+struct Flags {
+    on: list<bool>
+    first: bool
+}
+
 # TYPE-3: a struct is a value where an abstract struct it inherits from is
 # expected, through any number of parents.
 abstract struct Base {
@@ -365,6 +370,19 @@ test enums_zones_and_nullables {
     assert is_one(1)
     assert !is_one(2)
     assert !is_one(null)
+}
+
+# An element of a `list<bool>` is held as the `bool` it was when it was
+# read, before a later field's block changes the list.
+test bits_are_held_as_they_were_read {
+    var on = [true, false]
+    let made = Flags(first: on[1], on: {
+        on[1] = true
+        on
+    })
+    assert !made.first && made.on == [true, true]
+    let members: set<bool> = [true, false, true]
+    assert members == [false, true]
 }
 
 test a_var_place_is_taken_where_the_call_is_made {
