@@ -207,9 +207,9 @@ pub mod codes {
     pub const SCHEDULED_LIFECYCLE: &str = "scheduled.lifecycle";
     /// A wake asked of the scheduler or the alarm with a `duration` the
     /// compiler sees, that is not more than zero, other than a zero in
-    /// `start` (TIME-8). The catalogue's row is proposed, and lists the
-    /// code among the execution codes too.
-    pub const SCHEDULE_NON_POSITIVE_DURATION: &str = "schedule.non_positive_duration";
+    /// `start` (TIME-8). Where the program runs such a wake fails with
+    /// the execution code `schedule.non_positive_duration`.
+    pub const SCHEDULE_DURATION_BOUNDS: &str = "schedule.duration_bounds";
     /// `endpoint<T>` other than as the whole type of a native value
     /// function's parameter (TYPE-12).
     pub const ENDPOINT_POSITION: &str = "endpoint.position";
