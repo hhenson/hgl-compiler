@@ -1594,17 +1594,22 @@ class Designation:
     """What a node's `ref` result, `output`, designates through one of
     its evaluations (the language's FN-16, TIME-10; core's END-10).
 
-    FN-16: "The result designates the logical endpoint that path names:
-    its readers follow what that endpoint is bound to, a later re-binding
-    upstream included, and the node is not woken for it." `ports` has
-    each endpoint the node designates by name: the `REF` input it is
-    read through, a hidden one where the node may not be woken by the
-    endpoint's own. `state`, the node's `STATE`, keeps which one the
+    FN-16: "Returning an ordinary input or a child path designates the
+    logical endpoint named by the path. Readers follow a later rebinding
+    of that endpoint without waking the node for it." `ports` has each
+    such endpoint the node designates by name: the hidden `REF` input it
+    is read through. `state`, the node's `STATE`, keeps which one the
     result designates, `_designates`: where that endpoint is re-bound,
     its `REF` ticks, and the result designates what it is bound to now,
     the node's handlers not entered for it (the generated node returns
     first). hgraph 0.9.8's reference output holds the reference it was
     given, a value, which a re-binding upstream does not change.
+
+    FN-16: "Returning a whole `ref` parameter samples its current
+    designation when the `return` executes ... the result keeps the
+    sampled designation until the node writes its result again"
+    (`sample`): that is the reference the parameter's own `REF` holds,
+    and nothing follows it, as hgraph's own reference output does not.
 
     TIME-10: "A designation published again unchanged is no tick", and
     END-10: "A publication of the designation it holds is no tick". The
@@ -1653,6 +1658,19 @@ class Designation:
         """`return items[idx]`: designates `key`, and gives what the node
         returns (`published`)."""
         self.designate(*key)
+        return self.published()
+
+    def sample(self, port):
+        """`out = target` of a whole `ref` parameter, whose `REF` input is
+        `port` (FN-16): the result designates what the parameter
+        designates now, and keeps it until the node writes it again."""
+        self._pending = _bound(port)
+        self._key = None
+
+    def sampled(self, port):
+        """`return target` of a whole `ref` parameter: samples it
+        (`sample`), and gives what the node returns (`published`)."""
+        self.sample(port)
         return self.published()
 
     def invalidate(self):

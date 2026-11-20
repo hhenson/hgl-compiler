@@ -1,12 +1,12 @@
 module demo.refs_wave3
 
-# FN-16: "A `return` to a `ref` result is given an expression that
-# names an endpoint: a temporal input of the node, `ref` or not, or a
-# child of one ... The result designates the logical endpoint that path
-# names: its readers follow what that endpoint is bound to, a later
-# re-binding upstream included, and the node is not woken for it."
-# Core's END-10: "its readers follow what that endpoint is bound to, and
-# the node is not woken by that endpoint's ticks."
+# FN-16: "Returning a whole `ref` parameter samples its current
+# designation when the `return` executes ... If the input later
+# designates another target, the result keeps the sampled designation
+# until the node writes its result again. Returning an ordinary input or
+# a child path designates the logical endpoint named by the path.
+# Readers follow a later rebinding of that endpoint without waking the
+# node for it." Core's END-10 says the same.
 
 # Re-points its result where `use_b` ticks, and not where `a` or `b` is
 # re-bound upstream: both are passive.
@@ -30,7 +30,7 @@ fn designations(ref target: i64) -> i64 {
     }
 }
 
-# A `ref` parameter, designated by a node its re-binding does not wake.
+# A `ref` parameter, sampled by a node its re-binding does not wake.
 fn pass_on(once: bool, ref target: i64) -> ref i64 {
     when modified(once) { return target }
 }
@@ -47,8 +47,19 @@ fn pass_on_any<T>(once: bool, ref target: T) -> ref T {
 
 # Passivates `data`, which then publishes where `a` is re-bound: the
 # node is not woken, so `when modified(data)` is not reached (TIME-3:
-# "Passivating an input removes it as a wake source").
+# "Passivating an input removes it as a wake source"), and the result
+# keeps what it sampled of `a`.
 fn steady(once: bool, data: i64, ref a: i64, ref b: i64) -> ref i64 {
+    when modified(once) {
+        passivate(data)
+        return a
+    }
+    when modified(data) { return b }
+}
+
+# As `steady`, of ordinary inputs: the result follows what `a` is
+# re-bound to, and the node is not woken for it.
+fn steady_held(once: bool, data: i64, a: i64, b: i64) -> ref i64 {
     when modified(once) {
         passivate(data)
         return a
@@ -65,22 +76,25 @@ fn passed_on_any(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
 # Two re-bindings, a node that designates either of two.
 fn picked_twice(outer: bool, use_b: bool, use_d: bool, a: i64, b: i64, c: i64, d: i64) -> i64 =>
     follow(pick(outer, pick(use_b, a, b), pick(use_d, c, d)))
-fn passed_on_designations(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
-    designations(pass_on(once, pick(use_b, a, b)))
 fn steady_of(once: bool, data: i64, use_b: bool, a: i64, b: i64, other: i64) -> i64 =>
     follow(steady(once, data, pick(use_b, a, b), other))
+fn steady_held_of(once: bool, data: i64, use_b: bool, a: i64, b: i64, other: i64) -> i64 =>
+    follow(steady_held(once, data, pick(use_b, a, b), other))
 
 # `use_b` picks `b` at the start, then `a` at the third cycle, where `a`
-# does not tick: a reader that follows the re-binding samples what `a`
-# holds, 2, and then has `a`'s 4 and not `b`'s 11. `once` ticks at the
-# start alone.
-test a_designation_follows_a_re_binding_upstream {
+# does not tick. `once` ticks at the start alone. A relay that returns
+# its `ref` parameter sampled `b`, and its reader has `b`'s 11 and not
+# `a`'s 4. One that returns an ordinary input follows the re-binding:
+# its reader ticks with what `a` holds, 2, and then has `a`'s 4.
+test a_ref_parameter_is_sampled_and_an_ordinary_input_followed {
     assert eval(passed_on(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
-        [10, _, 2, 4]
+        [10, _, _, 11]
     assert eval(held(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
         [10, _, 2, 4]
     assert eval(passed_on_any(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
-        [10, _, 2, 4]
+        [10, _, _, 11]
+    # The outer `pick` samples `b` from the first inner one, and later
+    # `c` from the second: neither inner re-binding reaches the reader.
     assert eval(picked_twice(
         outer: [false, _, _, true, _],
         use_b: [true, _, false, _, _],
@@ -89,13 +103,16 @@ test a_designation_follows_a_re_binding_upstream {
         b:     [10, _, _, _, _],
         c:     [100, _, _, _, _],
         d:     [1000, _, _, _, _],
-    )) == [10, _, 2, 100, 1000]
-    # TIME-10: "A reference ticks where its designation changes": a
-    # reader of the result through a `ref` parameter is modified at the
-    # re-binding upstream.
-    assert eval(passed_on_designations(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
-        [1, _, 2, _]
+    )) == [10, _, _, 100, _]
     assert eval(steady_of(
+        once:  [true, _, _, _],
+        data:  [1, _, 5, _],
+        use_b: [true, _, false, _],
+        a:     [1, 2, _, 4],
+        b:     [10, _, _, 11],
+        other: [100, _, _, _],
+    )) == [10, _, _, 11]
+    assert eval(steady_held_of(
         once:  [true, _, _, _],
         data:  [1, _, 5, _],
         use_b: [true, _, false, _],

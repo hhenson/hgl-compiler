@@ -1320,8 +1320,8 @@ impl<'a> Emitter<'a> {
                 value: assigned,
                 ..
             } if function.is_out(*local) && designates(assigned) => {
-                if let Some(key) = self.designation(function, assigned) {
-                    self.line(depth, &format!("_designation.designate({key})"));
+                if let Some(designating) = self.designation(function, assigned) {
+                    self.line(depth, &designating.call(false));
                 }
             }
             Stmt::Assign {
@@ -1445,8 +1445,8 @@ impl<'a> Emitter<'a> {
                 value: Some(returned),
                 ..
             } if designates(returned) => match self.designation(function, returned) {
-                Some(key) => {
-                    self.line(depth, &format!("return _designation.returned({key})"));
+                Some(designating) => {
+                    self.line(depth, &format!("return {}", designating.call(true)));
                 }
                 None => self.line(depth, "return _designation.published()"),
             },
