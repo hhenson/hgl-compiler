@@ -7,17 +7,19 @@
 
 #include <hglrt/values.h>
 
+#include <source_location>
+
 namespace hglrt {
 
 /// `add_(lhs: str, rhs: str) -> str`: `lhs` and then `rhs` (OPS-1).
 str add__str_str(const str& lhs, const str& rhs);
 
-/// `mul_(lhs: str, rhs: i64) -> str`: `lhs` `rhs` times over, none for a
-/// count of zero (OPS-1). Core's HGL candidate takes the operands the other
-/// way round. Core's contract gives no rule for a count below zero, and
-/// none is made up: such a count is an internal fault of the library, an
-/// `std::domain_error`, and so is a count whose text no string can hold, an
-/// `std::length_error`; neither is an HGL failure (ERR-1).
-str mul__str_i64(const str& lhs, i64 rhs);
+/// `mul_(lhs: str, rhs: i64) -> str` (OPS-1): "A `str` and an `i64` give
+/// the text repeated that many times, the empty text for a count of zero; a
+/// count below zero is an HGL error with code `numeric.out_of_range`." Core's
+/// HGL candidate takes the operands the other way round. A count whose text
+/// no string can hold is an internal fault of the library, an
+/// `std::length_error`, and no HGL failure (ERR-1).
+str mul__str_i64(const str& lhs, i64 rhs, std::source_location where = std::source_location::current());
 
 } // namespace hglrt

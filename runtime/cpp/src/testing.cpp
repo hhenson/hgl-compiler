@@ -269,8 +269,11 @@ void stop_if_stopping() noexcept {
     }
 }
 
-/// Asks a run to stop as it starts, where runs are to stop: hgraph clears a
-/// stop asked for before a run's graph starts.
+/// Asks a run to stop as it starts, where runs are to stop. It stands in for
+/// a stop that holds across the start of `run()`: hgraph 0.9.12 clears
+/// `stop_requested` as `run()` begins (`run_storage` in its executor), so a
+/// stop asked for before then runs every cycle, in simulation and in real
+/// time alike.
 class StopAtStart final : public hgraph::LifecycleObserver {
   public:
     void on_after_start_graph(const hgraph::GraphView&) override { stop_if_stopping(); }

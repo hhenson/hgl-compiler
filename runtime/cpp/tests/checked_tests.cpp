@@ -4,7 +4,9 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -49,7 +51,8 @@ TEST_CASE("a checked read where its place takes a result gives one (ERR-14)") {
     CHECK_FALSE(none.error().context.has_value());
 }
 
-TEST_CASE("an index outside a list fails where it is evaluated, with no code (EXPR-3)") {
+TEST_CASE(
+    "an index outside a list fails where it is evaluated, coded value.index_out_of_range (EXPR-3, EXPR-7)") {
     hglrt::list<hglrt::i64> values{10, 20, 30};
     CHECK(hglrt::item(values, 0) == 10);
     CHECK(hglrt::item(values, 2) == 30);
@@ -60,15 +63,30 @@ TEST_CASE("an index outside a list fails where it is evaluated, with no code (EX
             (void)hglrt::item(values, outside);
             FAIL("nothing was raised");
         } catch (const hglrt::Failure& failure) {
-            CHECK_FALSE(failure.error().code.has_value());
+            CHECK(failure.error().code == "value.index_out_of_range");
             CHECK(failure.error().message ==
-                  "the index " + std::to_string(outside) + " is outside a sequence of 3");
+                  "the index " + std::to_string(outside) + " is outside a list of 3");
         }
     }
+    // An assignment's index is checked as a read's is.
+    const auto code_of = [](auto&& call) -> std::string {
+        try {
+            call();
+        } catch (const hglrt::Failure& failure) {
+            return failure.error().code.value_or("(no code)");
+        }
+        return "(nothing raised)";
+    };
+    CHECK(code_of([&] { hglrt::item(values, 3) = 1; }) == "value.index_out_of_range");
+    CHECK(code_of([&] { hglrt::item(values, std::numeric_limits<hglrt::i64>::min()) = 1; }) ==
+          "value.index_out_of_range");
+    CHECK(values == hglrt::list<hglrt::i64>{10, 21, 30});
+    // A fixed list, `list<T, N>`, is an ordinary list too.
     std::array<hglrt::i64, 2> fixed{1, 2};
     hglrt::item(fixed, 1) = 5;
     CHECK(fixed[1] == 5);
-    CHECK_THROWS_AS((void)hglrt::item(fixed, 2), hglrt::Failure);
+    CHECK(code_of([&] { (void)hglrt::item(std::as_const(fixed), 2); }) == "value.index_out_of_range");
+    CHECK(code_of([&] { hglrt::item(fixed, -1) = 0; }) == "value.index_out_of_range");
     const std::vector<hglrt::str> empty;
-    CHECK_THROWS_AS((void)hglrt::item(empty, 0), hglrt::Failure);
+    CHECK(code_of([&] { (void)hglrt::item(empty, 0); }) == "value.index_out_of_range");
 }
