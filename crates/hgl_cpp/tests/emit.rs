@@ -511,6 +511,91 @@ fn a_temporal_form_not_written_yet_is_reported() {
     assert_eq!(emitted.blocked("a_scalar"), None);
 }
 
+/// A temporal call that leaves out `const` parameters (UNIT-8): where
+/// more than one default may fail, each is held in the order of the
+/// parameters (EXPR-2); a default that runs statements is reported, as a
+/// value call's is; and a lifted call that leaves one out is reported,
+/// since its defaults bind as configuration where the graph is built
+/// (FN-6).
+#[test]
+fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "const fn one() -> i64 => 1\n",
+                "\n",
+                "fn scaled(value: i64, const by: i64 = one(), const plus: i64 = one()) -> i64 {\n",
+                "    when { return value * by + plus }\n",
+                "}\n",
+                "\n",
+                "fn twice(value: i64) -> i64 => scaled(value)\n",
+                "\n",
+                "fn blocky(value: i64, const by: i64 = {\n",
+                "    let b = 2\n",
+                "    b + 1\n",
+                "}) -> i64 {\n",
+                "    when { return value * by }\n",
+                "}\n",
+                "\n",
+                "fn blocked(value: i64) -> i64 => blocky(value)\n",
+                "\n",
+                "const fn add(a: i64, b: i64 = 1) -> i64 => a + b\n",
+                "\n",
+                "fn lifted_default(value: i64) -> i64 => add(value)\n",
+                "\n",
+                "test ordered {\n",
+                "    assert eval(twice(value: [1])) == [2]\n",
+                "}\n",
+                "\n",
+                "test block {\n",
+                "    assert eval(blocked(value: [1])) == [3]\n",
+                "}\n",
+                "\n",
+                "test lifted {\n",
+                "    assert eval(lifted_default(value: [1])) == [2]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("ordered"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    // Both defaults call `one`, and each may fail: each is held, `by`
+    // before `plus`, before the wiring function is called.
+    let twice = unit
+        .split("struct twice")
+        .nth(1)
+        .expect("the graph `twice`");
+    assert!(
+        twice.contains(
+            "[&] { const auto argument_00_ = value; const auto argument_01_ = ::hgl::m::m_::one(); const auto argument_02_ = ::hgl::m::m_::one(); return ::hgl::m::m_::w_::scaled(wiring_, argument_00_, argument_01_, argument_02_); }()"
+        ),
+        "{twice}"
+    );
+    assert!(
+        emitted.blocked("block").is_some_and(
+            |reason| reason.ends_with("does not write a default that runs statements yet")
+        ),
+        "{:?}",
+        emitted.blocked("block")
+    );
+    assert!(
+        emitted.blocked("lifted").is_some_and(|reason| reason
+            .ends_with("does not write a lifted call that leaves out a parameter yet")),
+        "{:?}",
+        emitted.blocked("lifted")
+    );
+}
+
 /// UNIT-8: a default is written where its argument is left out; one
 /// that calls its own function with that argument left out again would
 /// be written inside itself without end, and is reported.
