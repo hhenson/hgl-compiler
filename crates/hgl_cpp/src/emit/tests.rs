@@ -13,7 +13,7 @@ use hgl_analyser::hir::{Body, Local, Stmt};
 use hgl_diagnostics::Location;
 
 use super::Emitter;
-use super::names::identifier;
+use super::names::{self, identifier};
 use super::values::INDENT;
 
 impl Emitter<'_> {
@@ -33,7 +33,8 @@ impl Emitter<'_> {
             self.piece
                 .statements
                 .push((line, statement_at(statement, &body.locals)));
-            text.push_str(&format!("{INDENT}::hglrt::statement(__LINE__);\n"));
+            let statement_line = names::native("statement");
+            text.push_str(&format!("{INDENT}{statement_line}(__LINE__);\n"));
             self.test_statement(body, statement, &mut text);
         }
         text.push_str("}\n");
@@ -46,7 +47,8 @@ impl Emitter<'_> {
             // TST-4: "An `assert` takes a `bool`".
             Stmt::Assert { condition, .. } => {
                 let condition = self.expression(body, condition);
-                text.push_str(&format!("{INDENT}::hglrt::check({condition});\n"));
+                let check = names::native("check");
+                text.push_str(&format!("{INDENT}{check}({condition});\n"));
             }
             Stmt::Return { at, .. } => self.unsupported(*at, "a `return` in a test"),
             other => self.statement(body, other, 1, text),
