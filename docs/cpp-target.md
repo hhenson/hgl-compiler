@@ -40,7 +40,7 @@ one executable for each test module or application
 | --- | --- | --- |
 | `hgl_lower` | `crates/hgl_lower` | What both targets decide the same way, moved out of `hgl_hgraph` unchanged: the copy rule, instance collection and canonical names, what blocks a piece, eval wiring, the child-graph analyses, HGL type facts. The analyser records what it works out on the analysed program: whether each expression is a connection (`hir::Expr::category`), which calls are lifted (the call's `lifted`), what is a source (`Module::is_source`) |
 | `hgl_cpp` | `crates/hgl_cpp` | C++ for types, value functions, nodes, graphs, tests and applications. No semantic decision that `hgl_lower` or the analyser can make |
-| `libhglrt` | `runtime/cpp` | Core's native declarations; checked reads and failures; sources and wakes; the test and application host (traces, comparison, outcomes); glue for `switch` and `map` until hgraph has it |
+| `libhglrt` | `runtime/cpp` | Core's native declarations; checked reads and failures; sources and wakes; the test and application host (traces, comparison, outcomes) |
 | Build driver | `crates/hgl_cli` | Finds the SDK, writes the build, compiles what changed, links, runs. A failed build never runs an older executable |
 
 ## What is written
@@ -50,12 +50,12 @@ one executable for each test module or application
 | Module | One translation unit and one header; its generic instances with it, collected for the whole program before anything is written |
 | Value function, each concrete instance | A function. `var` parameters are references; a `let` or a parameter is a `const` reference; a copy is made where the copy rule says and nowhere else |
 | Scalars | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `ZonedDateTime` and `Tenor`. Tenor literals keep their calendar or business-day form |
-| Struct | A generated struct with HGL's equality. As a temporal value, a bundle of its fields, written and read field by field until hgraph takes the struct whole |
+| Struct | A generated struct with HGL's equality. As a temporal value, a nominal bundle whose whole value is the struct |
 | Enum, tuple, optional, list, fixed list, result | `enum class`, `std::tuple`, `std::optional`, `std::vector`, `std::array`, `std::expected` |
 | Set, dictionary, abstract struct, `delta<T>` | To be designed with the collections work: the containers must give the order and equality the specification states, and a delta converts to and from hgraph's own delta value |
 | Node | A struct with `eval`, `start` and `stop`. A handler header is the input's declared activity and validity; handlers are tested in source order. State and cache are one generated struct for each node |
 | Graph | A function over `Wiring&` and typed ports, calling `wire<Node>`. Identical value nodes are interned by hgraph |
-| `if`, `switch`, `for` over connections | hgraph's `switch_node`, `map_node` and `tsl_map_node`, each child a compiled sub-graph with its captures |
+| `if`, `switch`, `for` over connections | hgraph's `switch_` and `map_` wiring of compiled children (`types/subgraph_wiring.h`), each child a compiled sub-graph with its captures |
 | Lifted call | A generated node that calls the instance |
 | Source | A node with no input that schedules itself. The body is a C++23 coroutine (`std::generator` of a time and a payload) held in the node's state, made in `start` and destroyed in `stop`: `yield` inside loops and branches is written as it reads, with the body's locals in the coroutine's frame. A trial ran one on hgraph: the trace was right, a failure inside the body was the node's failure, and the frame was freed after a finished and after a failed run |
 | `ref` parameter and result | hgraph's `REF` input and output. Returning a whole `ref` parameter publishes the reference that input holds when the `return` runs, and no more: a `REF` output keeps what it was given, which is the specification's rule since hhenson/hgl_spec#147. Returning an ordinary input or a child of one designates that endpoint, which is followed through a re-binding: the node is active on that binding, publishes the new designation there and runs no handler for it (FN-16). A designation the result holds already is not published again (TIME-10) |
@@ -93,33 +93,29 @@ The driver keeps these by: one unit for each module; `libhglrt` and core's
 instances built once for an SDK; a precompiled header of the fixed include
 set; one executable for each test module with its cases chosen when it
 runs; `ninja` for what changed; `lld`. A rejection case never builds.
-A lighter front end in hgraph for generated code is the cheapest further
-saving ([hgraph 1838](https://github.com/hhenson/hgraph/issues/1838)).
+hgraph's lighter front end for generated code (`types/generated.h`) is
+the cheapest further saving; the times above are measured without it.
 
 ## What hgraph is asked for
 
-The SDK is hgraph 0.9.10.
+The SDK is hgraph 0.9.12. Nothing is asked of hgraph now. What was asked
+is in it, and each is taken up where the order of work reaches it:
 
-| Issue | Asked | Until then |
+| Issue | In hgraph | Here |
 | --- | --- | --- |
-| [1833](https://github.com/hhenson/hgraph/issues/1833) | `switch_` and `map_` wiring outside the operator library | `libhglrt` carries the glue |
-| [1822](https://github.com/hhenson/hgraph/issues/1822), [1827](https://github.com/hhenson/hgraph/issues/1827) | The growing list's first empty publication and its validity, a shrink under a map or an index, invalidation emptying a collection, and tuple deltas, as the specification has them | `libhglrt` adapts each |
-| [1848](https://github.com/hhenson/hgraph/issues/1848) | A generator that yields a time already past skips it and goes on | The source driver of `libhglrt` skips it |
-| [1834](https://github.com/hhenson/hgraph/issues/1834) | A C++ struct as a bundle's whole value | Field by field |
-| [1838](https://github.com/hhenson/hgraph/issues/1838) | A lighter front end for generated code | A precompiled header |
-| [1839](https://github.com/hhenson/hgraph/issues/1839) | A runtime library without Arrow | Arrow is installed with the SDK |
+| [1833](https://github.com/hhenson/hgraph/issues/1833) | `switch_` and `map_` wiring of compiled children with no operator registration (`types/subgraph_wiring.h`) | The control-flow work wires with them; `libhglrt` carries no glue |
+| [1822](https://github.com/hhenson/hgraph/issues/1822), [1827](https://github.com/hhenson/hgraph/issues/1827) | The growing list's first empty publication and its validity, a shrink under a map or an index, invalidation emptying a collection, and tuple deltas | The collections work builds on the engine as it is; an adaptation is written only where a core case shows a difference, and names its issue |
+| [1848](https://github.com/hhenson/hgraph/issues/1848) | A generator that yields a time already past skips it and goes on | The source driver's own skip goes when its tests pass without it |
+| [1834](https://github.com/hhenson/hgraph/issues/1834) | A C++ aggregate as a nominal bundle's whole value | A struct is written and read whole |
+| [1838](https://github.com/hhenson/hgraph/issues/1838) | A lighter front end for generated code (`types/generated.h`) | Generated units include it; the precompiled header stays only where it still pays |
+| [1839](https://github.com/hhenson/hgraph/issues/1839) | A runtime and wiring library without Arrow (`HGRAPH_WITH_ARROW=OFF`) | The SDK is to be built so, and Arrow leaves the dependency prefix |
+| [1837](https://github.com/hhenson/hgraph/issues/1837), [1835](https://github.com/hhenson/hgraph/issues/1835), [1836](https://github.com/hhenson/hgraph/issues/1836) | `add_node` keeps a builder's own scalars; `try_except_<G>` takes options for canonical errors; a `tenor` scalar | In use |
 
-Delivered: `add_node` keeps a builder's own scalars
-([1837](https://github.com/hhenson/hgraph/issues/1837)) and
-`try_except_<G>` takes options for canonical errors
-([1835](https://github.com/hhenson/hgraph/issues/1835)), both in 0.9.9;
-a `tenor` scalar ([1836](https://github.com/hhenson/hgraph/issues/1836))
-in 0.9.10. Nothing is asked
-on references: a `REF` output holds the reference it was given, which is
-the specification's rule for a returned `ref` parameter. Where the pinned
-specification and hgraph differ, this target builds the specification's
-rule, and the difference goes to the specification's issue tracker to be
-decided there, not here.
+Nothing is asked on references: a `REF` output holds the reference it
+was given, which is the specification's rule for a returned `ref`
+parameter. Where the pinned specification and hgraph differ, this target
+builds the specification's rule, and the difference goes to the
+specification's issue tracker to be decided there, not here.
 
 ## Progress and acceptance
 
