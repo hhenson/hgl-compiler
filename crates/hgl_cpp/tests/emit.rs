@@ -1580,12 +1580,13 @@ fn lifting_code_is_written() {
     assert!(unit.contains("::hglrt::capture<captured_"));
 }
 
-/// hgraph issue 1866: a capture whose configuration holds an `f64` is
-/// reported, as hgraph would take two boundaries whose configurations are
-/// `0.0` and `-0.0` for one, and wires no `try_except_` as a node of its
-/// own.
+/// A capture whose configuration holds an `f64` is written (ERR-7): every
+/// boundary is a node of its own, hgraph's `compiled::try_except_`, which
+/// it interns with no other, so that two whose configurations are `0.0`
+/// and `-0.0` stay two (hgraph issue 1866 is of interning; the SDK test of
+/// `demo.configurations` runs two such).
 #[test]
-fn a_capture_given_an_f64_configuration_is_reported() {
+fn a_capture_given_an_f64_configuration_is_written() {
     let emitted = emit_with(
         &[(
             "m.hgl",
@@ -1607,12 +1608,16 @@ fn a_capture_given_an_f64_configuration_is_reported() {
         )],
         &hgl_cpp::runtime::provides,
     );
-    assert_eq!(
-        emitted.blocked("shifts").as_deref(),
-        Some(
-            "m.hgl:8:36 the cpp target does not write a `capture` given an `f64` configuration (hgraph issue 1866) yet"
-        )
-    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_eq!(emitted.blocked("shifts"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    assert!(unit.contains("::hglrt::capture<captured_"), "{unit}");
 }
 
 /// TYPE-9: "Temporalization recursively maps tuples/structs to child
@@ -1925,9 +1930,9 @@ fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
 }
 
 /// TYPE-14: a connection of T is one of `T?` where one is taken, through
-/// hgraph's own widening of its port (`Port::as`): given to a node's input
-/// and returned as a graph's result. hgraph binds no `REF` of a `T?` to an
-/// output of T, so one given to a `ref` parameter of `T?` is reported.
+/// hgraph's own widening of its port (`Port::as`): given to a node's input,
+/// returned as a graph's result, and given to a `ref` parameter of `T?`,
+/// whose `REF` input designates the widened view (FN-16).
 #[test]
 fn a_connection_of_t_is_widened_where_a_nullable_is_taken() {
     let emitted = emit_with(
@@ -1978,11 +1983,10 @@ fn a_connection_of_t_is_widened_where_a_nullable_is_taken() {
         unit.contains("return (x).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>();"),
         "{unit}"
     );
-    assert_eq!(
-        emitted.blocked("designates").as_deref(),
-        Some(
-            "m.hgl:15:55 the cpp target does not write a connection of `i64` given to a `ref` parameter of `i64?` yet"
-        )
+    assert_eq!(emitted.blocked("designates"), None);
+    assert!(
+        unit.contains("::hgl::m::m_::w_::pick(wiring_, flag, (low).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>())"),
+        "{unit}"
     );
 }
 
@@ -2904,8 +2908,7 @@ fn temporal_structs_and_nullables_are_written() {
 /// field has a form the library does not read as a part (a set), a generic
 /// struct, an abstract one, a nullable put in the run's store (a `get`
 /// through a nullable place has the payload's type: hgl_spec issue 165),
-/// an atomic struct that holds an optional field (hgraph issue 1874), and
-/// a tuple with an atomic position.
+/// and a tuple with an atomic position.
 #[test]
 fn temporal_structs_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -2931,12 +2934,6 @@ fn temporal_structs_not_written_yet_are_reported() {
             "        return true\n",
             "    }\n",
             "}\n",
-            "struct Noted {\n",
-            "    note: str?\n",
-            "}\n",
-            "fn noted(value: atomic<Noted>) -> i64 {\n",
-            "    when { return 1 }\n",
-            "}\n",
             "struct Plain {\n",
             "    value: i64\n",
             "}\n",
@@ -2951,8 +2948,7 @@ fn temporal_structs_not_written_yet_are_reported() {
             "m.hgl:8:11 the cpp target does not write a temporal value of `Listed` yet",
             "m.hgl:11:10 the cpp target does not write a temporal value of `Box<i64>` yet",
             "m.hgl:17:9 the cpp target does not write a nullable value put in the run's store (hgl_spec issue 165) yet",
-            "m.hgl:24:10 the cpp target does not write an atomic struct that holds an optional field (hgraph issue 1874) yet",
-            "m.hgl:30:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
+            "m.hgl:24:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
         ]
     );
 }

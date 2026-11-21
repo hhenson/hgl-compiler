@@ -33,12 +33,13 @@
 //     error keeps the context it has, and is given the failing node's
 //     where it has none.
 //
-// `try_except_` is declared by `<hgraph/types/subgraph_wiring.h>`, which
-// brings hgraph's full wiring front end (`graph_wiring.h`) with it: the
-// front end for generated code (`generated.h`) has no `try_except_`, as it
-// has `compiled::switch_` and `compiled::map_` (hgraph issue 1871, which
-// asks for it there; this include goes when it is). Nothing of hgraph's
-// standard library comes with it.
+// The boundary is hgraph's `compiled::try_except_`, of the front end for
+// generated code (`generated.h`), as the branches of `if` and `switch` are
+// its `compiled::switch_`: the child is compiled with hgraph's
+// `compile_subgraph`, given the call's other arguments, and the boundary is
+// given the call's connections. Each capture is a node of its own, which
+// hgraph interns with no other: two given configurations that are `==`, as
+// `0.0` and `-0.0` are, stay two.
 #pragma once
 
 #include <hglrt/failure.h>
@@ -46,13 +47,11 @@
 #include <hglrt/values.h>
 
 #include <hgraph/types/generated.h>
-// hgraph issue 1871: `try_except_` is not in the front end for generated
-// code; until it is, its header and the full front end with it.
-#include <hgraph/types/subgraph_wiring.h>
 
 #include <cstddef>
 #include <expected>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -70,6 +69,26 @@ using captured = hgraph::UnNamedTSB<hgraph::Field<"value", S>, hgraph::Field<"er
 /// `NodeError`.
 inline constexpr hgraph::ErrorCaptureOptions capture_options{.canonical_errors = true};
 
+namespace detail {
+/// Whether an argument of a capture is a connection, an `hgraph::Port`.
+template <class A>
+inline constexpr bool is_port = false;
+template <class S>
+inline constexpr bool is_port<hgraph::Port<S>> = true;
+
+/// The argument `argument` of a capture where it is no connection, as a
+/// tuple of it, and the empty tuple where it is one: concatenated, the
+/// values `compile_subgraph` gives the child's `hgraph::Scalar`s.
+template <class A>
+auto scalar_part(const A& argument) {
+    if constexpr (is_port<A>) {
+        return std::tuple<>{};
+    } else {
+        return std::tuple<const A&>{argument};
+    }
+}
+} // namespace detail
+
 /// `capture(callable, args...)` (ERR-7) of the graph `G` the compiler
 /// writes for the call: `args` are what `G::compose` takes, the call's
 /// connections as ports and its other arguments as values, in the order
@@ -79,7 +98,21 @@ inline constexpr hgraph::ErrorCaptureOptions capture_options{.canonical_errors =
 template <class G, class... Args>
 auto capture(hgraph::Wiring& wiring, const Args&... args) {
     using output = typename hgraph::StaticGraphSignature<G>::output_type;
-    const hgraph::Port<void> boundary = hgraph::try_except_<G>(wiring, capture_options, args...);
+    // The child, compiled with the values of its `hgraph::Scalar`s, and
+    // the boundary given its connections, each in the order written.
+    hgraph::CompiledSubGraph child = std::apply(
+        [&wiring](const auto&... scalars) { return hgraph::compile_subgraph<G>(wiring, scalars...); },
+        std::tuple_cat(detail::scalar_part(args)...));
+    std::vector<hgraph::WiringPortRef> ports;
+    (
+        [&] {
+            if constexpr (detail::is_port<Args>) {
+                ports.push_back(args.erased());
+            }
+        }(),
+        ...);
+    const hgraph::Port<void> boundary{
+        wiring, hgraph::compiled::try_except_(wiring, ports, std::move(child), capture_options)};
     if constexpr (std::is_void_v<output>) {
         return boundary.template as<hgraph::TS<error>>();
     } else {

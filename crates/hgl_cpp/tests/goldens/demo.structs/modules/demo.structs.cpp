@@ -3,6 +3,7 @@
 #include "core.h"
 
 // Names this file writes, which no macro of a header above takes.
+#undef Holding
 #undef Inner
 #undef MarketQuote
 #undef NotedQuote
@@ -30,6 +31,7 @@
 #undef an_atomic_quote_wakes_its_bid_projection
 #undef an_atomic_struct_is_a_trace_cell
 #undef an_atomic_struct_is_replayed_whole
+#undef an_atomic_struct_with_an_optional_field_is_one_endpoint
 #undef ask
 #undef atomic_bid
 #undef atomic_bid_ticks
@@ -46,7 +48,9 @@
 #undef earliest_start
 #undef first
 #undef first_of
+#undef held_count
 #undef high
+#undef holding
 #undef inner
 #undef input
 #undef is_bid
@@ -55,7 +59,9 @@
 #undef nested_total
 #undef note
 #undef note_is_null
+#undef note_or_none
 #undef noted
+#undef noted_note
 #undef nullable_delta_payload
 #undef observe_noted_quote
 #undef observe_part_validity
@@ -101,10 +107,13 @@
 #undef value
 #undef watched
 #undef whole
+#undef whole_noted
 #undef whole_plain
 #undef whole_quote
+#undef whole_wrapped
 #undef wrap
 #undef wrapped
+#undef wrapped_note
 #undef wrapped_of
 #undef wrapped_sum
 #undef write_bid
@@ -1125,16 +1134,179 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_::whole_noted
+{
+// whole_noted(bid: i64) -> atomic<NotedQuote> (node), module demo.structs, line 377
+struct impl_
+{
+    static constexpr auto name = "demo.structs::whole_noted";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"bid", ::hgraph::TS<::hgraph::Int>> bid, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>> out_)
+    {
+        // when, line 378 (TIME-3)
+        {
+            if (::hglrt::gt__T_T<::hgraph::Int>(::hglrt::checked_value(bid), 1))
+            {
+                out_.set(::hgl::demo::structs::m_::NotedQuote{::hglrt::checked_value(bid), ::hgraph::Str{"high"}});
+                return;
+            }
+            out_.set(::hgl::demo::structs::m_::NotedQuote{::hglrt::checked_value(bid), ::std::nullopt});
+            return;
+        }
+    }
+};
+}  // namespace n_::whole_noted
+namespace w_
+{
+// whole_noted(bid: i64) -> atomic<NotedQuote> (node), module demo.structs, line 377
+::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>> whole_noted(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
+{
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::whole_noted::impl_>(wiring_, bid);
+}
+}  // namespace w_
+
+namespace n_::note_or_none
+{
+// note_or_none(quote: atomic<NotedQuote>) -> str (node), module demo.structs, line 384
+struct impl_
+{
+    static constexpr auto name = "demo.structs::note_or_none";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"quote", ::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>> quote, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_)
+    {
+        // when, line 385 (TIME-3)
+        {
+            [[maybe_unused]] const ::std::optional<::hgraph::Str>& note = (::hglrt::checked_value(quote)).note;
+            if ((!note.has_value()))
+            {
+                out_.set(::hgraph::Str{"none"});
+                return;
+            }
+            out_.set((*note));
+            return;
+        }
+    }
+};
+}  // namespace n_::note_or_none
+namespace w_
+{
+// note_or_none(quote: atomic<NotedQuote>) -> str (node), module demo.structs, line 384
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> note_or_none(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>> quote)
+{
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::note_or_none::impl_>(wiring_, quote);
+}
+}  // namespace w_
+
+namespace n_::noted_note
+{
+// noted_note(bid: i64) -> str? (graph), module demo.structs, line 392
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Str>>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
+    {
+        return ::hglrt::atomic_field<1, ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>(wiring_, ::hgl::demo::structs::m_::w_::whole_noted(wiring_, bid));
+    }
+};
+}  // namespace n_::noted_note
+namespace w_
+{
+// noted_note(bid: i64) -> str? (graph), module demo.structs, line 392
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Str>>> noted_note(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
+{
+    return ::hgl::demo::structs::m_::n_::noted_note::impl_::compose(wiring_, bid);
+}
+}  // namespace w_
+
+namespace n_::whole_wrapped
+{
+// whole_wrapped(bid: i64) -> atomic<Wrapped> (node), module demo.structs, line 394
+struct impl_
+{
+    static constexpr auto name = "demo.structs::whole_wrapped";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"bid", ::hgraph::TS<::hgraph::Int>> bid, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgl::demo::structs::m_::Wrapped>> out_)
+    {
+        // when, line 395 (TIME-3)
+        {
+            out_.set(::hgl::demo::structs::m_::Wrapped{::hgl::demo::structs::m_::NotedQuote{::hglrt::checked_value(bid), ::std::nullopt}, ::hglrt::checked_value(bid)});
+            return;
+        }
+    }
+};
+}  // namespace n_::whole_wrapped
+namespace w_
+{
+// whole_wrapped(bid: i64) -> atomic<Wrapped> (node), module demo.structs, line 394
+::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::Wrapped>> whole_wrapped(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid)
+{
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::whole_wrapped::impl_>(wiring_, bid);
+}
+}  // namespace w_
+
+namespace n_::wrapped_note
+{
+// wrapped_note(wrapped: atomic<Wrapped>) -> bool (node), module demo.structs, line 398
+struct impl_
+{
+    static constexpr auto name = "demo.structs::wrapped_note";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"wrapped", ::hgraph::TS<::hgl::demo::structs::m_::Wrapped>> wrapped, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_)
+    {
+        // when, line 399 (TIME-3)
+        {
+            out_.set(::hgl::demo::structs::m_::note_is_null((::hglrt::checked_value(wrapped)).noted));
+            return;
+        }
+    }
+};
+}  // namespace n_::wrapped_note
+namespace w_
+{
+// wrapped_note(wrapped: atomic<Wrapped>) -> bool (node), module demo.structs, line 398
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> wrapped_note(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::Wrapped>> wrapped)
+{
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::wrapped_note::impl_>(wiring_, wrapped);
+}
+}  // namespace w_
+
+namespace n_::held_count
+{
+// held_count(holding: Holding) -> i64 (node), module demo.structs, line 409
+struct impl_
+{
+    static constexpr auto name = "demo.structs::held_count";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"holding", ::hgraph::NominalTSB<::hgl::demo::structs::m_::Holding, ::hgraph::Field<"quote", ::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> holding, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        // when, line 410 (TIME-3)
+        if (::hglrt::fn_all_valid(holding))
+        {
+            [[maybe_unused]] const ::hgl::demo::structs::m_::Holding& whole = ::hglrt::whole_value(holding);
+            out_.set((whole).count);
+            return;
+        }
+    }
+};
+}  // namespace n_::held_count
+namespace w_
+{
+// held_count(holding: Holding) -> i64 (node), module demo.structs, line 409
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> held_count(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::Holding, ::hgraph::Field<"quote", ::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> holding)
+{
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::held_count::impl_>(wiring_, holding);
+}
+}  // namespace w_
+
 namespace n_::quoted_total
 {
-// quoted_total(pair: tuple<MarketQuote, i64>) -> i64 (node), module demo.structs, line 381
+// quoted_total(pair: tuple<MarketQuote, i64>) -> i64 (node), module demo.structs, line 434
 struct impl_
 {
     static constexpr auto name = "demo.structs::quoted_total";
 
     static void eval([[maybe_unused]] ::hgraph::In<"pair", ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> pair, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 382 (TIME-3)
+        // when, line 435 (TIME-3)
         if (::hglrt::fn_all_valid(pair) && ::hglrt::fn_all_valid(::hglrt::child<0>(pair)))
         {
             out_.set([&] { const ::hgraph::Int& argument_00_ = ::hglrt::checked_value(::hglrt::child<0>(::hglrt::child<0>(pair))); const ::hgraph::Int& argument_01_ = ::hglrt::checked_value(::hglrt::child<1>(pair)); return ::hglrt::add__i64_i64(argument_00_, argument_01_); }());
@@ -1145,7 +1317,7 @@ struct impl_
 }  // namespace n_::quoted_total
 namespace w_
 {
-// quoted_total(pair: tuple<MarketQuote, i64>) -> i64 (node), module demo.structs, line 381
+// quoted_total(pair: tuple<MarketQuote, i64>) -> i64 (node), module demo.structs, line 434
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> quoted_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> pair)
 {
     return ::hgraph::wire<::hgl::demo::structs::m_::n_::quoted_total::impl_>(wiring_, pair);
@@ -1154,14 +1326,14 @@ namespace w_
 
 namespace n_::nested_total
 {
-// nested_total(pair: tuple<tuple<i64, i64>, i64>) -> i64 (node), module demo.structs, line 385
+// nested_total(pair: tuple<tuple<i64, i64>, i64>) -> i64 (node), module demo.structs, line 438
 struct impl_
 {
     static constexpr auto name = "demo.structs::nested_total";
 
     static void eval([[maybe_unused]] ::hgraph::In<"pair", ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> pair, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 386 (TIME-3)
+        // when, line 439 (TIME-3)
         if (::hglrt::fn_all_valid(pair) && ::hglrt::fn_all_valid(::hglrt::child<0>(pair)))
         {
             out_.set([&] { const ::hgraph::Int argument_02_ = [&] { const ::hgraph::Int& argument_00_ = ::hglrt::checked_value(::hglrt::child<0>(::hglrt::child<0>(pair))); const ::hgraph::Int& argument_01_ = ::hglrt::checked_value(::hglrt::child<1>(::hglrt::child<0>(pair))); return ::hglrt::add__i64_i64(argument_00_, argument_01_); }(); const ::hgraph::Int& argument_03_ = ::hglrt::checked_value(::hglrt::child<1>(pair)); return ::hglrt::add__i64_i64(argument_02_, argument_03_); }());
@@ -1172,7 +1344,7 @@ struct impl_
 }  // namespace n_::nested_total
 namespace w_
 {
-// nested_total(pair: tuple<tuple<i64, i64>, i64>) -> i64 (node), module demo.structs, line 385
+// nested_total(pair: tuple<tuple<i64, i64>, i64>) -> i64 (node), module demo.structs, line 438
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> nested_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> pair)
 {
     return ::hgraph::wire<::hgl::demo::structs::m_::n_::nested_total::impl_>(wiring_, pair);
@@ -1731,6 +1903,127 @@ void an_atomic_struct_is_replayed_whole()
     });
         const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, 3};
         ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+}
+
+void an_atomic_struct_with_an_optional_field_is_one_endpoint()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::Holding, ::hgraph::Field<"quote", ::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1demo_1structs_1_1Holding_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgl::demo::structs::m_::Holding>{::std::nullopt}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::structs::m_::w_::held_count(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_06_ = ::hglrt::testing::evaluate<::hglrt::atomic_trace<::hgl::demo::structs::m_::NotedQuote>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
+        struct held_04_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::hglrt::atomic_trace<::hgl::demo::structs::m_::NotedQuote>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::checked_value(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::hglrt::atomic_trace<::hgl::demo::structs::m_::NotedQuote>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_05_ = ::hgl::demo::structs::m_::w_::whole_noted(wiring_, input_03_);
+        ::hgraph::wire<held_04_>(wiring_, result_05_);
+        ::hgl::core::m_::w_::i_::record::of_1atomic_1demo_1structs_1_1NotedQuote_1_(wiring_, result_05_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_07_ = ::hglrt::testing::Dense<::hgl::demo::structs::m_::NotedQuote>{::hglrt::testing::Cell<::hgl::demo::structs::m_::NotedQuote>{::hglrt::testing::Whole<::hgl::demo::structs::m_::NotedQuote>{::hgl::demo::structs::m_::NotedQuote{1, ::std::nullopt}}}, ::hglrt::testing::Cell<::hgl::demo::structs::m_::NotedQuote>{::hglrt::testing::Whole<::hgl::demo::structs::m_::NotedQuote>{::hgl::demo::structs::m_::NotedQuote{2, ::hgraph::Str{"high"}}}}};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_09_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>> input_08_ = ::hgl::core::m_::w_::i_::replay::of_1atomic_1demo_1structs_1_1NotedQuote_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::atomic_trace<::hgl::demo::structs::m_::NotedQuote>>{::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::NotedQuote>>{::hgl::demo::structs::m_::NotedQuote{1, ::std::nullopt}}, ::std::nullopt, ::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::NotedQuote>>{::hgl::demo::structs::m_::NotedQuote{3, ::hgraph::Str{"n"}}}}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::structs::m_::w_::note_or_none(wiring_, input_08_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"none"}, ::std::nullopt, ::hgraph::Str{"n"}};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_014_ = ::hglrt::testing::evaluate<::std::optional<::hgraph::Str>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_011_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
+        struct held_012_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::std::optional<::hgraph::Str>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::nullable_value(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::std::optional<::hgraph::Str>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_013_ = ::hgl::demo::structs::m_::w_::noted_note(wiring_, input_011_);
+        ::hgraph::wire<held_012_>(wiring_, result_013_);
+        ::hgl::core::m_::w_::i_::record::of_1str_1_(wiring_, result_013_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_015_ = ::hglrt::testing::Dense<::std::optional<::hgraph::Str>>{::std::optional<::hgraph::Str>{::std::nullopt}, ::std::optional<::hgraph::Str>{::hgraph::Str{"high"}}};
+        ::hglrt::testing::expect_same(left_014_, right_015_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_019_ = ::hglrt::testing::evaluate<::hglrt::atomic_trace<::hgl::demo::structs::m_::Wrapped>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_016_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1}, start_));
+        struct held_017_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TS<::hgl::demo::structs::m_::Wrapped>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::hglrt::atomic_trace<::hgl::demo::structs::m_::Wrapped>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::checked_value(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::hglrt::atomic_trace<::hgl::demo::structs::m_::Wrapped>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_018_ = ::hgl::demo::structs::m_::w_::whole_wrapped(wiring_, input_016_);
+        ::hgraph::wire<held_017_>(wiring_, result_018_);
+        ::hgl::core::m_::w_::i_::record::of_1atomic_1demo_1structs_1_1Wrapped_1_(wiring_, result_018_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_020_ = ::hglrt::testing::Dense<::hgl::demo::structs::m_::Wrapped>{::hglrt::testing::Cell<::hgl::demo::structs::m_::Wrapped>{::hglrt::testing::Whole<::hgl::demo::structs::m_::Wrapped>{::hgl::demo::structs::m_::Wrapped{::hgl::demo::structs::m_::NotedQuote{1, ::std::nullopt}, 1}}}};
+        ::hglrt::testing::expect_same(left_019_, right_020_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_022_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::Wrapped>> input_021_ = ::hgl::core::m_::w_::i_::replay::of_1atomic_1demo_1structs_1_1Wrapped_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::atomic_trace<::hgl::demo::structs::m_::Wrapped>>{::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::Wrapped>>{::hgl::demo::structs::m_::Wrapped{::hgl::demo::structs::m_::NotedQuote{1, ::hgraph::Str{"n"}}, 1}}}, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::structs::m_::w_::wrapped_note(wiring_, input_021_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_023_ = ::hglrt::testing::Dense<::hgraph::Bool>{false};
+        ::hglrt::testing::expect_same(left_022_, right_023_);
     }();
 }
 

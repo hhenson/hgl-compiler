@@ -2,7 +2,7 @@
 // END-9): hgraph's `TSW` of a tick count and `TSWDuration` of a duration,
 // read as HGL reads one.
 //
-// hgraph's window is HGL's in what it holds and when it ticks, as 0.9.13
+// hgraph's window is HGL's in what it holds and when it ticks, as 0.9.23
 // has it: it holds its arrivals oldest first; one of a tick count drops its
 // oldest value only at an arrival; in one of a duration a value is held
 // while its age is at most the maximum, and leaves one smallest step later,

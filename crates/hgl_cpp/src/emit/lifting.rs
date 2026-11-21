@@ -14,7 +14,7 @@
 //! | An input whose parameter has a default, or admits null (FN-11) | `hgraph::In<"factor", S, InputValidity::Unchecked>` under a name of its own, `input_00_`, and the value bound to the parameter's name at the top of `eval`: `::hglrt::fn_valid(input_00_) ? T{read} : T{default}`; T the parameter's `T?` where the input is a connection of T (TYPE-14) |
 //! | A struct, a tuple, a fixed list or a window given to one (FN-11, FN-12) | the helper is not called where it is valid and not all valid: `if (!::hglrt::fn_all_valid(view)) return;` |
 //! | `eval scale(value: [1, _, 3])` of a value function (TST-8) | the same node, given the replays of the traces as its inputs, at the scope of the test's namespace ahead of the test |
-//! | `let seen = capture(attempt, value)` (ERR-7) | a graph of its own for the call, a struct `captured_00_` in the graph's struct, wired by hgraph's `try_except_` with canonical errors, `::hglrt::capture<captured_00_>(wiring_, value)` (`<hglrt/capture.h>`) |
+//! | `let seen = capture(attempt, value)` (ERR-7) | a graph of its own for the call, a struct `captured_00_` in the graph's struct, wired by hgraph's `compiled::try_except_` with canonical errors, `::hglrt::capture<captured_00_>(wiring_, value)` (`<hglrt/capture.h>`): a node of its own, which hgraph interns with no other, so that two given `0.0` and `-0.0` stay two |
 //! | `seen.value`, `seen.error` (ERR-7) | `::hglrt::captured_value(seen)`, `::hglrt::captured_error(seen)` |
 //! | A temporal value of `error`, of `result<T, error>` | `TS<::hglrt::error>`, which is hgraph's `CanonicalError`; `TS<::hglrt::result<T>>`, a `std::expected` registered with hgraph as an atomic (`<hglrt/capture.h>`) |
 //! | A cell of a trace of either (TST-5) | the value, `::hglrt::result<::hgraph::Int>{...}`, compared by its own equality, which excludes an error's provenance |
@@ -22,9 +22,8 @@
 //! | `failure.context`, and its `.node`, `.phase`, `.evaluation_time` (ERR-4) | `(failure).context`, a `std::optional` of hgraph's `ErrorContext`; its members of those names |
 //!
 //! Not written yet, and reported: a lifted call or a capture given an
-//! argument of a pack (FN-8), a capture of a call of an operator's
-//! candidate, and a capture given an `f64` configuration, which hgraph
-//! would take for another given `-0.0` for `0.0` (hgraph issue 1866).
+//! argument of a pack (FN-8), and a capture of a call of an operator's
+//! candidate.
 
 use hgl_analyser::hir::{
     Argument, Body, Callee, ErrorPart, Expr, ExprKind, Hook, Local, Stmt, ValueCategory,
@@ -579,16 +578,9 @@ impl Emitter<'_> {
                     continue;
                 }
                 let ty = argument.value.ty.clone();
-                // hgraph issue 1866: hgraph takes two boundaries of one
-                // graph, given the same connections, for one where their
-                // configurations are equal under `==`, as `0.0` and `-0.0`
-                // are, and `try_except_` has no wiring as a node of its own.
-                if super::nodes::holds_f64(program, &ty, 0) {
-                    return self.missing(
-                        argument.value.at,
-                        "a `capture` given an `f64` configuration (hgraph issue 1866)",
-                    );
-                }
+                // A configuration that holds an `f64` needs no node of its
+                // own here: every boundary is one, as hgraph's
+                // `compiled::try_except_` interns it with no other.
                 let Some(cpp) = self.written_type(&ty, argument.value.at) else {
                     return "0".to_string();
                 };
