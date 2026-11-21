@@ -64,9 +64,9 @@ impl Emitter<'_> {
     fn node(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
         let declaration = &program.modules[self.module].declarations[index];
-        let function = Function::of(self.program, body, Some(signature), Mode::Node);
+        let mut function = Function::of(self.program, body, Some(signature), Mode::Node);
         let (mut parameters, result) = self.temporal_signature(declaration, signature);
-        self.window_published_once(signature, body);
+        function.window_writes = self.window_writes(signature, body);
         // The `const` parameters, as written for the node: a `start`
         // and a `stop` are functions of their own to hgraph, and are
         // given the configuration they may read by naming it.
@@ -483,6 +483,14 @@ impl Emitter<'_> {
             .map(|port| (port.local, port.name.clone()))
             .collect();
         let endpoint = |local: usize| endpoint_name(&body.locals[local]);
+        let handler_depth = if function.window_writes {
+            self.natives = true;
+            self.line(1, "with _core.WindowWrites(_output) as _window:");
+            2
+        } else {
+            1
+        };
+        let before_handlers = self.text.len();
         for handler in &handlers {
             let mut guards: Vec<String> = Vec::new();
             // TIME-3: "A wake by the scheduler or alarm wakes the
@@ -567,12 +575,15 @@ impl Emitter<'_> {
             // modified."
             self.empty_selected = handler.empty;
             if guards.is_empty() {
-                self.statements(&function, handler.body, 1);
+                self.statements(&function, handler.body, handler_depth);
             } else {
-                self.line(1, &format!("if {}:", guards.join(" and ")));
-                self.block(&function, handler.body, 2);
+                self.line(handler_depth, &format!("if {}:", guards.join(" and ")));
+                self.block(&function, handler.body, handler_depth + 1);
             }
             self.empty_selected = false;
+        }
+        if function.window_writes && self.text.len() == before_handlers {
+            self.line(handler_depth, "pass");
         }
         // `start` and `stop` are no evaluation a wake is due in.
         self.scheduled = None;

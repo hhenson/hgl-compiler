@@ -3873,8 +3873,7 @@ fn a_window_is_hgraphs_tsw() {
 }
 
 /// What this target does not write of a window is reported: the
-/// invalidation of a window, which hgraph's `TSW` survives with what it
-/// holds, a window of a value that is no scalar or enum, and a window of
+/// window of a value that is no scalar or enum, and a window of
 /// a duration's `delta_value` read where a `result` is taken (ERR-14),
 /// which an eval's record of one reads (core's CEVAL-4). Core's END-9
 /// gives every window's readiness, of ticks and of a duration, which is
@@ -3895,7 +3894,6 @@ fn a_window_form_not_written_yet_is_reported() {
         reported,
         [
             "m.hgl:7:19 target.unsupported: the hgraph target does not write `delta_value` of a child or of a window of a duration, or `removed_value`, read where a `result` is taken (ERR-14) yet",
-            "m.hgl:21:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
             "m.hgl:23:4 target.unsupported: the hgraph target does not write the type `rolling_window<Quote, 3, 1>` yet",
             "m.hgl:26:4 target.unsupported: the hgraph target does not write the type `rolling_window<f64?, 3, 1>` yet",
         ]
@@ -6647,4 +6645,17 @@ fn the_instances_one_call_makes_are_written_up_to_one_bound() {
             "m.hgl:4:38 target.unsupported: the hgraph target does not write an instance of `climb` past the 4096 instances of it one call makes yet"
         ]
     );
+}
+
+/// END-4, END-5: a window result discards history and a pending arrival
+/// when explicitly withdrawn. Its next value starts a fresh window.
+#[test]
+fn a_window_can_be_withdrawn_and_republished() {
+    let emitted = emit_clean(&[fixture!("demo.window_withdrawal.hgl")]);
+    emitted.module("demo.window_withdrawal").assert_writes(&[
+        "with _core.WindowWrites(_output) as _window:",
+        "_window.invalidate()",
+        "_window.hold(80)",
+        "_core.invalidate_window(_output)",
+    ]);
 }

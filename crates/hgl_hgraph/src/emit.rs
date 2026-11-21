@@ -237,6 +237,8 @@ struct Function<'a> {
     /// Which of its `let`s and loops take a copy of what they read,
     /// and which are references into its places.
     copies: Copies,
+    /// A direct window whose writes and withdrawals share one evaluation.
+    window_writes: bool,
 }
 
 impl<'a> Function<'a> {
@@ -254,6 +256,7 @@ impl<'a> Function<'a> {
             signature,
             mode,
             copies: Copies::of(program, body),
+            window_writes: false,
         }
     }
 
@@ -266,6 +269,7 @@ impl<'a> Function<'a> {
             signature: None,
             mode,
             copies: Copies::default(),
+            window_writes: false,
         }
     }
 
@@ -278,6 +282,7 @@ impl<'a> Function<'a> {
             signature: self.signature,
             mode,
             copies: self.copies.clone(),
+            window_writes: false,
         }
     }
 
@@ -1388,8 +1393,12 @@ impl<'a> Emitter<'a> {
                     let kept = self.kept(function, *local, assigned, value);
                     self.narrowed(function, &declared.ty, assigned, kept)
                 };
-                let target = self.place(function, *local);
-                self.line(depth, &format!("{target} = {value}"));
+                if function.window_writes && function.is_out(*local) {
+                    self.line(depth, &format!("_window.hold({value})"));
+                } else {
+                    let target = self.place(function, *local);
+                    self.line(depth, &format!("{target} = {value}"));
+                }
                 self.bind(function, *local);
             }
             // EXPR-3: "An assignment may name a place inside a value, at
@@ -1537,7 +1546,11 @@ impl<'a> Emitter<'a> {
                     value
                 };
                 let given = self.returned(&value);
-                self.line(depth, &format!("return {given}"));
+                if function.window_writes {
+                    self.line(depth, &format!("return _window.hold({given})"));
+                } else {
+                    self.line(depth, &format!("return {given}"));
+                }
             }
             Stmt::Assert { condition, .. } => {
                 // Python's own `assert` is removed when the interpreter

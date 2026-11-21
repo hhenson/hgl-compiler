@@ -26,6 +26,7 @@ import re as _re
 import sys as _sys
 import zoneinfo as _zoneinfo
 from fractions import Fraction as _Fraction
+from typing import Any as _Any
 
 from hgraph import (
     EvaluationClock as _EvaluationClock,
@@ -494,7 +495,9 @@ def struct(name, fields, by_value=False):
 
     return _dataclasses.make_dataclass(
         name,
-        fields,
+        # Python 3.12 gives a bare field the forward reference "typing.Any".
+        # hgraph registers the struct in its generated module and needs the type.
+        [(field, _Any) for field in fields],
         frozen=True,
         slots=True,
         kw_only=True,
@@ -877,11 +880,9 @@ def size_modified(delta):
 
 
 def _held_size(port):
-    """How many positions an unsized list holds, given its port: none
-    where it is not valid. END-4: "Invalidation clears validity,
-    modification, payload, and delta", and hgraph keeps an invalidated
-    `TSL`'s positions, each not valid."""
-    return len(port) if port.valid else 0
+    """The held extent (TYPE-16). Withdrawing a child preserves its
+    position; whole invalidation clears the list (END-4)."""
+    return len(port)
 
 
 def _ticked(port):
@@ -975,9 +976,10 @@ def list_applied(port, delta):
     validity. Where a `list<V>` ... is not valid, never published or
     invalidated, it makes the value valid and empty, and ticks. Where it
     is valid the delta changes nothing, and is no tick", and a delta whose
-    every entry is an ignored removal names no change too. hgraph's `TSL`
-    does not tick for either, valid or not: where the list is not valid it
-    is made to (`_ticked`). A trace's cell written whole is replayed as
+    every entry is an ignored removal names no change too. An invalid list
+    with positions retains its extent and stays quiet. With no positions
+    the first empty publication makes it valid (`_ticked`). A trace's
+    cell written whole is replayed as
     the delta that publishing it records (`whole_delta`), which TIME-7
     holds to the same: "A collection published whole is published as its
     change from what the result holds"."""
@@ -1003,7 +1005,7 @@ def list_applied(port, delta):
         raise HglError(
             f"the delta updates the position {min(beyond)} and gives the list a size of {size}"
         )
-    if size == held and not changes and not port.valid:
+    if held == 0 and size == 0 and not port.valid:
         _ticked(port)
     return _TSLDelta(changes, removed=tuple(position for position in gone if position < size), size_modified=size)
 
@@ -1531,6 +1533,45 @@ def _bound(port):
 
 # What a designation is before any write of an evaluation.
 _UNCHANGED = object()
+
+
+def invalidate_window(port):
+    """END-4: discard an owned window's samples before withdrawing it."""
+    if port.valid:
+        # An earlier arrival may already have used this evaluation's write.
+        # Withdrawing it first permits the empty replacement on that cycle.
+        if port.modified:
+            port.invalidate()
+        port.replace_samples([], [])
+        port.invalidate()
+
+
+class WindowWrites:
+    """END-4/END-5: keep the final arrival across all handlers of this evaluation."""
+
+    __slots__ = ("port", "held")
+
+    def __init__(self, port):
+        self.port = port
+        self.held = _UNCHANGED
+
+    def __enter__(self):
+        return self
+
+    def hold(self, value):
+        self.held = value
+
+    def invalidate(self):
+        if self.held is not _UNCHANGED and not self.port.valid:
+            # A pending first arrival makes this a real withdrawal.
+            self.port.value = self.held
+        self.held = _UNCHANGED
+        invalidate_window(self.port)
+
+    def __exit__(self, exc_type, exc, traceback):
+        # ERR-8: preceding writes survive an error from a later handler.
+        if self.held is not _UNCHANGED:
+            self.port.value = self.held
 
 
 class Designation:

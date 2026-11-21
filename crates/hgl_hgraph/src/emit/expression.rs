@@ -160,14 +160,18 @@ impl Emitter<'_> {
                         }
                     };
                 }
-                // The endpoint of what holds a window, itself or within
-                // (`windows_in`). hgraph's `TSW` keeps what it holds
-                // when it is invalidated, where END-4 has "Invalidation
-                // clears validity, modification, payload, and delta".
-                if !windows_in(self.program, &endpoint.ty).is_empty()
-                    && matches!(operation, EndpointOperation::Invalidate)
-                {
-                    self.unsupported(value.at, "the invalidation of a window");
+                if *operation == EndpointOperation::Invalidate {
+                    if matches!(endpoint.ty, Type::RollingWindow { .. }) {
+                        self.natives = true;
+                        return if function.window_writes {
+                            "_window.invalidate()".into()
+                        } else {
+                            format!("_core.invalidate_window({input})")
+                        };
+                    }
+                    if !windows_in(self.program, &endpoint.ty).is_empty() {
+                        self.unsupported(value.at, "the invalidation of a window");
+                    }
                 }
                 match operation {
                     // TIME-9, END-7: "`valid` of a collection is true where any

@@ -491,8 +491,8 @@ impl Emitter<'_> {
         (parameters, result)
     }
 
-    /// Reports a node whose result holds a window (`windows_in`) and
-    /// that may publish to it more than once in one evaluation: hgraph's
+    /// Determines whether a node must hold its direct window writes until its
+    /// handlers finish. Other repeated writes are still reported: hgraph's
     /// `TSW` takes one value in a cycle and fails at a second, where
     /// TIME-7 and END-5 have the last write be what is published.
     ///
@@ -500,7 +500,7 @@ impl Emitter<'_> {
     /// alone publish once. A write through `out`, to it or to a part of
     /// it, may be followed by another: it is written only where it is
     /// the node's one place that publishes, and stands in no loop.
-    pub(super) fn window_published_once(&mut self, signature: &Signature, body: &Body) {
+    pub(super) fn window_writes(&mut self, signature: &Signature, body: &Body) -> bool {
         use hgl_analyser::hir::{Node, walk_statement_nodes};
         let program = self.program;
         if signature
@@ -508,7 +508,7 @@ impl Emitter<'_> {
             .as_ref()
             .is_none_or(|result| windows_in(program, result).is_empty())
         {
-            return;
+            return false;
         }
         let locals = &body.locals;
         let out =
@@ -544,11 +544,41 @@ impl Emitter<'_> {
             .iter()
             .find(|(at, through_out)| *through_out && (all.len() > 1 || looped.contains(at)));
         if let Some((at, _)) = again {
+            // END-4: one evaluation may both withdraw its direct window and
+            // write its next arrival. Hold writes until the evaluation exits.
+            // A read of the same output would observe uncommitted history.
+            if matches!(signature.result, Some(Type::RollingWindow { .. })) {
+                let mut withdraws = false;
+                let mut reads_out = false;
+                hgl_analyser::hir::walk_statements(
+                    &body.statements,
+                    &mut |expr| match &expr.kind {
+                        ExprKind::Endpoint {
+                            operation,
+                            inputs: Some(inputs),
+                        } if inputs.iter().any(|&local| out(local)) => {
+                            if *operation == EndpointOperation::Invalidate {
+                                withdraws = true;
+                            } else {
+                                reads_out = true;
+                            }
+                        }
+                        ExprKind::Local(local) | ExprKind::EndpointOf(local) if out(*local) => {
+                            reads_out = true
+                        }
+                        _ => {}
+                    },
+                );
+                if withdraws && !reads_out {
+                    return true;
+                }
+            }
             self.unsupported(
                 *at,
                 "a window that one evaluation may publish to more than once",
             );
         }
+        false
     }
 }
 
