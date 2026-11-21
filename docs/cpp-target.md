@@ -117,6 +117,19 @@ SDK and the driver's own commands, beside the same on Linux (GCC 15):
 | The link (Apple's `ld`; GNU `ld`) | 0.07 s | 0.04 s |
 | Edit to result, `hgl test --target cpp` of that module | 0.55 s | 0.70 s |
 
+The compiled capture boundary reduces the cost of including
+`<hglrt/hglrt.h>`. Both versions used the hgraph 0.9.23 SDK without Arrow
+and differed only in `capture.h`. GCC 15.2 compiled a file containing just
+that include at `-std=c++23 -O0` on one x86-64 Linux core. The machine
+averaged 93% idle across all threads and the core's sibling thread
+averaged 98% idle. Times are medians of five interleaved runs after a
+warm-up.
+
+| Step | Old capture boundary | Compiled capture boundary |
+| --- | --- | --- |
+| Compile without a precompiled header | 3.84 s | 2.21 s |
+| Build the precompiled header | 7.23 s, 320.8 MiB | 6.44 s, 278.9 MiB |
+
 ## What hgraph is asked for
 
 The SDK is hgraph 0.9.23. One request is open:
