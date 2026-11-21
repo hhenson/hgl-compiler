@@ -1078,9 +1078,9 @@ fn contextual_result_reads_run_on_the_sdk() {
 
     let app = write(
         &root,
-        "demo.fallible.app.hgl",
+        "demo.fallible.entry.hgl",
         concat!(
-            "application demo.fallible.app\n",
+            "application demo.fallible.entry\n",
             "use demo.fallible::{from_source}\n",
             "const fn bad() -> result<i64, error> => err(error(message: \"invalid configuration\", code: \"convert.invalid\"))\n",
             "inject global_state\n",
@@ -1098,7 +1098,7 @@ fn contextual_result_reads_run_on_the_sdk() {
             "--target",
             "cpp",
             "--application",
-            "demo.fallible.app",
+            "demo.fallible.entry",
         ],
         &[],
         &[],
@@ -1106,7 +1106,7 @@ fn contextual_result_reads_run_on_the_sdk() {
     assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
     let stderr = text(&output.stderr);
     let expected = format!(
-        "hgl: demo.fallible.app failed: convert.invalid: invalid configuration, raised at {app}:6"
+        "hgl: demo.fallible.entry failed: convert.invalid: invalid configuration, raised at {app}:6"
     );
     assert_eq!(stderr.lines().last(), Some(expected.as_str()), "{stderr}");
 }
