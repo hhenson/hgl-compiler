@@ -52,6 +52,55 @@ inline i64 designated_position(i64 index, std::size_t size,
     return index;
 }
 
+/// `dictionary[key]` in a graph, by a node of its own that `key` and the
+/// dictionary's membership wake: its result `out` is made to designate the
+/// entry `key` names (EXPR-7: "Temporal dictionary key selection may give
+/// a reference, a designation of the keyed child (TIME-10)"), and an
+/// ordinary reader of it observes that entry, ticking with the value it
+/// holds where the key comes to name another. Where the dictionary holds no
+/// entry for the key the result designates nothing, and its reader is not
+/// valid (TIME-1: "A child of a collection ... is an endpoint whether or
+/// not it is valid"), until one is added. A result given the designation
+/// it holds is not published again (TIME-10).
+///
+/// It is hgraph's own form of a dictionary's entry by key: the dictionary
+/// observed for its membership (`InputActivity::Structural`) and for the
+/// key's, the entry's reference read from the input, and an entry whose
+/// output forwards to one not bound yet observed until it is, its slot
+/// plus one kept in `pending` (0 for none).
+template <class Dictionary, class Key, class Out>
+void select_entry(Dictionary& dictionary, const Key& key, i64& pending, const Out& out) {
+    hgraph::TSDInputView& entries = dictionary;
+    const hgraph::ValueView wanted = key.base().value();
+    entries.base().make_key_active(wanted);
+    const std::size_t slot = entries.find_slot(wanted);
+    if (pending > 0 && static_cast<std::size_t>(pending - 1) != slot) {
+        const auto previous = static_cast<std::size_t>(pending - 1);
+        if (entries.slot_occupied(previous)) {
+            entries.at_slot(previous).make_passive();
+        }
+        pending = 0;
+    }
+    hgraph::TimeSeriesReference reference = hgraph::TimeSeriesReference::empty();
+    if (slot != hgraph::TS_DATA_NO_CHILD_ID) {
+        hgraph::TSInputView entry = entries.at_slot(slot);
+        reference = entry.reference();
+        if (reference.is_empty()) {
+            const hgraph::TSOutputView position = entry.bound_output();
+            if (position.bound() && position.forwarding()) {
+                entry.make_active();
+                pending = static_cast<i64>(slot) + 1;
+            }
+        } else if (pending > 0) {
+            entry.make_passive();
+            pending = 0;
+        }
+    }
+    if (!out.valid() || !(out.value().template checked_as<hgraph::TimeSeriesReference>() == reference)) {
+        out.set(reference);
+    }
+}
+
 /// What the `REF` input among `inputs` at `position` designates
 /// (`designation`): each position of a fixed list a `ref` result may
 /// designate is followed through a `REF` input of its own, in order, and

@@ -6,9 +6,11 @@
 // Names this file writes, which no macro of a header above takes.
 #undef a
 #undef b
+#undef changed_key
 #undef choose
 #undef chosen
 #undef demo
+#undef entry_a
 #undef flag
 #undef follow
 #undef high
@@ -16,12 +18,15 @@
 #undef idx
 #undef item
 #undef items
+#undef key
 #undef low
 #undef low_slot
 #undef pick
 #undef pick_list
 #undef picked
 #undef present
+#undef present_item
+#undef price
 #undef probe
 #undef reading
 #undef references
@@ -30,10 +35,13 @@
 #undef sample_picked
 #undef sampled
 #undef sel
+#undef selected
+#undef selected_present
 #undef set_item
 #undef slot
 #undef take
 #undef target
+#undef write_entry
 
 namespace hgl::demo::references::m_
 {
@@ -102,6 +110,36 @@ namespace w_
 {
 // routed(idx: i64, flag: bool, low_slot: i64, low: i64, high_slot: i64, high: i64) -> i64 (graph), module demo.references, line 110
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> routed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> idx, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low_slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high_slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high);
+}  // namespace w_
+
+namespace w_
+{
+// write_entry(changed_key: str, price: i64?) -> dict<str, i64> (node), module demo.references, line 136
+::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> write_entry(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> changed_key, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> price);
+}  // namespace w_
+
+namespace w_
+{
+// selected(key: str, changed_key: str, price: i64?) -> i64 (graph), module demo.references, line 143
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> selected(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> changed_key, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> price);
+}  // namespace w_
+
+namespace w_
+{
+// present_item(probe: bool, item: i64) -> bool (node), module demo.references, line 154
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> present_item(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> item);
+}  // namespace w_
+
+namespace w_
+{
+// selected_present(probe: bool, key: str, changed_key: str, price: i64?) -> bool (graph), module demo.references, line 158
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> selected_present(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> changed_key, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> price);
+}  // namespace w_
+
+namespace w_
+{
+// entry_a(changed_key: str, price: i64?) -> i64 (graph), module demo.references, line 171
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_a(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> changed_key, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> price);
 }  // namespace w_
 
 namespace w_::i_::sampled

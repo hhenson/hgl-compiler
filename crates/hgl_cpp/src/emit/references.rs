@@ -18,6 +18,7 @@
 //! | `return items[idx]` of a position of a fixed list that is no `ref` parameter | each position given to the node again, `::hglrt::element_port(items, 0)`, as a `REF` input it follows as it follows an input (`designated_01_0_`); the index checked (`::hglrt::designated_position`), and the position it names published (`::hglrt::designation_of`) |
 //! | `out = ...` of a `ref` result | as the `return`, and the evaluation goes on |
 //! | `invalidate(out)` of a `ref` result that follows an input | the result follows none, then is invalidated |
+//! | `prices[key]` of a dictionary connection in a graph (EXPR-7), the key a connection or a value | a node of its own, `selected_00_`, written in the graph's struct as a lifted call's is, whose `REF` result designates the entry the key names (`::hglrt::select_entry`, hgraph's own form of an entry by key: the dictionary observed for its membership), given as a connection of the entry |
 //!
 //! Not written yet, and reported: a designation of any other child, of a
 //! `ref` parameter's (`xs[i]`), of a field, of a growing list's position;
@@ -116,6 +117,32 @@ impl Family for References {
             }
             _ => false,
         }
+    }
+
+    // EXPR-7: "Temporal dictionary key selection may give a reference, a
+    // designation of the keyed child (TIME-10)": `prices[key]` of a
+    // dictionary connection in a graph, the key a connection or a value.
+    fn wiring(
+        &self,
+        emitter: &mut Emitter<'_>,
+        scope: &mut Scope<'_>,
+        value: &Expr,
+    ) -> Option<String> {
+        let ExprKind::Index { base, index } = &value.kind else {
+            return None;
+        };
+        let Type::Dict { key, value: entry } = &base.ty else {
+            return None;
+        };
+        if !base.is_connection() {
+            return None;
+        }
+        // A dictionary whose form no family writes is not this family's:
+        // its own form is reported where it is wired.
+        let dictionary = emitter.temporal_schema_of(&base.ty)?;
+        let entry = emitter.temporal_schema(entry, value.at)?;
+        let keyed = emitter.temporal_schema(key, index.at)?;
+        Some(emitter.selected_entry(scope, value, base, index, &dictionary, &keyed, &entry))
     }
 }
 
@@ -465,6 +492,85 @@ impl Emitter<'_> {
                 }
             })
             .collect()
+    }
+
+    /// `value`, `base[index]` of a dictionary connection `base` of hgraph's
+    /// `dictionary` schema in a graph, whose key is of `keyed` and entry of
+    /// `entry`, as the `Port` it gives: a node of its own, a struct
+    /// `selected_00_` written in the graph's (as a lifted call's is), whose
+    /// result designates the entry the key names
+    /// (`hglrt::select_entry`), wired with the dictionary and the key, a
+    /// value key as a constant connection (FN-3), and given as a
+    /// connection of the entry (FN-16: "a `ref` result is a connection of
+    /// T to whoever reads it").
+    #[allow(clippy::too_many_arguments)]
+    fn selected_entry(
+        &mut self,
+        scope: &mut Scope,
+        value: &Expr,
+        base: &Expr,
+        index: &Expr,
+        dictionary: &str,
+        keyed: &str,
+        entry: &str,
+    ) -> String {
+        let namespace = runtime::NAMESPACE;
+        // A node of an eval's entry is written ahead of the test, at the
+        // scope of the test's namespace, and named by where it is, as a
+        // lifted call's is (`lifting`).
+        let name = if self.kind() == Some(Kind::Entry) {
+            format!(
+                "selected_0{}_{}_",
+                value.at.file.index(),
+                value.at.span.start
+            )
+        } else {
+            names::temporary("selected", self.temporary())
+        };
+        let line = self.line_of(value.at);
+        let graph = &self.program.modules[self.module].path;
+        let text = format!(
+            "// The entry of a dictionary its key selects, on line {line}: a\n\
+             // designation of it (EXPR-7, TIME-10).\n\
+             struct {name}\n{{\n\
+             {INDENT}static constexpr auto name = {};\n\
+             {INDENT}static void start(::hgraph::State<::hgraph::Int> {STATE}) {{ {STATE}.set(::hgraph::Int{{0}}); }}\n\
+             {INDENT}static void eval(::hgraph::In<\"dictionary\", {dictionary}, ::hgraph::InputActivity::Structural, ::hgraph::InputValidity::Unchecked> dictionary, ::hgraph::In<\"key\", {keyed}> key, ::hgraph::State<::hgraph::Int> {STATE}, ::hgraph::Out<::hgraph::REF<{entry}>> {OUT})\n\
+             {INDENT}{{\n\
+             {INDENT}{INDENT}::{namespace}::select_entry(dictionary, key, {STATE}.modify(), {OUT});\n\
+             {INDENT}}}\n}};\n",
+            names::string(&format!("{graph}:entry"))
+        );
+        if let Some(context) = self.temporal.as_mut() {
+            context.lifted.push(text);
+        }
+        // EXPR-2: the dictionary is wired before its key is evaluated:
+        // where either runs statements, or both may fail
+        // (`expressions::held_read`), the port is held first, as C++
+        // evaluates a call's arguments in no order it promises.
+        let held = super::expressions::held_read(base, index);
+        let port = self.wiring_form(scope, base);
+        let (steps, port) = if held {
+            let kept = names::temporary("dictionary", self.temporary());
+            (format!("const auto {kept} = {port}; "), kept)
+        } else {
+            (String::new(), port)
+        };
+        let key = if index.is_connection() {
+            self.wiring_form(scope, index)
+        } else {
+            let written = self.expression(scope, index);
+            self.temporal_constant(&index.ty, &written, index.at)
+        };
+        let wired = format!(
+            "::hgraph::wire<{name}>({}, {port}, {key}).as<{entry}>()",
+            super::graphs::WIRING
+        );
+        if steps.is_empty() {
+            wired
+        } else {
+            format!("[&]() {{ {steps}return {wired}; }}()")
+        }
     }
 
     /// `called`, what a wiring function gives of the node of `signature`,

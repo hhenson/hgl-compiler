@@ -976,6 +976,13 @@ fn references_are_written() {
         "::hgraph::In<\"designated:items[1]\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_1_",
         "= ::hglrt::designated_position(::hglrt::checked_value(idx), 2);",
         "out_.set(::hglrt::designation_of(position_00_, designated_01_0_, designated_01_1_));",
+        // EXPR-7: a dictionary's entry selected in a graph, a node of its
+        // own whose result designates it, given as a connection of the
+        // entry; a value key a constant connection.
+        "::hgraph::In<\"dictionary\", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Structural, ::hgraph::InputValidity::Unchecked> dictionary",
+        "::hglrt::select_entry(dictionary, key, state_.modify(), out_);",
+        ".as<::hgraph::TS<::hgraph::Int>>())",
+        "::hglrt::constant<::hgraph::Str>(wiring_, ::hgraph::Str{\"A\"})",
     ] {
         assert!(unit.contains(written), "{written} in\n{unit}");
     }
@@ -1315,9 +1322,9 @@ fn keyed_temporal_code_is_written() {
 }
 
 /// A dictionary's key of a type the family does not write, a constant
-/// connection of a set, an entry of a dictionary's entry in a hook, and a
-/// key's child as a connection of a graph are reported, and block what
-/// reaches them.
+/// connection of a set, and an entry of a dictionary's entry in a hook are
+/// reported, and block what reaches them. A key's child as a connection of
+/// a graph is written (`references`).
 #[test]
 fn a_keyed_form_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -1371,10 +1378,7 @@ fn a_keyed_form_not_written_yet_is_reported() {
         emitted.blocked("an_entry_of_an_entry").as_deref(),
         Some("m.hgl:12:21 the cpp target does not write an entry of a dictionary's entry yet")
     );
-    assert_eq!(
-        emitted.blocked("a_child_in_a_graph").as_deref(),
-        Some("m.hgl:15:44 the cpp target does not write a child of a connection yet")
-    );
+    assert_eq!(emitted.blocked("a_child_in_a_graph"), None);
 }
 
 /// A temporal form the target does not write yet is reported through the

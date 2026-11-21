@@ -128,3 +128,48 @@ test a_designated_position_outside_the_list_fails {
         eval(route(idx: [2], items: [[1, 2]]))
     }
 }
+
+# A dictionary's entry selected in a graph (EXPR-7: "Temporal dictionary
+# key selection may give a reference, a designation of the keyed child"):
+# its reader follows the entry the key names, is not valid while the
+# dictionary holds none for it (TIME-1), and follows one added later.
+fn write_entry(changed_key: str, price: i64?) -> dict<str, i64> {
+    when {
+        if price == null { return delta<dict<str, i64>>(removed: [changed_key]) }
+        return delta<dict<str, i64>>(updated: [changed_key: price])
+    }
+}
+
+fn selected(key: str, changed_key: str, price: i64?) -> i64 =>
+    follow(write_entry(changed_key, price)[key])
+
+test a_selected_entry_is_followed_through_its_key {
+    assert eval(selected(
+        key:         ["A",   _, "B",   _,    _,   _, "C",   _],
+        changed_key: ["A", "B",   _, "A",  "B", "B",   _, "C"],
+        price:       [  7,  20,   _,   8, null,  22,   _,  30],
+    )) ==            [  7,   _,  20,   _,    _,  22,   _,  30]
+}
+
+fn present_item(probe: bool, item: i64) -> bool {
+    when modified(probe) && valid(probe) { return valid(item) }
+}
+
+fn selected_present(probe: bool, key: str, changed_key: str, price: i64?) -> bool =>
+    present_item(probe, write_entry(changed_key, price)[key])
+
+test a_selected_entry_the_dictionary_lacks_is_not_valid {
+    assert eval(selected_present(
+        probe:       [true,  true,  true, true],
+        key:         [ "A",     _,   "C",    _],
+        changed_key: [ "A",   "A",     _,  "C"],
+        price:       [   1,  null,     _,    3],
+    )) ==            [true, false, false, true]
+}
+
+# The key a value, wired as a constant connection (FN-3).
+fn entry_a(changed_key: str, price: i64?) -> i64 => follow(write_entry(changed_key, price)["A"])
+
+test an_entry_at_a_value_key_is_followed {
+    assert eval(entry_a(changed_key: ["B", "A", "A"], price: [1, 2, 3])) == [_, 2, 3]
+}

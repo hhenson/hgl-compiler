@@ -126,6 +126,7 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A window of a scalar, of a tick count or of a duration: a publication to one, `all_valid`, its value read in a hook or given to a lifted helper where it is all valid, its delta and `removed_value` in the form their place takes, its trace, record and replay | TYPE-11, TYPE-16, END-3, END-9, ERR-14, FN-12, TIME-7, TST-16 |
 | A temporal list, growing and fixed: published whole and by delta, read whole, `valid`, `all_valid` and `delta_value` of one; a child read, at a constant index and one that runs, plain and into a `result`, given to `valid` and the other operations, and wired; a trace cell of one, whole or a delta, an input of one replayed, and a whole cell compared with the value the result holds | TYPE-9, TYPE-10, TYPE-16, TIME-1, TIME-7, TIME-9, END-3, END-7, END-8, ERR-14, TST-5, TST-9 |
 | A `ref` parameter and result: hgraph's `REF` input and output; a whole `ref` parameter returned sampled; an input that is no `ref` parameter designated whole, or a position of a fixed list by an index known when it runs, and followed through its re-binding with no handler run for it; `out =` and `invalidate(out)` of a `ref` result | FN-16, TIME-10, END-10 |
+| A dictionary's entry selected by a key in a graph, a connection or a value: a node whose `REF` result designates the entry, which its reader observes, and none while the dictionary holds none | EXPR-7, TIME-10, TIME-1 |
 | `inject global_state` in a graph, and `get`, `has`, `put` on it where the graph is built, once each, in the order written | FN-9, CAP-6, CRUN-7 |
 | An application: its statements setting the run's store before its run statement, in the order written; its run statement, `eval` in simulation and `run` in real time, with the entry's arguments and its `RunConfig` held in the order written; its entry unit and executable | UNIT-14, RUN-1, RUN-3, EXPR-2 |
 | `if` and `switch` over a connection in a graph: each branch a child graph of hgraph's `switch_`, taking what it reads whole; its value, the `var` it assigns, or a `return` and what follows; no `else`, no `default` | CTRL-2, CTRL-3, CTRL-5, CTRL-6, CTRL-13, CTRL-14, CTRL-15 |
@@ -148,8 +149,7 @@ with a part of a form the library does not read whole, a list with a part
 that is no scalar, enum, nullable or list, an atomic struct that holds an
 optional field (hgraph issue 1874), a set's element or a dictionary's key
 of any but a scalar, a constant connection of a set or a dictionary, an
-entry of a dictionary's entry, a key's child as a connection of a graph
-(EXPR-7), a nullable put in the run's store (hgl_spec issue 165), a
+entry of a dictionary's entry, a nullable put in the run's store (hgl_spec issue 165), a
 designation of a child that is no position of a fixed list input (FN-16), `all_valid` of a set, a
 change of an input's activity in `stop` (END-5), a `for` over a connection of a set (CTRL-15), in a branch or a
 loop's body the store or an ordinary value that may fail (FN-9: hgraph
@@ -195,7 +195,7 @@ the chapters' entries stay the hgraph target's.
 | `get`, `has`, `put` of the global store, in a node and where a graph is built | CAP-6, FN-9 | `capabilities.h` | `capabilities_tests.cpp` |
 | A value wired as a constant connection | FN-3 | `sources.h` | `sources_tests.cpp` |
 | A capture, hgraph's `try_except_` of the graph of a captured call with canonical errors: its value, and its error ticked with each failure and where it failed; a failure of `start` escaping it; a `result` published whole | ERR-2, ERR-4, ERR-7, ERR-8 | `capture.h` | `capture_tests.cpp` |
-| What a `ref` parameter designates: the reference its `REF` input holds, present from the start where it is given a connection, or none, which an ordinary reader of the result it is published to observes; a position of a fixed list designated, the index checked, `value.index_out_of_range` outside it | FN-16, TIME-10, END-10, EXPR-3 | `references.h` | `references_tests.cpp` |
+| What a `ref` parameter designates: the reference its `REF` input holds, present from the start where it is given a connection, or none, which an ordinary reader of the result it is published to observes; a position of a fixed list designated, the index checked, `value.index_out_of_range` outside it; a dictionary's entry selected by key, what its reader observes as the key and the membership change | FN-16, TIME-10, END-10, EXPR-3, EXPR-7 | `references.h` | `references_tests.cpp` |
 | The branch of no `else`, a connection that never ticks; the branch of no `default`, which fails with the selector's value | CTRL-3, CTRL-6, CTRL-13 | `control.h` | `control_tests.cpp` |
 | A nullable scalar's temporal form: its payload read checked, a published null; a nullable value held by hgraph as an atomic | TYPE-14, TYPE-15, TIME-1, TIME-7 | `nullables.h` | `structs_tests.cpp` |
 | A struct's, a tuple's and an atomic struct's temporal forms: a child's view and connection, a whole read checked, `all_valid`, a publication whole and by a delta, the delta read, a field of an atomic struct, what a whole cell publishes and the text of a struct | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, TST-9 | `structs.h` | `structs_tests.cpp` |

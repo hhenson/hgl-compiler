@@ -18,9 +18,10 @@
 //! A set's element and a dictionary's key are a scalar, which hgraph
 //! holds as a value of its own; a dictionary's value is a scalar, a set
 //! or a dictionary, whose form the library converts. Every other
-//! one, a constant connection of a set or a dictionary (FN-3), an entry
-//! of an entry (`book["a"]["b"]`), and a key's child as a connection of a
-//! graph (EXPR-7) are not written yet, and are reported.
+//! one, a constant connection of a set or a dictionary (FN-3) and an
+//! entry of an entry (`book["a"]["b"]`), are not written yet, and are
+//! reported. A key's child as a connection of a graph (EXPR-7) is the
+//! `references` family's, a designation of the entry.
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind};
 use hgl_analyser::{Scalar, Type};

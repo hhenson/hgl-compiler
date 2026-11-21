@@ -8,6 +8,9 @@
 #undef a_reader_observes_the_input_designated
 #undef a_ref_parameter_is_present_and_wakes_once
 #undef a_relay_keeps_what_it_sampled
+#undef a_selected_entry_is_followed_through_its_key
+#undef a_selected_entry_the_dictionary_lacks_is_not_valid
+#undef an_entry_at_a_value_key_is_followed
 #undef an_eval_records_a_ref_result_as_a_reader_does
 #undef demo
 #undef references
@@ -21,6 +24,9 @@ void a_relay_keeps_what_it_sampled();
 void a_designated_input_is_followed_through_its_rebinding();
 void a_designated_position_is_followed_through_its_rebinding();
 void a_designated_position_outside_the_list_fails();
+void a_selected_entry_is_followed_through_its_key();
+void a_selected_entry_the_dictionary_lacks_is_not_valid();
+void an_entry_at_a_value_key_is_followed();
 }  // namespace hgl::demo::references::m_::t_
 
 namespace
@@ -33,6 +39,9 @@ const ::hglrt::testing::Registration test_3{"demo.references::a_relay_keeps_what
 const ::hglrt::testing::Registration test_4{"demo.references::a_designated_input_is_followed_through_its_rebinding", &::hgl::demo::references::m_::t_::a_designated_input_is_followed_through_its_rebinding};
 const ::hglrt::testing::Registration test_5{"demo.references::a_designated_position_is_followed_through_its_rebinding", &::hgl::demo::references::m_::t_::a_designated_position_is_followed_through_its_rebinding};
 const ::hglrt::testing::Registration test_6{"demo.references::a_designated_position_outside_the_list_fails", &::hgl::demo::references::m_::t_::a_designated_position_outside_the_list_fails};
+const ::hglrt::testing::Registration test_7{"demo.references::a_selected_entry_is_followed_through_its_key", &::hgl::demo::references::m_::t_::a_selected_entry_is_followed_through_its_key};
+const ::hglrt::testing::Registration test_8{"demo.references::a_selected_entry_the_dictionary_lacks_is_not_valid", &::hgl::demo::references::m_::t_::a_selected_entry_the_dictionary_lacks_is_not_valid};
+const ::hglrt::testing::Registration test_9{"demo.references::an_entry_at_a_value_key_is_followed", &::hgl::demo::references::m_::t_::an_entry_at_a_value_key_is_followed};
 }  // namespace
 
 int main(int argc, char **argv)
