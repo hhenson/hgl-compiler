@@ -477,49 +477,15 @@ std::size_t size_after(std::size_t size, const list_delta<L>& delta) {
     return std::max(size, static_cast<std::size_t>(delta.updated.rbegin()->first) + 1);
 }
 
-/// The delta that publishing `value` whole records, to a value that held
-/// `size` positions, where it is a list (TST-9: "a T whole, which replaces
-/// what the input held"; TST-16: "A T published whole is held as its delta
-/// too"): a tuple's, each position; a fixed list's, each position; an
-/// unsized list's, each position, the tail past them removed, and the new
-/// size where it moves (TYPE-16: "on a shrink names the tail positions it
-/// drops in `removed`"). Each part publishes whole.
-template <class T>
-delta_t<T> whole_delta(const T& value, std::size_t size) {
-    if constexpr (requires { whole_publication<T>::delta(value); }) {
-        return whole_publication<T>::delta(value);
-    } else if constexpr (hglrt::detail::is_tuple<T>::value) {
-        return std::apply(
-            [](const auto&... part) {
-                static_assert((publishes_whole<std::remove_cvref_t<decltype(part)>> && ...),
-                              "hglrt: a whole tuple cell of parts that publish whole");
-                return delta_t<T>{part...};
-            },
-            value);
-    } else {
-        using Element = typename T::value_type;
-        static_assert(publishes_whole<Element>, "hglrt: a whole list cell of elements that publish whole");
-        delta_t<T> delta;
-        for (std::size_t position = 0; position < value.size(); ++position) {
-            delta.updated.emplace(static_cast<i64>(position), value[position]);
-        }
-        if constexpr (hglrt::detail::is_list<T>::value) {
-            for (std::size_t position = value.size(); position < size; ++position) {
-                delta.removed.insert(static_cast<i64>(position));
-            }
-            if (value.size() != size) {
-                delta.size_modified = static_cast<i64>(value.size());
-            }
-        }
-        return delta;
-    }
-}
-
 /// What each cell of a trace of a T publishes, in order, a whole one as the
-/// delta that replaces what the value held: the size of a list is followed
-/// through each cell, a delta's among them. A header of this library that
-/// declares a value type whose whole cell needs more of what the earlier
-/// cells left specializes it for that type (keyed.h: a set, a dictionary).
+/// delta that replaces what the value held (TST-9: "a T whole, which
+/// replaces what the input held"; TST-16: "A T published whole is held as
+/// its delta too"). A T that publishes whole is its own delta; a struct's
+/// whole value records what `whole_publication` says. A list, a fixed list
+/// and a tuple keep what each of their positions holds, below, and a
+/// header of this library that declares a value type whose whole cell needs
+/// more of what the earlier cells left specializes it for that type
+/// (keyed.h: a set, a dictionary).
 template <class T>
 class Publisher {
   public:
@@ -527,18 +493,168 @@ class Publisher {
         if constexpr (publishes_whole<T>) {
             return cell;
         } else {
-            delta_t<T> delta =
-                cell.index() == 0 ? std::get<0>(cell) : whole_delta(std::get<1>(cell).value, size_);
-            if constexpr (hglrt::detail::is_list_delta<delta_t<T>>::value) {
-                size_ = size_after(size_, delta);
+            return cell.index() == 0 ? std::get<0>(cell)
+                                     : whole_publication<T>::delta(std::get<1>(cell).value);
+        }
+    }
+};
+
+/// What a position of a list or a tuple publishes for its part of a cell
+/// written whole: the part itself where it publishes whole, and otherwise
+/// its own cell written whole, from what the position held.
+template <class V>
+delta_t<V> whole_part(Publisher<V>& position, const V& value) {
+    if constexpr (publishes_whole<V>) {
+        return position(value);
+    } else {
+        return position(Cell<V>{Whole<V>{value}});
+    }
+}
+
+/// What a position of a list or a tuple holds once its part of a delta,
+/// `change`, is published to it.
+template <class V>
+void changed_part(Publisher<V>& position, const delta_t<V>& change) {
+    static_cast<void>(position(Cell<V>{change}));
+}
+
+/// A growing list's cells (TYPE-16): a delta as it is, and a whole list as
+/// each position it gives, each as its part publishes from what the
+/// position held, the tail past them removed, and the new size where it
+/// moves ("on a shrink names the tail positions it drops in `removed`").
+/// What each position holds is kept, so that a list of lists, read whole
+/// at an inner position, is published from what that position held.
+template <class V>
+class Publisher<list<V>> {
+  public:
+    Publisher() = default;
+
+    /// One that holds `size` positions, each holding nothing.
+    explicit Publisher(std::size_t size) : positions_(size) {}
+
+    list_delta<list<V>> operator()(const Cell<list<V>>& cell) {
+        if (cell.index() == 0) {
+            const list_delta<list<V>>& delta = std::get<0>(cell);
+            const std::size_t size = size_after(positions_.size(), delta);
+            positions_.resize(size);
+            for (const i64 position : delta.removed) {
+                if (position >= 0 && static_cast<std::size_t>(position) < size) {
+                    positions_[static_cast<std::size_t>(position)] = Publisher<V>{};
+                }
+            }
+            for (const auto& [position, change] : delta.updated) {
+                if (position >= 0 && static_cast<std::size_t>(position) < size) {
+                    changed_part(positions_[static_cast<std::size_t>(position)], change);
+                }
             }
             return delta;
         }
+        const list<V>& whole = std::get<1>(cell).value;
+        list_delta<list<V>> delta;
+        for (std::size_t position = whole.size(); position < positions_.size(); ++position) {
+            delta.removed.insert(static_cast<i64>(position));
+        }
+        if (whole.size() != positions_.size()) {
+            delta.size_modified = static_cast<i64>(whole.size());
+        }
+        positions_.resize(whole.size());
+        for (std::size_t position = 0; position < whole.size(); ++position) {
+            // A position held as its element's own type: an element of a
+            // `list<bool>` is a bit, not a `bool` to refer to.
+            const V element = whole[position];
+            delta.updated.emplace(static_cast<i64>(position), whole_part(positions_[position], element));
+        }
+        return delta;
     }
 
   private:
-    std::size_t size_ = 0;
+    std::vector<Publisher<V>> positions_{};
 };
+
+/// A fixed list's cells (TYPE-16): a delta as it is, and a whole list as
+/// each of its positions, which a fixed list keeps.
+template <class V, std::size_t N>
+class Publisher<std::array<V, N>> {
+  public:
+    Publisher() = default;
+    explicit Publisher(std::size_t) {}
+
+    list_delta<std::array<V, N>> operator()(const Cell<std::array<V, N>>& cell) {
+        if (cell.index() == 0) {
+            const list_delta<std::array<V, N>>& delta = std::get<0>(cell);
+            for (const i64 position : delta.removed) {
+                if (position >= 0 && static_cast<std::size_t>(position) < N) {
+                    positions_[static_cast<std::size_t>(position)] = Publisher<V>{};
+                }
+            }
+            for (const auto& [position, change] : delta.updated) {
+                if (position >= 0 && static_cast<std::size_t>(position) < N) {
+                    changed_part(positions_[static_cast<std::size_t>(position)], change);
+                }
+            }
+            return delta;
+        }
+        const std::array<V, N>& whole = std::get<1>(cell).value;
+        list_delta<std::array<V, N>> delta;
+        for (std::size_t position = 0; position < N; ++position) {
+            delta.updated.emplace(static_cast<i64>(position),
+                                  whole_part(positions_[position], whole[position]));
+        }
+        return delta;
+    }
+
+  private:
+    std::array<Publisher<V>, N> positions_{};
+};
+
+/// A tuple's cells (TYPE-16: "each position's delta, null where it did not
+/// change"): a delta as it is, and a whole tuple as each of its positions.
+template <class... V>
+class Publisher<std::tuple<V...>> {
+  public:
+    Publisher() = default;
+    explicit Publisher(std::size_t) {}
+
+    delta_t<std::tuple<V...>> operator()(const Cell<std::tuple<V...>>& cell) {
+        return [&]<std::size_t... I>(std::index_sequence<I...>) {
+            if (cell.index() == 0) {
+                const delta_t<std::tuple<V...>>& delta = std::get<0>(cell);
+                (
+                    [&] {
+                        if (std::get<I>(delta).has_value()) {
+                            changed_part(std::get<I>(positions_), *std::get<I>(delta));
+                        }
+                    }(),
+                    ...);
+                return delta;
+            }
+            const std::tuple<V...>& whole = std::get<1>(cell).value;
+            return delta_t<std::tuple<V...>>{whole_part(std::get<I>(positions_), std::get<I>(whole))...};
+        }(std::index_sequence_for<V...>{});
+    }
+
+  private:
+    std::tuple<Publisher<V>...> positions_{};
+};
+
+/// The delta that publishing `value` whole records, to a value that held
+/// `size` positions, each holding nothing, where it is a list: what its
+/// cell written whole publishes (`Publisher`).
+template <class T>
+delta_t<T> whole_delta(const T& value, std::size_t size) {
+    if constexpr (requires { whole_publication<T>::delta(value); }) {
+        static_cast<void>(size);
+        return whole_publication<T>::delta(value);
+    } else if constexpr (std::is_constructible_v<Publisher<T>, std::size_t>) {
+        Publisher<T> publish(size);
+        return publish(Cell<T>{Whole<T>{value}});
+    } else {
+        // A set or a dictionary (keyed.h) holds no positions.
+        static_cast<void>(size);
+        Publisher<T> publish;
+        return publish(Cell<T>{Whole<T>{value}});
+    }
+}
 } // namespace detail
 
 /// The items core's `replay` is given for the dense trace `trace` of a run
