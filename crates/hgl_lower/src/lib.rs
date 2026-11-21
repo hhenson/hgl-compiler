@@ -41,3 +41,6 @@ pub mod nodes;
 mod packs;
 pub mod pieces;
 pub mod types;
+
+#[cfg(test)]
+mod tests;
