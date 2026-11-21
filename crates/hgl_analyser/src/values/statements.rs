@@ -42,11 +42,12 @@ impl<'a> Typer<'a> {
     pub(super) fn graph(mut self) -> Option<Body> {
         self.graph = true;
         for (local, parameter) in self.signature.parameters.iter().enumerate() {
-            self.locals[local].category = if parameter.constant {
-                ValueCategory::Value
-            } else {
-                ValueCategory::Connection
-            };
+            self.locals[local].category =
+                if parameter.constant || matches!(parameter.ty, Type::Function(_)) {
+                    ValueCategory::Value
+                } else {
+                    ValueCategory::Connection
+                };
         }
         self.body()
     }

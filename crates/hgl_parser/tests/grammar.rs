@@ -192,6 +192,9 @@ export const fn scale<T, ...Rest, const N: i64>(
 
 fn arrow(x: i64) -> i64 => x + 1
 
+const fn apply(f: const fn(value: i64) -> i64, x: i64) -> i64 => f(x)
+const fn via_generic(x: i64) -> i64 => apply(other::increase<i64>, x)
+
 export const limit: i64 = 2 * 5
 
 export abstract struct Quote<T> : Base, other::Mixin requires T is Shape {

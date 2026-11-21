@@ -67,7 +67,9 @@ pub fn canonical(program: &Program, ty: &Type) -> Option<String> {
         Type::ErrorContext => "error context".to_string(),
         Type::Delta(shape) => format!("delta<{}>", one(shape)?),
         Type::Nullable(inner) => format!("{}?", one(inner)?),
-        Type::Parameter { .. } | Type::Trace { .. } | Type::Unknown => return None,
+        Type::Parameter { .. } | Type::Trace { .. } | Type::Function(_) | Type::Unknown => {
+            return None;
+        }
     })
 }
 

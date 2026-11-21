@@ -105,8 +105,30 @@ impl Emitter<'_> {
         let Some((prototype, head)) = self.head(&name, signature, declaration.at) else {
             return;
         };
-        let mut scope = Scope::cold(self.program, body);
         let mut text = format!("{head}\n{{\n");
+        if self
+            .value_body(body, signature.result.as_ref(), declaration.at, &mut text)
+            .is_none()
+        {
+            return;
+        }
+        text.push_str("}\n");
+        let place = self.place_of(index);
+        let comment = format!("// {described}, {place}\n");
+        self.piece.declaration = within(namespace.as_deref(), &format!("{comment}{prototype};\n"));
+        self.piece.text = within(namespace.as_deref(), &format!("{comment}{text}"));
+    }
+
+    /// Writes the statements of a value body, including its own ERR-5
+    /// failure propagation. The caller has already written the head.
+    pub(super) fn value_body(
+        &mut self,
+        body: &Body,
+        result: Option<&Type>,
+        at: Location,
+        text: &mut String,
+    ) -> Option<()> {
+        let mut scope = Scope::cold(self.program, body);
         let mut propagates = false;
         walk_statements(&body.statements, &mut |expression| {
             propagates |= matches!(
@@ -120,26 +142,20 @@ impl Emitter<'_> {
                 }
             );
         });
-        if propagates && let Some(Type::Result { error, .. }) = &signature.result {
-            let Some(error) = self.written_type(error, declaration.at) else {
-                return;
-            };
+        if propagates && let Some(Type::Result { error, .. }) = result {
+            let error = self.written_type(error, at)?;
             let library = runtime::NAMESPACE;
             // ERR-5: only a contextual return becomes the function's
             // error. Execution failures still leave it by their own route.
             text.push_str(&format!("{INDENT}try\n{INDENT}{{\n"));
-            self.statements(&mut scope, &body.statements, 2, &mut text);
+            self.statements(&mut scope, &body.statements, 2, text);
             text.push_str(&format!(
                 "{INDENT}}}\n{INDENT}catch (const ::{library}::return_error<{error}>& failure_)\n{INDENT}{{\n{INDENT}{INDENT}return ::std::unexpected(failure_.value);\n{INDENT}}}\n"
             ));
         } else {
-            self.statements(&mut scope, &body.statements, 1, &mut text);
+            self.statements(&mut scope, &body.statements, 1, text);
         }
-        text.push_str("}\n");
-        let place = self.place_of(index);
-        let comment = format!("// {described}, {place}\n");
-        self.piece.declaration = within(namespace.as_deref(), &format!("{comment}{prototype};\n"));
-        self.piece.text = within(namespace.as_deref(), &format!("{comment}{text}"));
+        Some(())
     }
 
     /// Where declaration `index` of the module is written, for a

@@ -41,7 +41,7 @@ fn called(checked: &Checked, body: &Body) -> Vec<String> {
                 found.push("required".to_string());
                 return;
             }
-            Callee::Unread => {
+            Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {
                 found.push("none".to_string());
                 return;
             }

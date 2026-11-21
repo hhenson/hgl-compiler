@@ -29,7 +29,7 @@
 
 use hgl_analyser::hir::{Cell, Expr, ExprKind, Stmt};
 use hgl_analyser::{Argument as GenericArgument, Type};
-use hgl_lower::calls::{LeftOut, left_out};
+use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 use hgl_lower::instances::{core_function, run_wiring, trace_payload};
 
 use super::Emitter;
@@ -67,21 +67,7 @@ impl Emitter<'_> {
             self.statement(&mut scope, statement, 1, &mut text);
         }
         text.push_str("}\n");
-        // What the test's evals wire that a function cannot hold, ahead
-        // of it: its statements' lines move down by as many lines.
-        let mut ahead: String = std::mem::take(&mut self.ahead)
-            .into_iter()
-            .map(|node| node + "\n")
-            .collect();
-        // A node written ahead sets the HGL lines of its statements; the
-        // test's own are the unit's again after it.
-        let nodes = ahead.clone();
-        super::restore_after(&mut ahead, &nodes);
-        let moved = ahead.matches('\n').count();
-        for (line, _) in &mut self.piece.statements {
-            *line += moved;
-        }
-        self.piece.text = ahead + &text;
+        self.piece.text = text;
     }
 
     /// `value`, an `eval target(...)` (TST-5, TST-8; core's CEVAL-1): a
@@ -138,7 +124,12 @@ impl Emitter<'_> {
                                         .any(|argument| argument.parameter == Some(*index))
                             })
                             .filter_map(|(index, parameter)| {
-                                match left_out(program, (module, declaration), index, parameter) {
+                                match left_out(
+                                    program,
+                                    Some((module, declaration)),
+                                    index,
+                                    parameter,
+                                ) {
                                     Some(LeftOut::Default(default)) => Some(default),
                                     _ => None,
                                 }
@@ -188,7 +179,7 @@ impl Emitter<'_> {
         // configuration held.
         let mut replayed: Vec<Given> = Vec::new();
         let mut context = Context::new(Kind::Entry, scope.body.locals.len());
-        for (position, argument) in arguments.iter().enumerate() {
+        for (position, argument) in runtime_arguments(arguments) {
             // A trace that is no trace written out, a `let` of one or an
             // eval's, is replayed from what it holds: not written yet.
             if matches!(argument.value.ty, Type::Trace { .. })
@@ -277,7 +268,7 @@ impl Emitter<'_> {
                     continue;
                 }
                 let Some(LeftOut::Default(default)) =
-                    left_out(program, (module, declaration), index, parameter)
+                    left_out(program, Some((module, declaration)), index, parameter)
                 else {
                     continue;
                 };

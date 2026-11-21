@@ -109,8 +109,8 @@ pub use program::{
 };
 pub use types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumOf, EnumType, Field,
-    FieldRef, GenericKind, GenericParameter, Member, MemberOf, NamedKind, Pack, Parameter, Scalar,
-    Signature, StructType, TraceStyle, Type, WrittenType,
+    FieldRef, FunctionType, GenericKind, GenericParameter, Member, MemberOf, NamedKind, Pack,
+    Parameter, Scalar, Signature, StructType, TraceStyle, Type, WrittenType,
 };
 
 /// The most instances of one generic declaration that one call is
@@ -521,6 +521,8 @@ pub mod codes {
     pub const SWITCH_DUPLICATE_LABEL: &str = "switch.duplicate_label";
     /// A `while` with no condition in a value function (CTRL-12).
     pub const WHILE_CONDITION: &str = "while.condition";
+    /// A function argument must name a known callable (FN-17).
+    pub const FUNCTION_ARGUMENT: &str = "function.argument";
 
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
@@ -568,8 +570,15 @@ pub mod codes {
         /// rejects the dynamic sequence instead. See issue #373.
         pub const LOOP_CARRIED: &str = "loop.carried";
 
+        /// A compile-time function used as a runtime value (FN-17).
+        pub const FUNCTION_VALUE: &str = "function.value";
+
+        /// An explicit generic operator reference supplied as a
+        /// function argument awaits a ruling (FN-17, issue #362).
+        pub const FUNCTION_REFERENCE_UNREAD: &str = "function.reference_unread";
+
         /// Every local code of this stage.
-        pub const ALL: [&str; 9] = [
+        pub const ALL: [&str; 11] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
@@ -579,6 +588,8 @@ pub mod codes {
             SCHEDULED_OUTSIDE_NODE,
             READING_LIMIT,
             LOOP_CARRIED,
+            FUNCTION_VALUE,
+            FUNCTION_REFERENCE_UNREAD,
         ];
     }
 }

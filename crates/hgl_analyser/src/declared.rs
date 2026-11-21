@@ -498,6 +498,14 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
             value: part(value),
             error: part(error),
         },
+        Type::Function(function) => {
+            let mut function = function.as_ref().clone();
+            for (_, ty) in &mut function.parameters {
+                *ty = substitute(ty, map);
+            }
+            function.result = function.result.as_ref().map(|ty| substitute(ty, map));
+            Type::Function(Box::new(function))
+        }
         // TYPE-16: "In a generic declaration it stays as written until
         // T is known", and is then what the table gives for that T.
         Type::Delta(inner) => Type::delta(substitute(inner, map)),
@@ -577,6 +585,14 @@ fn weight(ty: &Type) -> usize {
         Type::Dict { key, value } => weight(key) + weight(value),
         Type::RollingWindow { value, .. } => weight(value),
         Type::Result { value, error } => weight(value) + weight(error),
+        Type::Function(function) => {
+            function
+                .parameters
+                .iter()
+                .map(|(_, ty)| weight(ty))
+                .sum::<usize>()
+                + function.result.as_ref().map_or(0, weight)
+        }
         Type::Scalar(_)
         | Type::Parameter { .. }
         | Type::Signal
@@ -1394,7 +1410,8 @@ impl Structs<'_> {
                 self.walk(value, in_collection, may_be_empty, found, path, budget);
                 self.walk(error, in_collection, may_be_empty, found, path, budget);
             }
-            Type::Scalar(_)
+            Type::Function(_)
+            | Type::Scalar(_)
             | Type::Parameter { .. }
             | Type::Signal
             | Type::Error
@@ -1992,7 +2009,8 @@ fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
         Type::Dict { key, value } => grown(key, in_group).or_else(|| grown(value, in_group)),
         Type::RollingWindow { value, .. } => grown(value, in_group),
         Type::Result { value, error } => grown(value, in_group).or_else(|| grown(error, in_group)),
-        Type::Scalar(_)
+        Type::Function(_)
+        | Type::Scalar(_)
         | Type::Parameter { .. }
         | Type::Signal
         | Type::Error
