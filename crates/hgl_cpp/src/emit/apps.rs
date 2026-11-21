@@ -83,6 +83,8 @@ impl Emitter<'_> {
         let testing = testing.trim_end_matches("::");
         let inner = INDENT.repeat(2);
 
+        // RUN-4, CRUN-1, CRUN-6: the entry hands fresh state and its
+        // pre-run store to the application host for execution and cleanup.
         // UNIT-14: the run's configuration and the store, set first, in
         // the order written, by value code "read as a constant's is ...
         // with no parameter in scope".

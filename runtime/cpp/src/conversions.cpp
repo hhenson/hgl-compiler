@@ -372,9 +372,7 @@ detail::made<i64> detail::whole_of(f64 value, Rounding rounding, std::optional<i
         return std::unexpected("an infinity is no `i64`");
     }
     const f64 whole = rounded(value, rounding);
-    // 2^63, the least f64 above every i64; -2^63 is the least i64.
-    constexpr f64 beyond = 9223372036854775808.0;
-    if (whole < -beyond || whole >= beyond) {
+    if (whole < -i64_upper_bound || whole >= i64_upper_bound) {
         return std::unexpected("the number is outside `i64` once rounded");
     }
     return static_cast<i64>(whole);

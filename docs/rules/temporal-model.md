@@ -14,7 +14,13 @@ analyser: partial
 - Left: a function value kept in a `state` or a `cache`, which carries a read into a later evaluation, and which the rules give no type
 - A struct, a tuple or a fixed list read whole, an input or a child named when the program is compiled, `return quote`, `rows[0]`, is admitted only by its own `all_valid`, in a header or as a guard: `valid` of it, and `all_valid` of what holds it, do not admit it (`payload.unguarded`); a dictionary and an unsized list are read whole where `valid` holds, an `atomic<V>` as any value that publishes whole
 
-transpiler: planned
+transpiler: partial
+
+- Checks validity of reads, preserving silence, null and equal publications. Whole and
+  child reads use the value's temporal family.
+- Left: Whole reads, publications, temporal schemas and deltas outside TYPE-9's families
+  are reported. Output reads, narrowed endpoint reads without a supported reader, and
+  the projection limits of EXPR-7 remain.
 
 ## TIME-2
 
@@ -23,9 +29,10 @@ analyser: partial
 - In a graph a connection is given nothing the graph needs the value of while it is built: a `const` parameter, a `switch` label and a `while` condition (FN-3, CTRL-15), a call on the store (FN-9), a symbol's configuration (EXPR-14), each `connection.as_constant`; an endpoint operation takes no input there (TIME-9)
 - Left: a connection written as a generic value argument or a list's size (GEN-8, TYPE-10), which is not rejected
 
-transpiler: planned
+transpiler: done
 
-- Evaluation in rank order, once per node per cycle; the order of two nodes of one rank undefined
+- Wires dependencies without reading live payloads. hgraph evaluates the graph in
+  dependency order, coalescing same-cycle work.
 
 ## TIME-3
 
@@ -41,7 +48,13 @@ analyser: partial
 - A sequence that names inputs is no selector's form (`endpoint.argument`)
 - Left: subscription, which `modified` sets; a selector that takes no part in its header's condition
 
-transpiler: planned
+transpiler: partial
+
+- Runs eligible handlers in source order and stops on return. Filters scheduled and
+  modified-input wakes and applies each handler's validity requirements.
+- Left: Reports a handler guard that needs preceding statements, validity checks of
+  unsupported endpoint forms, and `modified([])` combined with another modified
+  selector.
 
 ## TIME-4
 
@@ -55,7 +68,12 @@ analyser: partial
 - Not settled: whether `modified` of a collection admits a read of its child, which `valid` of it does not; such a read is left rejected (`payload.unguarded`)
 - Left: aggregate subscriptions; node-wide validity
 
-transpiler: planned
+transpiler: partial
+
+- Subscribes to the aggregate of the handlers' inputs and keeps noncommon checks in
+  their handlers.
+- Left: Output and child forms without per-handler validity support are reported
+  (TIME-3, END-9).
 
 ## TIME-5
 
@@ -67,11 +85,18 @@ analyser: done
 - A cache's initialiser reads none either (TIME-1)
 - A read in an anonymous function written in any of them is held to the same
 
-transpiler: planned
+transpiler: done
+
+- Builds the node's state, cache and capability members, then emits distinct start,
+  evaluation and stop hooks. Initializers and start do not read temporal inputs.
 
 ## TIME-6
 
-transpiler: planned
+transpiler: partial
+
+- Emits state members and reconstructs cache at start. Sources preserve coroutine locals
+  across yields.
+- Left: Checkpoint and restoration of state are pending.
 
 ## TIME-7
 
@@ -86,7 +111,12 @@ analyser: partial
 
 transpiler: partial
 
-- C++ sources can yield both whole values and deltas for output types the target writes. Each yield preserves its form until publication. A delta that names no change on a valid collection remains silent.
+- Publishes returns, whole `out` assignments and supported struct or tuple child writes.
+  A source yields whole values or deltas, and a window holds the last arrival of the
+  evaluation.
+- Left: Reports plain reads of `out` or its children, unsupported output writes or child
+  places, and a read of a node's own window in its `when`. Other unsupported publication
+  forms are under TYPE-9.
 
 ## TIME-8
 
@@ -99,7 +129,13 @@ analyser: partial
 - A capture by an anonymous function is reported: of the injected name by the resolver (`name.captured`, FN-14), and of a `let` it is bound to or a parameter of its type here
 - A wake asked of the scheduler or the alarm, a call of core's `schedule`, with a duration the compiler sees, a literal, a constant or a constant expression of them, that is not more than zero rejects (`schedule.duration_bounds`): in `start` a negative one, and in a `when` or `stop` zero too; in a value function given the capability a negative one, and a zero is left to the target, since the rule does not say whether a call there is in `start`
 
-transpiler: planned
+transpiler: partial
+
+- Supplies the declared node, source and application capabilities, including timers and
+  run configuration. Wires them before initializers that read them.
+- Left: Unknown or unavailable injections are reported, including graph injections other
+  than the store. A nested child graph cannot read capabilities captured from its parent
+  (CTRL-2).
 
 ## TIME-9
 
@@ -119,7 +155,14 @@ analyser: partial
 - In a guard it sets neither subscription nor validity
 - Left: which place a selector stands in; an operator's candidate with an `endpoint<T>` parameter; that an endpoint is not retained; `scheduled()` in the initialiser of a node that injects one, which the rule does not place; `scheduled()` in an anonymous function in a node that injects one, which FN-14 may make a use of the capability, and is accepted: the target writes no anonymous function
 
-transpiler: planned
+transpiler: partial
+
+- Writes observation and activity calls on supported endpoints, including borrowed
+  arguments to known native helpers and scheduler wake detection.
+- Left: Unsupported endpoint types, children and operation locations are reported,
+  including defaulting a borrowed endpoint, `all_valid` of a set, and unnamed or
+  unsupported `modified([])` contexts. END-5 records changes of input activity during
+  stop.
 
 ## TIME-10
 
@@ -127,4 +170,8 @@ analyser: done
 
 - A `ref` parameter's `valid`, `modified` and `last_modified` are endpoint operations as any input's are (FN-16)
 
-transpiler: planned
+transpiler: partial
+
+- Uses hgraph reference ports to follow endpoint rebinding without re-evaluating the
+  designating node. Supports sampled, whole-input and fixed-list child designations.
+- Left: Unsupported targets and output combinations are listed under FN-16.

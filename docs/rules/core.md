@@ -10,23 +10,38 @@ analyser: partial
 - Result types of arithmetic on `i64` and `f64`, and of unary minus, in value functions, through core's candidates
 - Left: temporal bodies
 
-transpiler: planned
+transpiler: done
+
+- Lowers numeric arithmetic to the selected core candidate, retaining result type, floor
+  division, modulo and floating-point special cases.
 
 ## NUM-2
 
-transpiler: planned
+transpiler: done
+
+- Uses checked signed arithmetic and the runtime's exact mixed comparison. Floating
+  payloads use the SDK binary64 type.
 
 ## NUM-3
 
-transpiler: planned
+transpiler: done
+
+- Names the selected zero policy as a native template argument. The provider supplies
+  signed infinities, NaNs, error data or escaping failures as selected.
 
 ## NUM-4
 
-transpiler: planned
+transpiler: done
+
+- Passes absolute and relative tolerances to the selected numeric equality native, which
+  applies the exact and configured comparisons.
 
 ## NUM-5
 
-transpiler: planned
+transpiler: done
+
+- Numeric equality uses the native's special-value comparisons and overflow-safe finite
+  tolerance test.
 
 ## NUM-6
 
@@ -35,7 +50,10 @@ analyser: partial
 - In a value function a comparison outcome is a `CmpResult`, and is rejected where a bool or a number is expected
 - Left: temporal bodies
 
-transpiler: planned
+transpiler: done
+
+- Routes numeric full comparison to the selected candidate and preserves the distinct
+  `CmpResult` enum, including unordered.
 
 ## NUM-7
 
@@ -58,7 +76,10 @@ optimiser: planned
 
 - Folding alters no default or outcome
 
-transpiler: planned
+transpiler: done
+
+- Uses the same resolved native identity and policy for a symbol, named call, and lifted
+  value helper. The runtime publishes nonfinite values as payloads.
 
 ## NUM-9
 
@@ -67,11 +88,17 @@ analyser: partial
 - A division, by name or by symbol, through core's candidates in a value function: its own type, or a `result` of it under `zero: .error`; `zero` is a generic value parameter, so one given no compile-time constant is rejected
 - Left: temporal bodies
 
-transpiler: planned
+transpiler: done
+
+- Specializes division by its zero policy and retains the selected numeric or tagged
+  result type and error code.
 
 ## NUM-10
 
-transpiler: planned
+transpiler: done
+
+- Keeps an error from checked division as tagged data. A lifted division publishes that
+  data whole, and an explicit result read propagates the error in its own phase.
 
 ## NUM-11
 
@@ -81,7 +108,10 @@ analyser: partial
 - The same as the symbol's configuration, `a =={abs: ...} b`
 - Left: temporal bodies
 
-transpiler: planned
+transpiler: done
+
+- Passes comparison tolerances as ordinary arguments in value code and as scalar
+  configuration of a lifted comparison.
 
 ## NUM-12
 
@@ -90,7 +120,10 @@ analyser: partial
 - Every division, by name or by symbol, through core's candidates in a value function: a division whose result is an `f64` admits each policy, one whose result is an `i64` or a `duration` only `.error` and `.fail`, and `.error` gives a `result`
 - Left: temporal bodies
 
-transpiler: planned
+transpiler: done
+
+- Writes native division with the analysed zero policy for the applicable numeric or
+  duration signature.
 
 ## OPS-1
 
@@ -100,7 +133,10 @@ analyser: partial
 - Its operands are read as the call's arguments are, and the type its place expects is requested of the candidates
 - Left: temporal bodies
 
-transpiler: planned
+transpiler: done
+
+- Writes the selected arithmetic, text, instant, duration and tenor operations through
+  core candidates for supported value and temporal forms.
 
 ## OPS-2
 
@@ -111,7 +147,10 @@ analyser: partial
 - Two zoned datetimes, in a value function, a hook and a graph: `==` and `!=` select core's candidates for them, `utc` a `bool` they alone declare; no order of a zoned type; in a graph `utc` is no connection (EXPR-14)
 - Left: a comparison with a nullable operand; other types in temporal bodies
 
-transpiler: planned
+transpiler: done
+
+- Writes core's ordered comparison and value equality, including zoned equality and the
+  `utc` option.
 
 ## OPS-3
 
@@ -127,7 +166,10 @@ analyser: partial
 - `convert<T>(value)` through core's candidates in a value function: the conversions core declares, and no other
 - Left: a list of structs to a list of their parent; temporal bodies
 
-transpiler: planned
+transpiler: done
+
+- Emits the selected core conversion with its result type and native template arguments.
+  An admitted integer literal can be written directly as an f64.
 
 ## OPS-5
 
@@ -142,7 +184,10 @@ analyser: done
 
 - The type each conversion yields; `convert<list<B>>(values)` of a `list<A>`, `A` inheriting from the abstract `B`, is `list<B>` with no option
 
-transpiler: planned
+transpiler: done
+
+- Uses the runtime conversion natives and the generated conversion of a list of concrete
+  structs to a list of their abstract parent.
 
 ## OPS-7
 
@@ -150,7 +195,10 @@ analyser: done
 
 - A conversion's options, and the `result` its checked error policy returns
 
-transpiler: planned
+transpiler: done
+
+- Emits rounding, NaN and invalid-input policies through the selected conversion. The
+  checked conversion preserves its ordinary tagged result.
 
 ## OPS-8
 
@@ -159,7 +207,10 @@ analyser: partial
 - The options of `convert` through core's candidates in a value function: `invalid` selects `result<T, error>` or T and is given a compile-time constant, `rounding` and `nan` are parameters, and an option is admitted only for the conversions that declare it
 - Left: temporal bodies
 
-transpiler: planned
+transpiler: done
+
+- Passes `rounding` and `nan` as arguments and instantiates the selected native using
+  the analysed `invalid` policy.
 
 ## OPS-9
 
@@ -168,11 +219,17 @@ analyser: done
 - In a graph `invalid: .identity`, by symbol or by name, selects core's temporal candidate of `add_` or `sub_` for two operands of one type, where the value operations it requires exist for that type (GEN-16); without the option the value candidate is selected and lifted
 - Core's two candidates are nodes, and are read as any node is
 
-transpiler: planned
+transpiler: done
+
+- Emits the HGL temporal identity candidate with its value operations specialized,
+  including alternate admission when one input is invalid.
 
 ## OPS-10
 
-transpiler: planned
+transpiler: done
+
+- Uses the duration and instant natives with microsecond rounding and checked ranges for
+  the selected arithmetic.
 
 ## LIST-1
 
@@ -180,7 +237,9 @@ analyser: done
 
 - `append` is core's native function, typed as any call; its list is a `var` parameter (FN-15)
 
-transpiler: planned
+transpiler: done
+
+- Passes the list place to native `append` and preserves earlier retained values.
 
 ## LIST-2
 
@@ -188,11 +247,16 @@ analyser: done
 
 - `extend` is core's native function, typed as any call; its list is a `var` parameter (FN-15)
 
-transpiler: planned
+transpiler: done
+
+- Passes the place and ordered update values to native `extend`.
 
 ## LIST-3
 
-transpiler: planned
+transpiler: done
+
+- Uses a mutable place for list natives and uses retained copies where needed to
+  preserve their earlier values (FN-13).
 
 ## TEN-1
 
@@ -201,19 +265,30 @@ analyser: done
 - The pairings are core's candidates, found as any operator's are: `date ± tenor`, `tenor ± tenor`, scaling in either order, negation, the order and `<=>`
 - A tenor on the left of a date, an instant that is no date, and a division are `operator.no_candidate`
 
-transpiler: planned
+transpiler: done
+
+- Writes tenor arithmetic, comparison and date movement through the selected native or
+  HGL candidate.
 
 ## TEN-2
 
-transpiler: planned
+transpiler: done
+
+- Uses the native count arithmetic, including mixed-unit and range errors.
 
 ## TEN-3
 
-transpiler: planned
+transpiler: done
+
+- Uses count-wise tenor comparison, preserving the unordered result for incompatible
+  counts or forms.
 
 ## TEN-4
 
-transpiler: planned
+transpiler: done
+
+- Calls core's calendar movement candidate and its month-then-day native with checked
+  final dates.
 
 ## TEN-5
 
@@ -221,11 +296,17 @@ analyser: done
 
 - `calendar` is an option of `+` and `-`, an argument of the candidate that takes it (EXPR-10); a calendar is a value `business_day` has a candidate for, and one that has none finds no candidate
 
-transpiler: planned
+transpiler: done
+
+- Binds the calendar argument or core's default and specializes the generic calls of the
+  calendar predicate.
 
 ## TEN-6
 
-transpiler: planned
+transpiler: done
+
+- Emits core's calendar candidate for movement by business days, including the starting
+  business-day choice.
 
 ## TEN-7
 
@@ -233,23 +314,36 @@ analyser: done
 
 - `rolling_rule` is an option of `+` and `-`, with `calendar` or alone; a rolling rule is a value `roll` has a candidate for
 
-transpiler: planned
+transpiler: done
+
+- Emits core's movement and rolling calls with the selected calendar and rolling rule.
 
 ## TEN-8
 
-transpiler: planned
+transpiler: done
+
+- Emits core's rolling candidates and the calendar primitives on which they depend.
 
 ## TEN-9
 
-transpiler: planned
+transpiler: done
+
+- Writes the native tenor-to-text conversion including mixed month/day units, signed
+  counts and zero.
 
 ## END-1
 
-transpiler: planned
+transpiler: done
+
+- Retains validity and payload across silence and publishes present scalar values,
+  including null and nonfinite values.
 
 ## END-2
 
-transpiler: planned
+transpiler: done
+
+- Reports scalar ticks even when values repeat. A newly selected temporal child sees
+  pre-existing valid data on startup.
 
 ## END-3
 
@@ -261,15 +355,28 @@ analyser: partial
 - A child's `delta_value` needs the child's admission (TIME-1)
 - Left: proof that `x` is valid and modified
 
-transpiler: planned
+transpiler: partial
+
+- Reads current scalar, nullable, collection and window deltas, with checked result
+  forms where selected.
+- Left: Reports unsupported endpoint deltas and window observations, including a node's
+  own window in its `when`. The temporal forms are under TYPE-9.
 
 ## END-4
 
-transpiler: planned
+transpiler: partial
+
+- Emits result invalidation, including clearing collection results and reference
+  designations, and permits observation of the transition without a modified guard.
+- Left: An unsupported endpoint family or operation context is reported (TIME-9).
 
 ## END-5
 
-transpiler: planned
+transpiler: partial
+
+- Writes input activity control and suppresses silent no-change collection updates.
+- Left: Reports `activate` and `passivate` in `stop`. A window result holds its last
+  arrival until the handler's evaluation finishes (END-9).
 
 ## END-6
 
@@ -277,7 +384,10 @@ analyser: done
 
 - `last_modified` on an input or the node's output has type `datetime?`
 
-transpiler: planned
+transpiler: done
+
+- Reads the last valid publication timestamp of a supported endpoint. Null payload
+  publications retain a timestamp, invalidated endpoints do not.
 
 ## END-7
 
@@ -285,7 +395,11 @@ analyser: done
 
 - `all_valid` is an endpoint operation on a list, tuple, struct, dictionary or window (TIME-9)
 
-transpiler: planned
+transpiler: partial
+
+- Uses published-empty collection validity and one-level `all_valid`, excluding optional
+  children in supported bundle forms.
+- Left: An unsupported endpoint or `all_valid` of a set is reported.
 
 ## END-8
 
@@ -294,7 +408,12 @@ analyser: partial
 - A collection's child is an endpoint, valid or not: `valid`, `modified`, `delta_value` and `last_modified` take it, and `all_valid` where it is a collection; its value and delta are read where it is admitted (TIME-1); a read at an index known only when it runs is `CheckedChild` (ERR-14)
 - A struct, a tuple or a fixed list read whole, a child among them, is admitted only where it is all valid by its own `all_valid`, which core's rejection case `quote_without_admission` checks; one at an index known only when it runs fails with `value.unset_read` where it is not all valid, or gives that `err` (ERR-14)
 
-transpiler: planned
+transpiler: partial
+
+- Emits child reads and endpoint observations for supported list, tuple, struct and
+  dictionary projections.
+- Left: The unsupported child forms under EXPR-7 and TYPE-9 are reported, including a
+  nested dictionary entry and unsupported operations on a field or child.
 
 ## END-9
 
@@ -304,7 +423,13 @@ analyser: partial
 - `delta_value(x)` of a window is the V that arrived, read before it is all valid as after; of a window of a duration it is read where a `result` is taken, and a plain read is `payload.unguarded` (TYPE-11)
 - `removed_value(x)` is core's declaration, given a window, read where a `result<V, error>` is taken, and a plain read is `payload.unguarded` for every window
 
-transpiler: planned
+transpiler: partial
+
+- Maps rolling windows to the SDK, writes their arrival publication and reads validity,
+  deltas and removed values in supported contexts.
+- Left: Reports a handler selecting on its own window result, access to that result
+  inside its `when`, and reads or operations outside the supported window endpoint
+  forms.
 
 ## END-10
 
@@ -313,7 +438,11 @@ analyser: done
 - A `ref` parameter of T is given a connection of T, and a `ref` result designates what its `return` names, a child of an input valid or not, read as `EndpointOf` or `ChildEndpointOf` with no payload read (FN-16)
 - An assignment to a part of a `ref` result's `out` is `binding.immutable`, and `ref` on a `signal` parameter `ref.position` (FN-16, TYPE-12)
 
-transpiler: planned
+transpiler: partial
+
+- A reader observes the designated input or fixed-list child through the reference port,
+  including changes caused by rebinding or removing the target.
+- Left: Unsupported designations and timer combinations are recorded under FN-16.
 
 ## CAP-1
 
@@ -321,7 +450,10 @@ analyser: done
 
 - `inject` binds each capability but `out` to a local of the native type core declares for it; a property is read with its type and not assigned, and no call constructs the type (with TIME-8 and NATIVE-6)
 
-transpiler: planned
+transpiler: done
+
+- Uses the declared native capability type and emits its properties as ordinary reads in
+  their admitted scopes.
 
 ## CAP-2
 
@@ -329,7 +461,10 @@ analyser: done
 
 - `log` and `log_debug`, `log_info`, `log_warning`, `log_error` are core's declarations, typed as any call; `logger.level` is a `LogLevel`
 
-transpiler: planned
+transpiler: done
+
+- Supplies the run logger and emits its property read, the native log call and the
+  standard HGL message helpers.
 
 ## CAP-3
 
@@ -337,7 +472,10 @@ analyser: done
 
 - A clock's four properties, each with its type
 
-transpiler: planned
+transpiler: done
+
+- Supplies the evaluation clock and its four distinct observations, including the cycle
+  interval.
 
 ## CAP-4
 
@@ -345,9 +483,10 @@ analyser: done
 
 - A scheduler's three properties, `is_scheduled_now` among them; `schedule` with a `duration` or a `datetime`, a `tag` and `on_wall_clock`; `un_schedule`, with a tag or without, and `reset`
 
-transpiler: planned
+transpiler: done
 
-- C++: hgraph 0.9.23's own `NodeScheduler` has it so, with no adapter: in the evaluation a wake brings about, `is_scheduled`, `next_scheduled_time` and `un_schedule` with no tag see only the wakes to come, and `is_scheduled_now` holds through the evaluation, after `un_schedule` or `reset` too
+- Supplies scheduler state and writes schedule, cancellation and reset using the SDK
+  adapter. Distinguishes due scheduler wakes from input ticks.
 
 ## CAP-5
 
@@ -356,7 +495,10 @@ analyser: done
 - An alarm has no property, and a node injects it or `scheduler` (TIME-8)
 - `schedule` on it takes a `duration` or a `datetime`, and neither a tag nor a clock
 
-transpiler: planned
+transpiler: done
+
+- Supplies the alarm adapter and emits duration or datetime scheduling, retaining the
+  earliest outstanding wake.
 
 ## CAP-6
 
@@ -369,8 +511,10 @@ analyser: partial
 
 transpiler: partial
 
-- C++ `get` returns the whole result to the recorded ERR-15 form.
-- Left: nullable store puts.
+- Reads a store entry as a whole result before applying the recorded form, and writes
+  supported ordinary payloads before a run, at graph build and in hooks.
+- Left: Putting a nullable value is reported (hhenson/hgl_spec#165). A child graph that
+  uses a captured store is reported (CRUN-7).
 
 ## CAP-7
 
@@ -378,7 +522,10 @@ analyser: done
 
 - `run_config` binds a local of core's native `RunConfig`, whose `start`, `end` and `length` are read with their types; no call constructs it (RUN-6)
 
-transpiler: planned
+transpiler: done
+
+- Exposes the supplied start, end and length as nullable properties, distinct from the
+  bounds resolved for execution.
 
 ## CONF-1
 
@@ -410,7 +557,12 @@ runner: planned
 
 - Eval uses core's designated replay and record
 
-transpiler: planned
+transpiler: partial
+
+- Creates an eval entry wired to core's replay and record and binds ordinary const
+  arguments for the run.
+- Left: Reports replay or record with no suitable core native, an unrepresentable target
+  and replay of a trace not written as a literal (TST-5).
 
 ## CEVAL-2
 
@@ -418,15 +570,28 @@ runner: planned
 
 - Typed replay entries for present publications; a dense placeholder adds no entry and no run bound
 
-transpiler: planned
+transpiler: done
+
+- Builds timestamped replay entries from literal traces, using the run start, dense
+  offsets, and silent cells with no event.
 
 ## CEVAL-3
 
-transpiler: planned
+transpiler: partial
+
+- Replays scalar publications, whole or delta collection entries, and window arrivals as
+  their forms require.
+- Left: Collection and window schemas are restricted as described under TYPE-9 and
+  TYPE-11.
 
 ## CEVAL-4
 
-transpiler: planned
+transpiler: partial
+
+- Records independent timestamp and delta pairs, including an empty recording. A cycle
+  that only ages a window adds no entry.
+- Left: Recording requires a compatible native and supported trace form (CEVAL-1,
+  TYPE-16).
 
 ## CEVAL-5
 
@@ -434,7 +599,9 @@ runner: planned
 
 - A fresh run, with its own node state and recording, for each eval; dense results built by TST-6
 
-transpiler: planned
+transpiler: done
+
+- Each eval creates a fresh simulation with its own graph, store and recording.
 
 ## CRUN-1
 
@@ -442,11 +609,19 @@ runner: planned
 
 - A run of one entry with its `const` arguments under the configuration it is given: built, started, evaluated and stopped once
 
-transpiler: planned
+transpiler: partial
+
+- Each emitted entry wires a fresh run for the simulation or real-time host.
+- Left: an empty time interval wires the entry but skips executor construction,
+  start and stop.
 
 ## CRUN-2
 
-transpiler: planned
+transpiler: done
+
+- Resolves inclusive start and exclusive end from the supplied configuration, including
+  length and defaults, and refuses simultaneous end and length before graph
+  construction.
 
 runner: planned
 
@@ -454,7 +629,11 @@ runner: planned
 
 ## CRUN-3
 
-transpiler: planned
+transpiler: partial
+
+- Uses the runtime's microsecond cycle resolution and sentinel bounds. Dense traces use
+  the same smallest step.
+- Left: The out-of-range bounds failure lacks the `run.bounds` code.
 
 runner: planned
 
@@ -466,7 +645,10 @@ runner: planned
 
 - Simulation runs each cycle without waiting and ends when nothing is scheduled; the same run gives the same publications
 
-transpiler: planned
+transpiler: done
+
+- The application and eval hosts use the SDK simulation clock and run until the next
+  work is beyond the end or the schedule is empty.
 
 ## CRUN-5
 
@@ -474,7 +656,10 @@ runner: planned
 
 - Real time runs a cycle when the host clock reaches it
 
-transpiler: planned
+transpiler: done
+
+- The application and integration hosts use the real-time clock to wait for scheduled
+  work and run due cycles.
 
 ## CRUN-6
 
@@ -482,7 +667,12 @@ runner: planned
 
 - Every node that started is stopped, in reverse; a failure names its node and phase, and the run has no output
 
-transpiler: planned
+transpiler: partial
+
+- The host stops the graph on success or failure and returns no result for a failed run.
+  It preserves captured failure provenance for the supported hook phases.
+- Left: Construction has no distinct HGL provenance tag where the underlying runtime
+  reports a build failure. Cleanup errors use the runtime's failure report.
 
 ## CRUN-7
 
@@ -490,7 +680,12 @@ runner: planned
 
 - One store for a run, which holds what its application put there when the graph is built; nothing outside the program puts a value there
 
-transpiler: planned
+transpiler: partial
+
+- Creates one store for a run, populated by the application before graph construction,
+  and executes its wiring-time store calls in order.
+- Left: A nested branch or loop using the store from the surrounding graph and a
+  nullable store write are reported (FN-9, CAP-6).
 
 ## CRUN-8
 
@@ -499,7 +694,12 @@ analyser: partial
 - The run's own key written out as a key of the global store is rejected (`store.reserved_key`)
 - Left: a key that is a `const` parameter
 
-transpiler: planned
+transpiler: partial
+
+- Adds recording to a result-bearing entry and retrieves the timestamped deltas after
+  stop. Outputless entries have no recording.
+- Left: Unsupported record types follow CEVAL-4. The reserved `run.output` check covers
+  literal keys at source checking. Keys resolved at graph construction remain unchecked.
 
 runner: planned
 

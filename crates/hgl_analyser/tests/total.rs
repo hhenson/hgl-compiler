@@ -236,12 +236,20 @@ fn candidate_trials_past_a_statements_bound_are_reported() {
         text.push_str("])");
     }
     text.push_str("\n}\n");
-    let started = std::time::Instant::now();
-    let checked = check_broken(&[("m.hgl", text.as_str())]);
-    assert_eq!(checked.front_end_errors, 0, "{}", checked.report);
-    assert_eq!(
-        checked.summary(),
-        ["m.hgl:6:5 local:type/reading.limit EXPR-5"]
-    );
-    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    // Deep candidate trials need the analyser's sized stack, as in `hgl`.
+    let limits = hgl_parser::Limits::default();
+    let worker = std::thread::Builder::new()
+        .stack_size(hgl_analyser::stack_size(limits))
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            let checked = check_broken(&[("m.hgl", text.as_str())]);
+            assert_eq!(checked.front_end_errors, 0, "{}", checked.report);
+            assert_eq!(
+                checked.summary(),
+                ["m.hgl:6:5 local:type/reading.limit EXPR-5"]
+            );
+            assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        })
+        .expect("a thread starts");
+    worker.join().expect("the analyser fits the stack");
 }

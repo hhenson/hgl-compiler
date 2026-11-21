@@ -62,6 +62,7 @@ impl Emitter<'_> {
             self.piece
                 .statements
                 .push((line, statement_at(statement, &body.locals)));
+            // ERR-1: preserve the source statement of a runtime failure.
             let marked = names::testing("statement");
             text.push_str(&format!("{INDENT}{marked}();\n"));
             self.statement(&mut scope, statement, 1, &mut text);
@@ -174,6 +175,8 @@ impl Emitter<'_> {
         }
         // CEVAL-1: "core's `replay` wired to each temporal input of the
         // target", each given the trace written for it (CEVAL-2).
+        // The runtime's replay applies the selected whole or delta
+        // cell at its timestamp (CEVAL-3, TST-9).
         let mut given: Vec<(usize, String)> = Vec::new();
         // What a lifted target is given (`lifting`): the replays, and the
         // configuration held.
@@ -316,13 +319,17 @@ impl Emitter<'_> {
                 self.ahead.push(node);
             }
         }
+        // CRUN-3, CRUN-4, CRUN-5: the run supplies the microstep and
+        // chooses its simulation or real-time scheduling clock.
         let configured = match (configured_run, *real_time) {
             (_, true) => format!(", {bounds}, {library}::Mode::real_time"),
             (true, false) => format!(", {bounds}"),
             (false, false) => String::new(),
         };
         // CEVAL-1: "and the target's result as the entry's", recorded by
-        // core's `record` under the run's key (CRUN-8).
+        // core's `record` under the run's key (CRUN-8). The recording
+        // is retained by the fresh run created for this eval (CEVAL-4,
+        // CEVAL-5).
         let run = match &wiring.result {
             None => {
                 text.push_str(&format!("{indent}{target};\n{INDENT}}}"));

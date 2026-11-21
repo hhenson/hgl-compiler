@@ -160,7 +160,7 @@ impl Emitter<'_> {
     /// become inputs; scalar arguments and omitted defaults bind as
     /// configuration"), wired: a node written for it in the context's
     /// `lifted`, given each connection as an input and each other argument
-    /// as configuration, in the order they are written, then each
+    /// as configuration, in the order they are written (EXPR-14), then each
     /// parameter the call leaves out as configuration, in the order of the
     /// parameters (EXPR-2). `given` are the arguments written already, by
     /// their positions; `defaults` the values already held for some of the

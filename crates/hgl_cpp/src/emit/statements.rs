@@ -364,6 +364,7 @@ impl Emitter<'_> {
             // copy where the list could change while it is in scope (the
             // copy rule), and then the loop runs over what the list held
             // when it began.
+            // CTRL-8: a hook iterates the collection's current values.
             Stmt::For {
                 names: bound,
                 sequence,
@@ -509,6 +510,8 @@ impl Emitter<'_> {
                     "{indent}{raises}({}, [&] {{\n",
                     names::string(code)
                 ));
+                // TST-11: the harness tests the escaping failure rather
+                // than treating a failed inner assertion as one.
                 self.statements(scope, statements, depth + 1, text);
                 text.push_str(&format!("{indent}}});\n"));
             }

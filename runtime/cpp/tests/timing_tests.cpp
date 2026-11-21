@@ -2,6 +2,8 @@
 // (TIME-3, TIME-9), on nodes written by hand with hgraph's front end for
 // generated code alone, run in an hgraph graph in simulation; and a
 // capability lent to a source's body (SOURCE-1, TIME-8).
+#include "core_nodes.h"
+
 #include <hglrt/hglrt.h>
 
 #include <doctest/doctest.h>
@@ -17,7 +19,7 @@ using hglrt::datetime;
 using hglrt::i64;
 using namespace std::chrono_literals;
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
 /// A source of commands: 7 at the start and 0 a microsecond later.
 struct Commands {

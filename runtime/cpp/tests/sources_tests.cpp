@@ -37,7 +37,7 @@ struct Body {
     }
 };
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
 /// The code of the HGL failure `call` raises, or none.
 template <class Call>

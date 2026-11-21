@@ -31,6 +31,14 @@ analyser: partial
 - What each expression is, a connection or an ordinary value, is recorded on it for the stages after the analyser, and on an instance's body with its candidates in place: a symbol, `&&`, `||` and `!` among them, and a construction, a result form, an element or a field of a connection is one
 - Left: what a composition body admits of a connection; what it calls; iteration and conditionals in composition
 
+transpiler: partial
+
+- Emits calls in their analysed phase and wires supported ordinary values as constant
+  connections.
+- Left: A read of a connection outside an admitted phase, an ordinary call of a temporal
+  function, unsupported connection expressions and constant connections of sets or
+  dictionaries are reported.
+
 ## FN-4
 
 analyser: partial
@@ -58,7 +66,14 @@ analyser: partial
 - Each call records whether it is lifted: in a graph's body, of a value function or a value candidate that marks no parameter `var` (FN-15), given a connection; its arguments that are connections are the node's inputs, and the rest its configuration
 - Left: an outputless helper as a sink
 
-transpiler: planned
+transpiler: partial
+
+- Wires a helper's temporal inputs and binds ordinary arguments and omitted defaults as
+  configuration. Includes the value-function eval path.
+- Left: Reports an unavailable lifted or packed target, a fallible default of an omitted
+  nullable parameter, and defaults that run statements or propagate a failure. Constant
+  inputs require a supported temporal schema, excluding sets and dictionaries.
+  Contextual connection reads have no ordinary value-code path.
 
 ## FN-7
 
@@ -70,7 +85,13 @@ analyser: partial
 - The analyser checks an anonymous function's body with its written parameter and result types. A direct call supplies unwritten parameter types from its arguments and the unwritten result type from the call's context.
 - Composition returns remain pending. Accepting an anonymous function as an argument is tracked in [#362](https://github.com/hhenson/hgl-compiler/issues/362).
 
-transpiler: planned
+transpiler: partial
+
+- Graph returns choose a connection, hook returns publish and exit the evaluation, and
+  ordinary functions return values.
+- Left: Restrictions on returns in temporal branches and value expressions are under
+  CTRL-13, CTRL-14 and CTRL-10. A valued return in a source, a valued return where the
+  graph or hook cannot return one, and a return in a test have defensive reports.
 
 ## FN-8
 
@@ -100,6 +121,13 @@ analyser: partial
 - `scheduled()` in a value function or a graph, which has no schedule of its own (TIME-9), is local `scheduled.outside_node`: the catalogue has no row for it; so is one in an anonymous function written there, and `scheduled<T>()`
 - Left: an anonymous function written in a graph; a capability used outside a hook or a source's body
 
+transpiler: partial
+
+- Executes the root graph's native store calls at construction in source order. Nodes
+  and sources bind their admitted capabilities in the corresponding hooks.
+- Left: A branch or loop child cannot see the surrounding graph's store or captured
+  capabilities. Other graph injections have a defensive report.
+
 ## FN-10
 
 parser: done
@@ -112,7 +140,11 @@ analyser: planned
 
 - Left: which lifted arguments need a valid input. The analyser records a nullable connection read as T at the reader (ERR-12).
 
-transpiler: planned
+transpiler: partial
+
+- Uses default or null when a lifted input is invalid and gates required inputs. Wires
+  an omitted optional input with no publication.
+- Left: Unsupported constant schemas and fallible defaults follow FN-6 and UNIT-8.
 
 ## FN-12
 
@@ -121,11 +153,18 @@ analyser: partial
 - A window's connection is given to a value function's parameter in composition as the `list<V>` it holds, which binds its generic parameters: the `T` of `list<T>` is V, and a bare `T` is `list<V>` (TYPE-11, FN-1); a `list<V>?` takes it too, "whatever its default or null contract" (FN-11)
 - Left: which aggregates need `all_valid` (FN-11)
 
-transpiler: planned
+transpiler: partial
+
+- Lifts whole list, dictionary, struct, tuple and window reads using the input's
+  eligibility for a whole read.
+- Left: Nested aggregate shapes follow TYPE-9. Fallible default expressions follow FN-6.
 
 ## FN-13
 
-transpiler: planned
+transpiler: done
+
+- Lowering retains copies that must survive mutation, and passes stable ordinary
+  arguments or local read-only data for the duration of the call.
 
 ## FN-14
 
@@ -152,7 +191,13 @@ analyser: partial
 - The call is held to what an assignment of the place is: a property of a native value or of a delta is `binding.immutable` (NATIVE-6, TYPE-16), and in a graph a `var` of an ordinary value in a branch selected at runtime is `binding.category` (CTRL-14) and one declared outside a loop that still makes a child for each member local `loop.carried` (CTRL-15, #373)
 - Left: a native implementation part's `var` marks matched with its declaration's (NATIVE-2)
 
-transpiler: planned
+transpiler: partial
+
+- Passes `var` places by mutable reference and holds ordinary arguments independently of
+  changes a call makes. Holds indexes before resolving a place at the call.
+- Left: Calls that assign in an expression, alias two `var` arguments to one place, or
+  take an unsupported place are reported. This includes a `list<bool>` bit, a dictionary
+  entry and an abstract field.
 
 ## FN-16
 
@@ -171,7 +216,14 @@ analyser: partial
 - A `return` to a `ref` result, and `out =` of one, names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`, and so is a source's `yield` to a `ref` result: a source has no temporal input to name (TIME-7: "A `ref` result takes no value")
 - Left: a native implementation part's marks matched with its declaration's (NATIVE-2)
 
-transpiler: planned
+transpiler: partial
+
+- Writes node `ref` inputs and results. A return can sample a ref-parameter designation,
+  designate a whole ordinary input or designate a child of a fixed-list input.
+- Left: Reports designations of other children and list forms, simultaneous whole and
+  positional designation of one input, designation in a node with scheduler or alarm,
+  and unsupported assignments to a `ref` result. Graph and source `ref` forms have
+  defensive reports.
 
 ## FN-17
 
@@ -202,6 +254,8 @@ analyser: planned
 
 transpiler: planned
 
+- Callable configuration parameters await #363.
+
 ## FN-19
 
 parser: planned
@@ -211,3 +265,5 @@ parser: planned
 analyser: planned
 
 transpiler: planned
+
+- Making and applying packs of arguments awaits #366 and #368.
