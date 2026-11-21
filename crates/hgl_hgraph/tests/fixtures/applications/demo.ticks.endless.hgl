@@ -1,4 +1,0 @@
-application demo.ticks.endless
-use demo.ticks::{counted}
-# No end: it runs until its host stops it.
-run counted(upto: 1000000, every: 20ms)

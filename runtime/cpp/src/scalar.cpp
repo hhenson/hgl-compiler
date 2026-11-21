@@ -361,8 +361,8 @@ f64 detail::floor_quotient(f64 lhs, f64 rhs) {
         }
         return std::copysign(std::floor(quotient), quotient);
     }
-    // The floor of the exact quotient of two finite numbers, as the
-    // reference provider's Python computes it (CPython's `float_floor_div`):
+    // The floor of the exact quotient of two finite numbers, as CPython's
+    // `float_floor_div` computes it:
     // the remainder `fmod` gives is exact, so `lhs - remainder` is a
     // multiple of `rhs`, and the quotient of the two is the floor or one
     // above it.

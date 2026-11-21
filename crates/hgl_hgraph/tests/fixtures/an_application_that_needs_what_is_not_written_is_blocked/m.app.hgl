@@ -1,3 +1,0 @@
-application m.app
-use m::{waits}
-eval waits()

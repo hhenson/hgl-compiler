@@ -1,5 +1,0 @@
-module demo.plain
-const fn doubled(value: i64) -> i64 => value * 2
-test plain {
-    assert doubled(2) == 4
-}

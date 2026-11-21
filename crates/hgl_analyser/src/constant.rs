@@ -2042,9 +2042,10 @@ fn divided(left: i64, right: i64) -> f64 {
 
 /// The floored quotient and the remainder of two finite `f64`, the
 /// divisor not zero: the remainder has the divisor's sign (NUM-1). It
-/// is worked out as the hgraph provider's Python works it out, from the
-/// IEEE remainder (`%` of Rust's `f64`), so a constant has the value its
-/// expression has when the program runs.
+/// is worked out as the runtime library works it out
+/// (`runtime/cpp/src/scalar.cpp`, after CPython's `float_floor_div`),
+/// from the IEEE remainder (`%` of Rust's `f64`), so a constant has the
+/// value its expression has when the program runs.
 fn floored(left: f64, right: f64) -> (f64, f64) {
     let mut remainder = left % right;
     let mut quotient = (left - remainder) / right;

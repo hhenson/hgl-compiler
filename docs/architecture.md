@@ -1,11 +1,10 @@
 # Architecture
 
 Status: the lexer, the parser, the analyser, the test runner and the
-hgraph transpiler are implemented, the last three in part:
+cpp transpiler are implemented, the last three in part:
 [rules.md](rules.md) says what each leaves. Everything marked *planned* is
-a plan, not a contract; it changes as stages are built. The native target
-is designed in [cpp-target.md](cpp-target.md): C++ on hgraph's own layers,
-with the Python-writing target kept as the reference until it is replaced.
+a plan, not a contract; it changes as stages are built. The target is
+designed in [cpp-target.md](cpp-target.md): C++ on hgraph's own layers.
 
 ## Pipeline
 
@@ -19,7 +18,7 @@ syntax tree ---------> formatter (planned) ---------> source text
 analysed program ----> error reporting (`check`)
     |  hgl_lower (in the optimiser's place)
 analysed program, and the facts every target decides the same way
-    |  one transpiler per target (`hgl_hgraph`, `hgl_cpp`)
+    |  one transpiler per target (`hgl_cpp`)
 target output
 ```
 
@@ -45,9 +44,8 @@ Rules for every stage:
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit`, `hgl run` |
 | formatter | Syntax tree to source text | planned |
 | optimiser | Analysed program to analysed program | planned |
-| `hgl_lower` | Lowering, in the optimiser's place: the facts every target decides the same way, read from the analysed program | implemented for what the hgraph target needed: see "Lowering" below |
-| `hgl_hgraph` | The hgraph target: the analysed program to Python wiring, and its tests run on a Python that has hgraph | in part: see "hgraph" below |
-| `hgl_cpp` | The cpp target: the analysed program to C++ against hgraph's C++ API; its build driver is in `hgl_cli` | skeleton: see "cpp" below |
+| `hgl_lower` | Lowering, in the optimiser's place: the facts every target decides the same way, read from the analysed program | implemented for what the cpp target needs: see "Lowering" below |
+| `hgl_cpp` | The cpp target: the analysed program to C++ against hgraph's C++ API; its build driver is in `hgl_cli` | in part: it runs core's cases but those its list names; see "cpp" below |
 
 A crate is created when its stage is built, not before.
 [rules.md](rules.md) lists each rule of the specification against the stage
@@ -806,7 +804,7 @@ whoever reads it (FN-16); any connection is given to a `signal`
 (`signals`). A generic parameter is inferred from the connection's
 type, at a `ref` parameter as at any other (GEN-11). A `?` that marks
 an input that may be omitted is no part of either (TYPE-14,
-`Type::omission_removed`); the hgraph target writes a lifted input by
+`Type::omission_removed`); the cpp target writes a lifted input by
 the same method, so the stages cannot disagree on it.
 
 In a node's hooks a `ref` parameter, a child of one, and `out` of a
@@ -1280,7 +1278,8 @@ however many calls make it, and at most `hgl_analyser::INSTANCES`
 (4096) instances of one declaration from one call, whose arguments are
 no longer than 65536 characters written out; a call whose instances go
 past that is `generic.instance_limit` (GEN-13), for what is
-past it is not told. The hgraph target makes no more than that many either. What
+past it is not told. The target makes no more than that many either
+(`hgl_lower::instances`). What
 is not told for a constant this compiler does not work out is reported
 as not known to hold; nothing else that cannot be told is reported.
 A generic parameter of the declaration a call is written in is no one
@@ -1458,9 +1457,9 @@ case that does not match fails alone.
 
 The runner knows no target. It hands the selected tests, each named
 `module.path::name`, and the surviving source's analysed program to an
-`Executor`, which says what became of each. `hgl test --target hgraph`
-gives it one made of the hgraph target and a Python interpreter;
-without `--target` it is given none, and every test is `not run`.
+`Executor`, which says what became of each. `hgl test --target cpp`
+gives it one made of the cpp target and its build driver; without
+`--target` it is given none, and every test is `not run`.
 
 An integration test is left out of a run (TST-17): it is no case of the
 run, and is not listed. `--integration` asks for them all, and `--test`
@@ -1489,6 +1488,95 @@ comment, or a second unnamed file of a module.
 
 The program is analysed once more for each rejection case. That is simple
 and exact; it is revisited if a suite grows large enough to notice.
+
+## Running an application
+
+`hgl run ROOT... [--application PATH] [--arg NAME=VALUE]... [--config
+FIELD=VALUE]...` runs an application (UNIT-14) on the target, `cpp`
+where `--target` names none: the program's one application, or the one
+named.
+
+What starts an application "supplies its run's configuration (RUN-6),
+and may replace an argument of its entry with a constant checked
+against the type it replaces: what the application writes is the
+default" (RUN-2). `hgl run` is what starts it, and this is the command
+line it gives for both: "Compiler/runner documentation specifies CLI
+options" (the program-execution chapter's core boundary):
+
+| Option | What it gives |
+| --- | --- |
+| `--arg NAME=VALUE` | The argument `NAME` of the entry, in place of the application's |
+| `--config start=VALUE`, `--config end=VALUE`, `--config length=VALUE` | That field of the run's configuration, core's `RunConfig`'s, over the default the application's `inject run_config{...}` gives it. An `end` given takes out a default `length`, and a `length` a default `end` (RUN-6: "An `end` or a `length` that what starts an application gives replaces a default of either"); both given are the run's, which refuses them (`run.end_and_length`) |
+
+The value is HGL, one expression on one line. `hgl_cli`'s `replace`
+puts it, in parentheses, in the application's text: an argument in the
+run statement, in place of the value the application wrote for that
+parameter or by name where it wrote none; a field in the braces of the
+application's `inject run_config`, in place of its default or after
+them, or in an `inject run_config{...}` written before the run
+statement where the application has none. The program is then read
+and checked again as if the application had written that, so the
+analyser holds each to every rule it holds what is written to, and no
+stage knows of replacements. `run_config` then reads the configuration
+as supplied (RUN-6).
+
+```text
+inject run_config{length: 3s}                  the application
+eval counted(upto: 3)
+--arg upto=5 --config end=@2026-01-02T00:00:00Z
+inject run_config{end: (@2026-01-02T00:00:00Z)}
+eval counted(upto: (5))
+```
+
+A name the entry or the configuration has not, a name given twice, and
+a value that is not one expression are refused before the second read.
+The value is read as it is put, between its parentheses, where `.buy`
+is a member of the enum the place expects; `3, 4` and `3) + (4` are not
+one expression there. An error of the second read is reported in the
+application's file, with the statement as it was checked. The type a
+replacement is checked against is the one it replaces. The generic
+arguments an entry's call infers, `<i64>` for `echo(value: 3)`, are
+written after the entry's name for the second read, so a replacement
+is read as the argument it replaces was expected: `.sell` is a member
+of the enum the call made `T`, `3` is the `f64` it made it, and
+`"text"` is no `i64`. They are written as a message writes a type,
+which the application's file may have no name for: they are left out
+where the application, with them written and nothing replaced, does not
+read as it did. In either case, where the call with the replacements is
+of another entry than the application's, or of the same one with other
+generic arguments, the program is rejected.
+
+The target writes the application and runs it once: the cpp target
+builds its executable and reads what became of the run from the results
+it writes ("The build driver" under "cpp" below).
+
+```text
+1970-01-01T00:00:01.000001Z  2
+1970-01-01T00:00:02.000001Z  4
+ran demo.ticks.backtest on cpp: 2 publications
+```
+
+The run's output goes to standard output, a line for each publication:
+its instant and what was published, written as HGL writes a value where
+it has a way to. What the program logs and hgraph prints goes to standard
+error, as the run goes.
+
+`eval` is a simulation, and `run` is in real time (RUN-3). An interrupt
+of `hgl run`, or a request for it to end, is the host's stop of a run in
+real time: `hgl` takes it and passes it on to the run, which ends as it
+does at its end, every node stopped, and what was recorded up to then is
+printed. A signal sent to `hgl` alone reaches the run all the same, and
+`hgl` outlives it to print the output. A stop of a simulation, and a
+second one of any run, end the run at once with no output.
+
+| Exit status of `hgl run` | When |
+| --- | --- |
+| 0 | The run ended |
+| 1 | The program is rejected, as written or with the replacements given, or the run failed |
+| 2 | No application was chosen, a replacement names nothing or is not one expression, the target does not write all it needs, or the host did not run it |
+
+Not written: outside events in real time, and a view of the output
+while the run goes.
 
 ## Diagnostics
 
@@ -1545,13 +1633,13 @@ analysed program.
 
 | Module | What it decides | Rules |
 | --- | --- | --- |
-| `copies` | Where a value is copied: which `let`s and loops take a copy, what a name refers into, whether a result is the function's own; which structs are values (`by_value`) | the owner's rule (compiler issue 151), FN-13, FN-15 |
-| `instances`, `canonical` | Which instances of generic declarations a program asks for, each keyed by its canonical text: for a typed target every generic value function's too (`Instances::typed`); what an eval's run and an application's run are wired with | GEN-2, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
+| `copies` | Where a value is copied: which `let`s and loops take a copy, what a name refers into, whether what a call gives is its own; which structs are values (`by_value`) | the owner's rule (compiler issue 151), FN-13, FN-15 |
+| `instances`, `canonical` | Which instances of generic declarations a program asks for, each keyed by its canonical text, every generic value function's among them (`Instances::typed`); what an eval's run and an application's run are wired with | GEN-2, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
 | `pieces` | What a piece a target writes reaches (`Reach`), and whether a test or an application reaches a form the target does not write (`blocked`) | |
-| `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, what is bound after branches, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
-| `types` | A struct's fields and descendants, the windows and unsized lists a type holds, which children `all_valid` asks, whether a value is whole or a delta | TYPE-3, TYPE-4, TYPE-9, TIME-1, TIME-7, TIME-9 |
+| `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, the `var`s a branch assigns, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
+| `types` | A struct's fields and descendants, whether a struct has none, and which values are read whole only where they are all valid | TYPE-3, TYPE-4, TYPE-9, TIME-1 |
 | `nodes` | A `when`'s subscriptions and requirements, what a node's handlers ask together, its timer, which inputs a `ref` result designates and how | TIME-3, TIME-4, TIME-9, FN-16 |
-| `calls` | What a parameter left out is given, which omitted input is never valid, a field's default, a duration's value worked out from how it is written | UNIT-7, UNIT-8, TIME-8 |
+| `calls` | What a parameter left out is given, and a field's default | UNIT-7, UNIT-8, TYPE-5 |
 
 The analyser exports what it works out and a target would otherwise
 work out again: which declarations are sources (`Module::is_source`,
@@ -1572,7 +1660,12 @@ and the rest its configuration. The targets read them (compiler issue
 A transpiler is a crate that depends on the analysed-program crate, the
 lowering crate and the diagnostics crate, and on no other transpiler. `hgl emit --target NAME
 --out DIR` selects one by name and writes what it gives. The front end
-does not change, and no stage before a transpiler knows a target.
+does not change, and no stage before a transpiler knows a target. There
+is one, `cpp`, which `hgl emit` and `hgl run` use where `--target` names
+none. `--target` takes no other value. `--target unknown` is a usage
+error, `error: invalid value 'unknown'
+for '--target <TARGET>'` with the values it takes, status 2, and nothing
+is read.
 
 A transpiler is given a program the analyser accepted. What it cannot
 write is no fault of the source, so it is reported in the category
@@ -1581,538 +1674,9 @@ own. `hgl emit` then writes nothing: half a program is of no use to run.
 `hgl test --target NAME` does run on such a program the tests that need
 nothing the target reported.
 
-### hgraph
-
-First target (owner decision, 2026-11-13): Python wiring for
-[hgraph](https://github.com/hhenson/hgraph) running on its C++ runtime.
-Behaviour that Python wiring cannot express faithfully is added to hgraph on
-its `0.9.x` branch, not approximated in generated code.
-
-`hgl_hgraph` writes every file under one Python package, `_hgl`, so
-that a program's modules are in a namespace of their own: a module named
-`hgraph`, or as a module of Python's library is, takes the place of
-nothing Python or hgraph imports. Each module is a package
-under it, each part of its path with `_m_` before it: `examples.tests`
-is `_hgl/_m_examples/_m_tests/__init__.py`. A package holds a module's
-declarations and the packages of the modules under it side by side, and
-the `_m_` keeps the two apart, so `module demo` may declare a `util`
-beside `module demo.util`. Beside the modules are the support files a
-generated module imports: `_hgl/_core_native.py`, the `_hgl/_core_support.py`
-it imports, and `_hgl/_harness.py`.
-A name that starts with `_` is the target's own: no module's or
-declaration's Python name does.
-
-An hgraph node or graph is written with the types of its inputs, so a
-temporal function or candidate with generic parameters is written once
-for each set of generic arguments it is called with (GEN-2). Before any
-module is written the target reads the typed program for those calls
-(`hgl_lower::instances`): a call in one module asks for an instance that is
-written in the declaration's module. It starts from every body that
-is not itself written by instance and from the tests, asks the analyser
-for each instance (`Program::instance`), and goes on through the calls
-of each instance it is given. A value function with generic parameters is
-written once where it can be, as Python takes a value of any type. It
-is written by instance too where one call of it says something of its
-body:
-
-| The body | Why one call says something of it |
-| --- | --- |
-| Calls an operation the declaration requires, or hands a requirement on to what it calls | Which candidate that is depends on the types (GEN-16) |
-| Reads a generic value parameter as a value | It is the constant the call gives (GEN-13) |
-| Calls a function written by instance with its own generic parameters | Which instance that is is known only where they are. This makes more functions so, until it makes no more |
-
-All three are read from the typed program.
-
-An instance is written with the types of the module that calls it, so
-its module then imports that module, which imports it: two generated
-modules may import one another where the source's do not. A call that
-selects a candidate of a module that imports the caller's does the same
-(GEN-5). Python reads a function's annotations where the function is
-defined, so each generated file defines its types before it imports
-another generated module. Whichever is loaded first, a type is there
-when a function that names it is defined, and what a function calls is
-looked up when it runs.
-
-Core is a module as any other, `_hgl/_m_core/__init__.py`, written when
-a module of the program imports it. It holds the functions and the
-candidates core has an HGL body for; core's native ones are the
-provider's. What core holds that the target does not write is reported
-only where the program reaches it, at core's source.
-
-| HGL | Python |
-| --- | --- |
-| `const fn` | A plain function |
-| A node, a `fn` with a `when` | `@_hg.compute_node`, or `@_hg.sink_node` where it has no result. hgraph is imported as `_hg` |
-| A `when` header's selectors | The node's `active=` is the union of handler subscriptions and its `valid=` holds the validity requirements common to all handlers (TIME-3, TIME-4). In source order, each handler checks its remaining validity requirements and condition. Explicit `modified()` and `modified(a, b)` read the current `valid` and `modified` flags on each selected input. A publication on any selected input satisfies the guard. An omitted selector adds no publication check |
-| `inject out` | `_output: _hg.TS_OUT[type] = None`: `out` is `_output.value`, `valid(out)` is `_output.valid`, and `invalidate(out)` is `_output.invalidate()`. `out` read whole is `(_output.value if _output.valid else _core.unset_read(...))`: before it holds a value the read fails with `value.unset_read` |
-| A graph | `@_hg.graph` |
-| In a graph, a value function or a candidate of core given a connection (FN-6) | A node of its own, `_lift_N_name`, written before the graph: an input `name: _hg.TS[type]` for each connection, a scalar parameter for each ordinary argument, and a default left out written where the node calls. An input whose parameter has a default is not required valid, `valid=(...)`, and is read as `(name.value if name.valid else default)` (FN-11). The same lifting twice in one graph is one node |
-| In a graph, such a call given no connection | The call itself, made where the graph is built |
-| `eval` of a value function | The function lifted the same way, each trace an input |
-| A temporal parameter | `name: _hg.TS[type]`; in a hook its payload is `name.value` |
-| A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph. One that is a list, a tuple or a dictionary is an `object` to hgraph: a call of the node gives it inside `_core.Held(...)`, and each of the three functions takes it out first, `items = items.value`. Its type is the instance's: a parameter declared a `T` is given so where `T` is a list |
-| A value function's parameter written `T?` | The parameter as any other. A call that leaves it out gives it `None` (UNIT-8) |
-| A parameter with a default, of a value function or a `const` one of a temporal function | The parameter as any other. A call that leaves it out is written with the default in its place, which the analysed program holds as a typed value (`Module::defaults`). Python is given no default of its own, so it has none to put in order or to evaluate where the function is defined. A default that leaves itself out is reported |
-| A function of another module | `alias.name`, the module imported under a name of its own, `import _hgl._m_demo._m_util as _hgl_4demo_4util`: two modules may each have a `pick`. Each part of the path has its length before it in the alias, so no two paths give one |
-| A sequence that is a set | `_py.frozenset((1, 2))` |
-| `[key: value, ...]`, and `[]` where a dictionary is expected (EXPR-9) | `{key: value, ...}`, `{}` |
-| In a value function and a node's hooks, `for item in items`, `for key, value in entries`, `while condition` (CTRL-12) | `for item in items:`, `for key, value in entries.items():`, `while condition:` |
-| `switch selector { case label: ... default: ... }` there (CTRL-6) | `_selected_N = selector`, N the depth it is written at, then `if _selected_N == label:` for the first case, `elif` for each after, and `else:` with the `default`, or with `_core.unmatched(_selected_N)`, which fails |
-| `bool`, `i64`, `f64`, `str`, `bytes` (TYPE-1) | `_py.bool`, `_py.int`, `_py.float`, `_py.str`, `_py.bytes`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
-| `date`, `time`, `datetime`, `civil_datetime`, `duration` (TYPE-2) | `_dt.date`, `_dt.time`, `_dt.datetime`, `_dt.datetime`, `_dt.timedelta`, of `import datetime as _dt`: an instant is a `datetime` in UTC that names no zone, as hgraph has them |
-| `tenor`, `timezone`, `zoned_datetime`, `zoned_time` (TYPE-2, TYPE-17) | `_core.Tenor`, `_core.Timezone`, `_core.ZonedDatetime`, `_core.ZonedTime`: frozen dataclasses of the provider, which hgraph holds by their fields, so each is `_hg.TS[...]` and `_hg.TS[... \| None]`. A zone is its name; a zoned datetime its instant in UTC and its zone. `@[Europe/London]`, `@09:30[Europe/London]` and `@2026-09-03T09:30+01:00[Europe/London]` are `_core.timezone("Europe/London")`, `_core.zoned_time(_dt.time(9, 30, 0, 0), "Europe/London")` and `_core.zoned_datetime(_dt.datetime(2026, 9, 3, 9, 30, 0, 0), 60, "Europe/London")`, which check the zone against the run's catalogue and the offset against the zone (LEX-12) |
-| `state name: T = value`, `cache name: T = value` (TIME-6) | A field of the node's `STATE`, given its value in the node's `start`, in the order written. hgraph's `STATE` is the node's own and is recorded nowhere, so a `cache` is rebuilt on every start, as it is to be |
-| `inject clock`, `inject logger`, `inject global_state` (TIME-8) | `_clock: _hg.EvaluationClock = None`, `_logger: _hg.LOGGER = None`, `_store: _hg.GlobalState = None`: a parameter of the node, of its `start` and of its `stop`. hgraph gives a capability for one call and no longer, which is the language's rule too: it "is not retained" |
-| `if flag { a } else { b }`, `switch route { ... }` in a graph, over a connection (CTRL-13 to CTRL-15) | `_hg.switch_(flag, {True: _case_0_0, False: _case_0_1}, value=value)`: a `@_hg.graph` for each branch, written before the statement, that takes the connections the branches read. hgraph starts a branch's graph where its key is selected and stops it where another is. A branch that returns takes the rest of the block for the other branch, as does one that gives a `let` its value and has a `return`; branches that assign a `var` give it, and it is assigned what `switch_` gives; branches that assign none are graphs with no output (CTRL-3), the omitted `else` one with nothing in it. A connection whose name `switch_` or `map_` keeps for itself, `key` or `name`, is taken as `_taken_key`. A `switch` with no `default` has one that fails when it is selected, `_core.unmatched(key.value)` in a node, as a hook's `switch` does. `switch_` keeps the last of two labels of one value, so a label the analyser has not valued, beside another, is reported. Where the `if` is a `T?`, each branch's graph gives one: `_core.nullable(price, _py.int)`, and `_hg.const(_core.published(None), _hg.TS[_py.int | None])` for a null. Over an ordinary value an `if` is Python's own, and a `switch` is `_selected_N = route` and an `if` on it |
-| `for item in items`, `while condition` in a graph, over ordinary data or a connection of `list<T, N>` (CTRL-15) | Python's own loop where the graph is built, `for item in items:`, `for key, value in entries.items():`, `while condition:`: the body is composed on each pass, and a `var` is carried. A fixed list's `TSL` gives a port for each position |
-| `for name, price in prices`, `for item in items`, `for member in members` in a graph, over a connection of `dict<K, V>`, `list<T>`, `set<T>` (CTRL-7, CTRL-15) | `_hg.map_(_each_0, price=prices, __key_arg__="name", level=_hg.pass_through(level))`: a `@_hg.graph` for the body, which takes the key's port, the member's, and the connections the body reads from outside, whole. A list is given as its unbounded `TSL`, `_core.discarded(_hg.map_(_each_1, item=items, __key_arg__=""))`, a child for each position it holds, one that lost its value among them: hgraph 0.9.8 fails a `map_` over it of a graph with no output, so each child gives `_hg.const(True)`, and drops a node nothing reads, so `discarded` reads the `map_`. A set is given as the keys, `__keys__=members`. hgraph keeps a child while its key or position stays, stops it where the key is removed or a shrink drops the position, and starts a fresh one where it is added again. The key is read only as the argument of a temporal parameter: hgraph gives it as a port |
-| `let made = if up { let doubled = a * 2; doubled + 1 } else { a }` in a value function or a hook (CTRL-10) | `if up:`, the branch's statements, `made = ...`, and `else:` likewise: a block's statements come before its value. The same for a `var`, an assignment to a name and a `return`. With no `else`, `made = None`; an `if` with no `else` in an expression, `(a if c else None)` |
-| `let seen = capture(child, value)`, `seen.value`, `seen.error` in a graph (ERR-7, ERR-8) | `seen = _core.captured(_hg.try_except(child, value=value))` for a graph `child`, `seen.out`, `_core.captured_error(seen.exception)`. hgraph catches an evaluation failure of the child, which runs on; start and stop failures escape. It gives a failure as its traceback's text, so an `HglError` writes its error as a JSON note the traceback ends with, which `captured_error` reads back with the node, phase and time. The phase of a failure with no note is told by the traceback's first frame, the function hgraph called: `_start_name` or `_stop_name` for a hook. hgraph also catches the failure of a `start` or `stop` the evaluation triggers, a `switch_` branch selected or left: `captured` wires a sink beside the capture that raises such a failure again, and any failure that is no `HglError`, as `Escaped` (ERR-1). An outputless child's failures are put in a bundle, `_hg.combine(exception=...)`. A temporal `error` and `result` are `_hg.TS[_core.Error]` and `_hg.TS[_core.Result]`; `is_ok(value)` of a connection is `_core.lifted_is_ok(value)` |
-| `let seen = capture(child, value, 2)`, `child` a node, a lifted value function, or a graph with a `const` parameter (ERR-7) | hgraph makes one node of two calls of a node with the same inputs and scalars in one graph, so `try_except` given a node would capture its twins' failures too; and it takes no graph with a scalar input. The capture is of a graph of its own, which no call outside shares: `_capture_0_by = 2`, a `@_hg.graph` `_capture_0(value)` that returns `child(value=value, by=_capture_0_by)`, or the lifted node, and `seen = _core.captured(_hg.try_except(_capture_0, value=value))`, all where the `let` is. Each argument is evaluated in its order before the `let`, a wiring-time value and a connection that is no local or literal held under such a name; a default left out is in the call of the child |
-| `failure.context`, `context.node`, `.phase`, `.evaluation_time` (ERR-4) | The provider's `Error.context`, `None` or an `ErrorContext`, whose three parts are attributes; two contexts are equal when their parts are |
-| `inject scheduler`, `inject alarm` (TIME-9, CAP-4, CAP-5) | `_scheduler: _hg.SCHEDULER = None` for either: hgraph has one scheduler for a node, and no cheaper one. `schedule`, `un_schedule` and `reset` are the provider's functions on it, and an alarm's one wake is kept under a tag of its own, the earlier of the one pending and the one asked for. The node's first line is `_scheduler = _core.Wake(_scheduler, _clock.evaluation_time)`: the adapter records the delivery and consumes any due entries that older hgraph versions still count as pending. A tag is given to hgraph as `"#" + tag`, since hgraph keeps no wake under the empty tag |
-| `when scheduled() { ... }`, `when modified([]) { ... }` (TIME-3) | One `if` over the handler: `if _scheduler.is_scheduled_now:` with a scheduler, and `if _scheduler.is_scheduled_now and not (price.modified or price.invalidated):` with an alarm, which is told from the inputs. A header that is `scheduled()` alone requires no input valid, so the node is `valid=()` and every other handler is under its own guard. One with no `modified` selector is run by an input's wake: `if (price.modified or price.invalidated) and price.valid:`. In a node with more than one handler, what woke it is read once where the node is entered, `_timer_woke = _scheduler.is_scheduled_now`, and each handler asks that: a handler before it may passivate the input that woke the node, or ask again under the tag that is due |
-| `modified([])` read as a bool (TIME-3) | `True` in the body of a handler whose header selects it. Elsewhere that no input is modified as `modified(input)` is written, `(not ((a.modified and a.valid) or (b.modified and b.valid)))`, and `True` in a node with no input. In `start` or `stop` it is reported |
-| A wake's duration that the target does not work out, `schedule(scheduler, delay)` (TIME-8) | `_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=delay, ..., _starting=False)`, `_starting=True` in `start`: once every argument is evaluated, the provider fails the call with `schedule.non_positive_duration` where the duration is not more than zero, but a zero in `start`. In a value function given the capability, a duration that may be zero is reported |
-| A node with no temporal input: a scheduler or an alarm wakes it, or nothing does and it has a `start` or a `stop` | hgraph takes no node without an input. The node is `_node_name`, with an input `_begin` that never wakes it, `active=()`, and `name` is a graph that gives it `_hg.const(True)` |
-| `when !scheduled() { ... }`, `when modified(a) \|\| scheduled() { ... }` (TIME-3, TIME-9) | `scheduled()` is a bool, what woke the node, read where it is entered: `_timer_woke = _scheduler.is_scheduled_now`, with an alarm `and not (a.modified or a.invalidated ...)`. The handler keeps the defaults: `if (a.modified or a.invalidated or b.modified or b.invalidated) and ((a.modified and a.valid) or _timer_woke):`, in a node that requires every input valid. In a handler's body it is `_timer_woke` too |
-| A handler or a node that nothing wakes (TIME-3) | A handler that subscribes to no input, in a node that injects neither a scheduler nor an alarm, is not written. A node none of whose handlers subscribes to an input is `active=()`; one with no input is `_node_name` with `_begin`, as above |
-| A source, a `fn` with a `yield` (SOURCE-1) | Three functions and a graph. `_yields_name(config, _state)` is a Python generator that holds the source's statements, each `yield time: value` a `yield (time, value)`. `_source_name` is a `@_hg.compute_node` that resumes it, `_core.resume(_state._source, _clock.evaluation_time, _scheduler, _output)`, which publishes what is due through the node's output before it resumes the generator, so that a failure after the `yield` leaves the publication standing (SOURCE-3, ERR-8). Its `start` gives each `cache` and `state` its value, runs the source's `start` and makes the generator; its `stop` is the source's. `name`, a `@_hg.graph`, is what a call names: the node, given `_hg.const(True)`. hgraph takes no node without an input, so the constant is its one input, and wakes it once as the graph starts; its own scheduler wakes it after |
-| `const fn bump(var count: i64, by: i64)`, and `bump(sum, value)` (FN-15) | `def bump(count, by): try: ...; return (None, count)`: Python has no place to give a value to, so a function with `var` parameters returns its result and then what each holds, at every way out. The call is the whole of a statement: `_given = bump(count=sum, by=value)` and then `sum = _given[1]`, each place in the order of the parameters; a place inside a value is assigned as any is, `book = _core.set_field(book, "orders", _given[1])`. A call's own result is `_given[0]`. A function that fails gives `_core.Failed(...)` in its result's place, beside what each parameter held then (`except _py.Exception as _failed: return (_core.Failed(_failed), count)`): the call assigns the places, and `_core.raise_if_failed(_given[0])` raises it again |
-| `clock.evaluation_time`, `logger.level` (CAP-1) | `_core.Clock_evaluation_time(_clock)`, and `_core.member(LogLevel, _core.Logger_level(_logger))`: a property of a native type is the provider's to read, named for the type and the property |
-| `log(logger, .info, message)`, a native function of core (NATIVE-7) | `_core.fn_log(logger=_logger, level=LogLevel["info"], message=message)`: the provider's function, `fn_` and the name it binds |
-| `get<i64>(global_state, "key")`, `has(...)`, `put(...)` (CAP-6) | Core's candidates for the store, the provider's as any native candidate: `_core.get_GlobalState_str(store=_store, key="key")` |
-| `stop { if valid(input) { ... } }` (TIME-5) | `@name.stop` on a function that takes the node's `const` parameters, its inputs as the node has them, its state, and its output where the node injects `out`. An input is read there as in a `when`, `input.value` under `input.valid`, and `out` as `_output.value` under `_output.valid` (TIME-7). `start` is given no input and no output |
-| `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified and x.valid`, `x.delta_value`. Where a list is in the value, `valid` and `all_valid` are the provider's, `_core.valid_of(x, shape)` and `_core.all_valid_of`, and so is a handler's and a lifted helper's admission of it: hgraph's `TSL` stays valid once every position has lost its value (TIME-9). `all_valid` asks no optional child: of a struct or a tuple with one, `_core.all_valid_of(x, ("fields", {"bid": None}))` of the others, and of a value whose every child is optional, `valid`. A lifted helper given a struct, a tuple or a fixed list runs only where it is all valid (FN-12) |
-| `activate(input)`, `passivate(input)`, `is_active(input)` (END-5) | `input.make_active()`, `input.make_passive()`, `input.active`. A passive input can satisfy a handler's modification check when another input wakes the node in the same cycle |
-| `last_modified(input)`, `last_modified(out)` (END-6) | The input or injected output's `last_modified_time` while valid and `None` while invalid, in a handler or in `stop` |
-| A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
-| `a =={abs: t} b`, `a !={rel: r} b` (NUM-4, EXPR-13) | The provider's function for the comparison with the tolerance where the source has it, `_core.eq__f64_f64_f64_f64(lhs=a, abs=t, rhs=b, rel=0.0)`: Python evaluates the arguments in that order. The function makes the test in exact arithmetic (NUM-5). Lifted, the tolerance is configuration of the node (NUM-11) |
-| `a == b`, `a =={utc: true} b` of two zoned datetimes (TYPE-2, OPS-2) | `_core.eq__zoned_datetime_zoned_datetime_bool(lhs=a, utc=True, rhs=b)`, and `utc=False` where the option is left out: core's candidate for two zoned datetimes. The provider's `ZonedDatetime` compares the instant and the zone, and under `utc` the instants alone. Lifted, the option is configuration of the node |
-| `text * count`, `count * text` (OPS-1) | `_core.mul__str_i64(lhs=text, rhs=count)`, and core's candidate the other way round calls it. A count below zero fails where it is met, with no HGL error: the contract does not say what it gives |
-| A generic value a native candidate is given, the `zero` of a division (NUM-9) | An argument by its name: a member of an enum as its name, `zero="ieee"`, and an integer as itself. The analyser says which member a constant comes to, however it is written (TYPE-7), and the target reads none of its spelling. `a / b` is `_core.div__f64_f64(lhs=a, rhs=b, zero="ieee")`, the default its candidate declares |
-| `convert<T>(value)` (OPS-4) | The provider's function for the candidate, named with what it gives too, `_core.convert_i64_to_f64(value=count)`: core's candidates of `convert` take one type and give different ones. One that can fail takes `invalid` as division takes `zero`, `_core.convert_str_to_bool(value=text, invalid="error")`, and gives a `result` under `"error"` and the plain value under `"fail"` (OPS-8) |
-| `impl const fn` with a body, of core or of a program (GEN-4) | A function of its module, `_impl_` and then the operator and the candidate's parameter types: `_impl_add__f64_i64`. A candidate binds no name (UNIT-12), and an operator may have many |
-| `impl fn` with a body (GEN-4) | A node or a graph of its module, as a temporal function is, under the same kind of name: `_impl_join__i64_i64`. A call in a graph that selects it calls it, and is not lifted. Where a value candidate has the same parameter types (GEN-5), the value one is `_value_impl_join__i64_i64` |
-| A temporal function or a temporal candidate with generic parameters (GEN-2) | Written once for each set of generic arguments the program calls it with, in the declaration's module: `_inst_`, the name it would have, and the arguments, `_inst_identity_sum__f64` and `_inst__impl_add__T_T__f64_core__InvalidInputPolicy_identity`. A call names the instance for its arguments. An operation the declaration requires is, in each instance, the call of the candidate that answers there (GEN-16): `_core.add__f64_f64` in the node for `f64`. A generic value read as a value is the constant the call gives, `by` as `3` in `_inst_scaled__3` (GEN-13). The arguments are keyed by value (`ConstantValue::key`), so one value is one instance however it is written: `scaled<1>` and `scaled<1.0>` of an `f64` are `_inst_scaled__1_0`, and the value is written `1.0` (UNIT-13); `-0.0` is `_inst_scaled___0_0`, an instance of its own. A member is keyed with its enum, `core::InvalidInputPolicy.identity` |
-| A value function or candidate with generic parameters (GEN-2, GEN-16) | One Python function, where one call says nothing of its body. Where it calls an operation it requires, hands a requirement on, reads a generic value, or calls an instance with its own generic parameters, one for each set of generic arguments it is called with, as a temporal one: `_inst_twice__i64` calls `_impl_join_i64_i64`. A value function, a node's hook, a constant and a lifted node call the instance for their arguments |
-| `operator` | Nothing: its candidates are the functions |
-| `enum Side { buy, sell = 5 }` (TYPE-7) | `Side = _enum.Enum("demo.orders::Side", [("buy", 0), ("sell", 5)])`, made by a call so that a member may have any name, a Python keyword among them. The class is named with its module's path: hgraph knows a Python enum by its class's name, so two modules' `Side`s would be one type to it, and core's `CmpResult` hgraph's own. hgraph takes it as a scalar: `_hg.TS[Side]`. A module's enums are written before its functions, whose annotations name them where they are defined |
-| `.buy`, `Side.buy`; `Side(1)`, `Side("buy")` | `Side["buy"]`; `_core.member(Side, value)`, which fails for a value that is no member's. A member's name that starts with `_` or is `mro`, which `Enum` keeps, has `hgl_` before it |
-| `struct Point { x: f64, y: f64 = 0.0 }` (TYPE-3) | `Point = _core.struct("Point", ("x", "y"), by_value=True)`: a class the provider makes, with every field the struct has, a parent's first. A struct of at most two fields, each an enum or a scalar other than a `str`, a `bytes` or an `any`, with no generic parameter and that no other inherits from, is a value, `by_value`: its values are never changed. Any other's value is changed where a place holds it (see below). Two are equal when each field is. A module's structs are written before its functions, with its enums. An abstract struct is a class too, of which no value is made. Equality is the provider's, field by field with no shortcut for one object compared with itself: a field may be a NaN (NUM-5) |
-| A value of a generic struct, `Box(value: 1)` (TYPE-3) | `_core.applied(Box, "i64")(value=1)`: each application is a class of its own, made once, so a `Box<i64>` is no `Box<f64>` where the two meet as values of a parent. The arguments are written as text no other type has, a named type with its module's path |
-| `Point(x: 1.0)` (TYPE-5) | `Point(x=1.0, y=0.0)`: the arguments in the order written, which is the order Python evaluates them in, then each field left out with its default in its place, read from the analysed program as a parameter's is (`Module::defaults`, `Member::default`), or `None` for an optional field with none |
-| `point.x`; `point.x = 1.0`, `line.end.x += by` (EXPR-3) | `point.x`; `point = _core.with_field(point, x=1.0)` for a struct that is a value, and `line = _core.set_field(line, "class_", 4)` and at depth `line = _core.set_at(line, (("f", "end"), ("f", "x"),), lambda: ...)` for one that is not: the place's own struct is changed where it is, and a value on the way, `end` here, is given a new one. What took the old value took a copy, and is as it was (TYPE-5: "later mutation of a source cannot change an earlier retained value"). The provider gives a value of a `by_value` class a new one though a parent's type stands for it. A `state` is assigned the same way |
-| In a graph, `quote.bid = b`, `pair[1] = b`, `rows[0] = b` of a `var` that holds a connection (EXPR-15) | `quote = _hg.TSB[...].from_ts(bid=b, ask=quote["ask"])`: a new bundle, or for a fixed list `_hg.TSL[...].from_ts(b, rows[1])`, of the old one's parts but the place's, at each step out to the `var`, with no node of its own. An ordinary value is a constant connection of the place's type, and a nullable scalar place takes `_core.nullable(b, ...)`. A field of an atomic struct, an entry of a dictionary and a position of an unsized list are reported |
-| `items[1]`, `pair[0]`; `sizes[name]` (EXPR-7, ERR-6) | `_core.item(items, 1)`, which fails for an index outside the sequence, a negative one among them; `_core.entry(sizes, name)`, which fails with `value.missing_key` for a key that is not there |
-| `get(sizes, name)`, core's candidate for a dictionary (ERR-6) | `_core.get_dict_K__T__K(store=sizes, key=name)`: the value, or `None` |
-| `items[0] = 1`, `sizes[name] += 1`, `rows[1][0] = 9` (EXPR-3) | `items = _core.with_item(items, 0, 1)`, `sizes = _core.with_entry(sizes, name, ...)` for a tuple, and for a list or a dictionary that is no place's own, which are given a new one; the place's own list and dictionary are changed where they are (see below). A key the dictionary has not is added, and an index outside a list fails |
-| `a <=> b`, `compare_(a, b)` (NUM-6, OPS-3) | `_core.member(_hgl_4core.CmpResult, _core.compare__T_T(lhs=a, rhs=b))`. A native candidate that gives an enum gives its member's name, as one that takes an enum is given it: the provider declares no enum of the program's, and the member is read from the enum the program has, core's here |
-| `ok(value)`, `err(value)`, `error(message: m, code: c)` (ERR-2, ERR-4) | `_core.Ok(value)`, `_core.Err(value)`, `_core.Error(message=m, code=c)`: values of the provider's, equal when their parts are |
-| `is_ok(r)`, `is_err(r)`; `r.value`, `r.error`; `e.message`, `e.code` (ERR-3, ERR-4) | `_py.isinstance(r, _core.Ok)`, `_py.isinstance(r, _core.Err)`; the attribute of the same name |
-| `r?` in a value function (ERR-5) | `_core.propagated(r)`, which gives a success's value and raises for a failure. The function's body is in a `try`, and returns the failure raised |
-| `r?` in a `when` (ERR-5) | `_core.succeeded(r)`, which fails the node with the error's message and code |
-| A named test | A function `test_name` |
-| `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
-| `eval target(input: [7, _, 9])` | `_harness.evaluate(target, {"input": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, input=[7, None, 9])` of `_hgl._harness`: the target; core's `replay` for each temporal input the eval gives a trace, by the input's name; core's `record` for the target's result, or `None`; and then the arguments. Core has the two as HGL for any type, so each is the instance written for the type it is of (GEN-2). The harness wires the run from those |
-| `eval{length: 2us} target(input: [7])` (RUN-6, core's CRUN-2) | `_harness.evaluate(target, {...}, ..., input=[7], _config=_harness.RunConfig(length=...))`: the configuration's entries, by a name no input has. An application's `inject run_config{...}` gives `_harness.run` its `_config` the same way; a read of `run_config`, and an eval in an integration test that injects it, are reported. The harness reads its `start`, `end` and `length`, refuses an `end` with a `length` (`run.end_and_length`), and runs the entry from the start to the end, which hgraph also takes as exclusive |
-| `eval target(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
-| `const scale: i64 = 2`, and `scale` read (UNIT-13) | `@_core.constant` over `def scale(): return 2`, and `scale()`. The provider runs the function once, when the constant is first read, so its expression may name what is written after it (UNIT-6) |
-| A trace given to a `const fn` (TST-16) | `_harness.publications(trace)`: a list with a tuple for each publication, its instant and what was published |
-| `assert raises("code") { ... }` (TST-10, TST-11) | A `try` around the block. Its handler calls `_harness.raised(error, "code")`, which lets the error out again unless it is an HGL error with that code, or has one as its cause, as a node's failure in an `eval` has; its `else` calls `_harness.not_raised("code")`, which fails the test |
-| A temporal `i64?`; a `const` one (TYPE-14) | `_hg.TS[_py.int \| None]`, hgraph's value that holds one `int` or is unset; `_py.int \| None`. A null is `None` as a value. Where it is published it is hgraph's `Null`: a node that returns `None` publishes nothing, and one that returns `Null` ticks a value that is unset. So a `return`, a `yield` and an assignment to `out` of a nullable result go through `_core.published(value)`, and `null` in a trace is `_hg.Null` where `_` is `None` |
-| `delta<i64?>()`, `delta<i64?>(value: v)`, `change.value` (TYPE-16) | `_hg.Null`, `_core.published(v)`, `_core.unpublished(change)`: a nullable's delta is hgraph's own, `Null` or the value, so `delta_value(input)` is `input.delta_value` as it is |
-| A temporal `set<i64>`; a `const` one (TYPE-9) | `_hg.TSS[_py.int]`, and `_hg.TSS_OUT[_py.int]` for the node's own output; `_py.frozenset[_py.int]`. A whole value published, by a node's `return`, `out =`, a part of `out` and a lifted function's result, is the `frozenset` as it is, and a replay publishes a cell written whole as its delta (`_core.whole_delta`): hgraph's `TSS` ticks only where the members change or where it is made valid (TIME-7: "a set given the members it holds ... is no tick") |
-| `delta<set<i64>>(added: [1, 2], removed: [3])` (TYPE-16) | `_hg.set_delta(added=_py.frozenset((1, 2)), removed=_py.frozenset((3,)), tp=_py.int)`: hgraph's own set delta, in a node, in a trace and as a value. The properties are given by name in the order they are written, so that they are evaluated in it (EXPR-13), and one left out is an empty `_py.frozenset()` |
-| A temporal `Quote`, `struct Quote { bid: i64, ask: i64 }` (TYPE-9) | `_hg.TSB[_core.schema(Quote, {"bid": _hg.TS[_py.int], "ask": _hg.TS[_py.int]})]`, and `_hg.TSB_OUT[...]` for the node's own output: hgraph's bundle over a schema the provider makes once for the class, each field temporalized in turn. The class and the schema are of the generated module that declares the struct, which hgraph knows them by with their names, so two modules' `Quote`s are two types. A whole value published to it is `_core.bundled(value)`, a `dict` of its fields, and `_core.bundled(value, {"quote": {"bid": None}, ...})` where a part is composite: a struct field by its fields, a set field as the set it is, which hgraph's `TSS` takes as its members now, cleared first through its own port, `_core.bundled(value, {"tags": "set"}, _output)`, so that it ticks where it keeps its members (TIME-7) |
-| A temporal `Box<i64>`, `struct Box<T> { value: T }` (TYPE-3, TYPE-9) | `_hg.TSB[_core.schema(_core.applied(Box, "i64"), {"value": _hg.TS[_py.int]})]`: the schema of the class for the arguments, each field of the type they give it |
-| A temporal `Shape`, `abstract struct Shape { id: i64 }`, and a `Circle : Shape` given where one is expected (TYPE-3) | `_hg.TSB[_core.schema(Shape, {"id": _hg.TS[_py.int]})]`, of its own fields; in a graph `_core.narrowed(circle, bundle, ("id",))`, hgraph's `from_ts` of the circle's fields, no node. A whole value published sets those fields, `_core.bundled(value, {"id": None})`; one read whole is reported |
-| A temporal `tuple<i64, str>` (TYPE-9, TYPE-10) | `_hg.TSB["_0": _hg.TS[_py.int], "_1": _hg.TS[_py.str]]`, hgraph's bundle with no name, matched by its fields. Published whole `_core.bundled((a, b,), (None, None,))`, which gives hgraph's bundle a `dict` of the positions, `{"_0": a, "_1": b}`: given a tuple, it marks a set in it modified where the set is given the members it holds (TIME-7); its delta, `(a, None,)`, as it is; read `(pair["_0"].value, pair["_1"].value,)`, `pair[0]` as `pair["_0"]`; `delta_value(pair)` `_core.positions(pair.delta_value, (None, None,))`, the tuple of hgraph's `dict`. `(a, b)` of connections in a graph is `_hg.TSB[...].from_ts(_0=a, _1=b)` |
-| `out.ask = v`, `out[0] = v`, `out[key] = v` (TIME-7) | `_output["ask"].value = v`, `_output["_0"].value = v` for a tuple and `_output[0].value = v` for a fixed list, `_core.child(_output, i)` by an index that is no constant; a dictionary's `_output.value = {key: v}`. A place inside a part that publishes whole, `out.ask` of an `atomic<Quote>`, is `_output.value = _core.with_field(_output.value, ask=v)`. A fixed list's `out` is `_hg.TS_OUT[_hg.TSL[...]]`: hgraph has no `TSL_OUT` |
-| `quote.bid` of a temporal `Quote`, in a graph and in a hook | `quote["bid"]`, the field's port taken by name, so a field may be named `value`; in a hook `(quote["bid"].value if quote["bid"].valid else _core.unset_read())`, and `quote` read whole `Quote(bid=(...), ask=(...))` of each field so read: a required part that has not published fails with `value.unset_read`, and an optional one is `None` (hhenson/hgl_spec#126, an interim reading); `out` as `_output` |
-| A temporal `struct Empty {}`, and a branch's ordinary `fixed()` of a composite in a graph | `_hg.TS[Empty]`: hgraph's bundle with no field never ticks; a publication, whole or its delta, is `_core.only_value(value, Empty)`, and `delta_value(e)` the empty `_core.struct_delta()`. `_hg.const(_core.bundled(fixed(), ...), tp=_hg.TSB[...])`: a constant told its time-series type |
-| A temporal `atomic<Quote>`, and `quote.bid` of it (TYPE-9) | `_hg.TS[Quote]`; in a graph `_hg.getattr_[_hg.SCALAR: _py.int](quote, "bid")`, told the field's type, and in a hook `quote.value.bid` |
-| `ref low: i64`, `-> ref i64` (FN-16, TIME-10) | `_hg.REF[_hg.TS[_py.int]]` for each, and `_hg.TS_OUT[_hg.REF[...]]` for the node's `_output`. A graph gives a connection of `i64` to the parameter, and the result to an `i64` input, as they are: hgraph binds one to the other, and a lifted input given the result is a `_hg.TS[_py.int]`, which follows its target. `valid`, `modified`, `last_modified` and activity are the `REF`'s own. The provider's `_core.Designation(_output, _state, ports)` keeps what the result designates, which endpoint in the node's `STATE`: `return low` of a whole `ref` parameter is `_designation.sampled(low)`, the reference its `REF` holds as the `return` runs, which nothing follows after (FN-16), `return value` of another input `_designation.returned("_ref_value")`, and `out = items[idx]` `_designation.designate("_ref_items", idx.value)`. An input that is no `ref` parameter is read through a hidden `REF` input the node is given beside it, `_ref_value: _hg.REF[...]`, through a graph of the function's name that gives it the input twice: hgraph makes a reference only from a `REF` input. A fixed list's position is read through one for each position, `_ref0_items`, which the graph gives `items[0]`: it ticks where the list is re-bound upstream, which hgraph 0.9.8's `TSL` of `REF`s given the list whole does not. The hidden input is active, so a re-binding upstream of what the result designates is followed, and the node returns before its handlers where no active input of its own, its scheduler or its alarm woke it; no validity is the whole node's (FN-16). The writes of an evaluation are kept, and the node returns the last, the designation it holds among them, which hgraph's ordinary reader is not woken for (TIME-10); `valid`, `modified` and `last_modified` of `out` ask of that, as of a `ref` parameter (END-10). `invalidate(out)` leaves it designating nothing: `_output.invalidate()`, for which hgraph unbinds a reader and wakes it (END-4). An ordinary value a graph gives a `ref` parameter is a constant connection of its type, `_hg.const(5)`, which hgraph would otherwise wire as a constant of the `REF` (FN-3). One written `T?` and left out is bound to `_hg.nothing(tp=_hg.REF[...])`, which designates nothing and is never valid (UNIT-8). A child of a `ref` parameter, `all_valid` of one, and a designation of another child are reported |
-| A `signal` input (TYPE-12) | `_hg.SIGNAL`, bound to any output, read only by `tick.valid` and `tick.modified` |
-| A temporal `T?` input left out (UNIT-8) | `_hg.nothing(tp=...)` of the input's type, an output that never ticks; for a `signal?` one of `_hg.TS[_py.bool]` |
-| `delta<Quote>(bid: 1)`, `change.bid` (TYPE-16) | `_core.struct_delta(bid=1)`, `_core.changed(change, "bid")`: hgraph's delta of a bundle, a `dict` of each field that changed, a null property left out |
-| A temporal `list<i64, 2>` (TYPE-9, TYPE-10) | `_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]`, `_hg.TS_OUT[_hg.TSL[...]]` for `out`. A whole value published is `_py.tuple(value)`; a delta, `_core.list_delta(updated={1: v}, removed=...)`, hgraph's `TSLDelta`, with `REMOVE` for a position that lost its value. Read whole `_core.list_value(pair)`, which fails with `value.unset_read` where a position is not valid, but for an optional element, which reads null (TYPE-15), `_core.list_value(pair, None)`; an unsized list's position that holds no value reads NaN for an `f64`, `_core.list_value(values, _py.float("nan"))` (TIME-1's table); `valid(pair)` is `_core.valid_of(pair, ("list", None))`, true once a position is and false again where each has lost its value, which hgraph's `valid` is not, and `all_valid(pair)` `pair.all_valid`; `pair[0]` in a graph is the child's port. A delta published is `_core.list_within(delta, 2)`, which fails for a position past the bounds and a `size_modified` that moves the size. A size of 0 is reported |
-| A temporal `list<i64>` (TYPE-10) | hgraph 0.9.8's unbounded `TSL`, `_hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]`, a child for each position, read and validated as a fixed list's, and its delta read hgraph's `TSLDelta`: the new size where it moved, the dropped tail in `removed`. A node with one as its result has `_output`: a whole value is `_core.list_replaced(_output, value)`, a tuple, a copy, which hgraph takes as the whole list; a delta `_core.list_applied(_output, delta)`, a `TSLDelta` whose size is counted from what the list holds, a negative one reducing it, to empty at most, an entry past the end extending it, the positions between not valid. hgraph does not tick for a publication that changes nothing it sees, an empty list first among them, so for an empty whole value, and a delta that names no change, where the list is not valid (TIME-7), the provider then grows the list by a position and drops it again in the same evaluation; given to a valid empty list, either is no tick. `out[i] = v` is `_core.list_child(_output, i).value = v`; a source applies what it yields as it is due, `_core.published_into(_output, ..., "list")`, a struct's or a tuple's with a shape of where its lists are, and of where its dictionaries and sets are (`entries=`), as a node publishes a struct's or a tuple's delta, a tuple's as a `dict` of the positions it gives, since hgraph's bundle given a tuple ticks for a position whose change leaves it as it was (TIME-7); `invalidate(out)` empties each list first, `_core.invalidated(_output, shape)`, since hgraph keeps an invalidated `TSL`'s positions; a branch's constant is the provider's node, `_core.constant_of(tp)`; a lifted helper's result has `_output` too. As a struct's field or a dictionary's value it is that `TSL`, and a whole value of the struct gives `_core.bundled(value, {"items": "list"}, _output)`, the empty list ticking through `_output["items"]` where it is not valid. In a hook a position it does not hold is a child that is not valid, `_core.list_position(values, 1)`, and in a graph an element is `_core.position_in(values, index)`, a connection that is not valid while the list does not hold the position. An element of a list of composites in a graph, an unsized list's delta inside a list's or a dictionary's delta the program makes, and an empty one assigned to an entry or a list's position of `out` are reported |
-| A temporal `dict<str, i64>` (TYPE-9) | `_hg.TSD[_py.str, _hg.TS[_py.int]]`; read whole `_py.dict(prices.value)`; `prices[key]` in a graph is the provider's `_core.entry_of(prices, key)`, a key known where the graph is built `_hg.const(key, tp=_hg.TS[_py.str])`: it publishes where the key or the selected child ticks, nothing while the key is absent, and is invalidated where the key goes or the dictionary is invalidated, as it requires only the key valid (EXPR-7, TIME-1: a child that is not valid). A whole dictionary published is `_core.dict_replaced(_output, value)`, which removes each key it has not. A dictionary of composites read by key, and a whole dictionary of composites published are reported |
-| A child of a temporal input or of `out` in a hook, `parts[1]`, `quote.bid`, `prices["a"]` (TIME-1, END-8) | Its endpoint is hgraph's child of the input, a fixed or an unsized list's position among them, `_core.list_position` one an unsized list does not hold, which is not valid: `_core.position_of(parts, 1)`, `quote["bid"]`, `_core.entry_port(prices, "a")`, one that is not valid where the key is absent; `valid(parts[1])` is `.valid` of it, `modified`, `delta_value` and `last_modified` `_core.child_modified`, `_core.child_delta`, `_core.child_last_modified`. A read admitted is of the value read whole; one at an index known when it runs is `_core.checked_child(port, lambda _port: ...)`, which fails with `value.unset_read` where the child is not valid, and `_core.checked_child_result` where a `result<T, error>` is expected (ERR-14) |
-| A trace's cell written whole, for a list, a set, a dictionary, a struct or a tuple (TST-5, TST-9) | `_harness.whole(value)`, and a tuple's `_harness.whole(value, shape=(None, None,))`: an input publishes `_core.whole_delta(value, keys)`, which removes each key or member the input held that the value has not, and sets each position of a tuple as hgraph's bundle takes it (`bundled`), a null one to a published null; an expectation's is compared with the value the result holds once its cycle has published, which `_harness.evaluate(..., _hold=lambda _port: ...)` reads from the result's port, as a part is read whole (`part_value`): null where an optional part is not valid, and no whole value, `value.unset_read`, where a required one is not (hhenson/hgl_spec#126) |
-| `delta<dict<str, i64>>(updated: u, removed: r)`, `change.updated`, `change.removed` (TYPE-16) | `_core.dict_delta(updated=u, removed=r)`, `_core.updated(change)`, `_core.removed(change)`: hgraph's delta of a `TSD`, one `dict` with `REMOVE_IF_EXISTS` for each removed key, so that one not held is ignored (TYPE-16). A node publishes a delta of a dictionary or a set, or of what holds one, as `_core.entries_published(_output, change, shape)`, and a source's node by `_core.resume(..., entries=shape)`: a `REMOVE` read from an input is published as `REMOVE_IF_EXISTS`; a dictionary or a set within that is valid and that the change leaves as it was is left out, so that what holds it does not tick (TIME-7: such a delta "is no tick"), and so is a struct's, a tuple's or a fixed list's that names no change in a dictionary's value, whose shape is written out there, `("entries", ("fields", {}))`, as hgraph's `TSD` ticks for one; and one that is not valid is made valid and empty by `clear`. A whole empty dictionary given to a valid empty one, and a whole set given the members it holds, are no tick, as hgraph's `TSD` and `TSS` take them (TIME-7); and `invalidate(out)` of one, or of a struct, a tuple or a fixed list that holds one at any depth, is `_core.invalidated(_output, shape)`, which empties each first, `{"book": "entries"}` for a struct's dictionary |
-| A temporal `rolling_window<f64, 3, 1>`, `rolling_window<f64, 5s, 0s>` (TYPE-11) | `_hg.TSW[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]]`, `_hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], _hg.WindowSize[_dt.timedelta(microseconds=0)]]`, and `_hg.TSW[_py.float, _hg.WindowSize[3]]` where no minimum is written, hgraph's one size for both; `_hg.TSW_OUT[...]` for `out`. `return price` adds the value that arrived (TYPE-16), and `delta_value(prices)` is `prices.delta_value`, that value; where a `result` is taken it is `_core.Ok(prices.delta_value)`, as of any endpoint that always has a delta, core's `record` among them (ERR-14). That of a window of a duration, read where a `result` is taken, and `removed_value`, are reported. A window within a struct, a list, a dictionary or a tuple is its child: `_core.schema(Book, {"prices": _hg.TSW[...], ...})`, `_hg.TSL[_hg.TSW[...], _hg.Size[2]]`, read by the port of a part that is no window, `book["last"].value`. `valid` and `all_valid` are the `TSW`'s; a window's value, an input's, `out`'s or a child's, is `_core.window_values(port)`, the `list<V>` it holds, which fails with `value.unset_read` where the window is not all valid, and where its place takes a `result<list<V>, error>` is `_core.window_result(port)`, that failure's `err` (ERR-14); a lifted helper given one requires it valid and is invoked where `port.all_valid`, and one whose parameter has a default or is a `list<V>?` binds that fallback where the window is not valid, `(_core.window_values(port) if port.valid else [])`, and is not invoked where it is valid and not all valid (FN-11). A position of that list, `book.prices[0]`, is `_core.item(_core.window_values(book["prices"]), 0)`, no child of the window. A window that a generic type parameter stands for, read in an instance's hook or given to a value function there, a value that holds a window read whole, a window given to a branch's or a loop's graph, and a window `out` the evaluation may write again are not written: each is reported |
-| A name | Itself, but where Python or the target would take it. A Python keyword, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
-| A value and a temporal definition of one name (FN-4) | The temporal one keeps the name; the value one is `_value_name` |
-
-Core's native functions are the target's to provide (NATIVE-7):
-`_hgl/_core_native.py` is that provider, written by hand in the crate and
-copied out beside the modules. It holds the `i64` operations to core's
-numeric contract, which neither wraps nor promotes. The transpiler reads
-the names it defines, a `def` or a line `name = other`, and a candidate
-it has no function for is reported. What the generated code names by
-hand, errors, structs, deltas, places and copies, is in
-`_hgl/_core_support.py`, which the provider imports: a module reaches
-both as `_core.name`.
-It is written when a module calls a function of it, and whenever the
-harness is written: the harness imports it, to know an HGL error by its
-class.
-
-hgraph has a generator node of its own, which is not what a source is
-written as:
-
-| | hgraph's `@generator` | A source (SOURCE-1 to SOURCE-4) |
-| --- | --- | --- |
-| `start` and `stop` | It has neither | Both, and `stop` always runs |
-| A target that has passed | Published at once | Skipped |
-| A target not after the one before | "Python generator output times must be strictly increasing" | `yield.non_increasing_time` |
-| A negative duration | Not checked | `yield.negative_duration` |
-
-So the provider resumes the generator itself, `resume`, and holds each
-target to the rules. hgraph gives a capability to one call and
-refuses it afterwards, so the generator, which lives across
-evaluations, reads the clock, the logger and the store from the node's
-state, where the node puts the ones of the evaluation it is resumed in.
-
-`_hgl/_harness.py` holds `evaluate`, which runs an eval as core has one
-(CEVAL-1): "a run of an entry it generates: core's `replay` wired to
-each temporal input of the target, and the target's result as the
-entry's".
-
-| Step | What the harness does |
-| --- | --- |
-| Entries | Each present dense cell or timed entry gives replay one publication at its absolute time (CEVAL-2) |
-| Wiring | A graph: a replay for each temporal input, the target, and a record on its result under `"run.output"` (CRUN-8) |
-| Run | hgraph's `evaluate_graph`, a simulation from the run's start to its end, with a global state of its own (CRUN-7) |
-| Output | What the store has under `"run.output"` once the run has stopped; none is a failure (CEVAL-6) |
-| Trace | The recording keeps its run start and one timed entry per publication, through the last publication (TST-6, TST-7) |
-
-hgraph's `eval_node` is not used. It keeps a dense recording counted
-from the earliest start whatever start a run has, so it gives no trace
-for a run that starts at a calendar date; here a recording holds times,
-and the dense trace is counted from the run's start.
-
-`replay` and `record` are core's, and core has them as HGL, for any
-type. The target writes each from core's own source, as it writes any
-generic temporal function: `replay` a source, and `record` a node that
-keeps its recording in a `cache` with core's `append` and puts it in the
-store at stop. Before any module is written the target finds the
-instances a program asks for, and an eval asks for these two, each for
-the type it is of. Core does not export them: a run wires them, and no
-module names them.
-
-A list, a dictionary and a struct are Python's, each one object that
-every name of it sees change, and a value of HGL's does not change
-(LIST-3: "a value taken from the place before the call is as it was").
-The target follows
-the owner's rule for it (issue 151): "all var mutations are mutations,
-not copies. The copies only occur when: 1. the value is passed to a
-function and the function also recieves a var reference to the item or
-items it contains, othewise they are safe to pass through. 2. let
-assignment". So a `var`, a `state` and a `cache` change what they hold
-where it is, with no check when the program runs, and the compiler says
-where a copy is made: where a reference is made to what a place holds
-and the place then changes, and where a reference is kept. "The copy by
-value exception is for trivial structures (think sizeof(i64))": a struct
-of at most two scalar fields is a value, copied nowhere and never
-changed, and a change to one makes a new one; so does a change to a
-tuple. Any other struct is changed where it is, and copied where a list
-is.
-
-| What is written | Where |
-| --- | --- |
-| `entries`, as it is | An argument, the read of an element or a field, an operand: a reference, which the function is given and does not change |
-| `before = _core.copied(entries)` | A `let` of what a place holds, or of a value written with it, where the place is changed while the name is in scope: in the rest of the `let`'s block, or anywhere in a loop the `let` is inside. `hgl_lower::copies` reads each body for it |
-| `last = _core.item(rows, 2)` | A `let` whose place changes no more in its scope: a reference into the place |
-| `for item in _core.copied(values):` | A loop whose own body changes the place it runs over. Any other loop reads each entry where it is |
-| `push_all(items=rows, more=_core.copied(rows))` | The owner's first case: an argument read from a place that the same call gives to a `var` parameter. A second `var` parameter given the same place takes a copy too, and the place is given them in the order of the parameters (FN-15) |
-| `mine = _core.copied(values)`, `rows = _core.set_entry(rows, "b", _core.copied(items))` | What a place keeps, assigned to it or into it: a copy, where something else holds the value. A value written out and what a function of the program returns are held by nothing else, and are kept as they are |
-| `_core.fn_append(values=rows, item=_core.copied(row))` | What a native function with a `var` parameter puts into its place, where the place may hold it: `append` keeps its item, and `extend(values, more)` keeps the numbers `more` holds and takes `more` as it is |
-| `return _core.copied(value)`, `return out` | A result is the caller's to keep: a copy of what the function was given, and its own `var` or `let` as it is. A `let` is the function's own only where every value it may be is: `let x = if flag { mine } else { p }` may be the parameter `p`, and `return _core.copied(x)`. `copies` keeps, beside the places a name refers into, whether it may also be a value held elsewhere, a parameter, a constant or what a native function gives of one; a form it does not know is taken to be one |
-| `_output.value = _core.copied(...)`, `yield`, a hook's `return` of a `state` | What is published is the runtime's to keep. The provider copies what it puts in a run's store. A struct read whole from its bundle, `Ticket(id=current["id"].value, ...)`, is made anew, and is kept as it is |
-| `n = summed(values=_core.Held(_core.copied(cfg)), tick=tick)` | In a graph an ordinary value is changed where it is by a native function and a `var` parameter, as anywhere, and each copy above is made for it as in a value function; a connection is never copied. What a graph gives a node, its configuration and a constant hgraph wires for an input, is hgraph's to keep: a copy, where the graph holds it too. A graph's call of another graph gives the value as it is, and a source's graph copies its configuration |
-| `items = _core.set_item(items, i, value)`, `book = _core.set_entry(book, key, value)`, `order = _core.set_field(order, "size", 2)` | An element, an entry or a field assigned: the place's own list, dictionary or struct, changed where it is. A `var` parameter is the caller's place, and is changed where it is too. A dictionary keeps a copy of a key it has not, where something else holds it: `counts = _core.set_entry(counts, _core.copied(key), 1)` |
-| `book = _core.set_at(book, (("f", "bids"), ("k", price),), lambda: size)` | A place further in: the provider goes in and changes each list, dictionary and struct that is no value on the way where it is, and gives a value on the way a new one. The value is asked for once the way in has been read |
-| `_given = _core.given_at(book, (("f", "orders"),), _core.fn_append, "values", lambda: _py.dict(item=order))` | A native function of core given a place further in, and then `book = _given[1]` |
-
-`_core.copied` shares no list, no dictionary and no struct that is
-changed where it is with what it copies, a dictionary's keys and a set's
-members among them; a tuple, a set and a result are made again only to
-hold the copies of what is inside them, and a value that holds nothing
-changed where it is is given as it is. A way in whose index is an
-expression after an element read is given new values on the way, so
-that the index is evaluated only once
-what it is an index of has been read. The provider reads the way in,
-then asks for the value, and only then changes anything: the value may
-hold a collection on the way in, `append(rows[0], rows)`, of which the
-compiler gives a copy, taken before the change. So a recording grows
-with no copy, a list passed to a function is not copied, a function's
-own result is kept as it is, and a `let` costs a copy only where its
-place changes while it is in scope. `every_copy_the_copy_points_fixture_makes_is_needed`
-takes each copy the target writes for `copy_points.hgl` out in turn and
-runs the fixture's tests on hgraph: each time one fails.
-
-FN-15: "A function that fails leaves the place holding what its
-parameter held when it failed: no change it had made is undone." A list,
-a dictionary and a struct that is no value are changed where they are,
-so what a function did to one stays where it fails. A parameter of any
-other type, and one the function gave a value of its own, is a name of
-the function's: the function catches what fails and gives it back as
-`_core.Failed` beside what each parameter holds, and the call assigns
-each place before it raises it again. An argument that fails is
-evaluated before the call, which then assigns nothing.
-
-FN-13: an argument is a reference, which the function cannot change,
-and nothing else runs while it does; where the call also gives a `var`
-parameter what the argument is read from, the argument is a copy. What a
-function returns of an argument is a copy, and what a node keeps of an
-input a copy too, so a retained result is independent of later
-publications. No argument is a view: what hgraph gives is a value of its
-own, a list made of its tuple, a struct of its bundle, or the value a
-`TS` holds, which nothing changes where it is.
-
-Left: a tuple is given a new one for a change of a position, where the
-owner's rule has any value but a trivial one changed where it is.
-
-A `tenor` (TYPE-17) is the provider's `Tenor`: a count of months and a
-count of days, or a count of business days. Its literal is written by its
-counts, `_core.Tenor(18, 0)` for `1Y6M` and `_core.Tenor(business=2)` for
-`2B`. Its own sum, order and text are the provider's functions (core's
-TEN-2, TEN-3, TEN-9). `date + tenor` is core's HGL, in
-`<core>/core/calendar.hgl`: the target writes it as it writes any generic
-value function, once for each calendar and rolling rule a call gives, and
-what it writes asks the program's own `business_day` and `roll`. The four
-parts that HGL is written with are the provider's too: `fn_moved`,
-`fn_business_days`, `fn_weekend` and `fn_same_month`. `Tenor` is a frozen
-dataclass, which hgraph holds by its fields: a temporal tenor is
-`_hg.TS[_core.Tenor]`, and a nullable one `_hg.TS[_core.Tenor | None]`.
-
-hgraph makes a value of its own of what it is given to keep, a node's
-configuration and what its global state holds, and has none for a tuple
-that holds a set's delta. An object of a class it does not know is kept
-as it is. So a list, a tuple or a dictionary that is a node's
-configuration, `replay`'s list of entries among them, is given to the
-node inside one, the provider's `Held`, and taken out at the head of
-the node, of its `start` and of its `stop`; to hgraph such a parameter
-is an `object`. What the store is given is inside one too.
-
-The harness compares traces with `same` (TST-4). It compares each
-publication's time and value. A trailing placeholder adds no publication.
-hgraph's set delta has `Removed(1)` equal to `1`, so `same` compares
-additions and removals separately. A `const fn` given a recording receives
-its publications and their recorded UTC instants through `publications`
-(TST-16). A written trace uses the earliest start for relative keys or
-dense positions (CRUN-3) and preserves absolute datetime keys.
-
-Reported as not written yet (`target.unsupported`): as the type of an
-input, an output or configuration, `any` and any other but the scalars above, an
-enum, a set of one of those and a nullable scalar or enum, a struct
-among them; a
-delta that is not a set's; a struct made in a graph;
-a generic struct made in a function generic in its arguments;
-a native declaration of a program,
-and a candidate with the parameter types of another of its module and
-its role;
-a call of a function written by instance whose generic arguments are
-not known; an operation a generic declaration requires that no
-candidate answers;
-a default of a temporal input; a pack parameter; a node that no input
-wakes, `modified([])`;
-a bare payload read of `out` in `stop`;
-in a graph, any expression but a name, a literal and a call, an `if`
-that is not a whole statement or the whole value of a `let` or a
-`return`, branches that assign more than one `var`, a `return` under a
-branch selected at runtime in a loop unrolled where the graph is built,
-and a loop's key or member read other than as the argument of a
-temporal parameter; a block with statements inside another expression;
-a pack in a lifted call; a temporal function called in a test outside an
-`eval`;
-a loop and a `switch` in a test;
-a literal instant outside the years 1 to 9999 in UTC; a `result` or an `error` as the type of an input or an output;
-and a candidate of core the provider has no function for.
-
-A module is written a piece at a time: each declaration, then each
-named test. A piece with a form that is not written is left out of the
-file, and every piece records the functions it names. A test is
-*blocked* when it, or a function it reaches through those names in any
-module, was left out; it then carries the first such report.
-
-`hgl_hgraph::run` runs the tests that are not blocked. hgraph is run
-from Python, so the host is a Python interpreter that has hgraph:
-`--python PATH`, or the one the environment variable
-`HGL_HGRAPH_PYTHON` names, or `python3` (`python` on Windows). The
-program is
-written to a temporary directory, or to the one `--keep DIR` names, and
-the interpreter is started once, with `-B` so that it writes no
-bytecode files, on a driver the target carries, `_hgl/_run_tests.py`.
-It and the application's driver import what they share,
-`_hgl/_driver.py`, written beside them.
-
-| File in the directory | Written by | Holds |
-| --- | --- | --- |
-| `_plan.txt` | the compiler | The tests to run, each as its Python module and its function, `test_name` |
-| `_results.txt` | the driver, as it runs | For each test `start`, then `passed`, `failed` with a line and the error's text, or `unloaded` when its module does not import |
-
-The results are a file, so nothing a program prints is taken for an
-outcome. A test with a `start` and nothing after it was running when the
-interpreter stopped; it and the tests after it are not run. For a test
-that failed, the driver gives the line of the test's own function that
-was running. The emitter recorded the line each statement of a test
-starts on, so the failure is reported at that statement in the source:
-`cases.hgl:9:5: the assertion does not hold`. An error that escapes,
-such as an `i64` result out of range (NUM-2), is reported the same way
-with its text.
-
-An integration test (TST-17) is held to a time limit: the duration
-`@timeout(5s)` gives on the line before it, or a minute where it writes
-none. The driver runs such a test on a thread of its
-own and waits for it no longer than its limit. One still running then
-has failed, at the statement it was at: its run in real time is asked to
-stop, which ends it as its end does, and the test goes on to its own
-end. One that does not end soon after is left, and the interpreter ends.
-A test that is no integration test has no limit yet.
-
-A trace is kept as its publications and when each was, and never as a
-cell for each microsecond: a publication a second after a run's start
-would be a million cells on. A trace written out dense, `[7, _, 9]`, is
-read with cell i at i smallest steps from the start. A timed trace,
-`[0s: 7, 2s: 9]`, gives only the publications (TST-7). Its keys are
-durations from the run's start or absolute datetimes. Computed keys must
-strictly increase. Replay rejects an input key before the run's start
-(CEVAL-2). Two recordings match when the publications have the same
-values and offsets from their respective starts.
-
-#### An application
-
-`hgl run ROOT... [--application PATH] [--arg NAME=VALUE]... [--config
-FIELD=VALUE]...` runs an application (UNIT-14) on hgraph: the program's
-one application, or the one named.
-
-What starts an application "supplies its run's configuration (RUN-6),
-and may replace an argument of its entry with a constant checked
-against the type it replaces: what the application writes is the
-default" (RUN-2). `hgl run` is what starts it, and this is the command
-line it gives for both: "Compiler/runner documentation specifies CLI
-options" (the program-execution chapter's core boundary):
-
-| Option | What it gives |
-| --- | --- |
-| `--arg NAME=VALUE` | The argument `NAME` of the entry, in place of the application's |
-| `--config start=VALUE`, `--config end=VALUE`, `--config length=VALUE` | That field of the run's configuration, core's `RunConfig`'s, over the default the application's `inject run_config{...}` gives it. An `end` given takes out a default `length`, and a `length` a default `end` (RUN-6: "An `end` or a `length` that what starts an application gives replaces a default of either"); both given are the run's, which refuses them (`run.end_and_length`) |
-
-The value is HGL, one expression on one line. `hgl_cli`'s `replace`
-puts it, in parentheses, in the application's text: an argument in the
-run statement, in place of the value the application wrote for that
-parameter or by name where it wrote none; a field in the braces of the
-application's `inject run_config`, in place of its default or after
-them, or in an `inject run_config{...}` written before the run
-statement where the application has none. The program is then read
-and checked again as if the application had written that, so the
-analyser holds each to every rule it holds what is written to, and no
-stage knows of replacements. `run_config` then reads the configuration
-as supplied (RUN-6).
-
-```text
-inject run_config{length: 3s}                  the application
-eval counted(upto: 3)
---arg upto=5 --config end=@2026-01-02T00:00:00Z
-inject run_config{end: (@2026-01-02T00:00:00Z)}
-eval counted(upto: (5))
-```
-
-A name the entry or the configuration has not, a name given twice, and
-a value that is not one expression are refused before the second read.
-The value is read as it is put, between its parentheses, where `.buy`
-is a member of the enum the place expects; `3, 4` and `3) + (4` are not
-one expression there. An error of the second read is reported in the
-application's file, with the statement as it was checked. The type a
-replacement is checked against is the one it replaces. The generic
-arguments an entry's call infers, `<i64>` for `echo(value: 3)`, are
-written after the entry's name for the second read, so a replacement
-is read as the argument it replaces was expected: `.sell` is a member
-of the enum the call made `T`, `3` is the `f64` it made it, and
-`"text"` is no `i64`. They are written as a message writes a type,
-which the application's file may have no name for: they are left out
-where the application, with them written and nothing replaced, does not
-read as it did. In either case, where the call with the replacements is
-of another entry than the application's, or of the same one with other
-generic arguments, the program is rejected.
-
-| Step | What does it |
-| --- | --- |
-| The run statement is written as a function, `_application`, in the application's own Python module | The transpiler |
-| What sets the run's store, `inject global_state` and the `put` calls before the run statement, is written as a function of the store, `_application_store` | The transpiler |
-| The function calls the harness's `run` with the entry, core's `record` for the entry's result, the mode, the entry's `const` arguments and the configuration | The generated code |
-| `run` makes the run's store, calls `_application_store` with it, wires the entry and `record` into a graph, runs it with hgraph, and gives what `record` put under `"run.output"` | `support/harness.py`: the run an eval is too |
-| A driver loads the module, calls the function on a thread of its own, and writes each publication to a results file | `support/run_application.py` |
-| `hgl run` starts the driver, and prints the publications once the run has stopped | `hgl_hgraph::run_application`, `hgl_cli` |
-
-```text
-1970-01-01T00:00:01.000001Z  2
-1970-01-01T00:00:02.000001Z  4
-ran demo.ticks.backtest on hgraph: 2 publications
-```
-
-The run's output goes to standard output, a line for each publication:
-its instant and what was published, written as HGL writes a value where
-it has a way to. What the program logs and hgraph prints goes to standard
-error, as the run goes.
-
-`eval` is a simulation, and `run` is in real time (RUN-3). An interrupt
-of `hgl run`, or a request for it to end, is the host's stop of a run in
-real time. hgraph waits for a run's next cycle where no signal reaches
-Python, so the driver keeps its main thread for the signal, and asks the
-run to stop through a source hgraph wakes for: the run ends as it does
-at its end, every node is stopped, and what was recorded up to then is
-printed. `hgl` takes the signal too, and passes the stop to the driver
-down a pipe: a signal sent to `hgl` alone reaches no other process. It
-outlives the signal to print the output. A stop of a simulation, and a
-second one of any run, end the run at once with no output.
-
-| Exit status of `hgl run` | When |
-| --- | --- |
-| 0 | The run ended |
-| 1 | The program is rejected, as written or with the replacements given, or the run failed |
-| 2 | No application was chosen, a replacement names nothing or is not one expression, the target does not write all it needs, or the host did not run it |
-
-Not written: outside events in real time, and a view of the output
-while the run goes.
-
-The crate's tests compare the Python written for a small module with
-what is expected, check how dense scalar traces are written, and check
-which tests of a program with unwritten forms are
-blocked. Tests that run on hgraph need a Python that has it, named by
-the environment variable `HGL_HGRAPH_PYTHON`, and are run with
-`cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. The `hgraph` job of
-the CI workflow runs them on Linux for every pull request. Its backend is
-hgraph 0.9.8, whose inputs say `invalidated` in the cycle they
-lose their value, where `modified` is of a publication alone. The harness preserves a published null and omits silence
-(TST-6).
-
-The job also builds `hgl` and runs every test in the pinned core's
-`tests/conformance` and `tests/implementation`, including integration tests.
-Run the same check with a Python that has hgraph installed:
-
-```sh
-python crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core
-```
-
-The check compares the runner's full discovery and execution lists and prints
-the outcomes and counts for each suite. A case can be reported as not run
-only for its source-located hgraph target diagnostic listed in
-[`unsupported_cases.toml`](../crates/hgl_hgraph/ci/unsupported_cases.toml).
-A rejection case can fail only by not being rejected, and only where it is
-listed under the file's `[rejections]`, by `suite::file::declaration` and a
-reason that names the rule not yet built; the analyser's and the driver's
-corpus tests read the same list. An assertion or source failure, an
-unavailable host, a new gap, or a listed case that passes, is rejected or
-disappears fails the check. Remove a listed gap when its case starts
-passing. The backend owns this list alongside its target tests.
-
 ### cpp
 
-The second target, designed in [cpp-target.md](cpp-target.md): C++ against
+The compiler's target, designed in [cpp-target.md](cpp-target.md): C++ against
 hgraph's graph, node, type and runtime layers, linked with `libhglrt`,
 the runtime library in `runtime/cpp`. It writes value code whole, value
 functions and the tests of them, and the temporal code of scalars,
@@ -2121,8 +1685,7 @@ graphs, sources and the evals of them; windows; `ref` parameters and
 results; schedulers and alarms; an input's activity; lifted calls and
 `capture`; control flow over connections; the run's store where a graph
 is built, and applications. It reports every other
-form, as the hgraph target reports what it does not write, so that `hgl
-test --target cpp` runs over any program to its end.
+form, so that `hgl test --target cpp` runs over any program to its end.
 
 | Part | Where | What it does |
 | --- | --- | --- |
@@ -2145,13 +1708,13 @@ test --target cpp` runs over any program to its end.
 | `set<K>`, `dict<K, V>` (TYPE-14, CTRL-12) | `hglrt::set<K>`, `hglrt::dict<K, V>`: hash containers in no order, equal where their members are (OPS-2); a key is told apart by `==` of its type (NUM-5: a key that holds a NaN is no key's). A dictionary written out with more than one entry is written where its keys are constants that are not `==`: the pinned text does not say what one key written twice gives. `book[key]` is `hglrt::entry_at`, which fails with `value.missing_key` (ERR-6); assigned whole it is `hglrt::entry(book, key) = value`, which adds the key as the value is assigned (EXPR-3); `for` binds each member, or key and value, of the container or of a copy of it where the copy rule says or it is made in the loop's line |
 | `delta<T>` (TYPE-16) | A nullable's `hglrt::nullable_delta<T, D>`, of the payload and its delta, which holds an optional, `value`: a type of its own, so that a `delta<i64?>?` is an optional of one and is compared with a `delta<i64?>` as a value, and `get` of a dictionary of them gives one; a list's `hglrt::list_delta`, its `updated` and `removed` read as a dictionary and a set; a set's and a dictionary's `hglrt::set_delta`, `hglrt::dict_delta`; a struct's `d_::S` of its module, an optional of each field's delta; a tuple's a tuple. A dictionary's or a list's whose value or element is an `atomic<V>`, at any depth through dictionaries and lists, is reported: its delta is the whole V, where the library's would be V's delta |
 | `Side(n)`, `Side("buy")` (TYPE-7) | `hglrt::enum_member`, from a table of the members' numbers or names; none matching fails uncoded: the catalogue has no code for it |
-| `timezone`, `zoned_time` (TYPE-2) | hgraph's `ZoneId` and `ZonedTime`. A literal of either, and of a `zoned_datetime`, is `hglrt::zone_literal`, `zoned_time_literal`, `zoned_datetime_literal`, which check the zone against the catalogue of hgraph's time-zone provider for the process, and a `zoned_datetime`'s offset against the zone, where it is evaluated (LEX-12), failing uncoded as the hgraph target's do: such a literal is one that may fail |
+| `timezone`, `zoned_time` (TYPE-2) | hgraph's `ZoneId` and `ZonedTime`. A literal of either, and of a `zoned_datetime`, is `hglrt::zone_literal`, `zoned_time_literal`, `zoned_datetime_literal`, which check the zone against the catalogue of hgraph's time-zone provider for the process, and a `zoned_datetime`'s offset against the zone, where it is evaluated (LEX-12), failing uncoded: such a literal is one that may fail |
 | `T?`, `tuple<A, B>`, `list<T>`, `list<T, N>` | `std::optional<T>`, `std::tuple<A, B>`, `hglrt::list<T>`, `std::array<T, N>` |
 | `error`, `result<T, error>`, `?` (ERR-2 to ERR-5) | `hglrt::error`, `hglrt::result<T>`; the result held before its statement, the function left with its failure; a `?` only where it is the first thing its statement evaluates, and reported anywhere else |
 | A constant (UNIT-13) | A function giving a reference to one `static` value, made where it is first read; a read of one whose value may fail is one that may fail, which a `?` after it is not run before |
 | `let`, `var` (EXPR-3) | `const T` or `const T&` as the copy rule says (`hgl_lower::copies`), `T` |
 | `if`, `switch`, `while`, `for` over a list (CTRL-6, CTRL-10, CTRL-12) | `if`, a chain of `if`s on the selector held once, each case a block (a case's binding read after the `switch`, which UNIT-12 binds in the block around it, is reported), `while`, a range `for` over the list or a copy of it |
-| A native candidate or function of core | The runtime library's function, named as the hgraph target names its provider's: `::hglrt::add__i64_i64`, a generic one's arguments its template's, `::hglrt::div__f64_f64<::hglrt::ZeroPolicy::nan>`; `convert`'s, of one value, given the type it gives first, `::hglrt::convert_i64<::hgraph::Float>` |
+| A native candidate or function of core | The runtime library's function, named by its operation and its parameters' types ("The C++ runtime library" below): `::hglrt::add__i64_i64`, a generic one's arguments its template's, `::hglrt::div__f64_f64<::hglrt::ZeroPolicy::nan>`; `convert`'s, of one value, given the type it gives first, `::hglrt::convert_i64<::hgraph::Float>` |
 | A call with more than one argument that may fail | Its arguments evaluated one statement at a time, in the order written (EXPR-2), in a lambda called where it stands |
 | A tuple or a list with an entry after the first that runs statements; an element read whose list and index both may fail, or either runs statements | Each entry held as a value of its own type first, in order; the list held, then the index (`expressions::held_read`), the element a value of its own |
 | Named test | A function of `hgl::demo::calc::m_::t_`; each statement told to the library's test host first, `::hglrt::testing::statement()`; `assert` is `::hglrt::testing::check`, `assert raises` `::hglrt::testing::raises` of a lambda (TST-10) |
@@ -2398,8 +1961,8 @@ expression"). Each reason is a key of `crates/hgl_cpp/ci/unsupported_cases.toml`
 3. A fixture and its goldens in `crates/hgl_cpp/tests` (`fixtures/`,
    `HGL_UPDATE_GOLDENS=1 cargo test -p hgl_cpp --test emit`), and the
    fixture run on the SDK in `crates/hgl_cli/tests/cpp.rs`.
-4. `check_core.py --target cpp --write-list`, never by hand: the cases it
-   now runs come off the list.
+4. `crates/hgl_cpp/ci/check_core.py --write-list`, never by hand: the
+   cases it now runs come off the list.
 
 A lane that needs a lookup the trait lacks asks for it: it is added to
 `Family` and to this table on the spine's branch, so every lane has the
@@ -2407,7 +1970,7 @@ same one.
 
 C++ compiles a unit whole, so a piece that calls one not written is
 left out too, and a test that reaches one is listed with the first form
-it reaches, as `hgl_lower::pieces` finds it for both targets. What a
+it reaches, as `hgl_lower::pieces` finds it. What a
 call that leaves an argument out gives it is `hgl_lower::calls`'s.
 
 What the target takes of the runtime library ("The C++ runtime
@@ -2419,9 +1982,9 @@ in `hglrt`, a native being defined where its name followed by `(` is in a
 header under `include/`, and core's enums its natives take where it
 declares an `enum class` of the name; and its test host,
 `hglrt::testing`. An executable is run as `EXE RESULTS NAME...`, and the
-results are the hgraph driver's protocol (`start N`, `passed N`, `failed
-N LINE TEXT`, `unloaded N TEXT`), read by the same code,
-`hgl_hgraph::read_results`, with LINE a line of the module's unit. The
+results are `start N`, `passed N`, `failed N LINE TEXT` and `unloaded N
+TEXT` (`hglrt/host.h`), read by `cpp/results.rs`, with LINE a line of
+the module's unit. The
 driver runs a test held to a time limit (TST-17) in a process of its
 own, which it ends at the limit; the host's own limit, `NAME@MICROSECONDS`,
 is not used yet.
@@ -2475,18 +2038,17 @@ failure: an older executable is never run in a newer one's place.
 Executables run side by side.
 
 `hgl emit --target cpp --out DIR` writes the files. `hgl run --target
-cpp` runs an application (UNIT-14) as `hgl run` does on hgraph ("An
-application" above), with what it replaces read again: it builds the
+cpp` runs an application (UNIT-14, "Running an application" above),
+with what it replaces read again: it builds the
 application's executable, `run/<application>`, in the program's
 workspace (`--keep`'s directory, or the one under the cache), linked
 from its entry unit and the units its module's reaches, and runs it as
 `EXECUTABLE RESULTS` (`cpp/application.rs`). The executable's host
 (`hglrt/application_host.h`) runs the run statement once and writes
-RESULTS in the form the hgraph target's driver writes (`start`,
-`published TIME TEXT`, `stopped`, `stopped none`, `host`, `failed
-TEXT`); `hgl` reads it and reports the outcome. A failed run prints
-its failure to standard error and exits with status 1. If the application
-could not be run, `hgl` exits with status 2. TIME is the
+RESULTS (`start`, `published TIME TEXT`, `stopped`, `stopped none`,
+`host`, `failed TEXT`). `hgl` reads it and reports the outcome. A failed
+run prints its failure to standard error and exits with status 1. If the
+application could not be run, `hgl` exits with status 2. TIME is the
 instant in UTC, `1970-01-01T00:00:01.000001Z`, and TEXT the value as the
 library's `text_of` writes it, as a trace's text is. What the program
 and hgraph print goes to standard error. An interrupt of `hgl`, or a
@@ -2524,19 +2086,38 @@ that `demo.values`, `demo.composites`, `demo.temporal`, `demo.windows`, `demo.re
 reported, applications run with their output, the store and a failure,
 and a run in real time stopped by an interrupt of `hgl` alone, with `cargo
 test -p hgl_cli --test cpp -- --ignored`, which the `cpp` job of the CI
-workflow runs, with `check_core.py --target cpp`, and then both again
+workflow runs, with `check_core.py` (below), and then both again
 with `HGL_CPP_FLAGS` naming the address and undefined-behaviour
 sanitizers. The generated code compiles with `-Wall -Wextra -Werror`.
 
 The target's progress is counted in cases: core's runtime cases, and
 later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
-[`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
-which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists 1
-of core's 198 runtime cases, with the form it needs that the
-target does not write: a nullable put in the run's store (hgl_spec
-issue 165).
+[`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml).
+Today it lists 1 of core's 198 runtime cases, with the form it needs
+that the target does not write: a nullable put in the run's store
+(hgl_spec issue 165). `check_core.py`, beside it, builds `hgl` first
+and then runs every test in the pinned core's `tests/conformance` and
+`tests/implementation`, integration tests among them, on the target:
+
+```sh
+cargo build --locked --bin hgl
+python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core
+```
+
+It compares the runner's full discovery and execution lists and prints
+the outcomes and counts for each suite. A case can be reported as not
+run only for its source-located diagnostic of the target, `the cpp
+target does not write ... yet`, under the form the list gives it. A
+rejection case can fail only by not being rejected, and only where it is
+listed under the file's `[rejections]`, by `suite::file::declaration`
+and a reason that names the rule not yet built; the analyser's and the
+driver's corpus tests read the same list. An assertion or source
+failure, a host that did not run a case, a new gap, or a listed case
+that passes, is rejected or disappears fails the check. `--write-list`
+writes the list from a run in place of checking it; read the difference
+before it is committed. Its own tests are
+`python3 -m unittest discover -s crates/hgl_cpp/ci`.
 
 ### The C++ runtime library
 
@@ -2646,9 +2227,9 @@ hashes a value it holds as configuration, a source's items, through
 
 An executable of a module's tests calls `hglrt::testing::main` from its
 own `main`: `EXECUTABLE RESULTS TEST...` runs the tests named, in order, and
-writes RESULTS in the form `support/run_tests.py` writes for the Python
-target (`start N`, `passed N`, `failed N LINE TEXT`, `unloaded N TEXT`),
-so that the runner reads both with one reader. `LINE` is the line of the
+writes RESULTS (`start N`, `passed N`, `failed N LINE TEXT`, `unloaded N
+TEXT`), which the build driver reads (`crates/hgl_cli/src/cpp/results.rs`).
+`LINE` is the line of the
 last statement the test marked with `statement()`. A test held to a time
 limit (TST-17) is named `NAME@MICROSECONDS`: it runs on a thread of its
 own, and at its limit its runs are asked to stop, as a host stops a run in
@@ -2765,7 +2346,7 @@ that adds a file to core fails it until the list has the file.
    `# expect-error` matching and `hgl test` for rejection cases (done);
    name resolution (done); the checks the parser left (FN-8, NATIVE-3;
    done); the typed bodies of functions and tests (in part).
-4. Transpiler for hgraph (in part); `hgl test` running tests
+4. Transpiler for C++ on hgraph (in part); `hgl test` and `hgl run`
    on it (done for what the target writes); the forms the rest of
    core's conformance cases need.
 5. Wider language coverage; optimiser passes; a second transpiler.
@@ -2789,7 +2370,7 @@ the job the way the design needs is dropped.
 | `ctrlc` | `hgl_cli` | taking an interrupt or a request to end while an application runs, to stop the run and still print its output |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
-| `tempfile` | `hgl_cli` | the directory a program is written to for a test run or an application's run, removed after it |
+| `tempfile` | `hgl_cli` | a file of a build written beside the one it replaces and renamed onto it, so that nothing reads half of it |
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 | `dirs` | `hgl_cli` | the user's cache directory, where the cpp target's builds are kept |
 | `which` | `hgl_cli` | the programs the cpp target builds with, found on the `PATH` |

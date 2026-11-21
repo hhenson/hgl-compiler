@@ -1,3 +1,0 @@
-application demo.ticks.broken
-use demo.ticks::{failing}
-eval failing()

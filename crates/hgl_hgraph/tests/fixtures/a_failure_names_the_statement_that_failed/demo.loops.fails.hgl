@@ -1,9 +1,0 @@
-module demo.loops.fails
-const fn strict(text: str) -> i64 {
-    switch text {
-        case "a": return 1
-        case "b": return 2
-    }
-    return 0
-}
-test unmatched { assert strict("z") == 0 }

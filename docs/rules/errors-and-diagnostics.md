@@ -8,9 +8,7 @@ diagnostics: done
 
 - Every diagnostic has a category and a code; a warning has its code alone, is listed apart from the source codes, and does not reject
 
-transpiler: done
-
-- hgraph: a capture takes an HGL error alone; any other failure a node raises, a form the target does not write or a fault of its own, is raised again beside every capture (`_core.Escaped`), with no code
+transpiler: planned
 
 ## ERR-2
 
@@ -20,17 +18,11 @@ analyser: partial
 - The payload is read as its side's type
 - Left: a result expected through a generic parameter still being inferred; equality
 
-transpiler: partial
-
-- hgraph: `ok` and `err` are values of the provider's, equal when their tags and then their payloads are, and unhashable
-- A temporal `result` publishes whole, a `_core.Result`
+transpiler: planned
 
 ## ERR-3
 
-transpiler: done
-
-- hgraph: `is_ok` and `is_err` test which the value is, and `.value` and `.error` read its payload
-- In a graph a test of a connection is the provider's lifted node, `_core.lifted_is_ok`
+transpiler: planned
 
 analyser: partial
 
@@ -47,11 +39,7 @@ analyser: done
 - `error(message: text, code: optional_code)`: each by its name, `message` a `str` and required, `code` a `str?`; `.message` is a `str` and `.code` a `str?`
 - `.context` is an `error context?`, a type of this compiler's, whose `.node` and `.phase` are a `str` and `.evaluation_time` a `datetime`, read under ERR-12 and never assigned (`binding.immutable`)
 
-transpiler: partial
-
-- hgraph: an `error` is a value of the provider's with a message and a code that may be null, equal when both are
-- `.context` is null for a constructed error; a captured failure's holds its node's wiring path, its phase and evaluation time, kept when it is propagated again, two equal when their parts are
-- Left: a failure inside a branch of a `switch_` names the `switch_` node, the one hgraph reports
+transpiler: planned
 
 ## ERR-5
 
@@ -82,22 +70,11 @@ analyser: partial
 - Bound with `let`, `.value` is the call's output and `.error` an `error`, both connections; `.value` of an outputless call is `capture.output_field`
 - Left: a capture used other than through a `let` and its two connections is not judged
 
-transpiler: partial
-
-- hgraph: in a graph, `capture` of a graph or a source given no wiring-time value is `_hg.try_except` of it; of a node, a value function lifted over a connection, or a graph given a wiring-time value, `try_except` of a graph of the target's own that calls it and binds the values, so that no call outside the capture shares the node it covers
-- `.value` is its `out` and `.error` its failures, each made an `error` with the failing node's provenance by `_core.captured_error`
-- A temporal `error` and `result` publish whole
-- Left: a capture of any but a graph given no wiring-time value other than as a `let`'s value; one in a test outside an eval; a call with a pack; a lifted operator or native function
+transpiler: planned
 
 ## ERR-8
 
-transpiler: done
-
-- hgraph: `try_except` catches an evaluation failure once, at the nearest boundary, and the child is evaluated again on its next input; start and stop failures escape, those of a `switch_` branch the evaluation starts or stops too, raised again by `_core.captured` through every capture
-- Each capture sees its own call's failures, two of one call each
-- A failed keyed child stays live for its key, and a capture in a keyed child is that child's
-- A retained error raised again keeps its first provenance
-- A node's write to `out` and a source's publication made before the failure in its pass stand
+transpiler: planned
 
 ## ERR-9
 
@@ -125,9 +102,7 @@ analyser: partial
 
 ## ERR-11
 
-transpiler: done
-
-- hgraph: NaN, an infinity and `CmpResult.unordered` publish as any value does, from a node and from a lifted value function, and a capture sees no failure; under `.fail` a zero divisor is a failure a capture sees
+transpiler: planned
 
 ## ERR-12
 
@@ -154,13 +129,7 @@ analyser: done
 - So is a read of a window's value, of an input, `out` or a child named when compiled (`CheckedWindow`), where the place expects `result<list<V>, error>`, "T being the `list<V>` it reads as (TYPE-11)"
 - So is `delta_value` of any endpoint, an input, `out` or a child, where the place expects `result<delta<T>, error>`, and core's `removed_value` of a window where it expects `result<V, error>` (`CheckedDelta`), the place saying what V is; where the place takes no `result` a window of a duration's delta and any `removed_value` are `payload.unguarded` (TYPE-11)
 
-transpiler: partial
-
-- hgraph: `ok` of the child's value, or `err` of an `error` coded `value.unset_read` where the child is not valid (`_core.checked_child_result`); elsewhere the read fails with that code.; a dictionary's entry whose key is absent is a child that is not valid (TIME-1), and is read as one
-- A struct, a tuple or a fixed list read whole there that is valid and not all valid gives the same, a required part that is not valid failing the read
-- A window's value read there before it is all valid gives that `err` too (`_core.window_result`, and `_core.checked_child_result` of a window child known when it runs)
-- `delta_value` of a direct input or `out` read there is `ok` of the delta (`_core.Ok`) where the endpoint is modified and valid, as `modified` is written, and that `err` where it has not ticked or was invalidated, for every endpoint but a window of a duration, core's `record` among them
-- Left, reported: `delta_value` of a child, of a window of a duration or of a value that holds one, and `removed_value`, read there
+transpiler: planned
 
 ## ERR-15
 

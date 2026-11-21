@@ -59,11 +59,7 @@ analyser: partial
 - A default is read as a value of its parameter's type (`type.mismatch`) and kept for the stages after, `Module::defaults`
 - Left: that a default is a required constant; the default of a window, an atomic or a reference, which is held to no type; a default whose parameter's type names a generic parameter
 
-transpiler: partial
-
-- hgraph: a call that leaves out a parameter with a default is written with the default in its place, for a value function and for a `const` parameter of a temporal one
-- A temporal input written `T?` and left out is bound to hgraph's `nothing` of its type, never valid; a `signal?` to one of a `bool`; a `ref` parameter to a `nothing` of its `REF`, which designates nothing and is never valid or modified (FN-16)
-- Left: a temporal input's default, wired as a constant
+transpiler: planned
 
 ## UNIT-9
 
@@ -116,10 +112,7 @@ analyser: partial
 - One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a default a call leaves to be read
 - Left: the value of a constant computed by a `const fn`; a struct's field default counts for a construction that gives the field; a formatter's writing a constant back as written, as there is no formatter yet
 
-transpiler: done
-
-- hgraph: a constant is a function of no parameter that the provider runs once, and a read is a call of it, in value code, in a graph and from another module
-- An instance and a generic struct's class are keyed by their constants' values (`ConstantValue::key`, GEN-13): `reciprocal<1>()` and `reciprocal<1.0>()` call one, and `reciprocal<0.0>()` and `reciprocal<-0.0>()` two, each written with its own value whichever is called first
+transpiler: planned
 
 ## UNIT-14
 
@@ -138,8 +131,4 @@ analyser: done
 - Those statements, the defaults among them, and the arguments of the run statement's call are value code: a call of a node, a graph or a source there is `call.role`, the code proposed, an operator selects among all its candidates and a temporal one selected is `call.role` too (GEN-5), and nothing is lifted; the call of the entry is composition (RUN-1)
 - Its path is no other file's: the first file of the path is the unit and each later one is reported (`application.duplicate_path`)
 
-transpiler: done
-
-- hgraph: what an application declares is written as a module's is, and its run statement after it as a function, `_application`, that runs its entry
-- What sets the run's store is a function of the store, `_application_store`, which the run calls before it builds its graph
-- An application that needs a form not written yet is blocked by it, as a test is
+transpiler: planned

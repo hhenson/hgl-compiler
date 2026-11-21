@@ -20,10 +20,7 @@ analyser: partial
 - A named operator call, and a symbol's configuration, may name an option its candidates declare
 - Left: what a pack holds; a generic function's parameter types
 
-transpiler: partial
-
-- hgraph: a call's arguments are written in the order they are given, and Python evaluates each once in that order; an index of a place a call assigns, and of a compound assignment's place, is evaluated once and held, with what it is an index of where reading that may fail
-- Left: a pack; a default evaluated where the argument it stands for would be
+transpiler: planned
 
 ## EXPR-3
 
@@ -35,14 +32,7 @@ analyser: partial
 - In a value function, a hook and a source an assignment names a place inside a value, `point.x = 1`, `row[0] += 1`, `book["a"] = 1`: the root is a `var`, a `state`, a `cache` or `out`, a `let`, a parameter and an iteration binding are read-only all the way down (`binding.immutable`), the value is of the place's type, and a compound assignment reads the place first
 - Left: an annotation checked against the category of its value
 
-transpiler: partial
-
-- hgraph: an assignment to a field or an element, at any depth, leaves what took the old value as it was: a list's and a tuple's element by its index, which fails outside the sequence, and a dictionary's value by its key, which is added where it is not there
-- An element of the list, and an entry of the dictionary, that a `var`, a `var` parameter, a `state` or a `cache` holds is assigned where the collection is, with no copy; what took the old value is a copy already (LIST-3)
-- A place further inside the value, `book.bids[price] = size`, `rows[key][0] = 2`, is assigned by the provider going in (`_core.set_at`): each collection on the way is changed where it is
-- What a place is assigned is a copy, where something else holds it, and so is a key a dictionary is given
-- A field of the struct a `var`, a `var` parameter, a `state` or a `cache` holds is assigned where the struct is (`_core.set_field`, `_core.set_at`), and what took it took a copy (the owner's rule, issue 151); a struct of at most two scalar fields is a value, and is given a new one, as a tuple is, though a parent's type stands for it
-- Left: `out` assigned piecewise; a way in whose index is an expression after an element read, which is given new values
+transpiler: planned
 
 ## EXPR-4
 
@@ -82,11 +72,7 @@ analyser: partial
 - A structural projection of a `ref` parameter in a hook, `xs[i]` or `quote.bid`, selects its child, an endpoint, and reads no payload; an atomic projection of one, `quote.bid` of `ref quote: atomic<Quote>`, reads its payload and is `ref.read` (FN-16)
 - Left: an index on any other value that has none; temporal projection
 
-transpiler: partial
-
-- hgraph: brackets read a list's and a tuple's element by its index, failing outside the sequence, and a dictionary's value by its key
-- Left, reported: an assertion that an index outside a list fails with `value.index_out_of_range`, a code the provider's failure has not (TST-10)
-- Left: projection of a connection; a child of a `ref` parameter, which is reported (FN-16)
+transpiler: planned
 
 ## EXPR-8
 
@@ -136,10 +122,7 @@ analyser: partial
 
 ## EXPR-13
 
-transpiler: partial
-
-- hgraph: a configured binary expression is written left operand, configuration, right operand, and Python evaluates a call's arguments in that order
-- Left: unary configuration, and short-circuiting
+transpiler: planned
 
 ## EXPR-14
 
@@ -158,8 +141,4 @@ analyser: done
 
 - In a graph an assignment into a place of a `var` is read as one elsewhere is (EXPR-3), and is an assignment to the `var`: a connection stays one whatever its place is given, an ordinary value given a connection, indexed by one, or assigned in a branch selected at runtime is rejected (`binding.category`), and so is a `var` declared outside a loop that makes one child for each member (`loop.carried`)
 
-transpiler: partial
-
-- hgraph: a field of a struct's connection, a tuple's position and a fixed list's position under a literal index, at any depth, rebind the `var` to a new bundle or `TSL` of the old one's parts but the place's, made where the graph is built (`from_ts`); what read the `var` before keeps its connection, and a branch selected at runtime assigns it as it assigns the `var`
-- An ordinary value assigned is a constant connection of the place's type; a nullable scalar place takes a connection of its `T` through `_core.nullable`
-- Left, reported: a field of an atomic struct's connection, an entry of a dictionary's, a position of an unsized list's, and a fixed list's or a tuple's position by an index that is no literal
+transpiler: planned

@@ -24,18 +24,12 @@
 //! above asks for core's candidate of `+` for `f64`, which core's
 //! OPS-9 gives a body of its own.
 //!
-//! A value function with generic parameters is written once where it
-//! can be, as the hgraph target writes it: Python takes a value of any
-//! type ([`Instances::of`]). A target whose values are typed writes
-//! each by instance ([`Instances::typed`]). It is written by instance too where
-//! its body calls an operation the declaration requires, or
-//! hands one of its requirements on to what it calls (GEN-16): which
-//! candidate that is depends on the types, and where its body has a call
-//! a membership it states authorises, whose candidate each instance
-//! selects (GEN-3, GEN-7). So is one that reads a generic value parameter as a value
-//! (GEN-13), and one that calls a
-//! function written by instance with its own generic parameters, which
-//! are known only in an instance of it.
+//! A value function and a value candidate with generic parameters is
+//! written by instance too, as the target's values are typed
+//! ([`Instances::typed`]): which candidate answers a requirement it
+//! states (GEN-16) or a call a membership it states authorises (GEN-3,
+//! GEN-7), and what a generic value parameter is (GEN-13), each instance
+//! says.
 //!
 //! An eval asks for instances too: its run is wired with core's
 //! `replay` for each input it gives a trace and core's `record` for
@@ -82,13 +76,8 @@ pub struct Instances {
     /// and its position among that module's declarations.
     declared: BTreeMap<(usize, usize), Vec<Instance>>,
     /// The value functions and value candidates that are written by
-    /// instance: those whose body [`requires`], and those that call
-    /// one written by instance with arguments that are not whole.
+    /// instance: each with generic parameters and a body.
     requiring: BTreeSet<(usize, usize)>,
-    /// The instances asked for and not made, each by its declaration and
-    /// its key: those past the [`hgl_analyser::INSTANCES`] of one
-    /// declaration that one call makes.
-    past: BTreeSet<(usize, usize, Vec<String>)>,
 }
 
 /// One call's request for an instance.
@@ -278,37 +267,6 @@ fn generic(program: &Program, module: usize, declaration: usize) -> bool {
     generic && matches!(declared.bodies.get(declaration), Some(Some(_)))
 }
 
-/// True for a body that one call of its declaration says something
-/// of. It needs to know what answers its declaration's requirements
-/// (GEN-16): it calls an operation the declaration requires, or one of
-/// its calls is answered by a requirement the declaration states,
-/// which it so hands on. Or it reads a generic value parameter as a
-/// value, which is the constant the call gives (GEN-13).
-fn requires(body: &Body) -> bool {
-    fn stated(answers: &[Answer]) -> bool {
-        answers.iter().any(|answer| match answer {
-            Answer::Stated(_) => true,
-            Answer::Candidate { requirements, .. } => stated(requirements),
-            Answer::Unread => false,
-        })
-    }
-    let mut found = false;
-    walk_statements(&body.statements, &mut |value| {
-        found |= match &value.kind {
-            ExprKind::GenericValue { .. } => true,
-            ExprKind::Call { callee, .. } => match callee {
-                Callee::Required { .. } => true,
-                Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
-                    stated(requirements)
-                }
-                Callee::Unread => false,
-            },
-            _ => false,
-        };
-    });
-    found
-}
-
 /// The generic arguments of a call of `declaration` of `module` as an
 /// instance's key. `None` where they are not whole: one of them names
 /// a generic parameter or is not known, or the call does not say what
@@ -344,68 +302,20 @@ impl Instances {
     /// declaration are made from one call than the analyser follows
     /// ([`hgl_analyser::INSTANCES`]): one past them is not made, and a
     /// call of it is reported.
-    pub fn of(program: &Program) -> Instances {
-        Instances::collected(program, false)
-    }
-
-    /// The instances `program` asks for, as [`Instances::of`] gives
-    /// them, for a target whose values are typed: there every value
-    /// function and value candidate with generic parameters is written
-    /// by instance, one for each set of generic arguments it is called
-    /// with (GEN-2), as a temporal one is.
+    ///
+    /// The target's values are typed, so every value function and value
+    /// candidate with generic parameters is written by instance, one for
+    /// each set of generic arguments it is called with (GEN-2), as a
+    /// temporal one is.
     pub fn typed(program: &Program) -> Instances {
-        Instances::collected(program, true)
-    }
-
-    /// [`Instances::of`], or [`Instances::typed`] where `every` is true.
-    fn collected(program: &Program, every: bool) -> Instances {
         let mut instances = Instances::default();
         for (index, module) in program.modules.iter().enumerate() {
             for (declaration, body) in module.bodies.iter().enumerate() {
                 let value = module.declarations[declaration].kind.role() == Some(Role::Value);
-                // A body with a call a membership authorises is written
-                // for each instance, which calls the candidate it selects.
-                if let (Some(body), true) = (body, value)
-                    && generic(program, index, declaration)
-                    && (every || requires(body) || module.selects_per_instance(declaration))
-                {
+                if body.is_some() && value && generic(program, index, declaration) {
                     instances.requiring.insert((index, declaration));
                 }
             }
-        }
-        // A value function that calls one written by instance with its
-        // own generic parameters is written by instance too: only an
-        // instance of it says which instance it calls. That makes more
-        // of them so, until it makes no more.
-        loop {
-            let mut more = Vec::new();
-            for (index, module) in program.modules.iter().enumerate() {
-                for (declaration, body) in module.bodies.iter().enumerate() {
-                    let value = module.declarations[declaration].kind.role() == Some(Role::Value);
-                    let (Some(body), true) = (body, value) else {
-                        continue;
-                    };
-                    if !generic(program, index, declaration)
-                        || instances.requiring.contains(&(index, declaration))
-                    {
-                        continue;
-                    }
-                    let open = instances
-                        .asked(program, &body.statements)
-                        .iter()
-                        .any(|asked| {
-                            key(program, (asked.module, asked.declaration), &asked.generics)
-                                .is_none()
-                        });
-                    if open {
-                        more.push((index, declaration));
-                    }
-                }
-            }
-            if more.is_empty() {
-                break;
-            }
-            instances.requiring.extend(more);
         }
         let mut waiting: VecDeque<Asked> = VecDeque::new();
         for (index, module) in program.modules.iter().enumerate() {
@@ -476,7 +386,6 @@ impl Instances {
                 .entry((root, next.module, next.declaration))
                 .or_insert(0);
             if *count >= hgl_analyser::INSTANCES {
-                instances.past.insert((next.module, next.declaration, key));
                 continue;
             }
             *count += 1;
@@ -603,11 +512,8 @@ impl Instances {
         found
     }
 
-    /// True for a declaration that is written by instance: a temporal
-    /// function or candidate with generic parameters and a body, and a
-    /// value one whose body needs to know what answers its
-    /// requirements, or calls one written by instance with its own
-    /// generic parameters.
+    /// True for a declaration that is written by instance: a function or
+    /// a candidate with generic parameters and a body.
     pub fn instanced(&self, program: &Program, module: usize, declaration: usize) -> bool {
         generic_temporal(program, module, declaration)
             || self.requiring.contains(&(module, declaration))
@@ -619,19 +525,6 @@ impl Instances {
         self.declared
             .get(&(module, declaration))
             .map_or(&[], Vec::as_slice)
-    }
-
-    /// True where the instance of `declaration` of `module` for the
-    /// generic arguments `generics` was asked for and not made: it is
-    /// past the instances of it one call makes ([`hgl_analyser::INSTANCES`]).
-    pub fn past(
-        &self,
-        program: &Program,
-        (module, declaration): (usize, usize),
-        generics: &[GenericArgument],
-    ) -> bool {
-        key(program, (module, declaration), generics)
-            .is_some_and(|key| self.past.contains(&(module, declaration, key)))
     }
 
     /// The instance of `declaration` of `module` for the generic

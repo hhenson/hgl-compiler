@@ -29,6 +29,5 @@
     "conformance::a_nullable_success_is_distinct_from_a_failure",
 ]
 
-# Rejection cases the compiler does not yet reject, as in the hgraph
-# target's list: none.
+# Rejection cases the compiler does not yet reject: none.
 [rejections]

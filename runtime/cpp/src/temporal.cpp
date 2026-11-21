@@ -114,8 +114,8 @@ hgraph::ZoneId catalogued(std::string_view name, std::source_location where) {
 }
 
 /// The local clock `micros`, counted from the epoch, as a date and a time
-/// with the seconds, and the microseconds where there are any: the text the
-/// hgraph target's failure gives the literal.
+/// with the seconds, and the microseconds where there are any: the text a
+/// failure gives the literal.
 std::string local_text(i64 micros) {
     const std::chrono::sys_time<duration> at{duration{micros}};
     const sys_days day = std::chrono::floor<std::chrono::days>(at);

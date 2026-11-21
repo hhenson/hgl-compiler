@@ -2,14 +2,13 @@
 //! [hgraph](https://github.com/hhenson/hgraph)'s graph, node, type and
 //! runtime layers (`docs/cpp-target.md`).
 //!
-//! This is a transpiler, the last stage of the pipeline, beside the
-//! hgraph target that writes Python. It reads the analysed program and
-//! writes C++ source: for each module a translation unit and a header,
-//! and for each module with tests an entry unit, the `main` of one
-//! executable that runs the module's tests chosen when it runs. The
-//! generated code links `libhglrt`, this repository's C++ runtime
-//! library ([`runtime`]), and hgraph. Building and running is the build
-//! driver's, in `hgl_cli`. Nothing here checks the language: what
+//! This is a transpiler, the last stage of the pipeline. It reads the
+//! analysed program and writes C++ source: for each module a
+//! translation unit and a header, and for each module with tests an
+//! entry unit, the `main` of one executable that runs the module's
+//! tests chosen when it runs. The generated code links `libhglrt`, this
+//! repository's C++ runtime library ([`runtime`]), and hgraph. Building
+//! and running is the build driver's, in `hgl_cli`. Nothing here checks the language: what
 //! reaches this stage has been checked.
 //!
 //! What this target cannot yet write is reported as a `build`
@@ -17,7 +16,7 @@
 //! program that reaches it: C++ is compiled whole, so a function that
 //! calls one that is not written is not written either. A test that
 //! reaches nothing left out can still be run; one that does is listed
-//! with the first form it reaches, as the hgraph target lists it.
+//! with the first form it reaches.
 //!
 //! How an HGL form is written, in short (`emit`'s modules say it all):
 //!
@@ -29,7 +28,7 @@
 //! | `const fn total(a: i64, b: i64) -> i64` | A function `::hgraph::Int total(::hgraph::Int a, ::hgraph::Int b)`; a generic one, a function for each instance |
 //! | The scalars, enums, `T?`, tuples, lists, results | hgraph's scalars, `enum class`, `std::optional`, `std::tuple`, `hglrt::list`, `hglrt::result` |
 //! | Structs, sets, dictionaries, deltas | Aggregates with HGL's equality, `hglrt::set`, `hglrt::dict`, the deltas of `hglrt` and of each struct |
-//! | A native candidate of core, `a + b` of two `i64` | The library's function named as the hgraph target names it: `::hglrt::add__i64_i64(a, b)` |
+//! | A native candidate of core, `a + b` of two `i64` | The library's function, named by its operation and its parameters' types: `::hglrt::add__i64_i64(a, b)` |
 //! | `assert condition`, `assert raises("code") { ... }` | `::hglrt::testing::check(condition)`, `::hglrt::testing::raises("code", ...)`, after `::hglrt::testing::statement()` |
 //!
 //! Every other form is reported as not written yet: anything temporal

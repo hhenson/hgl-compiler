@@ -7,9 +7,8 @@
 // entry unit declares each of the module's tests, registers it by the name
 // the runner gives it, `module.path::name` (TST-15), and its `main` calls
 // `hglrt::testing::main`, which runs the ones named on the command line and
-// records what becomes of each in a results file, in the form the runner
-// reads from the Python target's driver
-// (`crates/hgl_hgraph/support/run_tests.py`):
+// records what becomes of each in a results file, in the form the build
+// driver reads (`crates/hgl_cli/src/cpp/results.rs`):
 //
 //     EXECUTABLE RESULTS TEST...
 //

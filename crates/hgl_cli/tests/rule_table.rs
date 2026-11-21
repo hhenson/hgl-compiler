@@ -33,7 +33,7 @@ const STAGES: [(&str, &[&str]); 10] = [
     ("formatter", &[]),
     ("analyser", &["hgl_analyser"]),
     ("optimiser", &[]),
-    ("transpiler", &["hgl_hgraph"]),
+    ("transpiler", &["hgl_lower", "hgl_cpp"]),
     ("runner", &["hgl_runner"]),
     ("driver", &["hgl_cli"]),
     ("diagnostics", &["hgl_diagnostics"]),

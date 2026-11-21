@@ -397,9 +397,9 @@ fn a_constant_in_a_requires_is_read_by_its_name() {
 /// do: an implementation has a bound on the instances of one
 /// declaration, and rejects the program where they pass it. Proposed: the
 /// code `generic.instance_limit`, at the call that makes the first of
-/// them." The bound is `hgl_analyser::INSTANCES`, which the hgraph target
-/// writes no more than either. A call that makes exactly that many of one
-/// declaration is followed whole, each once, and so is one that makes
+/// them." The bound is `hgl_analyser::INSTANCES`, past which
+/// `hgl_lower` makes no instance either. A call that makes exactly that
+/// many of one declaration is followed whole, each once, and so is one that makes
 /// that many of each of two; one that makes one more of one rejects, and
 /// says that its instances do not end within the bound. `climb<N + 1>` in
 /// `climb<N>` ends when the program runs, but its instances do not; nor
