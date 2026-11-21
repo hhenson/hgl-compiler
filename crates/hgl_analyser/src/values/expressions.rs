@@ -104,12 +104,14 @@ impl<'a> Typer<'a> {
             }
             SyntaxKind::MemberExpr => self.member(node),
             SyntaxKind::TypeCall => self.type_call(node),
-            // An anonymous function's body is for a later part. What it
-            // captures of a capability is reported here, and what it
-            // reads of a node's inputs where it is written.
+            // The body has its own scope and result (FN-7, FN-14).
+            // The function itself has no general callable type.
             SyntaxKind::FnExpr => {
-                self.captured_capabilities(node);
-                self.anonymous_reads(node);
+                let parameters = self.anonymous_parameters(node);
+                let result = child(node, SyntaxKind::ReturnType)
+                    .and_then(|annotation| self.anonymous_type(&annotation))
+                    .unwrap_or(Type::Unknown);
+                self.anonymous_body(node, parameters, &result);
                 (ExprKind::Unread, Type::Unknown)
             }
             SyntaxKind::ImpliedMember => self.implied_member(node, expected),
@@ -162,7 +164,7 @@ impl<'a> Typer<'a> {
             }
             _ => (ExprKind::Unread, Type::Unknown),
         };
-        if matches!(kind, ExprKind::Unread) {
+        if matches!(kind, ExprKind::Unread) && node.kind() != SyntaxKind::FnExpr {
             self.forget();
         }
         if self.graph {
@@ -257,7 +259,11 @@ impl<'a> Typer<'a> {
     pub(super) fn local_of(&self, node: &SyntaxNode) -> Option<LocalId> {
         let name = name_token(node)?;
         match self.bindings.get(&(self.file, name.span().start))? {
-            Binding::Local { at, .. } => self.declared.get(at).copied(),
+            // FN-14 and ERR-9: a forbidden capture was already reported
+            // by the resolver, so it supplies no type to this use.
+            Binding::Local { at, kind } => self.declared.get(at).copied().filter(|&local| {
+                !self.is_capture(local) || (kind.capture_allowed() && !self.is_capability(local))
+            }),
             Binding::Declarations { .. } => None,
         }
     }

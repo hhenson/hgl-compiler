@@ -27,9 +27,9 @@
 //! * a test's `assert`, `eval` and `run` (TST-3, TST-4, TST-17).
 //!
 //! A form it does not read yet is left [`ExprKind::Unread`], with no
-//! type and no report: configuration given to `!`, `&&` or `||`, an
-//! anonymous function's body, and a conversion written with a type's
-//! name, `str(value)`. A type that is not known is reported once, where
+//! type and no report: configuration given to `!`, `&&` or `||`, and a
+//! conversion written with a type's name, `str(value)`. A type that is
+//! not known is reported once, where
 //! it was found, and never again where it is used (ERR-9).
 
 use std::cell::RefCell;
@@ -44,6 +44,7 @@ use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
 };
 use crate::types::{CallArguments, Detail, Scalar, Signature, Type};
+use anonymous::Anonymous;
 use control::label;
 use endpoints::endpoint_argument;
 
@@ -51,6 +52,8 @@ pub(crate) use candidates::{Selecting, select_in_instance};
 pub(crate) use constants::generic_default;
 pub(crate) use lifting::record;
 
+// The bodies of anonymous functions and their direct calls (FN-7, FN-14).
+mod anonymous;
 // Arguments given to parameters or fields, and a struct's construction (EXPR-2, TYPE-5).
 mod arguments;
 // What every call is held to once it is built (FN-1, FN-9, FN-15, TIME-8).
@@ -395,6 +398,8 @@ struct Typer<'a> {
     file: FileId,
     declaration: &'a Declaration,
     signature: &'a Signature,
+    /// Absent while reading the enclosing declaration itself.
+    anonymous: Option<Anonymous>,
     bindings: &'a HashMap<(FileId, u32), &'a Binding>,
     written: &'a HashMap<(FileId, u32), &'a Type>,
     /// The generic arguments each call writes, by where its callee
@@ -622,6 +627,7 @@ impl<'a> Typer<'a> {
             file: module.files[declaration.file].file,
             declaration,
             signature,
+            anonymous: None,
             bindings: tables.bindings,
             written: tables.written,
             calls: tables.calls,
@@ -665,6 +671,15 @@ impl<'a> Typer<'a> {
             bound: Vec::new(),
             diagnostics,
         }
+    }
+
+    /// The current function's result, which is the anonymous function's
+    /// while reading its body (FN-7, CTRL-5).
+    fn result_type(&self) -> Option<&Type> {
+        self.anonymous
+            .as_ref()
+            .map(|scope| &scope.result)
+            .or(self.signature.result.as_ref())
     }
 
     fn at(&self, node: &SyntaxNode) -> Location {
@@ -749,6 +764,13 @@ impl<'a> Typer<'a> {
         for diagnostic in spent {
             self.diagnostics.emit(diagnostic);
         }
+        self.restore_read(mark, keep_flow);
+        clean
+    }
+
+    /// Restores the surrounding scope after an anonymous function's
+    /// body or a tentative read, keeping the current diagnostics.
+    fn restore_read(&mut self, mark: Mark, keep_flow: bool) {
         // A call the reading put to be selected for each instance goes
         // with it: the reading that stands puts its own.
         self.selecting.borrow_mut().truncate(mark.selecting);
@@ -771,7 +793,6 @@ impl<'a> Typer<'a> {
             self.returned = mark.returned;
             self.unsure = mark.unsure;
         }
-        clean
     }
 
     /// True when one more expression of the construct being read may be
