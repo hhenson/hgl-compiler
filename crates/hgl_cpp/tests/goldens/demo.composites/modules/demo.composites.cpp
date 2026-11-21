@@ -78,6 +78,7 @@
 #undef london
 #undef longer
 #undef made
+#undef maybes
 #undef member
 #undef members
 #undef more
@@ -458,7 +459,7 @@ void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int 
     return ::hglrt::parent_list<::hgl::demo::composites::m_::Shape>(rounds);
 }
 
-// failing() -> i64 (`const fn`), module demo.composites, line 369
+// failing() -> i64 (`const fn`), module demo.composites, line 373
 ::hgraph::Int failing()
 {
     return ::hglrt::item(::hglrt::list<::hgraph::Int>{1}, 5);
@@ -597,6 +598,10 @@ void dictionaries_read_add_and_loop()
     ::hglrt::testing::check((!(::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"c"})).has_value()));
     ::hglrt::testing::statement();
     ::hglrt::testing::check((::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"b"}) == 2));
+    ::hglrt::testing::statement();
+    [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, std::optional<::hgraph::Int>> maybes = ::hglrt::dict_of<::hgraph::Str, std::optional<::hgraph::Int>>({{::hgraph::Str{"a"}, std::nullopt}, {::hgraph::Str{"b"}, 2}});
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check((((!(::hglrt::get_dict_K__T__K<::hgraph::Str, std::optional<::hgraph::Int>>(maybes, ::hgraph::Str{"a"})).has_value()) && (::hglrt::get_dict_K__T__K<::hgraph::Str, std::optional<::hgraph::Int>>(maybes, ::hgraph::Str{"b"}) == 2)) && (!(::hglrt::get_dict_K__T__K<::hgraph::Str, std::optional<::hgraph::Int>>(maybes, ::hgraph::Str{"c"})).has_value())));
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::composites::m_::total(book), 3, 0.0, 0.0));
     ::hglrt::testing::statement();

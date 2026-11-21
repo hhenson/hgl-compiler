@@ -178,6 +178,12 @@ TEST_CASE("get gives the value of a key, or null (ERR-6)") {
     const hglrt::dict<str, i64> book{{"a", 0}};
     CHECK(hglrt::get_dict_K__T__K(book, "a") == std::optional<i64>{0});
     CHECK(hglrt::get_dict_K__T__K(book, "b") == std::nullopt);
+    // TYPE-14: `T?` of an `i64?` is an `i64?`, and a null held is null.
+    const hglrt::dict<str, std::optional<i64>> nullable{{"a", std::nullopt}, {"b", 2}};
+    static_assert(std::is_same_v<decltype(hglrt::get_dict_K__T__K(nullable, "a")), std::optional<i64>>);
+    CHECK(hglrt::get_dict_K__T__K(nullable, "a") == std::nullopt);
+    CHECK(hglrt::get_dict_K__T__K(nullable, "b") == std::optional<i64>{2});
+    CHECK(hglrt::get_dict_K__T__K(nullable, "c") == std::nullopt);
 }
 
 TEST_CASE("a struct is a key through its fields") {

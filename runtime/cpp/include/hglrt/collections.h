@@ -75,6 +75,11 @@ struct fields;
 template <class S>
 concept written_struct = requires { fields<S>::members; };
 
+/// `T?` (TYPE-14): `std::optional<T>`, and `T` itself where it is a nullable
+/// already, as the suffix makes no nullable of a nullable.
+template <class T>
+using nullable_t = std::conditional_t<detail::is_optional<T>::value, T, std::optional<T>>;
+
 /// A value of an abstract struct (TYPE-3): a class the compiler writes, which
 /// holds the struct it is through `held_`, a pointer to a `held_value`.
 template <class A>
@@ -213,9 +218,10 @@ entry_place<K, V> entry(dict<K, V>& book, const std::type_identity_t<K>& key) {
 
 /// `get<K, T>(store: dict<K, T>, key: K) -> T?` (core's capabilities.hgl,
 /// ERR-6): the value the dictionary has for the key, or null where it has
-/// none.
+/// none. A `T` that is a nullable already gives itself: `T?` of an `i64?`
+/// is an `i64?` (TYPE-14), and a null held is null.
 template <class K, class T>
-std::optional<T> get_dict_K__T__K(const dict<K, T>& store, const std::type_identity_t<K>& key) {
+nullable_t<T> get_dict_K__T__K(const dict<K, T>& store, const std::type_identity_t<K>& key) {
     const auto found = store.find(key);
     if (found == store.end()) {
         return std::nullopt;

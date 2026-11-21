@@ -344,6 +344,10 @@ test dictionaries_read_add_and_loop {
     assert book == ["b": 2, "a": 1]
     assert get(book, "c") == null
     assert get(book, "b") == 2
+    # TYPE-14: `get` of a dictionary of `i64?` gives an `i64?`, null for a
+    # null held.
+    let maybes: dict<str, i64?> = ["a": null, "b": 2]
+    assert get(maybes, "a") == null && get(maybes, "b") == 2 && get(maybes, "c") == null
     assert total(book) == 3
     assert counted(["x", "y", "x"]) == ["x": 2, "y": 1]
     assert bumped(book, "b") == ["a": 1, "b": 3]

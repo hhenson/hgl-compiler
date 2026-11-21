@@ -130,7 +130,7 @@ fn template_arguments(
     {
         return None;
     }
-    if !template_keeps(&read.generics, &read.members, arguments) {
+    if !template_keeps(program, struct_of, arguments, &mut Vec::new()) {
         return None;
     }
     let written: Option<Vec<String>> = arguments
@@ -160,11 +160,27 @@ fn template_arguments(
 ///   field's `i64?` (TYPE-14: the suffix makes no nullable of a
 ///   nullable), and its delta's property, the atomic's whole value
 ///   (TYPE-16), where the template's would be an optional of an optional.
+///
+/// A field that names another generic struct is checked as that struct's
+/// application, its arguments given ours: `seen` holds the applications
+/// on the way, which are not checked again.
 fn template_keeps(
-    generics: &[GenericParameter],
-    members: &[hgl_analyser::Member],
+    program: &Program,
+    struct_of: (usize, usize),
     arguments: &[GenericArgument],
+    seen: &mut Vec<((usize, usize), Vec<GenericArgument>)>,
 ) -> bool {
+    let Some(Detail::Struct(read)) = program.modules[struct_of.0].details.get(struct_of.1) else {
+        return true;
+    };
+    let (generics, members) = (&read.generics, &read.members);
+    if seen
+        .iter()
+        .any(|(at, given)| *at == struct_of && given.as_slice() == arguments)
+    {
+        return true;
+    }
+    seen.push((struct_of, arguments.to_vec()));
     fn erased_in_cpp(ty: &Type) -> bool {
         match ty {
             Type::Atomic(_) => true,
@@ -238,12 +254,45 @@ fn template_keeps(
     for member in members {
         made_nullable(&member.ty, &mut nullable_of);
     }
-    !nullable_of.iter().any(|at| {
+    let flattened = nullable_of.iter().any(|at| {
         generics
             .iter()
             .position(|generic| generic.at == *at)
             .and_then(|position| arguments.get(position))
             .is_some_and(|argument| matches!(argument, GenericArgument::Type(Type::Nullable(_))))
+    });
+    if flattened {
+        return false;
+    }
+    // Each generic struct a field names, applied to what our arguments
+    // make of its own.
+    let mut nested = Vec::new();
+    for member in members {
+        walk_types(&member.ty, &mut |part| {
+            if let Type::Named {
+                module,
+                declaration,
+                arguments: given,
+                kind: NamedKind::Struct,
+                ..
+            } = part
+                && !given.is_empty()
+            {
+                nested.push(((*module, *declaration), given.clone()));
+            }
+        });
+    }
+    nested.into_iter().all(|(of, given)| {
+        let given: Vec<GenericArgument> = given
+            .iter()
+            .map(|argument| match argument {
+                GenericArgument::Type(ty) => {
+                    GenericArgument::Type(substituted(ty, generics, arguments))
+                }
+                GenericArgument::Constant(_) => argument.clone(),
+            })
+            .collect();
+        template_keeps(program, of, &given, seen)
     })
 }
 
