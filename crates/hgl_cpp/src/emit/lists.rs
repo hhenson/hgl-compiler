@@ -27,7 +27,7 @@ use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Value};
 use hgl_analyser::{ConstantValue, NamedKind, Type};
 
 use super::Emitter;
-use super::calls::{changes, may_fail};
+use super::expressions::held_read;
 use super::forms::Family;
 use super::names;
 use super::nodes::{Kind, Role};
@@ -128,19 +128,24 @@ impl Emitter<'_> {
         };
         let namespace = runtime::NAMESPACE;
         match shape(&base.ty)? {
-            // EXPR-2: a child of a child is chosen before the next index
-            // is evaluated, as C++ evaluates a call's arguments in no order
-            // it promises: where that index runs statements or may fail,
-            // the parent is held first.
-            Shape::Growing(_) | Shape::Fixed(..)
-                if matches!(base.kind, ExprKind::Index { .. })
-                    && (changes(index) || may_fail(index)) =>
-            {
+            // EXPR-2: the parent is chosen before the next index is
+            // evaluated, as C++ evaluates a call's arguments in no order it
+            // promises: where either runs statements, or both may fail, as
+            // a list's element read has it (`expressions::held_read`), the
+            // parent is held first.
+            Shape::Growing(_) | Shape::Fixed(..) if held_read(base, index) => {
                 let held = names::temporary("parent", self.temporary());
                 let at = names::temporary("index", self.temporary());
                 let index = self.expression(scope, index);
+                // An input's view, which hgraph does not copy, is named by
+                // reference; a child of one is the value the library made.
+                let kept = if matches!(base.kind, ExprKind::Local(_)) {
+                    "const auto&"
+                } else {
+                    "const auto"
+                };
                 Some(format!(
-                    "[&]() {{ const auto {held} = {parent}; const ::hgraph::Int {at} = {index}; return ::{namespace}::child({held}, {at}); }}()"
+                    "[&]() {{ {kept} {held} = {parent}; const ::hgraph::Int {at} = {index}; return ::{namespace}::child({held}, {at}); }}()"
                 ))
             }
             Shape::Growing(_) | Shape::Fixed(..) => {
@@ -390,10 +395,10 @@ impl Family for Lists {
         }
         let port = emitter.wiring_form(scope, base);
         // EXPR-2: the connection is wired before its index is evaluated:
-        // where the index runs statements or may fail, the port is held
-        // first, as C++ evaluates a call's arguments in no order it
-        // promises.
-        if changes(index) || may_fail(index) {
+        // where either runs statements, or both may fail
+        // (`expressions::held_read`), the port is held first, as C++
+        // evaluates a call's arguments in no order it promises.
+        if held_read(base, index) {
             let held = names::temporary("list", emitter.temporary());
             let at = names::temporary("index", emitter.temporary());
             let index = emitter.expression(scope, index);

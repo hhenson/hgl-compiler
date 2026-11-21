@@ -22,8 +22,11 @@
 #undef observe
 #undef observe_parts
 #undef ordered_child
+#undef ordered_connection
 #undef ordered_of
 #undef ordered_port
+#undef ordered_row
+#undef ordered_row_of
 #undef pair
 #undef part_sum
 #undef part_validity
@@ -212,19 +215,37 @@ namespace w_
 
 namespace w_
 {
-// shifted_pair(trigger: i64, const first: i64) -> list<i64, 2> (node), module demo.lists, line 153
+// ordered_row(values: list<list<i64>>) -> bool (node), module demo.lists, line 152
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> ordered_row(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> values);
+}  // namespace w_
+
+namespace w_
+{
+// ordered_row_of(count: i64) -> bool (graph), module demo.lists, line 162
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> ordered_row_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count);
+}  // namespace w_
+
+namespace w_
+{
+// shifted_pair(trigger: i64, const first: i64) -> list<i64, 2> (node), module demo.lists, line 166
 ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> shifted_pair(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> trigger, ::hgraph::Int first);
 }  // namespace w_
 
 namespace w_
 {
-// ordered_port(trigger: i64) -> i64 (graph), module demo.lists, line 157
+// ordered_port(trigger: i64) -> i64 (graph), module demo.lists, line 170
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> ordered_port(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> trigger);
 }  // namespace w_
 
 namespace w_
 {
-// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 166
+// ordered_connection(trigger: i64) -> i64 (graph), module demo.lists, line 180
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> ordered_connection(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> trigger);
+}  // namespace w_
+
+namespace w_
+{
+// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 189
 ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> relay(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values);
 }  // namespace w_
 
