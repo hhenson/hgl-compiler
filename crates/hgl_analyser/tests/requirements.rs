@@ -854,6 +854,28 @@ fn a_call_checks_each_type_its_pack_requires() {
     );
 }
 
+/// GEN-7 and GEN-10: a generic caller's stated memberships prove a
+/// requirement on a fixed argument or on a member of the captured pack.
+#[test]
+fn a_generic_body_proves_requirements_on_calls_with_packs() {
+    let checked = module(concat!(
+        "const fn numeric<T, ...Ts>(value: T, rest: ...Ts) -> i64\n",
+        "    requires T in {i64, f64} && each R in types(Ts) { R in {i64, f64} } => 1\n",
+        "const fn fixed<U>(value: U) -> i64 requires U in {i64, f64} => numeric(value, 1)\n",
+        "const fn packed<U>(value: U) -> i64 requires U in {i64, f64} => numeric(1, value)\n",
+        "const fn invalid<U>(value: U) -> i64 requires U in {i64, str} => numeric(1, value)\n",
+    ));
+    let reports = checked.summary();
+    assert_eq!(reports.len(), 1, "{}", checked.report);
+    assert!(reports[0].starts_with("m.hgl:6:"), "{}", checked.report);
+    assert!(
+        reports[0].contains("constraint/requires.unmet GEN-7"),
+        "{}",
+        checked.report
+    );
+    assert!(checked.report.contains("`U` = `str`"), "{}", checked.report);
+}
+
 /// GEN-3: "and so is an application of a struct whose `requires` does
 /// not hold with its arguments": where the struct is constructed, its
 /// arguments written or found from its fields (GEN-2), and where a type

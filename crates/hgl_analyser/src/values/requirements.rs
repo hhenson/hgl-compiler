@@ -454,7 +454,9 @@ impl<'a> Typer<'a> {
             // generic arguments a call of it gives" (hhenson/hgl_spec#144:
             // so is a call in it of another generic function).
             None if function && passes_on(generics, &own) => {
-                if let Some(report) = self.unmet_under_stated(at, callee, generics, &condition) {
+                if let Some(report) =
+                    self.unmet_under_stated(at, callee, (generics, &[]), &condition)
+                {
                     self.diagnostics.emit(report);
                 }
             }
@@ -484,9 +486,23 @@ impl<'a> Typer<'a> {
             return;
         }
         let program = self.program;
+        let own: Vec<_> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
         let report = match held {
             Some(true) => return,
             Some(false) => unmet(program, callee, at, &condition),
+            None if passes_on(generics, &own) || packs_pass_on(type_packs, &own) => {
+                if let Some(report) =
+                    self.unmet_under_stated(at, callee, (generics, type_packs), &condition)
+                {
+                    self.diagnostics.emit(report);
+                }
+                return;
+            }
             None if unvalued => untold(program, callee, at, &condition),
             None => untold_with_reason(
                 program,
@@ -542,7 +558,7 @@ impl<'a> Typer<'a> {
         &mut self,
         at: Location,
         callee: (usize, usize),
-        generics: &[Argument],
+        (generics, type_packs): (&[Argument], &[hir::TypePackArgument]),
         condition: &SyntaxNode,
     ) -> Option<hgl_diagnostics::Diagnostic> {
         let program = self.program;
@@ -555,7 +571,9 @@ impl<'a> Typer<'a> {
         let memberships: Vec<(Location, Vec<Argument>)> = self
             .memberships()
             .into_iter()
-            .filter(|(parameter, _)| passes_on(generics, &[*parameter]))
+            .filter(|(parameter, _)| {
+                passes_on(generics, &[*parameter]) || packs_pass_on(type_packs, &[*parameter])
+            })
             .collect();
         let mut combinations = super::candidates::combinations(&memberships);
         if memberships.is_empty() {
@@ -573,6 +591,17 @@ impl<'a> Typer<'a> {
             let placed_generics: Vec<Argument> = generics
                 .iter()
                 .map(|argument| given_in(argument, &given, &own))
+                .collect();
+            let placed_packs: Vec<_> = type_packs
+                .iter()
+                .map(|pack| hir::TypePackArgument {
+                    parameter: pack.parameter,
+                    types: pack
+                        .types
+                        .iter()
+                        .map(|ty| placed(substitute_within(ty, &given), &own))
+                        .collect(),
+                })
                 .collect();
             // ERR-9: "Failure during argument evaluation precedes later
             // admission checks": a generic argument worked out from the
@@ -595,7 +624,7 @@ impl<'a> Typer<'a> {
                 });
             }
             let held = self
-                .requires_told(callee, &placed_generics)
+                .requires_told_with_packs(callee, &placed_generics, &placed_packs)
                 .map(|(_, held, _)| held);
             if held == Some(Some(true)) {
                 continue;
@@ -2444,6 +2473,14 @@ fn passes_on(generics: &[Argument], declared: &[Location]) -> bool {
                 &|constant| constant.value.names_one_of(declared),
             ),
         })
+}
+
+/// An inferred pack can pass on a type of the enclosing generic body too.
+fn packs_pass_on(packs: &[hir::TypePackArgument], declared: &[Location]) -> bool {
+    packs
+        .iter()
+        .flat_map(|pack| &pack.types)
+        .any(|ty| mentions(ty, declared))
 }
 
 /// `argument`, a generic argument a call in a generic body gives, with
