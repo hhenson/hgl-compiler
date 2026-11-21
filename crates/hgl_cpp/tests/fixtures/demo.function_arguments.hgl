@@ -37,6 +37,11 @@ fn live_double(input: i64) -> i64 {
     when { return input + input }
 }
 
+operator live_transform(input: i64) -> i64
+impl fn live_transform(input: i64) -> i64 {
+    when { return input + 5 }
+}
+
 fn live_lambda(input: i64) -> i64 => map_graph(fn(n) => live_double(n), input)
 
 fn live_capture(input: i64, offset: i64) -> i64 =>
@@ -68,6 +73,8 @@ test ordinary_callbacks {
 
 test temporal_callbacks {
     assert eval map_graph(live_double, input: [2, 3]) == [4, 6]
+    assert eval map_graph(live_transform, input: [2, 3]) == [7, 8]
+    assert eval map_graph(triple, input: [2, 3]) == [6, 9]
     assert eval apply(increment, input: [2, 3]) == [3, 4]
     assert eval hooked(input: [2, 3]) == [4, 5]
     assert eval live_lambda(input: [2, 3]) == [4, 6]
