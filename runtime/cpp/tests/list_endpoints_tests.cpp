@@ -439,6 +439,39 @@ struct Yields {
     }
 };
 
+std::vector<list<bool>> flags_read;
+
+/// A growing `list<bool>`, a `std::vector<bool>`, whose element is a bit:
+/// published whole and by delta, and read whole, on every standard library
+/// (an element of one is a proxy on libc++).
+struct Flags {
+    static constexpr auto name = "test::flags";
+    static void eval(hgraph::In<"step", hgraph::TS<i64>> step,
+                     hgraph::Out<hgraph::TSL<hgraph::TS<bool>>> out_) {
+        if (step.value() == 0) {
+            const list<bool> whole{true, false};
+            hglrt::publish(out_, whole);
+        } else {
+            hglrt::publish(out_, list_delta<list<bool>>{.updated = {{1, true}, {2, false}}});
+        }
+    }
+};
+
+struct ReadFlags {
+    static constexpr auto name = "test::read_flags";
+    static void eval(hgraph::In<"flags", hgraph::TSL<hgraph::TS<bool>>> flags) {
+        flags_read.push_back(hglrt::checked_whole(flags));
+    }
+};
+
+TEST_CASE("a growing list of bool is published and read whole (TIME-7, TIME-1)") {
+    flags_read.clear();
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        hgraph::wire<ReadFlags>(wiring, hgraph::wire<Flags>(wiring, replayed(wiring, Dense<i64>{0, 1})));
+    });
+    CHECK(flags_read == std::vector<list<bool>>{list<bool>{true, false}, list<bool>{true, true, false}});
+}
+
 static_assert(std::is_same_v<hglrt::yielded_t<i64>, i64>);
 static_assert(std::is_same_v<hglrt::yielded_t<list<i64>>, std::variant<list<i64>, list_delta<list<i64>>>>);
 
