@@ -133,6 +133,15 @@ impl Program {
             diagnostics: &reports,
         };
         default.walk_mut(&mut |expression| self.place(expression, &instance, &[]));
+        let reports = reports.into_inner();
+        for report in reports.as_slice() {
+            if !diagnostics.as_slice().contains(report) {
+                diagnostics.emit(report.clone());
+            }
+        }
+        if reports.has_errors() {
+            return default;
+        }
         crate::values::fit_operator_default(self, operator, default, parameter, diagnostics)
     }
 
