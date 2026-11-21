@@ -871,8 +871,7 @@ fn a_window_given_to_a_lifted_default_is_read_as_its_list() {
 
 /// A window the target does not write yet is reported where its type is
 /// written, and blocks what reaches it: one of a nullable V, whose delta
-/// is the nullable's own (TYPE-11), and the invalidation of a window
-/// result (END-4).
+/// is the nullable's own (TYPE-11). Direct window invalidation is supported (END-4).
 #[test]
 fn a_window_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -923,10 +922,7 @@ fn a_window_not_written_yet_is_reported() {
     );
     assert_eq!(emitted.blocked("a_window"), None);
     // END-4 of a window result.
-    assert_eq!(
-        emitted.blocked("an_invalidated_window").as_deref(),
-        Some("m.hgl:17:12 the cpp target does not write `invalidate` of a window yet")
-    );
+    assert_eq!(emitted.blocked("an_invalidated_window"), None);
 }
 
 /// What a node's `when` writes of its window result is held until its
@@ -935,8 +931,8 @@ fn a_window_not_written_yet_is_reported() {
 /// publication"; TYPE-11: "A window takes at most one value a cycle"): its
 /// handlers run inside `::hglrt::WindowArrival::run`, and each write holds
 /// its value. A write then `invalidate(out)` (END-4: "publish then
-/// invalidate leaves the endpoint invalid") is reported, as `invalidate`
-/// of a window is; and so is a read of the result in that `when`, which
+/// invalidate leaves the endpoint invalid") discards the write. A read
+/// of the result in that `when` is still reported, since it
 /// would not see what the evaluation holds.
 #[test]
 fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
@@ -1019,10 +1015,8 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
     ] {
         assert!(unit.contains(written), "{written} in\n{unit}");
     }
-    assert_eq!(
-        emitted.blocked("written_then_invalidated").as_deref(),
-        Some("m.hgl:15:9 the cpp target does not write `invalidate` of a window yet")
-    );
+    assert_eq!(emitted.blocked("written_then_invalidated"), None);
+    assert!(unit.contains("arrival_.invalidate();"), "{unit}");
     assert_eq!(
         emitted.blocked("written_then_read").as_deref(),
         Some(
