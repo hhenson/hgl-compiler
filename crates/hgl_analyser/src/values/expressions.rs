@@ -536,7 +536,9 @@ impl<'a> Typer<'a> {
         self.signature
             .parameters
             .get(local)
-            .is_some_and(|parameter| !parameter.constant)
+            .is_some_and(|parameter| {
+                !parameter.constant && !matches!(parameter.ty, Type::Function(_))
+            })
     }
 
     /// `[key: value, ...]` (EXPR-9): "`[a: b]` has one pair entry, not a

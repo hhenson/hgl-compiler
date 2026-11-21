@@ -200,8 +200,8 @@ impl Typer<'_> {
         if !template.types().all(whole) {
             return None;
         }
-        let before = self.graph;
-        self.graph = !template.value;
+        let graph = std::mem::replace(&mut self.graph, !template.value);
+        let value_code = std::mem::replace(&mut self.value_code, false);
         let candidates = self.value_candidates(operator);
         let candidates: Vec<_> = candidates
             .into_iter()
@@ -231,7 +231,8 @@ impl Typer<'_> {
             written: false,
         };
         let (mut matches, unknown) = self.admitted(operator, &candidates, &given, &wanted);
-        self.graph = before;
+        self.graph = graph;
+        self.value_code = value_code;
         if !unknown
             && matches.len() == 1
             && let Some(chosen) = matches.pop()
@@ -243,7 +244,15 @@ impl Typer<'_> {
                 .kind
                 .role()
                 == Some(Role::Value);
-            let actual = function_type(taken, value);
+            let mut actual = function_type(taken, value);
+            if let Some(Detail::Callable(public)) = self.program.modules[operator.module]
+                .details
+                .get(operator.declaration)
+            {
+                for ((name, _), public) in actual.parameters.iter_mut().zip(&public.parameters) {
+                    *name = Some(public.name.clone());
+                }
+            }
             let requirements = self.answers(module, declaration, &chosen.generics);
             let callee = Callee::Candidate {
                 operator: (operator.module, operator.declaration),
@@ -364,7 +373,7 @@ impl Typer<'_> {
             .map(|(name, ty)| Slot {
                 name: name.as_deref().unwrap_or(""),
                 ty: ty.clone(),
-                required: true,
+                required: !matches!(ty, Type::Nullable(_)),
                 pack: None,
                 pack_bounds: (0, None),
                 type_pack: None,

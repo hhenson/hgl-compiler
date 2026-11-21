@@ -4353,10 +4353,13 @@ fn function_arguments_select_static_targets() {
         "operator twice_callback<T>(value: T) -> T\n",
         "impl const fn twice_callback(value: i64) -> i64 => value + value\n",
         "const fn operator_callback(x: i64) -> i64 => apply_callback(twice_callback, x)\n",
-        "const fn lambda_callback(x: i64) -> i64 => apply_callback(fn(n) => n + 1, x)\n",
+        "const fn lambda_callback(x: i64) -> i64 {\n",
+        "    let offset = x + 1\n",
+        "    return apply_callback(fn(n) => n + offset, x)\n",
+        "}\n",
         "fn graph_callback(f: fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
         "fn node_callback(x: i64) -> i64 { when { return x } }\n",
-        "fn graph_lambda(x: i64) -> i64 => graph_callback(fn(n) => node_callback(n), x)\n",
+        "fn graph_lambda(x: i64) -> i64 => graph_callback(fn(n) => node_callback(n + x), x)\n",
         "fn lifted_callback(x: i64) -> i64 => graph_callback(inc_callback, x)\n",
     ));
     assert!(checked.summary().is_empty(), "{}", checked.report);
@@ -4377,6 +4380,8 @@ fn function_arguments_check_their_template() {
         "const fn wrong_role(x: i64) -> i64 => unnamed(temporal_callback, x)\n",
         "const fn wrong_value(x: i64) -> i64 => unnamed(x, x)\n",
         "const fn wrong_lambda(x: i64) -> i64 => unnamed(fn(n) => temporal_callback(n), x)\n",
+        "const fn plus_generic<const N: i64>(x: i64) -> i64 => x + N\n",
+        "const fn unresolved_callback(x: i64) -> i64 => unnamed(plus_generic, x)\n",
     ));
     let codes: Vec<_> = checked
         .findings
@@ -4390,7 +4395,8 @@ fn function_arguments_check_their_template() {
             "type/type.mismatch",
             "type/type.mismatch",
             "type/function.argument",
-            "function-kind/call.role"
+            "function-kind/call.role",
+            "type/generic.unresolved"
         ],
         "{}",
         checked.report,

@@ -462,7 +462,7 @@ fn function_capture_arguments(
     let mut next = original;
     let mut ranges = vec![None; original];
     for (parameter, captures) in captured {
-        ranges[parameter] = Some((next, captures.len()));
+        ranges[parameter] = Some(next);
         next += captures.len();
     }
     // An instance may already carry captures from its uninstantiated
@@ -480,7 +480,7 @@ fn function_capture_arguments(
         let Some((parameter, captured)) = holds else {
             continue;
         };
-        let (start, _) = ranges[parameter].expect("capture slots were reserved");
+        let start = ranges[parameter].expect("capture slots were reserved");
         for (offset, local) in captured.into_iter().enumerate() {
             let binding = &locals[local];
             arguments.push(crate::hir::Argument {
