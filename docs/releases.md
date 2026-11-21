@@ -27,13 +27,41 @@ from the successful `main` run for that commit. If the main run is
 missing or its artifact has expired, the tag run builds and verifies a
 fresh bundle before publishing.
 
-After publishing, use the release's version and published archive checksum
-to open one update PR in the tap (set `version` and `sha256` first).
+## Update the Homebrew tap
 
-```sh
-brew bump-formula-pr hhenson/hgraph/hgl --version="$version" --sha256="$sha256" \
-  --url="https://github.com/hhenson/hgl-compiler/releases/download/$version/hgl-$version-macos-arm64.tar.gz"
-```
+1. Once the compiler release is published, prepare a tap branch with the
+   formula's new version, published archive URL and archive SHA-256. Remove
+   the previous version's bottle stanza. Have that commit reviewed in
+   [the tap PR](https://github.com/hhenson/homebrew-hgraph/pulls) and keep
+   the PR open for the bottle update.
+2. Set `version` to the bare release tag and `tap_sha` to the full SHA of
+   that reviewed commit in the tap. Dispatch **Homebrew bottle** on `main`
+   with publishing enabled.
+
+   ```sh
+   gh workflow run homebrew-bottle.yml --repo hhenson/hgl-compiler --ref main \
+     -f release_tag="$version" -f tap_sha="$tap_sha" -F publish=true
+   ```
+
+   The hosted Apple silicon macOS 26 job checks the formula against the
+   published archive, installs it with `brew install --build-bottle`, and
+   builds a relocatable `arm64_tahoe` bottle. The artifact keeps the bottle,
+   SHA-256, generated stanza and manifest. The publish job verifies those
+   bottle bytes and adds the tarball under Homebrew's download filename
+   beside the source archive. Omitting the `publish` input keeps the run
+   read-only.
+3. Add the generated `bottle.rb` stanza **from the successful publish
+   run** to the same tap PR. Its bottle SHA-256 is for the bottle tarball.
+   Keep the published source archive's SHA-256 as the formula's source
+   checksum. The stanza's `root_url` points to the matching compiler
+   release. Verify an ordinary `brew install hhenson/hgraph/hgl` pours
+   from the updated tap in an empty Homebrew prefix. Check `hgl --version`
+   and `hgl check` after the pour. Run `brew audit --strict` and `brew test`
+   on the formula before landing the tap PR.
+
+Pouring the bottle needs Homebrew. Building or running an HGL program on
+the C++ target requires Apple Clang 21 or later, CMake and Ninja. The bottle
+contains the SDK and its libraries.
 
 ## Build an archive locally
 

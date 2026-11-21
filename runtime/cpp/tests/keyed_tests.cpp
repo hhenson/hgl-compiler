@@ -14,6 +14,8 @@
 #include <chrono>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -369,6 +371,72 @@ TEST_CASE("a set that is not valid fails a read of it whole (TIME-1, ERR-14)") {
     CHECK(early_codes == std::vector<std::optional<std::string>>{"value.unset_read", std::nullopt});
 }
 
+// ---- A dictionary of tuples -------------------------------------------------
+
+using TupleEntry = std::tuple<i64, i64>;
+using TupleSchema =
+    hgraph::UnNamedTSB<hgraph::Field<"0", hgraph::TS<i64>>, hgraph::Field<"1", hgraph::TS<i64>>>;
+using TupleBookSchema = hgraph::TSD<str, TupleSchema>;
+using TupleBookInput = hgraph::In<"book", TupleBookSchema>;
+
+/// The first step gives only position 0 of the entry. The second completes it.
+struct WriteTupleEntry {
+    static constexpr auto name = "test::write_tuple_entry";
+
+    static void eval(hgraph::In<"step", hgraph::TS<i64>> step, hgraph::Out<TupleBookSchema> out) {
+        using Delta = hglrt::dict_delta<str, TupleEntry>;
+        const hglrt::delta_t<TupleEntry> part = step.value() == 0
+                                                    ? hglrt::delta_t<TupleEntry>{3, std::nullopt}
+                                                    : hglrt::delta_t<TupleEntry>{std::nullopt, 8};
+        hglrt::keyed_publish(out, Delta{{{"A", part}}, {}});
+    }
+};
+
+void read_whole_book_at_hgl_source(const TupleBookInput& book);
+void read_tuple_entry_at_hgl_source(const TupleBookInput& book);
+hglrt::result<TupleEntry> read_tuple_result_at_hgl_source(const TupleBookInput& book);
+
+std::size_t tuple_book_reads = 0;
+
+struct ReadTupleEntry {
+    static constexpr auto name = "test::read_tuple_entry";
+
+    static void eval(hgraph::In<"step", hgraph::TS<i64>> step, TupleBookInput book) {
+        ++tuple_book_reads;
+        CHECK(hglrt::keyed_entry_valid(book, "A"));
+        if (step.value() == 0) {
+            const auto check_location = [&](auto read, unsigned line) {
+                try {
+                    read(book);
+                    FAIL("expected an unset read");
+                } catch (const hglrt::Failure& failure) {
+                    CHECK(failure.error().code == "value.unset_read");
+                    CHECK(std::string_view{failure.where().file_name()} == "demo/dictionary_reads.hgl");
+                    CHECK(failure.where().line() == line);
+                }
+            };
+            check_location(read_whole_book_at_hgl_source, 12);
+            check_location(read_tuple_entry_at_hgl_source, 18);
+            const auto result = read_tuple_result_at_hgl_source(book);
+            REQUIRE_FALSE(result.has_value());
+            CHECK(result.error().code == "value.unset_read");
+        } else {
+            const auto result = read_tuple_result_at_hgl_source(book);
+            REQUIRE(result.has_value());
+            CHECK(*result == TupleEntry{3, 8});
+        }
+    }
+};
+
+TEST_CASE("partial dictionary tuples keep the place of a failing read and give err in a result (ERR-14)") {
+    tuple_book_reads = 0;
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        const auto step = replayed(wiring, Dense<i64>{0, 1});
+        hgraph::wire<ReadTupleEntry>(wiring, step, hgraph::wire<WriteTupleEntry>(wiring, step));
+    });
+    CHECK(tuple_book_reads == 2);
+}
+
 // ---- Traces ----------------------------------------------------------------
 
 TEST_CASE("a set's and a dictionary's whole trace cells publish their change from the cells before (TST-9)") {
@@ -404,6 +472,22 @@ TEST_CASE("a set, a dictionary and their deltas have their HGL names and text") 
     CHECK(hglrt::testing::text_of(MembersDelta{{3}, {1}}) == "delta<set<i64>>(added: [3], removed: [1])");
     CHECK(hglrt::testing::text_of(BookDelta{{{"a", 1}}, {"b"}}) ==
           "delta<dict<str, i64>>(updated: [\"a\": 1], removed: [\"b\"])");
+}
+
+// The generated code sets the HGL file and line at each read.
+void read_whole_book_at_hgl_source(const TupleBookInput& book) {
+#line 12 "demo/dictionary_reads.hgl"
+    (void)hglrt::keyed_value(book);
+}
+
+void read_tuple_entry_at_hgl_source(const TupleBookInput& book) {
+#line 18 "demo/dictionary_reads.hgl"
+    (void)hglrt::keyed_entry_value(book, "A");
+}
+
+hglrt::result<TupleEntry> read_tuple_result_at_hgl_source(const TupleBookInput& book) {
+#line 23 "demo/dictionary_reads.hgl"
+    return hglrt::keyed_entry_result(book, "A");
 }
 
 } // namespace

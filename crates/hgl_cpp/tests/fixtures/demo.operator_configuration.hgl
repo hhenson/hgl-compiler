@@ -44,10 +44,14 @@ impl const fn pick{flag: bool}(value: bool) -> bool => if flag { false } else { 
 
 const fn required_pick<T>(value: T) -> T requires pick(T) -> T => pick(value)
 const fn required_named_pick<T>(value: T) -> T requires pick(T) -> T => pick<T>(value: value)
+const fn required_configured_pick<T>(value: T) -> T requires pick(T) -> T =>
+    pick{flag: true}(value)
 
 test a_required_operator_keeps_ordinary_argument_slots {
     assert required_pick(7) == 107
     assert required_named_pick(true)
+    assert required_configured_pick(7) == 0
+    assert required_configured_pick(true) == false
 }
 
 struct Digit { value: i64 }

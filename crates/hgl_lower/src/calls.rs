@@ -57,6 +57,25 @@ pub fn left_out<'p>(
     index: usize,
     parameter: &Parameter,
 ) -> Option<LeftOut<'p>> {
+    if parameter.configuration
+        && let Callee::Candidate {
+            operator,
+            operator_generics,
+            ..
+        } = callee
+        && let Some(default) = program.inherited_configuration_default(callee, index)
+    {
+        let mut diagnostics = hgl_diagnostics::Diagnostics::new();
+        let default = program.specialize_operator_default(
+            default,
+            *operator,
+            operator_generics,
+            parameter,
+            &mut diagnostics,
+        );
+        return (!diagnostics.has_errors())
+            .then(|| LeftOut::Default(DefaultValue::Specialized(Box::new(default))));
+    }
     let default = callee.declaration().and_then(|(module, declaration)| {
         program.modules[module]
             .defaults
@@ -65,21 +84,7 @@ pub fn left_out<'p>(
             .and_then(Option::as_ref)
     });
     if let Some(default) = default {
-        let default = match callee {
-            Callee::Candidate {
-                operator,
-                operator_generics,
-                ..
-            } if parameter.configuration && !operator_generics.is_empty() => {
-                DefaultValue::Specialized(Box::new(program.specialize_operator_default(
-                    default,
-                    *operator,
-                    operator_generics,
-                )))
-            }
-            _ => DefaultValue::Declared(default),
-        };
-        Some(LeftOut::Default(default))
+        Some(LeftOut::Default(DefaultValue::Declared(default)))
     } else if matches!(parameter.ty, Type::Nullable(_)) {
         Some(LeftOut::Null)
     } else {

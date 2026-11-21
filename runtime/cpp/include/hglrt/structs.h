@@ -94,7 +94,7 @@ auto value_of(const E& view);
 
 /// Publishes `value`, a whole value or a delta, to the child output `view`.
 template <class E, class V>
-void publish_part(const E& view, const V& value);
+void publish_part(const E& view, const V& value, std::source_location where);
 
 } // namespace detail
 
@@ -286,7 +286,7 @@ auto whole_value(const E& view, std::source_location where = std::source_locatio
 /// it was"). Each field publishes as its own form does.
 template <class E, class V>
     requires detail::bundle<schema_of<E>>
-void publish(const E& out, const V& value) {
+void publish(const E& out, const V& value, std::source_location where = std::source_location::current()) {
     using S = schema_of<E>;
     using Read = endpoint_read<S>;
     using Whole = typename Read::value_type;
@@ -294,9 +294,10 @@ void publish(const E& out, const V& value) {
     if constexpr (std::is_same_v<V, Whole>) {
         [&]<std::size_t... I>(std::index_sequence<I...>) {
             if constexpr (detail::is_tuple<Whole>::value) {
-                (detail::publish_part(child<I>(out), std::get<I>(value)), ...);
+                (detail::publish_part(child<I>(out), std::get<I>(value), where), ...);
             } else {
-                (detail::publish_part(child<I>(out), value.*std::get<I>(detail::members_of<Whole>)), ...);
+                (detail::publish_part(child<I>(out), value.*std::get<I>(detail::members_of<Whole>), where),
+                 ...);
             }
         }(std::make_index_sequence<count>{});
     } else {
@@ -313,7 +314,7 @@ void publish(const E& out, const V& value) {
                         }
                     }();
                     if (part.has_value()) {
-                        detail::publish_part(child<I>(out), *part);
+                        detail::publish_part(child<I>(out), *part, where);
                     }
                 }(),
                 ...);
@@ -340,12 +341,12 @@ template <class S>
     requires detail::bundle<S>
 struct publisher<S> {
     template <class O>
-    static void whole(const O& out, const schema_value_t<S>& value, std::source_location) {
-        hglrt::publish(out, value);
+    static void whole(const O& out, const schema_value_t<S>& value, std::source_location where) {
+        hglrt::publish(out, value, where);
     }
     template <class O>
-    static void change(const O& out, const delta_t<schema_value_t<S>>& delta, std::source_location) {
-        hglrt::publish(out, delta);
+    static void change(const O& out, const delta_t<schema_value_t<S>>& delta, std::source_location where) {
+        hglrt::publish(out, delta, where);
     }
 };
 
@@ -382,11 +383,11 @@ auto value_of(const E& view) {
 }
 
 template <class E, class V>
-void publish_part(const E& view, const V& value) {
+void publish_part(const E& view, const V& value, std::source_location where) {
     if constexpr (bundle<schema_of<E>>) {
-        hglrt::publish(view, value);
+        hglrt::publish(view, value, where);
     } else {
-        publish_as_form(view, value, std::source_location::current());
+        publish_as_form(view, value, where);
     }
 }
 
@@ -403,7 +404,7 @@ struct AtomicField {
 
     static void eval(hgraph::In<"whole", hgraph::TS<S>> whole, hgraph::Out<Field> out) {
         const S value = checked_value(whole);
-        detail::publish_part(out, value.*std::get<I>(detail::members_of<S>));
+        detail::publish_part(out, value.*std::get<I>(detail::members_of<S>), std::source_location::current());
     }
 };
 

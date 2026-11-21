@@ -32,7 +32,7 @@
 //! types (GEN-7: "Each instance then selects its own candidate";
 //! [`crate::values::Selecting`]).
 
-use hgl_diagnostics::Location;
+use hgl_diagnostics::{Diagnostics, Location};
 
 use crate::declared::substitute_within;
 use crate::hir::{
@@ -56,13 +56,45 @@ struct InstanceArguments<'a> {
 }
 
 impl Program {
+    /// The operator's configuration default inherited by a candidate's parameter
+    /// at `slot` (GEN-6). Candidate-only configuration has its own default.
+    pub fn inherited_configuration_default(&self, callee: &Callee, slot: usize) -> Option<&Expr> {
+        let Callee::Candidate {
+            operator,
+            module,
+            declaration,
+            ..
+        } = callee
+        else {
+            return None;
+        };
+        let owner = self.modules.get(operator.0)?;
+        let Detail::Callable(public) = owner.details.get(operator.1)? else {
+            return None;
+        };
+        let Detail::Callable(candidate) = self.modules.get(*module)?.details.get(*declaration)?
+        else {
+            return None;
+        };
+        let index = public
+            .candidate_parameters(candidate)
+            .position(|index| index == Some(slot))?;
+        if !public.parameters[index].configuration {
+            return None;
+        }
+        owner.defaults.get(operator.1)?.get(index)?.as_ref()
+    }
+
     /// Places the operator's generic arguments in a checked configuration default.
     /// Its declaration references still name the operator's defining scope (UNIT-7).
+    /// The selected configuration parameter gives the default its type (UNIT-8).
     pub fn specialize_operator_default(
         &self,
         default: &Expr,
         operator: (usize, usize),
         generics: &[Argument],
+        parameter: &Parameter,
+        diagnostics: &mut Diagnostics,
     ) -> Expr {
         let mut default = default.clone();
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
@@ -81,7 +113,7 @@ impl Program {
             requirements: &[],
         };
         default.walk_mut(&mut |expression| self.place(expression, &instance, &[]));
-        default
+        crate::values::fit_operator_default(self, operator, default, parameter, diagnostics)
     }
 
     /// The signature and the body of `declaration` of `module` as one

@@ -138,7 +138,7 @@ impl<'a> Typer<'a> {
             generics: if public
                 .parameters
                 .iter()
-                .any(|parameter| parameter.configuration && parameter.has_default)
+                .any(|parameter| parameter.configuration)
             {
                 explicit
             } else {
@@ -151,7 +151,7 @@ impl<'a> Typer<'a> {
     /// GEN-2 and GEN-12: the operator's inputs resolve its generics in
     /// declaration order, whether for the requested output or to complete
     /// an FN-17 function template before binding static arguments.
-    fn infer_operator_inputs(
+    pub(super) fn infer_operator_inputs(
         &self,
         public: &Signature,
         found: &mut [Option<Argument>],

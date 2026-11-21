@@ -767,6 +767,33 @@ fn nested_forms_run_on_the_sdk() {
     );
 }
 
+/// A dictionary's tuple entry reads into a result even if it is not all valid (ERR-14, TIME-1).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_partial_dictionary_tuple_entry_reads_as_err_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("dictionary-entry-result");
+    let file = write(
+        &root,
+        "src/demo.dictionary_entry_result.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.dictionary_entry_result.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The temporal code of scalars on the SDK: a graph with lifted calls, a
 /// constant connection, nodes with state, handlers in order and
 /// capabilities, a source, and the evals of them (`demo.temporal`).
