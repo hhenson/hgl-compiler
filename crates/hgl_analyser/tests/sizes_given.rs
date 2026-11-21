@@ -179,9 +179,9 @@ fn a_call_that_gives_a_list_a_negative_size_is_rejected() {
 /// A struct that holds itself with arguments that grow at each level
 /// gives no size that is known below the type written, and holding it
 /// ends: `Grow<N + N>` in `Grow<const N: i64>`, `Twice<tuple<T, T>>` in
-/// `Twice<T>`, and `Pairs<[N, N]>` in `Pairs<N>`, where each writes it and
-/// where each is applied with known arguments. TYPE-10 as above for
-/// `Grow<-1>`.
+/// `Twice<T>`, `Pairs<[N, N]>` in `Pairs<N>` and `Text<S + S>` in
+/// `Text<const S: str>`, where each writes it and where each is applied
+/// with known arguments. TYPE-10 as above for `Grow<-1>`.
 #[test]
 fn a_struct_that_holds_itself_with_growing_arguments_is_held_in_bounds() {
     let checked = module(concat!(
@@ -199,10 +199,14 @@ fn a_struct_that_holds_itself_with_growing_arguments_is_held_in_bounds() {
         "    next: atomic<list<Pairs<[N, N]>>>\n",
         "}\n",
         "const fn paired(p: Pairs<0>) -> i64 => 0\n",
+        "struct Text<const S: str> {\n",
+        "    next: atomic<list<Text<S + S>>>\n",
+        "}\n",
+        "const fn texts(t: Text<\"x\">) -> i64 => 0\n",
     ));
     // TYPE-6 rejects `Twice`, which holds itself; the instances of
     // `Grow` end at an `N + N` out of range (GEN-8), and those of `Pairs`
-    // do not end within the bound (GEN-13).
+    // and `Text` do not end within the bound (GEN-13).
     assert_eq!(
         checked.summary(),
         [
@@ -211,6 +215,7 @@ fn a_struct_that_holds_itself_with_growing_arguments_is_held_in_bounds() {
             "m.hgl:11:20 type/generic.argument_constant GEN-8",
             "m.hgl:11:20 type/list.size TYPE-10",
             "m.hgl:15:20 type/generic.instance_limit GEN-13",
+            "m.hgl:19:19 type/generic.instance_limit GEN-13",
         ]
     );
 }

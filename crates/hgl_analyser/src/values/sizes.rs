@@ -31,10 +31,11 @@ const DEPTH: usize = 32;
 const APPLICATIONS: usize = 256;
 
 /// How many parts, types and constants and the values inside them, a
-/// struct application followed may have. A struct may apply itself with
-/// an argument that doubles at each depth, `Grow<[N, N]>` in `Grow<N>`,
-/// and an application past this is not followed.
-const PARTS: usize = 1024;
+/// struct application followed may have, a string counting a part for
+/// each byte. A struct may apply itself with an argument that doubles at
+/// each depth, `Grow<[N, N]>` in `Grow<N>` or `Grow<S + S>` in `Grow<const
+/// S: str>`, and an application past this is not followed.
+const PARTS: usize = 4096;
 
 /// A size that TYPE-10 or TYPE-11 rejects, as an application gives it.
 struct Fault {
@@ -250,9 +251,9 @@ fn names_a_parameter(ty: &Type) -> bool {
     )
 }
 
-/// True when `ty` has more than [`PARTS`] parts: types, constants, and
-/// the values inside a constant that is a list, a tuple or an
-/// expression. Counting stops once past it.
+/// True when `ty` has more than [`PARTS`] parts: types, constants, the
+/// values inside a constant that is a list, a tuple or an expression,
+/// and the bytes of a string. Counting stops once past it.
 fn too_large(ty: &Type) -> bool {
     // `Cell` lets the two counting closures, which `any_part` takes as
     // shared references, add to one count.
@@ -269,9 +270,12 @@ fn too_large(ty: &Type) -> bool {
     )
 }
 
-/// How many values `value` is made of, itself included.
+/// How many values `value` is made of, itself included, a string
+/// counting one for each of its bytes too: the parts that may grow where
+/// a struct applies itself.
 fn value_parts(value: &ConstantValue) -> usize {
     1 + match value {
+        ConstantValue::Str(text) => text.len(),
         ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
             value_parts(operand)
         }
