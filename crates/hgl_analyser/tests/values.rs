@@ -4569,6 +4569,27 @@ fn explicit_operator_reference_defaults_preserve_collection_types() {
     );
 }
 
+/// A generic value used by a default keeps its resolved type and
+/// value while sibling literals take their candidate's types (GEN-8, EXPR-5).
+#[test]
+fn explicit_operator_reference_defaults_preserve_prior_generic_values() {
+    let checked = module(concat!(
+        "const fn apply(f: const fn(i64) -> f64) -> f64 => f(0)\n",
+        "operator pair<const First: i64, const Pair: tuple<i64, i64> = (First, 3)>(x: i64) -> f64\n",
+        "impl const fn pair<const First: i64, const Pair: tuple<i64, f64> = (First, 3.0)>(x: i64) -> f64 => Pair[1]\n",
+        "operator floats<const First: i64, const Pair: tuple<i64, i64> = (First, 3)>(x: i64) -> f64\n",
+        "impl const fn floats<const First: i64, const Pair: tuple<f64, f64> = (3.0, 3.0)>(x: i64) -> f64 => Pair[1]\n",
+        "const fn accepted_pair() -> f64 => apply(pair<5>)\n",
+        "const fn rejected() -> f64 => apply(floats<5>)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:8:37 type/type.mismatch FN-17"],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-13: a supplied callback option can resolve a type parameter
 /// mentioned only in the option's candidate type.
 #[test]

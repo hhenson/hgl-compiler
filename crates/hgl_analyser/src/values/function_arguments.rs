@@ -235,6 +235,8 @@ impl<'a> Typer<'a> {
                     CallbackOptionSource::Default {
                         file: declared.at.file,
                         node,
+                        generics: &public.generics,
+                        arguments: &explicit.generics,
                     }
                 } else {
                     CallbackOptionSource::Resolved

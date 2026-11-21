@@ -1821,15 +1821,20 @@ pub(super) struct CallbackOption<'w> {
     /// The resolved type of the operator's value parameter.
     pub(super) ty: Type,
     /// The expression, if available, that gave the public option its value.
-    pub(super) source: CallbackOptionSource,
+    pub(super) source: CallbackOptionSource<'w>,
 }
 
 /// Where an explicit callback's public option gets its value (GEN-8).
-pub(super) enum CallbackOptionSource {
+pub(super) enum CallbackOptionSource<'w> {
     /// A value written at the reference.
     Written(SyntaxNode),
     /// The operator's default, read in the file that declares it.
-    Default { file: FileId, node: SyntaxNode },
+    Default {
+        file: FileId,
+        node: SyntaxNode,
+        generics: &'w [GenericParameter],
+        arguments: &'w [Argument],
+    },
     /// A value inferred from the callback's template.
     Resolved,
 }
@@ -1843,8 +1848,14 @@ impl CallbackOption<'_> {
         crate::constant::fit(read, Some(expected), typer.program).or_else(|fault| {
             // EXPR-5 contextualizes literals in the candidate's type.
             // Read in the definition scope so a named constant keeps its type.
-            if let CallbackOptionSource::Default { file, node } = &self.source
-                && let Ok(value) = typer.read_in(*file, node, Some(expected))
+            if let CallbackOptionSource::Default {
+                file,
+                node,
+                generics,
+                arguments,
+            } = &self.source
+                && let Ok(value) =
+                    typer.read_instance_default(*file, node, expected, (generics, arguments))
                 && widens_default_literals(&self.value.value, &value)
             {
                 Ok(value)
