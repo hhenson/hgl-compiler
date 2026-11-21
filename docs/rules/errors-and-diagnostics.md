@@ -56,12 +56,12 @@ transpiler: done
 analyser: partial
 
 - Brackets read an ordinary dictionary by its key. Core's two-argument `get` gives `result<V, error>` and the place selects its form (ERR-15).
-- Left: a fallback (`lookup.default_type`).
+- Checking a fallback against the exact dictionary value type (`lookup.default_type`) is pending. A literal `null` fallback selects the plain read.
 
 transpiler: partial
 
 - C++ brackets perform a strict read. Two-argument `get` returns the whole result to the recorded ERR-15 form. A temporal dictionary child is an endpoint read (ERR-14).
-- Left: a fallback.
+- Evaluation of the fallback on a key hit and preservation of a nullable fallback value are pending.
 
 ## ERR-7
 
@@ -143,6 +143,7 @@ analyser: partial
 - A call or held result keeps its tag in a result place, gives its success or raises in a T place, and gives its success or null in a `T?` place. An unannotated `let` keeps the result. A nullable success type is itself the T form.
 - A `result<U?, error>` given where a U is expected raises its original error on failure and reads the success under ERR-12. The owner confirmed the two reads while the specification update was in review. [Compiler issue #345](https://github.com/hhenson/hgl-compiler/issues/345#issuecomment-7060418814)
 - In composition the analyser records whether a conversion belongs to the call's node or to a reader of a held connection.
+- Equal minimum arrangements of result reads in one candidate await #356 (`operator.ambiguous`).
 
 transpiler: done
 

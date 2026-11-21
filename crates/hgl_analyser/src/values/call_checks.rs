@@ -17,7 +17,7 @@ use crate::declared::substitute_within;
 use crate::hir::{Expr, ExprKind, Form, Hook, LocalId, Value, ValueCategory};
 use crate::program::{LocalKind, Role};
 use crate::types::{Argument, ConstantValue, Detail, Scalar, Type};
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 impl<'a> Typer<'a> {
     /// What every call is held to once it is built, with each argument
@@ -364,9 +364,9 @@ impl<'a> Typer<'a> {
         for (local, at, inside) in assigned {
             if self.dynamic.is_some_and(|outside| local < outside) {
                 self.diagnostics.emit(
-                    error(
+                    local_error(
                         Category::Phase,
-                        codes::LOOP_CARRIED,
+                        codes::local::LOOP_CARRIED,
                         at,
                         format!(
                             "`{}` is declared outside this loop, which makes one child for each member: nothing is carried from one child to the next",

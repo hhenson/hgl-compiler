@@ -5,7 +5,7 @@
 //! `module` line, and otherwise a run of declarations or of statements;
 //! each is parsed as what it is. For every item the test checks that
 //!
-//! * lexing and parsing report nothing;
+//! * lexing and parsing report nothing, except for named pending samples;
 //! * the tree's text is the source text;
 //! * the tree holds no `Error` node.
 //!
@@ -21,14 +21,77 @@ mod common;
 use common::{corpus, entry_for, hgl_blocks, run};
 use hgl_parser::Entry;
 
-/// Samples the grammar rejects as the specification now stands, each with
-/// the one diagnostic expected. Listed here, they are checked to fail in
-/// just that way, so the list cannot outlive its reason.
-///
-/// Each is reported to the specification's issue tracker, not settled
-/// here. An entry is the path of the sample's file under `spec/` and the
-/// diagnostic's message. There is none at the pinned revision.
-const CONTRADICTIONS: &[(&str, &str)] = &[];
+/// A sample that awaits specific grammar work or a documentation correction.
+struct Pending {
+    /// The document's path under `spec/`.
+    file: &'static str,
+    /// The sample's opening line, stable when the document's line numbers move.
+    opening: &'static str,
+    /// The missing rules and the issues that will remove this entry.
+    reason: &'static str,
+}
+
+const FUNCTIONS: &str = "hgl_spec/spec/language/functions-and-phases.md";
+const GENERICS: &str = "hgl_spec/spec/language/generics-and-operators.md";
+const MAPPING: &str = "hgl_core/spec/mapping.md";
+
+const PENDING: &[Pending] = &[
+    Pending {
+        file: FUNCTIONS,
+        opening: "module examples.configuration_parameters",
+        reason: "FN-18, EXPR-10 (#363)",
+    },
+    Pending {
+        file: FUNCTIONS,
+        opening: "module examples.pack_forms",
+        reason: "LEX-29, EXPR-16, EXPR-17, FN-19 (#368)",
+    },
+    Pending {
+        file: FUNCTIONS,
+        opening: "module examples.function_parameters",
+        reason: "FN-17 (#362), GEN-17 (#366)",
+    },
+    Pending {
+        file: GENERICS,
+        opening: "module examples.shapes",
+        reason: "UNIT-3, GEN-4 (#364)",
+    },
+    Pending {
+        file: GENERICS,
+        opening: "module examples.rooms",
+        reason: "TYPE-3: comma between struct fields (hgl_spec#196)",
+    },
+    Pending {
+        file: GENERICS,
+        opening: "operator call_through<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R",
+        reason: "FN-17 (#362), GEN-17 and FN-8 (#366)",
+    },
+    Pending {
+        file: GENERICS,
+        opening: "operator keyed<K, R, ...Ps, ...As>(",
+        reason: "FN-17 (#362), GEN-17 and FN-8 (#366), GEN-10 and GEN-18 (#367)",
+    },
+    Pending {
+        file: GENERICS,
+        opening: r#"operator each_wanted<K, R, ...Ps, ...As, const key: str = "key">{"#,
+        reason: "FN-17 (#362), GEN-17 and FN-8 (#366), FN-18 and EXPR-10 (#363)",
+    },
+    Pending {
+        file: GENERICS,
+        opening: r#"operator each_slot<R, ...Ps, ...As, const key: str = "key", const index: str = "index">("#,
+        reason: "FN-17 (#362), GEN-17 and FN-8 (#366)",
+    },
+    Pending {
+        file: MAPPING,
+        opening: "export enum Join { inner, outer, left }",
+        reason: "FN-17 (#362), GEN-17 and FN-8 (#366), FN-18 (#363), GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368), UNIT-3 and GEN-4 (#364)",
+    },
+    Pending {
+        file: MAPPING,
+        opening: "module examples.mapping",
+        reason: "EXPR-10 (#363)",
+    },
+];
 
 #[test]
 fn the_specification_corpus_parses_cleanly() {
@@ -37,37 +100,44 @@ fn the_specification_corpus_parses_cleanly() {
     // How many samples were parsed as a file, as declarations and as
     // statements.
     let mut counts = [0usize; 3];
-    // Which entries of `CONTRADICTIONS` were met.
-    let mut met = vec![false; CONTRADICTIONS.len()];
+    let mut met = vec![0; PENDING.len()];
     for sample in &samples {
         let entry = entry_for(&sample.text);
         counts[entry as usize] += 1;
         let outcome = run(entry, &sample.text);
-        if outcome.findings.is_empty() && !outcome.has_error_node() {
-            continue;
-        }
-        let known = CONTRADICTIONS.iter().position(|(file, message)| {
-            sample.origin.starts_with(file)
-                && outcome.findings.len() == 1
-                && outcome.findings[0].message == *message
-        });
-        match known {
-            Some(index) => met[index] = true,
-            None => failures.push(format!(
+        let accepted = outcome.findings.is_empty() && !outcome.has_error_node();
+        let path = sample
+            .origin
+            .rsplit_once(':')
+            .map_or(sample.origin.as_str(), |(path, _)| path);
+        let opening = sample.text.trim_start().lines().next().unwrap_or("");
+        if let Some((index, pending)) = PENDING
+            .iter()
+            .enumerate()
+            .find(|(_, item)| item.file == path && item.opening == opening)
+        {
+            met[index] += 1;
+            assert!(
+                !accepted,
+                "{} now parses: remove its pending entry ({})",
+                sample.origin, pending.reason
+            );
+        } else if !accepted {
+            failures.push(format!(
                 "{} ({entry:?}):\n{}",
                 sample.origin, outcome.report
-            )),
+            ));
         }
     }
     // Shown by `cargo test -- --nocapture`.
     println!(
         "parsed {} samples: {} files, {} runs of declarations, {} runs of statements; \
-         {} known contradictions",
+         {} pending samples",
         samples.len(),
         counts[0],
         counts[1],
         counts[2],
-        CONTRADICTIONS.len()
+        PENDING.len()
     );
     // Each way in is exercised; a change to the corpus that removes one
     // should be noticed.
@@ -79,10 +149,13 @@ fn the_specification_corpus_parses_cleanly() {
         samples.len(),
         failures.join("\n")
     );
-    assert!(
-        met.iter().all(|met| *met),
-        "an entry of CONTRADICTIONS no longer applies: {met:?}"
-    );
+    for (pending, count) in PENDING.iter().zip(met) {
+        assert_eq!(
+            count, 1,
+            "pending sample {}: {} ({})",
+            pending.file, pending.opening, pending.reason
+        );
+    }
 }
 
 #[test]

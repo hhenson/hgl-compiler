@@ -62,10 +62,10 @@ parser: done
 
 ## LEX-10
 
-parser: done
+parser: partial
 
 - Contextual names take their meaning by position; `str(value)` is a conversion and `error(...)` a constructor
-- `run` is a hard reserved word, as `eval` is, and names nothing
+- `run` is a hard reserved word, as `eval` is, and names nothing. The contextual `without` awaits #366.
 
 ## LEX-11
 
@@ -196,3 +196,9 @@ lexer: done
 parser: done
 
 - A tenor literal is a literal expression, and may begin one
+
+## LEX-29
+
+lexer: planned
+
+- The `..<` token and digit boundary await #368.
