@@ -307,7 +307,7 @@ impl<'a> Typer<'a> {
                 continue;
             }
             match &root.kind {
-                ExprKind::Local(local) => {
+                ExprKind::Local(local) | ExprKind::DeferredPresent(local) => {
                     let declared = &self.locals[*local];
                     if !matches!(
                         declared.kind,

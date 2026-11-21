@@ -1974,6 +1974,61 @@ fn graph_instances_recheck_deferred_result_projections() {
     ));
 }
 
+/// ERR-12 and ERR-3: a terminating null branch refines the same binding
+/// before its tag is tested in the ordinary specialization (GEN-7).
+#[test]
+fn graph_instances_keep_presence_before_testing_a_result_tag() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn sample() -> result<i64, error> => ok(1)\n",
+        "fn guarded<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { sample() }\n",
+        "    if chosen == null { return 0 }\n",
+        "    if is_err(chosen) { return 0 }\n",
+        "    return chosen.value\n",
+        "}\n",
+        "fn wrong_side<T>(const input: T) -> str {\n",
+        "    let chosen = if predicate(input) { sample() }\n",
+        "    if chosen == null { return \"\" }\n",
+        "    if is_err(chosen) { return \"\" }\n",
+        "    return chosen.error.message\n",
+        "}\n",
+        "fn ordinary_guarded() -> i64 => guarded(\"s\")\n",
+        "fn ordinary_wrong_side() -> str => wrong_side(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:19:36 type/result.required_variant ERR-3"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "ordinary_guarded"));
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns the success payload");
+    };
+    let ExprKind::Payload {
+        success: true,
+        result,
+    } = &value.kind
+    else {
+        panic!("the tag fact allows a success projection");
+    };
+    assert_eq!(value.ty.to_string(), "i64");
+    assert_eq!(result.ty.to_string(), "result<i64, error>");
+    let ExprKind::Local(binding) = result.kind else {
+        panic!("the result is the same binding refined by its null test");
+    };
+    assert_eq!(
+        instance.locals[binding].ty.to_string(),
+        "result<i64, error>?"
+    );
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

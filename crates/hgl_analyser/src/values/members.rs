@@ -43,7 +43,9 @@ impl<'a> Typer<'a> {
         let base = self.expression(&base, None);
         // ERR-7: a capture is "read through two connections".
         let captured = match &base.kind {
-            ExprKind::Local(local) => self.captures.get(local).cloned(),
+            ExprKind::Local(local) | ExprKind::DeferredPresent(local) => {
+                self.captures.get(local).cloned()
+            }
             ExprKind::Capture(call) => Some(self.captured_output(call)),
             _ => None,
         };

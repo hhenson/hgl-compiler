@@ -208,9 +208,9 @@ impl<'a> Typer<'a> {
 
     /// The lexical fact a direct field projection needs on this binding.
     pub(super) fn payload_proven(&self, base: &Expr, name: &str) -> bool {
-        let fact = match (name, &base.kind) {
-            ("value", ExprKind::Local(local)) => Fact::Success(*local),
-            ("error", ExprKind::Local(local)) => Fact::Failure(*local),
+        let fact = match (name, base.named_local()) {
+            ("value", Some(local)) => Fact::Success(local),
+            ("error", Some(local)) => Fact::Failure(local),
             _ => return false,
         };
         self.present.contains(&fact)

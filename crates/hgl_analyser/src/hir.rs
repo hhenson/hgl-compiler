@@ -472,6 +472,15 @@ impl Expr {
         self.category == ValueCategory::Connection
     }
 
+    /// The local this expression names directly, including a read
+    /// whose proof of presence waits for instance selection (ERR-12).
+    pub(crate) fn named_local(&self) -> Option<LocalId> {
+        match self.kind {
+            ExprKind::Local(local) | ExprKind::DeferredPresent(local) => Some(local),
+            _ => None,
+        }
+    }
+
     /// True for a call that is lifted (FN-6): see the `lifted` of
     /// [`ExprKind::Call`].
     pub fn is_lifted(&self) -> bool {
@@ -509,6 +518,9 @@ pub enum ExprKind {
     /// where the local is a `T?` that a test against null has proved is
     /// not null there (ERR-12).
     Local(LocalId),
+    /// An immutable graph binding read where a null test proved its
+    /// presence, before the instance has determined its ordinary type (ERR-12).
+    DeferredPresent(LocalId),
     /// The endpoint of a temporal input, or of `out`, where a native
     /// value function takes the endpoint and not its payload: the
     /// argument of an `endpoint<T>` parameter (TIME-9). The payload is
@@ -1394,6 +1406,7 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
             | ExprKind::EnumMember { .. }
@@ -1508,6 +1521,7 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
             | ExprKind::EnumMember { .. }

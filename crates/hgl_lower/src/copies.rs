@@ -646,6 +646,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::Constant { .. }
         | ExprKind::Endpoint { .. }
         | ExprKind::Local(_)
+        | ExprKind::DeferredPresent(_)
         | ExprKind::EndpointOf(_)
         | ExprKind::GenericValue { .. }
         | ExprKind::EnumMember { .. }

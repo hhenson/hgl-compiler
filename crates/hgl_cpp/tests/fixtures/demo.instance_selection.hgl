@@ -393,3 +393,19 @@ test deferred_result_variants {
     assert eval deferred_result_projection(value: "s", passed: true) == [7]
     assert eval deferred_result_projection(value: "s", passed: false) == [8]
 }
+
+# ERR-12 and ERR-3: the null branch refines the same ordinary binding
+# before its tag is tested, even when its type settles in the instance.
+fn deferred_nullable_projection<T>(const value: T, const ready: bool, const passed: bool) -> i64 {
+    let chosen = if live_helper(value) > 0 && ready { projection_sample(passed) }
+    if chosen == null { return 0 }
+    if is_ok(chosen) { return chosen.value }
+    if chosen.error.message == "problem" { return 8 }
+    return 0
+}
+
+test deferred_nullable_variants {
+    assert eval deferred_nullable_projection(value: "s", ready: true, passed: true) == [7]
+    assert eval deferred_nullable_projection(value: "s", ready: true, passed: false) == [8]
+    assert eval deferred_nullable_projection(value: "s", ready: false, passed: true) == [0]
+}

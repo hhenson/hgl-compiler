@@ -441,11 +441,15 @@ impl<'a> Typer<'a> {
         }
         // ERR-12: "Refine that same binding to T on paths proving a
         // non-null T? value".
+        let present = self.present.contains(&Fact::Present(local));
         let ty = match &self.locals[local].ty {
-            Type::Nullable(inner) if self.present.contains(&Fact::Present(local)) => {
-                inner.as_ref().clone()
-            }
+            Type::Nullable(inner) if present => inner.as_ref().clone(),
             ty => ty.clone(),
+        };
+        let kind = if present && matches!(ty, Type::Unknown) && self.deferred_presence(local) {
+            ExprKind::DeferredPresent(local)
+        } else {
+            ExprKind::Local(local)
         };
         // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary
         // V", and TYPE-16: "an atomic publishes whole". In a hook an
@@ -466,11 +470,17 @@ impl<'a> Typer<'a> {
             ty
         };
         Expr {
-            kind: ExprKind::Local(local),
+            kind,
             ty,
             at,
             category: ValueCategory::Unsettled,
         }
+    }
+
+    /// An ordinary binding may still be unknown where a generic
+    /// graph is read. Keep its null test until this instance is known.
+    fn deferred_presence(&self, local: LocalId) -> bool {
+        self.graph && self.locals[local].category != ValueCategory::Connection
     }
 
     /// The bindings the condition `condition` proves are not null: those
@@ -488,8 +498,12 @@ impl<'a> Typer<'a> {
                 LocalKind::Parameter | LocalKind::Let | LocalKind::Iteration
             )
         };
-        let refinable =
-            |local: LocalId| immutable(local) && matches!(self.locals[local].ty, Type::Nullable(_));
+        let refinable = |local: LocalId| {
+            immutable(local)
+                && (matches!(self.locals[local].ty, Type::Nullable(_))
+                    || matches!(self.locals[local].ty, Type::Unknown)
+                        && self.deferred_presence(local))
+        };
         // ERR-3: "In composition a test of a connection is an ordinary
         // lifted call (FN-6): it gives a connection of `bool` and no
         // fact."
@@ -499,24 +513,18 @@ impl<'a> Typer<'a> {
         // operand of the connective the test is the right operand of:
         // `outcome != null && is_ok(outcome)`.
         let tagged = |local: LocalId, known: &[Fact]| {
+            let binding = &self.locals[local];
             let present = Fact::Present(local);
-            let result = match &self.locals[local].ty {
-                Type::Result { .. } => true,
-                Type::Nullable(inner) => {
-                    matches!(**inner, Type::Result { .. })
-                        && (self.present.contains(&present) || known.contains(&present))
-                }
-                // Save the same lexical fact for a deferred member.
-                // It qualifies as proof only once the base settles to
-                // an ordinary result binding.
-                Type::Unknown => {
-                    return self.graph
-                        && immutable(local)
-                        && self.locals[local].category != ValueCategory::Connection;
-                }
-                _ => false,
+            let present = self.present.contains(&present) || known.contains(&present);
+            let ty = match &binding.ty {
+                Type::Nullable(inner) if present => inner,
+                ty => ty,
             };
-            immutable(local) && result && self.locals[local].category == ValueCategory::Value
+            // A deferred projection retains this lexical fact and checks
+            // that its read settled to an ordinary result binding.
+            immutable(local)
+                && (matches!(ty, Type::Result { .. }) && binding.category == ValueCategory::Value
+                    || matches!(ty, Type::Unknown) && self.deferred_presence(local))
         };
         null_tests(
             condition,
@@ -980,9 +988,8 @@ fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>
         // it is a success and where it does not a failure, and `is_err`
         // the reverse."
         ExprKind::TagTest { success, value } => {
-            let local = match value.kind {
-                ExprKind::Local(local) if tagged(local, assumed) => local,
-                _ => return (Vec::new(), Vec::new()),
+            let Some(local) = value.named_local().filter(|local| tagged(*local, assumed)) else {
+                return (Vec::new(), Vec::new());
             };
             let (success_where, failure_where) =
                 (vec![Fact::Success(local)], vec![Fact::Failure(local)]);
@@ -1005,14 +1012,14 @@ fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>
             right,
         } => match operator {
             BinaryOperator::Equal | BinaryOperator::NotEqual => {
-                let local = match (&left.kind, &right.kind) {
-                    (ExprKind::Local(local), ExprKind::Literal(Value::Null))
-                    | (ExprKind::Literal(Value::Null), ExprKind::Local(local)) => *local,
+                let named = match (&left.kind, &right.kind) {
+                    (_, ExprKind::Literal(Value::Null)) => left,
+                    (ExprKind::Literal(Value::Null), _) => right,
                     _ => return (Vec::new(), Vec::new()),
                 };
-                if !refinable(local) {
+                let Some(local) = named.named_local().filter(|local| refinable(*local)) else {
                     return (Vec::new(), Vec::new());
-                }
+                };
                 match operator {
                     BinaryOperator::NotEqual => (vec![Fact::Present(local)], Vec::new()),
                     _ => (Vec::new(), vec![Fact::Present(local)]),

@@ -312,7 +312,9 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
     match &value.kind {
         // A default and a constant are read with no local in scope
         // (UNIT-7, UNIT-13).
-        ExprKind::Local(local) => locals.get(*local).map_or(Value, |local| local.category),
+        ExprKind::Local(local) | ExprKind::DeferredPresent(local) => {
+            locals.get(*local).map_or(Value, |local| local.category)
+        }
         ExprKind::StaticCallable(callee) => match &**callee {
             Callee::Anonymous(function) => function
                 .captures
@@ -551,6 +553,20 @@ pub(super) fn record_with(
                     return;
                 }
                 NodeMut::Expression(value) if composition && !whole(&value.ty) => {
+                    if let ExprKind::DeferredPresent(local) = value.kind {
+                        let binding = &locals[local];
+                        if binding.category != Unsettled && whole(&binding.ty) {
+                            value.ty = match (&binding.ty, binding.category) {
+                                (Type::Nullable(payload), ValueCategory::Value) => {
+                                    (**payload).clone()
+                                }
+                                (ty, _) => ty.clone(),
+                            };
+                            value.kind = ExprKind::Local(local);
+                            settling = true;
+                        }
+                        return;
+                    }
                     if let ExprKind::DeferredMember {
                         base,
                         name,
