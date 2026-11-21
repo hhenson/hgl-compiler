@@ -149,6 +149,37 @@ const fn local_checked(input: i64) -> result<i64, error> {
     return ok(input)
 }
 
+# ERR-15: one implicit result read outranks two, in either phase.
+operator fewer_reads<A, B>(left: A, right: B) -> i64
+impl const fn fewer_reads(left: result<i64, error>, right: i64) -> i64 => right
+impl const fn fewer_reads(left: i64, right: i64) -> i64 => left + right
+
+operator temporal_fewer_reads<A, B>(left: A, right: B) -> i64
+impl fn temporal_fewer_reads(left: result<i64, error>, right: i64) -> i64 {
+    when { return right }
+}
+impl fn temporal_fewer_reads(left: i64, right: i64) -> i64 {
+    when { return left + right }
+}
+
+fn fewer_reads_in_hook(left: i64, right: i64) -> i64 {
+    when { return fewer_reads(local_checked(left), local_checked(right)) }
+}
+
+fn fewer_reads_in_graph(left: i64, right: i64) -> i64 =>
+    temporal_fewer_reads(checked(left), checked(right))
+
+fn fewer_reads_lifted(left: i64, right: i64) -> i64 =>
+    fewer_reads(checked(left), checked(right))
+
+test operator_prefers_fewer_result_reads {
+    assert fewer_reads(local_checked(-1), local_checked(2)) == 2
+    assert eval fewer_reads_in_hook(left: [-1], right: [2]) == [2]
+    assert eval fewer_reads_in_graph(left: [-1], right: [2]) == [2]
+    assert eval fewer_reads_lifted(left: [-1], right: [2]) == [2]
+    assert raises("convert.invalid") { eval fewer_reads_lifted(left: [3], right: [-1]) }
+}
+
 const fn custom(input: i64) -> result<i64, str> {
     if input < 0 { return err("negative input") }
     return ok(input)

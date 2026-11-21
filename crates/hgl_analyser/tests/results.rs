@@ -738,6 +738,65 @@ fn operators_fit_each_argument_to_its_selected_parameter() {
     }
 }
 
+/// ERR-15: among admitted candidates, the fewest result reads take
+/// precedence. Equal read counts use ordinary candidate ranking.
+#[test]
+fn operators_rank_admitted_candidates_by_result_reads() {
+    use hgl_analyser::hir::walk_statements;
+
+    let checked = module(concat!(
+        "operator two<A, B>(x: A, y: B) -> i64\n",
+        "impl const fn two(x: result<i64, error>, y: i64) -> i64 => 1\n",
+        "impl const fn two(x: i64, y: i64) -> i64 => 3\n",
+        "const fn choose(x: result<i64, error>, y: result<i64, error>) -> i64 => two(x, y)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let mut selected = Vec::new();
+    walk_statements(&body(&checked, "choose").statements, &mut |expr| {
+        if let ExprKind::Call { arguments, .. } = &expr.kind {
+            selected.push((arguments[0].value.ty.clone(), arguments[1].value.ty.clone()));
+        }
+    });
+    assert_eq!(selected.len(), 1);
+    assert!(matches!(selected[0].0, hgl_analyser::Type::Result { .. }));
+    assert_eq!(
+        selected[0].1,
+        hgl_analyser::Type::Scalar(hgl_analyser::Scalar::I64)
+    );
+
+    let tied = module(concat!(
+        "operator two<A, B>(x: A, y: B) -> i64\n",
+        "impl const fn two(x: result<i64, error>, y: i64) -> i64 => 1\n",
+        "impl const fn two(x: i64, y: result<i64, error>) -> i64 => 2\n",
+        "const fn choose(x: result<i64, error>, y: result<i64, error>) -> i64 => two(x, y)\n",
+    ));
+    let faults = tied.summary();
+    assert_eq!(faults.len(), 1, "{}", tied.report);
+    assert!(faults[0].contains("operator/operator.ambiguous"));
+}
+
+/// ERR-15: a candidate admitted by payload inference competes with a
+/// concrete candidate. GEN-5 applies only after comparing read counts.
+#[test]
+fn an_inferred_payload_candidate_can_read_fewer_results() {
+    use hgl_analyser::hir::walk_statements;
+
+    let checked = module(concat!(
+        "operator two<A, B>(x: A, y: B) -> i64\n",
+        "impl const fn two<P>(x: result<i64, error>, y: P) -> i64 requires P == i64 => 1\n",
+        "impl const fn two(x: i64, y: i64) -> i64 => 3\n",
+        "const fn choose(x: result<i64, error>, y: result<i64, error>) -> i64 => two(x, y)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let mut kept_whole = false;
+    walk_statements(&body(&checked, "choose").statements, &mut |expr| {
+        if let ExprKind::Call { arguments, .. } = &expr.kind {
+            kept_whole = matches!(arguments[0].value.ty, hgl_analyser::Type::Result { .. });
+        }
+    });
+    assert!(kept_whole);
+}
+
 /// GEN-2, ERR-12 and ERR-15: a generic function sees the argument its
 /// parameter can take. An unconstrained parameter keeps the whole type.
 #[test]
