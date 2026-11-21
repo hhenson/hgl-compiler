@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -12,6 +13,17 @@ from urllib.request import urlopen
 TARGET = "aarch64-apple-darwin"
 NOTICE = re.compile(r"^(?:copying|license|notice|unlicense)", re.IGNORECASE)
 SYSTEM_LIBRARIES = ("/usr/lib/", "/System/Library/")
+SYSTEM_PATHS = tuple(map(Path, (
+    "/System/Library", "/usr/bin", "/usr/include", "/usr/lib", "/usr/libexec",
+    "/usr/sbin", "/usr/share", "/bin", "/dev", "/sbin",
+)))
+RELEASE_METADATA = {".cmake", ".conf", ".ini", ".json", ".pc", ".toml", ".txt", ".yaml", ".yml"}
+# A normal URL starts with two slashes after its scheme. A file URL names
+# a filesystem path, so check it like a plain absolute path.
+ABSOLUTE_PATH = re.compile(
+    rb'''(?:^|(?<=[=:"';, (\t\n]))(?:file://)?(/(?!/)[A-Za-z0-9._~-]+(?:/[^\s"'\[\]{}()>;\x00,]*)*)''',
+    re.MULTILINE,
+)
 
 
 def command(*args):
@@ -102,7 +114,6 @@ def verify(bundle, forbidden):
         if str(candidate) not in ("", "/")
     }
     scratch_path = re.compile(rb"(?:/private)?/var/folders/[^\s\x00]+|/Users/[^\s\x00]+")
-    cmake_path = re.compile(rb'(?<=[="; \t\n])(/[a-zA-Z0-9_][^"\s;)]*/[^"\s;)]*)')
     for path in bundle.rglob("*"):
         if path.is_symlink():
             if path.readlink().is_absolute() or not path.resolve(strict=True).is_relative_to(bundle):
@@ -112,16 +123,24 @@ def verify(bundle, forbidden):
             data = path.read_bytes()
             if any(prefix in data for prefix in prefixes) or scratch_path.search(data):
                 raise ValueError(f"build path in {path.relative_to(bundle)}")
-            if path.suffix == ".cmake":
-                for absolute in cmake_path.findall(data):
-                    if not absolute.decode().startswith(SYSTEM_LIBRARIES):
-                        raise ValueError(f"external path in {path.relative_to(bundle)}")
+            if path.suffix in RELEASE_METADATA:
+                verify_metadata_paths(bundle, path, data)
 
     for binary in {bin_file, *(lib.resolve(strict=True) for lib in libraries)}:
         if command("lipo", "-archs", binary).strip() != "arm64":
             raise ValueError(f"{binary.relative_to(bundle)} is not arm64")
         verify_load_paths(bundle, binary, names)
     print(f"Verified {bundle.name}")
+
+
+def verify_metadata_paths(bundle, path, data):
+    """Metadata can refer to paths relative to its prefix or to macOS."""
+    for match in ABSOLUTE_PATH.findall(data):
+        absolute = Path(os.fsdecode(match)).resolve()
+        in_system = any(absolute.is_relative_to(root) for root in SYSTEM_PATHS)
+        if absolute.is_relative_to(bundle) or in_system:
+            continue
+        raise ValueError(f"external path in {path.relative_to(bundle)}")
 
 
 def verify_load_paths(bundle, binary, names):
