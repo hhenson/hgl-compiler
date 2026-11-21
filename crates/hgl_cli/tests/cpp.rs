@@ -1563,3 +1563,39 @@ fn store_values_and_failure_places_on_the_sdk() {
         assert_eq!(stderr.lines().last(), Some(said.as_str()), "{stderr}");
     }
 }
+
+/// A test's failing statement is still named in HGL after a node the test
+/// writes ahead of itself, whose statements set their own HGL lines: an
+/// eval's lifted call of a value function (TST-8).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_tests_failure_is_named_after_a_node_written_ahead_of_it() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("ahead");
+    let file = write(
+        &root,
+        "demo.ahead.hgl",
+        concat!(
+            "module demo.ahead\n",
+            "const fn scale(value: i64) -> i64 => value * 2\n",
+            "test a_failure_after_an_eval_of_a_value_function {\n",
+            "    assert eval(scale(value: [1])) == [2]\n",
+            "    assert scale(1) == 3\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains(&format!("    {file}:5:5: the assertion does not hold\n")),
+        "{stdout}"
+    );
+}

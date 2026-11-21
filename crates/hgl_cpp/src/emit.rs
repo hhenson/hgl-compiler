@@ -323,6 +323,26 @@ impl Emitter<'_> {
     }
 }
 
+/// The line written after code that sets the HGL file and line of its
+/// statements with `#line` ([`Emitter::line_directive`]), which `assemble`
+/// makes the directive that numbers what follows as the file's own again,
+/// once the file's lines are all written: after each piece of a unit, and
+/// after what a test writes ahead of itself (`tests`).
+pub(crate) const RESTORE: &str = "// The lines of this file again, from here (#line).";
+
+/// Writes [`RESTORE`] on a line of its own at the end of `text`, where
+/// `written`, the code just put there, sets an HGL line.
+pub(crate) fn restore_after(text: &mut String, written: &str) {
+    if !written.starts_with("#line ") && !written.contains("\n#line ") {
+        return;
+    }
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(RESTORE);
+    text.push('\n');
+}
+
 /// The text of the file `at` is in: the root of the syntax tree of a
 /// declaration, a test, a store statement or a run statement written in
 /// it. `None` where none of the program's is.

@@ -18,7 +18,10 @@ use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Location};
 use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
-use crate::emit::{APPLICATION, Piece, Written, module_namespace, program_names, test_namespace};
+use crate::emit::{
+    APPLICATION, Piece, RESTORE, Written, module_namespace, program_names, restore_after,
+    test_namespace,
+};
 use crate::{
     Application, Executable, File, Output, Test, Unit, application_path, entry_path, header_path,
     runtime, types_header_path, unit_path,
@@ -658,25 +661,6 @@ fn application_entry(program: &Program, index: usize) -> String {
         runtime::APPLICATION_HOST_HEADER,
         module.path,
     )
-}
-
-/// The line `assemble` writes after a piece that sets the HGL file and
-/// line of its statements with `#line` (`Emitter::line_directive`), and
-/// which [`restored`] makes the directive that gives what follows its own
-/// file and line again, once the file's lines are all written.
-const RESTORE: &str = "// The lines of this file again, from here (#line).";
-
-/// Writes [`RESTORE`] on a line of its own after `piece`, the text just
-/// put at the end of `unit`, where it sets a line of its own.
-fn restore_after(unit: &mut String, piece: &str) {
-    if !piece.starts_with("#line ") && !piece.contains("\n#line ") {
-        return;
-    }
-    if !unit.ends_with('\n') {
-        unit.push('\n');
-    }
-    unit.push_str(RESTORE);
-    unit.push('\n');
 }
 
 /// `text`, the file at `path`, with each [`RESTORE`] line made the

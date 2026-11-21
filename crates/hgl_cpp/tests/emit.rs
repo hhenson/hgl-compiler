@@ -1215,6 +1215,56 @@ fn a_statement_names_its_hgl_file_and_line() {
     assert_eq!(lines[constant - 1], "#line 5 \"demo.apps.backtest.hgl\"");
 }
 
+/// A node a test writes ahead of itself, an eval's lifted call of a value
+/// function (TST-8), sets the HGL lines of its statements; the test's own
+/// statements, which it tells the test host by their lines in the unit,
+/// are numbered as the unit's again after it.
+#[test]
+fn a_tests_lines_are_the_units_after_a_node_written_ahead_of_it() {
+    let emitted = emit_named(
+        &[(
+            "demo.ahead.hgl",
+            concat!(
+                "module demo.ahead\n",
+                "const fn scale(value: i64) -> i64 => value * 2\n",
+                "test a_failure_after_an_eval_of_a_value_function {\n",
+                "    assert eval(scale(value: [1])) == [2]\n",
+                "    assert scale(1) == 3\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+        true,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.ahead.cpp")
+        .unwrap()
+        .text;
+    let lines: Vec<&str> = unit.lines().collect();
+    let test = lines
+        .iter()
+        .position(|line| *line == "void a_failure_after_an_eval_of_a_value_function()")
+        .unwrap();
+    // The node ahead of the test sets an HGL line; the last directive
+    // before the test numbers the unit's own lines again, so that the line
+    // each statement of the test tells the test host is its line in the
+    // unit, which the target recorded the statement at.
+    assert!(lines[..test].contains(&"#line 4 \"demo.ahead.hgl\""));
+    let last = lines[..test]
+        .iter()
+        .rposition(|line| line.starts_with("#line "))
+        .unwrap();
+    assert_eq!(
+        lines[last],
+        format!("#line {} \"modules/demo.ahead.cpp\"", last + 2)
+    );
+    assert!(!lines[test..].iter().any(|line| line.starts_with("#line ")));
+}
+
 /// An application that needs a form the target does not write yet is
 /// written with no entry unit, and says what it lacks.
 #[test]
