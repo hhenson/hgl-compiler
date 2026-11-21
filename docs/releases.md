@@ -40,8 +40,7 @@ bundles before publishing.
 1. Once the compiler release is published, prepare a tap branch with the
    formula's new version and each platform's published archive URL and
    SHA-256. The Linux formula uses Ubuntu 26.04's GCC 15 and C++ runtime.
-   Remove
-   the previous version's bottle stanza. Have that commit reviewed in
+   Remove the previous version's bottle stanza. Have that commit reviewed in
    [the tap PR](https://github.com/hhenson/homebrew-hgraph/pulls) and keep
    the PR open for the bottle update.
 2. Set `version` to the bare release tag and `tap_sha` to the full SHA of
@@ -77,8 +76,7 @@ contains the SDK and its libraries.
 
 Build from a clean checkout with the pinned Rust toolchain, CMake, Ninja,
 Git and Python 3.11 or later. On Apple silicon use Apple clang 21 or
-later. On x86-64 Ubuntu 26.04 use `gcc-15`, `g++-15` and `readelf` (from
-binutils).
+later. On x86-64 Ubuntu 26.04 install `gcc`, `g++-15` and binutils.
 
 ```sh
 scripts/package-release.sh
