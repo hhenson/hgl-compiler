@@ -1839,14 +1839,15 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     // lexical locals, with the same enclosing generics.
                     let locals = call.scope.as_deref().unwrap_or(body_locals);
                     if !current_locals.is_some_and(|current| std::ptr::eq(current, locals)) {
-                        typer.locals = locals
-                            .iter()
-                            .map(|local| hir::Local {
-                                ty: placed(substitute_within(&local.ty, &map), &declared),
-                                ..local.clone()
-                            })
-                            .collect();
-                        typer.assigned = vec![true; locals.len()];
+                        typer.use_instance_locals(
+                            locals
+                                .iter()
+                                .map(|local| hir::Local {
+                                    ty: placed(substitute_within(&local.ty, &map), &declared),
+                                    ..local.clone()
+                                })
+                                .collect(),
+                        );
                         current_locals = Some(locals);
                     }
                     let name = &program.modules[call.operator.module].declarations

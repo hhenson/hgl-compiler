@@ -753,12 +753,13 @@ impl<'a> Typer<'a> {
                 .find(|given| matches!(given.key, Key::Position(0)))
                 .and_then(|given| given.node.parent())
                 .map_or(symbol.at, |node| self.at(&node));
+            let provisional = (selected.len() == 1).then(|| &mut selected[0]);
             let settled = self.select_per_instance(
                 operator,
                 &given,
                 (&wanted, None, &operator_generics),
                 (symbol.form, written, symbol.at),
-                untold,
+                (untold, provisional),
             );
             match settled {
                 Settled::Deferred(ty) => {

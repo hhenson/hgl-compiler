@@ -729,6 +729,18 @@ impl<'a> Typer<'a> {
         local
     }
 
+    /// Installs the lexical scope used for operator selection in an instance.
+    /// Contextual operands can read these bindings by name (EXPR-5, GEN-7).
+    fn use_instance_locals(&mut self, locals: Vec<Local>) {
+        self.declared = locals
+            .iter()
+            .enumerate()
+            .map(|(id, local)| (local.at, id))
+            .collect();
+        self.assigned = vec![true; locals.len()];
+        self.locals = locals;
+    }
+
     /// What a reading may change, as it stands now: see
     /// [`Typer::take_back`].
     fn mark(&self) -> Mark {

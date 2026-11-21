@@ -167,8 +167,9 @@ impl Program {
     }
 
     /// Specialize one lexical body using its own local table. A call
-    /// a membership authorizes is selected with the instance's types
-    /// in place (GEN-5 and GEN-7), including in an anonymous body.
+    /// a generic candidate or membership authorizes is selected with
+    /// the instance's types in place (GEN-5 and GEN-7), including in an
+    /// anonymous body.
     fn place_body(
         &self,
         body: &mut Body,
