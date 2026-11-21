@@ -17,16 +17,18 @@ jobs:
   bundle:
     runs-on: ${{ fromJSON(vars.HGL_SELF_HOSTED_MACOS == 'true' && '["self-hosted","macOS","ARM64","hgl-release"]' || '["macos-26"]') }}
     steps:
-      - name: Mask local paths
-        run: &mask-paths |
+      - name: Report the macOS toolchain
+        run: &report-toolchain |
           for path in "$HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "${TMPDIR:-}"; do
             if [[ -d $path ]]; then
               printf '::add-mask::%s\n' "$path" "$(cd -- "$path" && pwd -P)"
             fi
           done
+          printf 'DEVELOPER_DIR=%s\nSDKROOT=%s\nCC=%s\nCXX=%s\n' \
+            "${DEVELOPER_DIR-<unset>}" "${SDKROOT-<unset>}" "${CC-<unset>}" "${CXX-<unset>}"
+          printf 'xcode-select -p: '
+          /usr/bin/xcode-select -p 2>/dev/null || printf '%s\n' '<unavailable>'
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - &install-uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -56,8 +58,8 @@ jobs:
     needs: bundle
     runs-on: ${{ fromJSON(vars.HGL_SELF_HOSTED_MACOS == 'true' && '["self-hosted","macOS","ARM64","hgl-release"]' || '["macos-26"]') }}
     steps:
-      - name: Mask local paths
-        run: *mask-paths
+      - name: Report the macOS toolchain
+        run: *report-toolchain
       - uses: actions/checkout@v7
       - *install-uv
       - *managed-python
@@ -98,6 +100,8 @@ jobs:
     needs: bundle
     runs-on: macos-26
     steps:
+      - name: Report the macOS toolchain
+        run: *report-toolchain
       - uses: actions/checkout@v7
       - *install-uv
       - *managed-python
