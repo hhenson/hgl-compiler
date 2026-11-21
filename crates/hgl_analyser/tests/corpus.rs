@@ -81,16 +81,6 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
         "examples.function_parameters",
         "FN-17 (#362)",
     ),
-    (
-        "hgl_spec/spec/language/generics-and-operators.md",
-        "examples.shapes",
-        "UNIT-3 and GEN-4 (#364)",
-    ),
-    (
-        "hgl_spec/spec/language/generics-and-operators.md",
-        "examples.rooms",
-        "UNIT-3 and GEN-4 (#364)",
-    ),
 ];
 
 /// The rejection cases of core the compiler does not yet reject, each as
