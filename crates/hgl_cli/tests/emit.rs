@@ -2,7 +2,7 @@
 
 mod common;
 
-use std::fs;
+use std::{fs, path::Path};
 
 use common::{argument, hgl, scratch, text, write};
 
@@ -31,14 +31,63 @@ fn an_accepted_program_is_written() {
         format!("wrote 6 files for cpp to {}\n", argument(&out))
     );
     for file in [
-        "modules/core.types.h",
-        "modules/core.h",
-        "modules/core.cpp",
-        "modules/demo.pass.h",
-        "modules/demo.pass.cpp",
-        "tests/demo.pass.cpp",
+        "modules/type-core.h",
+        "modules/mod-core.h",
+        "modules/mod-core.cpp",
+        "modules/mod-demo-pass.h",
+        "modules/mod-demo-pass.cpp",
+        "tests/test-demo-pass.cpp",
     ] {
         assert!(out.join(file).is_file(), "{file}");
+    }
+}
+
+/// UNIT-1, UNIT-2. The native emitter writes every file of two modules
+/// whose paths differ only in case, on Windows too.
+#[test]
+fn case_distinct_modules_have_distinct_files() {
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../hgl_cpp/tests/fixtures/module-stems/case");
+    let out = scratch("case_distinct_modules").join("out");
+    let output = hgl(&[
+        "emit",
+        "--target",
+        "cpp",
+        "--out",
+        &argument(&out),
+        &argument(&fixtures),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let modules = [
+        "mod-core.cpp",
+        "mod-core.h",
+        "mod-tm-+pricing-+app.cpp",
+        "mod-tm-+pricing-+app.h",
+        "mod-tm-pricing-app.cpp",
+        "mod-tm-pricing-app.h",
+        "type-core.h",
+        "type-tm-+pricing-+app.h",
+        "type-tm-pricing-app.h",
+    ];
+    let tests = ["test-tm-+pricing-+app.cpp", "test-tm-pricing-app.cpp"];
+    for (directory, expected) in [("modules", modules.as_slice()), ("tests", tests.as_slice())] {
+        let mut found: Vec<_> = fs::read_dir(out.join(directory))
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                assert!(entry.file_type().unwrap().is_file());
+                entry.file_name().into_string().unwrap()
+            })
+            .collect();
+        found.sort();
+        assert_eq!(found, expected, "{directory}");
+    }
+    for (entry, identity) in tests
+        .into_iter()
+        .zip(["tm.Pricing.App::upper_price", "tm.pricing.app::lower_price"])
+    {
+        let text = fs::read_to_string(out.join("tests").join(entry)).unwrap();
+        assert!(text.contains(identity), "{entry}");
     }
 }
 

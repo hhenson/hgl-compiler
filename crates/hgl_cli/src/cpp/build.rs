@@ -378,15 +378,9 @@ fn ninja_file(output: &Output, description: &Description) -> String {
     text
 }
 
-/// The test executable's path. An application's encoded stem uses the
-/// host's executable suffix, as its run executable does (UNIT-14).
+/// The test executable's path, with the host's executable suffix where required.
 fn test_target(executable: &Executable) -> String {
-    let suffix = if executable.stem == executable.module {
-        ""
-    } else {
-        std::env::consts::EXE_SUFFIX
-    };
-    format!("bin/{}{suffix}", executable.stem)
+    format!("bin/{}{}", executable.stem, std::env::consts::EXE_SUFFIX)
 }
 
 /// The path, in the build, of the executable of application `path`:
@@ -399,8 +393,8 @@ fn application_target(path: &str) -> String {
     )
 }
 
-/// The object a unit at `source` is compiled to: `obj/modules/demo.calc.o`
-/// for `modules/demo.calc.cpp`.
+/// The object a unit at `source` is compiled to, such as
+/// `obj/modules/mod-demo-calc.o` for `modules/mod-demo-calc.cpp`.
 fn object(source: &str) -> String {
     format!("obj/{}.o", source.trim_end_matches(".cpp"))
 }
