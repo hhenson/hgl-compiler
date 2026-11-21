@@ -101,7 +101,7 @@ impl Typer<'_> {
     ) -> Option<(Body, Vec<LocalId>)> {
         // CTRL-5: a return belongs to this function alone.
         self.check_capability_captures(function);
-        let mark = self.mark();
+        let mut mark = self.mark();
         let first_local = mark.locals;
         let outer = self.anonymous.replace(Anonymous {
             result: result.cloned().unwrap_or(Type::Unknown),
@@ -133,6 +133,20 @@ impl Typer<'_> {
             "this anonymous function",
         );
         let output = specialization.and(statements).map(|statements| {
+            // GEN-7: a deferred selection survives closing over its
+            // lexical scope. Diagnostics still use the local IDs from
+            // the first reading, before close renumbers them.
+            let mut selections = self.selecting.borrow_mut();
+            let unresolved = selections[mark.selecting..]
+                .iter_mut()
+                .filter(|call| call.scope.is_none());
+            let mut scope = None;
+            for call in unresolved {
+                call.scope = Some(std::sync::Arc::clone(
+                    scope.get_or_insert_with(|| self.locals.clone().into()),
+                ));
+            }
+            mark.selecting = selections.len();
             let body = Body {
                 locals: self.locals.clone(),
                 statements,

@@ -1057,6 +1057,7 @@ impl<'a> Typer<'a> {
             among: wanted.among.clone(),
             written: wanted.written,
             graph: self.graph,
+            scope: None,
         };
         // The report where nothing the `requires` states settles it.
         let unsettled = |typer: &Self| {
@@ -1432,6 +1433,9 @@ pub(crate) struct Selecting {
     /// True in composition, where a call selects among the temporal
     /// candidates too (GEN-5).
     pub(crate) graph: bool,
+    /// The lexical locals used to check a call inside a static anonymous
+    /// body. Other calls use the declaration's own body.
+    pub(crate) scope: Option<std::sync::Arc<[hir::Local]>>,
 }
 
 /// `signature`, a generic declaration's, as one instance of it reads its

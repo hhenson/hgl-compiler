@@ -46,6 +46,15 @@ use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar,
 /// it stands for at one call.
 type Map<'a> = [(Location, &'a Argument)];
 
+/// The enclosing declaration and the arguments common to its body and
+/// any anonymous bodies written inside it.
+struct InstanceArguments<'a> {
+    declaration: (usize, usize),
+    generics: &'a [Argument],
+    types: &'a Map<'a>,
+    requirements: &'a [Answer],
+}
+
 impl Program {
     /// The signature and the body of `declaration` of `module` as one
     /// call takes it: `None` for a declaration that is no function, or
@@ -114,22 +123,13 @@ impl Program {
         let mut body = body.clone();
         let temporal = declared.declarations[declaration].kind.role() == Some(Role::Temporal);
         let functions = hidden_captures(functions, &mut taken, &mut body, temporal);
-        for local in &mut body.locals {
-            local.ty = substitute_within(&local.ty, &map);
-        }
-        walk_statements_mut(&mut body.statements, &mut |expression| {
-            self.place(expression, &map, requirements, &functions);
-        });
-        // GEN-5: a call a membership authorises is the call of the
-        // candidate it selects with these arguments in place, which is
-        // read here.
-        crate::values::select_in_instance(
-            self,
-            (module, declaration),
+        let arguments = InstanceArguments {
+            declaration: (module, declaration),
             generics,
-            &mut body,
-            &|call| call.walk_mut(&mut |inner| self.place(inner, &map, requirements, &functions)),
-        );
+            types: &map,
+            requirements,
+        };
+        self.place_body(&mut body, &arguments, &functions);
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
         // could not say of an operation it requires.
@@ -138,32 +138,58 @@ impl Program {
         Some((taken, body))
     }
 
-    /// Puts what `map` gives in place in one expression: in its type,
+    /// Specialize one lexical body using its own local table. A call
+    /// a membership authorizes is selected with the instance's types
+    /// in place (GEN-5 and GEN-7), including in an anonymous body.
+    fn place_body(
+        &self,
+        body: &mut Body,
+        instance: &InstanceArguments<'_>,
+        functions: &[(usize, Callee)],
+    ) {
+        for local in &mut body.locals {
+            local.ty = substitute_within(&local.ty, instance.types);
+        }
+        walk_statements_mut(&mut body.statements, &mut |expression| {
+            self.place(expression, instance, functions);
+        });
+        crate::values::select_in_instance(
+            self,
+            instance.declaration,
+            instance.generics,
+            body,
+            &|call| call.walk_mut(&mut |inner| self.place(inner, instance, functions)),
+        );
+    }
+
+    /// Puts the instance's arguments in place in an expression's type,
     /// in what it calls, and where it reads a generic value parameter.
     fn place(
         &self,
         expression: &mut Expr,
-        map: &Map,
-        answers: &[Answer],
+        instance: &InstanceArguments<'_>,
         functions: &[(usize, Callee)],
     ) {
-        expression.ty = substitute_within(&expression.ty, map);
+        expression.ty = substitute_within(&expression.ty, instance.types);
         match &mut expression.kind {
             // GEN-13: a generic value parameter read as a value is the
             // constant the call gives it.
             ExprKind::GenericValue { at, .. } => {
-                let given = map.iter().find_map(|(declared, argument)| match argument {
-                    Argument::Constant(given) if declared == at => Some(given),
-                    _ => None,
-                });
+                let given = instance
+                    .types
+                    .iter()
+                    .find_map(|(declared, argument)| match argument {
+                        Argument::Constant(given) if declared == at => Some(given),
+                        _ => None,
+                    });
                 let read = given
                     .and_then(|given| self.constant(&given.value, &expression.ty, expression.at));
                 if let Some(kind) = read {
                     expression.kind = kind;
                 }
             }
-            ExprKind::Call { callee, .. } => self.place_target(callee, map, answers, functions),
-            ExprKind::StaticCallable(callee) => self.place_target(callee, map, answers, functions),
+            ExprKind::Call { callee, .. } => self.place_target(callee, instance, functions),
+            ExprKind::StaticCallable(callee) => self.place_target(callee, instance, functions),
             _ => {}
         }
     }
@@ -171,28 +197,22 @@ impl Program {
     fn place_target(
         &self,
         callee: &mut Callee,
-        map: &Map,
-        answers: &[Answer],
+        instance: &InstanceArguments<'_>,
         functions: &[(usize, Callee)],
     ) {
         if let Callee::Anonymous(function) = callee {
             let functions = inherited_functions(function, functions);
             let template = Type::Function(Box::new(function.template.clone()));
-            if let Type::Function(template) = substitute_within(&template, map) {
+            if let Type::Function(template) = substitute_within(&template, instance.types) {
                 function.template = *template;
             }
             function
                 .specialization
-                .extend(map.iter().map(|(_, value)| (*value).clone()));
-            for local in &mut function.body.locals {
-                local.ty = substitute_within(&local.ty, map);
-            }
-            walk_statements_mut(&mut function.body.statements, &mut |inner| {
-                self.place(inner, map, answers, &functions);
-            });
+                .extend(instance.types.iter().map(|(_, value)| (*value).clone()));
+            self.place_body(&mut function.body, instance, &functions);
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {
-            place_callee(callee, map, answers, functions);
+            place_callee(callee, instance.types, instance.requirements, functions);
         }
     }
 

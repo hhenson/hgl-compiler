@@ -107,6 +107,16 @@ impl fn dispatch_live(f: fn(i64) -> i64, x: i64) -> i64 => f(x)
 fn operator_graph(x: i64, offset: i64) -> i64 =>
     dispatch_live(fn(y) => live_double(y) + offset, x)
 
+const fn generic_lambda<T>(x: T) -> T requires T in {i64, f64} =>
+    dispatch_generic(fn(n: T) => n + n, x)
+
+fn invoke_scalar(f: const fn(i64) -> i64) -> i64 {
+    let adjusted = f(1)
+    return adjusted
+}
+
+fn captured_scalar(input: i64) -> i64 => invoke_scalar(fn(n) => n + input)
+
 test ordinary_callbacks {
     assert apply(increment) == 4
     assert apply(double<i64>, 4) == 8
@@ -123,6 +133,8 @@ test ordinary_callbacks {
     assert forward_to_operator(increment, 4) == 5
     assert dispatch_generic(shows_text, "yes")
     assert dispatch_generic(identity, 7) == 7
+    assert generic_lambda(4) == 8
+    assert generic_lambda(1.5) == 3.0
 }
 
 test temporal_callbacks {
@@ -140,4 +152,5 @@ test temporal_callbacks {
     assert eval optional_callbacks(input: [2, 3]) == [3, 4]
     assert eval nullable_inputs(input: [2, 3], extra: [_, 9]) == [3, 12]
     assert eval operator_graph(x: [2, 3], offset: [1, 2]) == [5, 8]
+    assert eval captured_scalar(input: [2, 3]) == [3, 4]
 }

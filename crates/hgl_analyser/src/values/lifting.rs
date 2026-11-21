@@ -272,8 +272,15 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
                     Connection
                 }
                 Callee::Anonymous(function) if !function.template.value => Connection,
+                Callee::Anonymous(function) => function
+                    .captures
+                    .iter()
+                    .map(|&local| locals[local].category)
+                    .fold(given, join),
                 Callee::Parameter { temporal: true, .. } => Connection,
-                Callee::Required { .. } => join(given, Unsettled),
+                // A value callback may capture a connection. Its
+                // specialized body determines whether FN-6 lifts it.
+                Callee::Parameter { .. } | Callee::Required { .. } => join(given, Unsettled),
                 _ => given,
             }
         }
@@ -422,18 +429,9 @@ fn recorded(program: &Program, locals: &[Local], composition: bool, value: &mut 
     if composition {
         formed_in_composition(program, locals, value);
     }
-    if let ExprKind::Call {
-        callee,
-        arguments,
-        lifted,
-        ..
-    } = &mut value.kind
-    {
-        *lifted = composition
-            && lifts(program, callee)
-            && arguments.iter().any(|argument| {
-                category(program, locals, &argument.value) == ValueCategory::Connection
-            });
+    if let ExprKind::Call { callee, lifted, .. } = &mut value.kind {
+        *lifted =
+            composition && lifts(program, callee) && value.category == ValueCategory::Connection;
     }
 }
 
