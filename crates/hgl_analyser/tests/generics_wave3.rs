@@ -701,6 +701,33 @@ fn a_candidate_that_outranks_every_one_not_told_is_known() {
     assert_eq!(called(&checked, &instance), ["kind(list<T>) <i64>"]);
 }
 
+/// FN-3 and GEN-7: a graph checks const arguments when the candidate
+/// admits the body and again when an instance selects a candidate.
+#[test]
+fn a_deferred_operator_call_checks_const_arguments() {
+    let checked = module(concat!(
+        "operator always_const<T>(value: T) -> i64\n",
+        "impl const fn always_const<T>(const value: T) -> i64 => 5\n",
+        "fn generic_const<T>(value: T) -> i64 => always_const(value)\n",
+        "operator sometimes_const<T>(value: T) -> i64\n",
+        "impl const fn sometimes_const<T>(value: T) -> i64 => 5\n",
+        "impl const fn sometimes_const(const value: i64) -> i64 => value\n",
+        "fn generic_runtime<T>(value: T) -> i64 => sometimes_const(value)\n",
+        "fn instance_const(value: i64) -> i64 => generic_runtime(value)\n",
+        "fn instance_runtime(value: str) -> i64 => generic_runtime(value)\n",
+        "fn instance_already_rejected(value: i64) -> i64 => generic_const(value)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:54 phase/connection.as_constant FN-3",
+            "m.hgl:9:41 phase/connection.as_constant FN-3",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

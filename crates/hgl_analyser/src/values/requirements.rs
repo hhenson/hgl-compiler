@@ -1899,13 +1899,31 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                             // is selected (`Typer::called`): a `var`
                             // parameter's place among them (FN-15).
                             let mark = typer.diagnostics.len();
-                            typer.called(
+                            let (kind, ty) = typer.called(
                                 call.operator,
                                 *chosen,
                                 given,
                                 Vec::new(),
                                 (call.form, call.name),
                             );
+                            if call.graph {
+                                typer.constants_of(&kind);
+                            }
+                            if let Some(result) = &call.result {
+                                let expected = placed(substitute_within(result, &map), &declared);
+                                if expected != ty {
+                                    typer.fit(
+                                        Expr {
+                                            kind,
+                                            ty,
+                                            at: call.at,
+                                            category: ValueCategory::Unsettled,
+                                        },
+                                        &expected,
+                                        "the operator call's result in this instance",
+                                    );
+                                }
+                            }
                             let reports = typer.diagnostics.as_slice()[mark..].to_vec();
                             typer.diagnostics.truncate(mark);
                             let fails = !reports.is_empty();

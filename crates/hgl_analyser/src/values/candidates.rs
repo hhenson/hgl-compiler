@@ -521,6 +521,7 @@ impl<'a> Typer<'a> {
         } = chosen;
         let signature: &Signature = &taken;
         let program = self.program;
+        let reported = self.diagnostics.len();
         // GEN-5: in a test's or an application's value code "a temporal
         // candidate it selects rejects" (TST-3, UNIT-14), the code
         // proposed as `call.role`.
@@ -689,6 +690,9 @@ impl<'a> Typer<'a> {
         };
         self.finished_call(&kind, false);
         let kind = if let Some(selecting) = selecting {
+            if self.graph {
+                self.constants_of(&kind);
+            }
             let arguments = selecting
                 .arguments
                 .iter()
@@ -698,7 +702,9 @@ impl<'a> Typer<'a> {
                     value: given.value.clone(),
                 })
                 .collect();
-            self.selecting.borrow_mut().push(*selecting);
+            if self.diagnostics.len() == reported {
+                self.selecting.borrow_mut().push(*selecting);
+            }
             ExprKind::Call {
                 callee: Callee::Unread,
                 form,
@@ -1093,7 +1099,7 @@ impl<'a> Typer<'a> {
         else {
             return Settled::Elsewhere;
         };
-        let record = Selecting {
+        let mut record = Selecting {
             at,
             name,
             operator,
@@ -1105,9 +1111,16 @@ impl<'a> Typer<'a> {
             written: wanted.written,
             graph: self.graph,
             scope: None,
+            result: None,
         };
         if admits_without_membership {
             if let Some(chosen) = provisional {
+                // GEN-7: surrounding expressions and inferred locals have
+                // already been checked using this candidate's result.
+                record.result = chosen.taken.result.clone();
+                if record.place.is_none() {
+                    record.place.clone_from(&record.result);
+                }
                 chosen.selecting = Some(Box::new(record));
             }
             return Settled::Elsewhere;
@@ -1489,6 +1502,8 @@ pub(crate) struct Selecting {
     /// The lexical locals used to check a call inside a static anonymous
     /// body. Other calls use the declaration's own body.
     pub(crate) scope: Option<std::sync::Arc<[hir::Local]>>,
+    /// The result type used to check the body when a candidate admitted it.
+    pub(super) result: Option<Type>,
 }
 
 /// `signature`, a generic declaration's, as one instance of it reads its
@@ -1618,8 +1633,21 @@ pub(crate) fn select_in_instance(
             operator_generics,
             (call.form, call.name),
         );
-        expression.kind = kind;
-        expression.ty = ty;
+        let selected = Expr {
+            kind,
+            ty,
+            at: expression.at,
+            category: expression.category,
+        };
+        *expression = if call.result.is_some() && selected.ty != expression.ty {
+            typer.fit(
+                selected,
+                &expression.ty,
+                "the operator call's result in this instance",
+            )
+        } else {
+            selected
+        };
         after(expression);
     });
     body.locals = typer.locals;
