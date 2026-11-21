@@ -185,6 +185,14 @@ impl<'a> Typer<'a> {
     /// known to be one (`lifting::record`): it is written here as the
     /// graph's building's.
     pub(super) fn raise_here(&self) -> Raise {
+        // ERR-5: failure propagation targets the function doing the
+        // read, including one written inside a hook or a source.
+        if let Some(scope) = &self.anonymous {
+            return match &scope.result {
+                Type::Result { .. } => Raise::Return,
+                _ => Raise::Execution,
+            };
+        }
         if self.testing {
             return Raise::Test;
         }
@@ -220,7 +228,7 @@ impl<'a> Typer<'a> {
     /// execution failure of one whose failure is of another type, which
     /// a null's `error` is not.
     fn null_raise_here(&self) -> Raise {
-        match (self.raise_here(), &self.signature.result) {
+        match (self.raise_here(), self.result_type()) {
             (Raise::Return, Some(Type::Result { error, .. })) if **error != Type::Error => {
                 Raise::Execution
             }
@@ -240,18 +248,20 @@ impl<'a> Typer<'a> {
         let Type::Result { error: failure, .. } = &result.ty else {
             return;
         };
-        let (allowed, place) = match (raise, &self.signature.result) {
-            (Raise::Return, Some(Type::Result { error: own, .. })) => {
+        let (allowed, place) = match (raise, self.result_type()) {
+            (_, Some(result)) if self.anonymous.is_some() && open(result) => return,
+            (Raise::Return, Some(result @ Type::Result { error: own, .. })) => {
                 if !whole(own) || open(own) {
                     return;
                 }
+                let who = if self.anonymous.is_some() {
+                    "the anonymous function".to_string()
+                } else {
+                    format!("`{}`", self.declaration.name)
+                };
                 (
                     (**own).clone(),
-                    format!(
-                        "`{}` gives `{}`, whose failure is `{own}`",
-                        self.declaration.name,
-                        self.signature.result.as_ref().expect("matched")
-                    ),
+                    format!("{who} gives `{result}`, whose failure is `{own}`"),
                 )
             }
             (raise, _) => (

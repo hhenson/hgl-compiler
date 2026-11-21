@@ -568,6 +568,26 @@ fn a_selector_under_a_configured_operator_sets_nothing() {
     assert_eq!(required(&checked, "unselected"), ["a", "b", "d"]);
 }
 
+/// TIME-8 forbids capability captures even under an operator
+/// configuration the typing pass leaves unread.
+#[test]
+fn a_nested_function_cannot_capture_an_enclosing_capability_alias() {
+    let checked = module(concat!(
+        "fn holds(value: bool) -> bool {\n",
+        "    inject clock\n",
+        "    when {\n",
+        "        let alias = clock\n",
+        "        let reader = fn() => fn() => true &&{strict: alias} false\n",
+        "        return value\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:54 injectable/capability.as_value TIME-8"]
+    );
+}
+
 /// TIME-8: "A capability is used within the node that injects it and is
 /// not retained: it is not the value of a `state` or a `cache`, an entry
 /// of a tuple, list, set, dictionary, or struct, what a function
