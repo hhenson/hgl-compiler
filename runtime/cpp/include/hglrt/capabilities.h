@@ -117,16 +117,10 @@ class Clock {
 /// `Scheduler` (CAP-4), what `inject scheduler` binds: the node's own
 /// scheduler, hgraph's `NodeScheduler`, in the hook `hook`.
 ///
-/// CAP-4 has a wake pending until it is delivered: `is_scheduled` is "True
-/// while a wake is pending". hgraph keeps the wake it delivers until the
-/// node has run, so that in the node's own evaluation it would still be the
-/// earliest: `un_schedule` would cancel it, `is_scheduled` count it and
-/// `next_scheduled_time` give the current time. So a scheduler made in an
-/// evaluation takes every wake due then as it is made, and keeps that one
-/// was due: `is_scheduled_now` "stays true for the rest of that evaluation
-/// after `un_schedule` or `reset` in it" (CAP-4, TIME-9). hgraph re-arms
-/// the node for what is still pending once it has run, as it does after
-/// every wake. The Python-writing target's scheduler does the same.
+/// Capture whether a scheduler wake brought about this evaluation (TIME-9).
+/// Clear any delivered requests still visible in the pending queue on older
+/// hgraph SDKs. Pending queries and cancellation then act on future wakes
+/// throughout the evaluation (CAP-4).
 ///
 /// hgraph marks the node for the earliest wake asked of it, and a wake
 /// cancelled (`un_schedule`, `reset`) or replaced under its tag leaves the
