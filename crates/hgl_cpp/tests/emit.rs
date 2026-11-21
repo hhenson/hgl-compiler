@@ -1451,6 +1451,53 @@ fn a_tests_lines_are_the_units_after_a_node_written_ahead_of_it() {
     assert!(!lines[test..].iter().any(|line| line.starts_with("#line ")));
 }
 
+/// A node whose result is a window writes its handlers inside the
+/// evaluation that holds what they publish (`windows`), indented, and they
+/// set the HGL lines of their statements there too: the unit numbers its
+/// own lines again after the node, though it is the module's last
+/// declaration, so that a test written after it is told its lines in the
+/// unit.
+#[test]
+fn a_units_lines_are_its_own_again_after_a_window_node() {
+    let emitted = emit_named(
+        &[(
+            "demo.windowed.hgl",
+            concat!(
+                "module demo.windowed\n",
+                "fn collect(reading: i64) -> rolling_window<i64, 3, 2> {\n",
+                "    when { return reading }\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+        true,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.windowed.cpp")
+        .unwrap()
+        .text;
+    let lines: Vec<&str> = unit.lines().collect();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start() == "#line 3 \"demo.windowed.hgl\""),
+        "{unit}"
+    );
+    let last = lines
+        .iter()
+        .rposition(|line| line.trim_start().starts_with("#line "))
+        .unwrap();
+    assert_eq!(
+        lines[last],
+        format!("#line {} \"modules/demo.windowed.cpp\"", last + 2),
+        "{unit}"
+    );
+}
+
 /// An application that needs a form the target does not write yet is
 /// written with no entry unit, and says what it lacks.
 #[test]

@@ -332,9 +332,14 @@ impl Emitter<'_> {
 pub(crate) const RESTORE: &str = "// The lines of this file again, from here (#line).";
 
 /// Writes [`RESTORE`] on a line of its own at the end of `text`, where
-/// `written`, the code just put there, sets an HGL line.
+/// `written`, the code just put there, sets an HGL line: a directive on a
+/// line of its own, at any indent, as a window result's handlers are
+/// written inside the evaluation that holds what they publish (`windows`).
 pub(crate) fn restore_after(text: &mut String, written: &str) {
-    if !written.starts_with("#line ") && !written.contains("\n#line ") {
+    if !written
+        .lines()
+        .any(|line| line.trim_start().starts_with("#line "))
+    {
         return;
     }
     if !text.ends_with('\n') {
