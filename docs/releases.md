@@ -24,6 +24,14 @@ publish the archive and its SHA-256 file to GitHub Releases after those
 checks pass. A tag of any other form starts nothing, and one that is not
 the workspace version fails the build.
 
+After publishing, use the release's version and published archive checksum
+to open one update PR in the tap (set `version` and `sha256` first).
+
+```sh
+brew bump-formula-pr hhenson/hgraph/hgl --version="$version" --sha256="$sha256" \
+  --url="https://github.com/hhenson/hgl-compiler/releases/download/$version/hgl-$version-macos-arm64.tar.gz"
+```
+
 ## Build an archive locally
 
 From a clean checkout on Apple silicon with the pinned Rust toolchain,
