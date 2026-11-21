@@ -1040,9 +1040,7 @@ void a_window_is_recorded_and_replayed()
     [&] {
         const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
-        const auto held_ = ::hgl::demo::windows::m_::w_::collect_any(wiring_, input_00_);
-        ::hglrt::testing::keep_held<::hgraph::Int>(wiring_, held_);
-        ::hgl::core::m_::w_::i_::record::of_1rolling_1window_1i64_1_13us_1_10us_1_(wiring_, held_, ::hgraph::Str{::hglrt::testing::run_output});
+        ::hgl::core::m_::w_::i_::record::of_1rolling_1window_1i64_1_13us_1_10us_1_(wiring_, ::hgl::demo::windows::m_::w_::collect_any(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
         const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2};
         ::hglrt::testing::expect_same(left_01_, right_02_);

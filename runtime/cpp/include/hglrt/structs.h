@@ -15,8 +15,8 @@
 // whole value read checked (`whole_value`), a publication of a whole value
 // or of a delta (`publish`), a field of an atomic struct's connection
 // (`atomic_field`), and each form's `endpoint_read` (endpoints.h): its delta
-// (TYPE-16), `all_valid` (TIME-9) and the whole value an eval's result
-// holds (testing.h, `keep_held`).
+// (TYPE-16), `all_valid` (TIME-9) and the whole value it holds, where it
+// can be read whole (`held`).
 #pragma once
 
 #include <hglrt/checked.h>
@@ -235,7 +235,7 @@ struct endpoint_read<hgraph::NominalTSB<T, F...>> {
     }
 
     /// The whole value the struct holds, where it can be read whole, and
-    /// none where a part of it is not valid (testing.h, `keep_held`).
+    /// none where a part of it is not valid.
     template <class E>
     static std::optional<T> held(const E& view) {
         if (!complete(view)) {
@@ -459,12 +459,6 @@ struct whole_publication<atomic_trace<S>> {
     static S delta(const atomic_trace<S>& value) { return value.value; }
 };
 
-/// The text of a value of an atomic struct is the struct's.
-template <class S>
-struct value_text<atomic_trace<S>> {
-    static std::string of(const atomic_trace<S>& value) { return text_of(value.value); }
-};
-
 /// The recording of an eval of an atomic struct `S` as a recording of `S`,
 /// to compare with a trace whose cells are `S` (TST-4, TST-5): each whole
 /// publication is the delta of every field (TST-9), and the value the result
@@ -555,18 +549,32 @@ struct whole_publication<std::tuple<P...>> {
     }
 };
 
-/// The text of a struct and of its delta, as the language writes them
-/// (TYPE-5, TYPE-16): `Quote(bid: 1, ask: 2)`, and `delta<Quote>(bid: 1)`,
-/// a property that is null left out ("A property left out is ... null for
-/// a struct's field").
+} // namespace hglrt::testing
+
+namespace hglrt {
+
+/// The text of a value of an atomic struct is the struct's.
+template <class S>
+struct value_form<atomic_trace<S>> {
+    static std::string text(const atomic_trace<S>& value) { return testing::text_of(value.value); }
+};
+
+/// The name of a struct and of its delta, the compiler's `type_named`, and
+/// their text, as the language writes them (TYPE-5, TYPE-16): `Quote(bid: 1,
+/// ask: 2)`, and `delta<Quote>(bid: 1)`, a property that is null left out
+/// ("A property left out is ... null for a struct's field").
 template <class T>
-    requires requires {
-        type_named<T>::fields;
-        type_named<T>::delta;
-        fields<T>::members;
-    }
-struct value_text<T> {
-    static std::string of(const T& value) {
+    requires requires { type_named<T>::name; }
+struct value_form<T> {
+    static std::string name() { return std::string{type_named<T>::name}; }
+
+    static std::string text(const T& value)
+        requires requires {
+            type_named<T>::fields;
+            type_named<T>::delta;
+            fields<T>::members;
+        }
+    {
         std::string parts;
         const auto& members = fields<T>::members;
         [&]<std::size_t... I>(std::index_sequence<I...>) {
@@ -578,16 +586,16 @@ struct value_text<T> {
                             return;
                         }
                         parts += (parts.empty() ? "" : ", ") + std::string{type_named<T>::fields[I]} + ": " +
-                                 text_of(*field);
+                                 testing::text_of(*field);
                     } else {
                         parts += (parts.empty() ? "" : ", ") + std::string{type_named<T>::fields[I]} + ": " +
-                                 text_of(field);
+                                 testing::text_of(field);
                     }
                 }(),
                 ...);
         }(std::make_index_sequence<std::tuple_size_v<std::remove_cvref_t<decltype(members)>>>{});
-        return std::string{type_named<T>::name} + "(" + parts + ")";
+        return name() + "(" + parts + ")";
     }
 };
 
-} // namespace hglrt::testing
+} // namespace hglrt

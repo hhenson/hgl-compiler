@@ -19,13 +19,13 @@ use common::{argument, scratch, text, write};
 
 /// A module with a value function and two tests: one that the target
 /// writes whole, needing no native of the runtime library's, and one it
-/// does not write yet.
+/// does not write yet: a set of lists, whose element is no scalar.
 const FLAGS: &str = concat!(
     "module demo.flags\n",
     "\n",
     "const fn yes() -> bool => true\n",
     "\n",
-    "fn pass(value: set<bool>) -> set<bool> {\n",
+    "fn pass(value: set<list<bool>>) -> set<list<bool>> {\n",
     "    when { return value }\n",
     "}\n",
     "\n",
@@ -34,7 +34,7 @@ const FLAGS: &str = concat!(
     "}\n",
     "\n",
     "test evaluates {\n",
-    "    assert eval(pass(value: [[true]])) == [[true]]\n",
+    "    assert eval(pass(value: [[[true]]])) == [[[true]]]\n",
     "}\n",
 );
 
@@ -249,7 +249,7 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
              HGL_HGRAPH_SDK is not set: set it to the install prefix of hgraph's C++ SDK, \
              the directory that holds `lib/cmake/hgraph`\n\
              not run  executable  demo.flags::evaluates\n    \
-             {file}:14:29: the cpp target does not write a temporal value of `set<bool>` yet\n\
+             {file}:14:29: the cpp target does not write a temporal value of `set<list<bool>>` yet\n\
              rejection cases: 0 passed, 0 failed\n\
              executable cases: 0 passed, 0 failed, 2 not run\n"
         )
@@ -913,6 +913,35 @@ fn temporal_structs_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 23 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// `demo.keyed`, the temporal form of a set and of a dictionary (TYPE-9,
+/// TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
+/// SDK, and under the sanitizers where `HGL_CPP_FLAGS` names them.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn keyed_temporal_code_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("keyed");
+    let file = write(
+        &root,
+        "src/demo.keyed.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

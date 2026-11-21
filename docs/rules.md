@@ -132,6 +132,7 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | `for` over a connection of a dictionary or a list, a child graph of hgraph's `map_` for each member; over a fixed list, the body for each position | CTRL-7, CTRL-15 |
 | A temporal struct, tuple and atomic struct: a field and a position a child of its own, read, given to an endpoint operation and written in a `when` (`out.bid = value`), and its connection in a graph; a whole read, `all_valid` one level deep with an optional child aside, a publication whole and by a delta, `delta_value`, trace cells | TYPE-9, TYPE-15, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, TST-5 |
 | A temporal nullable scalar or enum: a published null, its delta, a test against null of an input, a trace cell | TYPE-14, TYPE-15, END-1, END-3, END-6, ERR-12 |
+| A temporal set and dictionary: published whole and as a delta, read whole, `delta_value`, `all_valid` of a dictionary, an entry of a dictionary read in a hook and given to an endpoint operation, `invalidate(out)`, their trace cells whole and as deltas | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, END-3, END-4, TST-5, TST-9 |
 
 Not written yet, and reported: a `?` after anything its statement reads
 or runs before it (ERR-5), a `switch` case's binding read after the
@@ -141,21 +142,24 @@ field's default that runs statements, a field of an abstract struct
 assigned, a dictionary written with keys that may be one, a dictionary's
 entry given to a `var` parameter, an application of a generic struct its
 C++ template is not, a window of any but a scalar, and of temporal code: a
-temporal list, set or dictionary, a generic or an abstract struct as a
-temporal value, a struct or a tuple with a part of a form the library does
-not read whole, an atomic struct that holds an optional field (hgraph
-issue 1874), a nullable put in the run's store (hgl_spec issue 165), a
-designation of a child of an input (FN-16), `all_valid` of a list, a
-change of an input's activity in `stop` (END-5), a `for` over a connection
-of a set (CTRL-15), in a branch or a loop's body the store or an ordinary
-value that may fail (FN-9: hgraph builds each child as the graph around it
-is built), a `return` under a branch selected at runtime in a loop
-unrolled where the graph is built, branches that assign two `var`s
-(CTRL-14), a `capture` given an `f64` configuration (ERR-7, hgraph issue
-1866), a lifted call that leaves out a `T?` whose default may fail (FN-6),
-and an eval's or an application's configuration that is no `RunConfig(...)`
-written in it (RUN-1). A call of a function with a pack, core's `all_` and
-`any_`, has no callee the analyser reads.
+temporal list, a generic or an abstract struct as a temporal value, a
+struct or a tuple with a part of a form the library does not read whole,
+an atomic struct that holds an optional field (hgraph issue 1874), a set's
+element or a dictionary's key of any but a scalar, a constant connection
+of a set or a dictionary, an entry of a dictionary's entry, a key's child
+as a connection of a graph (EXPR-7), a nullable put in the run's store
+(hgl_spec issue 165), a designation of a child of an input (FN-16),
+`all_valid` of a list or a set, a change of an input's activity in `stop`
+(END-5), a `for` over a connection of a set (CTRL-15), in a branch or a
+loop's body the store or an ordinary value that may fail (FN-9: hgraph
+builds each child as the graph around it is built), a `return` under a
+branch selected at runtime in a loop unrolled where the graph is built,
+branches that assign two `var`s (CTRL-14), a `capture` given an `f64`
+configuration (ERR-7, hgraph issue 1866), a lifted call that leaves out a
+`T?` whose default may fail (FN-6), and an eval's or an application's
+configuration that is no `RunConfig(...)` written in it (RUN-1). A call
+of a function with a pack, core's `all_` and `any_`, has no callee the
+analyser reads.
 
 ## The C++ target's runtime library
 

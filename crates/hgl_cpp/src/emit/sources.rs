@@ -5,7 +5,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | The body, its statements and `yield` among them | a static member `body_` of the node's struct, an `::hglrt::generator` of `::hglrt::Yielded<T>`, given the source's `const` parameters by value: no hgraph view is held across a `yield` |
+//! | The body, its statements and `yield` among them | a static member `body_` of the node's struct, an `::hglrt::generator` of `::hglrt::Yielded<T>`, or of `Yielded<delta<T>>` where every `yield` gives a delta that is a type of its own (TIME-7), given the source's `const` parameters by value: no hgraph view is held across a `yield` |
 //! | `yield time: value` (SOURCE-2) | `co_yield yielded_type_{time, value};`, the time evaluated first, then the payload |
 //! | A bare `return`, the body's end (SOURCE-4) | `co_return;`, the coroutine's end |
 //! | Its node | `start` makes the body, held in the node's state with where it is; `eval` steps it with `::hglrt::resume`, which publishes what is due and asks the node's scheduler for the next target (SOURCE-2, SOURCE-3); `stop` destroys it, and the locals in its frame |

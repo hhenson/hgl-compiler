@@ -145,11 +145,6 @@ std::string scalar_text(const zoned_datetime& value);
 std::string scalar_text(const tenor& value);
 } // namespace detail
 
-/// The text of a value of `T` where its temporal form says it beside its
-/// other code: a static `of(value)`. A struct's is structs.h's.
-template <class T>
-struct value_text;
-
 /// `value` as the language writes it, for a person to read in a failure: a
 /// scalar as its literal, `null`, a tuple `(1, 2.0)`, a list `[1, 2]`, a
 /// list's delta by its properties, an enum's member as `Type.member`
@@ -189,8 +184,8 @@ std::string text_of(const T& value) {
         return text_of(value.value);
     } else if constexpr (detail::is_variant<T>::value) {
         return std::visit([](const auto& held) { return text_of(held); }, value);
-    } else if constexpr (requires { value_text<T>::of(value); }) {
-        return value_text<T>::of(value);
+    } else if constexpr (requires { value_form<T>::text(value); }) {
+        return value_form<T>::text(value);
     } else if constexpr (named_enum<T>) {
         return hglrt::detail::member_text(value);
     } else if constexpr (requires { detail::scalar_text(value); }) {
@@ -522,7 +517,9 @@ delta_t<T> whole_delta(const T& value, std::size_t size) {
 
 /// What each cell of a trace of a T publishes, in order, a whole one as the
 /// delta that replaces what the value held: the size of a list is followed
-/// through each cell, a delta's among them.
+/// through each cell, a delta's among them. A header of this library that
+/// declares a value type whose whole cell needs more of what the earlier
+/// cells left specializes it for that type (keyed.h: a set, a dictionary).
 template <class T>
 class Publisher {
   public:

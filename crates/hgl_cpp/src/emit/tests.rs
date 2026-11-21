@@ -15,7 +15,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | `eval(target(value: [1, _, 3]))` (TST-5, CEVAL-1) | `::hglrt::testing::evaluate<T>(entry)`: the entry wires core's `replay` of each trace written to the input it is given, the target, and core's `record` of its result under `"run.output"`; `run(...)` in an integration test runs in real time (TST-17); an eval of a target with no result is `::hglrt::testing::run(entry)` (TST-8) |
+//! | `eval(target(value: [1, _, 3]))` (TST-5, CEVAL-1) | `::hglrt::testing::evaluate<T>(entry)`: the entry wires core's `replay` of each trace written to the input it is given, the target, and core's `record` of its result under `"run.output"`, and, for a result whose delta is no T, a node `held_00_` that keeps the result read whole at each publication (`::hglrt::testing::hold`); `run(...)` in an integration test runs in real time (TST-17); an eval of a target with no result is `::hglrt::testing::run(entry)` (TST-8) |
 //! | `[7, _, 9]`, `[0s: 7, 2s: 9]` (TST-6, TST-7) | `::hglrt::testing::Dense<T>{7, std::nullopt, 9}`, `::hglrt::testing::Timed<T>{...}`, each cell as its type's family writes it |
 //! | `assert left == right` of two traces (TST-4) | `::hglrt::testing::expect_same(left, right)`, the left one evaluated first; `!=` is `expect_different`; either as a value is `::hglrt::testing::same` |
 //! | A trace given to a `const fn` (TST-16) | `::hglrt::testing::publications(trace)`, its publications as a list |
@@ -343,17 +343,38 @@ impl Emitter<'_> {
                     return "0".to_string();
                 };
                 // TST-5: "one written as a T [is compared] with the value
-                // the result holds once its cycle has published": where T's
-                // delta is no T, the entry keeps that value beside the
-                // recording (`hglrt::testing::keep_held`).
-                let target = if hgl_analyser::Type::delta(result.clone()) == *result {
-                    target
-                } else {
+                // the result holds once its cycle has published". Where T's
+                // delta is no T, a node of the entry's own keeps that value
+                // at each publication (`hglrt::testing::hold`): the result
+                // read whole as its form reads it, or none where that read
+                // fails. A result whose form no family writes is reported
+                // where the target is written. A window's trace holds its
+                // arrivals and its read is a list (`Family::read_type`): it
+                // has no cell written whole.
+                if Type::delta(result.clone()) != *result
+                    && self.read_type(result) == *result
+                    && let Some(schema) = self.temporal_schema_of(result)
+                {
+                    let read = self.temporal_read(result, "result_", call.at);
+                    let holder = names::temporary("held", self.temporary());
+                    let port = names::temporary("result", self.temporary());
+                    let inner = INDENT.repeat(3);
+                    let body = INDENT.repeat(4);
                     text.push_str(&format!(
-                        "{indent}const auto held_ = {target};\n{indent}{library}::keep_held<{written}>({WIRING}, held_);\n"
+                        "{indent}struct {holder}\n{indent}{{\n\
+                         {inner}static void eval(::hgraph::In<\"result\", {schema}> result_, ::hgraph::DateTime now_)\n{inner}{{\n\
+                         {body}if (!::{runtime}::fn_modified(result_))\n{body}{{\n{body}{INDENT}return;\n{body}}}\n\
+                         {body}std::optional<{written}> whole_;\n\
+                         {body}try\n{body}{{\n{body}{INDENT}whole_.emplace({read});\n{body}}}\n\
+                         {body}catch (const ::{runtime}::Failure&)\n{body}{{\n{body}}}\n\
+                         {body}{library}::hold<{written}>(now_, std::move(whole_));\n\
+                         {inner}}}\n{indent}}};\n\
+                         {indent}const auto {port} = {target};\n\
+                         {indent}::hgraph::wire<{holder}>({WIRING}, {port});\n",
+                        runtime = crate::runtime::NAMESPACE,
                     ));
-                    "held_".to_string()
-                };
+                    target = port;
+                }
                 text.push_str(&format!(
                     "{indent}{record}({WIRING}, {target}, ::hgraph::Str{{{library}::run_output}});\n{INDENT}}}"
                 ));

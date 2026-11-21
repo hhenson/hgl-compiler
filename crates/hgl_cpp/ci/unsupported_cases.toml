@@ -16,14 +16,6 @@
     "conformance::absolute_targets_before_at_and_after_start",
     "conformance::skipped_targets_still_establish_source_order",
 ]
-"a temporal value of `dict<str, i64>`" = [
-    "conformance::a_removed_key_is_absent_until_added_again",
-    "conformance::a_whole_dictionary_is_a_trace_cell",
-    "conformance::an_empty_dictionary_delta_ticks_only_where_it_makes_the_dictionary_valid",
-    "conformance::an_empty_dictionary_given_to_an_empty_dictionary_is_no_tick",
-    "conformance::removing_an_absent_key_is_ignored",
-    "conformance::removing_only_an_absent_key_is_no_tick",
-]
 "a temporal value of `list<f64>`" = [
     "conformance::a_whole_f64_list_reads_nan_in_a_gap",
 ]
@@ -51,15 +43,6 @@
     "conformance::reducing_a_list_past_its_length_leaves_it_empty",
     "conformance::removing_only_a_position_that_holds_no_value_is_no_tick",
 ]
-"a temporal value of `set<i64>`" = [
-    "conformance::a_set_delta_changes_only_the_named_members",
-    "conformance::a_set_given_the_members_it_holds_is_no_tick",
-    "conformance::a_whole_set_replaces_the_previous_members",
-    "conformance::an_empty_set_delta_ticks_only_where_it_makes_the_set_valid",
-    "conformance::mixed_replay",
-    "conformance::removing_only_an_absent_member_is_no_tick",
-    "core_implementation::record_can_be_empty",
-]
 "a trace of `list<bool, 2>`" = [
     "conformance::a_tuple_is_valid_once_one_position_is_and_all_valid_once_both_are",
     "conformance::a_window_emptied_by_exits_stays_valid",
@@ -80,10 +63,6 @@
 ]
 "a trace of `list<str, 2>`" = [
     "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
-]
-"a trace of `set<i64>`" = [
-    "conformance::set_writes_coalesce",
-    "core_implementation::record_retains_each_delta",
 ]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph
