@@ -272,8 +272,8 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
         text(&output.stdout),
         format!(
             "not run  executable  demo.flags::holds\n    \
-             HGL_HGRAPH_SDK is not set: set it to the install prefix of hgraph's C++ SDK, \
-             the directory that holds `lib/cmake/hgraph`\n\
+             HGL_HGRAPH_SDK is not set and the executable has no bundled `../libexec/hgraph-sdk`: \
+             set it to the install prefix of hgraph's C++ SDK, the directory that holds `lib/cmake/hgraph`\n\
              not run  executable  demo.flags::evaluates\n    \
              {file}:14:29: the cpp target does not write a temporal value of `set<list<bool>>` yet\n\
              rejection cases: 0 passed, 0 failed\n\
@@ -297,6 +297,48 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
         "{}",
         text(&output.stdout)
     );
+}
+
+/// A bundled SDK and its dependencies are found through a symlink to
+/// the binary. An explicit prefix overrides the matching bundle path.
+#[cfg(unix)]
+#[test]
+fn release_prefixes_follow_the_real_executable() {
+    let root = scratch("release_prefixes");
+    let file = write(&root, "flags.hgl", FLAGS);
+    let bundle = root.join("bundle");
+    let hgl = bundle.join("bin/hgl");
+    fs::create_dir_all(hgl.parent().unwrap()).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_hgl"), &hgl).unwrap();
+    let linked = root.join("hgl");
+    std::os::unix::fs::symlink(&hgl, &linked).unwrap();
+    let sdk = bundle.join("libexec/hgraph-sdk/lib/cmake/hgraph");
+    fs::create_dir_all(&sdk).unwrap();
+    fs::write(sdk.join("hgraphConfig.cmake"), "").unwrap();
+    let deps = bundle.join("libexec/hgraph-deps");
+    fs::create_dir_all(deps.join("include")).unwrap();
+    fs::create_dir_all(deps.join("lib")).unwrap();
+
+    let from_bundle = |sdk_override: Option<&Path>| {
+        let mut hgl = Command::new(&linked);
+        hgl.args(["test", &file, "--target", "cpp", "--test", "holds"])
+            .env("CXX", "true")
+            .env_remove("HGL_HGRAPH_SDK")
+            .env_remove("HGL_HGRAPH_DEPS");
+        if let Some(sdk_override) = sdk_override {
+            hgl.env("HGL_HGRAPH_SDK", sdk_override);
+        }
+        hgl.output().expect("the linked hgl runs")
+    };
+    let found_both = text(&from_bundle(None).stdout);
+    assert!(
+        found_both.contains("neither GCC nor Apple clang"),
+        "{found_both}"
+    );
+    let explicit = text(&from_bundle(Some(&root)).stdout);
+    assert!(explicit.contains("HGL_HGRAPH_SDK names"), "{explicit}");
+    let empty = text(&from_bundle(Some(Path::new(""))).stdout);
+    assert!(empty.contains("HGL_HGRAPH_SDK is empty"), "{empty}");
 }
 
 /// A compiler is known by the macros it defines, not by its name, and
@@ -445,8 +487,8 @@ fn run_with_no_sdk_named_says_so() {
     assert_eq!(text(&output.stdout), "");
     assert_eq!(
         text(&output.stderr),
-        "hgl: demo.ticks.backtest was not run: HGL_HGRAPH_SDK is not set: set it to the install \
-         prefix of hgraph's C++ SDK, the directory that holds `lib/cmake/hgraph`\n"
+        "hgl: demo.ticks.backtest was not run: HGL_HGRAPH_SDK is not set and the executable has no bundled \
+         `../libexec/hgraph-sdk`: set it to the install prefix of hgraph's C++ SDK, the directory that holds `lib/cmake/hgraph`\n"
     );
 }
 
@@ -1050,7 +1092,8 @@ fn activity_runs_on_the_sdk() {
 }
 
 /// FN-8 and GEN-10: C++ calls bind the individual inputs of positional
-/// and named packs in value helpers, nodes, and graphs.
+/// and named packs in value helpers, nodes, and graphs. TST-5: eval
+/// replays the trace of each captured argument.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn pack_parameters_run_on_the_sdk() {
@@ -1072,13 +1115,13 @@ fn pack_parameters_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
 
-/// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code
-/// and temporal nodes, including an application-phase failure.
+/// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code and
+/// temporal nodes, including SOURCE-2 yield times and an application failure.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn contextual_result_reads_run_on_the_sdk() {
@@ -1100,7 +1143,7 @@ fn contextual_result_reads_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 

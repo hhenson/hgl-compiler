@@ -20,6 +20,10 @@ with this target as its reference for behaviour and for speed.
 A trial transcription of four programs (scalar, keyed children, a struct with
 generic functions and a failure, a stateful `switch`) gave the costs below.
 
+The [macOS release bundle](releases.md) provides hgraph's SDK and the
+libraries it links. C++ builds on macOS still use the system's Apple
+clang 21 or later, with CMake and Ninja on `PATH`.
+
 ## Pipeline
 
 ```text

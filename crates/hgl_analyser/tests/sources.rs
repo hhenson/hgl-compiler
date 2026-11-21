@@ -7,7 +7,8 @@
 mod common;
 
 use common::{Checked, body, locals, module};
-use hgl_analyser::hir::{Hook, Stmt};
+use hgl_analyser::hir::{ExprKind, Hook, Raise, Stmt};
+use hgl_analyser::{Scalar, Type};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -109,6 +110,99 @@ fn a_sources_body_is_read() {
     };
     assert_eq!(time.ty.to_string(), "duration");
     assert_eq!(value.ty.to_string(), "i64");
+}
+
+/// SOURCE-2: "A duration is relative to current evaluation time; a
+/// datetime is absolute." Other types do not give a time (EXPR-5).
+#[test]
+fn a_yield_time_is_a_duration_or_datetime() {
+    let checked = module(concat!(
+        "fn typed(const at: datetime, const wrong: result<i64, error>, const maybe: str?) -> i64 {\n",
+        "    yield 1s: 1\n",
+        "    yield at: 2\n",
+        "    yield \"text\": 3\n",
+        "    yield 42: 4\n",
+        "    yield wrong: 5\n",
+        "    yield maybe: 6\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:11 type/yield.time_type SOURCE-2",
+            "m.hgl:6:11 type/yield.time_type SOURCE-2",
+            "m.hgl:7:11 type/yield.time_type SOURCE-2",
+            "m.hgl:8:11 type/yield.time_type SOURCE-2",
+        ]
+    );
+    for (statement, scalar) in body(&checked, "typed")
+        .statements
+        .iter()
+        .zip([Scalar::Duration, Scalar::Datetime])
+    {
+        let Stmt::Yield { time, .. } = statement else {
+            panic!("expected a yield");
+        };
+        assert_eq!(time.ty, Type::Scalar(scalar));
+    }
+}
+
+/// SOURCE-2, ERR-12, ERR-15: the time takes a result's successful
+/// payload and reads a nullable value. Neither form changes where a
+/// failure is raised (ERR-5).
+#[test]
+fn a_yield_reads_the_time_from_nullable_and_fallible_values() {
+    let checked = module(
+        r#"
+const fn delay() -> result<duration, error> => ok(1s)
+fn timed(const outcome: result<datetime?, error>, const maybe: duration?) -> i64 {
+    yield delay(): 1
+    yield maybe: 2
+    yield outcome: 3
+}
+"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let [
+        Stmt::Yield { time: delay, .. },
+        Stmt::Yield { time: maybe, .. },
+        Stmt::Yield { time: outcome, .. },
+    ] = body(&checked, "timed").statements.as_slice()
+    else {
+        panic!("expected three yields");
+    };
+    assert_eq!(delay.ty, Type::Scalar(Scalar::Duration));
+    assert!(matches!(
+        delay.kind,
+        ExprKind::Raised {
+            raise: Raise::Source,
+            ..
+        }
+    ));
+    assert_eq!(maybe.ty, Type::Scalar(Scalar::Duration));
+    assert!(matches!(
+        maybe.kind,
+        ExprKind::NullRead {
+            raise: Raise::Source,
+            ..
+        }
+    ));
+    assert_eq!(outcome.ty, Type::Scalar(Scalar::Datetime));
+    let ExprKind::NullRead {
+        value,
+        raise: Raise::Source,
+        ..
+    } = &outcome.kind
+    else {
+        panic!("expected a read of the nullable success");
+    };
+    assert!(matches!(
+        value.kind,
+        ExprKind::Raised {
+            raise: Raise::Source,
+            ..
+        }
+    ));
 }
 
 /// SOURCE-1: "`yield time: value` writes its output": the value is of

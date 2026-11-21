@@ -1994,8 +1994,8 @@ is not used yet.
 
 | Variable | What it names |
 | --- | --- |
-| `HGL_HGRAPH_SDK` | hgraph's C++ SDK, its install prefix: required, with no default |
-| `HGL_HGRAPH_DEPS` | The prefix of the libraries the SDK was built against: required, with no default |
+| `HGL_HGRAPH_SDK` | hgraph's C++ SDK prefix. Defaults to `../libexec/hgraph-sdk` beside the resolved executable |
+| `HGL_HGRAPH_DEPS` | The SDK's dependency prefix. Defaults to `../libexec/hgraph-deps` beside the resolved executable |
 | `CXX` | The compiler, of the platform's family: GCC 15 or later on Linux, Apple clang 21 or later on macOS. Otherwise, on Linux, the first of `g++-17`, `g++-16`, `g++-15`, `g++` on the `PATH` that is GCC 15 or later, and on macOS `clang++`. A compiler is known by the macros it defines (`-dM -E`), not by its name |
 | `HGL_CPP_FLAGS` | Flags added to every compile and link, the runtime library's too: `-O2`, `-g`, the sanitizers |
 | `HGL_NATIVE_CACHE` | Where builds are kept; otherwise `hgl/native` in the user's cache directory |
