@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use hgl_analyser::hir::{Body, Expr, ExprKind, walk_statements};
+use hgl_analyser::hir::{Body, Expr, ExprKind, Raise, walk_statements};
 use hgl_analyser::{Detail, Phase, Program, Signature, Type};
 use hgl_lower::instances::Instances;
 
@@ -18,6 +18,18 @@ pub(super) struct Reading {
     pub(super) parameter: usize,
     /// The read, including the connection it reads.
     pub(super) form: Expr,
+}
+
+/// Locate the result-to-value read in a consumer's recorded forms.
+/// ERR-15 raises on the Err publication even if no handler reads it.
+pub(super) fn watches_failure(value: &Expr) -> Option<&Expr> {
+    match value.kind {
+        ExprKind::Raised {
+            raise: Raise::Reader,
+            ..
+        } => Some(value),
+        _ => reader_inner(value).and_then(watches_failure),
+    }
 }
 
 type InstanceKey = (usize, usize, Option<String>);
@@ -130,7 +142,7 @@ fn reads(value: &Expr, signature: &Signature) -> Vec<Reading> {
     let ExprKind::Call { arguments, .. } = &value.kind else {
         return Vec::new();
     };
-    let mut reads: Vec<Reading> = arguments
+    arguments
         .iter()
         .filter_map(|argument| {
             let parameter = argument.parameter?;
@@ -149,9 +161,7 @@ fn reads(value: &Expr, signature: &Signature) -> Vec<Reading> {
                 form: argument.value.clone(),
             })
         })
-        .collect();
-    reads.sort_by_key(|read| read.parameter);
-    reads
+        .collect()
 }
 
 /// Whole publications and their deltas can be read directly for

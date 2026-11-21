@@ -144,7 +144,6 @@ analyser: partial
 - A `result<U?, error>` given where a U is expected raises its original error on failure and reads the success under ERR-12. The owner confirmed the two reads while the specification update was in review. [Compiler issue #345](https://github.com/hhenson/hgl-compiler/issues/345#issuecomment-7060418814)
 - In composition the analyser records whether a conversion belongs to the call's node or to a reader of a held connection.
 
-transpiler: partial
+transpiler: done
 
-- C++ follows the recorded whole, success or nullable form. A lifted call or node publishes the chosen form. Held results convert in the consuming handler or through a projected endpoint for consumers that need child tracking.
-- Open: collection guards, child tracking, and handlers that skip a read in a cycle with a held failure. [Compiler issue #355](https://github.com/hhenson/hgl-compiler/issues/355)
+- C++ follows the recorded whole, success or nullable form. A lifted call or node publishes the chosen form. A held failure taken as a value fails on its publication cycle, before the consumer runs a handler. Consumers that need child tracking use a projected endpoint. [Compiler issue #355](https://github.com/hhenson/hgl-compiler/issues/355)

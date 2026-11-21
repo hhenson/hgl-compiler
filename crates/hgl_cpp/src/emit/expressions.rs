@@ -55,7 +55,7 @@ impl Emitter<'_> {
         // The temporal forms, and the reads of a hook, are the dispatch
         // point's (`forms`), which a construct lane adds to.
         if let ExprKind::Local(local) = value.kind
-            && let Some(written) = self.reader_value(scope, local, value)
+            && let Some(written) = self.reader_value(scope, local, &value.ty, value.at)
         {
             return written;
         }
@@ -512,14 +512,20 @@ impl Emitter<'_> {
 
     /// Read a projected argument using the consuming node's physical
     /// input. The read is evaluated only where the handler uses it.
-    fn reader_value(&mut self, scope: &Scope, local: usize, read: &Expr) -> Option<String> {
+    pub(super) fn reader_value(
+        &mut self,
+        scope: &Scope,
+        local: usize,
+        ty: &Type,
+        at: Location,
+    ) -> Option<String> {
         let form = self.input_reader(local)?.clone();
         let underlying = super::lifting::reader_operand(&form);
         let name = identifier(&scope.body.locals[local].name);
-        let value = self.temporal_read(&underlying.ty, &name, read.at);
+        let value = self.temporal_read(&underlying.ty, &name, at);
         let value = self.apply_reader_chain(&form, &value);
         Some(match &form.ty {
-            Type::Nullable(payload) if **payload == read.ty => format!("(*({value}))"),
+            Type::Nullable(payload) if **payload == *ty => format!("(*({value}))"),
             _ => value,
         })
     }
@@ -559,7 +565,7 @@ impl Emitter<'_> {
 
     /// A source location at the read itself, even inside a multiline
     /// statement or a test whose generated body has no `#line`.
-    fn source_location(&mut self, at: Location) -> String {
+    pub(super) fn source_location(&mut self, at: Location) -> String {
         let current = "::std::source_location::current()";
         self.line_directive(at).map_or_else(
             || current.to_string(),

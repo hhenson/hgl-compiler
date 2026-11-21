@@ -32,7 +32,7 @@ use hgl_lower::nodes::{Handler, Timer, is_input, is_out, required_inputs, subscr
 use super::Emitter;
 use super::forms::Family;
 use super::names::{self, identifier};
-use super::readers::Reading;
+use super::readers::{Reading, watches_failure};
 use super::statements::{Scope, statement_at};
 use super::values::INDENT;
 use crate::runtime;
@@ -454,11 +454,15 @@ impl Emitter<'_> {
         context.result_forms = forms.clone();
         context.signature = Some(signature.clone());
         let mut physical = signature.clone();
+        let mut watched = Vec::new();
         if let Some((_, reads)) = readers {
             context.input_reads = reads.to_vec();
             for read in reads {
                 physical.parameters[read.parameter].ty =
                     super::lifting::reader_operand(&read.form).ty.clone();
+                if let Some(form) = watches_failure(&read.form) {
+                    watched.push((read.parameter, form));
+                }
             }
         }
         let mut inputs = Vec::new();
@@ -562,7 +566,9 @@ impl Emitter<'_> {
         // validity includes only requirements common to executable
         // handlers; other guards stay per-handler."
         let active = subscribed_inputs(&inputs, &running);
-        let valid = if running.is_empty() {
+        // ERR-15: a new Err can fail this node before any handler's
+        // admission is met. In these variants validity stays per handler.
+        let valid = if running.is_empty() || !watched.is_empty() {
             Vec::new()
         } else {
             required_inputs(&inputs, &running)
@@ -581,6 +587,21 @@ impl Emitter<'_> {
             return;
         };
         parameters.extend(designated.parameters());
+        let indent = INDENT.repeat(2);
+        let mut checks = String::new();
+        for &(local, form) in &watched {
+            let parameter = &physical.parameters[local];
+            let Some(schema) = self.temporal_schema(&parameter.ty, form.at) else {
+                return;
+            };
+            let view = format!("result_watch_{local}_");
+            // The extra subscription sees Err even if the HGL input is
+            // passive. A successful observation does not wake a handler.
+            parameters.push(format!(
+                "::hgraph::In<\"hgl.result.input.{local}\", {schema}, ::hgraph::InputValidity::Unchecked> {view}"
+            ));
+            checks.push_str(&self.check_result_tick(form, &view, &indent));
+        }
         let output = if let Some(forms) = &forms {
             Some(forms.output_parameter())
         } else {
@@ -681,7 +702,8 @@ impl Emitter<'_> {
         if let Some(output) = &output {
             hook.push(output.clone());
         }
-        let mut written = prologue(body, &states);
+        let mut written = checks;
+        written.push_str(&prologue(body, &states));
         if forms.is_some() {
             hook.push(ResultForms::mode_parameter());
             let declared = ResultForms::view(ResultForm::Whole);
@@ -710,8 +732,27 @@ impl Emitter<'_> {
             return;
         };
         written.push_str(&made);
-        written.push_str(&self.designation_prologue(&designated, body, &inputs, &active));
-        written.push_str(&super::scheduling::woken(&context, body, &inputs));
+        let woken = super::scheduling::woken(&context, body, &inputs);
+        let designation = self.designation_prologue(&designated, body, &inputs, &active);
+        if watched.is_empty() {
+            written.push_str(&designation);
+            written.push_str(&woken);
+        } else {
+            written.push_str(&woken);
+            let library = runtime::NAMESPACE;
+            let mut wakes = Vec::new();
+            if context.timer.is_some() {
+                wakes.push(super::scheduling::TIMER_WOKE.to_string());
+            }
+            for &local in &inputs {
+                let name = identifier(&body.locals[local].name);
+                wakes.push(format!(
+                    "(::{library}::fn_is_active({name}) && ::{library}::ticked({name}))"
+                ));
+            }
+            written.push_str(&format!("{indent}if (!({})) return;\n", wakes.join(" || ")));
+            written.push_str(&designation);
+        }
         context.kind = Kind::Hook(Hook::When);
         let mut handlers = String::new();
         for (handler, at) in running.iter().zip(&places) {
@@ -799,8 +840,9 @@ impl Emitter<'_> {
                 &registered,
             ));
         }
+        let watched: Vec<usize> = watched.iter().map(|&(local, _)| local).collect();
         let Some((prototype, wiring)) =
-            self.node_wiring(&physical, &placed, shown, body, forms.as_ref())
+            self.node_wiring(&physical, &placed, shown, body, forms.as_ref(), &watched)
         else {
             return;
         };
@@ -1043,7 +1085,7 @@ impl Emitter<'_> {
         wired: &str,
         body: &Body,
     ) -> Option<(String, String)> {
-        self.wiring_function_in_form(signature, placed, shown, body, (wired, None))
+        self.wiring_function_in_form(signature, placed, shown, body, (wired, None), &[])
     }
 
     /// Write the ordinary wiring function and the available result
@@ -1055,6 +1097,7 @@ impl Emitter<'_> {
         shown: &str,
         body: &Body,
         forms: Option<&ResultForms>,
+        watched: &[usize],
     ) -> Option<(String, String)> {
         let qualified = placed.qualified(self.program, self.module);
         let wired = format!("::hgraph::wire<{qualified}>");
@@ -1064,6 +1107,7 @@ impl Emitter<'_> {
             shown,
             body,
             (&wired, forms.map(|forms| (forms, ResultForm::Whole))),
+            watched,
         )?;
         if let Some(forms) = forms {
             for (form, ty) in [
@@ -1085,6 +1129,7 @@ impl Emitter<'_> {
                     shown,
                     body,
                     (&wired, Some((forms, form))),
+                    watched,
                 )?;
                 declarations.push_str(&declaration);
                 definitions.push_str(&definition);
@@ -1102,6 +1147,7 @@ impl Emitter<'_> {
         shown: &str,
         body: &Body,
         (wired, form): (&str, Option<(&ResultForms, ResultForm)>),
+        watched: &[usize],
     ) -> Option<(String, String)> {
         let program = self.program;
         let mut parameters = vec![format!("::hgraph::Wiring& {}", super::graphs::WIRING)];
@@ -1135,6 +1181,11 @@ impl Emitter<'_> {
         // FN-16: each input a `ref` result designates is given again, to
         // the input the node follows its re-binding through.
         for port in self.designated_ports(signature, body) {
+            wired_arguments.push((None, port.clone()));
+            given.push(port);
+        }
+        for &local in watched {
+            let port = identifier(&body.locals[local].name);
             wired_arguments.push((None, port.clone()));
             given.push(port);
         }

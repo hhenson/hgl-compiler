@@ -301,7 +301,7 @@ impl Emitter<'_> {
             &format!("{}.state", placed.display(program, self.module)),
         ));
         let Some((prototype, wiring)) =
-            self.node_wiring(signature, &placed, shown, body, forms.as_ref())
+            self.node_wiring(signature, &placed, shown, body, forms.as_ref(), &[])
         else {
             return;
         };

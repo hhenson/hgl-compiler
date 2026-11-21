@@ -38,6 +38,7 @@ use super::forms::Family;
 use super::graphs::{HeldInputs, WIRING};
 use super::names::{self, identifier};
 use super::nodes::{Context, Kind, OUT, ResultForm, Role};
+use super::readers::watches_failure;
 use super::statements::Scope;
 use super::values::INDENT;
 use crate::runtime;
@@ -56,6 +57,21 @@ pub(super) struct Given {
 }
 
 impl Emitter<'_> {
+    /// A new Err must fail the reading node before it tests admission
+    /// or runs a handler (ERR-15, owner's ruling on #355).
+    pub(super) fn check_result_tick(&mut self, form: &Expr, view: &str, indent: &str) -> String {
+        let input = reader_operand(form);
+        let value = self.temporal_read(&input.ty, view, input.at);
+        let name = names::temporary("outcome", self.temporary());
+        let place = self.source_location(form.at);
+        let library = runtime::NAMESPACE;
+        format!(
+            "{indent}if (::{library}::fn_modified({view}))\n{indent}{{\n\
+             {indent}{INDENT}const auto {name} = {value};\n\
+             {indent}{INDENT}if (!{name}.has_value()) ::{library}::raise({name}.error(), {place});\n{indent}}}\n"
+        )
+    }
+
     /// Wire the reader of a result or nullable connection returned by
     /// a graph. A held error is raised when the reader sees its cycle
     /// (ERR-12 and ERR-15), and silence never produces an output.
@@ -202,6 +218,19 @@ impl Emitter<'_> {
         let mut synthetic: Vec<Argument> = Vec::new();
         // For each argument, the name of its scalar where it is one.
         let mut labels: Vec<Option<String>> = Vec::new();
+        let reads_raw_input = |position, argument: &Argument| {
+            let input = reader_operand(&argument.value);
+            !std::ptr::eq(input, &argument.value)
+                && given
+                    .iter()
+                    .find(|given| given.position == position)
+                    .is_none_or(|given| given.input.as_ref() == Some(&input.ty))
+        };
+        let observes_results = arguments.iter().enumerate().any(|(position, argument)| {
+            reads_raw_input(position, argument) && watches_failure(&argument.value).is_some()
+        });
+        let mut checks = String::new();
+        let mut admission = String::new();
         // What `eval` does before it calls the function: FN-11's
         // admission, and the values the inputs that need not be valid
         // bind.
@@ -224,8 +253,10 @@ impl Emitter<'_> {
             let label = names::string(&parameter.name);
             let written = given.iter().find(|given| given.position == position);
             let input_value = reader_operand(&argument.value);
-            let mut local_read = !std::ptr::eq(input_value, &argument.value)
-                && written.is_none_or(|given| given.input.as_ref() == Some(&input_value.ty));
+            let mut local_read = reads_raw_input(position, argument);
+            let watched = local_read
+                .then(|| watches_failure(&argument.value))
+                .flatten();
             let input = match written {
                 Some(given) => given.input.clone(),
                 None => input_value.is_connection().then(|| input_value.ty.clone()),
@@ -254,8 +285,21 @@ impl Emitter<'_> {
                         // `valid(input)`": hgraph evaluates the node only
                         // once it is.
                         None => {
-                            parameters.push(format!("::hgraph::In<{label}, {schema}> {name}"));
+                            let policy = if observes_results {
+                                // ERR-15: failure ticks are observed even
+                                // while another input is still invalid.
+                                admission
+                                    .push_str(&format!("{indent}if (!{valid}({name})) return;\n"));
+                                ", ::hgraph::InputValidity::Unchecked"
+                            } else {
+                                ""
+                            };
+                            parameters
+                                .push(format!("::hgraph::In<{label}, {schema}{policy}> {name}"));
                             roles.push(Role::Input);
+                            if let Some(form) = watched {
+                                checks.push_str(&self.check_result_tick(form, &name, &indent));
+                            }
                             if whole {
                                 prelude.push_str(&format!(
                                     "{indent}if (!{all_valid}({name}))\n{indent}{{\n{indent}{INDENT}return;\n{indent}}}\n"
@@ -276,6 +320,9 @@ impl Emitter<'_> {
                             parameters.push(format!(
                                 "::hgraph::In<{label}, {schema}, ::hgraph::InputValidity::Unchecked> {view}"
                             ));
+                            if let Some(form) = watched {
+                                checks.push_str(&self.check_result_tick(form, &view, &indent));
+                            }
                             roles.push(Role::Plain);
                             // TYPE-14: "A T is a value where a `T?` is
                             // expected": a connection of T given to a
@@ -534,7 +581,9 @@ impl Emitter<'_> {
         context.roles = roles;
         context.result = result.cloned();
         let mut lifted_scope = Scope::cold(program, &body);
-        let mut statements = prelude;
+        let mut statements = checks;
+        statements.push_str(&admission);
+        statements.push_str(&prelude);
         self.in_context(&mut context, |emitter| {
             emitter.statements(&mut lifted_scope, &body.statements, 2, &mut statements);
         });

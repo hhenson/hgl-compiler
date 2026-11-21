@@ -66,6 +66,30 @@ fn reading_list(input: i64) -> i64 {
     return consuming_list(held)
 }
 
+fn waiting_for_an_input(input: i64, delayed: i64) -> i64 {
+    let held = checked(input)
+    return combine(held, delayed)
+}
+
+const fn add_inputs(left: i64, right: i64) -> i64 => left + right
+
+fn lifted_waiting_for_an_input(input: i64, delayed: i64) -> i64 {
+    let held = checked(input)
+    return add_inputs(held, delayed)
+}
+
+fn when_present(value: i64?) -> i64 {
+    when {
+        if value != null { return value }
+        return 0
+    }
+}
+
+fn checking_for_null(input: i64) -> i64 {
+    let held = checked(input)
+    return when_present(held)
+}
+
 test reads_in_the_consumer {
     assert eval reading_outcome(input: [1, 7], enabled: [false, true]) == [0, 7]
     assert eval reading_nullable(input: [1, 7], enabled: [false, true]) == [0, 7]
@@ -77,6 +101,13 @@ test reads_in_the_consumer {
     assert raises("convert.invalid") { eval ordered_reads(input: [-1]) }
     assert eval reading_list(input: [7]) == [7]
     assert raises("convert.invalid") { eval reading_list(input: [-1]) }
+    # An Err fails its consumer on the publication cycle regardless of
+    # whether the handler would read the input (ERR-15, owner's ruling).
+    assert raises("convert.invalid") { eval reading_outcome(input: [-1], enabled: [false]) }
+    assert raises("convert.invalid") { eval reading_outcome(input: [-1], enabled: [_]) }
+    assert raises("convert.invalid") { eval waiting_for_an_input(input: [-1], delayed: [_]) }
+    assert raises("convert.invalid") { eval lifted_waiting_for_an_input(input: [-1], delayed: [_]) }
+    assert eval checking_for_null(input: [7, -1, 9]) == [7, 0, 9]
 }
 
 # ERR-5, ERR-12 and ERR-15: reading a failure runs where the expression
