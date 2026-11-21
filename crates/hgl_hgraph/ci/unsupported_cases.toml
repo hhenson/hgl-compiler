@@ -16,6 +16,9 @@
 "text repeated a count below zero, `numeric.out_of_range` (OPS-1)" = [
     "core_implementation::text_repeated_below_zero_times_is_an_error",
 ]
+"this expression" = [
+    "conformance::a_nullable_place_leaves_a_bare_result_to_the_arguments",
+]
 
 # Rejection cases the compiler does not yet reject, each
 # `suite::file::declaration` with the file under the suite's directory,
