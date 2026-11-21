@@ -115,6 +115,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: `inject out` is the node's `_output`, read and assigned through its value; no write, no tick
+- hgraph: a growing list retains its positions when the last valid child is withdrawn. An empty sparse delta leaves it invalid and quiet. A resize to zero or a whole `[]` publishes a valid empty list (TIME-7, END-3).
 - `out` read whole, in a `when` or in `stop`, before it holds a value, or after `invalidate(out)`, fails with `value.unset_read`, which a capture takes, where `valid(out)` is false
 - A node whose result is written `T?` publishes its null: a `return`, a `yield` and an assignment to `out` give hgraph `Null` where the value is null, which ticks a value that is unset
 - A `stop` is given the output too, and reads it under `valid(out)`
