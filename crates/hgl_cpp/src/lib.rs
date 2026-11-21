@@ -22,8 +22,8 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, in the namespace `hgl::demo::calc::m_`, and `modules/demo.calc.types.h` of the types it declares |
-//! | Its named tests | Functions in `hgl::demo::calc::m_::t_`, and `tests/demo.calc.cpp`, an entry unit that registers each with the runtime library's test host and runs those its command line names |
+//! | Module `demo.calc` | `modules/mod-demo-calc.h` and `modules/mod-demo-calc.cpp`, in the namespace `hgl::demo::calc::m_`, and `modules/type-demo-calc.h` of the types it declares |
+//! | Its named tests | Functions in `hgl::demo::calc::m_::t_`, and `tests/test-demo-calc.cpp`, an entry unit that registers each with the runtime library's test host and runs those its command line names |
 //! | Application `demo.app` (UNIT-14) | Its module's unit, with its run statement as the function `hgl::demo::app::m_::application_`, and `applications/app-demo-app.cpp`, an entry unit whose `main` is the runtime library's host of that run |
 //! | `const fn total(a: i64, b: i64) -> i64` | A function `::hgraph::Int total(::hgraph::Int a, ::hgraph::Int b)`; a generic one, a function for each instance |
 //! | The scalars, enums, `T?`, tuples, lists, results | hgraph's scalars, `enum class`, `std::optional`, `std::tuple`, `hglrt::list`, `hglrt::result` |
@@ -191,36 +191,55 @@ pub struct Application {
     pub units: Vec<usize>,
 }
 
-/// The header of module `module`: `demo.calc` is `modules/demo.calc.h`.
-/// A module's path is unique in a program, and is made of identifiers
-/// and dots, so it is a file name as it is.
+/// The header name relative to the modules directory.
+fn header_name(module: &str) -> String {
+    format!("{}.h", path_stem("mod-", module))
+}
+
+/// The types header name relative to the modules directory.
+fn types_header_name(module: &str) -> String {
+    format!("{}.h", path_stem("type-", module))
+}
+
+/// The header of module `module`, such as `modules/mod-demo-calc.h`.
 pub fn header_path(module: &str) -> String {
-    format!("modules/{module}.h")
+    format!("modules/{}", header_name(module))
 }
 
 /// The types header of module `module`, which holds the enums and the
-/// structs it declares: `modules/demo.calc.types.h`.
+/// structs it declares, such as `modules/type-demo-calc.h`.
 pub fn types_header_path(module: &str) -> String {
-    format!("modules/{module}.types.h")
+    format!("modules/{}", types_header_name(module))
 }
 
-/// The translation unit of module `module`: `modules/demo.calc.cpp`.
+/// The translation unit of module `module`, such as `modules/mod-demo-calc.cpp`.
 pub fn unit_path(module: &str) -> String {
-    format!("modules/{module}.cpp")
+    format!("modules/{}.cpp", path_stem("mod-", module))
+}
+
+/// The file stem shared by a module's test entry unit, executable and results.
+fn test_stem(module: &str) -> String {
+    path_stem("test-", module)
 }
 
 /// The entry unit of the tests of module `module`:
-/// `tests/demo.calc.cpp`.
+/// `tests/test-demo-calc.cpp`.
 pub fn entry_path(module: &str) -> String {
-    format!("tests/{module}.cpp")
+    format!("tests/{}.cpp", test_stem(module))
 }
 
-/// The file stem of application `path` (UNIT-14). Hyphens replace dots,
-/// and a `+` marks each folded uppercase letter, so the encoding is
-/// distinct even on a case-insensitive filesystem. Neither character
-/// occurs in an HGL identifier. The prefix avoids reserved basenames.
+/// The file stem of application `path` (UNIT-14).
 pub fn application_stem(path: &str) -> String {
-    let mut stem = String::from("app-");
+    path_stem("app-", path)
+}
+
+/// Encodes a module or application path (UNIT-1, UNIT-2, UNIT-14).
+/// Hyphens replace dots and a `+` marks each folded uppercase letter.
+/// Neither character occurs in an identifier, so paths stay distinct
+/// on case-insensitive filesystems. The role prefix keeps artifact
+/// kinds apart and avoids reserved basenames.
+fn path_stem(prefix: &str, path: &str) -> String {
+    let mut stem = String::from(prefix);
     for character in path.chars() {
         match character {
             '.' => stem.push('-'),

@@ -12,11 +12,19 @@ analyser: done
 
 - Assembles a module's files: one scope, one unnamed file, unique part names
 
+transpiler: done
+
+- One module's headers, unit and test artifacts use role-prefixed stems that preserve case distinctions on a case-insensitive filesystem.
+
 ## UNIT-2
 
 analyser: done
 
 - Imports precede declarations and bind in their file; they and `alias::name` reach public declarations only
+
+transpiler: done
+
+- An import uses the same encoded header name as its module, including when the importing module's path ends in `.types`.
 
 ## UNIT-3
 

@@ -14,10 +14,9 @@
 //! piece that is written reaches it: one that only a piece left out asks
 //! for, an eval that reaches a form not written, is left out with it.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use hgl_analyser::{Module, Program};
+use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Location};
 use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
@@ -26,22 +25,12 @@ use crate::emit::{
     test_namespace,
 };
 use crate::{
-    Application, Executable, File, Output, Test, Unit, application_path, application_stem,
-    entry_path, header_path, runtime, types_header_path, unit_path,
+    Application, Executable, File, Output, Test, Unit, application_path, entry_path, header_name,
+    header_path, runtime, test_stem, types_header_name, types_header_path, unit_path,
 };
 
 /// The first line of every file the target writes.
 const WRITTEN: &str = "// Written by the hgl compiler for hgraph's C++ API. Do not edit.";
-
-/// The stem the module's generated files share. An application keeps
-/// its HGL path in names and reports (UNIT-14).
-fn module_stem(module: &Module) -> Cow<'_, str> {
-    if module.application {
-        Cow::Owned(application_stem(&module.path))
-    } else {
-        Cow::Borrowed(&module.path)
-    }
-}
 
 /// What blocks each piece of one module: the first form each needs that
 /// is not written, or `None` for one that is clear.
@@ -151,7 +140,6 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         .collect();
     for (index, module) in written.iter().enumerate() {
         let path = &program.modules[index].path;
-        let stem = module_stem(&program.modules[index]);
         // A type's declaration is in the header alone; each other piece
         // that is clear has its definition in the unit.
         let defined: Vec<&Piece> = module
@@ -230,23 +218,23 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             runtime::HEADER
         );
         if !typed.is_empty() {
-            header.push_str(&format!("#include \"{stem}.types.h\"\n"));
+            header.push_str(&format!("#include \"{}\"\n", types_header_name(path)));
             files.push(File {
-                path: types_header_path(&stem),
+                path: types_header_path(path),
                 text: types_header(program, index, &typed),
             });
         }
         for &module in &named {
             header.push_str(&format!(
-                "#include \"{}.types.h\"\n",
-                module_stem(&program.modules[module])
+                "#include \"{}\"\n",
+                types_header_name(&program.modules[module].path)
             ));
         }
-        let mut unit = format!("{WRITTEN}\n#include \"{stem}.h\"\n");
+        let mut unit = format!("{WRITTEN}\n#include \"{}\"\n", header_name(path));
         for &used in &included {
             unit.push_str(&format!(
-                "#include \"{}.h\"\n",
-                module_stem(&program.modules[used])
+                "#include \"{}\"\n",
+                header_name(&program.modules[used].path)
             ));
         }
         calls_into[index] = included;
@@ -289,18 +277,20 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             unit.push_str(&format!("\n}}  // namespace {declared}\n"));
         }
         unit_of[index] = Some(units.len());
-        units.push(Unit {
-            module: path.clone(),
-            source: unit_path(&stem),
-            header: header_path(&stem),
-        });
+        let source = unit_path(path);
+        let header_path = header_path(path);
         files.push(File {
-            path: header_path(&stem),
+            path: header_path.clone(),
             text: header,
         });
         files.push(File {
-            path: unit_path(&stem),
+            path: source.clone(),
             text: unit,
+        });
+        units.push(Unit {
+            module: path.clone(),
+            source,
+            header: header_path,
         });
     }
 
@@ -348,15 +338,15 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                 next.extend(&calls_into[module]);
             }
         }
-        let stem = module_stem(declared);
+        let source = entry_path(&declared.path);
         files.push(File {
-            path: entry_path(&stem),
+            path: source.clone(),
             text: entry(program, index, &clear),
         });
         executables.push(Executable {
             module: declared.path.clone(),
-            source: entry_path(&stem),
-            stem: stem.into_owned(),
+            source,
+            stem: test_stem(&declared.path),
             units: reached
                 .iter()
                 .filter_map(|&module| unit_of[module])
@@ -480,8 +470,8 @@ fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
         .collect();
     for &module in &named {
         text.push_str(&format!(
-            "#include \"{}.types.h\"\n",
-            module_stem(&program.modules[module])
+            "#include \"{}\"\n",
+            types_header_name(&program.modules[module].path)
         ));
     }
     // The structs, each after those it holds; the order declared

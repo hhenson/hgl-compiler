@@ -1697,7 +1697,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 
 | HGL | C++ |
 | --- | --- |
-| Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, namespace `hgl::demo::calc::m_`; `modules/demo.calc.types.h` where it declares a type: its enums, and its structs, each after those it holds (UNIT-6), which its header includes |
+| Module `demo.calc` (UNIT-1, UNIT-2) | `modules/mod-demo-calc.h` and `modules/mod-demo-calc.cpp` in namespace `hgl::demo::calc::m_`. Its header includes `modules/type-demo-calc.h` where it declares types, with each struct after those it holds (UNIT-6) |
 | `const fn` (FN-1); an HGL candidate of an operator (GEN-4) | A function, with its HGL name, signature and line in a comment; a candidate an overload of its operator's name in `c_` |
 | A generic one (GEN-2) | One function for each instance `hgl_lower` collects (`Instances::typed`), named by its suffix in `i_::name`: `i_::first::of_i64` |
 | A parameter; a `var` parameter (FN-15) | By value where it is small (`types::by_value`), a `const` reference otherwise; a reference to the place the call gives |
@@ -1719,7 +1719,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | A call with more than one argument that may fail | Its arguments evaluated one statement at a time, in the order written (EXPR-2), in a lambda called where it stands |
 | A tuple or a list with an entry after the first that runs statements; an element read whose list and index both may fail, or either runs statements | Each entry held as a value of its own type first, in order; the list held, then the index (`expressions::held_read`), the element a value of its own |
 | Named test | A function of `hgl::demo::calc::m_::t_`; each statement told to the library's test host first, `::hglrt::testing::statement()`; `assert` is `::hglrt::testing::check`, `assert raises` `::hglrt::testing::raises` of a lambda (TST-10) |
-| The tests of a module | `tests/demo.calc.cpp`: a `hglrt::testing::Registration` of each by its identity, and a `main` that is `hglrt::testing::main`; one executable |
+| The tests of a module | `tests/test-demo-calc.cpp` registers each test by its identity with `hglrt::testing::Registration` and defines the executable's `main` |
 | Temporal function `count` (FN-2), and each instance of a generic one (GEN-2) | A struct `n_::count::impl_` of the module's namespace, in its unit (`impl_` in a namespace of the function's name, so that no member, `name` or `compose`, is named as its struct), and a wiring function `w_::count(wiring_, ...)`, declared in its header, which adds it to a graph: a call names the wiring function, so that no other unit instantiates hgraph's templates of it; an instance's are `n_::i_::record::of_i64::impl_`, `w_::i_::record::of_i64` |
 | A node (FN-2, TIME-3 to TIME-8) | A static node of hgraph's front end (`<hgraph/types/generated.h>`): `eval`, and `start` and `stop` where it needs them, each given hgraph's views. A temporal parameter is an `hgraph::In` of its temporal form, `Passive` where no handler subscribes to it and `Unchecked` where not every executed handler requires it (TIME-4, `hgl_lower::nodes`); a `const` one an `hgraph::Scalar`; the result `hgraph::Out`, `out_` |
 | `state`, `cache` (TIME-5, TIME-6) | Members of the node's one `state_type_`, which hgraph holds as the node's `State`, registered with its type registry; each is given its first value in `start`, before the hook's statements, and bound by reference in each hook |
@@ -2036,7 +2036,12 @@ one calls into, through those (a unit is linked whole). Where the
 build fails, an executable is run only where `ninja -n` says nothing is
 left to do for it, and the tests of every other are not run, with the
 failure: an older executable is never run in a newer one's place.
-Executables run side by side.
+Executables run side by side. File stems replace each dot of a module
+or application path with a hyphen and mark folded uppercase letters
+with `+`. The `mod-`, `type-`, `test-` and `app-` prefixes
+distinguish artifact roles. `tm.pricing.app` and `tm.Pricing.App`
+give `bin/test-tm-pricing-app` and `bin/test-tm-+pricing-+app`
+on macOS. Reports keep the original HGL paths.
 
 `hgl emit --target cpp --out DIR` writes the files. `hgl run --target
 cpp` runs an application (UNIT-14, "Running an application" above),
@@ -2044,9 +2049,9 @@ with what it replaces read again: it builds the
 application's executable, `run/<application-stem>`, in the program's
 workspace (`--keep`'s directory, or the one under the cache), linked
 from its entry unit and the units its module's reaches, and runs it as
-`EXECUTABLE RESULTS` (`cpp/application.rs`). Application artifacts share a
-stem such as `app-demo-pricing-app` for `demo.pricing.app`, and reports
-keep the HGL path. The executable's host
+`EXECUTABLE RESULTS` (`cpp/application.rs`). The entry unit, executable
+and run results share a stem such as `app-demo-pricing-app` for
+`demo.pricing.app`. The executable's host
 (`hglrt/application_host.h`) runs the run statement once and writes
 RESULTS (`start`, `published TIME TEXT`, `stopped`, `stopped none`,
 `host`, `failed TEXT`). `hgl` reads it and reports the outcome. A failed

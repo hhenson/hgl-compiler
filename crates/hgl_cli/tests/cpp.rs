@@ -411,12 +411,12 @@ fn emit_writes_a_unit_a_header_and_an_entry() {
         format!("wrote 6 files for cpp to {}\n", argument(&out))
     );
     for file in [
-        "modules/core.types.h",
-        "modules/core.h",
-        "modules/core.cpp",
-        "modules/demo.flags.h",
-        "modules/demo.flags.cpp",
-        "tests/demo.flags.cpp",
+        "modules/type-core.h",
+        "modules/mod-core.h",
+        "modules/mod-core.cpp",
+        "modules/mod-demo-flags.h",
+        "modules/mod-demo-flags.cpp",
+        "tests/test-demo-flags.cpp",
     ] {
         assert!(out.join(file).is_file(), "{file}");
     }
@@ -547,7 +547,9 @@ fn the_whole_route_runs_on_the_sdk() {
         ]
     );
 
-    let executable = kept.join("bin").join("demo.calc");
+    let executable = kept
+        .join("bin")
+        .join(format!("test-demo-calc{}", std::env::consts::EXE_SUFFIX));
     let built = fs::metadata(&executable).unwrap().modified().unwrap();
     let again = hgl_in(&arguments, &[], &[]);
     assert_eq!(text(&again.stdout), stdout);
@@ -639,10 +641,12 @@ fn a_failed_build_runs_no_older_executable() {
         text(&output.stdout),
         text(&output.stderr)
     );
-    let executable = kept.join("bin").join("demo.calc");
+    let executable = kept
+        .join("bin")
+        .join(format!("test-demo-calc{}", std::env::consts::EXE_SUFFIX));
     assert!(executable.is_file());
 
-    block(&kept.join("obj").join("modules").join("demo.calc.o"));
+    block(&kept.join("obj").join("modules").join("mod-demo-calc.o"));
     let output = hgl_in(&arguments, &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(output.status.code(), Some(2), "{stdout}");
@@ -2178,6 +2182,92 @@ fn an_application_runs_on_the_sdk() {
     );
 }
 
+/// UNIT-1, UNIT-2. An importing module's header does not overwrite
+/// the types header of the module it imports.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn module_paths_like_types_headers_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../hgl_cpp/tests/fixtures/module-stems/types");
+    let output = hgl_in(&["test", "--target", "cpp", &argument(&fixtures)], &[], &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let printed = text(&output.stdout);
+    assert!(
+        printed.contains("passed   executable  tc.a.types::both_types"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("executable cases: 1 passed, 0 failed, 0 not run"),
+        "{printed}"
+    );
+}
+
+/// UNIT-1, UNIT-2. A case-insensitive filesystem keeps both builds,
+/// including the executable of a path ending in `.app` on macOS.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn case_distinct_module_paths_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../hgl_cpp/tests/fixtures/module-stems/case");
+    let kept = scratch("case_distinct_module_build");
+    let output = hgl_in(
+        &[
+            "test",
+            "--target",
+            "cpp",
+            "--keep",
+            &argument(&kept),
+            &argument(&fixtures),
+        ],
+        &[],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let printed = text(&output.stdout);
+    assert!(
+        printed.contains("passed   executable  tm.Pricing.App::upper_price"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("passed   executable  tm.pricing.app::lower_price"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("executable cases: 2 passed, 0 failed, 0 not run"),
+        "{printed}"
+    );
+    let suffix = std::env::consts::EXE_SUFFIX;
+    for name in ["tm-+pricing-+app", "tm-pricing-app"] {
+        for artifact in [
+            format!("bin/test-{name}{suffix}"),
+            format!("obj/modules/mod-{name}.o"),
+            format!("obj/tests/test-{name}.o"),
+        ] {
+            assert!(kept.join(&artifact).is_file(), "missing {artifact}");
+        }
+    }
+    let mut results: Vec<_> = fs::read_dir(kept.join("results"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    results.sort();
+    assert_eq!(results.len(), 2);
+    assert!(
+        results[0].starts_with("test-tm-+pricing-+app."),
+        "{results:?}"
+    );
+    assert!(
+        results[1].starts_with("test-tm-pricing-app."),
+        "{results:?}"
+    );
+}
+
 /// UNIT-14: application paths stay visible, while their files have
 /// distinct stems. The `.app` case also exercises launch on macOS,
 /// which treats a dotted `.app` filename as a bundle.
@@ -2240,13 +2330,14 @@ fn applications_with_extension_like_names_run_on_the_sdk() {
             text(&output.stdout),
             format!("1970-01-01T00:00:00.000001Z  {value}\nran {path} on cpp: 1 publication\n"),
         );
+        let name = stem.strip_prefix("app-").unwrap();
         for artifact in [
             format!("applications/{stem}.cpp"),
-            format!("modules/{stem}.cpp"),
-            format!("modules/{stem}.h"),
-            format!("modules/{stem}.types.h"),
+            format!("modules/mod-{name}.cpp"),
+            format!("modules/mod-{name}.h"),
+            format!("modules/type-{name}.h"),
             format!("obj/applications/{stem}.o"),
-            format!("obj/modules/{stem}.o"),
+            format!("obj/modules/mod-{name}.o"),
             format!("results/{stem}.run.txt"),
             format!("run/{stem}{suffix}"),
         ] {
@@ -2272,12 +2363,12 @@ fn applications_with_extension_like_names_run_on_the_sdk() {
     assert!(
         text(&tests.stdout).contains("passed   executable  demo.pricing.app::artifact_identity")
     );
-    assert!(kept.join("tests/app-demo-pricing-app.cpp").is_file());
+    assert!(kept.join("tests/test-demo-pricing-app.cpp").is_file());
     assert!(
-        kept.join(format!("bin/app-demo-pricing-app{suffix}"))
+        kept.join(format!("bin/test-demo-pricing-app{suffix}"))
             .is_file()
     );
-    assert!(kept.join("results/app-demo-pricing-app.0.txt").is_file());
+    assert!(kept.join("results/test-demo-pricing-app.0.txt").is_file());
 }
 
 /// An application of `ticks` whose arguments and configuration are
