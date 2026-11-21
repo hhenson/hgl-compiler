@@ -56,3 +56,32 @@ test instance_with_a_symbol {
     assert through_symbol(Counter(count: 3), 2) == 5
     assert through_symbol(Counter(count: 3), "s") == 103
 }
+
+# GEN-7: a contextual list still depends on the type of its local element.
+operator list_helper<T>(values: list<T>) -> i64
+impl const fn list_helper<T>(values: list<T>) -> i64 => 5
+impl const fn list_helper(values: list<i64>) -> i64 => 1
+
+const fn through_list<T>(value: T) -> i64 => list_helper([value])
+
+test instance_with_a_contextual_operand {
+    assert through_list(3) == 1
+    assert through_list("s") == 5
+}
+
+# ERR-15, GEN-7: the instance can select a candidate that takes the whole
+# result even when the candidate that admitted the body needed a read.
+operator classify<T>(value: T) -> i64
+impl const fn classify<T>(value: list<T>) -> i64 => 5
+impl const fn classify(value: result<list<i64>, str>) -> i64 => 1
+
+const fn through_result<T>(value: result<list<T>, str>) -> result<i64, str> => ok(classify(value))
+
+test instance_uses_whole_result {
+    let failed: result<list<i64>, str> = err("failure")
+    let passed: result<list<str>, str> = ok(["s"])
+    let one: result<i64, str> = ok(1)
+    let five: result<i64, str> = ok(5)
+    assert through_result(failed) == one
+    assert through_result(passed) == five
+}

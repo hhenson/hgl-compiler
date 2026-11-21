@@ -1127,6 +1127,7 @@ fn operator_candidates_have_distinct_cpp_names_on_the_sdk() {
 
 /// GEN-5 and GEN-7: value, node and graph instances choose their own
 /// operator candidate, including across modules and through a symbol.
+/// ERR-15: the choice uses the whole operands before implicit reads.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn operator_candidates_are_selected_per_instance_on_the_sdk() {
@@ -1153,7 +1154,7 @@ fn operator_candidates_are_selected_per_instance_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
