@@ -4412,6 +4412,121 @@ fn function_arguments_select_static_targets() {
     );
 }
 
+/// FN-17 and GEN-8: the operator's written arguments and the complete
+/// function template together select a static candidate.
+#[test]
+fn explicit_operator_references_resolve_the_public_signature() {
+    let checked = module(concat!(
+        "const fn use_with<V>(f: const fn(V) -> str, x: V) -> str => f(x)\n",
+        "operator label<R, V>(value: V) -> R\n",
+        "impl const fn label(value: i64) -> str => \"integer\"\n",
+        "impl const fn label(value: f64) -> str => \"float\"\n",
+        "const fn call_it() -> str => use_with(label<str>, 8)\n",
+    ));
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+    let outer = body(&checked, "call_it");
+    let [
+        Stmt::Return {
+            value: Some(call), ..
+        },
+    ] = outer.statements.as_slice()
+    else {
+        panic!("expected the outer call");
+    };
+    let ExprKind::Call { arguments, .. } = &call.kind else {
+        panic!("expected the outer call");
+    };
+    let ExprKind::StaticCallable(target) = &arguments[0].value.kind else {
+        panic!("expected a static callback");
+    };
+    let Callee::Candidate {
+        operator_generics,
+        module,
+        declaration,
+        ..
+    } = target.as_ref()
+    else {
+        panic!("expected an operator candidate");
+    };
+    assert_eq!(
+        operator_generics
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["str", "i64"]
+    );
+    let hgl_analyser::Detail::Callable(signature) =
+        &checked.program.modules[*module].details[*declaration]
+    else {
+        panic!("expected a candidate signature");
+    };
+    assert_eq!(signature.parameters[0].ty.to_string(), "i64");
+}
+
+/// FN-17 distinguishes an unresolved public generic argument from a
+/// candidate or public signature whose result disagrees with the template.
+#[test]
+fn explicit_operator_references_diagnose_unresolved_and_mismatched_templates() {
+    let checked = module(concat!(
+        "const fn take_integer(f: const fn(i64) -> i64) -> i64 => f(1)\n",
+        "operator unresolved<T, Unused>(value: T) -> T\n",
+        "impl const fn unresolved(value: i64) -> i64 => value\n",
+        "operator changed<R, V>(value: V) -> R\n",
+        "impl const fn changed(value: i64) -> f64 => 1.0\n",
+        "const fn missing() -> i64 => take_integer(unresolved<i64>)\n",
+        "const fn wrong_public_result() -> i64 => take_integer(changed<f64>)\n",
+        "const fn wrong_candidate_result() -> i64 => take_integer(changed<i64>)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:43 type/generic.unresolved FN-17",
+            "m.hgl:8:55 type/type.mismatch FN-17",
+            "m.hgl:9:58 type/type.mismatch FN-17",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// FN-17 and GEN-8: an explicit callback option must fit the candidate's
+/// value parameter after resolving any types it names.
+#[test]
+fn explicit_operator_references_check_candidate_option_types() {
+    let checked = module(concat!(
+        "const fn use_it(f: const fn(i64) -> i64) -> i64 => f(1)\n",
+        "operator select<const mode: bool>(value: i64) -> i64\n",
+        "impl const fn select<const mode: str>(value: i64) -> i64 => value\n",
+        "const fn bad() -> i64 => use_it(select<true>)\n",
+        "const fn wrong_public_type() -> i64 => use_it(select<\"slow\">)\n",
+    ));
+    let faults = checked.summary();
+    assert_eq!(faults.len(), 2, "{}", checked.report);
+    assert!(
+        faults[0].contains("type/type.mismatch FN-17"),
+        "{}",
+        checked.report
+    );
+    assert!(
+        faults[1].contains("type/type.mismatch"),
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-13: a supplied callback option can resolve a type parameter
+/// mentioned only in the option's candidate type.
+#[test]
+fn explicit_operator_references_infer_types_from_candidate_options() {
+    let checked = module(concat!(
+        "const fn use_it(f: const fn(i64) -> i64) -> i64 => f(1)\n",
+        "operator select<const mode: bool>(value: i64) -> i64\n",
+        "impl const fn select<T, const mode: T>(value: i64) -> i64 => value\n",
+        "const fn picked() -> i64 => use_it(select<true>)\n",
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
 /// FN-17: a template checks role, written names and plain parameter
 /// modes, and does not take an ordinary runtime value.
 #[test]
@@ -4449,7 +4564,7 @@ fn function_arguments_check_their_template() {
             "type/function.argument",
             "function-kind/call.role",
             "type/generic.unresolved",
-            "local:type/function.reference_unread",
+            "type/type.mismatch",
             "type/argument.missing",
             "name/argument.unknown",
         ],

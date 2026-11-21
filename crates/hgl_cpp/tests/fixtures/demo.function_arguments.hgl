@@ -158,3 +158,58 @@ test temporal_callbacks {
     assert eval operator_graph(x: [2, 3], offset: [1, 2]) == [5, 8]
     assert eval captured_scalar(input: [2, 3]) == [3, 4]
 }
+
+# FN-17, GEN-8: the specification's explicit generic operator reference.
+const fn widened(f: const fn(i64) -> f64, x: i64) -> f64 => f(x)
+const fn eight() -> f64 => widened(convert<f64>, 8)
+
+operator classify_text<R, V>(value: V) -> R
+impl const fn classify_text(value: i64) -> str => "integer"
+impl const fn classify_text(value: f64) -> str => "float"
+
+const fn describe<V>(f: const fn(V) -> str, value: V) -> str => f(value)
+const fn describe_named(f: const fn(value: i64) -> str, value: i64) -> str => f(value: value)
+
+# GEN-5 and FN-17: a result read at an ordinary call would allow both
+# candidates, but the callback's declared result itself must fit.
+operator exact_result<R, V>(value: V) -> R
+impl const fn exact_result(value: i64) -> f64 => 18.0
+impl const fn exact_result(value: i64) -> f64? => 19.0
+
+operator signed<const positive: bool = true, T>(value: T) -> T
+impl const fn signed<const positive: bool = true>(value: i64) -> i64
+    requires positive == true => value
+impl const fn signed<const positive: bool = true>(value: i64) -> i64
+    requires positive == false => -value
+
+# GEN-8 and EXPR-5: a written integer literal takes the selected option's f64 type.
+operator option_bias<const amount: i64>(value: i64) -> f64
+impl const fn option_bias<const amount: f64>(value: i64) -> f64 => amount
+
+operator option_infers<const enabled: bool>(value: i64) -> i64
+impl const fn option_infers<T, const enabled: T>(value: i64) -> i64 => value
+
+operator selected_live<R, V>(value: V) -> R
+impl fn selected_live(value: i64) -> i64 {
+    when { return value + 10 }
+}
+impl const fn selected_live(value: i64) -> i64 => value + 100
+
+fn map_widened(f: fn(i64) -> f64, value: i64) -> f64 => f(value)
+fn lifted_convert(value: i64) -> f64 => map_widened(convert<f64>, value)
+fn composed_operator(value: i64) -> i64 => map_graph(selected_live<i64>, value)
+
+test explicit_operator_callbacks {
+    assert eight() == 8.0
+    assert describe(classify_text<str>, 8) == "integer"
+    assert describe(classify_text<str>, 8.5) == "float"
+    assert describe(classify_text, 8) == "integer"
+    assert describe_named(classify_text<str>, 8) == "integer"
+    assert widened(exact_result<f64>, 8) == 18.0
+    assert apply(signed<false>, 8) == -8
+    assert apply(signed, 8) == 8
+    assert widened(option_bias<3>, 8) == 3.0
+    assert apply(option_infers<true>, 8) == 8
+    assert eval lifted_convert(value: [2, 3]) == [2.0, 3.0]
+    assert eval composed_operator(value: [2, 3]) == [12, 13]
+}

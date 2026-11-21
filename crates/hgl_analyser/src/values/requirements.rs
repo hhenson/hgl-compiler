@@ -988,6 +988,7 @@ impl<'a> Typer<'a> {
             place: asked.as_ref(),
             among,
             written: false,
+            callback: None,
         };
         self.requiring += 1;
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
