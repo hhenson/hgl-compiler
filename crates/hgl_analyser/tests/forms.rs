@@ -219,6 +219,7 @@ fn an_operator_call_records_positional_and_named_captures() {
         "const fn mixed() -> i64 => mix<f64, bool>(1, true, label: \"a\")\n",
         "const fn inferred() -> i64 => mix(1.0, true, label: \"a\")\n",
         "const fn bad_count() -> i64 => mix<i64>(1, true, label: \"a\")\n",
+        "const fn nullable() -> i64 => mix<i64?, bool>(1, true, label: \"a\")\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -226,7 +227,11 @@ fn an_operator_call_records_positional_and_named_captures() {
         "{}",
         checked.report
     );
-    for name in ["mixed", "inferred"] {
+    for (name, first_value, first_type) in [
+        ("mixed", "f64", "f64"),
+        ("inferred", "f64", "f64"),
+        ("nullable", "i64", "i64?"),
+    ] {
         let mut calls = 0;
         walk_statements(&body(&checked, name).statements, &mut |expr| {
             if let ExprKind::Call {
@@ -248,7 +253,7 @@ fn an_operator_call_records_positional_and_named_captures() {
                 assert_eq!(
                     slots,
                     [
-                        (Some(0), Some(PackKey::Position(0)), "f64".into()),
+                        (Some(0), Some(PackKey::Position(0)), first_value.into()),
                         (Some(0), Some(PackKey::Position(1)), "bool".into()),
                         (Some(1), Some(PackKey::Name("label".into())), "str".into()),
                     ]
@@ -268,7 +273,7 @@ fn an_operator_call_records_positional_and_named_captures() {
                 assert_eq!(
                     types,
                     [
-                        (0, vec!["f64".into(), "bool".into()]),
+                        (0, vec![first_type.into(), "bool".into()]),
                         (1, vec!["str".into()])
                     ]
                 );

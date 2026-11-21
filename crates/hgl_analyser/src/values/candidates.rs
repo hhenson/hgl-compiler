@@ -235,7 +235,9 @@ impl<'a> Typer<'a> {
         };
         let literal: Vec<bool> = given
             .iter()
-            .map(|given| !given.by_place && is_integer_literal(&given.value))
+            .map(|given| {
+                !given.by_place && given.explicit.is_none() && is_integer_literal(&given.value)
+            })
             .collect();
         // They differ only in what they take the literals as: every
         // other argument is given to one type, and they give one
@@ -481,8 +483,11 @@ impl<'a> Typer<'a> {
             let admitted = if given.by_place {
                 self.fits_place(&given.node, ty, widening)
             } else {
-                self.admits(ty, &given.value.ty)
-                    || widening && is_integer_literal(&given.value) && accepts_float(ty)
+                self.admits(ty, given.ty())
+                    || widening
+                        && given.explicit.is_none()
+                        && is_integer_literal(&given.value)
+                        && accepts_float(ty)
             };
             if !admitted {
                 return Admits::Misfit;
@@ -714,7 +719,7 @@ impl<'a> Typer<'a> {
             .collect();
         !own.is_empty()
             && (given.iter().any(|given| {
-                mentions(&given.value.ty, &own)
+                mentions(given.ty(), &own)
                     || self
                         .read_constant(&given.node, None)
                         .is_ok_and(|value| value.names_one_of(&own))
@@ -774,7 +779,7 @@ impl<'a> Typer<'a> {
             .filter(|(parameter, _)| {
                 let one = [*parameter];
                 given.iter().any(|given| {
-                    mentions(&given.value.ty, &one)
+                    mentions(given.ty(), &one)
                         || self
                             .read_constant(&given.node, None)
                             .is_ok_and(|value| value.names_one_of(&one))
@@ -800,16 +805,7 @@ impl<'a> Typer<'a> {
             name,
             operator,
             form,
-            arguments: given
-                .iter()
-                .map(|given| {
-                    let name = match &given.key {
-                        Key::Name(name) => Some(name.clone()),
-                        Key::Position(_) => None,
-                    };
-                    (name, given.node.clone(), given.value.clone())
-                })
-                .collect(),
+            arguments: given.to_vec(),
             place: wanted.place.cloned(),
             among: wanted.among.clone(),
             written: wanted.written,
@@ -890,12 +886,7 @@ impl<'a> Typer<'a> {
                 Key::Name(name) => *name == parameter.name,
             });
             if let Some(argument) = argument.filter(|argument| !argument.by_place) {
-                infer(
-                    &parameter.ty,
-                    &argument.value.ty,
-                    &public.generics,
-                    &mut found,
-                );
+                infer(&parameter.ty, argument.ty(), &public.generics, &mut found);
             }
         }
         let explicit: Vec<Argument> = found
@@ -980,39 +971,24 @@ impl<'a> Typer<'a> {
         }
         let built = values.is_some();
         let mut values = values.map(Vec::into_iter);
-        let mut position = 0;
         let given: Vec<Given> = selecting
             .arguments
             .iter()
-            .map(|(name, node, written)| {
-                let key = match name {
-                    Some(name) => Key::Name(name.clone()),
-                    None => {
-                        position += 1;
-                        Key::Position(position - 1)
-                    }
-                };
-                let by_place = typed_by_place(node);
-                // Without the instance's own, the value the generic body
-                // read, of its type here: an integer literal is still
-                // one, which a candidate may take as an `f64` (EXPR-5).
-                let value = values
+            .cloned()
+            .map(|mut given| {
+                given.explicit = given.explicit.as_ref().map(in_place);
+                given.by_place = given.explicit.is_none() && typed_by_place(&given.node);
+                // Without the instance's own value, retain the reading made
+                // in the generic body and substitute its argument's type.
+                given.value = values
                     .as_mut()
                     .and_then(Iterator::next)
                     .unwrap_or_else(|| Expr {
-                        ty: in_place(&written.ty),
-                        ..written.clone()
+                        ty: in_place(&given.value.ty),
+                        ..given.value.clone()
                     });
-                Given {
-                    key,
-                    node: node.clone(),
-                    by_place,
-                    value,
-                    // Where the call is built, an argument read as the
-                    // type of its place is read again as the selected
-                    // candidate's parameter.
-                    retried: built && by_place,
-                }
+                given.retried = built && given.by_place;
+                given
             })
             .collect();
         let place = selecting.place.as_ref().map(in_place);
@@ -1075,10 +1051,13 @@ impl<'a> Typer<'a> {
                     Argument::Type(_) => None,
                 })
         };
-        for (name, node, _) in &selecting.arguments {
-            let Some(name) = name.as_ref().filter(|name| options.contains(name.as_str())) else {
+        for Given { key, node, .. } in &selecting.arguments {
+            let Key::Name(name) = key else {
                 continue;
             };
+            if !options.contains(name.as_str()) {
+                continue;
+            }
             let Ok(value) = self.read_constant(node, None) else {
                 continue;
             };
@@ -1190,7 +1169,7 @@ pub(crate) struct Selecting {
     pub(crate) form: Form,
     /// Its arguments as written, each with its name where it is given
     /// one, and the value the generic body reads it as.
-    pub(crate) arguments: Vec<(Option<String>, SyntaxNode, Expr)>,
+    arguments: Vec<Given>,
     /// The output the call asks of a candidate in the generic body
     /// ([`Wanted::place`]).
     pub(crate) place: Option<Type>,
@@ -1329,6 +1308,7 @@ pub(crate) fn select_in_instance(
 }
 
 /// One argument of an operator's call, before a candidate is selected.
+#[derive(Debug, Clone)]
 pub(super) struct Given {
     /// How it is written: in a position, or by a name. Which parameter
     /// of a candidate that is, is the candidate's to say (GEN-6).
@@ -1340,6 +1320,8 @@ pub(super) struct Given {
     pub(super) by_place: bool,
     /// Its value, read with nothing expected of it.
     pub(super) value: Expr,
+    /// The type the call explicitly writes for this packed argument.
+    pub(super) explicit: Option<Type>,
     /// True when that reading has been taken back, the argument being
     /// read again as the selected candidate's parameter: `value` is
     /// then not what stands.
@@ -1347,6 +1329,12 @@ pub(super) struct Given {
 }
 
 impl Given {
+    /// The type the candidate sees. For example an explicit `i64?`
+    /// stays nullable even when its argument is an `i64` value.
+    pub(super) fn ty(&self) -> &Type {
+        self.explicit.as_ref().unwrap_or(&self.value.ty)
+    }
+
     /// An operand of a symbol, which is read before the symbol's
     /// candidates are: in the place `position`, with the value it has.
     pub(super) fn read(position: usize, node: SyntaxNode, value: Expr) -> Given {
@@ -1355,12 +1343,14 @@ impl Given {
             node,
             by_place: false,
             value,
+            explicit: None,
             retried: false,
         }
     }
 }
 
 /// How a call writes an argument.
+#[derive(Debug, Clone)]
 pub(super) enum Key {
     /// With no name: the place it stands in, from 0.
     Position(usize),
@@ -1620,9 +1610,10 @@ fn instance<'s>(
     let mut by_argument = vec![false; generics.len()];
     let mut type_packs = Vec::new();
     for (index, parameter) in signature.parameters.iter().enumerate() {
-        let arguments = given.iter().zip(bound).filter_map(|(given, place)| {
-            (place.parameter() == Some(index)).then_some(&given.value.ty)
-        });
+        let arguments = given
+            .iter()
+            .zip(bound)
+            .filter_map(|(given, place)| (place.parameter() == Some(index)).then_some(given.ty()));
         if let Some(generic) = type_pack(parameter, generics) {
             let types: Vec<Type> = arguments.cloned().collect();
             if !types.iter().all(whole) {
@@ -1665,7 +1656,7 @@ fn instance<'s>(
             .iter()
             .position(|&place| place == Place::Generic(index));
         if let (Some(position), GenericKind::Value(ty)) = (argument, &generic.kind) {
-            infer(ty, &given[position].value.ty, generics, &mut found);
+            infer(ty, given[position].ty(), generics, &mut found);
         }
     }
     // GEN-6: "An option that selects among candidates is a generic

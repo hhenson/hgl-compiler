@@ -248,6 +248,7 @@ impl<'a> Typer<'a> {
                         node,
                         value,
                         by_place: false,
+                        explicit: Some(ty.clone()),
                         retried: false,
                     }
                 } else {
@@ -262,7 +263,7 @@ impl<'a> Typer<'a> {
         let faulty = self.diagnostics.len() != reported;
         let unknown = given
             .iter()
-            .any(|given| !given.by_place && open(&given.value.ty));
+            .any(|given| !given.by_place && open(given.ty()));
         if faulty || unknown {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
@@ -297,7 +298,7 @@ impl<'a> Typer<'a> {
                         Key::Position(position) => *position == index,
                         Key::Name(name) => *name == parameter.name,
                     })
-                    .map(|given| &given.value.ty)
+                    .map(Given::ty)
             })
             .collect();
         let Requested {
@@ -439,7 +440,7 @@ impl<'a> Typer<'a> {
                 let value = if given.by_place {
                     given.node.text().to_string().trim().to_string()
                 } else {
-                    given.value.ty.to_string()
+                    given.ty().to_string()
                 };
                 match &given.key {
                     // An option is known by its name.
@@ -660,6 +661,7 @@ impl<'a> Typer<'a> {
             key,
             by_place,
             value,
+            explicit: None,
             retried,
             node,
         }
