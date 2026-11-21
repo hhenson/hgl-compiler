@@ -773,3 +773,32 @@ fn indexing_and_iteration_read_nullable_success_payloads() {
         assert_eq!(reads, 1, "{name}");
     }
 }
+
+/// CTRL-10 and CTRL-13 read a nullable condition. ERR-15 gives that
+/// condition the success value of a result, raising its failure first.
+#[test]
+fn conditions_read_nullable_success_payloads() {
+    use hgl_analyser::hir::{NULL_READ_CODE, Raise, walk_statements};
+
+    let checked = module(concat!(
+        "const fn required(flag: result<bool?, error>) -> i64 {\n",
+        "    if flag { return 1 }\n",
+        "    return 0\n",
+        "}\n",
+        "fn choose(flag: result<bool?, error>) -> i64 => if flag { 1 } else { 0 }\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for (name, phase) in [("required", Raise::Execution), ("choose", Raise::Reader)] {
+        let mut reads = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::NullRead { value, raise, code } = &expr.kind {
+                assert_eq!(*code, NULL_READ_CODE);
+                assert_eq!(*raise, phase);
+                assert!(matches!(value.kind, ExprKind::Raised { raise, .. } if raise == phase));
+                assert_eq!(expr.ty.to_string(), "bool");
+                reads += 1;
+            }
+        });
+        assert_eq!(reads, 1, "{name}");
+    }
+}

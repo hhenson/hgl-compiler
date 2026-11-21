@@ -212,9 +212,17 @@ impl<'a> Typer<'a> {
     /// read (ERR-12); a number, or any other type, rejects." CTRL-13: in
     /// composition "A `bool?` there is read as ERR-12 says". ERR-15: "a
     /// condition ... expect[s] the T": a `result<bool, error>` there is
-    /// its `bool`, a failure raised.
+    /// its `bool`, a failure raised. For `result<bool?, error>`, the
+    /// condition takes the `bool?` and then reads it.
     pub(super) fn condition(&mut self, node: &SyntaxNode) -> Expr {
         let value = self.expression(node, Some(&BOOL));
+        let value = if matches!(&value.ty, Type::Result { value, .. }
+            if matches!(value.as_ref(), Type::Nullable(payload) if **payload == BOOL))
+        {
+            self.received(value, |payload| *payload == BOOL)
+        } else {
+            value
+        };
         if let Some(taken) = self.taken(&BOOL, &value.ty) {
             return self.take(value, taken);
         }
