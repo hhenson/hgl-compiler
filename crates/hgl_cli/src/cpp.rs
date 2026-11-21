@@ -6,7 +6,7 @@
 //!
 //! 1. writes the program and lists each test the target could not
 //!    write all of as not run, with the first form it reaches that is
-//!    not written, as the hgraph target's tests are listed;
+//!    not written;
 //! 2. finds the toolchain (`sdk`): hgraph's C++ SDK and its
 //!    dependencies through `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS`, the
 //!    compiler, `ninja`; where one is missing every test that could run
@@ -18,8 +18,7 @@
 //!    workspace and runs `ninja` (`build`);
 //! 5. runs each executable built, one for each module, on a plan of the
 //!    module's tests to run, and reads what became of each from the
-//!    results file it writes: the protocol of the hgraph target's
-//!    driver, read by the same code (`hgl_hgraph::read_results`).
+//!    results file it writes (`results`).
 //!
 //! For `hgl run` it builds the one executable of the application chosen
 //! in the same way, runs it once, and reads what became of the run
@@ -27,6 +26,7 @@
 
 mod application;
 mod build;
+mod results;
 mod sdk;
 
 use std::ffi::OsString;
@@ -40,12 +40,13 @@ use std::time::{Duration, Instant};
 use hgl_analyser::Program;
 use hgl_cpp::Output;
 use hgl_diagnostics::{Diagnostics, Location};
-use hgl_hgraph::Said;
 use hgl_runner::{Executor, Outcome};
 use hgl_source::SourceMap;
 
-use super::EXIT_FAILED;
+use super::{EXIT_FAILED, EXIT_REJECTED, count};
+use application::RanApplication;
 use build::{Workspace, write_if_changed};
+use results::{Said, read_results};
 
 use sdk::Toolchain;
 
@@ -123,8 +124,8 @@ impl Executor for OnCpp<'_> {
             }
         } else if let Some(directory) = self.keep {
             // A directory that is kept holds the program whether or not a
-            // test is run, as the hgraph target's does; with no test to
-            // say it of, a failure to write it is not reported.
+            // test is run; with no test to say it of, a failure to write
+            // it is not reported.
             let _ = write(&output.files, directory);
         }
         outcomes
@@ -376,7 +377,7 @@ fn launch_one(
         let source = sources.file(at.file);
         format!("{}:{}", source.name(), source.line_col(at.span.start))
     };
-    hgl_hgraph::read_results(&recorded, launch.tests.len())
+    read_results(&recorded, launch.tests.len())
         .into_iter()
         .zip(&launch.tests)
         .map(|(recorded, (slot, test))| {
@@ -449,8 +450,7 @@ fn finish(
     Ok((output, timed_out))
 }
 
-/// A time limit as a person reads it, as the hgraph target's driver
-/// writes it: `1m`, `90s`, `0.5s`.
+/// A time limit as a person reads it: `1m`, `90s`, `0.5s`.
 fn seconds(limit: Duration) -> String {
     let seconds = limit.as_secs_f64();
     if seconds >= 60.0 && seconds % 60.0 == 0.0 {
@@ -463,10 +463,9 @@ fn seconds(limit: Duration) -> String {
 /// `hgl run --target cpp` of application `chosen` of `program`
 /// (UNIT-14, RUN-1): its executable built in the program's workspace,
 /// the directory `keep` names or the one of its source `roots`, and run
-/// once, and its output printed as the hgraph target's is (`super::ran`).
-/// An interrupt of `hgl`, or a request for it to end, is the host's stop
-/// of the run (RUN-3), which is passed on to the executable
-/// (`application::Stop`).
+/// once, and its output printed (`ran`). An interrupt of `hgl`, or a
+/// request for it to end, is the host's stop of the run (RUN-3), which
+/// is passed on to the executable (`application::Stop`).
 pub(super) fn run(
     sources: &SourceMap,
     program: &Program,
@@ -506,5 +505,38 @@ pub(super) fn run(
     let asked = stop.clone();
     let _ = ctrlc::set_handler(move || asked.ask());
     let ran = application::run(&output, application, keep, roots, &stop);
-    super::ran(&application.path, name, ran)
+    self::ran(&application.path, name, ran)
+}
+
+/// What `hgl run` prints of what became of application `path` on the
+/// target `name`, and the status it ends with: the run's output once the
+/// run has stopped, a line for each publication (core's CRUN-8), or why
+/// it failed (CRUN-6: "A run that failed has no output") or was not run.
+fn ran(path: &str, name: &str, ran: RanApplication) -> ExitCode {
+    match ran {
+        RanApplication::Stopped { output, by_host } => {
+            let how = if by_host { " until it was stopped" } else { "" };
+            match output {
+                Some(published) => {
+                    for (at, value) in &published {
+                        println!("{at}  {value}");
+                    }
+                    println!(
+                        "ran {path} on {name}{how}: {}",
+                        count(published.len(), "publication")
+                    );
+                }
+                None => println!("ran {path} on {name}{how}: its entry has no result"),
+            }
+            ExitCode::SUCCESS
+        }
+        RanApplication::Failed(message) => {
+            eprintln!("hgl: {path} failed: {message}");
+            ExitCode::from(EXIT_REJECTED)
+        }
+        RanApplication::NotRun(reason) => {
+            eprintln!("hgl: {path} was not run: {reason}");
+            ExitCode::from(EXIT_FAILED)
+        }
+    }
 }

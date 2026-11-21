@@ -13,7 +13,7 @@ class CoreGateTest(unittest.TestCase):
     ))
     passing = "passed   executable  conformance::ready\n"
     pending = "not run  executable  conformance::pending\n"
-    reason = "    fixture.hgl:3:4: the hgraph target does not write a graph switch yet\n"
+    reason = "    fixture.hgl:3:4: the cpp target does not write a graph switch yet\n"
     rejection_counts = "rejection cases: 0 passed, 0 failed\n"
     expected = {"conformance::pending": "a graph switch"}
 
@@ -27,7 +27,7 @@ class CoreGateTest(unittest.TestCase):
         self.assertFalse(self.problems(rows + self.reason, summary))
         for detail in (
             "    the interpreter could not be started\n",
-            "    the hgraph target does not write a graph switch yet\n",
+            "    the cpp target does not write a graph switch yet\n",
             self.reason.replace("a graph switch", "another construct"),
         ):
             with self.subTest(detail=detail):
@@ -105,9 +105,9 @@ class CoreGateTest(unittest.TestCase):
         self.assertFalse(self.rejection_problems(row + detail, counts, code=1, listed=listed))
 
 
-class NamedTargetTest(unittest.TestCase):
-    """`--target cpp`: the C++ target's words, and its list, which may hold
-    every case while it passes none."""
+class TargetWordsTest(unittest.TestCase):
+    """The target's own words, and its list, which may hold every case
+    while it passes none."""
 
     inventory = CompletedProcess([], 2, stdout="not run  executable  conformance::pending\n")
     rows = (
@@ -118,16 +118,15 @@ class NamedTargetTest(unittest.TestCase):
     )
     expected = {"conformance::pending": "an eval"}
 
-    def test_a_target_is_held_to_its_own_words(self):
+    def test_the_target_is_held_to_its_own_words(self):
         result = CompletedProcess([], 2, stdout=self.rows)
-        self.assertFalse(verify(self.inventory, result, self.expected, target="cpp"))
-        # The hgraph target's words are no gap of the cpp target's, and the
-        # hgraph target must pass a case.
-        self.assertTrue(verify(self.inventory, result, self.expected, target="hgraph"))
-        hgraph = CompletedProcess([], 2, stdout=self.rows.replace("cpp target", "hgraph target"))
-        self.assertTrue(verify(self.inventory, hgraph, self.expected, target="cpp"))
+        self.assertFalse(verify(self.inventory, result, self.expected))
+        # Another target's words are no gap of this one's.
+        other = CompletedProcess([], 2, stdout=self.rows.replace("cpp target", "other target"))
+        self.assertTrue(verify(self.inventory, other, self.expected))
 
     def test_the_gaps_of_a_run_are_read_by_their_form(self):
         result = CompletedProcess([], 2, stdout=self.rows)
-        self.assertEqual(gaps_of(result, "cpp"), self.expected)
-        self.assertEqual(gaps_of(result, "hgraph"), {})
+        self.assertEqual(gaps_of(result), self.expected)
+        other = CompletedProcess([], 2, stdout=self.rows.replace("cpp target", "other target"))
+        self.assertEqual(gaps_of(other), {})

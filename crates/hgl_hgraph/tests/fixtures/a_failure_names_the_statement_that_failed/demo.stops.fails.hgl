@@ -1,9 +1,0 @@
-module demo.stops.fails
-fn ends_badly(value: i64) -> i64 {
-    state ended: i64 = 0
-    when { return value }
-    stop {
-        if valid(value) { ended = value // 0 }
-    }
-}
-test stop_fails { eval ends_badly(value: [7]) }

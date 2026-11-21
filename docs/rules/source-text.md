@@ -79,10 +79,7 @@ lexer: done
 
 - Zone name source form
 
-transpiler: done
-
-- hgraph: the provider makes a zone literal and fails where it is evaluated for a name its run's catalogue has not (Python's `zoneinfo`, aliases included), and for a `zoned_datetime` whose offset is not the zone's at the instant it gives
-- No execution code is catalogued for either
+transpiler: planned
 
 ## LEX-13
 

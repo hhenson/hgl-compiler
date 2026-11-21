@@ -207,8 +207,7 @@ pub(crate) fn test_namespace(path: &str) -> String {
 
 /// A type as part of a native function's name: `i64` as it is, and any
 /// other character than a letter or a digit as `_`. The runtime
-/// library's natives are named so, as the hgraph target names its
-/// provider's.
+/// library's natives are named so.
 fn mangled(ty: &Type) -> String {
     ty.to_string()
         .chars()

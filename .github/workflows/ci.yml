@@ -91,36 +91,6 @@ jobs:
           path: *cache-paths
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
-  hgraph:
-    # The tests that run a generated program on hgraph, which the jobs
-    # above leave out, and both test suites of the pinned core. hgraph
-    # has a wheel for Linux.
-    runs-on: ubuntu-latest
-    env:
-      HGRAPH_VERSION: "0.9.8"
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: recursive
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-      # The hgraph the target is written against (docs/architecture.md).
-      - run: python -m pip install "hgraph==$HGRAPH_VERSION"
-      - run: echo "HGL_HGRAPH_PYTHON=$(which python)" >> "$GITHUB_ENV"
-      - run: cargo --version
-      - run: cargo test -p hgl_hgraph -p hgl_cli --locked -- --ignored
-      - run: python -m unittest discover -s crates/hgl_hgraph/ci
-      - run: cargo build --locked --bin hgl
-      - run: python crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Check generated programs on Python 3.12
-        run: |
-          python -m pip install "hgraph==$HGRAPH_VERSION"
-          python crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core
-
   cpp:
     # libhglrt, the C++ target's runtime library (runtime/cpp), built
     # against hgraph's C++ SDK and its unit tests run, then all of it again
@@ -180,16 +150,18 @@ jobs:
       - run: ctest --test-dir build/cpp-sanitize --output-on-failure
       # The C++ target on the SDK: the tests that build and run what it
       # writes, and core's cases, held to the list of those it does not
-      # run yet (crates/hgl_cpp/ci/unsupported_cases.toml).
+      # run yet (crates/hgl_cpp/ci/unsupported_cases.toml) by
+      # check_core.py, whose own tests run first.
       - run: cargo --version
       - run: cargo test -p hgl_cli --locked --test cpp -- --ignored
+      - run: python3 -m unittest discover -s crates/hgl_cpp/ci
       - run: cargo build --locked --bin hgl
-      - run: python3 crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core --target cpp
+      - run: python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core
       # The same again, the generated code and the runtime library built
       # with the address and undefined-behaviour sanitizers.
       - run: cargo test -p hgl_cli --locked --test cpp -- --ignored
         env:
           HGL_CPP_FLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
-      - run: python3 crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core --target cpp
+      - run: python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core
         env:
           HGL_CPP_FLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined

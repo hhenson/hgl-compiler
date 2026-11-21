@@ -38,13 +38,7 @@ analyser: partial
 - An `assert` takes a `bool` (`type.mismatch`) that is no connection (`connection.as_constant`)
 - `==` and `!=` with a trace are the harness's own comparison, a `bool`, selected through no operator; the other side is a trace of the same cells
 
-transpiler: partial
-
-- hgraph: the harness compares the time and value of each publication in dense and timed traces
-- A set delta compares additions and removals separately
-- A cell written whole is compared with the value the result holds once its cycle has published (TST-5)
-- Trailing placeholders add no publications (TST-6)
-- Left: the mismatch report says only that the assertion does not hold
+transpiler: planned
 
 runner: planned
 
@@ -66,26 +60,11 @@ analyser: partial
 - Its configuration, `eval{length: 4s} target(...)`, is read before the call, each entry a field of core's `RunConfig` (RUN-6)
 - Left: a generic target given structural cells other than a tuple's
 
-transpiler: partial
-
-- hgraph: a cell written whole is `_harness.whole(value)`, and a tuple's `_harness.whole(value, shape=...)`, how hgraph's bundle takes each position (`bundled`): an input publishes a null position as a published null
-- An expectation's is compared with the value the result holds after its cycle, read from the result's port (`_hold`), and one written as a delta with the delta recorded
-- An unsized list's whole cell replays as the `TSLDelta` that replaces what the input held, the tail it has not removed (`_core.whole_delta`); core's `record` records hgraph's `TSLDelta`
-- A whole cell is replayed, and given to a `const fn`, as the delta that publishing it records (TIME-7, TST-5, TST-16): a set's given the members it holds, and an empty list's or dictionary's given to a valid empty one, is no tick, and a dictionary's entries and a list's positions given again tick
-- The value held follows the owner's decision on hhenson/hgl_spec#126, ahead of the pinned text: a struct, a tuple or a list is whole only where each part is valid, an optional part that is not being null; where a required part is not valid there is no whole value, and no cell written whole equals it: it is read as a part is (`part_value`)
-- A tuple's cell written as its delta is that tuple of its positions, published and compared as recorded
-- A cell that is a delta naming no change is a tick only where it makes the input valid, so given to a valid input it wakes no reader, and a cycle whose node writes only such a delta where its result is valid records nothing, `_` in the expectation (TIME-7)
-- Not settled: an expectation's cell written as such a delta, at a cycle where the result is valid, is compared as a tick, which the cycle does not make: TST-5 does not say whether that cell is `_`
-- Left: a whole cell of a tuple with a position that is composite, a list or a struct, which is reported, as a struct's with a composite field is
+transpiler: planned
 
 ## TST-6
 
-transpiler: done
-
-- hgraph: each present dense cell publishes at its position in smallest steps from the run's start
-- `null` publishes hgraph's `Null` and `_` is silence
-- The recording ends at its last publication
-- Comparison matches each publication at its offset from its own run start
+transpiler: planned
 
 runner: planned
 
@@ -102,12 +81,7 @@ runner: planned
 
 - Sparse expectations match the actual ticks and times
 
-transpiler: done
-
-- hgraph: replay and expectation keys are duration offsets from the run's start or absolute datetimes
-- Computed keys must strictly increase
-- Input replay rejects a key before the run's start (CEVAL-2)
-- The harness compares every publication's time and value without allocating intervening cells
+transpiler: planned
 
 ## TST-8
 
@@ -121,10 +95,7 @@ runner: planned
 
 ## TST-9
 
-transpiler: partial
-
-- hgraph: a structural input cell written whole replaces what the input held: a dictionary's removes each key it held that the cell has not, a set's each member, and a tuple's sets each position, a null one to a published null; one written as a delta is that change
-- Left: what a whole value nested in another replaces
+transpiler: planned
 
 runner: planned
 
@@ -136,11 +107,7 @@ analyser: done
 
 - `assert raises` takes one string literal whose value is an execution code of the catalogue (`test.raises_code`), `value.index_out_of_range` among them
 
-transpiler: partial
-
-- hgraph: the block is run once, in a `try`; an error that escapes with the code passes, an HGL error or the one behind a node's failure in an `eval`, and the test goes on; a block that completes fails the test at the assertion, and one that lets out another code fails where that was raised
-- Left: cleanup that fails
-- Left, reported: an assertion of a failure the provider gives with no code, an index outside a list's `value.index_out_of_range` (EXPR-3, EXPR-7), or does not write, text repeated a count below zero's `numeric.out_of_range` (core's OPS-1)
+transpiler: planned
 
 runner: planned
 
@@ -148,10 +115,7 @@ runner: planned
 
 ## TST-11
 
-transpiler: partial
-
-- hgraph: a failed assertion in the block, and an error that is no HGL error with a code, do not satisfy it; an integration test past its time limit has failed whatever its block then does
-- Left: a crash, and a test that does not end once it is stopped, which end the interpreter
+transpiler: planned
 
 runner: planned
 
@@ -183,11 +147,7 @@ runner: done
 
 - Invalid metadata and surviving-source errors stop the run, and nothing is then executed; selectors; counts of rejection cases and of tests passed, failed and not run
 
-transpiler: partial
-
-- hgraph: a test whose interpreter does not start or stops early, or whose module does not load, is not run and has not failed
-- An integration test is held to a time limit
-- Left: a limit on how long a test that is no integration test may run
+transpiler: planned
 
 ## TST-15
 
@@ -196,10 +156,7 @@ runner: done
 - When a run succeeds; identity, kind and outcome of each case
 - A test is run by the executor the run is given, and is not run with none
 
-transpiler: partial
-
-- hgraph: a test is named `module.path::name`, and one given to the host has an outcome: passed, failed with the statement that failed, or not run with the reason
-- Left: the tests that need a form the target does not write yet, which are not run
+transpiler: planned
 
 ## TST-16
 
@@ -209,12 +166,7 @@ analyser: partial
 - A sequence written as a `const fn`'s argument is the list it is written as
 - Left: a value that holds a trace, `[seen]`, which is given as it is and not held to the parameter's type
 
-transpiler: partial
-
-- hgraph: a `const fn` receives the recording's publications at their absolute instants, including published nulls
-- Silent positions add no entries
-- A written trace uses the earliest start for dense positions and duration keys and preserves absolute keys; a cell written whole is held as the delta its publication records (`_core.whole_delta`), the delta an input replays
-- A window of ticks is recorded at each arrival; a window of a duration's recording, which skips a tick at which a value only leaves (CEVAL-4), is reported
+transpiler: planned
 
 runner: planned
 
@@ -233,11 +185,7 @@ analyser: done
 - Its `run call` is read as an eval is, in real time; in a test that is none it is `run.position`
 - It may inject `run_config` before its other statements, and read it in its value code (RUN-6)
 
-transpiler: done
-
-- hgraph: `run call` in an integration test is the eval's run in real time, from the host clock's present time where its configuration gives no start
-- Left, reported: an integration test that injects `run_config` (RUN-6)
-- An integration test has a time limit, the one `@timeout(...)` gives it or a minute: one still running then is stopped, and has failed at the statement it was at
+transpiler: planned
 
 runner: done
 

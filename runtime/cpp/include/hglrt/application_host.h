@@ -7,8 +7,7 @@
 // holds the function its run statement is written as (application.h), and its
 // entry unit's `main` calls `hglrt::application::main` with that function,
 // which runs it once and records what became of the run in a results file, in
-// the form the runner reads from the Python target's driver
-// (`crates/hgl_hgraph/support/run_application.py`):
+// the form the build driver reads (`crates/hgl_cli/src/cpp/application.rs`):
 //
 //     EXECUTABLE RESULTS
 //

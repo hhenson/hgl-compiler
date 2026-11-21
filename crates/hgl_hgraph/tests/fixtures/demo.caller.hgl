@@ -1,8 +1,0 @@
-module demo.caller
-use demo.lib::{scale, pick}
-const fn caller(base: i64) -> i64 => scale(3) + base
-test callers {
-    assert caller(10) == 16
-    assert pick() == 1
-    assert pick(7, 5) == 5
-}

@@ -1,13 +1,11 @@
-"""Run the pinned core suites on a target and check its known gaps (TST-14, TST-15).
+"""Run the pinned core suites on the cpp target and check its known gaps (TST-14, TST-15).
 
-`--target hgraph` (the default) runs them on the Python target, with the
-interpreter `--python` names, and checks them against
-`unsupported_cases.toml` beside this file. `--target cpp` runs them on the
-C++ target and checks them against `crates/hgl_cpp/ci/unsupported_cases.toml`;
-its build needs the SDK `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name only for
-a case it can run. `--write-list` writes the target's list from the run
-instead of checking it: each case not run for a form the target does not
-write, under that form; a case that fails is never listed.
+The suites run on the C++ target, `hgl test --target cpp`, and are checked
+against `unsupported_cases.toml` beside this file; the build needs the SDK
+`HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name only for a case it can run.
+`--write-list` writes the list from the run instead of checking it: each
+case not run for a form the target does not write, under that form; a case
+that fails is never listed.
 """
 
 import argparse
@@ -25,16 +23,11 @@ CASE = re.compile(
     r"^(passed|FAILED|not run) +(rejection|executable) +([^\n]+)(?:\n    ([^\n]+))?$",
     re.MULTILINE,
 )
-# Each target, and the list of the cases it is known not to run.
-TARGETS = {
-    "hgraph": Path(__file__).with_name("unsupported_cases.toml"),
-    "cpp": Path(__file__).parents[2] / "hgl_cpp" / "ci" / "unsupported_cases.toml",
-}
-
-
-def unsupported(target):
-    """The row detail of a case `target` does not write all of."""
-    return re.compile(rf".+\.hgl:\d+:\d+: the {re.escape(target)} target does not write (.+) yet")
+# The target the cases run on, and the list of those it is known not to run.
+TARGET = "cpp"
+LIST = Path(__file__).with_name("unsupported_cases.toml")
+# The row detail of a case the target does not write all of.
+UNSUPPORTED = re.compile(rf".+\.hgl:\d+:\d+: the {TARGET} target does not write (.+) yet")
 
 # A rejection case's row names its file, its line and the declaration it
 # is, as its source writes it: `.../tests/conformance/rejections/x.hgl:46
@@ -45,13 +38,13 @@ NOT_REJECTED = re.compile(r"^expected \S+ on line \d+ of .+: not reported$")
 SUITES = {"conformance": "conformance", "implementation": "core_implementation"}
 
 
-def known_gaps(target="hgraph"):
+def known_gaps():
     """Every listed case, by name, with its reason, and the names of the
-    rejection cases among them: the executable cases `target` does not
+    rejection cases among them: the executable cases the target does not
     write, and, under `[rejections]`, the rejection cases the compiler
     does not yet reject, each `suite::file::declaration` with `file` under
     the suite's directory."""
-    with TARGETS[target].open("rb") as file:
+    with LIST.open("rb") as file:
         groups = tomllib.load(file)
     rejections = groups.pop("rejections", {})
     gaps = {}
@@ -83,14 +76,12 @@ def case_rows(output):
     return rows
 
 
-def verify(discovered, result, expected, unrejected=frozenset(), target="hgraph"):
+def verify(discovered, result, expected, unrejected=frozenset()):
     """Require every discovered case and account for every non-passing
     outcome. A rejection case in `unrejected` must fail by not being
     rejected, as listed: rejected, or failing another way, it fails the
     check. A case not run must be so for the form its listing names, in
-    `target`'s words. The hgraph target must pass a case; another target
-    may yet pass none, where every case it does not run is listed."""
-    pattern = unsupported(target)
+    the target's words."""
     problems = []
     inventory = case_rows(discovered.stdout)
     actual = case_rows(result.stdout)
@@ -118,7 +109,7 @@ def verify(discovered, result, expected, unrejected=frozenset(), target="hgraph"
         if status == "FAILED":
             problems.append(f"{kind} failed: {name}")
         if status == "not run":
-            diagnostic = pattern.fullmatch(detail)
+            diagnostic = UNSUPPORTED.fullmatch(detail)
             if kind != "executable" or not diagnostic or expected.get(name) != diagnostic[1]:
                 problems.append(f"unexpected reason or case not run: {name}: {detail}")
             blocked.add(name)
@@ -140,18 +131,17 @@ def verify(discovered, result, expected, unrejected=frozenset(), target="hgraph"
         problems.append("the runner's final counts do not match its case rows")
     # The runner exits 1 where a case failed, a listed rejection among them.
     status = 1 if counts["rejection", "FAILED"] or failed else 2 if waiting else 0
-    if (target == "hgraph" and not passed) or result.returncode != status:
-        problems.append(f"no passing executable or unexpected runner exit status {result.returncode}")
+    if result.returncode != status:
+        problems.append(f"unexpected runner exit status {result.returncode}")
     return problems
 
 
-def gaps_of(result, target):
-    """Each case of `result` not run for a form `target` does not write,
+def gaps_of(result):
+    """Each case of `result` not run for a form the target does not write,
     by name, with that form."""
-    pattern = unsupported(target)
     gaps = {}
     for (kind, name), (status, detail) in case_rows(result.stdout).items():
-        diagnostic = pattern.fullmatch(detail or "")
+        diagnostic = UNSUPPORTED.fullmatch(detail or "")
         if kind == "executable" and status == "not run" and diagnostic:
             gaps[name] = diagnostic[1]
     return gaps
@@ -197,32 +187,29 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("hgl", type=Path, help="built HGL compiler")
     parser.add_argument("core", type=Path, help="core checkout containing hgl/ and tests/")
-    parser.add_argument("--target", choices=sorted(TARGETS), default="hgraph",
-                        help="the target to run the cases on")
-    parser.add_argument("--python", default=sys.executable, help="interpreter with hgraph")
+    parser.add_argument("--target", choices=[TARGET], default=TARGET,
+                        help="the target to run the cases on, the one there is")
     parser.add_argument("--write-list", action="store_true",
-                        help="write the target's list of cases not run from this run")
+                        help="write the list of cases not run from this run")
     args = parser.parse_args()
-    gaps, unrejected = known_gaps(args.target)
+    gaps, unrejected = known_gaps()
     problems = []
     found = {}
     target = ["--target", args.target]
-    if args.target == "hgraph":
-        target += ["--python", args.python]
     for suite, module in SUITES.items():
         command = [args.hgl.resolve(), "test", args.core / "hgl", args.core / "tests" / suite, "--integration"]
         print(f"Running {suite}", flush=True)
         discovered = subprocess.run(command, stdout=subprocess.PIPE, text=True)
         result = subprocess.run(command + target, stdout=subprocess.PIPE, text=True)
         print(result.stdout, end="")
-        found.update(gaps_of(result, args.target))
+        found.update(gaps_of(result))
         expected = {name: reason for name, reason in gaps.items() if name.startswith(module + "::")}
-        problems.extend(verify(discovered, result, expected, unrejected, args.target))
+        problems.extend(verify(discovered, result, expected, unrejected))
     if args.write_list:
-        with TARGETS[args.target].open("rb") as file:
+        with LIST.open("rb") as file:
             rejections = tomllib.load(file).get("rejections", {})
-        write_list(TARGETS[args.target], found, rejections)
-        print(f"wrote {len(found)} cases to {TARGETS[args.target]}")
+        write_list(LIST, found, rejections)
+        print(f"wrote {len(found)} cases to {LIST}")
         return 0
     for problem in problems:
         print(problem, file=sys.stderr)

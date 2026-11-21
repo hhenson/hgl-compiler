@@ -1,7 +1,0 @@
-module demo.shown
-# An entry that publishes numbers whose text has an exponent (OPS-6).
-export fn numbers() -> f64 {
-    yield 1s: 1e21
-    yield 1s: 0.00001
-    yield 1s: 2.5
-}

@@ -1,6 +1,0 @@
-module demo.results.fails
-const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: .error} b
-fn ratios(a: f64, b: f64) -> f64 {
-    when { return checked(a, b)? }
-}
-test node_fails { eval ratios(a: [6.0], b: [0.0]) }

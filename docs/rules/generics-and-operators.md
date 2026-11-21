@@ -23,14 +23,7 @@ analyser: partial
 - A generic value parameter takes its default where nothing else says what it is: a function's and a candidate's at a call, a struct's where it is named bare or constructed, an operator's in the output requested
 - Left: packs; solvable equalities; temporal bodies; what a nullable place says of a result that is a type parameter and nothing more (hhenson/hgl_spec#165, open), taken for now to be what is under the `?`
 
-transpiler: partial
-
-- hgraph: a temporal function with generic parameters, and a temporal candidate with them, is written once for each set of generic arguments the program calls it with, in the declaration's module, and a call names the instance for its arguments; one the program calls with none is not written
-- So is a value function or candidate whose body calls an operation it requires or hands a requirement on (GEN-16), reads a generic value as a value (GEN-13), has a call a membership authorises, whose candidate each instance selects (GEN-3, GEN-7), or calls one written by instance with its own generic parameters; any other value function with generic parameters is written once
-- A generic value read as a value is the constant the call gives (GEN-13): one constant is one instance however it is written, and two are two (UNIT-13), `reciprocal<0.0>()` and `reciprocal<-0.0>()` each written with its own whichever is called first
-- Each instance is a piece of its own: one with a form that is not written is left out, and a test that reaches it is not run
-- No more than `hgl_analyser::INSTANCES` instances of one declaration are made from one call, the analyser's bound: a call of one past them is reported, so writing a program ends however many instances it would make
-- Left: a call whose generic arguments are not known, an enum member given to a function's generic value among them; an application's run statement is not read for the instances it asks for
+transpiler: planned
 
 ## GEN-3
 
@@ -54,12 +47,7 @@ analyser: partial
 - An operator's requirement `O in {...}` on its bare result parameter limits its candidates' results
 - Left: operator identity in selection; every other requirement of an operator
 
-transpiler: partial
-
-- hgraph: a candidate with a body is written in its module, named by the operator and the candidate's parameter types, in a program and in core: a value candidate as a function, and a temporal candidate as a node or a graph, which a call in a graph that selects it calls
-- The value candidate of a temporal and a value pair of the same parameter types is named apart
-- One with generic parameters is written by instance (GEN-2)
-- Left: two candidates of one module and one role with the same parameter types; a native candidate a program declares
+transpiler: planned
 
 ## GEN-5
 
@@ -156,7 +144,7 @@ analyser: partial
 - A plain parameter is a type or a value by its uses in the signature; uses that disagree are rejected, and a struct's parameter nothing uses; a value parameter or a pack is not named as a type; a generic value parameter's default, a callable's or a struct's, is of its declared type, as far as how the default is written says what it is, and of the type a call resolves where that names a type parameter: an implied member, `.slow`, is held to the enum the call resolves, so is no `i64` and no member of an enum that lacks it (`type.mismatch`, TYPE-7)
 - A default that names a generic parameter before its own is of what that one takes, at a call and in a struct written with no arguments (`W2` of `<const A: i64 = 1, const B: i64 = A>` is `W2<1, 1>`); one that names its own, or one after it, gives it no value, so a call that leaves it is `generic.unresolved` (GEN-8); a call in the function's own body that gives a parameter its own, `rec<N>(v)`, gives the default that one and a struct written with no arguments `generic.argument_count`
 - Generic arguments that are the same, each type canonical and each value one constant (UNIT-13), make one type or one instance, and arguments that differ another: of the worked fragment, `Scaled<1>`, `Scaled<1.0>` and `Scaled<1.00>` are one type, and a `Scaled<-0.0>` where a `Scaled<0.0>` is expected is `type.mismatch`
-- "Where the instances of one declaration never end when the program is compiled, the program rejects": no more than `hgl_analyser::INSTANCES` (4096) instances of one declaration are followed from one call, by the analyser and by the hgraph target, and a call past that is `generic.instance_limit`, at the call that makes the first of them: the worked fragment's `climbed`; through constants worked out from the body's own parameters, and through a type that grows, `nest<list<T>>`
+- "Where the instances of one declaration never end when the program is compiled, the program rejects": no more than `hgl_analyser::INSTANCES` (4096) instances of one declaration are followed from one call, by the analyser and by `hgl_lower`, and a call past that is `generic.instance_limit`, at the call that makes the first of them: the worked fragment's `climbed`; through constants worked out from the body's own parameters, and through a type that grows, `nest<list<T>>`
 - Left: a default that names anything else; the kind a constraint gives; `type(N)`; a call that supplies no type for a function's parameter its signature does not settle
 
 ## GEN-14
@@ -192,7 +180,4 @@ analyser: partial
 - A function's requirement that does not hold at a call of it, and a struct's where it is constructed, is `requires.unmet` (GEN-3)
 - Left: a predicate, and the arrow rejected on one; a requirement supplied with a value or a set; a requirement checked where it is declared
 
-transpiler: partial
-
-- hgraph: in an instance of a generic function or candidate, temporal or value, an operation the declaration requires is the call of the value candidate that answers the requirement for that instance's types: called in a value function and in a node's hook, and lifted in a graph
-- Left: an operation for which the analyser could not tell what answers, which is reported where it is called
+transpiler: planned

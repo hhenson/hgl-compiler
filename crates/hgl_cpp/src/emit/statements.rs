@@ -505,7 +505,7 @@ impl Emitter<'_> {
                     text.push_str(&format!("{inner}}}\n"));
                 } else {
                     // CTRL-6: "An unmatched selector uses default or
-                    // fails", with no code, as the hgraph target fails.
+                    // fails", with no code.
                     let fail = format!(
                         "::{}::fail_uncoded(\"no case of the `switch` has the selector's value\");",
                         crate::runtime::NAMESPACE

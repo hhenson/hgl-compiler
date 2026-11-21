@@ -27,19 +27,18 @@ specification says which is which.
 | formatter | planned | Syntax tree to source text |
 | analyser | `hgl_analyser` | Names, types, phases and constants: every source rejection the parser cannot make |
 | optimiser | planned | Rewrites that keep what a program is observed to do |
-| transpiler | planned | The generated program and the runtime it runs on. A rule here may need a change to the runtime, not to generated code |
+| transpiler | `hgl_lower`, `hgl_cpp` | The generated program and the runtime it runs on. A rule here may need a change to the runtime, not to generated code |
 | runner | `hgl_runner` | `hgl test`: selects cases, matches `# expect-error`, runs eval |
 | driver | `hgl_cli` | The `hgl` command: source roots, target, entry and run configuration |
 | diagnostics | `hgl_diagnostics` | The diagnostic model every stage reports through |
 | docs | none | Documentation extraction |
 
-The `transpiler` entries are the hgraph target's. Nothing is marked for
-the cpp target (`hgl_cpp`) yet. Its progress is counted in cases, as
-`docs/cpp-target.md` has it: each of core's runtime cases it does not
+The `transpiler` entries are the cpp target's (`hgl_cpp`), and none is
+marked `done` or `partial`: its progress is counted in cases, as
+`docs/cpp-target.md` has it. Each of core's runtime cases it does not
 run is listed with its reason in `crates/hgl_cpp/ci/unsupported_cases.toml`,
-and `crates/hgl_hgraph/ci/check_core.py --target cpp` fails where a
-listed case runs or a case not listed is not run
-([architecture](architecture.md#cpp)).
+and `crates/hgl_cpp/ci/check_core.py` fails where a listed case runs or
+a case not listed is not run ([architecture](architecture.md#cpp)).
 
 Not listed: `TEST-1` to `TEST-4` and `WRITE-1` to `WRITE-12` of the
 specification. They say who owns what and how the documents are written;
@@ -165,12 +164,10 @@ analyser reads.
 
 ## The C++ target's runtime library
 
-No rule is `done` or `partial` for the C++ target yet: no program reaches
-its runtime library, `libhglrt` (`runtime/cpp`), until the target's emitter
-writes one, and the target's progress is counted in cases
-([cpp-target.md](cpp-target.md#progress-and-acceptance)). What the library
-implements and its unit tests check today, under `runtime/cpp`, is this;
-the chapters' entries stay the hgraph target's.
+No rule is `done` or `partial` for the C++ target: its progress is
+counted in cases ([cpp-target.md](cpp-target.md#progress-and-acceptance)).
+What its runtime library, `libhglrt` (`runtime/cpp`), implements and its
+unit tests check is this.
 
 | What | Rules or core declarations | Header | Tests |
 | --- | --- | --- | --- |

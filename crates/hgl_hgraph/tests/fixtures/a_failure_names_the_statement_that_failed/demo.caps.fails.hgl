@@ -1,8 +1,0 @@
-module demo.caps.fails
-fn absent(value: i64) -> i64 {
-    inject global_state
-    when { return get<i64>(global_state, "nothing") }
-}
-test an_absent_key_fails_the_node {
-    let seen = eval absent(value: [1])
-}

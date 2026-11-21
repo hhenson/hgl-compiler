@@ -49,7 +49,6 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hgl_analyser::{Detail, ImportKind, ParsedFile, Program};
 use hgl_diagnostics::{Diagnostics, Severity, render};
-use hgl_hgraph::{Ran, RanApplication, Stop};
 use hgl_lexer::{Token, TokenKind, lex, literal};
 use hgl_parser::ast::{self, AstNode};
 use hgl_parser::{Entry, Limits};
@@ -173,18 +172,9 @@ struct TestArgs {
     #[arg(long, value_enum)]
     target: Option<Target>,
 
-    /// For `--target hgraph`: the Python interpreter to run the
-    /// program with, one that has hgraph installed. When not given,
-    /// the one the environment variable `HGL_HGRAPH_PYTHON` names, and
-    /// with neither `python3`, or `python` on Windows.
-    #[arg(long, value_name = "PATH", requires = "target")]
-    python: Option<PathBuf>,
-
-    /// Keep what the target wrote for the run in this directory. With
-    /// none, it is written to a temporary directory and removed after
-    /// the run. For `--target cpp` it is the directory the program is
-    /// built in; with none, one under the cache is kept for the next
-    /// run.
+    /// Build the program in this directory, which keeps what the target
+    /// wrote. With none, it is built in a directory under the cache
+    /// for its source roots, which is kept for the next run.
     #[arg(long, value_name = "DIR", requires = "target")]
     keep: Option<PathBuf>,
 
@@ -200,7 +190,7 @@ struct EmitArgs {
     roots: Vec<PathBuf>,
 
     /// The target to write for.
-    #[arg(long, value_enum, default_value_t = Target::Hgraph)]
+    #[arg(long, value_enum, default_value_t = Target::Cpp)]
     target: Target,
 
     /// The directory to write into. It is made when it is not there,
@@ -225,15 +215,8 @@ struct RunArgs {
     application: Option<String>,
 
     /// The target to run it on.
-    #[arg(long, value_enum, default_value_t = Target::Hgraph)]
+    #[arg(long, value_enum, default_value_t = Target::Cpp)]
     target: Target,
-
-    /// For `--target hgraph`: the Python interpreter to run the
-    /// program with, one that has hgraph installed. When not given,
-    /// the one the environment variable `HGL_HGRAPH_PYTHON` names, and
-    /// with neither `python3`, or `python` on Windows.
-    #[arg(long, value_name = "PATH")]
-    python: Option<PathBuf>,
 
     /// Replace an argument of the application's entry: `--arg upto=5`.
     /// The value is HGL, a constant of the parameter's type, and what
@@ -251,9 +234,9 @@ struct RunArgs {
     #[arg(long = "config", value_name = "FIELD=VALUE", value_parser = replace::replacement)]
     config: Vec<Replacement>,
 
-    /// Keep what the target wrote for the run in this directory. With
-    /// none, it is written to a temporary directory and removed after
-    /// the run.
+    /// Build the application in this directory, which keeps what the
+    /// target wrote. With none, it is built in a directory under the
+    /// cache for its source roots, which is kept for the next run.
     #[arg(long, value_name = "DIR")]
     keep: Option<PathBuf>,
 
@@ -299,12 +282,12 @@ fn chosen_application(program: &Program, named: Option<&str>) -> Result<String, 
     }
 }
 
-/// What `hgl emit` writes for, and `hgl test` and `hgl run` run on.
-/// Each is a transpiler crate of its own.
+/// What `hgl emit` writes for, and `hgl test` and `hgl run` run on:
+/// a transpiler crate, `hgl_cpp`. `ValueEnum` makes the variant's name,
+/// in lower case, the one value `--target` accepts; any other is
+/// refused as a usage error.
 #[derive(Clone, Copy, ValueEnum)]
 enum Target {
-    /// Python wiring for hgraph.
-    Hgraph,
     /// C++ against hgraph's C++ API, built with the SDK that
     /// `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name.
     Cpp,
@@ -617,20 +600,6 @@ fn parse_program(roots: &[PathBuf], limits: Limits) -> Result<Parsed, ExitCode> 
     parse_program_with(roots, limits, None)
 }
 
-/// The interpreter a program is run with on hgraph: the one `--python`
-/// gave, or the one the environment variable `HGL_HGRAPH_PYTHON`
-/// names, or `python3`, which is `python` on Windows.
-fn interpreter(given: &Option<PathBuf>) -> PathBuf {
-    given
-        .clone()
-        .or_else(|| {
-            std::env::var_os("HGL_HGRAPH_PYTHON")
-                .filter(|named| !named.is_empty())
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" }))
-}
-
 /// As [`parse_program`], with the text of one file given in place of
 /// what is on disk: `replaced` is the file's name, as it is in the
 /// source map, and the text to read for it. This is how `hgl run`
@@ -820,40 +789,22 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
         println!("nothing written: the program is rejected");
         return report(&sources, diagnostics);
     }
-    // What the target wrote, as what writes it into a directory and
-    // says how many files it wrote. A `Box<dyn FnOnce>` holds either
-    // target's, each closure owning its files.
-    type Writes = Box<dyn FnOnce(&Path) -> Result<usize, String>>;
-    let (name, write): (&str, Writes) = match arguments.target {
-        Target::Hgraph => {
-            let files = hgl_hgraph::transpile(&program, &mut diagnostics).files;
-            (
-                hgl_hgraph::TARGET,
-                Box::new(move |out| {
-                    hgl_hgraph::write(&files, out)
-                        .map(|()| files.len())
-                        .map_err(|error| error.to_string())
-                }),
-            )
-        }
+    let (name, files) = match arguments.target {
         Target::Cpp => {
             let file_name =
                 |at: hgl_diagnostics::Location| sources.file(at.file).name().to_string();
             let files = hgl_cpp::transpile(&program, &file_name, &mut diagnostics).files;
-            (
-                hgl_cpp::TARGET,
-                Box::new(move |out| cpp::write(&files, out).map(|()| files.len())),
-            )
+            (hgl_cpp::TARGET, files)
         }
     };
     if diagnostics.has_errors() {
         println!("nothing written: the {name} target does not write all of the program yet");
         return report(&sources, diagnostics);
     }
-    match write(&arguments.out) {
-        Ok(written) => println!(
+    match cpp::write(&files, &arguments.out) {
+        Ok(()) => println!(
             "wrote {} for {name} to {}",
-            count(written, "file"),
+            count(files.len(), "file"),
             arguments.out.display()
         ),
         Err(error) => {
@@ -871,7 +822,7 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
 /// ```text
 /// 1970-01-01T00:00:00.000001Z  1970-01-01T00:00:00.000001Z
 /// 1970-01-01T00:00:00.500001Z  1970-01-01T00:00:00.500001Z
-/// ran examples.entry.backtest on hgraph: 2 publications
+/// ran examples.entry.backtest on cpp: 2 publications
 /// ```
 ///
 /// What the program logs and what the target prints goes to standard
@@ -1009,105 +960,14 @@ fn run(arguments: &RunArgs) -> ExitCode {
             return ExitCode::from(EXIT_REJECTED);
         }
     }
-    if let Target::Cpp = arguments.target {
-        return cpp::run(
+    match arguments.target {
+        Target::Cpp => cpp::run(
             &sources,
             &program,
             &chosen,
             arguments.keep.as_deref(),
             &arguments.roots,
-        );
-    }
-    // What the target does not write yet is no error of the program:
-    // it matters where the application needs it.
-    let mut unwritten = Diagnostics::new();
-    let output = hgl_hgraph::transpile(&program, &mut unwritten);
-    let Some(chosen) = output
-        .applications
-        .iter()
-        .position(|application| application.path == chosen)
-    else {
-        eprintln!("hgl: the target wrote no application `{chosen}`");
-        return ExitCode::from(EXIT_FAILED);
-    };
-    let application = &output.applications[chosen];
-    let name = hgl_hgraph::TARGET;
-    if let Some(diagnostic) = &application.blocked {
-        let source = sources.file(diagnostic.primary.file);
-        eprintln!(
-            "{}:{}: {}",
-            source.name(),
-            source.line_col(diagnostic.primary.span.start),
-            diagnostic.message
-        );
-        println!(
-            "not run: the {name} target does not write all that {} needs yet",
-            application.path
-        );
-        return ExitCode::from(EXIT_FAILED);
-    }
-
-    // The directory the program is written to: the one to keep, or a
-    // temporary one that is removed when `temporary` is dropped at the
-    // end of this function.
-    let temporary;
-    let directory = match &arguments.keep {
-        Some(directory) => directory.as_path(),
-        None => match tempfile::Builder::new().prefix("hgl-run-").tempdir() {
-            Ok(made) => {
-                temporary = made;
-                temporary.path()
-            }
-            Err(error) => {
-                eprintln!("hgl: a temporary directory could not be made: {error}");
-                return ExitCode::from(EXIT_FAILED);
-            }
-        },
-    };
-    let python = interpreter(&arguments.python);
-    // An interrupt or a request to end, of this process, is the host's
-    // stop of the run (RUN-3). It is passed to the interpreter, which
-    // one sent to this process alone does not reach, and this process
-    // outlives it, to print what the run recorded. Where the handler
-    // cannot be set the run goes on all the same, and an interrupt
-    // then ends this process as it always did.
-    let stop = Stop::new();
-    let asked = stop.clone();
-    let _ = ctrlc::set_handler(move || asked.ask());
-    let ran = hgl_hgraph::run_application(&python, directory, &output, chosen, &stop);
-    self::ran(&application.path, name, ran)
-}
-
-/// What `hgl run` prints of what became of application `path` on the
-/// target `name`, and the status it ends with: the run's output once the
-/// run has stopped, a line for each publication (core's CRUN-8), or why
-/// it failed (CRUN-6: "A run that failed has no output") or was not run.
-fn ran(path: &str, name: &str, ran: RanApplication) -> ExitCode {
-    match ran {
-        RanApplication::Stopped { output, by_host } => {
-            let how = if by_host { " until it was stopped" } else { "" };
-            match output {
-                Some(published) => {
-                    for (at, value) in &published {
-                        println!("{at}  {value}");
-                    }
-                    println!(
-                        "ran {path} on {name}{how}: {}",
-                        count(published.len(), "publication")
-                    );
-                }
-                None => println!("ran {path} on {name}{how}: its entry has no result"),
-            }
-            ExitCode::SUCCESS
-        }
-        RanApplication::Failed(message) => {
-            eprintln!("hgl: {path} failed: {message}");
-            ExitCode::from(EXIT_REJECTED)
-        }
-        RanApplication::NotRun(reason) => {
-            eprintln!("hgl: {path} was not run: {reason}");
-            ExitCode::from(EXIT_FAILED)
-        }
+        ),
     }
 }
 
@@ -1122,7 +982,7 @@ fn ran(path: &str, name: &str, ran: RanApplication) -> ExitCode {
 /// FAILED   executable  examples.rejection::wrong
 ///     cases/rolling.hgl:31:5: the assertion does not hold
 /// not run  executable  examples.rejection::later
-///     cases/rolling.hgl:40:18: the hgraph target does not write the type `i64?` yet
+///     cases/rolling.hgl:40:18: the cpp target does not write a temporal value of `set<list<bool>>` yet
 /// rejection cases: 1 passed, 1 failed
 /// executable cases: 1 passed, 1 failed, 1 not run
 /// ```
@@ -1151,12 +1011,7 @@ fn test(arguments: &TestArgs) -> ExitCode {
         rejections_only: arguments.rejections_only,
         integration: arguments.integration,
     };
-    // The target the tests run on, and where it writes the program.
-    let mut on_hgraph = OnHgraph {
-        sources: &sources,
-        python: interpreter(&arguments.python),
-        keep: arguments.keep.as_deref(),
-    };
+    // The target the tests run on, and where it builds the program.
     let mut on_cpp = cpp::OnCpp {
         sources: &sources,
         keep: arguments.keep.as_deref(),
@@ -1164,7 +1019,6 @@ fn test(arguments: &TestArgs) -> ExitCode {
     };
     let executor: Option<&mut dyn Executor> = match arguments.target {
         None => None,
-        Some(Target::Hgraph) => Some(&mut on_hgraph),
         Some(Target::Cpp) => Some(&mut on_cpp),
     };
     let report = hgl_runner::run(&sources, &parsed, &front_end, &selection, executor);
@@ -1209,93 +1063,6 @@ fn test(arguments: &TestArgs) -> ExitCode {
     } else {
         // Nothing failed, and something could not be run.
         ExitCode::from(EXIT_FAILED)
-    }
-}
-
-/// `hgl test --target hgraph`: what runs the executable cases of a
-/// program on hgraph.
-struct OnHgraph<'a> {
-    /// The program's files, to say where a failure is.
-    sources: &'a SourceMap,
-    /// The Python interpreter to start.
-    python: PathBuf,
-    /// Where to keep what the target writes, when it is kept.
-    keep: Option<&'a Path>,
-}
-
-impl Executor for OnHgraph<'_> {
-    fn execute(&mut self, program: &Program, tests: &[String]) -> Vec<Outcome> {
-        // What the target does not write yet is no error of the
-        // program: it is why a test that needs it is not run.
-        let mut unwritten = Diagnostics::new();
-        let output = hgl_hgraph::transpile(program, &mut unwritten);
-        let place = |at: hgl_diagnostics::Location| {
-            let source = self.sources.file(at.file);
-            format!("{}:{}", source.name(), source.line_col(at.span.start))
-        };
-
-        // Each test asked for, as its position among the target's
-        // tests, and those of them that can be run.
-        let found: Vec<Option<usize>> = tests
-            .iter()
-            .map(|identity| {
-                output
-                    .tests
-                    .iter()
-                    .position(|test| test.identity() == *identity)
-            })
-            .collect();
-        let runnable: Vec<usize> = found
-            .iter()
-            .flatten()
-            .copied()
-            .filter(|&test| output.tests[test].blocked.is_none())
-            .collect();
-
-        // The directory the program is written to: the one to keep, or
-        // a temporary one that is removed when `temporary` is dropped
-        // at the end of this function.
-        let temporary;
-        let directory = match self.keep {
-            Some(directory) => Ok(directory),
-            None => match tempfile::Builder::new().prefix("hgl-test-").tempdir() {
-                Ok(made) => {
-                    temporary = made;
-                    Ok(temporary.path())
-                }
-                Err(error) => Err(format!("a temporary directory could not be made: {error}")),
-            },
-        };
-        let mut ran = match directory {
-            Ok(directory) => hgl_hgraph::run(&self.python, directory, &output, &runnable),
-            Err(reason) => vec![Ran::NotRun(reason); runnable.len()],
-        }
-        .into_iter();
-
-        found
-            .iter()
-            .map(|test| {
-                let Some(test) = test.map(|test| &output.tests[test]) else {
-                    return Outcome::NotRun("the target wrote no such test".to_string());
-                };
-                if let Some(diagnostic) = &test.blocked {
-                    return Outcome::NotRun(format!(
-                        "{}: {}",
-                        place(diagnostic.primary),
-                        diagnostic.message
-                    ));
-                }
-                match ran.next() {
-                    Some(Ran::Passed) => Outcome::Passed,
-                    Some(Ran::Failed { at, message }) => Outcome::FailedRun(match at {
-                        Some(at) => format!("{}: {message}", place(at)),
-                        None => message,
-                    }),
-                    Some(Ran::NotRun(reason)) => Outcome::NotRun(reason),
-                    None => Outcome::NotRun("the target gave it no outcome".to_string()),
-                }
-            })
-            .collect()
     }
 }
 

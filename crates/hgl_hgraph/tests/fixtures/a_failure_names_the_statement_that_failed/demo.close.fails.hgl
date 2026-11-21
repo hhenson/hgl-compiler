@@ -1,3 +1,0 @@
-module demo.close.fails
-const fn close(a: f64, b: f64, tolerance: f64) -> bool => a =={abs: tolerance} b
-test negative_tolerance { assert close(1.0, 1.0, -1.0) }
