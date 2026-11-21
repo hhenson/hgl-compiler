@@ -620,8 +620,10 @@ struct publisher<hgraph::TSL<C, N>> {
         }
         std::size_t size = 0;
         if constexpr (Shape::growing) {
-            // END-4: a list that is not valid holds no position.
-            const std::size_t held = out.valid() ? out.size() : 0;
+            // The size the list holds: a list whose every position lost its
+            // value keeps its positions, not valid (TYPE-16), and one
+            // invalidated holds none, as hgraph empties it (END-4).
+            const std::size_t held = out.size();
             size = held;
             if (delta.size_modified.has_value()) {
                 const i64 written = *delta.size_modified;

@@ -145,6 +145,43 @@ TEST_CASE("a growing list's empty publications tick only where they make it vali
           });
 }
 
+/// `[1, 2, 3]` published whole, then each position removed, then position 0
+/// updated alone (TYPE-16).
+struct EmptiedPositions {
+    static constexpr auto name = "test::emptied_positions";
+
+    static void eval(hgraph::In<"step", hgraph::TS<i64>> step, hgraph::Out<Growing> out_) {
+        switch (step.value()) {
+        case 0:
+            hglrt::publish(out_, list<i64>{1, 2, 3});
+            break;
+        case 1:
+            hglrt::publish(out_, list_delta<list<i64>>{.removed = {0, 1, 2}});
+            break;
+        default:
+            hglrt::publish(out_, list_delta<list<i64>>{.updated = {{0, 7}}});
+        }
+    }
+};
+
+TEST_CASE("a growing list whose every position lost its value keeps its size (TYPE-16)") {
+    list_seen.clear();
+    (void)hglrt::testing::run([&](hgraph::Wiring& wiring, datetime) {
+        hgraph::wire<ReadingsSeen>(
+            wiring, hgraph::wire<EmptiedPositions>(wiring, replayed(wiring, Dense<i64>{0, 1, 2})));
+    });
+    // TYPE-16: "`removed`, the positions that lost their value ... and
+    // `size_modified`, set only when the size moves": the positions stay,
+    // not valid, and an update of one moves no size. END-4 has an
+    // invalidation empty the list; a removal does not.
+    CHECK(list_seen == std::vector<ListSeen>{
+                           {start, true, true,
+                            list_delta<list<i64>>{.updated = {{0, 1}, {1, 2}, {2, 3}}, .size_modified = 3}},
+                           {start + 1us, false, false, std::nullopt},
+                           {start + 2us, true, false, list_delta<list<i64>>{.updated = {{0, 7}}}},
+                       });
+}
+
 TEST_CASE("a growing list's delta extends, leaves gaps, shrinks and ignores a gap's removal (TYPE-16)") {
     CHECK(seen_of_steps(Dense<i64>{1, 2, 3, 4, 6}) ==
           std::vector<ListSeen>{
