@@ -67,7 +67,8 @@ analyser: partial
 - A value function's `return`, arrow body and final expression are of its result type; a `return` with no value is rejected where a result is declared, and one with a value where none is; a function that declares a result returns on every path (`return.missing`)
 - In a hook a `return` with no value is accepted where a result is declared, and one with a value is of the result's type
 - No value of a type is a function: a call of one, `plus_one(x)()`, `[x][0]()` or `(1 + 2)()`, is `type.mismatch`
-- Left: a composition return; an anonymous function's context
+- The analyser checks an anonymous function's body with its written parameter and result types. A direct call supplies unwritten parameter types from its arguments and the unwritten result type from the call's context.
+- Composition returns remain pending. Accepting an anonymous function as an argument is tracked in [#362](https://github.com/hhenson/hgl-compiler/issues/362).
 
 transpiler: planned
 
@@ -181,6 +182,7 @@ parser: planned
 analyser: planned
 
 - Callable argument checking, specialization and `function.argument` await #362.
+- An anonymous function takes its kind from the accepting function type. Checking its body as a graph or as value code awaits #362.
 
 transpiler: planned
 
