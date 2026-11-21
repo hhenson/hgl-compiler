@@ -60,7 +60,7 @@ analyser: partial
 analyser: partial
 
 - A value fits the type its place expects, in a value function, a hook and a graph; an integer literal is an `f64` where one is expected, the `f64` of its value (UNIT-13: `let x: f64 = 1` binds `1.0`), and a result or nullable value takes the form its place expects (ERR-12, ERR-15); `null`, a tuple and a sequence take the expected type, and so does a child read checked when it runs (ERR-14)
-- A graph instance rechecks newly known values against established field, tuple and list member types (GEN-7, `graph_instances_fit_aggregate_members`).
+- A graph instance rechecks newly known values against established field, tuple, list, set and dictionary entry types (GEN-7).
 - What is read again to learn its place's type is counted for each statement, so a statement is judged the same whatever comes before it; one that needs more than its bound, 10,000 and 16 for each node of its syntax, is local `reading.limit`, and is not accepted
 - Left: const expression restrictions
 
@@ -82,6 +82,7 @@ transpiler: done
 analyser: partial
 
 - A field of a struct value has its type, the value's generic arguments in place; a list's element by an `i64`, a tuple's by a constant within its length, read by the one reader (`constant`): a literal, a constant of a module, and a constant expression of those
+- When a graph's deferred collection type settles, its bracket reads get the element type and take the implicit reads needed by the base, index or key (GEN-7, ERR-12, ERR-15).
 - A set indexed is rejected, to read or to assign
 - A member or an element of a nullable's payload is read where a null test proves it present (ERR-12), and a result's payload through its tag (ERR-3)
 - A structural projection of a `ref` parameter in a hook, `xs[i]` or `quote.bid`, selects its child, an endpoint, and reads no payload; an atomic projection of one, `quote.bid` of `ref quote: atomic<Quote>`, reads its payload and is `ref.read` (FN-16)

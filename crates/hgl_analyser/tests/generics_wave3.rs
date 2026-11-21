@@ -1332,6 +1332,128 @@ fn graph_instances_check_settled_switch_selectors_and_labels() {
     );
 }
 
+/// GEN-7, EXPR-5 and EXPR-9: contextual dictionary and set entries
+/// retain their destination types even when the value settled later.
+#[test]
+fn graph_instances_fit_dictionary_and_set_entries() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "fn wrong_value<T>(const input: T) -> dict<str, str> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return [\"key\": chosen]\n",
+        "}\n",
+        "fn wrong_key<T>(const input: T) -> dict<str, i64> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return [chosen: 1]\n",
+        "}\n",
+        "fn wrong_set<T>(const input: T) -> set<str> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return [chosen]\n",
+        "}\n",
+        "fn right<T>(const input: T) -> dict<str, i64> {\n",
+        "    let key = if predicate(input) { \"key\" }\n",
+        "    let value = if predicate(input) { 1 }\n",
+        "    return [key: value]\n",
+        "}\n",
+        "fn bad_value() -> dict<str, str> => wrong_value(1)\n",
+        "fn bad_key() -> dict<str, i64> => wrong_key(1)\n",
+        "fn bad_set() -> set<str> => wrong_set(1)\n",
+        "fn accepted() -> dict<str, i64> => right(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:21:37 type/type.mismatch EXPR-5",
+            "m.hgl:22:35 type/type.mismatch EXPR-5",
+            "m.hgl:23:29 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    let Some(Stmt::Return {
+        value: Some(returned),
+        ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns the dictionary");
+    };
+    let ExprKind::Pairs(entries) = &returned.kind else {
+        panic!("dictionary entries")
+    };
+    let [(key, value)] = entries.as_slice() else {
+        panic!("one key and value")
+    };
+    for (entry, expected) in [(key, "str"), (value, "i64")] {
+        assert_eq!(entry.ty.to_string(), expected);
+        assert!(matches!(entry.kind, ExprKind::NullRead { .. }));
+    }
+}
+
+/// GEN-7, EXPR-7 and ERR-12: a settled collection determines its
+/// projection, and brackets read nullable bases and indices as usual.
+#[test]
+fn graph_instances_propagate_indexed_types_and_reads() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "fn list_item<T>(const input: T) -> i64? {\n",
+        "    let values = [if predicate(input) { 1 }]\n",
+        "    let item = values[0]\n",
+        "    return item\n",
+        "}\n",
+        "fn tuple_item<T>(const input: T) -> i64? {\n",
+        "    let values = (if predicate(input) { 1 }, 0)\n",
+        "    return values[0]\n",
+        "}\n",
+        "fn nullable_base<T>(const input: T) -> i64 {\n",
+        "    let values = if predicate(input) { [1] }\n",
+        "    return values[0]\n",
+        "}\n",
+        "fn nullable_index<T>(const input: T) -> i64 {\n",
+        "    let key = if predicate(input) { \"key\" }\n",
+        "    let values: dict<str, i64> = [\"key\": 1]\n",
+        "    return values[key]\n",
+        "}\n",
+        "fn wrong<T>(const input: T) -> str {\n",
+        "    let values = [if predicate(input) { 1 }]\n",
+        "    return values[0]\n",
+        "}\n",
+        "fn from_list() -> i64? => list_item(1)\n",
+        "fn from_tuple() -> i64? => tuple_item(1)\n",
+        "fn base() -> i64 => nullable_base(1)\n",
+        "fn keyed() -> i64 => nullable_index(1)\n",
+        "fn rejected() -> str => wrong(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:30:25 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+    for (name, ty, reads) in [
+        ("from_list", "i64?", 0),
+        ("from_tuple", "i64?", 0),
+        ("base", "i64", 1),
+        ("keyed", "i64", 1),
+    ] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        let mut projections = 0;
+        let mut null_reads = 0;
+        walk_statements(&instance.statements, &mut |expr| match expr.kind {
+            ExprKind::Index { .. } => {
+                projections += 1;
+                assert_eq!(expr.ty.to_string(), ty, "{name}");
+            }
+            ExprKind::NullRead { .. } => null_reads += 1,
+            _ => {}
+        });
+        assert_eq!(projections, 1, "{name}");
+        assert_eq!(null_reads, reads, "{name}");
+    }
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

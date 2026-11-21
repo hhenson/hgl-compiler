@@ -8,6 +8,7 @@ use super::Typer;
 use super::control::{bound_by_loop, no_else_type, while_connection};
 use super::expressions::sequence_element;
 use super::fit::{open, whole};
+use super::members::{index_result, indexed_payload};
 use crate::hir::{
     Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Run, Stmt, Value, ValueCategory,
     walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
@@ -641,6 +642,15 @@ fn settled_type(
             }
         }
         ExprKind::Local(local) => locals.get(*local)?.ty.clone(),
+        // The base may have acquired an element type after a conditional
+        // inside a list or tuple settled. Keep the existing projection.
+        ExprKind::Index { base, index } => {
+            let position = match index.kind {
+                ExprKind::Literal(Value::Int(position)) => Some(position),
+                _ => None,
+            };
+            index_result(indexed_payload(&base.ty), position)?.clone()
+        }
         _ => return None,
     };
     (ty != Type::Unknown).then_some(ty)

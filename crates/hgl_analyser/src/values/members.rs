@@ -7,7 +7,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
-use super::fit::{not_null, open};
+use super::fit::{not_null, open, whole};
 use super::inference::{fixed, placed};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
@@ -268,40 +268,34 @@ impl<'a> Typer<'a> {
         let base = self.expression(&base, None);
         // ERR-15, ERR-12: what an index is read from expects the T: a
         // result's, and a nullable list's, tuple's or dictionary's.
-        let base = self.received(base, |payload| {
-            matches!(
-                payload,
-                Type::List { .. } | Type::Tuple(_) | Type::Dict { .. }
-            )
-        });
+        let base = self.received(base, index_collection);
         let (index, ty) = match &base.ty {
-            Type::List { element, .. } => {
-                let integer = Type::Scalar(Scalar::I64);
-                let index = self.expression(&index, Some(&integer));
-                (
-                    self.fit(index, &integer, "the index of a list"),
-                    (**element).clone(),
-                )
+            Type::List { .. } | Type::Dict { .. } => {
+                let (expected, place) =
+                    index_operand(&base.ty).expect("a list or dictionary index");
+                let index = self.expression(&index, Some(expected));
+                let ty = index_result(&base.ty, None)
+                    .cloned()
+                    .unwrap_or(Type::Unknown);
+                (self.fit(index, expected, place), ty)
             }
             // EXPR-7: "A tuple's index is a constant within its length:
             // it selects the element's type."
             Type::Tuple(elements) => {
-                let integer = Type::Scalar(Scalar::I64);
+                let (integer, place) = index_operand(&base.ty).expect("a tuple index");
                 // UNIT-13: an index that names a constant of a module is
                 // that constant's value: the index is read as every
                 // constant is (`crate::constant`).
-                let found = self.read_constant(&index, Some(&integer));
-                let index = self.expression(&index, Some(&integer));
+                let found = self.read_constant(&index, Some(integer));
+                let index = self.expression(&index, Some(integer));
                 // EXPR-7: "by an `i64` index". An index of another type,
                 // `pair[0 / 1]` or `pair[0 == 0]`, is reported as that,
                 // and is not evaluated.
-                let is_integer = self.admits(&integer, &index.ty);
-                let index = self.fit(index, &integer, "the index of a tuple");
+                let is_integer = self.admits(integer, &index.ty);
+                let index = self.fit(index, integer, place);
                 let element = match found {
                     _ if !is_integer => Some(&Type::Unknown),
-                    Ok(ConstantValue::Int(value)) => usize::try_from(value)
-                        .ok()
-                        .and_then(|position| elements.get(position)),
+                    Ok(ConstantValue::Int(value)) => index_result(&base.ty, Some(value)),
                     // No compile-time constant: a local, a parameter, a
                     // call.
                     Err(Fault::NotConstant) => None,
@@ -330,13 +324,6 @@ impl<'a> Typer<'a> {
                 };
                 (index, ty)
             }
-            Type::Dict { key, value } => {
-                let index = self.expression(&index, Some(key));
-                (
-                    self.fit(index, key, "the key of the dictionary"),
-                    (**value).clone(),
-                )
-            }
             // EXPR-7: "Brackets read an element of a list or a tuple by
             // an `i64` index, and the value a dictionary has for a
             // key." EXPR-3: "A set has no place to assign."
@@ -361,6 +348,45 @@ impl<'a> Typer<'a> {
             index: Box::new(index),
         };
         (kind, ty)
+    }
+}
+
+/// EXPR-7: the collection kinds read by brackets, including through a `T?`.
+pub(super) fn index_collection(ty: &Type) -> bool {
+    matches!(ty, Type::List { .. } | Type::Tuple(_) | Type::Dict { .. })
+}
+
+/// ERR-12 and ERR-15: the type an index sees after the same implicit
+/// reads as `Typer::received`. Settlement uses it before inserting reads.
+pub(super) fn indexed_payload(ty: &Type) -> &Type {
+    let received = match ty {
+        Type::Result { value, .. } if whole(ty) && !open(value) => value,
+        _ => ty,
+    };
+    match received {
+        Type::Nullable(payload) if index_collection(payload) => payload,
+        _ => received,
+    }
+}
+
+/// EXPR-7: what type a bracket index must have for each collection.
+pub(super) fn index_operand(ty: &Type) -> Option<(&Type, &'static str)> {
+    const INTEGER: &Type = &Type::Scalar(Scalar::I64);
+    match ty {
+        Type::List { .. } => Some((INTEGER, "the index of a list")),
+        Type::Tuple(_) => Some((INTEGER, "the index of a tuple")),
+        Type::Dict { key, .. } => Some((key, "the key of the dictionary")),
+        _ => None,
+    }
+}
+
+/// EXPR-7: the result of indexing an already selected collection type.
+pub(super) fn index_result(ty: &Type, position: Option<i64>) -> Option<&Type> {
+    match ty {
+        Type::List { element, .. } => Some(element),
+        Type::Dict { value, .. } => Some(value),
+        Type::Tuple(elements) => elements.get(usize::try_from(position?).ok()?),
+        _ => None,
     }
 }
 

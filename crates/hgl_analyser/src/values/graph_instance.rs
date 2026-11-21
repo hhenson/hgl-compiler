@@ -12,6 +12,7 @@ use super::control::bound_by_loop;
 use super::fit::{open, whole};
 use super::inference::{fixed, type_pack};
 use super::lifting::{assignment_category, record, record_with};
+use super::members::{index_collection, index_operand, indexed_payload};
 use super::statements::{child_loop_return, child_loop_write, place_assignment_category};
 use super::{Selected, Tables, Typer};
 use crate::declared::substitute_within;
@@ -215,6 +216,38 @@ impl GraphDestinations {
                 }
                 return;
             }
+            NodeMut::Expression(Expr {
+                kind: ExprKind::Sequence(entries),
+                ty: Type::Set(element),
+                ..
+            }) if whole(element) => {
+                for entry in entries {
+                    self.fit(typer, entry, element, "an element", false);
+                }
+                return;
+            }
+            NodeMut::Expression(Expr {
+                kind: ExprKind::Pairs(entries),
+                ty: Type::Dict { key, value },
+                ..
+            }) => {
+                for (entry_key, entry_value) in entries {
+                    if whole(key) {
+                        self.fit(typer, entry_key, key, "a dictionary's key", false);
+                    }
+                    if whole(value) {
+                        self.fit(typer, entry_value, value, "a dictionary's value", false);
+                    }
+                }
+                return;
+            }
+            NodeMut::Expression(Expr {
+                kind: ExprKind::Index { base, index },
+                ..
+            }) => {
+                self.fit_index(typer, base, index);
+                return;
+            }
             _ => return,
         };
         self.fit(typer, value, &expected, place, input);
@@ -237,6 +270,23 @@ impl GraphDestinations {
     fn fit_condition(&self, typer: &mut Typer<'_>, value: &mut Expr) {
         if self.known(value) {
             *value = typer.fit_condition(value.clone());
+        }
+    }
+
+    /// A previously unknown base may need its result or nullable value
+    /// read, and a newly known index must fit the selected collection.
+    fn fit_index(&self, typer: &mut Typer<'_>, base: &mut Expr, index: &mut Expr) {
+        let base_settled = self.known(base);
+        let received = indexed_payload(&base.ty);
+        if base_settled && received != &base.ty && index_collection(received) {
+            *base = typer.received(base.clone(), index_collection);
+        }
+        if let Some((expected, place)) = index_operand(&base.ty)
+            && whole(&index.ty)
+            && (base_settled || self.known(index))
+            && index.ty != *expected
+        {
+            *index = typer.fit(index.clone(), expected, place);
         }
     }
 

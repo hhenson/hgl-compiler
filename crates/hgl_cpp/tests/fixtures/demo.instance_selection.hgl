@@ -132,6 +132,28 @@ fn inferred_list<T>(const value: T) -> i64 {
     return list_score(values)
 }
 
+# EXPR-7 and ERR-12: projections carry the element type and read a
+# nullable base before indexing when settlement requires that read.
+fn indexed_elements<T>(const value: T) -> i64 {
+    let values = [if positive(value) { 2 }]
+    let pair = (if positive(value) { 3 }, 0)
+    let item = values[0]
+    return chosen_or_skip(item) + chosen_or_skip(pair[0])
+}
+
+fn optional_elements<T>(const value: T) -> i64 {
+    let values = if positive(value) { [2] }
+    return values[0]
+}
+
+# EXPR-5 and EXPR-9: the dictionary's typed entries read their values.
+fn dictionary_entries<T>(const value: T) -> i64 {
+    let key = if positive(value) { "key" }
+    let entry = if positive(value) { 4 }
+    let values: dict<str, i64> = [key: entry]
+    return values["key"]
+}
+
 # CTRL-15: a deferred selector and its label settle to i64.
 fn selected_case<T>(const value: T) -> i64 {
     let key = if live_helper(value) > 0 { 1 }
@@ -155,6 +177,12 @@ test an_instance_settles_its_graph_conditions {
     assert raises("value.null") { eval contextual_choice(value: "s") }
     assert eval inferred_list(value: 3) == [2]
     assert eval inferred_list(value: "s") == [-1]
+    assert eval indexed_elements(value: 3) == [5]
+    assert eval indexed_elements(value: "s") == [-2]
+    assert eval optional_elements(value: 3) == [2]
+    assert raises("value.null") { eval optional_elements(value: "s") }
+    assert eval dictionary_entries(value: 3) == [4]
+    assert raises("value.null") { eval dictionary_entries(value: "s") }
     assert eval selected_case(value: 3) == [4]
 }
 
