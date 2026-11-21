@@ -330,10 +330,7 @@ impl Parser<'_> {
                 if parser.nl() {
                     return Verdict::No;
                 }
-                // CTRL-9: give the selector the same brace boundary
-                // as the actual switch. A first `default:` label can
-                // otherwise look like EXPR-10 call configuration.
-                parser.subject();
+                parser.expression();
                 if parser.errors == errors && parser.at(LBrace) && !parser.nl() {
                     Verdict::Yes
                 } else {
