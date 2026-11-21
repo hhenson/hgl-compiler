@@ -2,7 +2,10 @@
 
 mod common;
 
-use common::{check, module};
+use common::{body, check, module};
+use hgl_analyser::Detail;
+use hgl_analyser::hir::{Callee, ExprKind, Stmt};
+use hgl_diagnostics::Diagnostics;
 
 #[test]
 fn a_generic_inherited_default_is_held_to_the_selected_parameter() {
@@ -92,6 +95,111 @@ const fn second() -> i64 => pick(2)",
         "{}",
         checked.report
     );
+}
+
+#[test]
+fn a_specialized_inherited_default_checks_nested_omitted_defaults() {
+    // GEN-16, UNIT-8: the specializer selects the inner bool candidate,
+    // which must check its selected configuration's inherited default.
+    let checked = module(
+        "operator make<T>{fallback: T = 1}() -> T
+impl const fn make{fallback: i64}() -> i64 => fallback
+impl const fn make{fallback: bool}() -> bool => fallback
+operator pick<T>{fallback: T = make<T>()}(input: T) -> T requires make() -> T
+impl const fn pick{fallback: bool}(input: bool) -> bool => fallback
+impl const fn pick{fallback: i64}(input: i64) -> i64 => fallback
+const fn accepted() -> i64 => pick(5)
+const fn explicit() -> bool => pick{fallback: false}(true)
+const fn first_rejected() -> bool => pick(true)
+const fn second_rejected() -> bool => pick(false)",
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:32 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+}
+
+#[test]
+fn an_inherited_default_reports_an_unanswered_concrete_requirement() {
+    // GEN-16: a required call in an omitted default must be callable
+    // after substitution. An explicit override never evaluates it.
+    let checked = module(
+        "operator make<T>() -> T
+impl const fn make() -> i64 => 28
+operator pick<T>{fallback: T = make<T>()}(input: T) -> T requires make() -> T
+impl const fn pick<T>{fallback: T}(input: T) -> T => fallback
+const fn forward<T>(input: T) -> T requires make() -> T => pick(input)
+const fn accepted() -> i64 => forward(5)
+const fn explicit() -> bool => pick{fallback: false}(true)
+const fn rejected() -> bool => pick(false)",
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:32 constraint/requires.unmet GEN-3"],
+        "{}",
+        checked.report
+    );
+}
+
+#[test]
+fn an_inherited_default_selects_a_candidate_under_membership() {
+    // GEN-7 selects the call whose candidate depends on a member of T.
+    let checked = module(
+        "operator make<T>() -> T
+impl const fn make() -> i64 => 4
+impl const fn make() -> bool => true
+operator pick<T>{fallback: T = make<T>()}(input: T) -> T requires T in {i64, bool}
+impl const fn pick{fallback: bool}(input: bool) -> bool => fallback
+const fn use_default() -> bool => pick(false)",
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    let [
+        Stmt::Return {
+            value: Some(call), ..
+        },
+    ] = body(&checked, "use_default").statements.as_slice()
+    else {
+        panic!("expected the call with an omitted default");
+    };
+    let ExprKind::Call { callee, .. } = &call.kind else {
+        panic!("expected an operator call");
+    };
+    let Callee::Candidate {
+        operator,
+        operator_generics,
+        module,
+        declaration,
+        ..
+    } = callee
+    else {
+        panic!("expected the selected candidate");
+    };
+    let default = checked
+        .program
+        .inherited_configuration_default(callee, 0)
+        .unwrap();
+    let Detail::Callable(signature) = &checked.program.modules[*module].details[*declaration]
+    else {
+        panic!("expected a candidate signature");
+    };
+    let mut diagnostics = Diagnostics::new();
+    let specialized = checked.program.specialize_operator_default(
+        default,
+        *operator,
+        operator_generics,
+        &signature.parameters[0],
+        &mut diagnostics,
+    );
+    assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
+    assert!(matches!(
+        specialized.kind,
+        ExprKind::Call {
+            callee: Callee::Candidate { .. },
+            ..
+        }
+    ));
 }
 
 #[test]

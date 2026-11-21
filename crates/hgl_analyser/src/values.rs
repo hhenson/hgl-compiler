@@ -260,6 +260,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         // type, whatever its declaration is: a function, a candidate,
         // an operator, or the contract of a native one.
         let mut defaults = Vec::with_capacity(module.declarations.len());
+        selecting.borrow_mut().clear();
         for (position, declaration) in module.declarations.iter().enumerate() {
             let read = match module.details.get(position) {
                 Some(Detail::Callable(signature))
@@ -286,6 +287,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 _ => Vec::new(),
             };
             defaults.push(read);
+            let calls = selecting.take();
+            if declaration.kind == DeclarationKind::Operator {
+                // The operator has no body. Its inherited defaults use
+                // this table when specialized in that scope (UNIT-7).
+                selected[position].extend(calls);
+            }
         }
         // What each expression is and which calls are lifted (FN-3,
         // FN-6), written on what was read for the stages after this

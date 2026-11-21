@@ -38,8 +38,8 @@ use hgl_diagnostics::{Diagnostics, Location};
 
 use crate::declared::substitute_within;
 use crate::hir::{
-    AnonymousFunction, Answer, Body, Callee, ConfigurationRead, Expr, ExprKind, ValueCategory,
-    walk_statements, walk_statements_mut,
+    AnonymousFunction, Answer, Body, Callee, ConfigurationRead, Expr, ExprKind, Stmt,
+    ValueCategory, walk_statements, walk_statements_mut,
 };
 use crate::program::{LocalKind, Phase, Program, Role};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
@@ -99,9 +99,8 @@ impl Program {
         parameter: &Parameter,
         diagnostics: &mut Diagnostics,
     ) -> Expr {
-        let mut default = default.clone();
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
-            return default;
+            return default.clone();
         };
         let types: Vec<_> = signature
             .generics
@@ -109,22 +108,28 @@ impl Program {
             .map(|generic| generic.at)
             .zip(generics)
             .collect();
-        let mut required = false;
+        let mut uses = Vec::new();
         default.walk(&mut |value| {
-            required |= matches!(
-                value.kind,
-                ExprKind::Call {
-                    callee: Callee::Required { .. },
-                    ..
-                }
-            );
+            if let ExprKind::Call {
+                callee: Callee::Required { requirement, .. },
+                ..
+            } = &value.kind
+            {
+                uses.push((*requirement, value.at));
+            }
         });
-        let requirements = if required {
-            crate::values::operator_default_answers(self, operator, generics, diagnostics)
-        } else {
-            Vec::new()
-        };
         let reports = RefCell::new(Diagnostics::new());
+        let requirements = if uses.is_empty() {
+            Vec::new()
+        } else {
+            crate::values::operator_default_answers(
+                self,
+                operator,
+                generics,
+                &uses,
+                &mut reports.borrow_mut(),
+            )
+        };
         let instance = InstanceArguments {
             declaration: operator,
             generics,
@@ -132,7 +137,16 @@ impl Program {
             requirements: &requirements,
             diagnostics: &reports,
         };
-        default.walk_mut(&mut |expression| self.place(expression, &instance, &[]));
+        // UNIT-7: a default has no formal parameters in scope. Run the
+        // same membership-based selection here as in a specialized body.
+        let mut body = Body {
+            locals: Vec::new(),
+            statements: vec![Stmt::Expr(default.clone())],
+        };
+        self.place_body(&mut body, &instance, &[]);
+        let Some(Stmt::Expr(default)) = body.statements.pop() else {
+            unreachable!("the default is a single expression");
+        };
         let reports = reports.into_inner();
         for report in reports.as_slice() {
             if !diagnostics.as_slice().contains(report) {

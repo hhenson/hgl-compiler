@@ -792,6 +792,18 @@ impl<'a> Typer<'a> {
         declaration: usize,
         generics: &[Argument],
     ) -> Vec<hir::Answer> {
+        self.answers_for_default(module, declaration, generics, &[])
+    }
+
+    /// Also report a requirement known to fail where an inherited default
+    /// actually uses it. A symbolic application can leave an answer unread.
+    pub(super) fn answers_for_default(
+        &mut self,
+        module: usize,
+        declaration: usize,
+        generics: &[Argument],
+        uses: &[(usize, Location)],
+    ) -> Vec<hir::Answer> {
         let program = self.program;
         let declared_in = &program.modules[module];
         let declared = &declared_in.declarations[declaration];
@@ -801,10 +813,11 @@ impl<'a> Typer<'a> {
         let Some(clause) = child(&declared.syntax, SyntaxKind::RequiresClause) else {
             return Vec::new();
         };
+        let Some(condition) = clause.children().next() else {
+            return Vec::new();
+        };
         let mut calls = Vec::new();
-        if let Some(condition) = clause.children().next() {
-            required_calls(&condition, &mut calls);
-        }
+        required_calls(&condition, &mut calls);
         if calls.is_empty() {
             return Vec::new();
         }
@@ -814,8 +827,12 @@ impl<'a> Typer<'a> {
         let file = declared_in.files[declared.file].file;
         let read =
             self.requirements_read(declared, &signature.generics, (module, generics), &calls);
+        let report_unmet = !uses.is_empty()
+            && generics.len() == signature.generics.len()
+            && generics.iter().all(resolved_default_argument);
         read.into_iter()
-            .map(|read| {
+            .enumerate()
+            .map(|(index, read)| {
                 let Some((operator, operands, result)) = read else {
                     return hir::Answer::Unread;
                 };
@@ -836,6 +853,19 @@ impl<'a> Typer<'a> {
                             generics,
                             requirements,
                         }
+                    }
+                    Some(Answered::Unmet) if report_unmet => {
+                        for &(_, at) in uses.iter().filter(|(used, _)| *used == index) {
+                            if !self.unmet_reported(at) {
+                                self.diagnostics.emit(unmet(
+                                    program,
+                                    (module, declaration),
+                                    at,
+                                    &condition,
+                                ));
+                            }
+                        }
+                        hir::Answer::Unread
                     }
                     Some(Answered::Unmet) | None => hir::Answer::Unread,
                 }
@@ -2591,6 +2621,32 @@ pub(super) struct Condition<'c> {
     /// name, or one not worked out. Such a constant is not taken as
     /// known, so a `requires` not told for it is not taken to hold.
     pub(super) unvalued: &'c std::cell::Cell<bool>,
+}
+
+/// A concrete application names no type or value parameter and uses
+/// only known constant values, including those nested inside its types.
+fn resolved_default_argument(argument: &Argument) -> bool {
+    fn known(value: &ConstantValue) -> bool {
+        match value {
+            ConstantValue::Member(member) => member.of.is_some(),
+            ConstantValue::List(values) | ConstantValue::Tuple(values) => values.iter().all(known),
+            ConstantValue::Parameter { .. }
+            | ConstantValue::Named { .. }
+            | ConstantValue::Constructed { .. }
+            | ConstantValue::Unary(..)
+            | ConstantValue::Binary(..)
+            | ConstantValue::Unevaluated
+            | ConstantValue::Unknown => false,
+            _ => true,
+        }
+    }
+    match argument {
+        Argument::Type(ty) => !ty.any_part(
+            &|part| matches!(part, Type::Parameter { .. } | Type::Unknown),
+            &|constant| !known(&constant.value),
+        ),
+        Argument::Constant(constant) => known(&constant.value),
+    }
 }
 
 /// True where `value` is, or holds, a constant this compiler does not

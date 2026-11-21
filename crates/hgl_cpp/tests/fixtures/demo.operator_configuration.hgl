@@ -113,3 +113,27 @@ test symbol_configuration {
     assert total == 213
     assert order == 3
 }
+
+# GEN-16, UNIT-8: specializing the outer omitted default selects a
+# candidate whose own inherited default supplies its value.
+operator inner_default<T>{value: T = 41}() -> T
+impl const fn inner_default{value: i64}() -> i64 => value
+operator nested_default<T>{value: T = inner_default<T>()}(input: T) -> T
+    requires inner_default() -> T
+impl const fn nested_default{value: i64}(input: i64) -> i64 => value
+
+# GEN-7: the operator's membership authorizes selection when the
+# inherited default's type is made concrete.
+operator inner_member<T>() -> T
+impl const fn inner_member() -> i64 => 42
+impl const fn inner_member() -> bool => true
+operator member_default<T>{value: T = inner_member<T>()}(input: T) -> T
+    requires T in {i64, bool}
+impl const fn member_default{value: i64}(input: i64) -> i64 => value
+impl const fn member_default{value: bool}(input: bool) -> bool => value
+
+test specialized_inherited_defaults {
+    assert nested_default(0) == 41
+    assert member_default(0) == 42
+    assert member_default(false)
+}
