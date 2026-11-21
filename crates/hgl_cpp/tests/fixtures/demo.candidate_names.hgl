@@ -1,0 +1,77 @@
+module demo.candidate_names
+
+# GEN-4, GEN-5: both temporal definitions have a separate C++ identity.
+operator scaled<T>(v: T) -> T
+impl fn scaled(v: i64) -> i64 {
+    when { return v * 2 }
+}
+impl fn scaled(v: f64) -> f64 {
+    when { return v * 3.0 }
+}
+fn ints(x: i64) -> i64 => scaled(x)
+fn reals(x: f64) -> f64 => scaled(x)
+
+test temporal_candidates {
+    assert eval ints(x: [1, 2]) == [2, 4]
+    assert eval reals(x: [1.0]) == [3.0]
+}
+
+# GEN-2, GEN-4: both candidates specialize with the same type argument.
+operator collection_kind<C>(value: C) -> i64
+impl fn collection_kind<T>(value: list<T>) -> i64 {
+    when { return 11 }
+}
+impl fn collection_kind<T>(value: set<T>) -> i64 {
+    when { return 22 }
+}
+fn list_kind(items: list<i64>) -> i64 => collection_kind(items)
+fn set_kind(items: set<i64>) -> i64 => collection_kind(items)
+
+test generic_temporal_candidates {
+    assert eval list_kind(items: [[1], [2, 3]]) == [11, 11]
+    assert eval set_kind(items: [[1], [2, 3]]) == [22, 22]
+}
+
+# GEN-5: the integer literal is the i64 candidate's argument.
+operator scaled_by<T>(value: T, factor: f64) -> T
+impl const fn scaled_by(value: f64, factor: f64) -> f64 => value * factor
+impl const fn scaled_by(value: i64, factor: f64) -> i64 => value
+
+const fn via_literal() -> i64 => scaled_by(2, 3.0)
+
+# The output can distinguish candidates with identical parameter types.
+operator contextual<O>(value: i64) -> O
+impl const fn contextual(value: i64) -> i64 => value + 1
+impl const fn contextual(value: i64) -> f64 => 2.5
+const fn whole_context() -> i64 => contextual(2)
+const fn real_context() -> f64 => contextual(2)
+
+test value_candidates {
+    assert via_literal() == 2
+    assert whole_context() == 3
+    assert real_context() == 2.5
+}
+
+struct Room { size: i64 }
+
+impl const fn add_(room: Room, amount: f64) -> i64 => room.size + 100
+impl const fn add_(room: Room, amount: i64) -> i64 => room.size + amount
+
+impl fn add_(room: Room, const amount: f64) -> i64 {
+    when all_valid(room) { return room.size + 200 }
+}
+impl fn add_(room: Room, const amount: i64) -> i64 {
+    when all_valid(room) { return room.size + amount + 10 }
+}
+
+const fn in_value(room: Room) -> i64 => room + 2
+fn in_graph(room: Room) -> i64 => room + 2
+fn in_hook(room: Room) -> i64 {
+    when all_valid(room) { return room + 2 }
+}
+
+test symbol_candidates {
+    assert in_value(Room(size: 5)) == 7
+    assert eval in_graph(room: [Room(size: 5)]) == [17]
+    assert eval in_hook(room: [Room(size: 5)]) == [7]
+}

@@ -100,7 +100,7 @@ namespace hgl::demo::composites::m_
 namespace c_
 {
 // add_(lhs: Point, rhs: Point) -> Point (candidate `impl const fn`), module demo.composites, line 129
-::hgl::demo::composites::m_::Point add_1_(::hgl::demo::composites::m_::Point lhs, ::hgl::demo::composites::m_::Point rhs);
+::hgl::demo::composites::m_::Point add_1_1Point_1Point_d28_(::hgl::demo::composites::m_::Point lhs, ::hgl::demo::composites::m_::Point rhs);
 }  // namespace c_
 
 // origin() -> Point (`const fn`), module demo.composites, line 131
