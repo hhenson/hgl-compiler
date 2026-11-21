@@ -607,6 +607,22 @@ impl<'a> Typer<'a> {
 }
 
 impl Typer<'_> {
+    /// Whether a cycle read can take ERR-14's nullable form. The
+    /// duration window and `removed_value` still take a result alone
+    /// in the pinned TYPE-11.
+    pub(super) fn nullable_cycle_read(&self, value: &Expr) -> bool {
+        match &value.kind {
+            ExprKind::Endpoint {
+                inputs: Some(inputs),
+                ..
+            } => inputs
+                .first()
+                .is_some_and(|&local| !duration_window(self.locals[local].ty.omission_removed())),
+            ExprKind::ChildEndpoint { child, .. } => !duration_window(child.ty.omission_removed()),
+            _ => false,
+        }
+    }
+
     /// Reports each read of what an endpoint published or lost in the
     /// cycle, among a node's `statements`, whose place does not take a
     /// `result` (ERR-14, TYPE-11). A window of a duration has no delta at

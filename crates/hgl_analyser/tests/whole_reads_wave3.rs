@@ -8,7 +8,8 @@
 
 mod common;
 
-use common::{Checked, check};
+use common::{Checked, body, check};
+use hgl_analyser::hir::{ExprKind, Node, Stmt, walk_statement_nodes};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -94,6 +95,35 @@ fn a_dictionary_an_unsized_list_and_an_atomic_are_read_whole_where_valid() {
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE);
+}
+
+/// TIME-1 and ERR-14: admission of the endpoint's whole does not
+/// check the contents. The read can take the result or nullable form.
+#[test]
+fn admitted_whole_reads_take_the_requested_failure_form() {
+    let checked = module(
+        "fn inspect(book: dict<str, tuple<i64, i64>>, values: list<i64>) {
+    when valid(book) && valid(values) {
+        let checked: result<dict<str, tuple<i64, i64>>, error> = book
+        let nullable: list<i64>? = values
+    }
+}",
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let mut reads = Vec::new();
+    walk_statement_nodes(&body(&checked, "inspect").statements, &mut |node| {
+        if let Node::Statement(Stmt::Declare {
+            value: Some(value), ..
+        }) = node
+        {
+            reads.push(&value.kind);
+        }
+    });
+    assert!(matches!(
+        reads.as_slice(),
+        [ExprKind::CheckedWhole(_), ExprKind::OrNull { result, .. }]
+            if matches!(result.kind, ExprKind::CheckedWhole(_))
+    ));
 }
 
 /// TIME-4: "The guard of a whole read of a struct, a tuple or a fixed

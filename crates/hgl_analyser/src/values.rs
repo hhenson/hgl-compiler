@@ -467,6 +467,12 @@ struct Typer<'a> {
     /// another name, and is held to the same rule, whether or not core
     /// has given the capability a type.
     aliases: HashMap<LocalId, LocalId>,
+    /// Where each inferred `let` holding a child endpoint comes from
+    /// (ERR-14). Known paths still require the same guards at a read.
+    bound_children: HashMap<LocalId, children::ChildOrigin>,
+    /// The inferred initializer where a child is being held, without a
+    /// payload read (ERR-14).
+    binding_child: Option<Location>,
     /// True while a named test's block is read (TST-3): there `assert`
     /// is a statement, and what the test may not hold is reported by the
     /// phase pass and not read.
@@ -650,6 +656,8 @@ impl<'a> Typer<'a> {
             out: None,
             present: Vec::new(),
             aliases: HashMap::new(),
+            bound_children: HashMap::new(),
+            binding_child: None,
             testing: false,
             value_code: false,
             integration: false,
@@ -785,6 +793,7 @@ impl<'a> Typer<'a> {
             // What was noted of a local that is taken back goes with it:
             // its number is given to the next local declared.
             self.aliases.retain(|local, _| *local < mark.locals);
+            self.bound_children.retain(|local, _| *local < mark.locals);
             self.captures.retain(|local, _| *local < mark.locals);
         }
         self.present.truncate(mark.present);

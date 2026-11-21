@@ -34,7 +34,10 @@ impl<'a> Typer<'a> {
         self.expressing += 1;
         let value = self.expression_read(node, expected);
         self.expressing -= 1;
-        value
+        match expected {
+            Some(expected) => self.endpoint_read_form(value, expected),
+            None => value,
+        }
     }
 
     /// [`Typer::expression`], counted.
@@ -354,6 +357,19 @@ impl<'a> Typer<'a> {
             );
             // One report for one `var`.
             self.assigned[local] = true;
+        }
+        if self.bound_children.contains_key(&local)
+            && let Type::Endpoint(payload) = &self.locals[local].ty
+        {
+            return self.child_read(
+                node,
+                Expr {
+                    kind: ExprKind::BoundChild(local),
+                    ty: (**payload).clone(),
+                    at,
+                    category: ValueCategory::Unsettled,
+                },
+            );
         }
         if self.is_temporal_input(local)
             && (self.hook.is_some() || self.initializing || self.caching)
