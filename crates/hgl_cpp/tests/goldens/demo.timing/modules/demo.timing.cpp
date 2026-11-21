@@ -54,6 +54,7 @@
 #undef scheduled_on_input
 #undef scheduler
 #undef second
+#undef start
 #undef the_wake_delivered_is_pending_no_longer
 #undef ticker
 #undef time_before_each_delay

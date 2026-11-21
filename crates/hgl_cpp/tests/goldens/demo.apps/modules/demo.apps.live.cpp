@@ -5,6 +5,7 @@
 // Names this file writes, which no macro of a header above takes.
 #undef apps
 #undef demo
+#undef length
 #undef live
 #undef quiet
 

@@ -23,6 +23,7 @@
 #undef early_total
 #undef error
 #undef held
+#undef length
 #undef lifted_total
 #undef observe_arrival
 #undef observe_checked

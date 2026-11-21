@@ -51,6 +51,7 @@ add_library(hglrt SHARED
     src/application.cpp
     src/capabilities.cpp
     src/checked.cpp
+    src/collections.cpp
     src/conversions.cpp
     src/failure.cpp
     src/host.cpp
@@ -125,6 +126,7 @@ if(BUILD_TESTING)
         tests/capabilities_tests.cpp
         tests/capture_tests.cpp
         tests/checked_tests.cpp
+        tests/collections_tests.cpp
         tests/control_tests.cpp
         tests/conversion_tests.cpp
         tests/endpoint_tests.cpp

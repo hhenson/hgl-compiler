@@ -30,6 +30,7 @@
 #undef sample_picked
 #undef sampled
 #undef sel
+#undef start
 #undef take
 #undef target
 #undef wakes

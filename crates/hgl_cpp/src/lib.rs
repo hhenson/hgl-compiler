@@ -23,16 +23,17 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, in the namespace `hgl::demo::calc::m_` |
+//! | Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, in the namespace `hgl::demo::calc::m_`, and `modules/demo.calc.types.h` of the types it declares |
 //! | Its named tests | Functions in `hgl::demo::calc::m_::t_`, and `tests/demo.calc.cpp`, an entry unit that registers each with the runtime library's test host and runs those its command line names |
 //! | Application `demo.app` (UNIT-14) | Its module's unit, with its run statement as the function `hgl::demo::app::m_::application_`, and `applications/demo.app.cpp`, an entry unit whose `main` is the runtime library's host of that run |
 //! | `const fn total(a: i64, b: i64) -> i64` | A function `::hgraph::Int total(::hgraph::Int a, ::hgraph::Int b)`; a generic one, a function for each instance |
 //! | The scalars, enums, `T?`, tuples, lists, results | hgraph's scalars, `enum class`, `std::optional`, `std::tuple`, `hglrt::list`, `hglrt::result` |
+//! | Structs, sets, dictionaries, deltas | Aggregates with HGL's equality, `hglrt::set`, `hglrt::dict`, the deltas of `hglrt` and of each struct |
 //! | A native candidate of core, `a + b` of two `i64` | The library's function named as the hgraph target names it: `::hglrt::add__i64_i64(a, b)` |
 //! | `assert condition`, `assert raises("code") { ... }` | `::hglrt::testing::check(condition)`, `::hglrt::testing::raises("code", ...)`, after `::hglrt::testing::statement()` |
 //!
-//! Every other form is reported as not written yet: a struct, a set, a
-//! dictionary, and anything temporal among them. `docs/architecture.md`
+//! Every other form is reported as not written yet: anything temporal
+//! among them. `docs/architecture.md`
 //! says what is covered and how the target's progress is counted.
 
 mod assemble;
@@ -194,6 +195,12 @@ pub struct Application {
 /// and dots, so it is a file name as it is.
 pub fn header_path(module: &str) -> String {
     format!("modules/{module}.h")
+}
+
+/// The types header of module `module`, which holds the enums and the
+/// structs it declares: `modules/demo.calc.types.h`.
+pub fn types_header_path(module: &str) -> String {
+    format!("modules/{module}.types.h")
 }
 
 /// The translation unit of module `module`: `modules/demo.calc.cpp`.

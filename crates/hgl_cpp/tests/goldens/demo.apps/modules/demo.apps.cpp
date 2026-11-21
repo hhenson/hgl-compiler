@@ -18,6 +18,7 @@
 #undef reset
 #undef seeded
 #undef seen
+#undef start
 #undef the_store_is_set_where_the_graph_is_built
 #undef ticks
 #undef value

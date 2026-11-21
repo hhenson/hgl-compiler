@@ -52,7 +52,9 @@ one executable for each test module or application
 | Scalars | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `ZonedDateTime` and `Tenor`. Tenor literals keep their calendar or business-day form |
 | Struct | A generated struct with HGL's equality. As a temporal value, a nominal bundle whose whole value is the struct |
 | Enum, tuple, optional, list, fixed list, result | `enum class`, `std::tuple`, `std::optional`, `std::vector`, `std::array`, `std::expected` |
-| Set, dictionary, abstract struct, `delta<T>` | To be designed with the collections work: the containers must give the order and equality the specification states, and a delta converts to and from hgraph's own delta value |
+| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key is told apart by `==` of its type |
+| Abstract struct | A class that holds any struct that inherits from it, read through a function of each field's name |
+| `delta<T>` | As a value: an optional, `hglrt::list_delta`, `set_delta`, `dict_delta`, a struct's own delta struct, a tuple. Converting to and from hgraph's delta value is the temporal work's |
 | Node | A struct with `eval`, `start` and `stop`, in its module's unit, and a wiring function, in its header, that wires it: other units call the wiring function and instantiate none of hgraph's templates of the node. A handler header is the input's declared activity and validity; handlers are tested in source order. State and cache are one generated struct for each node |
 | Graph | A struct with static `compose` over `Wiring&` and typed ports, calling the wiring functions of what it wires, and a wiring function as a node has. Identical value nodes are interned by hgraph, but where a node's configuration holds an `f64` ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866): `0.0 == -0.0`) |
 | `if`, `switch`, `for` over connections | hgraph's `switch_` and `map_` wiring of compiled children (`types/subgraph_wiring.h`), each child a compiled sub-graph with its captures |
@@ -166,7 +168,5 @@ step with rules that change, and is no reference for them.
 
 ## Not decided here
 
-- Containers for a set and a dictionary, an abstract struct's value, and a
-  delta's C++ form: with step 2's collections lane.
 - Whether instances that two modules both need can be built once across
   programs: after step 1, from measured build times.

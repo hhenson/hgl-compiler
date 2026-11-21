@@ -10,6 +10,10 @@
     "conformance::an_atomic_quote_wakes_its_bid_projection",
     "conformance::changing_a_sibling_field_does_not_publish_a_bid",
 ]
+"a run's configuration that is no `RunConfig(...)`" = [
+    "conformance::absolute_targets_before_at_and_after_start",
+    "conformance::skipped_targets_still_establish_source_order",
+]
 "a temporal value of `MarketQuote`" = [
     "conformance::a_struct_is_all_valid_once_every_field_is",
     "conformance::a_struct_is_valid_once_one_field_is",
@@ -69,6 +73,10 @@
     "conformance::an_empty_set_delta_ticks_only_where_it_makes_the_set_valid",
     "conformance::mixed_replay",
     "conformance::removing_only_an_absent_member_is_no_tick",
+    "core_implementation::record_can_be_empty",
+]
+"a trace of `MarketQuote`" = [
+    "conformance::a_struct_delta_keeps_the_final_write_to_each_field",
 ]
 "a trace of `datetime?`" = [
     "conformance::last_modified_follows_the_last_publication",
@@ -99,29 +107,12 @@
 "a trace of `list<str, 2>`" = [
     "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
 ]
+"a trace of `set<i64>`" = [
+    "conformance::set_writes_coalesce",
+    "core_implementation::record_retains_each_delta",
+]
 "a trace of `tuple<i64, str>`" = [
     "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",
-]
-"the type `Closed`" = [
-    "core_implementation::a_calendar_says_what_a_business_day_is",
-    "core_implementation::a_rule_rolls_to_a_business_day",
-]
-"the type `MarketQuote`" = [
-    "conformance::a_struct_delta_keeps_the_final_write_to_each_field",
-]
-"the type `RunConfig`" = [
-    "conformance::absolute_targets_before_at_and_after_start",
-    "conformance::skipped_targets_still_establish_source_order",
-]
-"the type `Weekdays`" = [
-    "core_implementation::business_days_start_from_a_business_day",
-    "core_implementation::months_end_at_the_months_last_day",
-    "core_implementation::only_the_result_of_a_move_is_held_to_the_range",
-]
-"the type `set<i64>`" = [
-    "conformance::set_writes_coalesce",
-    "core_implementation::record_can_be_empty",
-    "core_implementation::record_retains_each_delta",
 ]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph

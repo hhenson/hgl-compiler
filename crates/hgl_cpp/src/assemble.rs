@@ -1,8 +1,9 @@
 //! Puts the pieces `emit` wrote into the target's files: for each
-//! module a header of its declarations and a unit of its definitions
-//! and tests, for each module with a test that can be run an entry
-//! unit, and for each application that can be run one too (UNIT-14).
-//! Part of the transpiler, the last stage.
+//! module a header of its declarations, a types header of the types it
+//! declares where it declares one, and a unit of its definitions and
+//! tests, for each module with a test that can be run an entry unit, and
+//! for each application that can be run one too (UNIT-14). Part of the
+//! transpiler, the last stage.
 //!
 //! C++ is compiled a unit at a time and whole, so a piece is written
 //! only where it is *clear*: neither it nor any piece it names, through
@@ -17,12 +18,10 @@ use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Location};
 use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
-use crate::emit::{
-    APPLICATION, Piece, Written, identifier, module_namespace, program_names, test_namespace,
-};
+use crate::emit::{APPLICATION, Piece, Written, module_namespace, program_names, test_namespace};
 use crate::{
     Application, Executable, File, Output, Test, Unit, application_path, entry_path, header_path,
-    runtime, unit_path,
+    runtime, types_header_path, unit_path,
 };
 
 /// The first line of every file the target writes.
@@ -115,7 +114,10 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                     .zip(&blocks[index].instances),
             )
             .filter(|(piece, blocked)| {
-                blocked.is_none() && !(piece.text.is_empty() && piece.declaration.is_empty())
+                blocked.is_none()
+                    && !(piece.text.is_empty()
+                        && piece.declaration.is_empty()
+                        && piece.layout.is_none())
             })
             .map(|(piece, _)| piece)
             .collect();
@@ -151,27 +153,37 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             })
             .filter(|&used| used != index)
             .collect();
-        // The enums of other modules its declarations name: its header
-        // declares each opaque (TYPE-7: an `enum class`, whose values are
-        // `int`'s), and includes no other module's header. An instance is
-        // written in its declaration's module (GEN-2), and may name an
-        // enum of a module that imports that one, so two headers could
-        // otherwise include each other.
-        let typed: BTreeSet<(usize, usize)> = defined
+        // The module's types are in a header of their own, which its
+        // header includes; its other declarations are in its header.
+        let (typed, functions): (Vec<&Piece>, Vec<&Piece>) =
+            defined.iter().copied().partition(|piece| piece.is_type);
+        // The modules whose enums and structs its declarations name: its
+        // header includes their types headers, and no other module's
+        // header. An instance is written in its declaration's module
+        // (GEN-2), and may name a type of a module that imports that one;
+        // a types header includes only the types headers of the modules
+        // its own types name, which its module imports (UNIT-3: "Import
+        // cycles are rejected"), so no two headers include each other.
+        let named: BTreeSet<usize> = functions
             .iter()
-            .flat_map(|piece| &piece.types)
-            .copied()
+            .flat_map(|piece| piece.types.iter().map(|(module, _)| *module))
+            .filter(|&module| module != index)
             .collect();
         let mut header = format!(
             "{WRITTEN}\n#pragma once\n\n#include <{}>\n",
             runtime::HEADER
         );
-        for &(module, declaration) in &typed {
-            let namespace = module_namespace(&program.modules[module].path);
+        if !typed.is_empty() {
+            header.push_str(&format!("#include \"{path}.types.h\"\n"));
+            files.push(File {
+                path: types_header_path(path),
+                text: types_header(program, index, &typed),
+            });
+        }
+        for &module in &named {
             header.push_str(&format!(
-                "\nnamespace {}\n{{\nenum class {};\n}}\n",
-                namespace.trim_start_matches("::"),
-                identifier(&program.modules[module].declarations[declaration].name)
+                "#include \"{}.types.h\"\n",
+                program.modules[module].path
             ));
         }
         let mut unit = format!("{WRITTEN}\n#include \"{path}.h\"\n");
@@ -182,7 +194,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         if !defined.is_empty() {
             let namespace = module_namespace(path);
             let declared = namespace.trim_start_matches("::");
-            header.push_str(&declarations(declared, &defined));
+            header.push_str(&declarations(declared, &functions));
             unit.push_str(&format!("\nnamespace {declared}\n{{\n"));
             for piece in &defined {
                 if !piece.text.is_empty() {
@@ -379,6 +391,124 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         applications,
     };
     (output, blocking)
+}
+
+/// The types header of module `index`, of the pieces `typed` that
+/// declare its types (`emit::Layout`): the types headers of the modules
+/// whose types they name; the enums, which a struct's generic parameter
+/// may be of, and each struct declared; what each struct inherits from;
+/// the structs, each after those it holds, as C++ needs a struct defined
+/// before a struct that holds it, though a type may name one declared
+/// after it (UNIT-6); and what each struct tells the runtime library.
+fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
+    let path = &program.modules[index].path;
+    let namespace = module_namespace(path);
+    let declared = namespace.trim_start_matches("::");
+    let mut text = format!(
+        "{WRITTEN}\n#pragma once\n\n#include <{}>\n",
+        runtime::HEADER
+    );
+    let named: BTreeSet<usize> = typed
+        .iter()
+        .flat_map(|piece| piece.types.iter().map(|(module, _)| *module))
+        .filter(|&module| module != index)
+        .collect();
+    for &module in &named {
+        text.push_str(&format!(
+            "#include \"{}.types.h\"\n",
+            program.modules[module].path
+        ));
+    }
+    // The structs, each after those it holds; the order declared
+    // otherwise. What a struct holds holds none of it (TYPE-6: a struct
+    // that holds itself is not written), so the order is found.
+    let structs: Vec<&crate::emit::Layout> = typed
+        .iter()
+        .filter_map(|piece| piece.layout.as_deref())
+        .collect();
+    let mut ordered: Vec<&crate::emit::Layout> = Vec::new();
+    // `visiting` holds the structs whose dependencies are being placed: one
+    // met again there is not followed, so that no order is looked for
+    // without end.
+    fn visit<'l>(
+        layout: &'l crate::emit::Layout,
+        structs: &[&'l crate::emit::Layout],
+        ordered: &mut Vec<&'l crate::emit::Layout>,
+        visiting: &mut Vec<usize>,
+    ) {
+        if visiting.contains(&layout.declaration)
+            || ordered
+                .iter()
+                .any(|done| done.declaration == layout.declaration)
+        {
+            return;
+        }
+        visiting.push(layout.declaration);
+        for held in &layout.holds {
+            if let Some(first) = structs.iter().find(|other| other.declaration == *held) {
+                visit(first, structs, ordered, visiting);
+            }
+        }
+        visiting.pop();
+        if !ordered
+            .iter()
+            .any(|done| done.declaration == layout.declaration)
+        {
+            ordered.push(layout);
+        }
+    }
+    for layout in &structs {
+        visit(layout, &structs, &mut ordered, &mut Vec::new());
+    }
+    let within =
+        |body: String| format!("\nnamespace {declared}\n{{\n{body}\n}}  // namespace {declared}\n");
+    // The enums first: a struct's generic parameter may be of one, which
+    // its forward declaration names.
+    let enums: Vec<String> = typed
+        .iter()
+        .filter(|piece| piece.layout.is_none() && !piece.declaration.is_empty())
+        .map(|piece| piece.declaration.clone())
+        .collect();
+    let mut first = format!("\n{}", enums.join("\n"));
+    if !ordered.is_empty() {
+        let forward: String = ordered
+            .iter()
+            .map(|layout| layout.forward.as_str())
+            .collect();
+        let deltas: String = ordered
+            .iter()
+            .map(|layout| layout.delta_forward.as_str())
+            .collect();
+        if !enums.is_empty() {
+            first.push('\n');
+        }
+        first.push_str(&format!(
+            "{forward}namespace d_\n{{\n{deltas}}}  // namespace d_"
+        ));
+    }
+    text.push_str(&within(first));
+    if !ordered.is_empty() {
+        let parents: String = ordered
+            .iter()
+            .map(|layout| layout.parents.as_str())
+            .collect();
+        if !parents.is_empty() {
+            text.push('\n');
+            text.push_str(&parents);
+        }
+        let definitions: Vec<String> = ordered
+            .iter()
+            .map(|layout| layout.definition.clone())
+            .collect();
+        text.push_str(&within(format!("\n{}", definitions.join("\n"))));
+    }
+    if !ordered.is_empty() {
+        text.push('\n');
+        for layout in &ordered {
+            text.push_str(&layout.traits);
+        }
+    }
+    text
 }
 
 /// `text` with an `#undef` of each of `names` it writes, after its last

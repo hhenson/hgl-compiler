@@ -161,6 +161,11 @@ impl Emitter<'_> {
         if distinct.len() != given_places.len() {
             return self.missing(at, "a call that gives one place to two `var` parameters");
         }
+        // An argument that runs statements of its own may change what an
+        // argument before it reads: then every argument is evaluated in
+        // turn, and each that is no place is held as a value of its own,
+        // what it read then.
+        let changing = arguments.iter().any(|argument| changes(&argument.value));
         // Each parameter's argument: the one written for it, or what
         // `hgl_lower` says one left out is given (UNIT-8), a default read
         // with nothing in scope (UNIT-7). Each is the parameter's
@@ -187,6 +192,19 @@ impl Emitter<'_> {
                         argument.value.at,
                         "an element of a `list<bool>` given to a `var` parameter",
                     );
+                }
+                // A place held before an argument that runs statements
+                // could be one that argument replaces or grows, a list's
+                // element gone: its indices are held in turn, and the
+                // place is taken where the call is made
+                // (`composites::held_place`).
+                if changing {
+                    let Some((steps, place)) = self.held_place(scope, &argument.value) else {
+                        return self
+                            .missing(argument.value.at, "this place given to a `var` parameter");
+                    };
+                    written.push((index, place, may_fail(&argument.value), Held::Steps(steps)));
+                    continue;
                 }
                 let Some(place) = self.place(scope, &argument.value) else {
                     return self
@@ -278,19 +296,6 @@ impl Emitter<'_> {
         // order, before the call; a lambda called where the call is
         // gives them a block to be in.
         let mut given: Vec<String> = vec![String::new(); signature.parameters.len()];
-        // An argument that runs statements of its own may change what an
-        // argument before it reads: then every argument is evaluated in
-        // turn, and each that is no place is held as a value of its own,
-        // what it read then.
-        let changing = arguments.iter().any(|argument| changes(&argument.value));
-        // A place held before such an argument could be one it replaces
-        // or grows: a list's element would be gone.
-        if changing && assigns {
-            return self.missing(
-                at,
-                "a call that gives a `var` parameter a place, beside an argument that runs statements",
-            );
-        }
         let ordered: Vec<(usize, String, bool, Held)> =
             written.into_iter().chain(defaulted).collect();
         if !changing && ordered.iter().filter(|(_, _, fails, _)| *fails).count() <= 1 {
@@ -308,12 +313,19 @@ impl Emitter<'_> {
         // its bit, which a later argument could change.
         let mut steps = String::new();
         for (index, value, _, held) in ordered {
-            let name = names::temporary("argument", self.temporary());
             let declared = match held {
+                Held::Steps(held) => {
+                    // The place's indices, held in turn; the place itself
+                    // at the call.
+                    steps.push_str(&held);
+                    given[index] = value;
+                    continue;
+                }
                 Held::Place => "auto&".to_string(),
                 Held::Reference(ty) if !changing => format!("const {ty}&"),
                 Held::Reference(ty) | Held::Value(ty) => format!("const {ty}"),
             };
+            let name = names::temporary("argument", self.temporary());
             steps.push_str(&format!("{declared} {name} = {value}; "));
             given[index] = name;
         }
@@ -432,6 +444,10 @@ impl Emitter<'_> {
 enum Held {
     /// A place given to a `var` parameter: a reference to it.
     Place,
+    /// A place given to a `var` parameter beside an argument that runs
+    /// statements: the steps that hold its indices, in order, and the
+    /// place taken where the call is made.
+    Steps(String),
     /// What a local, a constant or a part of one holds, which outlives
     /// the call: a `const` reference to it.
     Reference(String),
@@ -516,13 +532,17 @@ pub(super) fn changes(value: &Expr) -> bool {
 }
 
 /// True where evaluating `value` may fail or do anything at all: any
-/// expression but a literal, a local, an enum's member, and a tuple or a
-/// list made of those.
+/// expression but a literal, a local, an enum's member, a field of one of
+/// those, and a tuple, a list, a set or a dictionary made of those.
 pub(super) fn may_fail(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Literal(_) | ExprKind::Local(_) | ExprKind::EnumMember { .. } => false,
         ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => entries.iter().any(may_fail),
-        ExprKind::Widen(inner) => may_fail(inner),
+        ExprKind::Pairs(entries) => entries
+            .iter()
+            .any(|(key, value)| may_fail(key) || may_fail(value)),
+        // A field of a struct or a property of a delta is read as it is.
+        ExprKind::Widen(inner) | ExprKind::Field { base: inner, .. } => may_fail(inner),
         _ => true,
     }
 }

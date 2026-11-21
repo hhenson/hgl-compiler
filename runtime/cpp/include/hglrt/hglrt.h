@@ -5,7 +5,8 @@
 // core's native declarations written in C++ (scalar.h, temporal.h, text.h,
 // conversions.h, tenors.h, lists.h, endpoints.h, capabilities.h), HGL's failures
 // (failure.h), a capture and the temporal values of errors and results
-// (capture.h), the reads checked when they run (checked.h), constants and
+// (capture.h), sets, dictionaries and what a struct tells the library
+// (collections.h), the reads checked when they run (checked.h), constants and
 // sources (sources.h) with the coroutine type of a source's body
 // (generator.h), what tells a node's wakes apart and what a source's body is
 // lent (timing.h), windows (windows.h), what a `ref` parameter designates
@@ -20,6 +21,7 @@
 #include <hglrt/capabilities.h>
 #include <hglrt/capture.h>
 #include <hglrt/checked.h>
+#include <hglrt/collections.h>
 #include <hglrt/control.h>
 #include <hglrt/conversions.h>
 #include <hglrt/endpoints.h>
