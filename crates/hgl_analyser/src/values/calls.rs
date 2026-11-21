@@ -11,7 +11,9 @@ use hgl_source::{FileId, Span};
 use super::Typer;
 use super::arguments::{Slot, Takes};
 use super::fit::{not_null, open};
-use super::inference::{Inferred, Places, infer_from_place, mentions, placed};
+use super::inference::{
+    ExplicitGenerics, Inferred, Places, infer_from_place, mentions, pack_bounds, placed, type_pack,
+};
 use super::node::RefRead;
 use super::sizes;
 use crate::declared::{names_parameter, substitute_within};
@@ -19,7 +21,7 @@ use crate::hir::{self, Callee, EndpointOperation, ExprKind, Form, Hook};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{
-    Argument, CallArguments, ConstantValue, Detail, GenericKind, NamedKind, Scalar, Type,
+    Argument, CallArguments, ConstantValue, Detail, GenericKind, NamedKind, Parameter, Scalar, Type,
 };
 use crate::{codes, error};
 
@@ -392,6 +394,7 @@ impl<'a> Typer<'a> {
             .into_iter()
             .map(|(_, value)| hir::Argument {
                 parameter: None,
+                pack: None,
                 value: self.expression(&value, Some(&Type::Unknown)),
             })
             .collect();
@@ -586,21 +589,10 @@ impl<'a> Typer<'a> {
                 Some(Role::Value)
             );
         let generics = &signature.generics;
-        let packed = generics
+        let first_pack = generics
             .iter()
-            .any(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
-            || signature
-                .parameters
-                .iter()
-                .any(|parameter| parameter.pack.is_some());
-        // What the call writes of the generic parameters. Arguments
-        // that were rejected say nothing: the call is then read as one
-        // whose generic parameters are not known (ERR-9).
-        let explicit = if packed {
-            None
-        } else {
-            self.generic_arguments(name, generics, given)
-        };
+            .position(|generic| matches!(generic.kind, GenericKind::Pack { .. }));
+        let explicit = self.explicit_generics(name, signature, given);
         let required = |parameter: &crate::types::Parameter| {
             // UNIT-8: "A parameter whose type is written `T?` needs no
             // default to be omitted."
@@ -608,7 +600,14 @@ impl<'a> Typer<'a> {
             // given, whatever its type" (FN-15).
             parameter.var || !parameter.has_default && !matches!(parameter.ty, Type::Nullable(_))
         };
-        let Some((mut found, faulty)) = explicit.filter(|_| !generics.is_empty()) else {
+        let read_pack_bounds =
+            |parameter: &Parameter, written| pack_bounds(parameter, generics, written);
+        let Some(ExplicitGenerics {
+            fixed: mut found,
+            faulty,
+            pack: written_pack,
+        }) = explicit.filter(|_| !generics.is_empty())
+        else {
             // No generic parameter, or none this pass resolves: a type
             // that names one is not known.
             let known = |ty: &Type| {
@@ -626,6 +625,8 @@ impl<'a> Typer<'a> {
                     ty: taken(parameter, known(&parameter.ty)),
                     required: required(parameter),
                     pack: parameter.pack,
+                    pack_bounds: read_pack_bounds(parameter, None),
+                    type_pack: type_pack(parameter, generics),
                     listed,
                 })
                 .collect();
@@ -650,6 +651,7 @@ impl<'a> Typer<'a> {
                 module,
                 declaration,
                 generics: Vec::new(),
+                type_packs: Vec::new(),
                 requirements,
             };
             let kind = ExprKind::Call {
@@ -693,6 +695,8 @@ impl<'a> Typer<'a> {
                 ty: Type::Unknown,
                 required: required(parameter),
                 pack: parameter.pack,
+                pack_bounds: read_pack_bounds(parameter, written_pack.as_ref()),
+                type_pack: type_pack(parameter, generics),
                 listed,
             })
             .collect();
@@ -708,6 +712,9 @@ impl<'a> Typer<'a> {
             settled: !expected.is_some_and(open),
             aside: &value_names,
             values: &named,
+            written_pack: written_pack
+                .as_ref()
+                .map(|pack| (pack.parameter, pack.types.as_slice())),
             result_fallback,
             defaults: generics
                 .iter()
@@ -720,6 +727,32 @@ impl<'a> Typer<'a> {
             unknown,
             defaulted,
         } = self.infer_arguments(name, list, &places, found, Takes::Parameters);
+        let mut inferred_packs = vec![None; generics.len()];
+        // FN-8 and GEN-10: collect the individual types in capture order.
+        for (slot, parameter) in slots.iter().enumerate() {
+            if let Some(index) = parameter.type_pack {
+                inferred_packs[index].get_or_insert_with(|| {
+                    arguments
+                        .iter()
+                        .filter(|argument| argument.parameter == Some(slot))
+                        .enumerate()
+                        .map(|(position, argument)| {
+                            written_pack
+                                .as_ref()
+                                .filter(|pack| pack.parameter == index)
+                                .and_then(|pack| pack.types.get(position))
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    self.inferred_from(listed, &argument.value, Takes::Parameters)
+                                })
+                        })
+                        .collect::<Vec<_>>()
+                });
+            }
+        }
+        if let Some(pack) = &written_pack {
+            inferred_packs[pack.parameter].get_or_insert_with(|| pack.types.clone());
+        }
         self.generic_values(name, callee, generics, (&named, &defaulted), &mut found);
 
         // GEN-8: "A call rejects when it leaves a generic parameter
@@ -737,15 +770,17 @@ impl<'a> Typer<'a> {
         let unresolved: Vec<&str> = generics
             .iter()
             .zip(&found)
-            .filter(|(_, found)| found.is_none())
-            .filter(|(generic, _)| {
+            .zip(&inferred_packs)
+            .filter(|((_, found), pack)| found.is_none() && pack.is_none())
+            .map(|((generic, _), _)| generic)
+            .filter(|generic| {
                 !place_unknown
                     || !signature
                         .result
                         .as_ref()
                         .is_some_and(|result| mentions(result, &[generic.at]))
             })
-            .map(|(generic, _)| generic.name.as_str())
+            .map(|generic| generic.name.as_str())
             .collect();
         let judged = !faulty && self.diagnostics.len() == reported && !unknown;
         if judged && !unresolved.is_empty() {
@@ -847,14 +882,30 @@ impl<'a> Typer<'a> {
         );
         // GEN-3: the callee's `requires` holds with what was resolved.
         // Not where something else was reported of the call (ERR-9).
-        if judged && unresolved.is_empty() {
+        if first_pack.is_none() && judged && unresolved.is_empty() {
             self.requires_met(at, (module, declaration), &resolved);
         }
-        let requirements = self.answers(module, declaration, &resolved);
+        // Pack reflection in requirements needs the separate sequence
+        // of types recorded on this call (GEN-10).
+        let requirements = if first_pack.is_none() {
+            self.answers(module, declaration, &resolved)
+        } else {
+            Vec::new()
+        };
         let callee = Callee::Function {
             module,
             declaration,
             generics: resolved,
+            type_packs: inferred_packs
+                .into_iter()
+                .enumerate()
+                .filter_map(|(parameter, types)| {
+                    Some(hir::TypePackArgument {
+                        parameter,
+                        types: types?,
+                    })
+                })
+                .collect(),
             requirements,
         };
         let kind = ExprKind::Call {

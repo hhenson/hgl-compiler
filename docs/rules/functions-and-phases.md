@@ -77,9 +77,11 @@ parser: done
 
 - Pack parameter forms
 
-analyser: done
+analyser: partial
 
 - Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration
+- Function and operator calls bind leftover positional and named arguments to their corresponding packs and check the known element type. The HIR keeps each argument's pack slot and position or source name.
+- Duplicate pack declarations await the pinned `pack.duplicate` diagnostic. [Compiler issue #336](https://github.com/hhenson/hgl-compiler/issues/336)
 
 ## FN-9
 

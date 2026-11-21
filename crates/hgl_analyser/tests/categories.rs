@@ -48,6 +48,7 @@ fn instance_called_by(checked: &Checked, caller: &str) -> Body {
                     declaration,
                     generics,
                     requirements,
+                    ..
                 },
             ..
         } = &expression.kind

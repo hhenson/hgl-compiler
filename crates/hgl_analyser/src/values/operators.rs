@@ -9,13 +9,17 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::candidates::{Chosen, Given, Key, Settled, Wanted, typed_by_place};
 use super::constants::generic_default;
 use super::fit::open;
-use super::inference::{bare_parameter, fixed, infer, infer_from_place, placed, unsaid};
+use super::inference::{
+    ExplicitGenerics, bare_parameter, fixed, infer, infer_from_place, pack_bounds, placed, unsaid,
+};
 use super::{Candidate, Typer};
 use crate::declared::{agree, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{OperatorRef, Role};
 use crate::syntax::has_token;
-use crate::types::{Argument, CallArguments, Detail, GenericKind, NamedKind, Signature, Type};
+use crate::types::{
+    Argument, CallArguments, Detail, GenericKind, NamedKind, Pack, Signature, Type,
+};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -166,8 +170,6 @@ impl<'a> Typer<'a> {
     /// that place. A candidate that fits with no integer literal
     /// widened is taken before one that needs it.
     ///
-    /// What is not read here: a call of an operator that has a pack, or
-    /// a candidate with one. Such a call has no type.
     pub(super) fn call_operator(
         &mut self,
         name: &SyntaxToken,
@@ -190,16 +192,17 @@ impl<'a> Typer<'a> {
         // is left to resolve: `convert<f64>(count)` asks for an `f64`.
         // What they say of the operands is for the pass that resolves
         // generic candidates.
-        let written: Vec<Option<Argument>> = match generics {
-            None => vec![None; public.generics.len()],
-            Some(_) => {
-                let Some((explicit, _)) = self.generic_arguments(name, &public.generics, generics)
-                else {
-                    return self.unread_call(list);
-                };
-                explicit
-            }
+        let Some(ExplicitGenerics {
+            fixed: written,
+            faulty,
+            pack,
+        }) = self.explicit_generics(name, public, generics)
+        else {
+            return self.unread_call(list);
         };
+        if faulty {
+            return self.unread_call(list);
+        }
         // GEN-8: "A generic value parameter the call does not give takes
         // its default, when it has one. An operator's takes part in the
         // output requested, in GEN-2's order: what the call writes, then
@@ -222,12 +225,36 @@ impl<'a> Typer<'a> {
         // against each candidate's own signature").
         let (selecting, options) = options_of(public, &candidates);
         let reported = self.diagnostics.len();
-        let written = self.operator_arguments(name, list, public, &options);
+        let written = self.operator_arguments(name, list, public, &options, pack.as_ref());
+        let fixed_count = public
+            .parameters
+            .iter()
+            .filter(|parameter| parameter.pack.is_none())
+            .count();
         // Each argument, read with nothing expected of it: what it
         // reports itself is reported here, once.
         let mut given: Vec<Given> = written
             .into_iter()
-            .map(|(key, node)| self.give(key, node))
+            .map(|(key, node)| {
+                if let Key::Position(position) = &key
+                    && let Some(ty) = position
+                        .checked_sub(fixed_count)
+                        .and_then(|index| pack.as_ref()?.types.get(index))
+                {
+                    let value = self.expression(&node, Some(ty));
+                    let value = self.fit_input(value, ty, "the explicitly typed pack argument");
+                    Given {
+                        key,
+                        node,
+                        value,
+                        by_place: false,
+                        explicit: Some(ty.clone()),
+                        retried: false,
+                    }
+                } else {
+                    self.give(key, node)
+                }
+            })
             .collect();
         self.constants_given(&mut given, &selecting);
         // An argument given to no parameter, or rejected itself, has
@@ -236,7 +263,7 @@ impl<'a> Typer<'a> {
         let faulty = self.diagnostics.len() != reported;
         let unknown = given
             .iter()
-            .any(|given| !given.by_place && open(&given.value.ty));
+            .any(|given| !given.by_place && open(given.ty()));
         if faulty || unknown {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
@@ -271,7 +298,7 @@ impl<'a> Typer<'a> {
                         Key::Position(position) => *position == index,
                         Key::Name(name) => *name == parameter.name,
                     })
-                    .map(|given| &given.value.ty)
+                    .map(Given::ty)
             })
             .collect();
         let Requested {
@@ -413,7 +440,7 @@ impl<'a> Typer<'a> {
                 let value = if given.by_place {
                     given.node.text().to_string().trim().to_string()
                 } else {
-                    given.value.ty.to_string()
+                    given.ty().to_string()
                 };
                 match &given.key {
                     // An option is known by its name.
@@ -634,6 +661,7 @@ impl<'a> Typer<'a> {
             key,
             by_place,
             value,
+            explicit: None,
             retried,
             node,
         }
@@ -655,11 +683,23 @@ impl<'a> Typer<'a> {
         list: &SyntaxNode,
         public: &Signature,
         options: &std::collections::HashSet<&str>,
+        written_pack: Option<&hir::TypePackArgument>,
     ) -> Vec<(Key, SyntaxNode)> {
         let mut named_seen = false;
         let mut position = 0;
         let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut arguments = Vec::new();
+        let fixed = public
+            .parameters
+            .iter()
+            .filter(|parameter| parameter.pack.is_none())
+            .count();
+        let has_named_pack = public
+            .parameters
+            .iter()
+            .any(|parameter| parameter.pack == Some(Pack::Named));
+        let mut positional = Vec::new();
+        let mut named = Vec::new();
         for (name, value) in self.call_arguments(list) {
             let key = match name {
                 None => {
@@ -674,6 +714,9 @@ impl<'a> Typer<'a> {
                             "EXPR-2",
                         ));
                     }
+                    if position >= fixed {
+                        positional.push(self.at(&value));
+                    }
                     position += 1;
                     Key::Position(position - 1)
                 }
@@ -686,8 +729,9 @@ impl<'a> Typer<'a> {
                     let own = public
                         .parameters
                         .iter()
-                        .position(|parameter| parameter.name == text);
-                    if own.is_none() && !options.contains(text) {
+                        .position(|parameter| parameter.pack.is_none() && parameter.name == text);
+                    let captured = own.is_none() && !options.contains(text);
+                    if captured && !has_named_pack {
                         self.diagnostics.emit(error(
                             Category::Name,
                             codes::ARGUMENT_UNKNOWN,
@@ -705,11 +749,22 @@ impl<'a> Typer<'a> {
                             format!("`{text}` is given twice"),
                             "EXPR-2",
                         ));
+                    } else if captured {
+                        named.push(at);
                     }
                     Key::Name(text.to_string())
                 }
             };
             arguments.push((key, value));
+        }
+        for parameter in &public.parameters {
+            let captured = match parameter.pack {
+                Some(Pack::Positional) => &positional,
+                Some(Pack::Named) => &named,
+                None => continue,
+            };
+            let bounds = pack_bounds(parameter, &public.generics, written_pack);
+            self.check_pack_count(list, &parameter.name, bounds, captured);
         }
         arguments
     }
@@ -736,6 +791,7 @@ impl<'a> Typer<'a> {
             .into_iter()
             .map(|given| hir::Argument {
                 parameter: None,
+                pack: None,
                 value: if given.retried {
                     self.expression(&given.node, Some(&Type::Unknown))
                 } else {
@@ -827,22 +883,35 @@ pub(super) fn from_place(
     }
 }
 
-/// True when a call of an operator is not read: the operator or a
-/// candidate has a pack, or a candidate has a generic parameter that is
-/// a type pack. Such a call has no type.
+/// True when a call still has no supported candidate shape. A fixed
+/// candidate in a public pack's place will reject at its declaration
+/// when the pinned catalogue has `impl.pack` (#336).
 pub(super) fn unreadable(public: &Signature, candidates: &[(usize, usize, &Signature)]) -> bool {
-    let packed = |signature: &Signature| {
-        signature
-            .parameters
-            .iter()
-            .any(|parameter| parameter.pack.is_some())
+    // A second pack of the same kind remains untyped until the
+    // declaration check can report `pack.duplicate` (#336).
+    let duplicate = |signature: &Signature| {
+        [Pack::Positional, Pack::Named].into_iter().any(|kind| {
+            signature
+                .parameters
+                .iter()
+                .filter(|parameter| parameter.pack == Some(kind))
+                .nth(1)
+                .is_some()
+        })
     };
-    packed(public)
+    duplicate(public)
         || candidates.iter().any(|(_, _, signature)| {
-            packed(signature)
-                || signature
-                    .generics
+            duplicate(signature)
+                || public
+                    .parameters
                     .iter()
-                    .any(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+                    .enumerate()
+                    .any(|(index, parameter)| {
+                        signature
+                            .parameters
+                            .get(index)
+                            .and_then(|candidate| candidate.pack)
+                            != parameter.pack
+                    })
         })
 }

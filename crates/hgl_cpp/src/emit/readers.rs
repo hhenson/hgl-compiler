@@ -135,7 +135,8 @@ fn reads(value: &Expr, signature: &Signature) -> Vec<Reading> {
         .filter_map(|argument| {
             let parameter = argument.parameter?;
             let declared = signature.parameters.get(parameter)?;
-            if declared.constant
+            if argument.pack.is_some()
+                || declared.constant
                 || declared.reference
                 || !direct_read(&argument.value.ty)
                 || reader_inner(&argument.value).is_none()

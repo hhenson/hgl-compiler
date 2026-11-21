@@ -2,6 +2,8 @@
 //! field of a struct, and the construction of a struct (EXPR-2, TYPE-3,
 //! TYPE-5). Part of the typing pass ([`super`]).
 
+use std::collections::HashSet;
+
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::Span;
@@ -12,7 +14,7 @@ use super::inference::{Inferred, Places, fixed, placed};
 use crate::declared::{is_optional, substitute_within};
 use crate::hir::{self, EndpointOperation, ExprKind};
 use crate::program::DeclarationKind;
-use crate::syntax::{child, has_token, name_token};
+use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{Argument, Detail, GenericKind, GenericParameter, NamedKind, Pack, Type};
 use crate::{RESULT_FORMS, codes, error};
 
@@ -188,6 +190,8 @@ impl<'a> Typer<'a> {
                     required: !member.has_default && is_optional(&ty) != Some(true),
                     ty: placed(ty, &own),
                     pack: None,
+                    pack_bounds: (0, None),
+                    type_pack: None,
                     listed: false,
                 }
             })
@@ -206,6 +210,7 @@ impl<'a> Typer<'a> {
                     settled,
                     aside: &[],
                     values: &[],
+                    written_pack: None,
                     result_fallback: None,
                     // GEN-2: "a generic value parameter that nothing
                     // says anything of takes its default".
@@ -290,8 +295,8 @@ impl<'a> Typer<'a> {
     /// each for a field the struct has, a parent's included, in any
     /// order; it takes no positional argument."
     ///
-    /// The arguments come back in the order written, each with the slot
-    /// it is given to: `None` for one given to a pack, or to nothing.
+    /// The arguments come back in written order. Captured arguments
+    /// keep both their pack's slot and their key within it (FN-8).
     /// Their values are not read here.
     pub(super) fn assign(
         &mut self,
@@ -300,10 +305,23 @@ impl<'a> Typer<'a> {
         slots: &[Slot],
         takes: Takes,
         aside: &[&str],
-    ) -> Vec<(Option<usize>, SyntaxNode)> {
+    ) -> Vec<Assigned> {
         let what = takes.noun();
         let callee_at = Location::new(self.file, callee.span());
-        let has_pack = |pack: Pack| slots.iter().any(|slot| slot.pack == Some(pack));
+        let pack = |kind| {
+            let mut matches = slots
+                .iter()
+                .enumerate()
+                .filter(|(_, slot)| slot.pack == Some(kind));
+            let first = matches.next().map(|(index, _)| index);
+            // #336: once the pinned catalogue has pack.duplicate, a
+            // second pack of the same kind will be rejected at its declaration.
+            (first.is_some(), first.filter(|_| matches.next().is_none()))
+        };
+        let (has_positional_pack, positional_pack) = pack(Pack::Positional);
+        let (has_named_pack, named_pack) = pack(Pack::Named);
+        let mut pack_locations = vec![Vec::new(); slots.len()];
+        let mut pack_names = HashSet::new();
         // Which slots have been given a value.
         let mut filled = vec![false; slots.len()];
         let mut named_seen = false;
@@ -347,7 +365,7 @@ impl<'a> Typer<'a> {
                     // (FN-8).
                     let next = (0..slots.len())
                         .find(|&index| !filled[index] && slots[index].pack.is_none());
-                    if next.is_none() && !has_pack(Pack::Positional) {
+                    if next.is_none() && !has_positional_pack {
                         let fixed = slots.iter().filter(|slot| slot.pack.is_none()).count();
                         self.diagnostics.emit(error(
                             Category::Type,
@@ -361,7 +379,7 @@ impl<'a> Typer<'a> {
                             "EXPR-2",
                         ));
                     }
-                    next
+                    next.or(positional_pack)
                 }
                 Some(name) => {
                     named_seen = true;
@@ -389,7 +407,20 @@ impl<'a> Typer<'a> {
                         Some(index) => Some(index),
                         // A named pack takes the names the others
                         // leave (FN-8).
-                        None if has_pack(Pack::Named) => None,
+                        None if has_named_pack => {
+                            if named_pack.is_some() && !pack_names.insert(name.text().to_string()) {
+                                self.diagnostics.emit(error(
+                                    Category::Name,
+                                    codes::ARGUMENT_DUPLICATE,
+                                    name_at,
+                                    format!("`{}` is given twice", name.text()),
+                                    "EXPR-2",
+                                ));
+                                None
+                            } else {
+                                named_pack
+                            }
+                        }
                         None => {
                             self.diagnostics.emit(error(
                                 Category::Name,
@@ -403,10 +434,27 @@ impl<'a> Typer<'a> {
                     }
                 }
             };
-            if let Some(index) = slot {
+            let pack = slot.and_then(|index| {
                 filled[index] = true;
-            }
-            arguments.push((slot, value));
+                slots[index].pack.map(|kind| {
+                    let captured = &mut pack_locations[index];
+                    let key = match kind {
+                        Pack::Positional => hir::PackKey::Position(captured.len()),
+                        Pack::Named => hir::PackKey::Name(
+                            name.as_ref()
+                                .expect("named pack argument")
+                                .text()
+                                .to_string(),
+                        ),
+                    };
+                    let position = captured.len();
+                    captured.push(name.as_ref().map_or(at, |name| {
+                        Location::new(self.file, Span::new(name.span().start, value.span().end))
+                    }));
+                    (position, key)
+                })
+            });
+            arguments.push(Assigned { slot, pack, value });
         }
         for (index, slot) in slots.iter().enumerate() {
             if slot.required && slot.pack.is_none() && !filled[index] && !unnamed_field {
@@ -423,7 +471,55 @@ impl<'a> Typer<'a> {
                 ));
             }
         }
+        for index in [positional_pack, named_pack].into_iter().flatten() {
+            self.check_pack_count(
+                list,
+                slots[index].name,
+                slots[index].pack_bounds,
+                &pack_locations[index],
+            );
+        }
         arguments
+    }
+
+    /// GEN-10 and the owner's decision on #336: blame the first excess
+    /// argument, or the closing parenthesis if the pack has too few.
+    pub(super) fn check_pack_count(
+        &mut self,
+        list: &SyntaxNode,
+        name: &str,
+        (minimum, maximum): (u64, Option<u64>),
+        given: &[Location],
+    ) {
+        let count = given.len() as u64;
+        let (at, bound, direction) = if let Some(maximum) = maximum
+            && count > maximum
+        {
+            (given[maximum as usize], maximum, "at most")
+        } else if count < minimum {
+            let at = tokens(list)
+                .find(|token| token.kind() == SyntaxKind::RParen)
+                .map_or_else(
+                    || self.at(list),
+                    |token| Location::new(self.file, token.span()),
+                );
+            (at, minimum, "at least")
+        } else {
+            return;
+        };
+        let direction = if maximum == Some(minimum) {
+            "exactly"
+        } else {
+            direction
+        };
+        let arguments = if bound == 1 { "argument" } else { "arguments" };
+        self.diagnostics.emit(error(
+            Category::Type,
+            codes::PACK_CARDINALITY,
+            at,
+            format!("the pack `{name}` takes {direction} {bound} {arguments} and is given {count}"),
+            "GEN-10",
+        ));
     }
 
     /// Gives each argument of `list` to one of `slots` and reads its
@@ -437,20 +533,22 @@ impl<'a> Typer<'a> {
     ) -> Vec<hir::Argument> {
         self.assign(callee, list, slots, takes, &[])
             .into_iter()
-            .map(|(slot, value)| {
+            .map(|Assigned { slot, pack, value }| {
                 // No generic parameter here: a slot that is a trace is
                 // one an eval gives (TST-5).
                 let expected = slot.map(|index| {
                     let slot = &slots[index];
                     (slot, matches!(slot.ty, Type::Trace { .. }))
                 });
-                self.argument(slot, &value, expected, takes)
+                let mut argument = self.argument(slot, &value, expected, takes);
+                argument.pack = pack.map(|(_, key)| key);
+                argument
             })
             .collect()
     }
 
-    /// The argument written at `node`, given to `slot`. One given to a
-    /// pack, or to nothing, is read for what it reports itself. With
+    /// The argument written at `node`, given to `slot`. One given to
+    /// nothing is read for what it reports itself. With
     /// the slot is whether it is a trace an eval gives (TST-5).
     ///
     /// A value that holds a trace, given to a place that takes none,
@@ -487,7 +585,11 @@ impl<'a> Typer<'a> {
             }
             None => self.expression(node, Some(&Type::Unknown)),
         };
-        hir::Argument { parameter, value }
+        hir::Argument {
+            parameter,
+            pack: None,
+            value,
+        }
     }
 
     /// Reports a trace given to a field, or to a parameter of a
@@ -510,6 +612,16 @@ impl<'a> Typer<'a> {
     }
 }
 
+/// An argument tied to a place before its value is read.
+pub(super) struct Assigned {
+    /// The index of its parameter or field.
+    pub(super) slot: Option<usize>,
+    /// The position and key within the capture when the slot is a pack.
+    pub(super) pack: Option<(usize, hir::PackKey)>,
+    /// The value written by the call.
+    pub(super) value: SyntaxNode,
+}
+
 /// What an argument may be given to: a parameter of a function, or a
 /// field of a struct.
 pub(super) struct Slot<'a> {
@@ -522,6 +634,10 @@ pub(super) struct Slot<'a> {
     pub(super) required: bool,
     /// The pack it is, when it is one (FN-8).
     pub(super) pack: Option<Pack>,
+    /// How many arguments the pack takes (GEN-10).
+    pub(super) pack_bounds: (u64, Option<u64>),
+    /// The generic parameter of a heterogeneous pack, when it has one.
+    pub(super) type_pack: Option<usize>,
     /// True for a parameter of a `const fn`: a trace given to it is the
     /// list of its publications there (TST-16).
     pub(super) listed: bool,

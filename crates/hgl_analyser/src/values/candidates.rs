@@ -11,7 +11,9 @@ use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::expressions::takes_its_type;
 use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, not_null, whole};
-use super::inference::{bare_parameter, infer, infer_from_place, mentions, placed};
+use super::inference::{
+    bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
+};
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use crate::constant::Fault;
@@ -20,7 +22,7 @@ use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{
-    Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Signature, Type,
+    Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack, Signature, Type,
 };
 use crate::{codes, error};
 
@@ -135,6 +137,9 @@ impl<'a> Typer<'a> {
         for &(module, declaration, signature) in candidates {
             let declared_in = &program.modules[module];
             let candidate = &declared_in.declarations[declaration];
+            let Some(bound) = bound(signature, public, given) else {
+                continue;
+            };
             let clause = child(&candidate.syntax, SyntaxKind::RequiresClause);
             let payload_parameters = if matches!(
                 forms,
@@ -208,10 +213,9 @@ impl<'a> Typer<'a> {
                 };
                 holds(condition, &partial) == Some(false)
             };
-            let Some((taken, generics, defaulted)) = instance(
+            let Some((taken, generics, type_packs, defaulted)) = instance(
                 signature,
-                public,
-                given,
+                (given, &bound),
                 wanted,
                 (
                     &widens,
@@ -257,8 +261,8 @@ impl<'a> Typer<'a> {
             let admits = self.admits_call(
                 (candidate, &taken),
                 (operator_declaration, public),
-                (module, &generics),
-                (given, wanted),
+                (module, &generics, &type_packs),
+                (given, &bound, wanted),
                 widening,
                 converting,
             );
@@ -269,6 +273,7 @@ impl<'a> Typer<'a> {
                 declared: signature,
                 taken,
                 generics,
+                type_packs,
             };
             match admits {
                 Admits::Yes => selected.push(chosen),
@@ -356,10 +361,7 @@ impl<'a> Typer<'a> {
             Some(
                 bound
                     .iter()
-                    .map(|place| match place {
-                        Place::Parameter(index) => Some(chosen.taken.parameters[*index].ty.clone()),
-                        Place::Generic(_) => None,
-                    })
+                    .map(|&place| parameter_type(&chosen.taken, &chosen.type_packs, place).cloned())
                     .collect(),
             )
         };
@@ -368,7 +370,9 @@ impl<'a> Typer<'a> {
         };
         let literal: Vec<bool> = given
             .iter()
-            .map(|given| !given.by_place && is_integer_literal(&given.value))
+            .map(|given| {
+                !given.by_place && given.explicit.is_none() && is_integer_literal(&given.value)
+            })
             .collect();
         // They differ only in what they take the literals as: every
         // other argument is given to one type, and they give one
@@ -421,6 +425,7 @@ impl<'a> Typer<'a> {
             declaration,
             taken,
             generics,
+            type_packs,
             ..
         } = chosen;
         let signature: &Signature = &taken;
@@ -462,6 +467,7 @@ impl<'a> Typer<'a> {
                 .into_iter()
                 .map(|given| hir::Argument {
                     parameter: None,
+                    pack: None,
                     value: given.value,
                 })
                 .collect();
@@ -515,23 +521,27 @@ impl<'a> Typer<'a> {
             .into_iter()
             .enumerate()
             .filter_map(|(position, given)| {
-                let index = match bound.get(position) {
-                    Some(Place::Parameter(index)) => *index,
-                    // What a generic value parameter is given is a
-                    // compile-time constant, kept among the call's
-                    // generic arguments and not among its arguments.
-                    Some(Place::Generic(_)) => return None,
-                    None => {
-                        return Some(hir::Argument {
-                            parameter: None,
-                            value: given.value,
-                        });
-                    }
+                let Some(&bound) = bound.get(position) else {
+                    return Some(hir::Argument {
+                        parameter: None,
+                        pack: None,
+                        value: given.value,
+                    });
                 };
+                // Options that select are kept among the generic arguments.
+                let index = bound.parameter()?;
                 let parameter = &signature.parameters[index];
                 let place = format!("the parameter `{}`", parameter.name);
                 let named = matches!(given.key, Key::Name(_));
-                let value = self.argument_value(given, &parameter.ty, &place);
+                let pack = match bound {
+                    Place::Pack(_, position) => Some(match &given.key {
+                        Key::Position(_) => hir::PackKey::Position(position),
+                        Key::Name(name) => hir::PackKey::Name(name.clone()),
+                    }),
+                    _ => None,
+                };
+                let ty = parameter_type(signature, &type_packs, bound).unwrap_or(&Type::Unknown);
+                let value = self.argument_value(given, ty, &place);
                 // A `const` parameter given a connection is reported as
                 // one where the call is read (FN-3).
                 if lifted && !parameter.constant && named {
@@ -539,6 +549,7 @@ impl<'a> Typer<'a> {
                 }
                 Some(hir::Argument {
                     parameter: Some(index),
+                    pack,
                     value,
                 })
             })
@@ -550,6 +561,7 @@ impl<'a> Typer<'a> {
                 module,
                 declaration,
                 generics,
+                type_packs,
                 requirements,
             },
             arguments,
@@ -568,8 +580,8 @@ impl<'a> Typer<'a> {
         &mut self,
         (candidate, signature): (&Declaration, &Signature),
         (operator, public): (&Declaration, &Signature),
-        (module, generics): (usize, &[Argument]),
-        (given, wanted): (&[Given], &Wanted),
+        (module, generics, type_packs): (usize, &[Argument], &[hir::TypePackArgument]),
+        (given, bound, wanted): (&[Given], &[Place], &Wanted),
         widening: bool,
         converting: bool,
     ) -> Admits {
@@ -600,61 +612,51 @@ impl<'a> Typer<'a> {
         if !result_fits || !among {
             return Admits::Misfit;
         }
-        // GEN-6: "A call is matched against each candidate's own
-        // signature. One that names an option admits only the
-        // candidates that declare it."
-        let Some(bound) = bound(signature, public, given) else {
-            return Admits::Misfit;
-        };
         let own = public.parameters.len();
-        // GEN-13: a generic value parameter has an ordinary type, and
-        // what the call gives it is of that type.
-        for (position, place) in bound.iter().enumerate() {
-            let Place::Generic(index) = *place else {
-                continue;
+        // Match each supplied argument, including every entry a pack captures.
+        for (given, &place) in given.iter().zip(bound) {
+            let ty = match place {
+                Place::Generic(index) => match &signature.generics[index].kind {
+                    GenericKind::Value(ty) => Some(ty),
+                    _ => None,
+                },
+                _ => parameter_type(signature, type_packs, place),
             };
-            let GenericKind::Value(ty) = &signature.generics[index].kind else {
-                continue;
+            let Some(ty) = ty else {
+                return Admits::Misfit;
             };
-            let given = &given[position];
             let admitted = if given.by_place {
                 self.fits_place(&given.node, ty, widening)
             } else {
-                self.admits(ty, &given.value.ty)
-                    || widening && is_integer_literal(&given.value) && accepts_float(ty)
+                self.admits(ty, given.ty())
+                    || converting
+                        && place.parameter().is_some()
+                        && given.explicit.is_none()
+                        && self.taken(ty, given.ty()).is_some()
+                    || widening
+                        && given.explicit.is_none()
+                        && is_integer_literal(&given.value)
+                        && accepts_float(ty)
             };
             if !admitted {
                 return Admits::Misfit;
             }
         }
         for (index, parameter) in signature.parameters.iter().enumerate() {
-            let argument = bound
+            let count = bound
                 .iter()
-                .position(|&place| place == Place::Parameter(index))
-                .map(|position| &given[position]);
-            let admitted = match argument {
-                // What the call leaves out has a default, the
-                // candidate's or for one of its own parameters the
-                // operator's, or is written `T?` (UNIT-8). GEN-6: "a
-                // candidate whose option has none is admitted only when
-                // the call gives it."
-                None => {
-                    parameter.has_default
-                        || (index < own && public.parameters[index].has_default)
-                        || matches!(parameter.ty, Type::Nullable(_))
-                }
-                Some(given) if given.by_place => {
-                    self.fits_place(&given.node, &parameter.ty, widening)
-                }
-                Some(given) => {
-                    self.admits(&parameter.ty, &given.value.ty)
-                        || converting
-                            && !given.by_place
-                            && self.taken(&parameter.ty, &given.value.ty).is_some()
-                        || widening
-                            && is_integer_literal(&given.value)
-                            && accepts_float(&parameter.ty)
-                }
+                .filter(|place| place.parameter() == Some(index))
+                .count() as u64;
+            let admitted = if parameter.pack.is_some() {
+                let (minimum, maximum) = pack_bounds(parameter, &signature.generics, None);
+                count >= minimum && maximum.is_none_or(|maximum| count <= maximum)
+            } else {
+                // GEN-6 and UNIT-8: an omitted fixed argument must have
+                // a default or a nullable type.
+                count != 0
+                    || parameter.has_default
+                    || (index < own && public.parameters[index].has_default)
+                    || matches!(parameter.ty, Type::Nullable(_))
             };
             if !admitted {
                 return Admits::Misfit;
@@ -866,7 +868,7 @@ impl<'a> Typer<'a> {
             .collect();
         !own.is_empty()
             && (given.iter().any(|given| {
-                mentions(&given.value.ty, &own)
+                mentions(given.ty(), &own)
                     || self
                         .read_constant(&given.node, None)
                         .is_ok_and(|value| value.names_one_of(&own))
@@ -926,7 +928,7 @@ impl<'a> Typer<'a> {
             .filter(|(parameter, _)| {
                 let one = [*parameter];
                 given.iter().any(|given| {
-                    mentions(&given.value.ty, &one)
+                    mentions(given.ty(), &one)
                         || self
                             .read_constant(&given.node, None)
                             .is_ok_and(|value| value.names_one_of(&one))
@@ -952,16 +954,7 @@ impl<'a> Typer<'a> {
             name,
             operator,
             form,
-            arguments: given
-                .iter()
-                .map(|given| {
-                    let name = match &given.key {
-                        Key::Name(name) => Some(name.clone()),
-                        Key::Position(_) => None,
-                    };
-                    (name, given.node.clone(), given.value.clone())
-                })
-                .collect(),
+            arguments: given.to_vec(),
             place: wanted.place.cloned(),
             among: wanted.among.clone(),
             written: wanted.written,
@@ -995,7 +988,7 @@ impl<'a> Typer<'a> {
                 // (`Typer::called`): a `var` parameter's place among them.
                 AtInstance::Selected(chosen, given) => {
                     let start = self.diagnostics.len();
-                    self.called(operator, chosen, given, (form, name));
+                    self.called(operator, *chosen, given, (form, name));
                     self.diagnostics.as_slice()[start..].first().cloned()
                 }
                 AtInstance::Rejected(report) => Some(report),
@@ -1042,12 +1035,7 @@ impl<'a> Typer<'a> {
                 Key::Name(name) => *name == parameter.name,
             });
             if let Some(argument) = argument.filter(|argument| !argument.by_place) {
-                infer(
-                    &parameter.ty,
-                    &argument.value.ty,
-                    &public.generics,
-                    &mut found,
-                );
+                infer(&parameter.ty, argument.ty(), &public.generics, &mut found);
             }
         }
         let explicit: Vec<Argument> = found
@@ -1132,39 +1120,24 @@ impl<'a> Typer<'a> {
         }
         let built = values.is_some();
         let mut values = values.map(Vec::into_iter);
-        let mut position = 0;
         let given: Vec<Given> = selecting
             .arguments
             .iter()
-            .map(|(name, node, written)| {
-                let key = match name {
-                    Some(name) => Key::Name(name.clone()),
-                    None => {
-                        position += 1;
-                        Key::Position(position - 1)
-                    }
-                };
-                let by_place = typed_by_place(node);
-                // Without the instance's own, the value the generic body
-                // read, of its type here: an integer literal is still
-                // one, which a candidate may take as an `f64` (EXPR-5).
-                let value = values
+            .cloned()
+            .map(|mut given| {
+                given.explicit = given.explicit.as_ref().map(in_place);
+                given.by_place = given.explicit.is_none() && typed_by_place(&given.node);
+                // Without the instance's own value, retain the reading made
+                // in the generic body and substitute its argument's type.
+                given.value = values
                     .as_mut()
                     .and_then(Iterator::next)
                     .unwrap_or_else(|| Expr {
-                        ty: in_place(&written.ty),
-                        ..written.clone()
+                        ty: in_place(&given.value.ty),
+                        ..given.value.clone()
                     });
-                Given {
-                    key,
-                    node: node.clone(),
-                    by_place,
-                    value,
-                    // Where the call is built, an argument read as the
-                    // type of its place is read again as the selected
-                    // candidate's parameter.
-                    retried: built && by_place,
-                }
+                given.retried = built && given.by_place;
+                given
             })
             .collect();
         let place = selecting.place.as_ref().map(in_place);
@@ -1183,7 +1156,7 @@ impl<'a> Typer<'a> {
         if selected.len() == 1
             && let Some(chosen) = selected.pop()
         {
-            return AtInstance::Selected(chosen, given);
+            return AtInstance::Selected(Box::new(chosen), given);
         }
         // Named as the operator is declared: a symbol stands for it.
         let name = &program.modules[operator.module].declarations[operator.declaration].name;
@@ -1227,10 +1200,13 @@ impl<'a> Typer<'a> {
                     Argument::Type(_) => None,
                 })
         };
-        for (name, node, _) in &selecting.arguments {
-            let Some(name) = name.as_ref().filter(|name| options.contains(name.as_str())) else {
+        for Given { key, node, .. } in &selecting.arguments {
+            let Key::Name(name) = key else {
                 continue;
             };
+            if !options.contains(name.as_str()) {
+                continue;
+            }
             let Ok(value) = self.read_constant(node, None) else {
                 continue;
             };
@@ -1312,7 +1288,7 @@ pub(super) fn combinations(
 pub(super) enum AtInstance<'a> {
     /// The one most-specific candidate admitted, and the call's
     /// arguments as it takes them.
-    Selected(Chosen<'a>, Vec<Given>),
+    Selected(Box<Chosen<'a>>, Vec<Given>),
     /// None is admitted, or more than one most-specific candidate is
     /// admitted equally: the report, at the call's operator.
     Rejected(hgl_diagnostics::Diagnostic),
@@ -1342,7 +1318,7 @@ pub(crate) struct Selecting {
     pub(crate) form: Form,
     /// Its arguments as written, each with its name where it is given
     /// one, and the value the generic body reads it as.
-    pub(crate) arguments: Vec<(Option<String>, SyntaxNode, Expr)>,
+    arguments: Vec<Given>,
     /// The output the call asks of a candidate in the generic body
     /// ([`Wanted::place`]).
     pub(crate) place: Option<Type>,
@@ -1473,7 +1449,7 @@ pub(crate) fn select_in_instance(
         else {
             return;
         };
-        let (kind, ty) = typer.called(call.operator, chosen, given, (call.form, call.name));
+        let (kind, ty) = typer.called(call.operator, *chosen, given, (call.form, call.name));
         expression.kind = kind;
         expression.ty = ty;
         after(expression);
@@ -1481,7 +1457,7 @@ pub(crate) fn select_in_instance(
 }
 
 /// One argument of an operator's call, before a candidate is selected.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(super) struct Given {
     /// How it is written: in a position, or by a name. Which parameter
     /// of a candidate that is, is the candidate's to say (GEN-6).
@@ -1493,6 +1469,8 @@ pub(super) struct Given {
     pub(super) by_place: bool,
     /// Its value, read with nothing expected of it.
     pub(super) value: Expr,
+    /// The type the call explicitly writes for this packed argument.
+    pub(super) explicit: Option<Type>,
     /// True when that reading has been taken back, the argument being
     /// read again as the selected candidate's parameter: `value` is
     /// then not what stands.
@@ -1500,6 +1478,12 @@ pub(super) struct Given {
 }
 
 impl Given {
+    /// The type the candidate sees. For example an explicit `i64?`
+    /// stays nullable even when its argument is an `i64` value.
+    pub(super) fn ty(&self) -> &Type {
+        self.explicit.as_ref().unwrap_or(&self.value.ty)
+    }
+
     /// An operand of a symbol, which is read before the symbol's
     /// candidates are: in the place `position`, with the value it has.
     pub(super) fn read(position: usize, node: SyntaxNode, value: Expr) -> Given {
@@ -1508,13 +1492,14 @@ impl Given {
             node,
             by_place: false,
             value,
+            explicit: None,
             retried: false,
         }
     }
 }
 
 /// How a call writes an argument.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(super) enum Key {
     /// With no name: the place it stands in, from 0.
     Position(usize),
@@ -1561,9 +1546,41 @@ pub(super) struct Wanted<'w> {
 enum Place {
     /// The parameter at this position of the candidate's.
     Parameter(usize),
+    /// The parameter and position in a pack (FN-8, GEN-10).
+    Pack(usize, usize),
     /// The generic value parameter at this position of the candidate's
     /// generic parameters: an option that selects (GEN-6).
     Generic(usize),
+}
+
+impl Place {
+    /// The fixed or packed value parameter this argument is given to.
+    fn parameter(self) -> Option<usize> {
+        match self {
+            Self::Parameter(index) | Self::Pack(index, _) => Some(index),
+            Self::Generic(_) => None,
+        }
+    }
+}
+
+/// The type of one argument of the instantiated signature, including
+/// the corresponding type from a heterogeneous pack (GEN-10).
+fn parameter_type<'a>(
+    signature: &'a Signature,
+    packs: &'a [hir::TypePackArgument],
+    place: Place,
+) -> Option<&'a Type> {
+    let parameter = &signature.parameters[place.parameter()?];
+    if let Place::Pack(_, position) = place
+        && let Some(generic) = type_pack(parameter, &signature.generics)
+    {
+        return packs
+            .iter()
+            .find(|pack| pack.parameter == generic)?
+            .types
+            .get(position);
+    }
+    Some(&parameter.ty)
 }
 
 /// What each argument of a call is given to in a candidate, in the
@@ -1585,37 +1602,64 @@ fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<V
     }
     let mut taken = vec![false; signature.parameters.len()];
     let mut named = vec![false; signature.generics.len()];
+    let mut captured = vec![0; signature.parameters.len()];
+    let positional_pack = signature
+        .parameters
+        .iter()
+        .position(|p| p.pack == Some(Pack::Positional));
+    let named_pack = signature
+        .parameters
+        .iter()
+        .position(|p| p.pack == Some(Pack::Named));
+    let fixed = signature
+        .parameters
+        .iter()
+        .filter(|p| p.pack.is_none())
+        .count();
     let mut places = Vec::with_capacity(given.len());
     for given in given {
         let place = match &given.key {
+            Key::Position(position) if *position >= fixed => {
+                let index = positional_pack?;
+                Place::Pack(index, captured[index])
+            }
             Key::Position(position) => Place::Parameter(*position),
             Key::Name(name) => {
                 let generic = signature.generics.iter().position(|generic| {
                     matches!(generic.kind, GenericKind::Value(_)) && generic.name == *name
                 });
-                match generic {
-                    Some(generic) => Place::Generic(generic),
-                    None => Place::Parameter(
-                        public
+                if let Some(generic) = generic {
+                    Place::Generic(generic)
+                } else if let Some(index) = public
+                    .parameters
+                    .iter()
+                    .position(|parameter| parameter.pack.is_none() && parameter.name == *name)
+                    .or_else(|| {
+                        signature
                             .parameters
                             .iter()
-                            .position(|parameter| parameter.name == *name)
-                            .or_else(|| {
-                                signature
-                                    .parameters
-                                    .iter()
-                                    .skip(own)
-                                    .position(|parameter| parameter.name == *name)
-                                    .map(|option| option + own)
-                            })?,
-                    ),
+                            .enumerate()
+                            .skip(own)
+                            .find(|(_, option)| option.pack.is_none() && option.name == *name)
+                            .map(|(index, _)| index)
+                    })
+                {
+                    Place::Parameter(index)
+                } else {
+                    let index = named_pack?;
+                    Place::Pack(index, captured[index])
                 }
             }
         };
-        // Each is given once.
+        // FN-8: a pack can be given more than one argument.
         let slot = match place {
             Place::Parameter(index) => taken.get_mut(index)?,
             Place::Generic(index) => named.get_mut(index)?,
+            Place::Pack(index, _) => {
+                captured[index] += 1;
+                places.push(place);
+                continue;
+            }
         };
         if *slot {
             return None;
@@ -1639,6 +1683,8 @@ pub(super) struct Chosen<'s> {
     taken: std::borrow::Cow<'s, Signature>,
     /// What each of its generic parameters stands for at this call.
     pub(super) generics: Vec<Argument>,
+    /// The ordered types of each heterogeneous pack (GEN-10).
+    type_packs: Vec<hir::TypePackArgument>,
 }
 
 /// A candidate as a call takes it: itself where it has no generic
@@ -1659,8 +1705,7 @@ pub(super) struct Chosen<'s> {
 #[allow(clippy::type_complexity)]
 fn instance<'s>(
     signature: &'s Signature,
-    public: &Signature,
-    given: &[Given],
+    (given, bound): (&[Given], &[Place]),
     wanted: &Wanted,
     (widens, defaults, constant, converting): (
         &dyn Fn(&Type, &Type) -> bool,
@@ -1673,16 +1718,21 @@ fn instance<'s>(
             &dyn Fn(&GenericParameter, &Type) -> bool,
         )>,
     ),
-) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>, Vec<usize>)> {
+) -> Option<(
+    std::borrow::Cow<'s, Signature>,
+    Vec<Argument>,
+    Vec<hir::TypePackArgument>,
+    Vec<usize>,
+)> {
     let generics = &signature.generics;
     if generics.is_empty() {
         return Some((
             std::borrow::Cow::Borrowed(signature),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         ));
     }
-    let bound = bound(signature, public, given)?;
     let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
     // GEN-2: what the call writes decides first. A generic value
     // parameter it gives by name is that, whatever an argument's type
@@ -1719,47 +1769,68 @@ fn instance<'s>(
     // The generic parameters an argument decided: what the call writes,
     // or its place expects, is not widened (GEN-2).
     let mut by_argument = vec![false; generics.len()];
+    let mut type_packs = Vec::new();
     for (index, parameter) in signature.parameters.iter().enumerate() {
-        let argument = bound
+        let arguments = given
             .iter()
-            .position(|&place| place == Place::Parameter(index));
-        let Some(position) = argument else {
-            continue;
-        };
-        let actual = &given[position].value.ty;
-        let actual = match converting {
-            Some((typer, forms, payload_parameters, rejects_form)) if !given[position].by_place => {
-                // A bare parameter follows its first argument (GEN-2).
-                // After whole and contextual matching fail, its candidate
-                // can still bind from a payload that satisfies its condition.
-                if whole(actual)
-                    && let Some(index) = bare_parameter(&parameter.ty, generics)
-                    && found[index].is_none()
-                    && payload_parameters.get(index) == Some(&true)
-                {
-                    infer_payload(actual, forms, |ty| rejects_form(&generics[index], ty))
-                } else {
-                    typer.inference_input(&parameter.ty, actual, generics, &found, result_fallback)
-                }
+            .zip(bound)
+            .filter_map(|(given, place)| (place.parameter() == Some(index)).then_some(given));
+        if let Some(generic) = type_pack(parameter, generics) {
+            let types: Vec<Type> = arguments.map(Given::ty).cloned().collect();
+            if !types.iter().all(whole) {
+                return None;
             }
-            _ => actual,
-        };
-        // GEN-2: "an abstract struct that the type decided inherits
-        // from widens the parameter to that struct".
-        if let Some(generic) = bare_parameter(&parameter.ty, generics)
-            && by_argument[generic]
-            && let Some(Argument::Type(decided)) = &found[generic]
-            && widens(decided, actual)
-        {
-            found[generic] = Some(Argument::Type(actual.clone()));
+            found[generic] = Some(Argument::Type(Type::Unknown));
+            type_packs.push(hir::TypePackArgument {
+                parameter: generic,
+                types,
+            });
             continue;
         }
-        let before: Vec<bool> = found.iter().map(Option::is_some).collect();
-        infer(&parameter.ty, actual, generics, &mut found);
-        for (generic, was) in before.into_iter().enumerate() {
-            by_argument[generic] |= !was && found[generic].is_some();
+        for given in arguments {
+            let actual = given.ty();
+            let actual = match converting {
+                Some((typer, forms, payload_parameters, rejects_form))
+                    if !given.by_place && given.explicit.is_none() =>
+                {
+                    // GEN-2: the first argument decides a bare parameter.
+                    // A payload may meet that place when the whole form fails.
+                    if whole(actual)
+                        && let Some(index) = bare_parameter(&parameter.ty, generics)
+                        && found[index].is_none()
+                        && payload_parameters.get(index) == Some(&true)
+                    {
+                        infer_payload(actual, forms, |ty| rejects_form(&generics[index], ty))
+                    } else {
+                        typer.inference_input(
+                            &parameter.ty,
+                            actual,
+                            generics,
+                            &found,
+                            result_fallback,
+                        )
+                    }
+                }
+                _ => actual,
+            };
+            // GEN-2: "an abstract struct that the type decided inherits
+            // from widens the parameter to that struct".
+            if let Some(generic) = bare_parameter(&parameter.ty, generics)
+                && by_argument[generic]
+                && let Some(Argument::Type(decided)) = &found[generic]
+                && widens(decided, actual)
+            {
+                found[generic] = Some(Argument::Type(actual.clone()));
+                continue;
+            }
+            let before: Vec<bool> = found.iter().map(Option::is_some).collect();
+            infer(&parameter.ty, actual, generics, &mut found);
+            for (generic, was) in before.into_iter().enumerate() {
+                by_argument[generic] |= !was && found[generic].is_some();
+            }
         }
     }
+    type_packs.sort_by_key(|pack| pack.parameter);
     // A generic value parameter's own type may name a type parameter:
     // the `T` of `<T, const fallback: T>`. What the call gives it says
     // what that is where the result and the parameters, which are
@@ -1771,7 +1842,7 @@ fn instance<'s>(
             .iter()
             .position(|&place| place == Place::Generic(index));
         if let (Some(position), GenericKind::Value(ty)) = (argument, &generic.kind) {
-            infer(ty, &given[position].value.ty, generics, &mut found);
+            infer(ty, given[position].ty(), generics, &mut found);
         }
     }
     // GEN-6: "An option that selects among candidates is a generic
@@ -1802,7 +1873,9 @@ fn instance<'s>(
     let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
     let mut taken = signature.clone();
     for parameter in &mut taken.parameters {
-        parameter.ty = placed(substitute_within(&parameter.ty, &map), &own);
+        if type_pack(parameter, generics).is_none() {
+            parameter.ty = placed(substitute_within(&parameter.ty, &map), &own);
+        }
     }
     // A generic value parameter's type may name another generic
     // parameter: the `T` of `<T, const fallback: T>`.
@@ -1815,7 +1888,12 @@ fn instance<'s>(
         .result
         .as_ref()
         .map(|result| placed(substitute_within(result, &map), &own));
-    Some((std::borrow::Cow::Owned(taken), resolved, defaulted))
+    Some((
+        std::borrow::Cow::Owned(taken),
+        resolved,
+        type_packs,
+        defaulted,
+    ))
 }
 
 /// ERR-12 and ERR-15: a result of a nullable value can supply the

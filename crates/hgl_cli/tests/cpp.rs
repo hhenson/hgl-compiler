@@ -1049,36 +1049,6 @@ fn activity_runs_on_the_sdk() {
     );
 }
 
-/// Lifting and capture on the SDK (`demo.lifting`): lifted calls binding
-/// defaults, a sink, an eval of a value function, captures of a node, a
-/// graph and a lifted call, a write that stands before a failure, a `?` in
-/// a `when` and an error's context.
-#[test]
-#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
-fn lifting_code_runs_on_the_sdk() {
-    if !sdk_named() {
-        return;
-    }
-    let root = scratch("lifting");
-    let file = write(
-        &root,
-        "src/demo.lifting.hgl",
-        include_str!("../../hgl_cpp/tests/fixtures/demo.lifting.hgl"),
-    );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
-    let stdout = text(&output.stdout);
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "{stdout}{}",
-        text(&output.stderr)
-    );
-    assert!(
-        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
-        "{stdout}"
-    );
-}
-
 /// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code
 /// and temporal nodes, including an application-phase failure.
 #[test]
@@ -1139,6 +1109,36 @@ fn contextual_result_reads_run_on_the_sdk() {
         "hgl: demo.fallible.app failed: convert.invalid: invalid configuration, raised at {app}:6"
     );
     assert_eq!(stderr.lines().last(), Some(expected.as_str()), "{stderr}");
+}
+
+/// Lifting and capture on the SDK (`demo.lifting`): lifted calls binding
+/// defaults, a sink, an eval of a value function, captures of a node, a
+/// graph and a lifted call, a write that stands before a failure, a `?` in
+/// a `when` and an error's context.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn lifting_code_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("lifting");
+    let file = write(
+        &root,
+        "src/demo.lifting.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.lifting.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
 }
 
 /// Control flow over connections on the SDK (`demo.control`): each
