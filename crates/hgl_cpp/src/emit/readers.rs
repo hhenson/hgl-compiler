@@ -21,11 +21,15 @@ pub(super) struct Reading {
     pub(super) form: Expr,
 }
 
-/// Locate the result-to-value read in a consumer's recorded forms.
-/// ERR-15 raises on the Err publication even if no handler reads it.
+/// Locate the outermost required read whose publication can fail
+/// the consumer even if no handler reads it (ERR-12, ERR-15).
 pub(super) fn watches_failure(value: &Expr) -> Option<&Expr> {
     match value.kind {
         ExprKind::Raised {
+            raise: Raise::Reader,
+            ..
+        }
+        | ExprKind::NullRead {
             raise: Raise::Reader,
             ..
         } => Some(value),

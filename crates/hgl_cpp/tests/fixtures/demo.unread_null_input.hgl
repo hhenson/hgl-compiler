@@ -1,0 +1,81 @@
+module demo.unread_null_input
+
+# ERR-12: even a passive input fails its consumer when it publishes null.
+fn unread(main: i64, other: i64) -> i64 {
+    when modified(main) { return main }
+}
+
+fn node_error(main: i64, other: i64?) -> error =>
+    capture(unread, main, other).error
+
+fn node_value(main: i64, other: i64?) -> i64 =>
+    capture(unread, main, other).value
+
+fn through_graph(main: i64, other: i64?) -> i64 => unread(main, other)
+fn graph_error(main: i64, other: i64?) -> error =>
+    capture(through_graph, main, other).error
+
+test unpublished_and_retained {
+    let failure = error(message: "a null value was read", code: "value.null")
+    assert eval node_error(main: [_, _, 3, 4, 5], other: [1, null, _, null, 2]) ==
+        [_, failure, _, failure, _]
+    assert eval node_value(main: [1, _, 3, 4, _, 6], other: [1, null, _, null, 2, _]) ==
+        [1, _, 3, _, _, 6]
+    assert eval graph_error(main: [_], other: [null]) == [failure]
+}
+
+const fn lifted(main: i64, other: i64) -> i64 => main + other
+const fn lifted_default(main: i64, other: i64 = 7) -> i64 => main + other
+
+fn lifted_error(main: i64, other: i64?) -> error =>
+    capture(lifted, main, other).error
+
+fn default_error(main: i64, other: i64?) -> error =>
+    capture(lifted_default, main, other).error
+
+fn default_value(main: i64, other: i64?) -> i64 =>
+    capture(lifted_default, main, other).value
+
+test lifted_null_before_admission {
+    let failure = error(message: "a null value was read", code: "value.null")
+    assert eval lifted_error(main: [_], other: [null]) == [failure]
+    assert eval default_error(main: [_], other: [null]) == [failure]
+    assert eval default_value(main: [1, 2, 3], other: [_, null, 8]) == [8, _, 11]
+}
+
+fn node_pack(items: ...i64{2}) -> i64 { when { return 7 } }
+const fn lifted_pack(items: ...i64{2}) -> i64 => 7
+
+fn node_pack_error(main: i64, other: i64?) -> error =>
+    capture(node_pack, main, other).error
+
+fn lifted_pack_error(main: i64, other: i64?) -> error =>
+    capture(lifted_pack, main, other).error
+
+test unread_pack_entries {
+    let failure = error(message: "a null value was read", code: "value.null")
+    assert eval node_pack_error(main: [_, 2, _], other: [null, 3, null]) ==
+        [failure, _, failure]
+    assert eval lifted_pack_error(main: [_], other: [null]) == [failure]
+}
+
+# ERR-15: a failed result keeps its error, even when a successful
+# nullable payload would itself need a read.
+fn maybe_other(tick: i64) -> result<i64?, error> {
+    when {
+        if tick < 0 { return err(error(message: "other failed", code: "other.failed")) }
+        if tick == 0 { return ok(null) }
+        return ok(tick)
+    }
+}
+
+fn chained_error(main: i64, tick: i64) -> error {
+    let held = maybe_other(tick)
+    return capture(unread, main, held).error
+}
+
+test result_then_nullable {
+    assert eval chained_error(main: [_, _, _, _], tick: [0, -1, _, 3]) ==
+        [error(message: "a null value was read", code: "value.null"),
+         error(message: "other failed", code: "other.failed"), _, _]
+}
