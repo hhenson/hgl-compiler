@@ -1125,6 +1125,39 @@ fn operator_candidates_have_distinct_cpp_names_on_the_sdk() {
     );
 }
 
+/// GEN-5 and GEN-7: value, node and graph instances choose their own
+/// operator candidate, including across modules and through a symbol.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn operator_candidates_are_selected_per_instance_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("instance-selection");
+    let file = write(
+        &root,
+        "demo.instance_selection.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.instance_selection.hgl"),
+    );
+    let library = write(
+        &root,
+        "demo.instance_selection_library.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.instance_selection_library.hgl"),
+    );
+    let output = hgl_in(&["test", &file, &library, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-8 and GEN-10: C++ calls bind the individual inputs of positional
 /// and named packs in value helpers, nodes, and graphs. TST-5: eval
 /// replays the trace of each captured argument.
