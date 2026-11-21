@@ -110,7 +110,6 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | An enum's member made from its number or its name | TYPE-7 |
 | `timezone` and `zoned_time`, and their literals; a zone's literal checked against the run provider's catalogue, and a `zoned_datetime`'s offset against its zone; a `T?` compared with a `T` | TYPE-2, LEX-12, TYPE-14, OPS-2 |
 | A `var` place beside an argument that runs statements, taken where the call is made | FN-15, EXPR-2 |
-
 | A node of scalars: its inputs' activity and validity, handlers in source order, `state` and `cache`, `start` and `stop` | FN-2, TIME-3, TIME-4, TIME-5, TIME-6 |
 | `return value`, `out = value`, `invalidate(out)` in a handler | TIME-7, FN-7, END-4 |
 | A payload read; `valid`, `modified`, `delta_value` plain and into a `result`, `last_modified` of an input | TIME-1, END-1, END-2, END-3, END-6, ERR-14 |
@@ -125,12 +124,16 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A temporal candidate of an operator | GEN-4, OPS-9 |
 | A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
 | A window of a scalar, of a tick count or of a duration: a publication to one, `all_valid`, its value read in a hook or given to a lifted helper where it is all valid, its delta and `removed_value` in the form their place takes, its trace, record and replay | TYPE-11, TYPE-16, END-3, END-9, ERR-14, FN-12, TIME-7, TST-16 |
+| A temporal list, growing and fixed: published whole and by delta, read whole, `valid`, `all_valid` and `delta_value` of one; a child read, at a constant index and one that runs, plain and into a `result`, given to `valid` and the other operations, and wired; a trace cell of one, whole or a delta, an input of one replayed, and a whole cell compared with the value the result holds | TYPE-9, TYPE-10, TYPE-16, TIME-1, TIME-7, TIME-9, END-3, END-7, END-8, ERR-14, TST-5, TST-9 |
 | A `ref` parameter and result: hgraph's `REF` input and output; a whole `ref` parameter returned sampled; an input that is no `ref` parameter designated whole, and followed through its re-binding with no handler run for it; `out =` and `invalidate(out)` of a `ref` result | FN-16, TIME-10, END-10 |
 | `inject global_state` in a graph, and `get`, `has`, `put` on it where the graph is built, once each, in the order written | FN-9, CAP-6, CRUN-7 |
 | An application: its statements setting the run's store before its run statement, in the order written; its run statement, `eval` in simulation and `run` in real time, with the entry's arguments and its `RunConfig` held in the order written; its entry unit and executable | UNIT-14, RUN-1, RUN-3, EXPR-2 |
 | `if` and `switch` over a connection in a graph: each branch a child graph of hgraph's `switch_`, taking what it reads whole; its value, the `var` it assigns, or a `return` and what follows; no `else`, no `default` | CTRL-2, CTRL-3, CTRL-5, CTRL-6, CTRL-13, CTRL-14, CTRL-15 |
 | A `var` of a connection; an `if` over an ordinary value that gives a connection | CTRL-1, CTRL-13, CTRL-14 |
 | `for` over a connection of a dictionary or a list, a child graph of hgraph's `map_` for each member; over a fixed list, the body for each position | CTRL-7, CTRL-15 |
+| A temporal struct, tuple and atomic struct: a field and a position a child of its own, read, given to an endpoint operation and written in a `when` (`out.bid = value`), and its connection in a graph; a whole read, `all_valid` one level deep with an optional child aside, a publication whole and by a delta, `delta_value`, trace cells | TYPE-9, TYPE-15, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, TST-5 |
+| A temporal nullable scalar or enum: a published null, its delta, a test against null of an input, a trace cell | TYPE-14, TYPE-15, END-1, END-3, END-6, ERR-12 |
+| A temporal set and dictionary: published whole and as a delta, read whole, `delta_value`, `all_valid` of a dictionary, an entry of a dictionary read in a hook and given to an endpoint operation, `invalidate(out)`, their trace cells whole and as deltas | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, END-3, END-4, TST-5, TST-9 |
 
 Not written yet, and reported: a `?` after anything its statement reads
 or runs before it (ERR-5), a `switch` case's binding read after the
@@ -139,17 +142,22 @@ parameter (a bit, no `bool&`), a struct that holds itself (TYPE-6), a
 field's default that runs statements, a field of an abstract struct
 assigned, a dictionary written with keys that may be one, a dictionary's
 entry given to a `var` parameter, an application of a generic struct its
-C++ template is not, a window of any but a scalar, and of temporal code:
-a temporal value of any but a scalar, an enum, an `error` and a
-`result`, a designation of a child of an input (FN-16), `all_valid` of
-any but a window, a change of an input's activity in `stop` (END-5), a
-`for` over a connection of a set (CTRL-15), in a branch or a loop's body
-the store or an ordinary value that may fail (FN-9: hgraph builds each
-child as the graph around it is built), a `return` under a branch
-selected at runtime in a loop unrolled where the graph is built,
+C++ template is not, a window of any but a scalar, and of temporal code: a
+generic or an abstract struct as a temporal value, a struct or a tuple
+with a part of a form the library does not read whole, a list with a part
+that is no scalar, enum, nullable or list, an atomic struct that holds an
+optional field (hgraph issue 1874), a set's element or a dictionary's key
+of any but a scalar, a constant connection of a set or a dictionary, an
+entry of a dictionary's entry, a key's child as a connection of a graph
+(EXPR-7), a nullable put in the run's store (hgl_spec issue 165), a
+designation of a child of an input (FN-16), `all_valid` of a set, a
+change of an input's activity in `stop` (END-5), a `for` over a connection of a set (CTRL-15), in a branch or a
+loop's body the store or an ordinary value that may fail (FN-9: hgraph
+builds each child as the graph around it is built), a `return` under a
+branch selected at runtime in a loop unrolled where the graph is built,
 branches that assign two `var`s (CTRL-14), a `capture` given an `f64`
-configuration (ERR-7, hgraph issue 1866), a lifted call that leaves out
-a `T?` whose default may fail (FN-6), and an eval's or an application's
+configuration (ERR-7, hgraph issue 1866), a lifted call that leaves out a
+`T?` whose default may fail (FN-6), and an eval's or an application's
 configuration that is no `RunConfig(...)` written in it (RUN-1). A call
 of a function with a pack, core's `all_` and `any_`, has no callee the
 analyser reads.
@@ -181,6 +189,7 @@ the chapters' entries stay the hgraph target's.
 | `append`, `extend` | LIST-1, LIST-2, LIST-3 | `lists.h` | `capabilities_tests.cpp` |
 | A set and a dictionary, hash containers equal where their members are; a key told apart by `==` of its type, and its hash; a strict read, `value.missing_key`; the place an assignment adds a key at; core's `get`; the deltas of a set and a dictionary, and a list's delta's properties; what a struct names of its fields, a value of an abstract struct, and what a struct inherits from; an enum's member made from a value | TYPE-3, TYPE-7, TYPE-14, TYPE-16, EXPR-3, ERR-6, OPS-2 | `collections.h` | `collections_tests.cpp` |
 | The operations on an endpoint of a scalar or a nullable scalar, input or result: `valid`, `modified`, `delta_value` plain and where a `result` is taken, `last_modified`, `invalidate` of the result, `is_active`, `activate`, `passivate`; `all_valid` and a form's own delta wait for their forms | TIME-9, END-1 to END-6, ERR-14 | `endpoints.h` | `endpoint_tests.cpp` |
+| A temporal list, growing and fixed: a value published whole or as its delta, and a delta that it cannot take refused; read whole, a gap of a growing list as TIME-1's table has it; `all_valid`; its delta read from hgraph's; a child of one, read, given to the operations on an endpoint, and wired | TYPE-9, TYPE-10, TYPE-16, TIME-1, TIME-7, TIME-9, END-3, END-7, END-8, ERR-14, EXPR-3, TST-5 | `list_endpoints.h` | `list_endpoints_tests.cpp` |
 | `Logger` and `log`, `Clock` and its four properties | CAP-1, CAP-2, CAP-3 | `capabilities.h` | `capabilities_tests.cpp` |
 | `Scheduler`: its three properties, `schedule` with a duration or a datetime under a tag or none, on the wall clock in real time and unchanged by it in simulation, `un_schedule`, `reset`; `Alarm` and its `schedule`; what may be asked of each | CAP-4, CAP-5, TIME-8 | `capabilities.h` | `scheduler_tests.cpp` |
 | `get`, `has`, `put` of the global store, in a node and where a graph is built | CAP-6, FN-9 | `capabilities.h` | `capabilities_tests.cpp` |
@@ -188,6 +197,9 @@ the chapters' entries stay the hgraph target's.
 | A capture, hgraph's `try_except_` of the graph of a captured call with canonical errors: its value, and its error ticked with each failure and where it failed; a failure of `start` escaping it; a `result` published whole | ERR-2, ERR-4, ERR-7, ERR-8 | `capture.h` | `capture_tests.cpp` |
 | What a `ref` parameter designates: the reference its `REF` input holds, present from the start where it is given a connection, or none, which an ordinary reader of the result it is published to observes | FN-16, TIME-10, END-10 | `references.h` | `references_tests.cpp` |
 | The branch of no `else`, a connection that never ticks; the branch of no `default`, which fails with the selector's value | CTRL-3, CTRL-6, CTRL-13 | `control.h` | `control_tests.cpp` |
+| A nullable scalar's temporal form: its payload read checked, a published null; a nullable value held by hgraph as an atomic | TYPE-14, TYPE-15, TIME-1, TIME-7 | `nullables.h` | `structs_tests.cpp` |
+| A struct's, a tuple's and an atomic struct's temporal forms: a child's view and connection, a whole read checked, `all_valid`, a publication whole and by a delta, the delta read, a field of an atomic struct, what a whole cell publishes and the text of a struct | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, TST-9 | `structs.h` | `structs_tests.cpp` |
+| A set's and a dictionary's temporal forms, hgraph's `TSS` and `TSD`: published whole and by a delta, an empty delta and a removal of what is not held no tick but where it makes one valid, two deltas in a cycle one change, an invalidation emptying it; read whole checked; an entry of a dictionary an endpoint whether or not it is held; whole trace cells published as their change; their names and text | TYPE-9, TYPE-16, TIME-1, TIME-2, TIME-7, TIME-9, END-4, END-5, ERR-14, TST-9 | `keyed.h` | `keyed_tests.cpp` |
 | An enum as a value of the library and of the test host: its HGL name, its members' text, its schema with hgraph; core's `CmpResult`, `ZeroPolicy`, `Rounding`, `InvalidPolicy`, `LogLevel` | TYPE-7, TST-4, TST-5, OPS-3 | `values.h`, `traces.h` | `traces_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
 | Whether an input ticked in an evaluation, published or lost its value, by which a node with a timer tells its wakes apart; a capability lent to a source's body for one resumption | TIME-3, TIME-9, END-4, SOURCE-1, TIME-8 | `timing.h` | `timing_tests.cpp` |

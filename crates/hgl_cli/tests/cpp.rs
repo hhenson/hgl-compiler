@@ -19,13 +19,13 @@ use common::{argument, scratch, text, write};
 
 /// A module with a value function and two tests: one that the target
 /// writes whole, needing no native of the runtime library's, and one it
-/// does not write yet.
+/// does not write yet: a set of lists, whose element is no scalar.
 const FLAGS: &str = concat!(
     "module demo.flags\n",
     "\n",
     "const fn yes() -> bool => true\n",
     "\n",
-    "fn pass(value: bool?) -> bool? {\n",
+    "fn pass(value: set<list<bool>>) -> set<list<bool>> {\n",
     "    when { return value }\n",
     "}\n",
     "\n",
@@ -34,7 +34,7 @@ const FLAGS: &str = concat!(
     "}\n",
     "\n",
     "test evaluates {\n",
-    "    assert eval(pass(value: [true])) == [true]\n",
+    "    assert eval(pass(value: [[[true]]])) == [[[true]]]\n",
     "}\n",
 );
 
@@ -249,7 +249,7 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
              HGL_HGRAPH_SDK is not set: set it to the install prefix of hgraph's C++ SDK, \
              the directory that holds `lib/cmake/hgraph`\n\
              not run  executable  demo.flags::evaluates\n    \
-             {file}:14:29: the cpp target does not write a temporal value of `bool?` yet\n\
+             {file}:14:29: the cpp target does not write a temporal value of `set<list<bool>>` yet\n\
              rejection cases: 0 passed, 0 failed\n\
              executable cases: 0 passed, 0 failed, 2 not run\n"
         )
@@ -630,6 +630,34 @@ fn value_code_runs_on_the_sdk() {
     );
 }
 
+/// The temporal forms of a list and of a tuple on the SDK (`demo.lists`):
+/// each test passes, a failing child read among them.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn list_code_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("lists");
+    let file = write(
+        &root,
+        "src/demo.lists.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.lists.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The temporal code of scalars on the SDK: a graph with lifted calls, a
 /// constant connection, nodes with state, handlers in order and
 /// capabilities, a source, and the evals of them (`demo.temporal`), each
@@ -887,6 +915,65 @@ fn an_unmatched_connection_selector_fails_the_run() {
     );
 }
 
+/// `demo.structs`, the temporal forms of a struct, a tuple, an atomic
+/// struct and a nullable scalar (TYPE-9, TYPE-15, TYPE-16, TIME-7, TIME-9,
+/// EXPR-7): every test of it passes on the SDK, and under the sanitizers
+/// where `HGL_CPP_FLAGS` names them.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn temporal_structs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("structs");
+    let file = write(
+        &root,
+        "src/demo.structs.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.structs.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 23 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// `demo.keyed`, the temporal form of a set and of a dictionary (TYPE-9,
+/// TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
+/// SDK, and under the sanitizers where `HGL_CPP_FLAGS` names them.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn keyed_temporal_code_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("keyed");
+    let file = write(
+        &root,
+        "src/demo.keyed.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// `demo.composites`, structs, sets, dictionaries and deltas as values
 /// (TYPE-3 to TYPE-6, TYPE-14, TYPE-16, EXPR-3, ERR-6, CTRL-12): every
 /// test of it passes on the SDK, and under the sanitizers where
@@ -1051,6 +1138,68 @@ fn names_the_generated_cpp_declares_are_built() {
             "{stdout}"
         );
     }
+}
+
+/// TYPE-16: a nullable's delta is a type of its own, which holds what was
+/// published, a null among them. A temporal `i64?` read by its delta,
+/// published by one, and relayed, and a temporal `list<i64?>` relayed and
+/// read by its delta, a published null at a position among it: each runs,
+/// and its tests pass.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_nullables_delta_is_read_and_published() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nullable-deltas");
+    let file = write(
+        &root,
+        "src/demo.deltas.hgl",
+        concat!(
+            "module demo.deltas\n",
+            "fn relay(value: i64?) -> i64? {\n",
+            "    when { return value }\n",
+            "}\n",
+            "fn read(value: i64?) -> i64? {\n",
+            "    when { return delta_value(value) }\n",
+            "}\n",
+            "fn published(step: i64) -> i64? {\n",
+            "    when {\n",
+            "        if step == 0 { return delta<i64?>() }\n",
+            "        if step == 1 { return delta<i64?>(value: 7) }\n",
+            "        return null\n",
+            "    }\n",
+            "}\n",
+            "fn relay_list(values: list<i64?>) -> list<i64?> {\n",
+            "    when { return values }\n",
+            "}\n",
+            "fn read_list(values: list<i64?>) -> list<i64?> {\n",
+            "    when { return delta_value(values) }\n",
+            "}\n",
+            "test a_nullable_publishes_its_delta {\n",
+            "    assert eval(relay(value: [1, null, 2])) == [1, null, 2]\n",
+            "    assert eval(read(value: [1, null, 2])) == [1, null, 2]\n",
+            "    assert eval(published(step: [0, 1, 2])) == [null, 7, null]\n",
+            "}\n",
+            "test a_list_of_nullables_publishes_its_delta {\n",
+            "    assert eval(relay_list(values: [[1, null], [null, 2]])) == [[1, null], [null, 2]]\n",
+            "    assert eval(read_list(values: [[1, null], delta<list<i64?>>(updated: [0: delta<i64?>()])])) ==\n",
+            "        [[1, null], delta<list<i64?>>(updated: [0: delta<i64?>()])]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
 }
 
 /// LEX-12: "The selected run provider checks exact catalog membership and

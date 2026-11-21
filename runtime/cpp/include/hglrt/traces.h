@@ -59,7 +59,7 @@ struct Whole {
 namespace detail {
 /// Whether a T publishes whole (`publishes_whole`).
 template <class T>
-constexpr bool whole_publication() {
+constexpr bool published_whole() {
     if constexpr (hglrt::detail::is_optional<T>::value) {
         using P = typename T::value_type;
         return std::is_same_v<delta_t<P>, P>;
@@ -73,7 +73,7 @@ constexpr bool whole_publication() {
 /// payload's delta is the payload, the `nullable_delta` that holds the
 /// same as the nullable.
 template <class T>
-inline constexpr bool publishes_whole = detail::whole_publication<T>();
+inline constexpr bool publishes_whole = detail::published_whole<T>();
 
 /// A cell of a trace of a T: a T where a T publishes whole, and otherwise a
 /// delta of it or a whole value.
@@ -205,6 +205,8 @@ std::string text_of(const T& value) {
         return text_of(value.value);
     } else if constexpr (detail::is_variant<T>::value) {
         return std::visit([](const auto& held) { return text_of(held); }, value);
+    } else if constexpr (requires { value_form<T>::text(value); }) {
+        return value_form<T>::text(value);
     } else if constexpr (named_enum<T>) {
         return hglrt::detail::member_text(value);
     } else if constexpr (requires { detail::scalar_text(value); }) {
@@ -474,6 +476,13 @@ bool same(const Left& left, const Right& right) {
 
 // ---- What a trace written out publishes (CEVAL-2, TST-9, TST-16) ---------
 
+/// The delta that publishing a whole value of `T` records, where `T`'s
+/// temporal form says it beside its other code: a static `delta(value)`.
+/// A struct's is structs.h's; a tuple's and a list's are `whole_delta`'s
+/// own, below.
+template <class T>
+struct whole_publication;
+
 namespace detail {
 /// How many positions a list of `size` holds once `delta` is published to it
 /// (TYPE-16): the size it gives, a negative one taken from the size, or,
@@ -498,13 +507,27 @@ std::size_t size_after(std::size_t size, const list_delta<L>& delta) {
 /// The delta that publishing `value` whole records, to a value that held
 /// `size` positions, where it is a list (TST-9: "a T whole, which replaces
 /// what the input held"; TST-16: "A T published whole is held as its delta
-/// too"): a tuple's, each position; a fixed list's, each position; an
-/// unsized list's, each position, the tail past them removed, and the new
-/// size where it moves (TYPE-16: "on a shrink names the tail positions it
-/// drops in `removed`"). Each part publishes whole.
+/// too"): a nullable's, what it holds; a tuple's, each position; a fixed
+/// list's, each position; an unsized list's, each position, the tail past
+/// them removed, and the new size where it moves (TYPE-16: "on a shrink
+/// names the tail positions it drops in `removed`"). Each part publishes
+/// whole.
 template <class T>
 delta_t<T> whole_delta(const T& value, std::size_t size) {
-    if constexpr (hglrt::detail::is_tuple<T>::value) {
+    if constexpr (requires { whole_publication<T>::delta(value); }) {
+        return whole_publication<T>::delta(value);
+    } else if constexpr (hglrt::detail::is_optional<T>::value) {
+        // A nullable: a published null, or what it holds, as its payload
+        // published whole records it (`nullable_delta`).
+        if (!value.has_value()) {
+            return delta_t<T>{};
+        }
+        if constexpr (publishes_whole<typename T::value_type>) {
+            return delta_t<T>{*value};
+        } else {
+            return delta_t<T>{whole_delta(*value, 0)};
+        }
+    } else if constexpr (hglrt::detail::is_tuple<T>::value) {
         return std::apply(
             [](const auto&... part) {
                 static_assert((publishes_whole<std::remove_cvref_t<decltype(part)>> && ...),
@@ -535,7 +558,9 @@ delta_t<T> whole_delta(const T& value, std::size_t size) {
 
 /// What each cell of a trace of a T publishes, in order, a whole one as the
 /// delta that replaces what the value held: the size of a list is followed
-/// through each cell, a delta's among them.
+/// through each cell, a delta's among them. A header of this library that
+/// declares a value type whose whole cell needs more of what the earlier
+/// cells left specializes it for that type (keyed.h: a set, a dictionary).
 template <class T>
 class Publisher {
   public:
