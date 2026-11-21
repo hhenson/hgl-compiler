@@ -302,16 +302,13 @@ fn an_anonymous_function_reads_under_the_admission_where_it_is_written() {
     );
 }
 
-/// FN-7: "Anonymous functions obtain their parameter/result context from
-/// their accepting form", which is not read: their reads of the node's
-/// inputs are judged (TIME-1), and nothing that depends on that context.
-/// CTRL-5: "Return targets the enclosing HGL function", and `?` leaves it
-/// (ERR-5): neither is judged against the node's result or hook, in a
-/// `when`, in `start` or in `stop`. A result written `-> Base` takes the
-/// branches of an `if` that are two of its children (TYPE-3). `out` a
-/// body uses is a capture, reported as one (`name.captured`, FN-14).
+/// FN-7, CTRL-5 and ERR-5: the anonymous function has its own result
+/// type for `return` and for a failure its body raises, including in a
+/// node's `when`, `start` or `stop` hook. A result written `-> Base`
+/// takes the branches of an `if` that are two of its children (TYPE-3).
+/// Capturing `out` still rejects at the capture (FN-14).
 #[test]
-fn an_anonymous_function_is_judged_for_its_reads_alone() {
+fn an_anonymous_function_does_not_publish_to_the_enclosing_node() {
     let checked = module(concat!(
         "abstract struct Base {\n",
         "    id: i64\n",

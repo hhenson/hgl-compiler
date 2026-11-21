@@ -814,14 +814,7 @@ impl Resolver<'_> {
             // FN-14: "From the functions and blocks around it, its body
             // uses only parameters, generic parameters, `let` locals,
             // and iteration bindings."
-            let usable = matches!(
-                kind,
-                LocalKind::Parameter
-                    | LocalKind::GenericParameter
-                    | LocalKind::Let
-                    | LocalKind::Iteration
-            );
-            if captured && !usable {
+            if captured && !kind.capture_allowed() {
                 self.diagnostics.emit(
                     error(
                         Category::Name,

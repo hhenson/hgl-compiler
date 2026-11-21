@@ -672,6 +672,14 @@ pub enum LocalKind {
 }
 
 impl LocalKind {
+    /// FN-14: whether an anonymous function may capture this binding.
+    pub(crate) fn capture_allowed(self) -> bool {
+        matches!(
+            self,
+            Self::Parameter | Self::GenericParameter | Self::Let | Self::Iteration
+        )
+    }
+
     /// A few words for messages: `a parameter`, `a \`var\``.
     pub fn describe(self) -> &'static str {
         match self {
