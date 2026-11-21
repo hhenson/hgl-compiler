@@ -145,6 +145,119 @@ fn an_eval_is_the_call_of_its_target_with_traces() {
     assert!(cells[0].time.is_none(), "a dense cell has no time");
 }
 
+/// TST-5 and FN-8: each captured argument receives its own trace. An
+/// inferred type pack keeps the types those traces replay, in capture order.
+#[test]
+fn an_eval_reads_pack_arguments_as_separate_traces() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn fixed(const seed: i64, rest: ...i64{2}) -> i64 { when { return seed } }
+fn same_cells<T>(rest: ...T{2}) -> i64 { when { return 1 } }
+fn positional<...Ts>(rest: ...Ts{2}) -> i64 { when { return 1 } }
+fn named<...Ts>(rest: ...{Ts}{2}) -> i64 { when { return 1 } }
+test captured {
+    let fixed_trace = eval fixed(1, [1, 2], [_, 3])
+    let same_trace = eval same_cells([1, 2], [_, _])
+    let explicit = eval positional<i64, bool>([_, 2], [_, _])
+    let inferred = eval positional([_, 2], [_, true])
+    let named_trace = eval named(flag: [0s: true], items: [0s: [1, 2]])
+}
+"#,
+    )]);
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let module = checked.program.module("m").expect("module m exists");
+    let body = module.test_bodies[0]
+        .as_ref()
+        .expect("the test has a block");
+    let calls: Vec<_> = body
+        .statements
+        .iter()
+        .map(|statement| {
+            let Stmt::Declare {
+                value: Some(value), ..
+            } = statement
+            else {
+                panic!("the test binds an eval");
+            };
+            let ExprKind::Eval { call, .. } = &value.kind else {
+                panic!("the binding holds an eval");
+            };
+            let ExprKind::Call {
+                callee, arguments, ..
+            } = &call.kind
+            else {
+                panic!("the eval holds the call of its target");
+            };
+            (callee, arguments)
+        })
+        .collect();
+    assert!(matches!(calls[0].1[0].value.kind, ExprKind::Literal(_)));
+    for &(_, arguments) in &calls {
+        for argument in arguments.iter().filter(|argument| argument.pack.is_some()) {
+            assert!(matches!(argument.value.kind, ExprKind::Trace(_)));
+        }
+    }
+    let types = |index: usize| {
+        calls[index].0.type_packs()[0]
+            .types
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(types(2), ["i64", "bool"]);
+    assert_eq!(types(3), ["i64", "bool"]);
+    assert_eq!(types(4), ["bool", "list<i64>"]);
+}
+
+/// TST-5 and FN-8: a trace's cells still have one type when the trace
+/// supplies the type of a heterogeneous pack element.
+#[test]
+fn an_eval_rejects_a_wrong_cell_type_in_a_pack_argument() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn fixed(rest: ...i64) -> i64 { when { return 1 } }
+fn inferred<...Ts>(rest: ...Ts) -> i64 { when { return 1 } }
+test rejected {
+    assert eval fixed(["text"]) == [1]
+    assert eval inferred([1, "text"]) == [1]
+}
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:24 type/type.mismatch EXPR-5",
+            "m.hgl:6:30 type/type.mismatch EXPR-5",
+        ]
+    );
+}
+
+/// GEN-8: a packed trace with no cells that publish cannot decide a
+/// generic type. The target still gives the argument its trace context.
+#[test]
+fn a_pack_cannot_infer_a_type_from_gaps_in_an_eval() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn same<T>(rest: ...T) -> i64 { when { return 1 } }
+fn disparate<...Ts>(rest: ...Ts) -> i64 { when { return 1 } }
+test rejected {
+    assert eval same([_]) == []
+    assert eval disparate([_]) == []
+}
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:17 type/generic.unresolved GEN-8",
+            "m.hgl:6:17 type/generic.unresolved GEN-8",
+        ]
+    );
+}
+
 /// EXPR-13: operands are evaluated in the order written, and CTRL-10
 /// has a block among them assign what a later one reads. A trace
 /// written out on the left of an eval takes its type from the eval,
