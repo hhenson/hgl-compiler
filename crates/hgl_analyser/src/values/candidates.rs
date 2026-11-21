@@ -32,6 +32,9 @@ enum ArgumentForms {
     Whole,
     /// Take a form when its parameter's type calls for one.
     Contextual,
+    /// Retry bare bindings whose whole argument is ruled out by the
+    /// candidate's condition even without knowing the other bindings.
+    ConstrainedPayload,
     /// Also infer an open parameter from a payload when whole matching
     /// did not admit a candidate.
     Payload,
@@ -72,6 +75,7 @@ impl<'a> Typer<'a> {
             &[
                 ArgumentForms::Whole,
                 ArgumentForms::Contextual,
+                ArgumentForms::ConstrainedPayload,
                 ArgumentForms::Payload,
                 ArgumentForms::RequiredPayload,
             ][..]
@@ -134,7 +138,9 @@ impl<'a> Typer<'a> {
             let clause = child(&candidate.syntax, SyntaxKind::RequiresClause);
             let payload_parameters = if matches!(
                 forms,
-                ArgumentForms::Payload | ArgumentForms::RequiredPayload
+                ArgumentForms::ConstrainedPayload
+                    | ArgumentForms::Payload
+                    | ArgumentForms::RequiredPayload
             ) {
                 // Only an occurrence elsewhere in the signature or a
                 // condition can make an open binding need another form.
@@ -1811,6 +1817,9 @@ fn instance<'s>(
 /// success or its required value. A candidate's condition can rule
 /// out one form for this binding independently of its other bindings.
 fn infer_payload(actual: &Type, forms: ArgumentForms, rejects: impl Fn(&Type) -> bool) -> &Type {
+    if forms == ArgumentForms::ConstrainedPayload && !rejects(actual) {
+        return actual;
+    }
     let (payload, required) = match actual {
         Type::Result { value, .. } => match value.as_ref() {
             Type::Nullable(required) => (value.as_ref(), Some(required.as_ref())),

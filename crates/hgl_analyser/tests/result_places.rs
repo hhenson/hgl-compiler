@@ -73,31 +73,37 @@ operator take<X, Y>(keep: X, read: Y) -> i64
 impl const fn take<T, U>(keep: T, read: U) -> i64
     requires U in {i64} => 0
 const fn keep_failed(read: i64?) -> i64 => take(checked(-1), read)
+operator take_if<X, Y>(keep: X, read: Y) -> i64
+impl const fn take_if<T, U>(keep: T, read: U) -> i64
+    requires T in {result<i64, error>, i64} && U in {i64} => 0
+const fn keep_allowed(read: i64?) -> i64 => take_if(checked(-1), read)
 "#,
     );
     assert!(checked.summary().is_empty(), "{}", checked.report);
-    let mut calls = 0;
-    walk_statements(&body(&checked, "keep_failed").statements, &mut |expr| {
-        if let ExprKind::Call {
-            callee: Callee::Candidate { .. },
-            arguments,
-            ..
-        } = &expr.kind
-            && arguments.len() == 2
-        {
-            assert_eq!(arguments[0].value.ty.to_string(), "result<i64, error>");
-            assert!(matches!(arguments[0].value.kind, ExprKind::Call { .. }));
-            assert!(matches!(
-                arguments[1].value.kind,
-                ExprKind::NullRead {
-                    raise: Raise::Execution,
-                    ..
-                }
-            ));
-            calls += 1;
-        }
-    });
-    assert_eq!(calls, 1);
+    for name in ["keep_failed", "keep_allowed"] {
+        let mut calls = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::Call {
+                callee: Callee::Candidate { .. },
+                arguments,
+                ..
+            } = &expr.kind
+                && arguments.len() == 2
+            {
+                assert_eq!(arguments[0].value.ty.to_string(), "result<i64, error>");
+                assert!(matches!(arguments[0].value.kind, ExprKind::Call { .. }));
+                assert!(matches!(
+                    arguments[1].value.kind,
+                    ExprKind::NullRead {
+                        raise: Raise::Execution,
+                        ..
+                    }
+                ));
+                calls += 1;
+            }
+        });
+        assert_eq!(calls, 1, "{name}");
+    }
 }
 
 /// ERR-12 and ERR-15: each generic parameter takes the form its
