@@ -9,10 +9,6 @@
 "a nullable value put in the run's store (hgl_spec issue 165)" = [
     "conformance::a_stored_null_is_distinct_from_an_absent_key",
 ]
-"a run's configuration that is no `RunConfig(...)`" = [
-    "conformance::absolute_targets_before_at_and_after_start",
-    "conformance::skipped_targets_still_establish_source_order",
-]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph
 # target's list: none.

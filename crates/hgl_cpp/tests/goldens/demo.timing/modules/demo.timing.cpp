@@ -6,8 +6,10 @@
 #undef Alarm
 #undef Clock
 #undef Logger
+#undef RunConfig
 #undef Scheduler
 #undef a_resumed_source_keeps_its_locals_until_it_returns
+#undef a_run_configuration_is_a_value
 #undef a_scheduler_wakes_a_node_with_no_input
 #undef a_source_keeps_its_cache_and_state
 #undef a_source_reads_its_clock_when_it_runs
@@ -21,9 +23,11 @@
 #undef alarmed
 #undef an_alarm_wakes_a_node
 #undef an_empty_selection_is_true_where_it_is_selected
+#undef at
 #undef cancel_next
 #undef cause_of_wake
 #undef clock
+#undef config
 #undef core
 #undef count
 #undef counter
@@ -34,17 +38,20 @@
 #undef earliest_start
 #undef empty_elsewhere
 #undef empty_selected
+#undef end
 #undef every
 #undef finish_early
 #undef finish_or_resume
 #undef first
 #undef get
+#undef length
 #undef limit
 #undef log_debug
 #undef logger
 #undef never
 #undef next
 #undef opening
+#undef opening_at
 #undef pending
 #undef record
 #undef repeated
@@ -60,6 +67,7 @@
 #undef time_before_each_delay
 #undef times
 #undef timing
+#undef valid_start
 #undef value
 #undef wake_after
 #undef wake_in_the_past
@@ -787,9 +795,21 @@ namespace w_
 }
 }  // namespace w_
 
+// opening_at(at: datetime) -> RunConfig (`const fn`), module demo.timing, line 144
+::hgl::core::m_::RunConfig opening_at([[maybe_unused]] ::hgraph::DateTime at)
+{
+    return ::hgl::core::m_::RunConfig{at, std::nullopt, std::nullopt};
+}
+
+// valid_start(config: RunConfig) -> bool (`const fn`), module demo.timing, line 147
+::hgraph::Bool valid_start([[maybe_unused]] const ::hgl::core::m_::RunConfig& config)
+{
+    return ((config).start).has_value();
+}
+
 namespace n_::finish_or_resume
 {
-// finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 144
+// finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 150
 struct impl_
 {
     static constexpr auto name = "demo.timing::finish_or_resume";
@@ -891,7 +911,7 @@ namespace hgl::demo::timing::m_
 {
 namespace w_
 {
-// finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 144
+// finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 150
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> finish_or_resume(::hgraph::Wiring& wiring_, ::hgraph::Bool finish_early)
 {
     return ::hgraph::wire<::hgl::demo::timing::m_::n_::finish_or_resume::impl_>(wiring_, finish_early);
@@ -900,7 +920,7 @@ namespace w_
 
 namespace n_::counter
 {
-// counter(const limit: i64) -> i64 (source), module demo.timing, line 155
+// counter(const limit: i64) -> i64 (source), module demo.timing, line 161
 struct impl_
 {
     static constexpr auto name = "demo.timing::counter";
@@ -1003,7 +1023,7 @@ namespace hgl::demo::timing::m_
 {
 namespace w_
 {
-// counter(const limit: i64) -> i64 (source), module demo.timing, line 155
+// counter(const limit: i64) -> i64 (source), module demo.timing, line 161
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counter(::hgraph::Wiring& wiring_, ::hgraph::Int limit)
 {
     return ::hgraph::wire<::hgl::demo::timing::m_::n_::counter::impl_>(wiring_, limit);
@@ -1012,7 +1032,7 @@ namespace w_
 
 namespace n_::counting_from
 {
-// counting_from(const first: i64) -> i64 (source), module demo.timing, line 166
+// counting_from(const first: i64) -> i64 (source), module demo.timing, line 172
 struct impl_
 {
     static constexpr auto name = "demo.timing::counting_from";
@@ -1113,7 +1133,7 @@ namespace hgl::demo::timing::m_
 {
 namespace w_
 {
-// counting_from(const first: i64) -> i64 (source), module demo.timing, line 166
+// counting_from(const first: i64) -> i64 (source), module demo.timing, line 172
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counting_from(::hgraph::Wiring& wiring_, ::hgraph::Int first)
 {
     return ::hgraph::wire<::hgl::demo::timing::m_::n_::counting_from::impl_>(wiring_, first);
@@ -1122,7 +1142,7 @@ namespace w_
 
 namespace n_::i_::repeated::of_i64
 {
-// repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 176
+// repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 182
 struct impl_
 {
     static constexpr auto name = "demo.timing::repeated[i64]";
@@ -1222,7 +1242,7 @@ namespace hgl::demo::timing::m_
 {
 namespace w_::i_::repeated
 {
-// repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 176
+// repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 182
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> of_i64(::hgraph::Wiring& wiring_, ::hgraph::Int value, ::hgraph::Int times)
 {
     return ::hgraph::wire<::hgl::demo::timing::m_::n_::i_::repeated::of_i64::impl_>(wiring_, value, times);
@@ -1454,6 +1474,45 @@ void a_source_keeps_its_cache_and_state()
     });
         const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 5, 5};
         ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+}
+
+void a_run_configuration_is_a_value()
+{
+    ::hglrt::testing::statement();
+    [[maybe_unused]] const ::hgraph::DateTime opening = ::hgraph::DateTime{std::chrono::microseconds{1767605400000000}};
+    ::hglrt::testing::statement();
+    [[maybe_unused]] const ::hgl::core::m_::RunConfig times = ::hgl::core::m_::RunConfig{opening, std::nullopt, std::nullopt};
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, ::hglrt::sub__datetime_duration(opening, ::hgraph::TimeDelta{2}), opening), ::hgraph::Str{::hglrt::testing::run_output});
+    }, [&] { const ::hgl::core::m_::RunConfig config_00_ = times; return ::hglrt::testing::Bounds{.start = config_00_.start, .end = config_00_.end, .length = config_00_.length}; }());
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{20};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_07_ = [&]() {
+        const ::hgraph::DateTime argument_03_ = opening;
+        const ::hgraph::DateTime argument_04_ = ::hglrt::add__datetime_duration(opening, ::hgraph::TimeDelta{2});
+        const auto bounds_06_ = [&] { const ::hgl::core::m_::RunConfig config_05_ = ::hgl::demo::timing::m_::opening_at(opening); return ::hglrt::testing::Bounds{.start = config_05_.start, .end = config_05_.end, .length = config_05_.length}; }();
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, argument_03_, argument_04_), ::hgraph::Str{::hglrt::testing::run_output});
+    }, bounds_06_);
+    }();
+        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 20};
+        ::hglrt::testing::expect_same(left_07_, right_08_);
+    }();
+    ::hglrt::testing::statement();
+    [[maybe_unused]] const ::hgl::core::m_::RunConfig short_ = ::hgl::core::m_::RunConfig{opening, std::nullopt, ::hgraph::TimeDelta{3}};
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_010_ = ::hglrt::testing::evaluate<::hgraph::DateTime>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        ::hgl::core::m_::w_::i_::record::of_datetime(wiring_, ::hgl::demo::timing::m_::w_::time_before_each_delay(wiring_), ::hgraph::Str{::hglrt::testing::run_output});
+    }, [&] { const ::hgl::core::m_::RunConfig config_09_ = (::hgl::demo::timing::m_::valid_start(short_) ? ::hgl::core::m_::RunConfig(short_) : ::hgl::core::m_::RunConfig(times)); return ::hglrt::testing::Bounds{.start = config_09_.start, .end = config_09_.end, .length = config_09_.length}; }());
+        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::DateTime>{std::nullopt, std::nullopt, opening};
+        ::hglrt::testing::expect_same(left_010_, right_011_);
     }();
 }
 

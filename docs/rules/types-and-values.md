@@ -143,7 +143,8 @@ analyser: partial
 
 - A size is a count that is not negative; `unbounded`; size in identity, by value; tuples distinct from lists
 - A size is read by the one reader (`constant`) as an `i64`: a constant of a module, and a constant expression of those, is its value (UNIT-13); a list constant of another length than its place's size is of another type
-- Left: an unsized pattern accepting a fixed size
+- A size a generic value parameter gives is held where the parameter is given (`values::sizes`): by a struct application written in any type, a construction's and a parent's included, its argument written, defaulted, or worked out from a size expression, through the fields of the structs it applies; and by a call of a generic function, in its parameters and result. A negative count, or no count, is `list.size` there
+- Left: an unsized pattern accepting a fixed size; a size inside a generic body, a local's `list<i64, N - 3>`, which GEN-7 judges once where the body is declared
 
 transpiler: partial
 
@@ -162,7 +163,8 @@ analyser: partial
 - Its delta is the V that arrived (TYPE-16), and of a nullable V the nullable's own delta, `delta<V>`, which its result takes as well (TIME-7), read before the window is all valid as after; a read of the delta of a window of a duration, an input's, a child's or `out`'s, whose place is not a `result` is `payload.unguarded`, and one of a window of a tick count is not
 - Core's `removed_value` is read where its place takes a `result<V, error>` (ERR-14); a read whose place is not a `result` is `payload.unguarded` for every window
 - A window's result takes a V and nothing else (TIME-7); its trace's cells are V (TST-5), a generic target's once its arguments are known
-- Left: a size computed by a call, or from a generic parameter, whose kind and bounds are not checked; the delta of a window of a duration that a generic parameter stands for, which is read in an instance
+- A size a generic value parameter gives is held to the same kind and bounds where the parameter is given, as TYPE-10's is (`values::sizes`): `Ticks<0>` for a `rolling_window<f64, N>` is `rolling_window.size_bounds`, and `Kinded<"x">` `rolling_window.size_kind`
+- Left: a size computed by a call; a size inside a generic body (GEN-7); the delta of a window of a duration that a generic parameter stands for, which is read in an instance
 
 transpiler: partial
 
