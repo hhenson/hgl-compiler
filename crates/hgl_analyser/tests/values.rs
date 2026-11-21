@@ -4537,6 +4537,38 @@ fn explicit_operator_reference_defaults_preserve_typed_constants() {
     );
 }
 
+/// EXPR-5 contextualizes collection literals and preserves the type
+/// of a named constant and the identity of a resolved enum (FN-17, GEN-8).
+#[test]
+fn explicit_operator_reference_defaults_preserve_collection_types() {
+    let checked = module(concat!(
+        "const fn apply(f: const fn(i64) -> f64) -> f64 => f(0)\n",
+        "const Amounts: list<i64> = [3]\n",
+        "operator named_amounts<const enabled: bool, const amounts: list<i64> = Amounts>(x: i64) -> f64\n",
+        "impl const fn named_amounts<T, const enabled: T, const amounts: list<f64> = [3.0]>(x: i64) -> f64 => amounts[0]\n",
+        "enum PublicMode { ready }\n",
+        "enum OtherMode { ready }\n",
+        "operator typed_mode<const enabled: bool, const option: tuple<PublicMode, i64> = (.ready, 3)>(x: i64) -> f64\n",
+        "impl const fn typed_mode<T, const enabled: T, const option: tuple<OtherMode, f64> = (.ready, 3.0)>(x: i64) -> f64 => 3.0\n",
+        "operator same_mode<const enabled: bool, const option: tuple<PublicMode, i64> = (.ready, 3)>(x: i64) -> f64\n",
+        "impl const fn same_mode<T, const enabled: T, const option: tuple<PublicMode, f64> = (.ready, 3.0)>(x: i64) -> f64 => 3.0\n",
+        "const fn named() -> f64 => apply(named_amounts<true>)\n",
+        "const fn written() -> f64 => apply(named_amounts<true, Amounts>)\n",
+        "const fn wrong() -> f64 => apply(typed_mode<true>)\n",
+        "const fn same() -> f64 => apply(same_mode<true>)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:34 type/type.mismatch FN-17",
+            "m.hgl:13:36 type/type.mismatch FN-17",
+            "m.hgl:14:34 type/type.mismatch FN-17",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-13: a supplied callback option can resolve a type parameter
 /// mentioned only in the option's candidate type.
 #[test]

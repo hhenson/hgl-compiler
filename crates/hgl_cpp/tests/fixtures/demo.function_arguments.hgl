@@ -187,6 +187,12 @@ impl const fn signed<const positive: bool = true>(value: i64) -> i64
 operator option_bias<const enabled: bool, const amount: i64 = 3>(value: i64) -> f64
 impl const fn option_bias<T, const enabled: T, const amount: f64 = 3.0>(value: i64) -> f64 => amount
 
+operator list_bias<const enabled: bool, const amounts: list<i64> = [3]>(value: i64) -> f64
+impl const fn list_bias<T, const enabled: T, const amounts: list<f64> = [3.0]>(value: i64) -> f64 => amounts[0]
+
+operator nested_bias<const enabled: bool, const amounts: list<list<i64>> = [[3]]>(value: i64) -> f64
+impl const fn nested_bias<T, const enabled: T, const amounts: list<list<f64>> = [[3.0]]>(value: i64) -> f64 => amounts[0][0]
+
 operator option_infers<const enabled: bool>(value: i64) -> i64
 impl const fn option_infers<T, const enabled: T>(value: i64) -> i64 => value
 
@@ -211,6 +217,10 @@ test explicit_operator_callbacks {
     assert apply(signed, 8) == 8
     assert widened(option_bias<true>, 8) == 3.0
     assert widened(option_bias<true, 3>, 8) == 3.0
+    assert widened(list_bias<true>, 8) == 3.0
+    assert widened(list_bias<true, [3]>, 8) == 3.0
+    assert widened(nested_bias<true>, 8) == 3.0
+    assert widened(nested_bias<true, [[3]]>, 8) == 3.0
     assert apply(option_infers<true>, 8) == 8
     assert eval lifted_convert(value: [2, 3]) == [2.0, 3.0]
     assert eval composed_operator(value: [2, 3]) == [12, 13]

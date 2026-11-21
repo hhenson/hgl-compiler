@@ -1841,20 +1841,36 @@ impl CallbackOption<'_> {
         }
         let read = crate::constant::Typed::of(self.value.value.clone(), Some(self.ty.clone()));
         crate::constant::fit(read, Some(expected), typer.program).or_else(|fault| {
-            // EXPR-5 gives an integer literal the candidate's f64 type.
-            // Read the default in its definition scope so a named i64
-            // constant still has its own type.
+            // EXPR-5 contextualizes literals in the candidate's type.
+            // Read in the definition scope so a named constant keeps its type.
             if let CallbackOptionSource::Default { file, node } = &self.source
-                && matches!(self.value.value, ConstantValue::Int(_))
-                && accepts_float(expected)
-                && let Ok(value @ ConstantValue::Float(_)) =
-                    typer.read_in(*file, node, Some(expected))
+                && let Ok(value) = typer.read_in(*file, node, Some(expected))
+                && widens_default_literals(&self.value.value, &value)
             {
                 Ok(value)
             } else {
                 Err(fault)
             }
         })
+    }
+}
+
+/// A contextual read may widen an integer literal at any depth (EXPR-5).
+/// The constant reader decides whether each expression fits the new type.
+/// Other parts keep their resolved values, including an implied enum member
+/// whose nominal identity was resolved at the public parameter.
+fn widens_default_literals(public: &ConstantValue, fitted: &ConstantValue) -> bool {
+    match (public, fitted) {
+        (ConstantValue::Int(_), ConstantValue::Float(_)) => true,
+        (ConstantValue::List(public), ConstantValue::List(fitted))
+        | (ConstantValue::Tuple(public), ConstantValue::Tuple(fitted)) => {
+            public.len() == fitted.len()
+                && public
+                    .iter()
+                    .zip(fitted)
+                    .all(|(public, fitted)| widens_default_literals(public, fitted))
+        }
+        _ => public.same(fitted) == Some(true),
     }
 }
 
