@@ -46,13 +46,14 @@ test a_configuration_default_reads_the_operators_generics {
 
 # GEN-16 requires the ordinary operand. FN-18 configuration occupies
 # distinct slots, and a candidate may have an extra defaulted option.
-operator pick<T>{flag: bool = false}(value: T) -> T
+operator pick<T, const mode: i64 = 0>{flag: bool = false}(value: T) -> T
 impl const fn pick{extra: i64 = 100, flag: bool}(value: i64) -> i64 =>
     if flag { 0 } else { value + extra }
 impl const fn pick{flag: bool}(value: bool) -> bool => if flag { false } else { value }
 
 const fn required_pick<T>(value: T) -> T requires pick(T) -> T => pick(value)
 const fn required_named_pick<T>(value: T) -> T requires pick(T) -> T => pick<T>(value: value)
+const fn required_option_pick<T>(value: T) -> T requires pick(T) -> T => pick{mode: 0}(value)
 const fn required_configured_pick<T>(value: T) -> T requires pick(T) -> T =>
     pick{flag: true}(value)
 
@@ -63,6 +64,8 @@ const fn required_wide_config<T>(value: T) -> f64 requires wide_config(T) -> f64
     wide_config{offset: 3}(value)
 
 test a_required_operator_keeps_ordinary_argument_slots {
+    assert required_option_pick(5) == 105
+    assert required_option_pick(true) == true
     assert required_pick(7) == 107
     assert required_named_pick(true)
     assert required_configured_pick(7) == 0

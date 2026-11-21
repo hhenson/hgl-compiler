@@ -356,12 +356,18 @@ impl<'a> Typer<'a> {
         // generic parameters is callable in its body. The requirement
         // is of the call as it asks: one that gives another output than
         // the call requests, its defaults included, is not this call.
+        // Named public generics are already in `written_generics` (GEN-8).
+        let value_argument = |argument: &Given| argument.key.generic_parameter(public).is_none();
         if let Some(result) = self.required(
             operator,
-            &given.iter().collect::<Vec<_>>(),
+            &given
+                .iter()
+                .filter(|argument| value_argument(argument))
+                .collect::<Vec<_>>(),
             (requested.as_ref(), expected),
             written_generics.as_deref(),
         ) {
+            given.retain(value_argument);
             return self.call_required(operator, result, given, operator_generics, Form::Named);
         }
         // True where the output requested is the type the call writes
