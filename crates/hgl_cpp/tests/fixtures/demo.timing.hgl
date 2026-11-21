@@ -1,0 +1,245 @@
+module demo.timing
+
+# The timing the cpp target writes: nodes woken by a scheduler or an
+# alarm (CAP-4, CAP-5, TIME-3, TIME-9), and sources with declarations and
+# hooks (SOURCE-1 to SOURCE-4). Its goldens are under
+# `tests/goldens/demo.timing`.
+
+# A node with no input that its scheduler wakes, under a tag, a number
+# of times (CAP-4).
+fn ticker(const every: duration, const times: i64) -> i64 {
+    state count: i64 = 0
+    inject scheduler
+    start { schedule(scheduler, every, tag: "tick") }
+    when scheduled() {
+        count += 1
+        if count < times { schedule(scheduler, every, tag: "tick") }
+        return count
+    }
+}
+
+# A wake that lands with an input's tick is the scheduler's and the
+# input's; one alone is the scheduler's (TIME-3, TIME-9).
+fn cause_of_wake(value: i64) -> str {
+    inject scheduler
+    start {
+        schedule(scheduler, 2us, tag: "with input")
+        schedule(scheduler, 4us, tag: "alone")
+    }
+    when scheduled() && valid([]) {
+        if modified(value) { return "input and scheduler" }
+        return "scheduler"
+    }
+    when modified(value) { return "input" }
+}
+
+# `modified([])` read in the handler that selects it is true (TIME-3).
+fn empty_selected(value: i64) -> bool {
+    inject scheduler
+    start { schedule(scheduler, 2us) }
+    when modified([]) && valid([]) { return modified([]) }
+}
+
+# Read elsewhere, it is whether no input published.
+fn empty_elsewhere(value: i64) -> bool {
+    inject scheduler
+    start {
+        schedule(scheduler, 2us, tag: "with input")
+        schedule(scheduler, 4us, tag: "alone")
+    }
+    when scheduled() { return modified([]) }
+}
+
+# `scheduled()` read as a value, in a handler an input's tick runs.
+fn scheduled_on_input(value: i64) -> bool {
+    inject scheduler
+    start { schedule(scheduler, 2us) }
+    when { return scheduled() }
+}
+
+# `is_scheduled` is true while a wake is pending: the one being delivered
+# is pending no longer (CAP-4).
+fn pending() -> bool {
+    inject scheduler
+    start {
+        schedule(scheduler, 1us)
+        schedule(scheduler, 3us)
+    }
+    when scheduled() { return scheduler.is_scheduled }
+}
+
+# `un_schedule` with no tag cancels the earliest pending wake (CAP-4).
+fn cancel_next() -> bool {
+    state woken: i64 = 0
+    inject scheduler
+    start {
+        schedule(scheduler, 1us)
+        schedule(scheduler, 3us)
+        schedule(scheduler, 5us)
+    }
+    when scheduled() {
+        woken += 1
+        if woken == 1 { un_schedule(scheduler) }
+        return scheduler.is_scheduled_now
+    }
+}
+
+# A wake asked for at a datetime before now is dropped (TIME-8).
+fn wake_in_the_past(value: i64) -> str {
+    inject scheduler
+    when scheduled() { return "woken" }
+    when modified(value) {
+        schedule(scheduler, never)
+        return "asked"
+    }
+}
+
+# A wake asked of the scheduler outside `start` with no duration fails
+# (TIME-8).
+fn wake_after(delay: duration) -> bool {
+    inject scheduler
+    when modified(delay) {
+        schedule(scheduler, delay)
+        return true
+    }
+}
+
+# An evaluation in which an input ticked is no alarm's (TIME-9).
+fn alarm_or_input(value: i64) -> str {
+    inject alarm
+    start { schedule(alarm, 2us) }
+    when scheduled() && valid([]) { return "alarm" }
+    when modified(value) { return "input" }
+}
+
+# A node with no input that its alarm wakes: every handler subscribes to
+# none (CAP-5).
+fn alarmed() -> i64 {
+    state count: i64 = 0
+    inject alarm
+    start { schedule(alarm, 1us) }
+    when {
+        count += 1
+        if count < 3 { schedule(alarm, 2us) }
+        return count
+    }
+}
+
+# A source's body reads its clock when it runs (SOURCE-2, CAP-3).
+fn time_before_each_delay() -> datetime {
+    inject clock
+    {
+        yield 2us: clock.evaluation_time
+        yield 3us: clock.evaluation_time
+    }
+}
+
+# Absolute targets (SOURCE-3).
+fn absolute_yields(const first: datetime, const second: datetime) -> i64 {
+    yield first: 10
+    yield second: 20
+}
+
+# A source keeps its locals until it returns (SOURCE-4).
+fn finish_or_resume(const finish_early: bool) -> i64 {
+    inject clock
+    {
+        let opening = clock.evaluation_time
+        yield 2us: 10
+        if finish_early { return }
+        yield opening + 4us: 20
+    }
+}
+
+# A source with a `cache`, which its `stop` reads (SOURCE-1).
+fn counter(const limit: i64) -> i64 {
+    inject logger
+    cache count: i64 = 0
+    while count < limit {
+        count += 1
+        yield 1us: count
+    }
+    stop { log_debug(logger, "counted") }
+}
+
+# A source with a `state` that its `start` sets.
+fn counting_from(const first: i64) -> i64 {
+    state next: i64 = 0
+    start { next = first }
+    while next < first + 3 {
+        yield 1us: next
+        next += 1
+    }
+}
+
+# A generic source with a `cache`, written for each instance (GEN-2).
+fn repeated<T>(const value: T, const times: i64) -> T {
+    cache done: i64 = 0
+    while done < times {
+        done += 1
+        yield 1us: value
+    }
+}
+
+test a_scheduler_wakes_a_node_with_no_input {
+    assert eval(ticker(every: 2us, times: 3)) == [_, _, 1, _, 2, _, 3]
+}
+
+test a_wake_can_coincide_with_an_input {
+    assert eval(cause_of_wake(value: [7, _, 9])) ==
+        ["input", _, "input and scheduler", _, "scheduler"]
+}
+
+test an_empty_selection_is_true_where_it_is_selected {
+    assert eval(empty_selected(value: [7, _, 9])) == [_, _, true]
+    assert eval(empty_elsewhere(value: [7, _, 9])) == [_, _, false, _, true]
+}
+
+test scheduled_is_read_as_a_value {
+    assert eval(scheduled_on_input(value: [7, _, 9])) == [false, _, true]
+}
+
+test the_wake_delivered_is_pending_no_longer {
+    assert eval(pending()) == [_, true, _, false]
+    assert eval(cancel_next()) == [_, true, _, _, _, true]
+}
+
+test a_wake_before_now_is_dropped {
+    assert eval(wake_in_the_past(value: [7, _, 9])) == ["asked", _, "asked"]
+}
+
+test a_zero_duration_outside_start_fails {
+    assert raises("schedule.non_positive_duration") {
+        eval(wake_after(delay: [1us, 0s]))
+    }
+}
+
+test an_alarm_wakes_a_node {
+    assert eval(alarm_or_input(value: [1, 2, 3, 4])) == ["input", "input", "input", "input"]
+    assert eval(alarmed()) == [_, 1, _, 2, _, 3]
+}
+
+test a_source_reads_its_clock_when_it_runs {
+    assert eval(time_before_each_delay()) ==
+        [_, _, earliest_start, _, _, earliest_start + 2us]
+}
+
+test absolute_targets_before_at_and_after_the_start {
+    assert eval(absolute_yields(first: never, second: earliest_start)) == [20]
+    assert eval(absolute_yields(first: earliest_start, second: earliest_start + 2us)) ==
+        [10, _, 20]
+    assert raises("yield.non_increasing_time") {
+        eval(absolute_yields(first: never, second: never))
+    }
+}
+
+test a_resumed_source_keeps_its_locals_until_it_returns {
+    assert eval(finish_or_resume(finish_early: false)) == [_, _, 10, _, 20]
+    assert eval(finish_or_resume(finish_early: true)) == [_, _, 10]
+}
+
+test a_source_keeps_its_cache_and_state {
+    assert eval(counter(limit: 3)) == [_, 1, 2, 3]
+    assert eval(counting_from(first: 10)) == [_, 10, 11, 12]
+    assert eval(repeated(value: 5, times: 2)) == [_, 5, 5]
+}

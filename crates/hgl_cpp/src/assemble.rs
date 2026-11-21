@@ -1,8 +1,9 @@
 //! Puts the pieces `emit` wrote into the target's files: for each
 //! module a header of its declarations, a types header of the types it
 //! declares where it declares one, and a unit of its definitions and
-//! tests, and for each module with a test that can be run an entry
-//! unit. Part of the transpiler, the last stage.
+//! tests, for each module with a test that can be run an entry unit, and
+//! for each application that can be run one too (UNIT-14). Part of the
+//! transpiler, the last stage.
 //!
 //! C++ is compiled a unit at a time and whole, so a piece is written
 //! only where it is *clear*: neither it nor any piece it names, through
@@ -17,10 +18,10 @@ use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Location};
 use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
-use crate::emit::{Piece, Written, module_namespace, program_names, test_namespace};
+use crate::emit::{APPLICATION, Piece, Written, module_namespace, program_names, test_namespace};
 use crate::{
-    Application, Executable, File, Output, Test, Unit, entry_path, header_path, runtime,
-    types_header_path, unit_path,
+    Application, Executable, File, Output, Test, Unit, application_path, entry_path, header_path,
+    runtime, types_header_path, unit_path,
 };
 
 /// The first line of every file the target writes.
@@ -127,7 +128,12 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .enumerate()
             .filter(|(test, _)| Some(index) != core && blocks[index].tests[*test].is_none())
             .collect();
-        if defined.is_empty() && tests.is_empty() {
+        // An application's run statement, where it is clear (UNIT-14).
+        let application = module
+            .application
+            .as_ref()
+            .filter(|_| blocks[index].application.is_none());
+        if defined.is_empty() && tests.is_empty() && application.is_none() {
             continue;
         }
         // The headers of the other modules whose functions its pieces
@@ -136,6 +142,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .iter()
             .copied()
             .chain(tests.iter().map(|(_, piece)| *piece))
+            .chain(application)
             .flat_map(|piece| {
                 piece
                     .reach
@@ -214,6 +221,14 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             }
             unit.push_str(&format!("\n}}  // namespace {declared}\n"));
         }
+        if let Some(piece) = application {
+            let namespace = module_namespace(path);
+            let declared = namespace.trim_start_matches("::");
+            unit.push_str(&format!(
+                "\nnamespace {declared}\n{{\n\n{}\n}}  // namespace {declared}\n",
+                piece.text
+            ));
+        }
         unit_of[index] = Some(units.len());
         units.push(Unit {
             module: path.clone(),
@@ -288,19 +303,43 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         });
     }
 
-    // UNIT-14: each application, with what stops it being run.
-    let applications = program
-        .modules
-        .iter()
-        .zip(written)
-        .zip(&blocks)
-        .filter(|((_, written), _)| written.application.is_some())
-        .map(|((module, _), blocks)| Application {
-            path: module.path.clone(),
-            real_time: module.run_body.as_ref().is_some_and(|run| run.real_time),
-            blocked: blocks.application.clone(),
-        })
-        .collect();
+    // UNIT-14: each application, with what stops it being run, and for
+    // one that can be run its entry unit and the units its executable is
+    // linked from, as a module's tests' are.
+    let mut applications = Vec::new();
+    for (index, module) in written.iter().enumerate() {
+        if module.application.is_none() {
+            continue;
+        }
+        let declared = &program.modules[index];
+        let blocked = blocks[index].application.clone();
+        let mut application = Application {
+            path: declared.path.clone(),
+            real_time: declared.run_body.as_ref().is_some_and(|run| run.real_time),
+            blocked,
+            source: None,
+            units: Vec::new(),
+        };
+        if application.blocked.is_none() {
+            let mut reached: BTreeSet<usize> = BTreeSet::new();
+            let mut next = vec![index];
+            while let Some(module) = next.pop() {
+                if reached.insert(module) {
+                    next.extend(&calls_into[module]);
+                }
+            }
+            files.push(File {
+                path: application_path(&declared.path),
+                text: application_entry(program, index),
+            });
+            application.source = Some(application_path(&declared.path));
+            application.units = reached
+                .iter()
+                .filter_map(|&module| unit_of[module])
+                .collect();
+        }
+        applications.push(application);
+    }
 
     // What blocks each piece of the program's own modules that is
     // blocked by another piece.
@@ -356,11 +395,11 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
 
 /// The types header of module `index`, of the pieces `typed` that
 /// declare its types (`emit::Layout`): the types headers of the modules
-/// whose types they name; each struct declared; what each struct
-/// inherits from; the enums and then the structs, each struct after
-/// those it holds, as C++ needs a struct defined before a struct that
-/// holds it, though a type may name one declared after it (UNIT-6); and
-/// what each struct tells the runtime library.
+/// whose types they name; the enums, which a struct's generic parameter
+/// may be of, and each struct declared; what each struct inherits from;
+/// the structs, each after those it holds, as C++ needs a struct defined
+/// before a struct that holds it, though a type may name one declared
+/// after it (UNIT-6); and what each struct tells the runtime library.
 fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
     let path = &program.modules[index].path;
     let namespace = module_namespace(path);
@@ -416,6 +455,14 @@ fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
     }
     let within =
         |body: String| format!("\nnamespace {declared}\n{{\n{body}\n}}  // namespace {declared}\n");
+    // The enums first: a struct's generic parameter may be of one, which
+    // its forward declaration names.
+    let enums: Vec<String> = typed
+        .iter()
+        .filter(|piece| piece.layout.is_none() && !piece.declaration.is_empty())
+        .map(|piece| piece.declaration.clone())
+        .collect();
+    let mut first = format!("\n{}", enums.join("\n"));
     if !ordered.is_empty() {
         let forward: String = ordered
             .iter()
@@ -425,9 +472,15 @@ fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
             .iter()
             .map(|layout| layout.delta_forward.as_str())
             .collect();
-        text.push_str(&within(format!(
+        if !enums.is_empty() {
+            first.push('\n');
+        }
+        first.push_str(&format!(
             "{forward}namespace d_\n{{\n{deltas}}}  // namespace d_"
-        )));
+        ));
+    }
+    text.push_str(&within(first));
+    if !ordered.is_empty() {
         let parents: String = ordered
             .iter()
             .map(|layout| layout.parents.as_str())
@@ -436,17 +489,12 @@ fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
             text.push('\n');
             text.push_str(&parents);
         }
+        let definitions: Vec<String> = ordered
+            .iter()
+            .map(|layout| layout.definition.clone())
+            .collect();
+        text.push_str(&within(format!("\n{}", definitions.join("\n"))));
     }
-    let mut definitions = Vec::new();
-    for piece in typed.iter().filter(|piece| piece.layout.is_none()) {
-        if !piece.declaration.is_empty() {
-            definitions.push(piece.declaration.clone());
-        }
-    }
-    for layout in &ordered {
-        definitions.push(layout.definition.clone());
-    }
-    text.push_str(&within(format!("\n{}", definitions.join("\n"))));
     if !ordered.is_empty() {
         text.push('\n');
         for layout in &ordered {
@@ -576,4 +624,31 @@ fn entry(program: &Program, index: usize, clear: &[(usize, &Piece)]) -> String {
         crate::emit::testing("main")
     ));
     text
+}
+
+/// The entry unit of application `index` (UNIT-14): the declaration of the
+/// function its run statement is written as, and a `main` that is the
+/// runtime library's host of it, which runs it once in the mode its word
+/// says (RUN-3) and records what became of the run. It includes the host's
+/// light header alone, as a test's entry unit does.
+fn application_entry(program: &Program, index: usize) -> String {
+    let module = &program.modules[index];
+    let namespace = module_namespace(&module.path);
+    let declared = namespace.trim_start_matches("::");
+    let real_time = module.run_body.as_ref().is_some_and(|run| run.real_time);
+    let (word, mode) = if real_time {
+        ("run", "in real time")
+    } else {
+        ("eval", "a simulation")
+    };
+    let library = runtime::NAMESPACE;
+    format!(
+        "{WRITTEN}\n#include <{}>\n\nnamespace {declared}\n{{\n\
+         ::{library}::application::Output {APPLICATION}();\n}}  // namespace {declared}\n\n\
+         // The run statement of `{}` is `{word}`: {mode} (RUN-3).\n\
+         int main(int argc, char **argv)\n{{\n    \
+         ::{library}::application::main(argc, argv, {real_time}, &{namespace}::{APPLICATION});\n}}\n",
+        runtime::APPLICATION_HOST_HEADER,
+        module.path,
+    )
 }

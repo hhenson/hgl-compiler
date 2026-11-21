@@ -10,8 +10,8 @@ use super::Typer;
 use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::expressions::takes_its_type;
-use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, not_null, whole};
-use super::inference::{bare_parameter, infer, mentions, placed};
+use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, whole};
+use super::inference::{asked_of_result, bare_parameter, infer, mentions, placed};
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use crate::constant::Fault;
@@ -816,6 +816,7 @@ impl<'a> Typer<'a> {
                 .collect(),
             place: wanted.place.cloned(),
             among: wanted.among.clone(),
+            written: wanted.written,
             graph: self.graph,
         };
         // The report where nothing the `requires` states settles it.
@@ -1025,6 +1026,7 @@ impl<'a> Typer<'a> {
                 .among
                 .as_ref()
                 .map(|among| among.iter().map(in_place).collect()),
+            written: selecting.written,
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         if untold || self.rereads == 0 && given.iter().any(|given| given.by_place) {
@@ -1199,6 +1201,9 @@ pub(crate) struct Selecting {
     /// What the operator's own requirement admits for its result there
     /// ([`Wanted::among`]).
     pub(crate) among: Option<Vec<Type>>,
+    /// Whether `place` is the type the call writes for the operator's
+    /// result ([`Wanted::written`]).
+    pub(crate) written: bool,
     /// True in composition, where a call selects among the temporal
     /// candidates too (GEN-5).
     pub(crate) graph: bool,
@@ -1395,6 +1400,10 @@ pub(super) struct Wanted<'w> {
     /// called as `convert<f64>(count)`, an `f64` and a
     /// `result<f64, error>`.
     pub(super) among: Option<Vec<Type>>,
+    /// True where `place` is the type the call writes for an operator's
+    /// result that is its type parameter and nothing more, which a
+    /// candidate is given whole (GEN-8; see `asked_of_result`).
+    pub(super) written: bool,
 }
 
 /// What an argument of a call is given to in a candidate.
@@ -1537,11 +1546,12 @@ fn instance<'s>(
             }));
         }
     }
+    // GEN-5: "Match candidates against the requested output before
+    // inputs". The `V` of core's `get<V>(store: GlobalState, const key:
+    // str) -> V` is the `i64?` that `get<i64?>(global_state, key)`
+    // writes (core's CAP-6): see `asked_of_result`.
     if let (Some(place), Some(result)) = (wanted.place, &signature.result) {
-        let place = match result {
-            Type::Nullable(_) => place,
-            _ => not_null(Some(place)).unwrap_or(place),
-        };
+        let place = asked_of_result(result, place, wanted.written);
         infer(result, place, generics, &mut found);
     }
     // The generic parameters an argument decided: what the call writes,

@@ -18,9 +18,10 @@
 //! | A cell of a trace of one (TST-5) | `::hglrt::testing::Cell<T>`, of a `Whole<T>` or of a delta |
 //!
 //! A part the library does not read and publish yet (`list_endpoints.h`),
-//! a struct, a set, a dictionary, a window, is not this family's, and
-//! neither is a lifted input of a fixed list or a tuple, which FN-11
-//! admits only where it is `all_valid`: each is reported.
+//! a struct, a set, a dictionary, a window, is not this family's, and is
+//! reported. FN-11 gives a lifted helper a fixed list or a tuple only
+//! where it is `all_valid`, which the lifted call's node asks first
+//! (`lifting`).
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Value};
 use hgl_analyser::{ConstantValue, NamedKind, Type};
@@ -187,18 +188,12 @@ impl Family for Lists {
     // TIME-1: "A read of a struct, a tuple or a fixed list whole ...
     // requires `all_valid` of it ... A dictionary and an unsized list hold
     // what they hold: a read of one whole requires its `valid` and no
-    // more", checked when it runs. FN-11: a lifted fixed list or tuple "is
-    // supplied only where it is `all_valid` as well ... and the helper is
-    // not invoked", an admission the lifted node does not make yet: its
-    // read is not written.
-    fn read(&self, emitter: &mut Emitter<'_>, ty: &Type, view: &str) -> Option<String> {
+    // more", checked when it runs.
+    fn read(&self, _emitter: &mut Emitter<'_>, ty: &Type, view: &str) -> Option<String> {
         if !supported(ty) {
             return None;
         }
-        let shape = shape(ty)?;
-        if emitter.kind() == Some(Kind::Lifted) && !matches!(shape, Shape::Growing(_)) {
-            return None;
-        }
+        shape(ty)?;
         Some(format!("::{}::checked_whole({view})", runtime::NAMESPACE))
     }
 

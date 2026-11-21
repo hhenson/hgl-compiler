@@ -5,13 +5,14 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | `fn count(value: i64) -> i64 { ... }` | a struct `n_::count` of the module's namespace, with static `eval`, and `start` and `stop` where it needs them; and a wiring function `w_::count(wiring_, value)`, which its module's header declares, that adds the node to a graph |
+//! | `fn count(value: i64) -> i64 { ... }` | a struct `n_::count::impl_` of the module's namespace, with static `eval`, and `start` and `stop` where it needs them; and a wiring function `w_::count(wiring_, value)`, which its module's header declares, that adds the node to a graph |
 //! | A temporal parameter; a `const` one | `::hgraph::In<"value", TS<...>>`, its activity and its validity the node's (TIME-4); `::hgraph::Scalar<"key", T>` |
 //! | `state` and `cache` (TIME-6) | members of the node's one `state_type_`, held by hgraph as the node's `State`, each given its first value as the node starts, then bound by reference in each hook |
 //! | `inject clock`, `logger`, `global_state` (TIME-8) | the hgraph view of the hook, and the library's capability made from it at the top of the hook (`endpoints`) |
+//! | `inject scheduler`, `inject alarm` (TIME-8, TIME-9) | the same, made with the hook it is made in and in every `eval`, and what woke the node read as `eval` is entered, which guards the handlers (`scheduling`) |
 //! | `when` handlers (TIME-3) | tested in source order in `eval`, each guarded by what it asks beyond the node's own validity |
 //! | `return value`, `out = value` (TIME-7, FN-7) | the value published to the node's output, `out_`, as its temporal form publishes; a `return` then leaves the evaluation |
-//! | A generic node (GEN-2) | a struct and a wiring function for each instance `hgl_lower` collects, `n_::i_::record::of_i64` |
+//! | A generic node (GEN-2) | a struct and a wiring function for each instance `hgl_lower` collects, `n_::i_::record::of_i64::impl_` |
 //!
 //! What a handler subscribes to and requires is `hgl_lower::nodes`'s, as
 //! the analyser read the header. An input every executed handler
@@ -19,15 +20,14 @@
 //! then evaluates the node only once it is valid; one no handler
 //! subscribes to is `InputActivity::Passive`.
 //!
-//! Not written yet, and reported: a `ref` parameter or result (FN-16),
-//! `inject scheduler` and `inject alarm` (CAP-4, CAP-5), a handler that
-//! `scheduled()` or `modified([])` selects where the node injects a
-//! timer, a read of `out`.
+//! What the `ref` mode of a parameter and the result adds is
+//! `references`'s (FN-16). Not written yet, and reported: a read of
+//! `out`.
 
 use hgl_analyser::hir::{Body, Expr, ExprKind, Hook, Local, Stmt};
 use hgl_analyser::{Detail, LocalKind, Phase, Signature, Type};
 use hgl_diagnostics::Location;
-use hgl_lower::nodes::{Handler, is_input, is_out, required_inputs, subscribed_inputs};
+use hgl_lower::nodes::{Handler, Timer, is_input, is_out, required_inputs, subscribed_inputs};
 
 use super::Emitter;
 use super::forms::Family;
@@ -36,11 +36,17 @@ use super::statements::{Scope, statement_at};
 use super::values::INDENT;
 use crate::runtime;
 
+/// The name of every temporal function's struct, in a namespace of the
+/// function's own name (`Placed`): no member it has, `name`, `eval` or
+/// `compose`, has the name of the struct, which C++ refuses, whatever the
+/// function is called.
+pub(super) const IMPLEMENTATION: &str = "impl_";
+
 /// The name of the view of a node's result, `out` (TIME-7).
 pub(super) const OUT: &str = "out_";
 
 /// The name of the view of a node's state.
-const STATE: &str = "state_";
+pub(super) const STATE: &str = "state_";
 
 /// The name of the node's state as a hook changes it.
 const KEPT: &str = "kept_";
@@ -61,6 +67,17 @@ pub(super) struct Context {
     /// The nodes of a graph's lifted calls written so far, each a struct
     /// written in the graph's own (`graphs`).
     pub(super) lifted: Vec<String>,
+    /// The signature of the node whose hook is written, where it is one:
+    /// the modes of its parameters and its result, which a family reads
+    /// (FN-16, `references`).
+    pub(super) signature: Option<Signature>,
+    /// What wakes the node beside its inputs, the scheduler or the alarm
+    /// it injects (TIME-9), which `scheduling` writes.
+    pub(super) timer: Option<Timer>,
+    /// True while the body of a handler whose header selects
+    /// `modified([])` is written, where it is `true` read as a value
+    /// (TIME-3, `scheduling`).
+    pub(super) selected_empty: bool,
 }
 
 impl Context {
@@ -71,6 +88,9 @@ impl Context {
             roles: vec![Role::Plain; locals],
             result: None,
             lifted: Vec::new(),
+            signature: None,
+            timer: None,
+            selected_empty: false,
         }
     }
 }
@@ -182,10 +202,9 @@ impl Emitter<'_> {
     ) {
         let module = &self.program.modules[self.module];
         let at = module.declarations[index].at;
-        // FN-16: a `ref` result designates an endpoint, which the
-        // references work writes.
-        if signature.reference {
-            self.unsupported(at, "a `ref` result");
+        // FN-16: a `ref` parameter or result, which `references` writes,
+        // or reports where it does not.
+        if !self.references_written(signature, phase, module.is_source(index), at) {
             return;
         }
         if let Some(parameter) = signature
@@ -194,14 +213,6 @@ impl Emitter<'_> {
             .find(|parameter| parameter.pack.is_some())
         {
             self.unsupported(parameter.at, "a pack");
-            return;
-        }
-        if let Some(parameter) = signature
-            .parameters
-            .iter()
-            .find(|parameter| parameter.reference)
-        {
-            self.unsupported(parameter.at, "a `ref` parameter");
             return;
         }
         // The body's locals start with its parameters, in order.
@@ -272,6 +283,7 @@ impl Emitter<'_> {
         let placed_at = program.modules[self.module].declarations[index].at;
         let mut context = Context::new(Kind::Hook(Hook::When), body.locals.len());
         context.result = signature.result.clone();
+        context.signature = Some(signature.clone());
         let mut inputs = Vec::new();
         for (local, role) in context.roles.iter_mut().enumerate() {
             if is_input(&body.locals, Some(signature), local) {
@@ -287,6 +299,7 @@ impl Emitter<'_> {
         // (FN-2).
         let mut states: Vec<(usize, Option<&Expr>)> = Vec::new();
         let mut injected: Vec<usize> = Vec::new();
+        let mut timed: Vec<usize> = Vec::new();
         let mut start: Option<&[Stmt]> = None;
         let mut stop: Option<&[Stmt]> = None;
         let mut running: Vec<Handler> = Vec::new();
@@ -306,9 +319,15 @@ impl Emitter<'_> {
                     if name == "out" {
                         continue;
                     }
-                    if super::endpoints::capability(name).is_none() {
+                    if capability(name).is_none() {
                         self.unsupported(*at, &format!("an injected `{name}`"));
                         return;
+                    }
+                    // TIME-9: the scheduler or the alarm, which wakes the
+                    // node beside its inputs (`scheduling`).
+                    if let Some(timer) = Timer::of(name) {
+                        context.timer = Some(timer);
+                        timed.push(*local);
                     }
                     injected.push(*local);
                 }
@@ -339,10 +358,12 @@ impl Emitter<'_> {
                     // TIME-3: "A wake by the scheduler or alarm wakes the
                     // handlers that subscribe to no input and those whose
                     // header has `scheduled()` ... Where the node injects
-                    // neither ... nothing wakes it". No node here injects
-                    // either, so such a handler is never run, and is not
+                    // neither ... nothing wakes it": in a node that injects
+                    // neither such a handler is never run, and is not
                     // written.
-                    if handler.scheduled || handler.subscribed.is_empty() {
+                    if (handler.scheduled || handler.subscribed.is_empty())
+                        && context.timer.is_none()
+                    {
                         continue;
                     }
                     running.push(handler);
@@ -366,13 +387,22 @@ impl Emitter<'_> {
         } else {
             required_inputs(&inputs, &running)
         };
-        // The node's parameters as hgraph's views, in the order of the
-        // signature: the order `wire` gives them in.
-        let Some(parameters) = self.node_parameters(signature, body, &active, &valid) else {
+        // FN-16: the ordinary inputs a `ref` result designates, which the
+        // node follows (`references`), and the validity that leaves the
+        // node's own.
+        let Some(designated) = self.designated_inputs(signature, body, &injected) else {
             return;
         };
+        let valid = designated.validity(valid);
+        // The node's parameters as hgraph's views, in the order of the
+        // signature: the order `wire` gives them in; then the inputs it
+        // follows the designations of.
+        let Some(mut parameters) = self.node_parameters(signature, body, &active, &valid) else {
+            return;
+        };
+        parameters.extend(designated.parameters());
         let output = match &signature.result {
-            Some(result) => match self.temporal_schema(result, placed_at) {
+            Some(result) => match self.endpoint_schema(result, signature.reference, placed_at) {
                 Some(schema) => Some(format!("::hgraph::Out<{schema}> {OUT}")),
                 None => return,
             },
@@ -390,10 +420,11 @@ impl Emitter<'_> {
                 identifier(&declared.name)
             ));
         }
-        let held = !states.is_empty();
+        members.push_str(&designated.members());
+        let held = !states.is_empty() || designated.holds();
         let placed = Placed::of(program, self.module, index, instance);
         let qualified = placed.qualified(program, self.module);
-        let mut text = format!("// {shown}\nstruct {}\n{{\n", placed.name);
+        let mut text = format!("// {shown}\nstruct {IMPLEMENTATION}\n{{\n");
         text.push_str(&format!(
             "{INDENT}static constexpr auto name = {};\n",
             names::string(&placed.display(program, self.module))
@@ -421,28 +452,31 @@ impl Emitter<'_> {
                 written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type_{{}});\n"));
             }
             written.push_str(&prologue(body, &states));
-            let Some(made) = self.capabilities(body, &injected, statements, &mut hook) else {
+            // TIME-6: "Cache is reconstructible node-local value data,
+            // initialized on every start"; a `state` is given its first
+            // value as the node starts too, since no state is restored.
+            // An initializer may read a capability, which is made first.
+            let initialized: Vec<Stmt> = states
+                .iter()
+                .filter_map(|(local, value)| {
+                    value.map(|value| Stmt::Assign {
+                        local: *local,
+                        operator: None,
+                        value: value.clone(),
+                        at: body.locals[*local].at,
+                    })
+                })
+                .collect();
+            let used: Vec<Stmt> = initialized.iter().chain(statements).cloned().collect();
+            let Some(made) = self.capabilities(body, &injected, &[], &used, Hook::Start, &mut hook)
+            else {
                 return;
             };
+            written.push_str(&made);
             context.kind = Kind::Hook(Hook::Start);
             let mut scope = Scope::cold(program, body);
             self.in_context(&mut context, |emitter| {
-                // TIME-6: "Cache is reconstructible node-local value data,
-                // initialized on every start"; a `state` is given its
-                // first value as the node starts too, since no state is
-                // restored.
-                for (local, value) in &states {
-                    if let Some(value) = value {
-                        let assigned = Stmt::Assign {
-                            local: *local,
-                            operator: None,
-                            value: (*value).clone(),
-                            at: body.locals[*local].at,
-                        };
-                        emitter.statement(&mut scope, &assigned, 2, &mut written);
-                    }
-                }
-                written.push_str(&made);
+                emitter.statements(&mut scope, &initialized, 2, &mut written);
                 emitter.statements(&mut scope, statements, 2, &mut written);
             });
             text.push_str(&format!(
@@ -472,10 +506,16 @@ impl Emitter<'_> {
                 used
             })
             .collect();
-        let Some(made) = self.capabilities(body, &injected, &all, &mut hook) else {
+        // The scheduler or the alarm is made in every evaluation: what woke
+        // the node is read from the scheduler, or for an alarm from the
+        // inputs (`scheduling`).
+        let Some(made) = self.capabilities(body, &injected, &timed, &all, Hook::When, &mut hook)
+        else {
             return;
         };
         written.push_str(&made);
+        written.push_str(&self.designation_prologue(&designated, body, &inputs, &active));
+        written.push_str(&super::scheduling::woken(&context, body, &inputs));
         context.kind = Kind::Hook(Hook::When);
         for (handler, at) in running.iter().zip(&places) {
             if !self.handler(
@@ -508,7 +548,9 @@ impl Emitter<'_> {
                 hook.push(output.clone());
             }
             let mut written = prologue(body, &states);
-            let Some(made) = self.capabilities(body, &injected, statements, &mut hook) else {
+            let Some(made) =
+                self.capabilities(body, &injected, &[], statements, Hook::Stop, &mut hook)
+            else {
                 return;
             };
             written.push_str(&made);
@@ -568,7 +610,7 @@ impl Emitter<'_> {
                 written.push(format!("::hgraph::Scalar<{label}, {ty}> {name}"));
                 continue;
             }
-            let schema = self.temporal_schema(&parameter.ty, parameter.at)?;
+            let schema = self.endpoint_schema(&parameter.ty, parameter.reference, parameter.at)?;
             let mut policies = String::new();
             if !active.contains(&local) {
                 policies.push_str(", ::hgraph::InputActivity::Passive");
@@ -595,32 +637,38 @@ impl Emitter<'_> {
         self.temporal = outer;
     }
 
-    /// The capabilities of `injected` that `statements` use, each made
-    /// at the top of its hook from the view hgraph gives it, which is
-    /// added to `parameters` (TIME-8). `None` where one is not written
-    /// yet, which is reported.
-    fn capabilities(
+    /// The capabilities of `injected` that `statements` use, and those of
+    /// `always` whether they do or not, each made at the top of its hook,
+    /// `hook`, from the view hgraph gives it, which is added to
+    /// `parameters` (TIME-8). `None` where one is not written yet, which
+    /// is reported.
+    pub(super) fn capabilities(
         &mut self,
         body: &Body,
         injected: &[usize],
+        always: &[usize],
         statements: &[Stmt],
+        hook: Hook,
         parameters: &mut Vec<String>,
     ) -> Option<String> {
         let mut written = String::new();
         for &local in injected {
-            if !uses(statements, local) {
+            if !uses(statements, local) && !always.contains(&local) {
                 continue;
             }
             let name = &body.locals[local].name;
-            let Some((view, made)) = super::endpoints::capability(name) else {
+            let Some((view, made)) = capability(name) else {
                 self.unsupported(body.locals[local].at, &format!("an injected `{name}`"));
                 return None;
             };
             let parameter = names::temporary("capability", local);
             parameters.push(format!("{view} {parameter}"));
+            // A scheduler and an alarm are made with the hook they are
+            // used in (`scheduling`).
             written.push_str(&format!(
-                "{INDENT}{INDENT}[[maybe_unused]] const {made} {}{{{parameter}}};\n",
-                identifier(name)
+                "{INDENT}{INDENT}[[maybe_unused]] const {made} {}{{{parameter}{}}};\n",
+                identifier(name),
+                super::scheduling::made_in(name, hook)
             ));
         }
         Some(written)
@@ -644,6 +692,9 @@ impl Emitter<'_> {
     ) -> bool {
         let indent = INDENT.repeat(2);
         let mut guards: Vec<String> = Vec::new();
+        // TIME-3: in a node with a scheduler or an alarm, what woke the
+        // node decides which handlers it runs (`scheduling`).
+        guards.extend(super::scheduling::wake_guard(context.timer, handler));
         let mut scope = Scope::cold(self.program, body);
         let mut written = String::new();
         let mut broken = false;
@@ -697,7 +748,15 @@ impl Emitter<'_> {
                     guards.push(guard);
                 }
             }
+            // TIME-3: "In that handler's body `modified([])`, as a bool, is
+            // true" where its header selects it (`scheduling`).
+            if let Some(current) = emitter.temporal.as_mut() {
+                current.selected_empty = handler.empty;
+            }
             emitter.statements(&mut scope, handler.body, 3, &mut written);
+            if let Some(current) = emitter.temporal.as_mut() {
+                current.selected_empty = false;
+            }
         });
         if broken {
             return false;
@@ -772,6 +831,12 @@ impl Emitter<'_> {
             }
             given.push(name);
         }
+        // FN-16: each input a `ref` result designates is given again, to
+        // the input the node follows its re-binding through.
+        for port in self.designated_ports(signature, body) {
+            wired_arguments.push((None, port.clone()));
+            given.push(port);
+        }
         let schema = match &signature.result {
             Some(result) => Some(self.temporal_schema(result, placed.at)?),
             None => None,
@@ -803,6 +868,8 @@ impl Emitter<'_> {
             }
             _ => format!("{wired}({})", given.join(", ")),
         };
+        // FN-16: "a `ref` result is a connection of T to whoever reads it".
+        let called = self.result_port(signature, schema.as_deref(), called);
         let declaration = nested(&placed.wiring, &format!("// {shown}\n{prototype};\n"));
         let definition = nested(
             &placed.wiring,
@@ -925,8 +992,16 @@ fn maybe_unused(parameters: &[String]) -> String {
         .join(", ")
 }
 
+/// The capability `inject name` binds (TIME-8), as the hook's hgraph
+/// view of it and the library's type made from that: the endpoints'
+/// (`clock`, `logger`, `global_state`), and the scheduler and the alarm
+/// (`scheduling`). `None` for any other name.
+fn capability(name: &str) -> Option<(&'static str, &'static str)> {
+    super::endpoints::capability(name).or_else(|| super::scheduling::capability(name))
+}
+
 /// True where `statements` name `local`.
-fn uses(statements: &[Stmt], local: usize) -> bool {
+pub(super) fn uses(statements: &[Stmt], local: usize) -> bool {
     let mut found = false;
     hgl_analyser::hir::walk_statements(statements, &mut |value| {
         found |= matches!(value.kind, ExprKind::Local(named) if named == local);
@@ -989,11 +1064,12 @@ pub(super) fn registration(
 }
 
 /// Where a temporal function, or an instance of one, is written: its
-/// struct is `name` in the namespace `structs` under the module's, and
-/// its wiring function `name` in `wiring`.
+/// struct is [`IMPLEMENTATION`] in the namespace `structs` under the
+/// module's, and its wiring function `name` in `wiring`.
 pub(super) struct Placed {
-    /// The namespace of its struct, under the module's: `n_`, or
-    /// `n_::i_::record` for an instance.
+    /// The namespace of its struct, under the module's, named as the
+    /// function: `n_::count`, or `n_::i_::record::of_i64` for an
+    /// instance.
     pub(super) structs: String,
     /// The namespace of its wiring function, under the module's: `w_`,
     /// or `w_::i_::record`.
@@ -1024,7 +1100,7 @@ impl Placed {
             None => root.to_string(),
         };
         Placed {
-            structs: under("n_"),
+            structs: format!("{}::{name}", under("n_")),
             wiring: under("w_"),
             name,
             hgl: program.modules[module].declarations[declaration]
@@ -1038,10 +1114,9 @@ impl Placed {
     /// Its struct, qualified from the global namespace.
     pub(super) fn qualified(&self, program: &hgl_analyser::Program, module: usize) -> String {
         format!(
-            "{}::{}::{}",
+            "{}::{}::{IMPLEMENTATION}",
             names::module_namespace(&program.modules[module].path),
-            self.structs,
-            self.name
+            self.structs
         )
     }
 
@@ -1084,7 +1159,11 @@ impl Family for Nodes {
         depth: usize,
         text: &mut String,
     ) -> bool {
-        let publishing = matches!(emitter.kind(), Some(Kind::Hook(Hook::When) | Kind::Lifted));
+        // A `return` written inside a value, the block a lambda gives
+        // (`expressions`), is the value's own, and publishes nothing:
+        // `conditional` marks it.
+        let publishing = matches!(emitter.kind(), Some(Kind::Hook(Hook::When) | Kind::Lifted))
+            && scope.conditional == 0;
         let indent = INDENT.repeat(depth);
         match statement {
             // FN-7: "a runtime return publishes and exits the function's

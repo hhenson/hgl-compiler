@@ -13,6 +13,7 @@
 //! | `tuple<A, B>` | `std::tuple<A, B>` |
 //! | `list<T>`, `list<T, N>` | the library's `hglrt::list<T>`, a `std::vector<T>` hgraph can hash; `std::array<T, N>` |
 //! | `error`, `result<T, error>` | the library's `hglrt::error`, hgraph's `CanonicalError`; `hglrt::result<T>`, a `std::expected<T, error>` (ERR-2, ERR-4) |
+//! | An error's `.context` (ERR-4) | hgraph's `ErrorContext` |
 //! | A struct, a set, a dictionary, a delta | `composites`' |
 //!
 //! Every other type is not written yet: a window, a trace and anything
@@ -47,15 +48,18 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
             ..
         } => match program.modules[*module].declarations[*declaration].kind {
             DeclarationKind::Enum => enum_name(program, *module, *declaration),
+            DeclarationKind::Struct => {
+                composites::struct_type(program, (*module, *declaration), arguments, generic)?
+            }
             // CAP-1: a capability is the runtime library's (`endpoints`).
             DeclarationKind::NativeType => {
                 super::endpoints::capability_type(program, *module, *declaration)?
             }
-            DeclarationKind::Struct => {
-                composites::struct_type(program, (*module, *declaration), arguments, generic)?
-            }
             _ => return None,
         },
+        // TYPE-16: "`delta<f64>` is `f64`": a scalar publishes whole, and
+        // its delta is itself.
+        Type::Delta(inner) if matches!(**inner, Type::Scalar(_)) => cpp_type(program, inner)?,
         Type::Nullable(inner) => {
             format!("std::optional<{}>", cpp_type_in(program, inner, generic)?)
         }
@@ -94,6 +98,10 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
             _ => return None,
         },
         Type::Error => format!("::{}::error", runtime::NAMESPACE),
+        // ERR-4: an error's `.context`, "a read-only nullable record of
+        // `.node: str`, `.phase: str` ... and `.evaluation_time`", is
+        // hgraph's `ErrorContext`, which `CanonicalError` holds.
+        Type::ErrorContext => "::hgraph::ErrorContext".to_string(),
         Type::Result { value, error } if **error == Type::Error => format!(
             "::{}::result<{}>",
             runtime::NAMESPACE,
@@ -246,7 +254,13 @@ impl Emitter<'_> {
     /// Notes enum `declaration` of `module`, where it is another module's
     /// and declared by no library.
     pub(super) fn note_enum(&mut self, module: usize, declaration: usize) {
-        let name = &self.program.modules[module].declarations[declaration].name;
+        let declared = &self.program.modules[module].declarations[declaration];
+        // A capability, core's native type, is the library's, and no enum
+        // to declare (`endpoints::capability_type`).
+        if declared.kind != DeclarationKind::Enum {
+            return;
+        }
+        let name = &declared.name;
         let library = Some(module) == self.program.core() && runtime::declares_enum(name);
         if module != self.module && !library {
             self.piece.types.insert((module, declaration));

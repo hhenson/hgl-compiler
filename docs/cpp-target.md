@@ -52,7 +52,7 @@ one executable for each test module or application
 | Scalars | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `ZonedDateTime` and `Tenor`. Tenor literals keep their calendar or business-day form |
 | Struct | A generated struct with HGL's equality. As a temporal value, a nominal bundle whose whole value is the struct |
 | Enum, tuple, optional, list, fixed list, result | `enum class`, `std::tuple`, `std::optional`, `std::vector`, `std::array`, `std::expected` |
-| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key's identity is `==`, but that every NaN is one key |
+| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key is told apart by `==` of its type |
 | Abstract struct | A class that holds any struct that inherits from it, read through a function of each field's name |
 | `delta<T>` | As a value: an optional, `hglrt::list_delta`, `set_delta`, `dict_delta`, a struct's own delta struct, a tuple. Converting to and from hgraph's delta value is the temporal work's: a list's and a tuple's in `list_endpoints.h` |
 | Temporal list, fixed list, tuple | hgraph's `TSL<S>`, `TSL<S, N>` and a bundle with no name of a field for each position, built on as they are |
@@ -64,7 +64,7 @@ one executable for each test module or application
 | `ref` parameter and result | hgraph's `REF` input and output. Returning a whole `ref` parameter publishes the reference that input holds when the `return` runs, and no more: a `REF` output keeps what it was given, which is the specification's rule since hhenson/hgl_spec#147. Returning an ordinary input or a child of one designates that endpoint, which is followed through a re-binding: the node is active on that binding, publishes the new designation there and runs no handler for it (FN-16). A designation the result holds already is not published again (TIME-10) |
 | Failure | Thrown as hgraph's `ExecutionFailure` carrying `CanonicalError` (code, message, node, phase, time). `capture` is `try_except_node` with canonical errors. `assert raises` finds the failure in the exception it catches |
 | Test | Core's `replay` and `record` are compiled like any module. The compiler writes each eval's entry graph, runs the executor in simulation and reads the recording from the run's store |
-| Application | The same, in real time, stopped through the engine's control |
+| Application | The same, in an executable of its own whose host is `libhglrt`'s, in simulation or in real time; a run in real time its host asks to stop is stopped through the engine's control |
 
 ## Safety of generated C++
 
@@ -101,9 +101,20 @@ SDK with Arrow and `graph_wiring.h`, as before):
 The driver keeps these by: one unit for each module; `libhglrt` and core's
 instances built once for an SDK; a precompiled header of the fixed include
 set; one executable for each test module with its cases chosen when it
-runs; `ninja` for what changed; `lld`. A rejection case never builds.
-A unit with no precompiled header still takes about twice as long as one
-against it, so the header stays.
+runs; `ninja` for what changed; `lld` on Linux. A rejection case never
+builds. A unit with no precompiled header still takes about twice as long
+as one against it, so the header stays.
+
+On a macOS machine (Apple Silicon, Apple clang 21), with hgraph 0.9.13's
+SDK and the driver's own commands, beside the same on Linux (GCC 15):
+
+| Step | macOS | Linux |
+| --- | --- | --- |
+| The precompiled header of `<hglrt/hglrt.h>` | 1.6 s, 54 MB | 5.5 s, 265 MB |
+| A module's unit of value functions and two tests, against it; with none | 0.26 s; 1.38 s | 0.60 s; 1.70 s |
+| The entry unit, `host.h` alone | 0.11 s | 0.07 s |
+| The link (Apple's `ld`; GNU `ld`) | 0.07 s | 0.04 s |
+| Edit to result, `hgl test --target cpp` of that module | 0.55 s | 0.70 s |
 
 ## What hgraph is asked for
 
