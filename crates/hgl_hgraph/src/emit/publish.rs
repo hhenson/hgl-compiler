@@ -7,6 +7,18 @@
 use super::*;
 
 impl Emitter<'_> {
+    /// Whether a node publishes this delta directly through its output. An
+    /// assignment needs no second write after the provider has applied it.
+    pub(super) fn applies_delta(&self, function: &Function, value: &Expr) -> bool {
+        function.mode == Mode::Node
+            && function
+                .signature
+                .and_then(|signature| signature.result.as_ref())
+                .is_some_and(|result| {
+                    !whole_value(result, value) && entries_shape(self.program, result).is_some()
+                })
+    }
+
     /// What an assignment to `out` and a `yield` publish for `value`,
     /// written `written` (TIME-7): the runtime keeps what is published
     /// and the hook or the source goes on after it, so a copy where
@@ -583,8 +595,8 @@ pub(super) struct Shape {
     flat: bool,
 }
 
-/// Where a node's delta of `ty` holds a dictionary or a set, the shape
-/// of where (`entries_shape`), which the provider publishes it by
+/// The shape of a node's fixed or keyed delta (`entries_shape`), which
+/// the provider uses when it publishes the change through the output
 /// (`entries_published`): a `REMOVE` read from an input as
 /// `REMOVE_IF_EXISTS`, and each dictionary and set made valid where the
 /// delta names no change and it is not. `None` where it holds none, and where it holds
