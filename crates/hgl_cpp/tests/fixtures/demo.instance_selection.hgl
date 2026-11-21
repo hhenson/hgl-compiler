@@ -460,3 +460,16 @@ test deferred_delta_properties_fit {
     assert eval deferred_delta_properties(value: "s", ready: true) == ["ready"]
     assert eval deferred_delta_properties(value: "s", ready: false) == ["absent"]
 }
+
+# FN-9 and GEN-7: the value candidate can supply the graph's store
+# while the graph is built, including through a local alias.
+fn deferred_store_value<T>(const value: T) -> i64 {
+    inject global_state
+    let store = global_state
+    put(store, "selected_value", live_helper(value))
+    return get<i64>(store, "selected_value")
+}
+
+test a_store_argument_can_settle_to_an_ordinary_value {
+    assert eval deferred_store_value(value: "s") == [5]
+}

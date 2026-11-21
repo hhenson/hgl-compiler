@@ -50,11 +50,13 @@ impl<'a> Typer<'a> {
     /// written by name, with generic arguments, by a symbol, as a link
     /// of a chain `a + b + c`, or by a compound assignment.
     pub(super) fn finished_call(&mut self, kind: &ExprKind, evaluating: bool) {
+        let connected =
+            |typer: &Self, value: &Expr| typer.category(value) == ValueCategory::Connection;
         // A call of a function or a candidate: an operation a
         // declaration requires has no candidate here, and a call that
         // is not read no parameters to judge.
         let Some(selected) = Selected::of(self.program, kind) else {
-            self.store_call(kind);
+            self.store_call(kind, connected);
             return;
         };
         let assigned = self.places_given(&selected);
@@ -70,7 +72,7 @@ impl<'a> Typer<'a> {
                 }
             }
         }
-        self.store_call(kind);
+        self.store_call(kind, connected);
         self.capabilities_given(&selected);
         self.fixed_arguments(&selected);
         self.traces_given(&selected, evaluating);
@@ -180,8 +182,9 @@ impl<'a> Typer<'a> {
     /// then ... and is given no connection (`connection.as_constant`)."
     /// A call on the store is one given the capability the graph
     /// injects: it is run where the graph is built, when a connection
-    /// has no value.
-    fn store_call(&mut self, kind: &ExprKind) {
+    /// has no value. The instance reports only arguments that became
+    /// connections there, leaving the source's direct checks in place.
+    pub(super) fn store_call(&mut self, kind: &ExprKind, connected: impl Fn(&Self, &Expr) -> bool) {
         if !self.graph || self.testing {
             return;
         }
@@ -197,7 +200,7 @@ impl<'a> Typer<'a> {
             return;
         }
         for argument in arguments {
-            if self.category(&argument.value) == ValueCategory::Connection {
+            if connected(self, &argument.value) {
                 self.diagnostics.emit(
                     error(
                         Category::Phase,

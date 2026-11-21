@@ -28,6 +28,7 @@ use crate::types::{Detail, Signature, Type};
 pub(crate) struct GraphDestinations {
     expressions: HashSet<Location>,
     captures: HashSet<Location>,
+    store_arguments: HashSet<Location>,
 }
 
 impl GraphDestinations {
@@ -35,6 +36,7 @@ impl GraphDestinations {
     pub(crate) fn pending(body: &Body) -> Self {
         let mut expressions = HashSet::new();
         let mut captures = HashSet::new();
+        let mut store_arguments = HashSet::new();
         hir::walk_statements(&body.statements, &mut |value| {
             if !whole(&value.ty) {
                 expressions.insert(value.at);
@@ -44,10 +46,20 @@ impl GraphDestinations {
             {
                 captures.insert(call.at);
             }
+            if let ExprKind::Call { arguments, .. } = &value.kind {
+                store_arguments.extend(
+                    arguments
+                        .iter()
+                        .map(|argument| &argument.value)
+                        .filter(|value| value.category == ValueCategory::Unsettled)
+                        .map(|value| value.at),
+                );
+            }
         });
         Self {
             expressions,
             captures,
+            store_arguments,
         }
     }
 
@@ -100,13 +112,20 @@ impl GraphDestinations {
             });
             record(program, body, true);
         }
-        if !self.captures.is_empty() {
-            hir::walk_statements(&body.statements, &mut |value| {
-                if let ExprKind::Capture(call) = &value.kind
-                    && self.captures.contains(&call.at)
-                {
+        if !self.captures.is_empty() || !self.store_arguments.is_empty() {
+            hir::walk_statements(&body.statements, &mut |value| match &value.kind {
+                ExprKind::Capture(call) if self.captures.contains(&call.at) => {
                     typer.check_capture_phase(call, call.category, None);
                 }
+                kind @ ExprKind::Call { .. } if !self.store_arguments.is_empty() => {
+                    // FN-9: use the graph's injected locals and typed
+                    // aliases to recognize the same store as source typing.
+                    typer.store_call(kind, |_, value| {
+                        self.store_arguments.contains(&value.at)
+                            && value.category == ValueCategory::Connection
+                    });
+                }
+                _ => {}
             });
         }
         check_control(&mut typer, &body.statements);
