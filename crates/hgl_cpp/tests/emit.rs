@@ -1219,13 +1219,13 @@ fn the_store_and_applications_are_written() {
     );
     let applications = &emitted.output.applications;
     assert_eq!(applications.len(), 2);
-    for (application, real_time) in applications.iter().zip([false, true]) {
+    for (application, (stem, real_time)) in applications.iter().zip([
+        ("app-demo-apps-backtest", false),
+        ("app-demo-apps-live", true),
+    ]) {
         assert!(application.blocked.is_none(), "{}", application.path);
         assert_eq!(application.real_time, real_time, "{}", application.path);
-        assert_eq!(
-            application.source,
-            Some(format!("applications/{}.cpp", application.path))
-        );
+        assert_eq!(application.source, Some(format!("applications/{stem}.cpp")));
         // Linked from its own module's unit, the entry's and core's.
         let units: Vec<&str> = application
             .units
@@ -1235,7 +1235,7 @@ fn the_store_and_applications_are_written() {
         for unit in [
             "modules/core.cpp",
             "modules/demo.apps.cpp",
-            &format!("modules/{}.cpp", application.path),
+            &format!("modules/{stem}.cpp"),
         ] {
             assert!(units.contains(&unit), "{unit} in {units:?}");
         }
@@ -1272,7 +1272,7 @@ fn an_applications_parts_are_evaluated_in_the_order_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.apps.ordered.cpp")
+        .find(|file| file.path == "modules/app-demo-apps-ordered.cpp")
         .unwrap()
         .text;
     let at = |text: &str| {
@@ -1387,7 +1387,7 @@ fn a_statement_names_its_hgl_file_and_line() {
     let body = &test[..test.find("\n}\n").unwrap()];
     assert!(!body.contains("#line"), "{body}");
     // An application's store statements and its run statement.
-    let application = text("modules/demo.apps.backtest.cpp");
+    let application = text("modules/app-demo-apps-backtest.cpp");
     let lines: Vec<&str> = application.lines().collect();
     let stored = lines
         .iter()

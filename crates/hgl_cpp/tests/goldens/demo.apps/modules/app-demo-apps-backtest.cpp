@@ -1,5 +1,5 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
-#include "demo.apps.backtest.h"
+#include "app-demo-apps-backtest.h"
 #include "core.h"
 #include "demo.apps.h"
 

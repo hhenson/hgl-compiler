@@ -2,7 +2,7 @@
 //! once (UNIT-14, RUN-1), a stop of its host passed on to it (RUN-3),
 //! and what it recorded read back.
 //!
-//! The executable is `run/<application>` of the program's workspace,
+//! The executable is `run/<application-stem>` of the program's workspace,
 //! `EXECUTABLE RESULTS`, and its `main` is the runtime library's host of
 //! the run (`hglrt/application_host.h`). It writes RESULTS as the run
 //! goes, one line for each thing that happens:
@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use hgl_cpp::{Application, Output};
+use hgl_cpp::{Application, Output, application_stem};
 
 use super::build::{self, Workspace};
 use super::sdk::{self, Toolchain};
@@ -183,7 +183,7 @@ fn launch(
     let results = workspace
         .directory
         .join("results")
-        .join(format!("{}.run.txt", application.path));
+        .join(format!("{}.run.txt", application_stem(&application.path)));
     // What an earlier run recorded is not this run's.
     let cleared = match fs::remove_file(&results) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
