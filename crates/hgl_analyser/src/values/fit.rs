@@ -76,9 +76,7 @@ impl<'a> Typer<'a> {
             } => ExprKind::CheckedChild { read, result: true },
             _ if self.window_read(&value) => ExprKind::CheckedWindow(Box::new(value)),
             _ if self.checked_whole_read(&value) => ExprKind::CheckedWhole(Box::new(value)),
-            _ if reads_cycle(self.program, &value)
-                && (!nullable || self.nullable_cycle_read(&value)) =>
-            {
+            _ if reads_delta(&value) || (!nullable && reads_cycle(self.program, &value)) => {
                 ExprKind::CheckedDelta(Box::new(value))
             }
             _ => return value,
@@ -320,15 +318,10 @@ pub(super) fn window_value(window: &Type) -> Type {
 /// lost in it, core's `removed_value`: each takes its form from its place
 /// (ERR-14).
 pub(super) fn reads_cycle(program: &Program, value: &Expr) -> bool {
+    if reads_delta(value) {
+        return true;
+    }
     match &value.kind {
-        ExprKind::Endpoint {
-            operation: EndpointOperation::DeltaValue,
-            ..
-        }
-        | ExprKind::ChildEndpoint {
-            operation: EndpointOperation::DeltaValue,
-            ..
-        } => true,
         ExprKind::Call {
             callee:
                 Callee::Function {
@@ -340,6 +333,21 @@ pub(super) fn reads_cycle(program: &Program, value: &Expr) -> bool {
         } => removes(program, (*module, *declaration)),
         _ => false,
     }
+}
+
+/// True for `delta_value`, whose nullable form is admitted even for a
+/// duration window. `removed_value` remains result-only (TYPE-11).
+fn reads_delta(value: &Expr) -> bool {
+    matches!(
+        value.kind,
+        ExprKind::Endpoint {
+            operation: EndpointOperation::DeltaValue,
+            ..
+        } | ExprKind::ChildEndpoint {
+            operation: EndpointOperation::DeltaValue,
+            ..
+        }
+    )
 }
 
 /// `T?` for a `T`; a type that is nullable already, or not known, as it

@@ -166,7 +166,7 @@ analyser: done
 
 - An inferred `let` given a child holds the endpoint. Endpoint operations name it and a value use reads it under TIME-1 admission. An inferred `var` still reads the value at initialization, as ruled pending the owner's reading in #440.
 - A runtime-checked child read, or an admitted whole read of a dictionary, an unsized list or a window, gives T, `result<T, error>`, or `T?` according to its place. The nullable form discards the error as ERR-15 does.
-- `delta_value` takes the same forms except where TYPE-11 requires a result for a duration-window delta. `removed_value` takes a result for every window. The nullable duration-window delta rule follows the specification update in hhenson/hgl_spec#207.
+- `delta_value` takes the same forms. TYPE-11 restricts a duration-window delta to a result or nullable place, and `removed_value` to a result place for every window.
 
 transpiler: partial
 
