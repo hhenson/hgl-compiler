@@ -1050,7 +1050,8 @@ fn activity_runs_on_the_sdk() {
 }
 
 /// FN-8 and GEN-10: C++ calls bind the individual inputs of positional
-/// and named packs in value helpers, nodes, and graphs.
+/// and named packs in value helpers, nodes, and graphs. TST-5: eval
+/// replays the trace of each captured argument.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn pack_parameters_run_on_the_sdk() {
@@ -1072,7 +1073,7 @@ fn pack_parameters_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
