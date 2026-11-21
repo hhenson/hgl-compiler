@@ -460,14 +460,16 @@ impl Emitter<'_> {
 
     /// The `const` parameters of the source of `signature` and `body` as
     /// a hook of its node is given them, each an `hgraph::Scalar`, which
-    /// the hook reads with `.value()` (`Role::Config`). `None` where a type
+    /// the hook reads as `configuration` holds it (`Role::Config`). `None` where a type
     /// is not written yet, which is reported.
     fn hook_configs(&mut self, signature: &Signature, body: &Body) -> Option<Vec<String>> {
         let mut configs = Vec::new();
         for (local, parameter) in signature.parameters.iter().enumerate() {
             let ty = self.written_type(&parameter.ty, parameter.at)?;
+            // FN-1: as hgraph holds a configuration (`configuration`).
+            let held = super::configuration::held(self.program, &parameter.ty, &ty);
             configs.push(format!(
-                "[[maybe_unused]] ::hgraph::Scalar<{}, {ty}> {}",
+                "[[maybe_unused]] ::hgraph::Scalar<{}, {held}> {}",
                 names::string(&parameter.name),
                 identifier(&body.locals[local].name)
             ));

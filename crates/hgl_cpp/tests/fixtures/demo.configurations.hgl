@@ -1,0 +1,136 @@
+module demo.configurations
+
+# `const` parameters of every kind of ordinary value (FN-1: "a `const`
+# parameter takes what is fixed when the graph is built. In composition
+# that is any ordinary value"), each given to a node, a source, a lifted
+# call or a branch. Its goldens are under `tests/goldens/demo.configurations`.
+
+struct Holder {
+    xs: list<i64>
+    n: i64
+}
+
+struct Noted {
+    bid: i64
+    note: str?
+}
+
+# Sources given a set and a dictionary.
+fn from_members(const members: set<i64>) -> i64 {
+    for member in members {
+        yield 1s: member
+    }
+}
+
+fn from_book(const book: dict<str, i64>) -> i64 {
+    for key, value in book {
+        yield 1s: value
+    }
+}
+
+# Nodes given a tuple, a struct that holds a list, a struct with an
+# optional field, and a nullable, tested against null and read narrowed
+# (ERR-12).
+fn shifted(x: i64, const by: tuple<i64, i64>) -> i64 {
+    when { return x + by[0] + by[1] }
+}
+
+fn first(probe: bool, const h: Holder) -> i64 {
+    when { return h.xs[0] + h.n }
+}
+
+fn noted_bid(x: i64, const q: Noted) -> i64 {
+    when {
+        if q.note == null { return x + q.bid }
+        return -1
+    }
+}
+
+fn nudged(x: i64, const by: i64?) -> i64 {
+    when {
+        if by == null { return x }
+        return x + by
+    }
+}
+
+# Two nodes of one input whose configurations differ, which stay two.
+fn both(x: i64) -> i64 {
+    return shifted(x, (1, 2)) + shifted(x, (10, 20))
+}
+
+fn holders(probe: bool) -> i64 {
+    return first(probe, Holder(xs: [5], n: 1)) + first(probe, Holder(xs: [50], n: 10))
+}
+
+# Two nodes whose configurations differ by the sign of a zero alone, which
+# hgraph's interning would take for one (hgraph issue 1866).
+fn above(x: f64, const by: tuple<f64, f64>) -> bool {
+    when { return x /{zero: .ieee} by[0] > 0.0 }
+}
+
+fn differ(a: bool, b: bool) -> bool {
+    when { return a != b }
+}
+
+fn signs(x: f64) -> bool => differ(above(x, (0.0, 1.0)), above(x, (-0.0, 1.0)))
+
+# A lifted call given a set and a dictionary.
+const fn member_of(x: i64, members: set<i64>) -> bool {
+    for m in members {
+        if m == x { return true }
+    }
+    return false
+}
+
+fn checked(x: i64) -> bool => member_of(x, [1, 2])
+
+const fn looked(x: str, book: dict<str, i64>) -> i64 {
+    let found = get(book, x)
+    if found == null { return -1 }
+    return found
+}
+
+fn booked(x: str) -> i64 => looked(x, ["a": 1])
+
+# A branch that captures a set.
+fn summed(key: str, const members: set<i64>) -> i64 {
+    when {
+        var n = 0
+        for m in members { n += m }
+        return n
+    }
+}
+
+fn fallback(key: str, const values: list<i64>) -> i64 {
+    when { return values[0] }
+}
+
+fn branch(flag: bool, key: str, const members: set<i64>) -> i64 {
+    if flag { return summed(key, members) }
+    return fallback(key, [7])
+}
+
+test sources_are_given_a_set_and_a_dictionary {
+    assert eval(from_members(members: [7])) == [1s: 7]
+    assert eval(from_book(book: ["a": 7])) == [1s: 7]
+}
+
+test nodes_are_given_any_value {
+    assert eval(shifted(x: [1], by: (10, 100))) == [111]
+    assert eval(first(probe: [true], h: Holder(xs: [5], n: 1))) == [6]
+    assert eval(noted_bid(x: [1], q: Noted(bid: 10))) == [11]
+    assert eval(nudged(x: [1], by: null)) == [1]
+    assert eval(nudged(x: [1], by: 5)) == [6]
+}
+
+test configurations_that_differ_are_two_nodes {
+    assert eval(both(x: [1])) == [35]
+    assert eval(holders(probe: [true])) == [66]
+    assert eval(signs(x: [1.0])) == [true]
+}
+
+test lifted_calls_and_branches_are_given_any_value {
+    assert eval(checked(x: [1, 3])) == [true, false]
+    assert eval(booked(x: ["a", "b"])) == [1, -1]
+    assert eval(branch(flag: [true, false], key: ["a", "b"], members: [1, 2])) == [3, 7]
+}

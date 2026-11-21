@@ -680,8 +680,10 @@ impl Emitter<'_> {
             parameters.push(format!("[[maybe_unused]] ::hgraph::Port<{schema}> {port}"));
         }
         for (local, scalar, written) in &scalars {
+            // FN-1: as hgraph holds a configuration (`configuration`).
+            let held = super::configuration::held(program, &locals[*local].ty, written);
             parameters.push(format!(
-                "[[maybe_unused]] ::hgraph::Scalar<{}, {written}> {scalar}",
+                "[[maybe_unused]] ::hgraph::Scalar<{}, {held}> {scalar}",
                 names::string(&locals[*local].name)
             ));
         }
@@ -739,7 +741,9 @@ impl Emitter<'_> {
             .map(|(port, _)| format!("{port}.erased()"))
             .collect();
         let mut given = vec![WIRING.to_string()];
-        given.extend(scalars.iter().map(|(_, scalar, _)| scalar.clone()));
+        given.extend(scalars.iter().map(|(local, scalar, written)| {
+            super::configuration::given(program, &locals[*local].ty, written, scalar)
+        }));
         let keyed = if key.is_some() {
             "::hgraph::MapKeyArg::First"
         } else {
@@ -1353,8 +1357,10 @@ impl Emitter<'_> {
                 parameters.push(format!("[[maybe_unused]] ::hgraph::Port<{schema}> {port}"));
             }
             for (local, scalar, written) in &scalars {
+                // FN-1: as hgraph holds a configuration (`configuration`).
+                let held = super::configuration::held(program, &locals[*local].ty, written);
                 parameters.push(format!(
-                    "[[maybe_unused]] ::hgraph::Scalar<{}, {written}> {scalar}",
+                    "[[maybe_unused]] ::hgraph::Scalar<{}, {held}> {scalar}",
                     names::string(&locals[*local].name)
                 ));
             }
@@ -1388,7 +1394,9 @@ impl Emitter<'_> {
                 parameters.join(", ")
             ));
             let mut given = vec![WIRING.to_string()];
-            given.extend(scalars.iter().map(|(_, scalar, _)| scalar.clone()));
+            given.extend(scalars.iter().map(|(local, scalar, written)| {
+                super::configuration::given(program, &locals[*local].ty, written, scalar)
+            }));
             let graph_call = format!("::hgraph::compile_subgraph<{graph}>({})", given.join(", "));
             match &branch.key {
                 // CTRL-6: "Switch labels are typed source constants ...
@@ -1542,7 +1550,7 @@ impl Emitter<'_> {
         }
         // The branch's own context: its connections are those of the
         // graph it is written in, and each value it is configured with is
-        // its `hgraph::Scalar`, read with `.value()`.
+        // its `hgraph::Scalar`, read as `configuration` holds it.
         let outer = self.temporal.as_ref()?;
         let mut context = Context::new(Kind::Graph, locals.len());
         context.roles = outer.roles.clone();

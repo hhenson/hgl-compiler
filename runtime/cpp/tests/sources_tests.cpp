@@ -72,6 +72,20 @@ struct Reciprocal {
     }
 };
 
+/// `x + by[0] + by[1]`, configured with a tuple, which hgraph has no scalar
+/// of its own for: the node's `const` parameter is held whole as
+/// `hglrt::configured` (values.h, FN-1).
+struct Shifted {
+    static constexpr auto name = "test::shifted";
+
+    static void eval(hgraph::In<"x", hgraph::TS<i64>> x,
+                     hgraph::Scalar<"by", hglrt::configured<std::tuple<i64, i64>>> by,
+                     hgraph::Out<hgraph::TS<i64>> out) {
+        const std::tuple<i64, i64>& held = by.value().held;
+        out.set(hglrt::add__i64_i64(hglrt::add__i64_i64(x.value(), std::get<0>(held)), std::get<1>(held)));
+    }
+};
+
 /// The one value the run `ran` recorded under `key`.
 template <class T>
 T recorded_once(const hglrt::testing::Run& ran, std::string_view key) {
@@ -205,4 +219,22 @@ TEST_CASE("constants equal under `==` but of different values publish each its o
     CHECK(std::signbit(recorded_once<list<f64>>(ran, "minus").at(0)));
     CHECK_FALSE(std::signbit(std::get<1>(recorded_once<list<Pair>>(ran, "pair plus").at(0))));
     CHECK(std::signbit(std::get<1>(recorded_once<list<Pair>>(ran, "pair minus").at(0))));
+}
+
+TEST_CASE("a configuration hgraph has no scalar of its own for is held whole (FN-1)") {
+    using Pair = std::tuple<i64, i64>;
+    // Two nodes of one input whose configurations differ are two; two whose
+    // configurations are equal are one, as hgraph interns any node.
+    const hglrt::testing::Entry entry = [](hgraph::Wiring& wiring, datetime) {
+        auto value = hgraph::wire<hglrt_test::Replay>(wiring, hglrt::testing::Recorded<i64>{{start, 1}});
+        auto small = hgraph::wire<Shifted>(wiring, value, hglrt::configured<Pair>{{1, 2}});
+        auto large = hgraph::wire<Shifted>(wiring, value, hglrt::configured<Pair>{{10, 20}});
+        auto again = hgraph::wire<Shifted>(wiring, value, hglrt::configured<Pair>{{1, 2}});
+        auto both = hgraph::wire<Added>(wiring, hgraph::wire<Added>(wiring, small, large), again);
+        hgraph::wire<hglrt_test::Record>(wiring, both, hglrt::str{hglrt::testing::run_output});
+    };
+    CHECK(hglrt::testing::evaluate<i64>(entry).entries == hglrt::testing::Recorded<i64>{{start, 39}});
+    CHECK(hglrt::configured<Pair>{{1, 2}} == hglrt::configured<Pair>{{1, 2}});
+    CHECK(std::hash<hglrt::configured<Pair>>{}(hglrt::configured<Pair>{{1, 2}}) ==
+          hglrt::hash_of(Pair{1, 2}));
 }

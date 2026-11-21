@@ -312,6 +312,47 @@ fn a_form_not_written_yet_blocks_what_reaches_it() {
     assert!(!unit.contains("reaches_a_division"), "{unit}");
 }
 
+/// FN-1: "a `const` parameter takes what is fixed when the graph is
+/// built. In composition that is any ordinary value." A value hgraph has
+/// no scalar of its own type for, a tuple, a set, a dictionary, a struct,
+/// is held as `::hglrt::configured<T>`, given so where the node is wired
+/// and read as `held` in a hook; one it has, a scalar, a list, a nullable
+/// whose payload has a hash, as it is. A nullable one is tested against
+/// null, and read narrowed, as the optional its `hgraph::Scalar` holds
+/// (ERR-12). Everything is written, and each test can be run.
+#[test]
+fn configurations_are_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.configurations.hgl",
+            include_str!("fixtures/demo.configurations.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.configurations", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.configurations.cpp")
+        .unwrap()
+        .text;
+    for written in [
+        "::hgraph::Scalar<\"by\", ::hglrt::configured<std::tuple<::hgraph::Int, ::hgraph::Int>>> by",
+        "::hgraph::Scalar<\"members\", ::hglrt::configured<::hglrt::set<::hgraph::Int>>> members",
+        "::hgraph::Scalar<\"by\", std::optional<::hgraph::Int>> by",
+        "(!by.value().has_value())",
+        "(*by.value())",
+        "std::get<0>(by.value().held)",
+    ] {
+        assert!(unit.contains(written), "{written} in\n{unit}");
+    }
+}
+
 /// Temporal code over the scalars, as the target writes it: a graph and
 /// its lifted calls (FN-6), a constant connection (FN-3), nodes with
 /// state, handlers tested in order and capabilities (TIME-3, TIME-6,

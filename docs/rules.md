@@ -111,6 +111,7 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | `timezone` and `zoned_time`, and their literals; a `T?` compared with a `T` | TYPE-2, TYPE-14, OPS-2 |
 | A `var` place beside an argument that runs statements, taken where the call is made | FN-15, EXPR-2 |
 | A node of scalars: its inputs' activity and validity, handlers in source order, `state` and `cache`, `start` and `stop` | FN-2, TIME-3, TIME-4, TIME-5, TIME-6 |
+| A `const` parameter of any ordinary value, given to a node, a source, a lifted call or a branch; a nullable one tested against null and read narrowed in a hook | FN-1, ERR-12 |
 | `return value`, `out = value`, `invalidate(out)` in a handler | TIME-7, FN-7, END-4 |
 | A payload read; `valid`, `modified`, `delta_value` plain and into a `result`, `last_modified` of an input | TIME-1, END-1, END-2, END-3, END-6, ERR-14 |
 | `is_active`, `activate` and `passivate` of a direct input in a handler, `is_active` in `stop` too | TIME-9, END-5 |

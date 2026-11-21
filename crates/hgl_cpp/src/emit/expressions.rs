@@ -157,7 +157,18 @@ impl Emitter<'_> {
                     && matches!(scope.body.locals[local].ty, Type::Nullable(_))
                 {
                     scope.read = true;
-                    let name = identifier(&scope.body.locals[local].name);
+                    let declared = &scope.body.locals[local];
+                    // A node's `const` parameter is its `hgraph::Scalar`,
+                    // whose value is the optional (`configuration`).
+                    let name = if self.role(local) == super::nodes::Role::Config {
+                        super::configuration::read(
+                            self.program,
+                            &declared.ty,
+                            &identifier(&declared.name),
+                        )
+                    } else {
+                        identifier(&declared.name)
+                    };
                     return if equal {
                         format!("(!{name}.has_value())")
                     } else {
