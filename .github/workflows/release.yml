@@ -2,9 +2,14 @@ name: macOS release bundle
 
 on:
   push:
+    branches: [main]
     # A release's tag is its bare version, `0.1.0`.
     tags: ['[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -14,12 +19,49 @@ env:
   CXX: /usr/bin/clang++
 
 jobs:
+  reuse-build:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      version: ${{ steps.find.outputs.version }}
+      commit: ${{ steps.find.outputs.commit }}
+      run-id: ${{ steps.find.outputs.run-id }}
+      artifact-id: ${{ steps.find.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 scripts/release-bundle.py version)
+          commit=$(git rev-parse HEAD)
+          printf 'version=%s\ncommit=%s\n' "$version" "$commit" >> "$GITHUB_OUTPUT"
+          if [[ $GITHUB_REF_TYPE == tag && $GITHUB_REF_NAME != "$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match workspace version $version" >&2
+            exit 1
+          fi
+          if [[ $GITHUB_EVENT_NAME == push && $GITHUB_REF_TYPE == tag ]]; then
+            python3 scripts/release-bundle.py find-verified-run \
+              "$GITHUB_REPOSITORY" "$commit" "$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+          fi
+
   bundle:
+    needs: reuse-build
+    if: needs.reuse-build.outputs.artifact-id == ''
     runs-on: ${{ fromJSON(vars.HGL_SELF_HOSTED_MACOS == 'true' && '["self-hosted","macOS","ARM64","hgl-release"]' || '["macos-26"]') }}
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - name: Report the macOS toolchain
         run: &report-toolchain |
-          for path in "$HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "${TMPDIR:-}"; do
+          for path in "$HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "${TMPDIR:-}" "${RUNNER_TOOL_CACHE:-}"; do
             if [[ -d $path ]]; then
               printf '::add-mask::%s\n' "$path" "$(cd -- "$path" && pwd -P)"
             fi
@@ -28,7 +70,9 @@ jobs:
             "${DEVELOPER_DIR-<unset>}" "${SDKROOT-<unset>}" "${CC-<unset>}" "${CXX-<unset>}"
           printf 'xcode-select -p: '
           /usr/bin/xcode-select -p 2>/dev/null || printf '%s\n' '<unavailable>'
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - &install-uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -42,17 +86,47 @@ jobs:
           uv python install --no-bin 3.14
           interpreter=$(uv python find --managed-python 3.14)
           dirname -- "$interpreter" >> "$GITHUB_PATH"
+      - name: Locate the release caches
+        id: caches
+        env:
+          TOOL_CACHE: ${{ runner.tool_cache }}
+        run: |
+          native_key=$(python3 scripts/release-bundle.py native-key)
+          echo "native-key=$native_key" >> "$GITHUB_OUTPUT"
+          {
+            echo "HGL_RELEASE_NATIVE_CACHE=$TOOL_CACHE/hgl-release-native/$native_key"
+            echo "CARGO_HOME=$TOOL_CACHE/hgl-release-cargo"
+            echo "CARGO_TARGET_DIR=$TOOL_CACHE/hgl-release-target"
+            echo "RUSTUP_HOME=$TOOL_CACHE/hgl-release-rustup"
+          } >> "$GITHUB_ENV"
+      - name: Cache the native SDK and libraries
+        if: runner.environment == 'github-hosted'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.HGL_RELEASE_NATIVE_CACHE }}
+          key: hgl-macos-arm64-native-${{ steps.caches.outputs.native-key }}
+      - name: Cache Rust crates and builds
+        if: runner.environment == 'github-hosted'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}
+          key: hgl-macos-arm64-rust-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'scripts/package-release.sh') }}
       - env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          CARGO_HOME: ${{ github.workspace }}/target/release-cargo
-          RUSTUP_HOME: ${{ runner.tool_cache }}/hgl-release-rustup
         run: scripts/package-release.sh target/release-bundles "$RELEASE_TAG"
-      - uses: actions/upload-artifact@v7
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: hgl-macos-arm64
-          path: target/release-bundles/*
+          # Another attempt of the same run uploads an independent artifact.
+          name: hgl-macos-arm64-${{ github.run_attempt }}
+          path: |
+            target/release-bundles/hgl-${{ needs.reuse-build.outputs.version }}-macos-arm64.tar.gz
+            target/release-bundles/hgl-${{ needs.reuse-build.outputs.version }}-macos-arm64.tar.gz.sha256
           if-no-files-found: error
-          overwrite: true
+          retention-days: 30
 
   verify:
     needs: bundle
@@ -60,12 +134,14 @@ jobs:
     steps:
       - name: Report the macOS toolchain
         run: *report-toolchain
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - *install-uv
       - *managed-python
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: hgl-macos-arm64
+          artifact-ids: ${{ needs.bundle.outputs.artifact-id }}
           path: ${{ runner.temp }}/artifact
       - shell: bash
         run: |
@@ -102,12 +178,14 @@ jobs:
     steps:
       - name: Report the macOS toolchain
         run: *report-toolchain
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - *install-uv
       - *managed-python
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: hgl-macos-arm64
+          artifact-ids: ${{ needs.bundle.outputs.artifact-id }}
       - shell: bash
         run: |
           version=$(python3 scripts/release-bundle.py version)
@@ -119,20 +197,38 @@ jobs:
           "$hgl" check crates/hgl_cpp/tests/fixtures/demo.apps.hgl
 
   publish:
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [verify, hosted-check]
+    if: >-
+      !cancelled() &&
+      github.event_name == 'push' && github.ref_type == 'tag' &&
+      needs.reuse-build.result == 'success' &&
+      (
+        needs.reuse-build.outputs.artifact-id != '' ||
+        (needs.verify.result == 'success' && needs.hosted-check.result == 'success')
+      )
+    needs: [reuse-build, bundle, verify, hosted-check]
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: hgl-macos-arm64
+          artifact-ids: ${{ needs.reuse-build.outputs.artifact-id || needs.bundle.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.reuse-build.outputs.run-id || github.run_id }}
           path: ${{ runner.temp }}/artifact
       - env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.reuse-build.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.reuse-build.outputs.commit }}
         run: |
-          assets="$RUNNER_TEMP/artifact"
+          cd "$RUNNER_TEMP/artifact"
+          name=hgl-$RELEASE_VERSION-macos-arm64.tar.gz
+          shasum -a 256 -c "$name.sha256"
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" != "$RELEASE_COMMIT" ]]; then
+            echo "Tag $RELEASE_TAG no longer points to the verified commit" >&2
+            exit 1
+          fi
           gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
-            "$assets"/*.tar.gz "$assets"/*.tar.gz.sha256
+            "$name" "$name.sha256"
