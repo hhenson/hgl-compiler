@@ -354,9 +354,9 @@ TEST_CASE("a struct that holds a struct publishes and reads it field by field (T
     // TST-9: a whole cell is published as the delta of every field: a
     // struct's field as its own delta, an atomic field as its payload, and
     // a tuple's struct and tuple positions as their deltas.
-    CHECK(hglrt::testing::whole_publication<t::Book>::delta(t::Book{t::Quote{1, 2}, 3}) ==
+    CHECK(hglrt::testing::detail::whole_delta(t::Book{t::Quote{1, 2}, 3}, 0) ==
           t::d_::Book{t::d_::Quote{1, 2}, 3});
-    CHECK(hglrt::testing::whole_publication<t::Envelope>::delta(t::Envelope{t::Quote{1, 2}, 3}) ==
+    CHECK(hglrt::testing::detail::whole_delta(t::Envelope{t::Quote{1, 2}, 3}, 0) ==
           t::d_::Envelope{t::Quote{1, 2}, 3});
     using Nested = std::tuple<t::Quote, std::tuple<i64, i64>>;
     CHECK(hglrt::testing::detail::whole_delta(Nested{t::Quote{1, 2}, {3, 4}}, 0) ==

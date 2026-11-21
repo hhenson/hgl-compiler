@@ -34,6 +34,7 @@
 #include <hglrt/checked.h>
 #include <hglrt/collections.h>
 #include <hglrt/endpoints.h>
+#include <hglrt/structs.h>
 #include <hglrt/traces.h>
 #include <hglrt/values.h>
 
@@ -45,6 +46,7 @@
 #include <optional>
 #include <source_location>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -183,6 +185,62 @@ struct keyed_form<hgraph::TSD<K, V>> {
             keyed_detail::binding_of(keyed_detail::ts_meta<hgraph::TSD<K, V>>()->delta_value_schema)};
         built.set("removed", keyed_detail::set_value<K>(delta.removed));
         built.set("modified", modified.build());
+        return built.build();
+    }
+};
+
+/// A tuple's form, `UnNamedTSB` (structs.h), as a dictionary's entry: a
+/// value of a position for each position. An entry is read whole as a tuple
+/// is (TIME-1: "So does one of a child that is a struct, a tuple or a fixed
+/// list ... requires `all_valid`"), checked when it runs: one that is not all
+/// valid fails the read (`value.unset_read`). It is written as hgraph's
+/// bundle of its positions, each as its own form writes it, and its delta as
+/// hgraph's bundle of the positions it holds (TYPE-16: "null leaves the
+/// position ... as it was").
+template <class... F>
+struct keyed_form<hgraph::UnNamedTSB<F...>> {
+    using schema = hgraph::UnNamedTSB<F...>;
+    using type = std::tuple<typename keyed_form<typename F::schema>::type...>;
+
+    template <class E>
+    static type read(const E& endpoint) {
+        std::optional<schema_value_t<schema>> held = ::hglrt::whole<schema>::read(endpoint);
+        if (!held.has_value()) {
+            unset_read("an entry of a dictionary that is not all valid is read whole",
+                       std::source_location::current());
+        }
+        return std::move(*held);
+    }
+
+    static hgraph::Value whole(const type& value) {
+        hgraph::BundleBuilder built{keyed_detail::binding_of(keyed_detail::ts_meta<schema>()->value_schema)};
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            (
+                [&] {
+                    const hgraph::Value written =
+                        keyed_form<typename std::tuple_element_t<I, std::tuple<F...>>::schema>::whole(
+                            std::get<I>(value));
+                    built.set(I, written.view());
+                }(),
+                ...);
+        }(std::index_sequence_for<F...>{});
+        return built.build();
+    }
+
+    static hgraph::Value change(const delta_t<type>& delta) {
+        hgraph::BundleBuilder built{
+            keyed_detail::binding_of(keyed_detail::ts_meta<schema>()->delta_value_schema)};
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            (
+                [&] {
+                    if (const auto& part = std::get<I>(delta); part.has_value()) {
+                        const hgraph::Value written =
+                            keyed_form<typename std::tuple_element_t<I, std::tuple<F...>>::schema>::change(*part);
+                        built.set(I, written.view());
+                    }
+                }(),
+                ...);
+        }(std::index_sequence_for<F...>{});
         return built.build();
     }
 };

@@ -65,13 +65,26 @@ TEST_CASE("the error a failure nests is found through hgraph's nesting") {
         REQUIRE(carried.has_value());
         CHECK(carried->code == "value.unset_read");
         CHECK(hglrt::raised_at(outer).has_value());
-        const std::string text = hglrt::describe(outer);
-        CHECK(text.starts_with("value.unset_read: inner, raised at "));
-        CHECK(text.find("failure_tests.cpp:") != std::string::npos);
+        // Raised here, in no HGL file: the place is not described.
+        CHECK(hglrt::describe(outer) == "value.unset_read: inner");
     }
     const std::runtime_error other("not an HGL failure");
     CHECK_FALSE(hglrt::carried_error(other).has_value());
     CHECK(hglrt::describe(other) == "not an HGL failure");
+}
+
+/// Fails as the generated code of an HGL statement on line 7 of
+/// `demo/places.hgl` fails: defined at the end of this file, which its
+/// `#line` renumbers.
+void fails_in_places();
+
+TEST_CASE("a failure is described with the HGL file and line it was raised at, and no other place") {
+    try {
+        fails_in_places();
+        FAIL("nothing was raised");
+    } catch (const std::exception& failure) {
+        CHECK(hglrt::describe(failure) == "value.unset_read: inner, raised at demo/places.hgl:7");
+    }
 }
 
 TEST_CASE("a failure is described with the context hgraph gave it") {
@@ -80,4 +93,11 @@ TEST_CASE("a failure is described with the context hgraph gave it") {
     const hgraph::ExecutionFailure failure{given};
     CHECK(hglrt::describe(failure) ==
           "numeric.division_by_zero: gone (in m::h@2, start, at 1970-01-01T00:00:00.000001)");
+}
+
+// The generated code sets the HGL file and line of each statement as this
+// does (`#line`): nothing after it in this file is numbered as its own.
+void fails_in_places() {
+#line 7 "demo/places.hgl"
+    hglrt::fail("value.unset_read", "inner");
 }

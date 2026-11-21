@@ -157,7 +157,18 @@ impl Emitter<'_> {
                     && matches!(scope.body.locals[local].ty, Type::Nullable(_))
                 {
                     scope.read = true;
-                    let name = identifier(&scope.body.locals[local].name);
+                    let declared = &scope.body.locals[local];
+                    // A node's `const` parameter is its `hgraph::Scalar`,
+                    // whose value is the optional (`configuration`).
+                    let name = if self.role(local) == super::nodes::Role::Config {
+                        super::configuration::read(
+                            self.program,
+                            &declared.ty,
+                            &identifier(&declared.name),
+                        )
+                    } else {
+                        identifier(&declared.name)
+                    };
                     return if equal {
                         format!("(!{name}.has_value())")
                     } else {
@@ -222,7 +233,7 @@ impl Emitter<'_> {
                         return self.missing(index.at, "a tuple's position that is no literal");
                     };
                     let base = self.expression(scope, base);
-                    format!("std::get<{position}>({base})")
+                    format!("::std::get<{position}>({base})")
                 }
                 // EXPR-2: the list, then the index. Where they are held
                 // (`held_read`), the list is held first, and the element
@@ -301,7 +312,7 @@ impl Emitter<'_> {
                 if *success {
                     format!("{ty}{{{payload}}}")
                 } else {
-                    format!("{ty}{{std::unexpect, {payload}}}")
+                    format!("{ty}{{::std::unexpect, {payload}}}")
                 }
             }
             // ERR-3: `is_ok(value)` and `is_err(value)`.
@@ -343,7 +354,7 @@ impl Emitter<'_> {
                         code.as_deref().map(|code| self.expression(scope, code)),
                     )
                 };
-                let code = code.unwrap_or_else(|| "std::nullopt".to_string());
+                let code = code.unwrap_or_else(|| "::std::nullopt".to_string());
                 let made = format!("::{}::make_error", runtime::NAMESPACE);
                 if ordered {
                     let held = names::temporary("message", self.temporary());
@@ -481,7 +492,7 @@ impl Emitter<'_> {
         let held = names::temporary("propagated", self.temporary());
         scope.before.push(format!("const auto {held} = {written};"));
         scope.before.push(format!(
-            "if (!{held}.has_value())\n{{\n{INDENT}return std::unexpected({held}.error());\n}}"
+            "if (!{held}.has_value())\n{{\n{INDENT}return ::std::unexpected({held}.error());\n}}"
         ));
         format!("(*{held})")
     }
@@ -523,7 +534,7 @@ impl Emitter<'_> {
                     made
                 }
             }
-            Value::Null => "std::nullopt".to_string(),
+            Value::Null => "::std::nullopt".to_string(),
             // TYPE-17: a tenor of months and days, and one of business
             // days, which are two forms: zero of one is not zero of the
             // other.
@@ -586,7 +597,7 @@ pub(super) fn integer_literal(number: i64) -> String {
 fn temporal_literal(temporal: &hgl_analyser::hir::Temporal, ty: &Type) -> Option<String> {
     let date = temporal.date.map(|date| {
         format!(
-            "::hgraph::Date{{std::chrono::year{{{}}}, std::chrono::month{{{}}}, std::chrono::day{{{}}}}}",
+            "::hgraph::Date{{::std::chrono::year{{{}}}, ::std::chrono::month{{{}}}, ::std::chrono::day{{{}}}}}",
             date.year, date.month, date.day
         )
     });
@@ -610,18 +621,23 @@ fn temporal_literal(temporal: &hgl_analyser::hir::Temporal, ty: &Type) -> Option
         Type::Scalar(Scalar::Datetime) => {
             let micros = instant(temporal)?;
             Some(format!(
-                "::hgraph::DateTime{{std::chrono::microseconds{{{micros}}}}}"
+                "::hgraph::DateTime{{::std::chrono::microseconds{{{micros}}}}}"
             ))
         }
         // TYPE-2: "named `timezone`" and "date-independent `zoned_time`".
+        // LEX-12: "The selected run provider checks exact catalog
+        // membership and offset consistency": the library checks each
+        // zone, and a `zoned_datetime`'s offset, where it is evaluated.
         Type::Scalar(Scalar::Timezone) => Some(format!(
-            "::hgraph::ZoneId{{{}}}",
+            "::{}::zone_literal({})",
+            runtime::NAMESPACE,
             names::string(temporal.zone.as_deref()?)
         )),
         Type::Scalar(Scalar::ZonedTime) => {
             let time = time?;
             Some(format!(
-                "::hgraph::ZonedTime{{::hgraph::time_of_day({}, {}, {}, {}), ::hgraph::ZoneId{{{}}}}}",
+                "::{}::zoned_time_literal(::hgraph::time_of_day({}, {}, {}, {}), {})",
+                runtime::NAMESPACE,
                 time.hour,
                 time.minute,
                 time.second,
@@ -634,7 +650,8 @@ fn temporal_literal(temporal: &hgl_analyser::hir::Temporal, ty: &Type) -> Option
             let zone = temporal.zone.as_deref()?;
             let offset = i64::from(temporal.offset?) * 60;
             Some(format!(
-                "::hgraph::ZonedDateTime::from_resolved(::hgraph::DateTime{{std::chrono::microseconds{{{micros}}}}}, ::hgraph::ZoneId{{{}}}, {offset})",
+                "::{}::zoned_datetime_literal(::hgraph::DateTime{{::std::chrono::microseconds{{{micros}}}}}, {offset}, {})",
+                runtime::NAMESPACE,
                 names::string(zone)
             ))
         }

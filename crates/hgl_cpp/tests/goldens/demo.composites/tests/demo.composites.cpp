@@ -5,8 +5,10 @@
 #undef a_dictionarys_place_comes_before_its_key
 #undef a_failing_value_adds_no_key
 #undef a_missing_key_fails
+#undef a_nullable_delta_is_no_nullable
 #undef a_struct_holding_nan_is_not_equal_to_itself
 #undef a_var_place_is_taken_where_the_call_is_made
+#undef an_empty_default_of_an_optional_collection_is_the_collection
 #undef arguments_are_evaluated_in_the_order_written
 #undef bits_are_held_as_they_were_read
 #undef composites
@@ -35,6 +37,8 @@ void deltas_are_values();
 void enums_zones_and_nullables();
 void bits_are_held_as_they_were_read();
 void a_var_place_is_taken_where_the_call_is_made();
+void a_nullable_delta_is_no_nullable();
+void an_empty_default_of_an_optional_collection_is_the_collection();
 }  // namespace hgl::demo::composites::m_::t_
 
 namespace
@@ -54,6 +58,8 @@ const ::hglrt::testing::Registration test_10{"demo.composites::deltas_are_values
 const ::hglrt::testing::Registration test_11{"demo.composites::enums_zones_and_nullables", &::hgl::demo::composites::m_::t_::enums_zones_and_nullables};
 const ::hglrt::testing::Registration test_12{"demo.composites::bits_are_held_as_they_were_read", &::hgl::demo::composites::m_::t_::bits_are_held_as_they_were_read};
 const ::hglrt::testing::Registration test_13{"demo.composites::a_var_place_is_taken_where_the_call_is_made", &::hgl::demo::composites::m_::t_::a_var_place_is_taken_where_the_call_is_made};
+const ::hglrt::testing::Registration test_14{"demo.composites::a_nullable_delta_is_no_nullable", &::hgl::demo::composites::m_::t_::a_nullable_delta_is_no_nullable};
+const ::hglrt::testing::Registration test_15{"demo.composites::an_empty_default_of_an_optional_collection_is_the_collection", &::hgl::demo::composites::m_::t_::an_empty_default_of_an_optional_collection_is_the_collection};
 }  // namespace
 
 int main(int argc, char **argv)

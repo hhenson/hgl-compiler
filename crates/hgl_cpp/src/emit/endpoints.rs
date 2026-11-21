@@ -88,9 +88,21 @@ impl Family for Endpoints {
                     }
                     Some(emitter.temporal_read(&declared.ty, &view, value.at))
                 }
+                // FN-1: the value as the node's `hgraph::Scalar` holds it
+                // (`configuration`); ERR-12: "a binding a test has proved is
+                // not null is read as its payload's type there".
                 Role::Config => {
                     scope.read = true;
-                    Some(format!("{}.value()", identifier(&locals[*local].name)))
+                    let declared = &locals[*local];
+                    let read = super::configuration::read(
+                        emitter.program,
+                        &declared.ty,
+                        &identifier(&declared.name),
+                    );
+                    Some(match &declared.ty {
+                        Type::Nullable(payload) if **payload == value.ty => format!("(*{read})"),
+                        _ => read,
+                    })
                 }
                 Role::Out => Some(emitter.missing(value.at, "a read of `out`")),
                 Role::Plain | Role::Connection => None,

@@ -143,7 +143,8 @@ analyser: partial
 
 - A size is a count that is not negative; `unbounded`; size in identity, by value; tuples distinct from lists
 - A size is read by the one reader (`constant`) as an `i64`: a constant of a module, and a constant expression of those, is its value (UNIT-13); a list constant of another length than its place's size is of another type
-- Left: an unsized pattern accepting a fixed size
+- A size a generic value parameter gives is held where the parameter is given (`values::sizes`): by a struct application written in any type, a construction's and a parent's included, its argument written, defaulted, or worked out from a size expression, through the fields of the structs it applies; and by a call of a generic function, in its parameters and result. A negative count, or no count, is `list.size` there
+- Left: an unsized pattern accepting a fixed size; a size inside a generic body, a local's `list<i64, N - 3>`, which GEN-7 judges once where the body is declared
 
 transpiler: partial
 
@@ -162,7 +163,8 @@ analyser: partial
 - Its delta is the V that arrived (TYPE-16), and of a nullable V the nullable's own delta, `delta<V>`, which its result takes as well (TIME-7), read before the window is all valid as after; a read of the delta of a window of a duration, an input's, a child's or `out`'s, whose place is not a `result` is `payload.unguarded`, and one of a window of a tick count is not
 - Core's `removed_value` is read where its place takes a `result<V, error>` (ERR-14); a read whose place is not a `result` is `payload.unguarded` for every window
 - A window's result takes a V and nothing else (TIME-7); its trace's cells are V (TST-5), a generic target's once its arguments are known
-- Left: a size computed by a call, or from a generic parameter, whose kind and bounds are not checked; the delta of a window of a duration that a generic parameter stands for, which is read in an instance
+- A size a generic value parameter gives is held to the same kind and bounds where the parameter is given, as TYPE-10's is (`values::sizes`): `Ticks<0>` for a `rolling_window<f64, N>` is `rolling_window.size_bounds`, and `Kinded<"x">` `rolling_window.size_kind`
+- Left: a size computed by a call; a size inside a generic body (GEN-7); the delta of a window of a duration that a generic parameter stands for, which is read in an instance
 
 transpiler: partial
 
@@ -173,7 +175,7 @@ transpiler: partial
 - `delta_value` of a window of ticks, read plain or where a `result` is taken, is the `TSW`'s, the value that arrived; core's `record` of one reads it so (ERR-14)
 - A window's value, of an input, of `out`, of a child where it is admitted or checked when it runs, in a `when` or `stop`, and given to a lifted helper, is the `list<V>` it holds, oldest first (`_core.window_values`), which fails with `value.unset_read` before the window is all valid, where hgraph 0.9.8 reads what it holds
 - Where its place takes a `result<list<V>, error>` it is `ok` of that list, or before the window is all valid `err` of an `error` coded `value.unset_read` (`_core.window_result`, and `_core.checked_child_result` of a child known when it runs); given to a lifted parameter with a default, FN-11's entry says what binds
-- Left, reported: the value of a window that a generic type parameter stands for, which the body, checked once (GEN-7), reads as a `T`; a value that holds a window read whole; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection; the delta of a value that holds a window of a duration, whose field's delta where a value only leaves the rules do not give, and hgraph gives none; `delta_value` of a window of a duration and `removed_value`, read where a `result` is taken, and so core's `record` of a window of a duration
+- Left, reported: the value of a window that a generic type parameter stands for, which the body, checked once (GEN-7), reads as a `T`; a value that holds a window read whole; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; multiple writes where the node does not explicitly invalidate its direct window, or reads the output while writes are held; a window of a nullable, a struct or a collection; the delta of a value that holds a window of a duration, whose field's delta where a value only leaves the rules do not give, and hgraph gives none; `delta_value` of a window of a duration and `removed_value`, read where a `result` is taken, and so core's `record` of a window of a duration
 
 ## TYPE-12
 

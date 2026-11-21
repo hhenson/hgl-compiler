@@ -67,6 +67,12 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
 /// [`emit`], for a runtime library that defines the natives `provides`
 /// names.
 fn emit_with(files: &[(&str, &str)], provides: &dyn Fn(&str) -> bool) -> Emitted {
+    emit_named(files, provides, false)
+}
+
+/// [`emit_with`], where `named` gives the target the files' names, so that
+/// it sets the HGL file and line of each statement with `#line`.
+fn emit_named(files: &[(&str, &str)], provides: &dyn Fn(&str) -> bool, named: bool) -> Emitted {
     let mut sources = SourceMap::new();
     let mut diagnostics = Diagnostics::new();
     let mut parsed = Vec::new();
@@ -91,7 +97,9 @@ fn emit_with(files: &[(&str, &str)], provides: &dyn Fn(&str) -> bool) -> Emitted
         render::to_string(&sources, &diagnostics)
     );
     let before = diagnostics.len();
-    let output = transpile_for(&program, provides, &mut diagnostics);
+    let file_name = |at: hgl_diagnostics::Location| sources.file(at.file).name().to_string();
+    let file_name: Option<hgl_cpp::FileName> = named.then_some(&file_name);
+    let output = transpile_for(&program, provides, file_name, &mut diagnostics);
     let reported = diagnostics.as_slice()[before..]
         .iter()
         .map(|diagnostic| {
@@ -310,6 +318,54 @@ fn a_form_not_written_yet_blocks_what_reaches_it() {
     assert!(!unit.contains("kept"), "{unit}");
     assert!(!unit.contains("halved"), "{unit}");
     assert!(!unit.contains("reaches_a_division"), "{unit}");
+}
+
+/// FN-1: "a `const` parameter takes what is fixed when the graph is
+/// built. In composition that is any ordinary value." A value hgraph has
+/// no scalar of its own type for, a tuple, a set, a dictionary, a struct,
+/// is held as `::hglrt::configured<T>`, given so where the node is wired
+/// and read as `held` in a hook; one it has, a scalar, an enum, a list or
+/// a nullable of a value the library names, as it is. A nullable one is tested against
+/// null, and read narrowed, as the optional its `hgraph::Scalar` holds
+/// (ERR-12). Everything is written, and each test can be run.
+#[test]
+fn configurations_are_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.configurations.hgl",
+            include_str!("fixtures/demo.configurations.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.configurations", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.configurations.cpp")
+        .unwrap()
+        .text;
+    for written in [
+        "::hgraph::Scalar<\"by\", ::hglrt::configured<::std::tuple<::hgraph::Int, ::hgraph::Int>>> by",
+        "::hgraph::Scalar<\"members\", ::hglrt::configured<::hglrt::set<::hgraph::Int>>> members",
+        "::hgraph::Scalar<\"by\", ::std::optional<::hgraph::Int>> by",
+        "(!by.value().has_value())",
+        "(*by.value())",
+        "::std::get<0>(by.value().held)",
+        // A struct that holds a list is a nominal bundle (TYPE-9): a
+        // nullable and a list of one are held as they are.
+        "::hgraph::Scalar<\"h\", ::std::optional<::hgl::demo::configurations::m_::Holder>> h",
+        "::hgraph::Scalar<\"hs\", ::hglrt::list<::hgl::demo::configurations::m_::Holder>> hs",
+        "::hgraph::Scalar<\"t\", ::hglrt::configured<::std::optional<::hgl::demo::configurations::m_::Tagged>>> t",
+        "::hgraph::Scalar<\"tagged\", ::hglrt::configured<::hglrt::list<::hgl::demo::configurations::m_::Tagged>>> tagged",
+        "::hgraph::Scalar<\"ts\", ::hglrt::list<::std::tuple<::hgraph::Int, ::hgraph::Int>>> ts",
+    ] {
+        assert!(unit.contains(written), "{written} in\n{unit}");
+    }
 }
 
 /// Temporal code over the scalars, as the target writes it: a graph and
@@ -808,7 +864,7 @@ fn windows_are_written() {
         .unwrap()
         .text;
     for written in [
-        "using yielded_type_ = ::hglrt::Yielded<::hgraph::Int>;\n    using body_type_ = ::hglrt::generator<yielded_type_>;\n\n    // The body (SOURCE-1), given its configuration by value.\n    static body_type_ body_([[maybe_unused]] ::hglrt::list<std::tuple<::hgraph::DateTime, ::hgraph::Int>> items)",
+        "using yielded_type_ = ::hglrt::Yielded<::hgraph::Int>;\n    using body_type_ = ::hglrt::generator<yielded_type_>;\n\n    // The body (SOURCE-1), given its configuration by value.\n    static body_type_ body_([[maybe_unused]] ::hglrt::list<::std::tuple<::hgraph::DateTime, ::hgraph::Int>> items)",
         "[&out_](::hgraph::Int value_) { ::hglrt::window_push(out_, value_); }",
         "::hgraph::In<\"input\", ::hgraph::TSWDuration<::hgraph::Int, 3, 0>> input",
     ] {
@@ -1079,14 +1135,28 @@ fn references_are_written() {
         "(wiring_, flag, low, high, low, high).as<::hgraph::TS<::hgraph::Int>>()",
         "::hgraph::In<\"designated:low\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_",
         "if (designates_ == 0 && designated_01_.modified())",
+        // FN-16: a position of a fixed list designated, `items[idx]`: each
+        // position given again, the index checked, and the one it names
+        // published.
+        "(wiring_, idx, items, ::hglrt::element_port(items, 0), ::hglrt::element_port(items, 1))",
+        "::hgraph::In<\"designated:items[1]\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_1_",
+        "= ::hglrt::designated_position(::hglrt::checked_value(idx), 2);",
+        "out_.set(::hglrt::designation_of(position_00_, designated_01_0_, designated_01_1_));",
+        // EXPR-7: a dictionary's entry selected in a graph, a node of its
+        // own whose result designates it, given as a connection of the
+        // entry; a value key a constant connection.
+        "::hgraph::In<\"dictionary\", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Structural, ::hgraph::InputValidity::Unchecked> dictionary",
+        "::hglrt::select_entry(dictionary, key, state_.modify(), out_);",
+        ".as<::hgraph::TS<::hgraph::Int>>())",
+        "::hglrt::constant<::hgraph::Str>(wiring_, ::hgraph::Str{\"A\"})",
     ] {
         assert!(unit.contains(written), "{written} in\n{unit}");
     }
 }
 
-/// FN-16: a designation of a position of a list is reported, after the
-/// list's own temporal form (`lists`), so that a case is listed for the
-/// first form it reaches.
+/// FN-16: a designation the target does not write yet is reported, a
+/// child of a `ref` parameter; a list designated whole, and one by a
+/// position, are written.
 #[test]
 fn a_designation_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -1095,7 +1165,15 @@ fn a_designation_not_written_yet_is_reported() {
             concat!(
                 "module m\n",
                 "\n",
-                "fn route(idx: i64, items: list<i64, 3>) -> ref i64 {\n",
+                "fn route(idx: i64, ref items: list<i64, 3>) -> ref i64 {\n",
+                "    when modified(idx) { return items[idx] }\n",
+                "}\n",
+                "\n",
+                "fn both(idx: i64, items: list<i64, 3>) -> ref list<i64, 3> {\n",
+                "    when modified(idx) { return items }\n",
+                "}\n",
+                "\n",
+                "fn mixed(idx: i64, items: list<i64, 3>) -> ref i64 {\n",
                 "    when modified(idx) { return items[idx] }\n",
                 "}\n",
             ),
@@ -1104,7 +1182,7 @@ fn a_designation_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.reported,
-        ["m.hgl:4:33 the cpp target does not write a designation of a position of a list yet"]
+        ["m.hgl:4:33 the cpp target does not write a designation of this child yet"]
     );
 }
 
@@ -1203,6 +1281,215 @@ fn an_applications_parts_are_evaluated_in_the_order_written() {
     assert!(at(every) < at("const ::hglrt::testing::Bounds bounds_ = "));
     // The entry, wired in the run, is given what was held.
     assert!(at("w_::ticks(wiring_, argument_00_, argument_01_)") > at("bounds_ = "));
+}
+
+/// The fixtures of what the run's store holds (CAP-6): the module and its
+/// applications.
+const STORE: [(&str, &str); 4] = [
+    ("demo.store.hgl", include_str!("fixtures/demo.store.hgl")),
+    (
+        "demo.store.quotes.hgl",
+        include_str!("fixtures/demo.store.quotes.hgl"),
+    ),
+    (
+        "demo.store.failing.hgl",
+        include_str!("fixtures/demo.store.failing.hgl"),
+    ),
+    (
+        "demo.store.unbuilt.hgl",
+        include_str!("fixtures/demo.store.unbuilt.hgl"),
+    ),
+];
+
+/// CAP-6: every ordinary value is put in the run's store and got back as
+/// itself, in a node, where a graph is built and by an application: a
+/// struct, a tuple, a dictionary, a set and a delta among them, through the
+/// library's natives, whatever schema hgraph has of the value.
+#[test]
+fn every_ordinary_value_is_put_in_the_store() {
+    let emitted = emit_with(&STORE, &hgl_cpp::runtime::provides);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.store", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    for application in &emitted.output.applications {
+        assert!(application.blocked.is_none(), "{}", application.path);
+    }
+}
+
+/// Where the driver gives the files' names, each statement written outside
+/// a test, a constant's value and a handler's condition are preceded by
+/// the `#line` of their HGL file and line, so that a failure raised there
+/// names it; after each piece the unit numbers its lines as its own again,
+/// which a test's statements are told to the test host by.
+#[test]
+fn a_statement_names_its_hgl_file_and_line() {
+    let emitted = emit_named(
+        &[
+            ("demo.apps.hgl", include_str!("fixtures/demo.apps.hgl")),
+            (
+                "demo.apps.backtest.hgl",
+                include_str!("fixtures/demo.apps.backtest.hgl"),
+            ),
+        ],
+        &hgl_cpp::runtime::provides,
+        true,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let text = |path: &str| {
+        &emitted
+            .output
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap()
+            .text
+    };
+    let module = text("modules/demo.apps.cpp");
+    let lines: Vec<&str> = module.lines().collect();
+    // The graph `seeded`: its `put`, on line 26 of its file, set where it is
+    // built (FN-9).
+    let put = lines
+        .iter()
+        .position(|line| line.contains("put_GlobalState_str_V<::hgraph::Int>(global_state, ::hgraph::Str{\"limit\"}, limit)"))
+        .expect("the graph's put is written");
+    assert_eq!(lines[put - 1], "#line 26 \"demo.apps.hgl\"");
+    // After each piece the unit's own numbering again, the line after the
+    // directive numbered as it is in the unit.
+    for (index, line) in lines.iter().enumerate() {
+        if let Some(number) = line
+            .strip_prefix("#line ")
+            .and_then(|rest| rest.strip_suffix(" \"modules/demo.apps.cpp\""))
+        {
+            assert_eq!(number.parse::<usize>().unwrap(), index + 2, "{line}");
+        }
+    }
+    assert!(module.contains("\"modules/demo.apps.cpp\""));
+    // A test's statements are told to the test host by the unit's lines:
+    // none in its body sets an HGL line.
+    let test = module
+        .split("void the_store_is_set_where_the_graph_is_built()")
+        .nth(1)
+        .unwrap();
+    let body = &test[..test.find("\n}\n").unwrap()];
+    assert!(!body.contains("#line"), "{body}");
+    // An application's store statements and its run statement.
+    let application = text("modules/demo.apps.backtest.cpp");
+    let lines: Vec<&str> = application.lines().collect();
+    let stored = lines
+        .iter()
+        .position(|line| line.contains("put_GlobalState_str_V"))
+        .unwrap();
+    assert_eq!(lines[stored - 1], "#line 9 \"demo.apps.backtest.hgl\"");
+    let recorded = lines
+        .iter()
+        .position(|line| line.contains("record::of_i64(wiring_"))
+        .unwrap();
+    assert_eq!(lines[recorded - 1], "#line 12 \"demo.apps.backtest.hgl\"");
+    // A constant's value.
+    let constant = lines
+        .iter()
+        .position(|line| line.contains("static const ::hgraph::Int value = 2;"))
+        .unwrap();
+    assert_eq!(lines[constant - 1], "#line 5 \"demo.apps.backtest.hgl\"");
+}
+
+/// A node a test writes ahead of itself, an eval's lifted call of a value
+/// function (TST-8), sets the HGL lines of its statements; the test's own
+/// statements, which it tells the test host by their lines in the unit,
+/// are numbered as the unit's again after it.
+#[test]
+fn a_tests_lines_are_the_units_after_a_node_written_ahead_of_it() {
+    let emitted = emit_named(
+        &[(
+            "demo.ahead.hgl",
+            concat!(
+                "module demo.ahead\n",
+                "const fn scale(value: i64) -> i64 => value * 2\n",
+                "test a_failure_after_an_eval_of_a_value_function {\n",
+                "    assert eval(scale(value: [1])) == [2]\n",
+                "    assert scale(1) == 3\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+        true,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.ahead.cpp")
+        .unwrap()
+        .text;
+    let lines: Vec<&str> = unit.lines().collect();
+    let test = lines
+        .iter()
+        .position(|line| *line == "void a_failure_after_an_eval_of_a_value_function()")
+        .unwrap();
+    // The node ahead of the test sets an HGL line; the last directive
+    // before the test numbers the unit's own lines again, so that the line
+    // each statement of the test tells the test host is its line in the
+    // unit, which the target recorded the statement at.
+    assert!(lines[..test].contains(&"#line 4 \"demo.ahead.hgl\""));
+    let last = lines[..test]
+        .iter()
+        .rposition(|line| line.starts_with("#line "))
+        .unwrap();
+    assert_eq!(
+        lines[last],
+        format!("#line {} \"modules/demo.ahead.cpp\"", last + 2)
+    );
+    assert!(!lines[test..].iter().any(|line| line.starts_with("#line ")));
+}
+
+/// A node whose result is a window writes its handlers inside the
+/// evaluation that holds what they publish (`windows`), indented, and they
+/// set the HGL lines of their statements there too: the unit numbers its
+/// own lines again after the node, though it is the module's last
+/// declaration, so that a test written after it is told its lines in the
+/// unit.
+#[test]
+fn a_units_lines_are_its_own_again_after_a_window_node() {
+    let emitted = emit_named(
+        &[(
+            "demo.windowed.hgl",
+            concat!(
+                "module demo.windowed\n",
+                "fn collect(reading: i64) -> rolling_window<i64, 3, 2> {\n",
+                "    when { return reading }\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+        true,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.windowed.cpp")
+        .unwrap()
+        .text;
+    let lines: Vec<&str> = unit.lines().collect();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_start() == "#line 3 \"demo.windowed.hgl\""),
+        "{unit}"
+    );
+    let last = lines
+        .iter()
+        .rposition(|line| line.trim_start().starts_with("#line "))
+        .unwrap();
+    assert_eq!(
+        lines[last],
+        format!("#line {} \"modules/demo.windowed.cpp\"", last + 2),
+        "{unit}"
+    );
 }
 
 /// An application that needs a form the target does not write yet is
@@ -1316,6 +1603,106 @@ fn a_capture_given_an_f64_configuration_is_reported() {
     );
 }
 
+/// TYPE-9: "Temporalization recursively maps tuples/structs to child
+/// fields, lists to child positions, dictionaries to keyed children": a
+/// form made of another family's forms, each part's form asked of its own
+/// family through the dispatch point (`temporal_schema_of`) and read and
+/// published through it (endpoints.h's `whole` and `publisher`). A list of
+/// tuples, growing and fixed; a tuple of a list; a dictionary of tuples; a
+/// struct with a list field: each as a node's input and result, and as a
+/// trace's cells, whole and as deltas. Everything is written.
+#[test]
+fn nested_forms_are_written() {
+    let emitted = emit_with(
+        &[("demo.nested.hgl", include_str!("fixtures/demo.nested.hgl"))],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.nested", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.nested.cpp")
+        .unwrap()
+        .text;
+    let pair = "::hgraph::UnNamedTSB<::hgraph::Field<\"0\", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<\"1\", ::hgraph::TS<::hgraph::Str>>>";
+    for written in [
+        // A list's element is the tuple's own form (`structs`).
+        format!("::hgraph::TSL<{pair}>"),
+        format!("::hgraph::TSL<{pair}, 2>"),
+        // A tuple's position is the list's own form (`lists`).
+        "::hgraph::UnNamedTSB<::hgraph::Field<\"0\", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>, ::hgraph::Field<\"1\", ::hgraph::TS<::hgraph::Bool>>>".to_string(),
+        // A dictionary's entry is the tuple's own form.
+        format!("::hgraph::TSD<::hgraph::Str, {pair}>"),
+        // A struct's list field is the list's own form.
+        "::hgraph::Field<\"counts\", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>".to_string(),
+    ] {
+        assert!(unit.contains(&written), "{written} in\n{unit}");
+    }
+    // The struct's nominal bundle holds the list field as the value hgraph
+    // holds that `TSL` as (structs.h, `list_value`).
+    let types = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.nested.types.h")
+        .unwrap()
+        .text;
+    assert!(
+        types.contains("::hgraph::Field<\"counts\", ::hglrt::list_value<::hgraph::Int>>"),
+        "{types}"
+    );
+}
+
+/// A form made of others that the library does not read or publish as a
+/// part yet is reported by name, and nothing is miswritten: a list of
+/// sets, a dictionary of lists, a dictionary of structs, a tuple of a set,
+/// and a child of a list of tuples named in a hook, whose library `Child`
+/// is no view a tuple's own reads take.
+#[test]
+fn nested_forms_not_written_yet_are_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Quote {\n",
+            "    bid: i64\n",
+            "}\n",
+            "fn sets(values: list<set<i64>>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn lists(book: dict<str, list<i64>>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn quotes(book: dict<str, Quote>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn tagged(tag: tuple<set<i64>, i64>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn first(pairs: list<tuple<i64, str>>) -> tuple<i64, str> {\n",
+            "    when valid(pairs[0]) && all_valid(pairs[0]) { return pairs[0] }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:5:9 the cpp target does not write a temporal value of `list<set<i64>>` yet",
+            "m.hgl:8:10 the cpp target does not write a temporal value of `dict<str, list<i64>>` yet",
+            "m.hgl:11:11 the cpp target does not write a temporal value of `dict<str, Quote>` yet",
+            "m.hgl:14:11 the cpp target does not write a temporal value of `tuple<set<i64>, i64>` yet",
+            "m.hgl:18:16 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
+            "m.hgl:18:39 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
+            "m.hgl:18:58 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
+        ]
+    );
+}
+
 /// The temporal forms of a list and of a tuple (`lists`): published whole
 /// and by delta, read whole and by child, a child wired, a list replayed
 /// and recorded, and the value an eval's result holds kept for a cell
@@ -1410,9 +1797,9 @@ fn keyed_temporal_code_is_written() {
 }
 
 /// A dictionary's key of a type the family does not write, a constant
-/// connection of a set, an entry of a dictionary's entry in a hook, and a
-/// key's child as a connection of a graph are reported, and block what
-/// reaches them.
+/// connection of a set, and an entry of a dictionary's entry in a hook are
+/// reported, and block what reaches them. A key's child as a connection of
+/// a graph is written (`references`).
 #[test]
 fn a_keyed_form_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -1466,9 +1853,124 @@ fn a_keyed_form_not_written_yet_is_reported() {
         emitted.blocked("an_entry_of_an_entry").as_deref(),
         Some("m.hgl:12:21 the cpp target does not write an entry of a dictionary's entry yet")
     );
+    assert_eq!(emitted.blocked("a_child_in_a_graph"), None);
+}
+
+/// An instance that only a piece left out asks for is not written: an
+/// eval that reaches a form the target does not write asks for core's
+/// `replay` and `record` of its types, which are left out of core's unit
+/// with it, so that what is not written stops no other module's tests
+/// ("Assembly"). One a test that runs asks for is written.
+#[test]
+fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "const fn half(d: duration) -> result<duration, error> => ok(d)\n",
+                "\n",
+                "fn later(a: duration) -> duration {\n",
+                "    when { return a + half(a)? }\n",
+                "}\n",
+                "\n",
+                "fn kept(a: i64) -> i64 {\n",
+                "    when { return a }\n",
+                "}\n",
+                "\n",
+                "test blocked {\n",
+                "    assert eval(later(a: [1s])) == [2s]\n",
+                "}\n",
+                "\n",
+                "test runs {\n",
+                "    assert eval(kept(a: [1])) == [1]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert!(
+        emitted
+            .blocked("blocked")
+            .is_some_and(|reason| reason.ends_with("does not write a `?` here yet")),
+        "{:?}",
+        emitted.blocked("blocked")
+    );
+    assert_eq!(emitted.blocked("runs"), None);
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    assert!(!core.contains("of_duration"), "{core}");
+    assert!(
+        core.contains("::hgraph::wire<::hgl::core::m_::n_::i_::record::of_i64::impl_>"),
+        "{core}"
+    );
+}
+
+/// TYPE-14: a connection of T is one of `T?` where one is taken, through
+/// hgraph's own widening of its port (`Port::as`): given to a node's input
+/// and returned as a graph's result. hgraph binds no `REF` of a `T?` to an
+/// output of T, so one given to a `ref` parameter of `T?` is reported.
+#[test]
+fn a_connection_of_t_is_widened_where_a_nullable_is_taken() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn shown(x: i64?) -> bool {\n",
+                "    when { return valid(x) }\n",
+                "}\n",
+                "\n",
+                "fn widened(x: i64) -> bool => shown(x)\n",
+                "\n",
+                "fn widened_result(x: i64) -> i64? => x\n",
+                "\n",
+                "fn pick(flag: bool, ref low: i64?) -> ref i64? {\n",
+                "    when modified(flag) { return low }\n",
+                "}\n",
+                "\n",
+                "fn picked(flag: bool, low: i64) -> i64? => pick(flag, low)\n",
+                "\n",
+                "test widens {\n",
+                "    assert eval(widened(x: [1])) == [true]\n",
+                "    assert eval(widened_result(x: [1])) == [1]\n",
+                "}\n",
+                "\n",
+                "test designates {\n",
+                "    assert eval(picked(flag: [true], low: [1])) == [1]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("widens"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    assert!(
+        unit.contains("::hgl::m::m_::w_::shown(wiring_, (x).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>())"),
+        "{unit}"
+    );
+    assert!(
+        unit.contains("return (x).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>();"),
+        "{unit}"
+    );
     assert_eq!(
-        emitted.blocked("a_child_in_a_graph").as_deref(),
-        Some("m.hgl:15:44 the cpp target does not write a child of a connection yet")
+        emitted.blocked("designates").as_deref(),
+        Some(
+            "m.hgl:15:55 the cpp target does not write a connection of `i64` given to a `ref` parameter of `i64?` yet"
+        )
     );
 }
 
@@ -1825,7 +2327,7 @@ fn a_lifted_calls_omitted_defaults_are_configuration() {
         "{twice}"
     );
     assert!(
-        twice.contains("::hgl::m::m_::summed(::hglrt::checked_value(a), b.value(), c.value(), std::nullopt, e.value())"),
+        twice.contains("::hgl::m::m_::summed(::hglrt::checked_value(a), b.value(), c.value(), ::std::nullopt, e.value())"),
         "{twice}"
     );
     // Each default may fail: each is held, `b` before `c`, after the
@@ -2332,7 +2834,7 @@ fn temporal_structs_and_nullables_are_written() {
 
 /// What the target does not write of temporal structs, tuples and
 /// nullables yet is reported, and nothing is miswritten: a struct whose
-/// field has a form the library does not read whole (a list), a generic
+/// field has a form the library does not read as a part (a set), a generic
 /// struct, an abstract one, a nullable put in the run's store (a `get`
 /// through a nullable place has the payload's type: hgl_spec issue 165),
 /// an atomic struct that holds an optional field (hgraph issue 1874), and
@@ -2344,7 +2846,7 @@ fn temporal_structs_not_written_yet_are_reported() {
         concat!(
             "module m\n",
             "struct Listed {\n",
-            "    values: list<i64>\n",
+            "    values: set<i64>\n",
             "}\n",
             "struct Box<T> {\n",
             "    value: T\n",
@@ -2499,9 +3001,6 @@ fn composite_forms_not_written_yet_are_reported() {
             // TYPE-14: `T?` of an `i64?` is an `i64?`, where the template's
             // field would be an optional of one.
             "m.hgl:32:15 the cpp target does not write the type `Maybe<i64?>` yet",
-            // TYPE-3: `Mark<delta<i64?>>` is no `Mark<i64?>`, which would be
-            // one C++ struct.
-            "m.hgl:33:10 the cpp target does not write the type `Mark<delta<i64?>>` yet",
             // TYPE-16: an atomic's delta is the whole value, which the
             // template, given the value the atomic holds, would not have.
             "m.hgl:34:16 the cpp target does not write the type `delta<Maybe<atomic<list<i64>>>>` yet",

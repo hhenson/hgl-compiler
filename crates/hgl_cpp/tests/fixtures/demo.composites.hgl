@@ -85,6 +85,46 @@ struct Pair : Sized<2> {}
 
 const fn held(holder: Holder<list<i64, 2>>) -> list<i64, 2> => holder.value
 
+# A struct named `std`: the module's C++ names the standard library's
+# names from the global namespace.
+struct std {
+    x: i64
+}
+
+# TYPE-4: an optional field's default that is not null, an empty
+# collection: a field of a generic struct's and one a parent declares
+# among them.
+struct Stocked {
+    items: list<i64>? = []
+    tags: set<str>? = []
+    book: dict<str, i64>? = []
+    kept: atomic<list<i64>>? = []
+}
+
+struct Shelf<T> {
+    items: list<T>? = []
+}
+
+abstract struct Slot<T> {
+    held: T?
+}
+
+struct Filled : Slot<list<i64>> {
+    held = []
+}
+
+# TYPE-16: a nullable's delta is no nullable: a dictionary's value of it,
+# and a struct's delta's property for a nullable field.
+struct Reading {
+    level: i64?
+}
+
+const fn look(book: dict<str, delta<i64?>>, key: str) -> delta<i64?>? => get(book, key)
+
+const fn published_null() -> delta<Reading> => delta<Reading>(level: delta<i64?>())
+
+const fn unchanged() -> delta<Reading> => delta<Reading>()
+
 # GEN-4: a candidate of an operator over a struct.
 impl const fn add_(lhs: Point, rhs: Point) -> Point => Point(x: lhs.x + rhs.x, y: lhs.y + rhs.y)
 
@@ -467,4 +507,35 @@ test a_var_place_is_taken_where_the_call_is_made {
         }], 1)
     }
     assert seen == 0
+}
+
+test a_nullable_delta_is_no_nullable {
+    let book: dict<str, delta<i64?>> = ["a": delta<i64?>()]
+    assert get(book, "a") != null
+    assert look(book, "a") == delta<i64?>()
+    assert look(book, "missing") == null
+    assert published_null().level != null
+    assert unchanged().level == null
+    assert published_null().level == delta<i64?>()
+    assert unchanged().level != delta<i64?>()
+    assert delta<Reading>(level: delta<i64?>(value: 2)).level == delta<i64?>(value: 2)
+    # Each side is held, in the order written, where one runs statements.
+    var reads = 0
+    assert {
+        reads += 1
+        published_null().level
+    } == delta<i64?>()
+    assert unchanged().level != {
+        reads += 1
+        delta<i64?>()
+    }
+    assert reads == 2
+}
+
+test an_empty_default_of_an_optional_collection_is_the_collection {
+    assert Stocked().items != null && Stocked().tags != null && Stocked().book != null
+    assert Stocked().kept != null
+    assert Shelf<i64>().items != null
+    assert Filled().held != null
+    assert std(x: 2).x == 2
 }

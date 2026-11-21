@@ -2799,7 +2799,7 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
             "-> _hg.TSS[_py.int]:\n",
         ),
         concat!(
-            "    _output.value = _core.entries_published(_output, _hg.set_delta(added=_py.frozenset((2, 3)), ",
+            "    _core.entries_published(_output, _hg.set_delta(added=_py.frozenset((2, 3)), ",
             "removed=_py.frozenset(), tp=_py.int), \"entries\")\n",
         ),
         "    return _core.entries_published(_output, input.delta_value, \"entries\")\n",
@@ -3870,8 +3870,7 @@ fn a_window_is_hgraphs_tsw() {
 }
 
 /// What this target does not write of a window is reported: the
-/// invalidation of a window, which hgraph's `TSW` survives with what it
-/// holds, a window of a value that is no scalar or enum, and a window of
+/// window of a value that is no scalar or enum, and a window of
 /// a duration's `delta_value` read where a `result` is taken (ERR-14),
 /// which an eval's record of one reads (core's CEVAL-4). Core's END-9
 /// gives every window's readiness, of ticks and of a duration, which is
@@ -3892,7 +3891,6 @@ fn a_window_form_not_written_yet_is_reported() {
         reported,
         [
             "m.hgl:7:19 target.unsupported: the hgraph target does not write `delta_value` of a child or of a window of a duration, or `removed_value`, read where a `result` is taken (ERR-14) yet",
-            "m.hgl:21:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
             "m.hgl:23:4 target.unsupported: the hgraph target does not write the type `rolling_window<Quote, 3, 1>` yet",
             "m.hgl:26:4 target.unsupported: the hgraph target does not write the type `rolling_window<f64?, 3, 1>` yet",
         ]
@@ -4922,7 +4920,7 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
     python.assert_writes(&[
         format!("def quoted(bid: _hg.TS[_py.int], ask: _hg.TS[_py.int]) -> {quote}:"),
         "    return _core.bundled(Quote(bid=bid.value, ask=ask.value))".to_string(),
-        "        return _core.struct_delta(bid=price.value)".to_string(),
+        "        return _core.entries_published(_output, _core.struct_delta(bid=price.value), (\"fields\", {}))".to_string(),
         format!(
             "_output: _hg.TSB_OUT[{}] = None",
             &quote["_hg.TSB[".len()..quote.len() - 1]
@@ -5382,9 +5380,9 @@ fn a_growing_lists_position_is_an_endpoint_of_its_own() {
         "_core.list_position(values, 1).valid".to_string(),
         "_core.child_modified(_core.list_position(values, 1))".to_string(),
         "_core.checked_child_result(_core.list_position(values, index.value), lambda _port: ".to_string(),
-        "        return _core.published_into(_output, (None, _core.list_delta(size_modified=_core.neg__i64(value=1)),), (None, \"list\",))\n".to_string(),
-        "_core.published_into(_output, _core.struct_delta(items=_core.list_delta(size_modified=_core.neg__i64(value=command.value))), {\"items\": \"list\"})".to_string(),
-        "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, {\"items\": \"list\"})\n".to_string(),
+        "        return _core.published_into(_output, (None, _core.list_delta(size_modified=_core.neg__i64(value=1)),), (None, \"list\",), entries=(\"positions\", (None, None,)))\n".to_string(),
+        "_core.published_into(_output, _core.struct_delta(items=_core.list_delta(size_modified=_core.neg__i64(value=command.value))), {\"items\": \"list\"}, entries=(\"fields\", {}))".to_string(),
+        "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, {\"items\": \"list\"}, entries=(\"fields\", {}))\n".to_string(),
         "_core.bundled(Basket(owner=\"b\", items=[]), {\"owner\": None, \"items\": \"list\"}, _core.DEFERRED)".to_string(),
         "        _core.invalidated(_output, \"list\")\n".to_string(),
         "        _core.invalidated(_output, {\"items\": \"list\"})\n".to_string(),
@@ -6402,7 +6400,7 @@ fn a_delta_beside_an_unsized_list_is_told_where_its_dictionaries_are() {
     let python = emitted.text("_hgl/_m_m/__init__.py");
     for expected in [
         "(\"list\", None,), entries=(\"positions\", (None, (\"entries\", \"entries\"),)))\n",
-        "return _core.published_into(_output, (None, _core.list_delta(),), (None, \"list\",))\n",
+        "return _core.published_into(_output, (None, _core.list_delta(),), (None, \"list\",), entries=(\"positions\", (None, None,)))\n",
     ] {
         assert!(python.contains(expected), "{expected}\nnot in\n{python}");
     }
@@ -6644,4 +6642,17 @@ fn the_instances_one_call_makes_are_written_up_to_one_bound() {
             "m.hgl:4:38 target.unsupported: the hgraph target does not write an instance of `climb` past the 4096 instances of it one call makes yet"
         ]
     );
+}
+
+/// END-4, END-5: a window result discards history and a pending arrival
+/// when explicitly withdrawn. Its next value starts a fresh window.
+#[test]
+fn a_window_can_be_withdrawn_and_republished() {
+    let emitted = emit_clean(&[fixture!("demo.window_withdrawal.hgl")]);
+    emitted.module("demo.window_withdrawal").assert_writes(&[
+        "with _core.WindowWrites(_output) as _window:",
+        "_window.invalidate()",
+        "_window.hold(80)",
+        "_core.invalidate_window(_output)",
+    ]);
 }

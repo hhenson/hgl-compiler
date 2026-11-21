@@ -132,7 +132,11 @@ impl Emitter<'_> {
     }
 
     /// Writes `statement` into `text`, `depth` levels in, after what it
-    /// needs run before it (`Scope::before`).
+    /// needs run before it (`Scope::before`). Outside a test, each line it
+    /// writes, what runs before it among them, is given the HGL file and
+    /// line of the statement, so that a failure raised in it names them
+    /// (`stamped`); a test's statements tell the test host their own lines
+    /// instead (`tests`).
     pub(super) fn statement(
         &mut self,
         scope: &mut Scope,
@@ -141,6 +145,7 @@ impl Emitter<'_> {
         text: &mut String,
     ) {
         let indent = INDENT.repeat(depth);
+        let mut whole = String::new();
         let mut written = String::new();
         let outer_before = std::mem::take(&mut scope.before);
         let outer_acted = std::mem::replace(&mut scope.acted, false);
@@ -148,12 +153,34 @@ impl Emitter<'_> {
         self.statement_text(scope, statement, depth, &mut written);
         for written in std::mem::replace(&mut scope.before, outer_before) {
             for line in written.lines() {
-                text.push_str(&format!("{indent}{line}\n"));
+                whole.push_str(&format!("{indent}{line}\n"));
             }
         }
         scope.acted = outer_acted;
         scope.read = outer_read;
-        text.push_str(&written);
+        whole.push_str(&written);
+        self.push_stamped(scope, statement, &whole, text);
+    }
+
+    /// Pushes `written`, the code of `statement`, onto `text`, each of its
+    /// lines given the statement's HGL file and line outside a test
+    /// (`stamped`).
+    pub(super) fn push_stamped(
+        &mut self,
+        scope: &Scope,
+        statement: &Stmt,
+        written: &str,
+        text: &mut String,
+    ) {
+        let directive = if scope.testing {
+            None
+        } else {
+            self.line_directive(statement_at(statement, &scope.body.locals))
+        };
+        match directive {
+            Some(directive) => text.push_str(&super::stamped(&directive, written)),
+            None => text.push_str(written),
+        }
     }
 
     /// The text of `statement`, `depth` levels in, without what it needs
@@ -474,7 +501,7 @@ impl Emitter<'_> {
                     // The labels name every value the selector can hold,
                     // so no other is reached: C++ is told so.
                     text.push_str(&format!("{inner}else\n{inner}{{\n"));
-                    text.push_str(&format!("{inner}{INDENT}std::unreachable();\n"));
+                    text.push_str(&format!("{inner}{INDENT}::std::unreachable();\n"));
                     text.push_str(&format!("{inner}}}\n"));
                 } else {
                     // CTRL-6: "An unmatched selector uses default or
@@ -598,7 +625,7 @@ impl Emitter<'_> {
                         return None;
                     };
                     let base = self.place_held(scope, base, holds)?;
-                    Some(format!("std::get<{position}>({base})"))
+                    Some(format!("::std::get<{position}>({base})"))
                 }
                 // EXPR-2: the list, then the index. Where the indices are
                 // held before the statement, the list's own place is

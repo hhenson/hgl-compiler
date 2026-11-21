@@ -16,11 +16,13 @@
 //! | A cell of a trace of one (TST-5) | `::hglrt::testing::Whole<T>{value}` for a value written whole; the delta itself for a delta |
 //!
 //! A set's element and a dictionary's key are a scalar, which hgraph
-//! holds as a value of its own; a dictionary's value is a scalar, a set
-//! or a dictionary, whose form the library converts. Every other
-//! one, a constant connection of a set or a dictionary (FN-3), an entry
-//! of an entry (`book["a"]["b"]`), and a key's child as a connection of a
-//! graph (EXPR-7) are not written yet, and are reported.
+//! holds as a value of its own; a dictionary's value is a scalar, a set,
+//! a dictionary or a tuple of such positions, whose form the library
+//! converts, a tuple's an entry read whole as a tuple is (TIME-1). Every
+//! other one, a constant connection of a set or a dictionary (FN-3) and an
+//! entry of an entry (`book["a"]["b"]`), are not written yet, and are
+//! reported. A key's child as a connection of a graph (EXPR-7) is the
+//! `references` family's, a designation of the entry.
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind};
 use hgl_analyser::{Scalar, Type};
@@ -48,12 +50,15 @@ fn key(emitter: &Emitter, ty: &Type) -> Option<String> {
 }
 
 /// True where `ty` is a dictionary's value whose form the library
-/// converts (`keyed_form`): a scalar's, a set's or a dictionary's.
+/// converts (`keyed_form`): a scalar's, a set's, a dictionary's, and a
+/// tuple's of such positions, whose form is the `structs` family's (the
+/// dispatch point gives it).
 fn entry_form(ty: &Type) -> bool {
     matches!(
         ty,
         Type::Scalar(scalar) if !matches!(scalar, Scalar::Timezone | Scalar::ZonedTime | Scalar::Any)
     ) || matches!(ty, Type::Set(_) | Type::Dict { .. })
+        || matches!(ty, Type::Tuple(positions) if !positions.is_empty() && positions.iter().all(entry_form))
 }
 
 /// hgraph's schema of a temporal value of `ty`, where it is a set or a

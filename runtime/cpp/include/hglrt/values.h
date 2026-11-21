@@ -17,9 +17,9 @@
 // atomic, through that alone.
 //
 // What a temporal value publishes in one cycle, its `delta<T>` (TYPE-16), is
-// an ordinary value too: `delta_t<T>`. It is T itself for a scalar and for
-// a nullable one, a tuple of optionals for a tuple, and `list_delta` for a
-// list. A set's, a dictionary's and a struct's are the collections' and the
+// an ordinary value too: `delta_t<T>`. It is T itself for a scalar, a
+// tuple of optionals for a tuple, `nullable_delta` for a nullable and
+// `list_delta` for a list. A set's, a dictionary's and a struct's are the collections' and the
 // structs' work (docs/cpp-target.md, "Not decided here").
 #pragma once
 
@@ -41,6 +41,7 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -112,11 +113,13 @@ concept named_enum = std::is_enum_v<E> && requires(E value) {
 template <class L>
 struct list_delta;
 
+template <class T, class D>
+struct nullable_delta;
+
 /// `delta<T>` (TYPE-16): what a temporal value of T publishes in one cycle.
 /// "For most T it is another type the language has: `delta<f64>` is `f64`,
-/// and `delta<tuple<f64, i64>>` is `tuple<f64?, i64?>` ... A nullable's
-/// delta is an optional: it holds what was published, a null among them"; a
-/// list's is a type of its own, `list_delta`.
+/// and `delta<tuple<f64, i64>>` is `tuple<f64?, i64?>`"; a nullable's is a
+/// type of its own, `nullable_delta`, and a list's, `list_delta`.
 template <class T>
 struct delta_of {
     using type = T;
@@ -128,7 +131,7 @@ using delta_t = typename delta_of<T>::type;
 
 template <class T>
 struct delta_of<std::optional<T>> {
-    using type = std::optional<delta_t<T>>;
+    using type = nullable_delta<T, delta_t<T>>;
 };
 
 /// A tuple's delta: each position's delta, or null where the position does
@@ -172,12 +175,41 @@ struct list_delta {
     friend bool operator==(const list_delta&, const list_delta&) = default;
 };
 
+/// `delta<T?>` (TYPE-16): "A nullable's ... delta is a type of its own ...
+/// Such a delta is no T", and "A nullable's delta is an optional: it holds
+/// what was published, a null among them": `value`, the delta `D` of the
+/// payload `T` that was published, empty where a null was. `D` is
+/// `delta_t<T>` but for an `atomic<T>?`, whose delta is the whole T. It is
+/// no `std::optional`, so that a `delta<T?>?` is an optional of one, as a
+/// nullable of a nullable never is (TYPE-14), and a `delta<T?>` compared
+/// with one is compared as a value. "A `delta<V>` is a value where a
+/// `delta<V?>` is expected": a D converts to one that holds it.
+template <class T, class D = delta_t<T>>
+struct nullable_delta {
+    /// The nullable's payload, and its delta.
+    using payload_type = T;
+    using delta_type = D;
+
+    /// What was published: its delta, or empty for a null.
+    std::optional<D> value{};
+
+    constexpr nullable_delta() = default;
+    constexpr nullable_delta(D published) : value(std::move(published)) {}
+    constexpr explicit nullable_delta(std::optional<D> published) : value(std::move(published)) {}
+
+    friend bool operator==(const nullable_delta&, const nullable_delta&) = default;
+};
+
 /// The hash of `value`, part by part: what `std::hash` gives a list (TYPE-8:
 /// equal values hash alike). A tuple and an optional are hashed through
 /// their parts, as the standard library hashes neither a tuple nor an
-/// optional of every type.
+/// optional of every type; a type whose `value_form` gives a `hash`, as it
+/// says.
 template <class T>
 std::size_t hash_of(const T& value);
+
+template <class T>
+struct value_form;
 
 namespace detail {
 
@@ -212,6 +244,11 @@ struct is_list_delta : std::false_type {};
 template <class L>
 struct is_list_delta<list_delta<L>> : std::true_type {};
 
+template <class T>
+struct is_nullable_delta : std::false_type {};
+template <class T, class D>
+struct is_nullable_delta<nullable_delta<T, D>> : std::true_type {};
+
 } // namespace detail
 
 template <class T>
@@ -223,6 +260,8 @@ std::size_t hash_of(const T& value) {
         return seed;
     } else if constexpr (detail::is_optional<T>::value) {
         return value.has_value() ? detail::combined(1, hash_of(*value)) : 0;
+    } else if constexpr (detail::is_nullable_delta<T>::value) {
+        return detail::combined(2, hash_of(value.value));
     } else if constexpr (detail::is_list<T>::value || detail::is_fixed_list<T>::value) {
         std::size_t seed = value.size();
         // Each element as the list's value type: libc++ gives an element
@@ -241,6 +280,8 @@ std::size_t hash_of(const T& value) {
             seed = detail::combined(seed, hash_of(position));
         }
         return detail::combined(seed, hash_of(value.size_modified));
+    } else if constexpr (requires { value_form<T>::hash(value); }) {
+        return value_form<T>::hash(value);
     } else {
         return std::hash<T>{}(value);
     }
@@ -249,9 +290,10 @@ std::size_t hash_of(const T& value) {
 /// What a header of this library says of a value type it declares that the
 /// chains of `type_name` and of `testing::text_of` (traces.h) do not know, a
 /// set's or a dictionary's (keyed.h) and a struct's (structs.h) among them: a
-/// specialization gives `name()`, the HGL name of the type, and `text(value)`,
-/// a value of it as the language writes it, or either. The primary says
-/// nothing.
+/// specialization gives `name()`, the HGL name of the type, `text(value)`,
+/// a value of it as the language writes it, and `hash(value)`, its hash
+/// where the standard library has none (`hash_of`), or any of them. The
+/// primary says nothing.
 template <class T>
 struct value_form {};
 
@@ -301,6 +343,14 @@ std::string type_name() {
         return "delta<" + type_name<typename T::list_type>() + ">";
     } else if constexpr (detail::is_optional<T>::value) {
         return type_name<typename T::value_type>() + "?";
+    } else if constexpr (detail::is_nullable_delta<T>::value) {
+        // A payload whose delta is the whole of it, where its own is not,
+        // is an atomic's.
+        using P = typename T::payload_type;
+        const std::string payload = type_name<P>();
+        return "delta<" +
+               (std::is_same_v<typename T::delta_type, delta_t<P>> ? payload : "atomic<" + payload + ">") +
+               "?>";
     } else if constexpr (detail::is_tuple<T>::value) {
         return []<std::size_t... I>(std::index_sequence<I...>) {
             std::string parts;
@@ -318,6 +368,27 @@ std::string type_name() {
         static_assert(false, "hglrt::type_name: no HGL name for this type");
     }
 }
+
+/// The configuration of a node, a `const` parameter's value (FN-1: "a
+/// `const` parameter takes what is fixed when the graph is built. In
+/// composition that is any ordinary value"), where hgraph has no scalar of
+/// the value's own type to hold it as: a tuple, a fixed list, a set, a
+/// dictionary, a struct, a list or a nullable of a struct hgraph does not
+/// hold as a bundle, a nullable of a tuple. hgraph holds a node's
+/// configuration as `hgraph::Scalar<"name", T>`, and asks of T a scalar of
+/// its type registry, with `std::hash` and `==`, for its interning of
+/// identical nodes; this holds the value whole, and is registered as an
+/// atomic under `hgl.config.` and the name of the value's C++ type (below),
+/// with the value's hash (`hash_of`) and equality. Two nodes whose
+/// configurations differ are two; the compiler wires one whose
+/// configuration holds an `f64` as a node of its own, since `0.0 == -0.0`
+/// (hgraph issue 1866). A hook reads the value as `held`.
+template <class T>
+struct configured {
+    T held;
+
+    friend bool operator==(const configured&, const configured&) = default;
+};
 
 } // namespace hglrt
 
@@ -364,5 +435,24 @@ struct hgraph::scalar_descriptor<E> {
     [[nodiscard]] static const ValueTypeMetaData* value_meta() {
         static const std::string name = "hgl." + hglrt::type_name<E>();
         return TypeRegistry::instance().register_scalar<E>(name);
+    }
+};
+
+template <class T>
+struct std::hash<hglrt::configured<T>> {
+    std::size_t operator()(const hglrt::configured<T>& value) const { return hglrt::hash_of(value.held); }
+};
+
+/// A configuration that hgraph has no scalar of its value's own type for is
+/// registered with hgraph as an atomic, the first time hgraph asks for its
+/// schema, under `hgl.config.` and the C++ type's own name, which tells
+/// every type apart: not every value type the compiler writes has an HGL
+/// name the library can give (a struct hgraph does not hold as a bundle).
+template <class T>
+struct hgraph::scalar_descriptor<hglrt::configured<T>> {
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta() {
+        static const std::string name = std::string{"hgl.config."} + typeid(T).name();
+        return TypeRegistry::instance().register_scalar<hglrt::configured<T>>(name);
     }
 };
