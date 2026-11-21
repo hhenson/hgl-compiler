@@ -15,7 +15,7 @@ use hgl_diagnostics::Location;
 // A tenor's value is the lexer's: a later stage reads it from here.
 pub use hgl_lexer::literal::Tenor;
 
-use crate::program::LocalKind;
+use crate::program::{LocalKind, OperatorRef};
 use crate::types::{Argument as GenericArgument, Type};
 
 /// An application's run statement, typed (RUN-1): "its run statement
@@ -610,6 +610,23 @@ pub enum ExprKind {
         /// The left operand.
         left: Box<Expr>,
         /// The right operand.
+        right: Box<Expr>,
+    },
+    /// An unconfigured binary symbol awaiting an operand's type in a graph.
+    DeferredBinary {
+        /// The binary form written in source.
+        operator: BinaryOperator,
+        /// The operator this symbol binds.
+        identity: OperatorRef,
+        /// The source location of the symbol itself.
+        at: Location,
+        /// What the original place expects of the operator's result.
+        expected: Option<Box<Type>>,
+        /// The source locations of the two written operands.
+        operands: [Location; 2],
+        /// The left operand, already read in source order.
+        left: Box<Expr>,
+        /// The right operand, already read in source order.
         right: Box<Expr>,
     },
     /// An `i64` taken as the `f64` of the same number, where an `f64`
@@ -1406,6 +1423,7 @@ impl Expr {
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes(visit),
             ExprKind::Binary { left, right, .. }
+            | ExprKind::DeferredBinary { left, right, .. }
             | ExprKind::Index {
                 base: left,
                 index: right,
@@ -1518,6 +1536,7 @@ impl Expr {
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes_mut(visit),
             ExprKind::Binary { left, right, .. }
+            | ExprKind::DeferredBinary { left, right, .. }
             | ExprKind::Index {
                 base: left,
                 index: right,
@@ -1793,6 +1812,12 @@ impl ExprKind {
                 operator,
                 left,
                 right,
+            }
+            | ExprKind::DeferredBinary {
+                operator,
+                left,
+                right,
+                ..
             } => Some((*operator, left, right)),
             // The left operand is the first argument and the right the
             // last, with the configuration between (EXPR-13).

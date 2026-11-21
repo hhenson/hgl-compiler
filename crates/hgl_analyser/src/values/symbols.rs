@@ -383,8 +383,37 @@ impl<'a> Typer<'a> {
                 (symbol.form, symbol.at),
             );
         }
-        let identity = identity.filter(|_| !(as_written(&left) || as_written(&right)));
-        let Some(identity) = identity else {
+        let blocked = as_written(&left) || as_written(&right);
+        // A graph operand may gain its type during instance selection
+        // (GEN-7). Keep the identity when only the types of already-read
+        // operands prevent selection, and leave intrinsic forms alone.
+        if blocked
+            && self.graph
+            && !configured
+            && !faulty
+            && let Some(identity) = identity
+            && [&left, &right].into_iter().all(|operand| {
+                !operand.by_place
+                    && !is_null(&operand.node)
+                    && (!as_written(operand) || !whole(&operand.value.ty))
+            })
+        {
+            let operands = [self.at(&left.node), self.at(&right.node)];
+            let (left, right) = self.operands_as_written(left, right);
+            return (
+                ExprKind::DeferredBinary {
+                    operator,
+                    identity,
+                    at,
+                    expected: symbol.place.map(Box::new),
+                    operands,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+                symbol.unjudged,
+            );
+        }
+        let Some(identity) = identity.filter(|_| !blocked) else {
             let (left_node, right_node) = (left.node.clone(), right.node.clone());
             let (left, right) = self.operands_as_written(left, right);
             // ERR-15: a result "compared with `null`, where T is not
@@ -413,6 +442,35 @@ impl<'a> Typer<'a> {
             return (self.unselected(given, symbol.form), symbol.unjudged);
         }
         self.call_symbol(symbol, identity, given)
+    }
+
+    /// Select a graph symbol once its operands have settled (GEN-5, GEN-7).
+    /// Keep the operand HIR in written order and reuse the source selection.
+    pub(super) fn settle_binary(&mut self, kind: &ExprKind) -> Option<(ExprKind, Type)> {
+        let ExprKind::DeferredBinary {
+            operator,
+            identity,
+            at,
+            expected,
+            operands,
+            left,
+            right,
+        } = kind
+        else {
+            return None;
+        };
+        if !whole(&left.ty) || !whole(&right.ty) {
+            return None;
+        }
+        let left = Given::read(0, self.node_at(operands[0])?, (**left).clone());
+        let right = Given::read(1, self.node_at(operands[1])?, (**right).clone());
+        Some(self.symbol(
+            (*operator, *at),
+            Some(*identity),
+            (left, right),
+            (Vec::new(), false, false),
+            expected.as_deref(),
+        ))
     }
 
     /// An operand `value` of `==` or another symbol recorded as it is

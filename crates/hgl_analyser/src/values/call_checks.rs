@@ -574,7 +574,9 @@ impl<'a> Typer<'a> {
             // `Side(N)`, of what is fixed: the member is fixed too.
             ExprKind::EnumFrom { value, .. } => self.is_fixed(value),
             ExprKind::Unary { operand, .. } => self.is_fixed(operand),
-            ExprKind::Binary { left, right, .. } => self.is_fixed(left) && self.is_fixed(right),
+            ExprKind::Binary { left, right, .. } | ExprKind::DeferredBinary { left, right, .. } => {
+                self.is_fixed(left) && self.is_fixed(right)
+            }
             // A symbol over constants: `-1`, `1 + 2`.
             ExprKind::Call {
                 arguments,

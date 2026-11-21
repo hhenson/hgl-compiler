@@ -1593,6 +1593,37 @@ fn graph_instances_settle_iteration_binding_types() {
     assert!(matches!(sequence.kind, ExprKind::NullRead { .. }));
 }
 
+/// GEN-5, GEN-7 and OPS-1: a symbol in a graph uses the operand type
+/// recovered for its loop binding and rejects an incompatible operand.
+#[test]
+fn graph_instances_select_symbols_with_deferred_iteration_operands() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn sum<T>(const input: T) -> i64 {\n",
+        "    var total = 0\n",
+        "    for item in (if predicate(input) { [2, 3] }) { total = total + item }\n",
+        "    return total\n",
+        "}\n",
+        "fn incompatible<T>(const input: T) -> i64 {\n",
+        "    var total = 0\n",
+        "    for item in (if predicate(input) { [true] }) { total = total + item }\n",
+        "    return total\n",
+        "}\n",
+        "fn accepted() -> i64 => sum(\"s\")\n",
+        "fn rejected() -> i64 => incompatible(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:16:25 operator/operator.no_candidate OPS-1"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    assert!(called(&checked, &instance).contains(&"add_(i64, i64)".to_string()));
+}
+
 /// GEN-7 and EXPR-7: a member name and base survive the source pass
 /// until selection can check the field and choose its read form.
 #[test]

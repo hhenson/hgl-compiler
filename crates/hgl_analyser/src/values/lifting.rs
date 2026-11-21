@@ -372,6 +372,9 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
         }
         ExprKind::Unary { operand, .. } => category(operand),
         ExprKind::Binary { left, right, .. } => join(category(left), category(right)),
+        ExprKind::DeferredBinary { left, right, .. } => {
+            join(join(category(left), category(right)), Unsettled)
+        }
         ExprKind::Widen(inner) => category(inner),
         // OPS-6: the list converted is what it is given, lifted
         // over a connection as a conversion is (FN-6).
@@ -520,6 +523,23 @@ pub(super) fn record_with(
                     for (&local, given) in names.iter().zip(categories) {
                         if locals[local].category == Unsettled && given != Unsettled {
                             locals[local].category = given;
+                            settling = true;
+                        }
+                    }
+                    return;
+                }
+                NodeMut::Expression(value)
+                    if composition && matches!(value.kind, ExprKind::DeferredBinary { .. }) =>
+                {
+                    if let Some(typer) = typer.as_deref_mut() {
+                        // The normal call checks read the concrete local
+                        // scope, including iteration bindings settled here.
+                        std::mem::swap(&mut typer.locals, locals);
+                        let selected = typer.settle_binary(&value.kind);
+                        std::mem::swap(&mut typer.locals, locals);
+                        if let Some((kind, ty)) = selected {
+                            value.kind = kind;
+                            value.ty = ty;
                             settling = true;
                         }
                     }

@@ -351,6 +351,12 @@ impl Program {
                     }
                 }
             }
+            ExprKind::DeferredBinary {
+                expected: Some(expected),
+                ..
+            } => {
+                **expected = substitute_within(expected, instance.types);
+            }
             ExprKind::StaticCallable(callee) => self.place_target(callee, instance, functions),
             _ => {}
         }
