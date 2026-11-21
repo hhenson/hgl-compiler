@@ -1,0 +1,8 @@
+module demo.instance_selection_library
+
+# The caller's module also has a helper, with different answers.
+operator helper<T>(value: T) -> i64
+impl const fn helper<T>(value: T) -> i64 => 6
+impl const fn helper(value: i64) -> i64 => 2
+
+export const fn from_other_module<T>(value: T) -> i64 => helper(value)

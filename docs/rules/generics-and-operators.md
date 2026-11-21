@@ -103,9 +103,10 @@ analyser: partial
 
 - The proposed checking of passes over the keys of a generic pack awaits #368.
 
-- In a body with generic parameters, a call of an operator, by name or by symbol, with an argument whose type names one of them is admitted where a requirement of the declaration names that operator with those types, each given by its position or by the operator's parameter name, and is of the type its arrow states; with none it selects among the candidates as any call does, so one that takes any type is still taken
+- In a body with generic parameters, a call of an operator, by name or by symbol, with an argument whose type names one of them is admitted where a requirement of the declaration names that operator with those types, each given by its position or by the operator's parameter name, and is of the type its arrow states. A candidate that takes every admitted type can also admit the body.
 - The call records the position of the requirement it is (`Callee::Required`), so that a call of the declaration says which candidate it calls
 - "It is judged once, where it is declared, by what its `requires` states, and never again for the generic arguments a call of it gives": a call of an operator in it is admitted where a candidate takes every generic argument the requirements admit, where a named operator requirement states it, or under a membership where each listed type has one (GEN-3), and otherwise the declaration rejects (`operator.no_candidate`, with a note), by name and by symbol, in a value function and a graph: the fragments `less` and `wrap` with no `requires`
+- Each instance selects again for an operator call whose operand types use the enclosing declaration's generic parameters, including when a generic candidate admitted the body. The new selection uses the instance's operands and the operator binding at the call (GEN-5), including private operators, symbols, and calls in nodes and graphs.
 - A generic body's value parameter, including a fixed list's size `N` (GEN-13), is specified to be read as a constant, such as in `0..<N` or an index. #368 tracks ranges.
 - Left: a requirement met by widening an argument, and checking misuse of a type or size parameter as a runtime value
 

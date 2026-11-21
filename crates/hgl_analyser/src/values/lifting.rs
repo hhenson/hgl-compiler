@@ -2,15 +2,16 @@
 //! while the graph is built, and the places that take no connection
 //! (FN-3, FN-6, CTRL-14, EXPR-14). Part of the typing pass ([`super`]).
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 
 use super::Typer;
+use super::control::{no_else_type, while_connection};
 use crate::hir::{
-    Body, Callee, Expr, ExprKind, Local, LocalId, Node, Run, Stmt, ValueCategory,
-    walk_statement_nodes, walk_statements_mut,
+    Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Run, Stmt, ValueCategory,
+    walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
-use crate::types::Detail;
+use crate::types::{Detail, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -40,39 +41,16 @@ impl<'a> Typer<'a> {
         (given, at): (ValueCategory, Location),
         inside: bool,
     ) {
-        use ValueCategory::{Connection, Unsettled, Value};
-        if self.locals[local].category == Unsettled && !inside {
+        if self.locals[local].category == ValueCategory::Unsettled && !inside {
             self.locals[local].category = given;
         }
-        let held = self.locals[local].category;
         // Declared before the nearest `if` selected at runtime.
         let chosen_at_runtime = self.temporal.is_some_and(|outside| local < outside);
-        let name = self.locals[local].name.clone();
-        let message = match (held, given) {
-            (Value, Connection) => format!(
-                "`{name}` holds an ordinary value, and this is a connection: a `var` keeps \
-                 the category of its first value"
-            ),
-            (Connection, Value) if !inside => format!(
-                "`{name}` is a connection, and this is an ordinary value: a `var` keeps the \
-                 category of its first value"
-            ),
-            (Value, Value) if chosen_at_runtime => format!(
-                "`{name}` holds an ordinary value, and this branch is selected at runtime: \
-                 its value would not be known while the graph is built"
-            ),
-            _ => return,
-        };
-        self.diagnostics.emit(
-            error(
-                Category::Type,
-                codes::BINDING_CATEGORY,
-                at,
-                message,
-                "CTRL-14",
-            )
-            .with_related(self.locals[local].at, "declared here"),
-        );
+        if let Some(report) =
+            assignment_category(&self.locals[local], (given, at), inside, chosen_at_runtime)
+        {
+            self.diagnostics.emit(report);
+        }
     }
 
     /// What a value read in a graph is (FN-3), as [`category`] says,
@@ -86,59 +64,7 @@ impl<'a> Typer<'a> {
     /// while the graph is built. TIME-2: "Composition describes a typed
     /// graph without reading live payloads."
     pub(super) fn constants_of(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            // An operation the body requires: the operator's own
-            // signature says which of its parameters is `const`
-            // (GEN-4).
-            Callee::Required {
-                operator: (module, declaration),
-                ..
-            } => (*module, *declaration),
-            Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => return,
-        };
-        let Some(Detail::Callable(signature)) =
-            self.program.modules[module].details.get(declaration)
-        else {
-            return;
-        };
-        for argument in arguments {
-            let parameter = argument
-                .parameter
-                .and_then(|index| signature.parameters.get(index));
-            let Some(parameter) = parameter else {
-                continue;
-            };
-            // What is not settled is not judged: it may be a value.
-            if parameter.constant && self.category(&argument.value) == ValueCategory::Connection {
-                self.diagnostics.emit(error(
-                    Category::Phase,
-                    codes::CONNECTION_AS_CONSTANT,
-                    argument.value.at,
-                    format!(
-                        "`{}` is a `const` parameter, and this is a connection: it has no \
-                         value while the graph is built",
-                        parameter.name
-                    ),
-                    "FN-3",
-                ));
-            }
-        }
+        check_const_arguments(self.program, &self.locals, kind, self.diagnostics);
     }
 
     /// An entry of the configuration of the symbol written `form` in a
@@ -182,6 +108,156 @@ impl<'a> Typer<'a> {
             && !self.testing
             && self.hook.is_none()
             && self.category(value) == ValueCategory::Connection
+    }
+}
+
+/// The same CTRL-14 comparison, once the categories of both sides are known.
+pub(super) fn assignment_category(
+    binding: &Local,
+    (given, at): (ValueCategory, Location),
+    inside: bool,
+    chosen_at_runtime: bool,
+) -> Option<Diagnostic> {
+    use ValueCategory::{Connection, Value};
+    let name = &binding.name;
+    let message = match (binding.category, given) {
+        (Value, Connection) => format!(
+            "`{name}` holds an ordinary value, and this is a connection: a `var` keeps \
+             the category of its first value"
+        ),
+        (Connection, Value) if !inside => format!(
+            "`{name}` is a connection, and this is an ordinary value: a `var` keeps the \
+             category of its first value"
+        ),
+        (Value, Value) if chosen_at_runtime => format!(
+            "`{name}` holds an ordinary value, and this branch is selected at runtime: \
+             its value would not be known while the graph is built"
+        ),
+        _ => return None,
+    };
+    Some(
+        error(
+            Category::Type,
+            codes::BINDING_CATEGORY,
+            at,
+            message,
+            "CTRL-14",
+        )
+        .with_related(binding.at, "declared here"),
+    )
+}
+
+/// FN-3: checks the const inputs of a call using its current graph categories.
+fn check_const_arguments(
+    program: &Program,
+    locals: &[Local],
+    kind: &ExprKind,
+    diagnostics: &mut Diagnostics,
+) {
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = kind
+    else {
+        return;
+    };
+    let (module, declaration) = match callee {
+        Callee::Function {
+            module,
+            declaration,
+            ..
+        }
+        | Callee::Candidate {
+            module,
+            declaration,
+            ..
+        } => (*module, *declaration),
+        // An operation the body requires: the operator's own
+        // signature says which of its parameters is `const`
+        // (GEN-4).
+        Callee::Required {
+            operator: (module, declaration),
+            ..
+        } => (*module, *declaration),
+        Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => return,
+    };
+    let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration) else {
+        return;
+    };
+    for argument in arguments {
+        let parameter = argument
+            .parameter
+            .and_then(|index| signature.parameters.get(index));
+        let Some(parameter) = parameter else {
+            continue;
+        };
+        // What is not settled is not judged: it may be a value.
+        if parameter.constant
+            && category(program, locals, &argument.value) == ValueCategory::Connection
+        {
+            diagnostics.emit(error(
+                Category::Phase,
+                codes::CONNECTION_AS_CONSTANT,
+                argument.value.at,
+                format!(
+                    "`{}` is a `const` parameter, and this is a connection: it has no \
+                     value while the graph is built",
+                    parameter.name
+                ),
+                "FN-3",
+            ));
+        }
+    }
+}
+
+/// GEN-7: a selected temporal candidate can make a formerly unsettled
+/// argument or a loop condition a connection. Check the graph's
+/// constant places after recording the instance.
+pub(super) fn check_instance_constants(
+    program: &Program,
+    body: &Body,
+    from: &[Location],
+    diagnostics: &mut Diagnostics,
+) {
+    let mut reports = Diagnostics::new();
+    walk_statement_nodes(&body.statements, &mut |node| match node {
+        Node::Expression(value) => {
+            check_const_arguments(program, &body.locals, &value.kind, &mut reports);
+        }
+        Node::Statement(Stmt::While {
+            condition: Some(condition),
+            ..
+        }) => {
+            if let Some(report) = while_connection(condition, condition.category) {
+                reports.emit(report);
+            }
+        }
+        _ => {}
+    });
+    report_instance_checks(
+        &reports,
+        from,
+        diagnostics,
+        "this place in the generic body needs a value",
+    );
+}
+
+pub(super) fn report_instance_checks(
+    reports: &Diagnostics,
+    from: &[Location],
+    diagnostics: &mut Diagnostics,
+    message: &str,
+) {
+    for report in reports.as_slice() {
+        if diagnostics.as_slice().contains(report) {
+            continue;
+        }
+        for &root in from {
+            let mut here = report.clone().with_related(report.primary, message);
+            here.primary = root;
+            if !diagnostics.as_slice().contains(&here) {
+                diagnostics.emit(here);
+            }
+        }
     }
 }
 
@@ -273,9 +349,12 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
                     .map(|&local| locals[local].category)
                     .fold(given, join),
                 Callee::Parameter { temporal: true, .. } => Connection,
-                // A value callback may capture a connection. Its
-                // specialized body determines whether FN-6 lifts it.
-                Callee::Parameter { .. } | Callee::Required { .. } => join(given, Unsettled),
+                // A callback may capture a connection. A call awaiting
+                // instance selection may choose a temporal candidate
+                // (GEN-7), even with only ordinary arguments.
+                Callee::Parameter { .. } | Callee::Required { .. } | Callee::Unread => {
+                    join(given, Unsettled)
+                }
                 _ => given,
             }
         }
@@ -379,20 +458,28 @@ fn lifts(program: &Program, callee: &Callee) -> bool {
 /// local declared inside it, `let s = { let t = add_(k, k); t }`, which
 /// a walk meets after the declaration it is in, so the walk is made
 /// again until it settles no more: each walk but the last settles one
-/// at least.
+/// category or inferred type. In a graph this includes a no-else `if`
+/// whose type depends on the settled categories (CTRL-13).
 pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
     use ValueCategory::Unsettled;
     let Body { locals, statements } = body;
     let mut settling = true;
     while settling {
         settling = false;
-        walk_statement_nodes(statements, &mut |node| {
-            let (local, value) = match node {
-                Node::Statement(Stmt::Declare {
+        walk_statement_nodes_mut(statements, &mut |node| {
+            let (local, value, declares) = match node {
+                NodeMut::Statement(Stmt::Declare {
                     local,
                     value: Some(value),
-                })
-                | Node::Statement(Stmt::Assign { local, value, .. }) => (*local, value),
+                }) => (*local, value, true),
+                NodeMut::Statement(Stmt::Assign { local, value, .. }) => (*local, value, false),
+                NodeMut::Expression(value) if composition && value.ty == Type::Unknown => {
+                    if let Some(ty) = settled_type(program, locals, value) {
+                        value.ty = ty;
+                        settling = true;
+                    }
+                    return;
+                }
                 _ => return,
             };
             if locals[local].category == Unsettled {
@@ -402,11 +489,42 @@ pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
                     settling = true;
                 }
             }
+            if composition
+                && declares
+                && locals[local].ty == Type::Unknown
+                && value.ty != Type::Unknown
+            {
+                locals[local].ty = value.ty.clone();
+                settling = true;
+            }
         });
     }
     walk_statements_mut(statements, &mut |value| {
         recorded(program, locals, composition, value);
     });
+}
+
+/// CTRL-13: decide a no-else expression's type once its categories
+/// settle. A block tail or a read of an inferred local also takes its
+/// type from the value once that type is known.
+fn settled_type(program: &Program, locals: &[Local], value: &Expr) -> Option<Type> {
+    let ty = match &value.kind {
+        ExprKind::If {
+            condition,
+            then,
+            otherwise: None,
+        } if gives_a_value(then) => no_else_type(
+            then.ty.clone(),
+            category(program, locals, condition),
+            category(program, locals, then),
+        ),
+        ExprKind::Block {
+            value: Some(tail), ..
+        } => tail.ty.clone(),
+        ExprKind::Local(local) => locals.get(*local)?.ty.clone(),
+        _ => return None,
+    };
+    (ty != Type::Unknown).then_some(ty)
 }
 
 /// Records what `value` is and, for a call, whether it is lifted, as

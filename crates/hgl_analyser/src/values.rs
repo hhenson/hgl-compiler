@@ -84,6 +84,9 @@ mod fit;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
 mod function_arguments;
+// Fits destinations whose graph values become known only in an instance (GEN-7).
+mod graph_instance;
+pub(crate) use graph_instance::GraphDestinations;
 // What a call's generic parameters stand for (GEN-2, GEN-8, GEN-12).
 mod inference;
 // What a value is in a graph: a connection or an ordinary value (FN-3, FN-6).
@@ -733,6 +736,18 @@ impl<'a> Typer<'a> {
         self.assigned.push(assigned);
         self.declared.insert(at, local);
         local
+    }
+
+    /// Installs the lexical scope used for operator selection in an instance.
+    /// Contextual operands can read these bindings by name (EXPR-5, GEN-7).
+    fn use_instance_locals(&mut self, locals: Vec<Local>) {
+        self.declared = locals
+            .iter()
+            .enumerate()
+            .map(|(id, local)| (local.at, id))
+            .collect();
+        self.assigned = vec![true; locals.len()];
+        self.locals = locals;
     }
 
     /// What a reading may change, as it stands now: see

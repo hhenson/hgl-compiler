@@ -1,0 +1,167 @@
+module demo.instance_selection
+
+use demo.instance_selection_library::{from_other_module}
+
+# GEN-5, GEN-7: an admitted instance selects its most-specific candidate.
+export operator helper<T>(value: T) -> i64
+impl const fn helper<T>(value: T) -> i64 => 5
+impl const fn helper(value: i64) -> i64 => 1
+
+const fn wraps<T>(value: T) -> i64 => helper(value)
+const fn wraps_required<T>(value: T) -> i64 requires helper(T) -> i64 => helper(value)
+const fn direct(value: i64) -> i64 => helper(value)
+
+test direct_call { assert direct(3) == 1 }
+
+test instance {
+    assert wraps(3) == 1
+    assert wraps("s") == 5
+}
+
+test instance_with_requirement {
+    assert wraps_required(3) == 1
+    assert wraps_required("s") == 5
+}
+
+# The exported generic retains the operator looked up in its module (GEN-7).
+test instance_across_modules {
+    assert from_other_module(3) == 2
+    assert from_other_module("s") == 6
+}
+
+fn in_node<T>(value: T) -> i64 {
+    when { return helper(value) }
+}
+
+fn in_graph<T>(value: T) -> i64 => helper(value)
+
+test instance_in_a_node {
+    assert eval in_node(value: [3, 4]) == [1, 1]
+    assert eval in_node(value: ["s", "t"]) == [5, 5]
+}
+
+test instance_in_a_graph {
+    assert eval in_graph(value: [3, 4]) == [1, 1]
+    assert eval in_graph(value: ["s", "t"]) == [5, 5]
+}
+
+# GEN-5 and FN-6: the selected temporal candidate makes a connection,
+# even when its input was an ordinary value during composition.
+operator live_helper<T>(value: T) -> i64
+impl const fn live_helper<T>(value: T) -> i64 => 5
+impl fn live_helper(value: i64) -> i64 {
+    when { return value }
+}
+
+fn through_graph<T>(const value: T) -> i64 {
+    let classified = live_helper(value)
+    return classified + 1
+}
+
+test instance_selects_temporal {
+    assert eval through_graph(value: 3) == [4]
+    assert eval through_graph(value: "s") == [6]
+}
+
+# GEN-7, FN-3 and CTRL-15: the ordinary instance can test a graph loop.
+fn loop_scalar<T>(const value: T) -> i64 {
+    var visits = 0
+    while live_helper(value) > visits { visits += 1 }
+    return visits
+}
+
+operator positive<T>(value: T) -> bool
+impl const fn positive<T>(value: T) -> bool => false
+impl const fn positive(value: i64) -> bool => value > 0
+
+const fn chosen_or_skip(value: i64?) -> i64 {
+    if value == null { return -1 }
+    return value
+}
+
+# CTRL-13: an ordinary no-else result is nullable. Feed it to a value
+# helper so the graph returns an ordinary i64 as a constant connection.
+fn wiring_if<T>(const value: T) -> i64 {
+    let chosen = if positive(value) { 1 }
+    return chosen_or_skip(chosen)
+}
+
+# CTRL-13: a no-else result with a connection condition is an i64
+# connection and stays silent while the condition is false.
+fn connection_if<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    return chosen
+}
+
+# ERR-12: if selection settles the condition as an ordinary value,
+# the graph's result reads the nullable value left by the conditional.
+fn required_choice<T>(const value: T) -> i64 {
+    let chosen = if positive(value) { 2 }
+    return chosen
+}
+
+test an_instance_settles_its_graph_conditions {
+    assert eval loop_scalar(value: "s") == [5]
+    assert eval wiring_if(value: 3) == [1]
+    assert eval wiring_if(value: "s") == [-1]
+    assert eval connection_if(value: 3) == [1]
+    assert eval connection_if(value: 0) == []
+    assert eval required_choice(value: 3) == [2]
+    assert raises("value.null") { eval required_choice(value: "s") }
+}
+
+struct Counter { count: i64 }
+
+impl const fn add_<T>(counter: Counter, increment: T) -> i64 => counter.count + 100
+impl const fn add_(counter: Counter, increment: i64) -> i64 => counter.count + increment
+
+const fn through_symbol<T>(counter: Counter, increment: T) -> i64 => counter + increment
+
+test instance_with_a_symbol {
+    assert through_symbol(Counter(count: 3), 2) == 5
+    assert through_symbol(Counter(count: 3), "s") == 103
+}
+
+# GEN-7: a contextual list still depends on the type of its local element.
+operator list_helper<T>(values: list<T>) -> i64
+impl const fn list_helper<T>(values: list<T>) -> i64 => 5
+impl const fn list_helper(values: list<i64>) -> i64 => 1
+
+const fn through_list<T>(value: T) -> i64 => list_helper([value])
+
+test instance_with_a_contextual_operand {
+    assert through_list(3) == 1
+    assert through_list("s") == 5
+}
+
+# ERR-15, GEN-7: the instance can select a candidate that takes the whole
+# result even when the candidate that admitted the body needed a read.
+operator classify<T>(value: T) -> i64
+impl const fn classify<T>(value: list<T>) -> i64 => 5
+impl const fn classify(value: result<list<i64>, str>) -> i64 => 1
+
+const fn through_result<T>(value: result<list<T>, str>) -> result<i64, str> => ok(classify(value))
+
+test instance_uses_whole_result {
+    let failed: result<list<i64>, str> = err("failure")
+    let passed: result<list<str>, str> = ok(["s"])
+    let one: result<i64, str> = ok(1)
+    let five: result<i64, str> = ok(5)
+    assert through_result(failed) == one
+    assert through_result(passed) == five
+}
+
+# GEN-7: an inferred local retains the type established by the body.
+operator get_value<T, O>(value: T) -> O
+impl const fn get_value<T>(value: T) -> i64 => 5
+impl const fn get_value(value: i64) -> str => "other output"
+
+const fn into_inferred_local<T>(value: T) -> i64 {
+    let answer = get_value(value)
+    return answer
+}
+
+test instance_preserves_the_inferred_result_type {
+    assert into_inferred_local(3) == 5
+    assert get_value(3) == "other output"
+}

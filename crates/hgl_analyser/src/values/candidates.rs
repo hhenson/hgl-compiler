@@ -343,6 +343,7 @@ impl<'a> Typer<'a> {
                     generics,
                     type_packs,
                     ambiguous_reads: false,
+                    selecting: None,
                 };
                 if admits == Admits::Unknown {
                     if possible_reads
@@ -515,10 +516,12 @@ impl<'a> Typer<'a> {
             taken,
             generics,
             type_packs,
+            mut selecting,
             ..
         } = chosen;
         let signature: &Signature = &taken;
         let program = self.program;
+        let reported = self.diagnostics.len();
         // GEN-5: in a test's or an application's value code "a temporal
         // candidate it selects rejects" (TST-3, UNIT-14), the code
         // proposed as `call.role`.
@@ -612,6 +615,10 @@ impl<'a> Typer<'a> {
             Form::Binary(operator) => operator.symbol(),
             Form::Unary(operator) => operator.symbol(),
         };
+        // GEN-7: when an instance has to select again, keep the input
+        // expressions before the provisional candidate fits them. In
+        // particular, an implicit result read here must not decide the
+        // types used for the next selection (GEN-5, ERR-15).
         let arguments = given
             .into_iter()
             .enumerate()
@@ -639,10 +646,20 @@ impl<'a> Typer<'a> {
                     _ => None,
                 };
                 let ty = parameter_type(signature, &type_packs, bound).unwrap_or(&Type::Unknown);
-                let value = match given.value.kind {
-                    // FN-17: the template was checked at candidate admission.
-                    ExprKind::StaticCallable(_) => given.value,
-                    _ => self.argument_value(given, ty, &place),
+                // FN-17: the template was checked at candidate admission.
+                let static_callable = matches!(given.value.kind, ExprKind::StaticCallable(_));
+                let input = if given.retried && !static_callable {
+                    self.expression(&given.node, Some(ty))
+                } else {
+                    given.value
+                };
+                if let Some(selecting) = &mut selecting {
+                    selecting.arguments[position].value = input.clone();
+                }
+                let value = if static_callable {
+                    input
+                } else {
+                    self.fit(input, ty, &place)
                 };
                 // A `const` parameter given a connection is reported as
                 // one where the call is read (FN-3).
@@ -672,6 +689,31 @@ impl<'a> Typer<'a> {
             lifted: false,
         };
         self.finished_call(&kind, false);
+        let kind = if let Some(selecting) = selecting {
+            if self.graph {
+                self.constants_of(&kind);
+            }
+            let arguments = selecting
+                .arguments
+                .iter()
+                .map(|given| hir::Argument {
+                    parameter: None,
+                    pack: None,
+                    value: given.value.clone(),
+                })
+                .collect();
+            if self.diagnostics.len() == reported {
+                self.selecting.borrow_mut().push(*selecting);
+            }
+            ExprKind::Call {
+                callee: Callee::Unread,
+                form,
+                arguments,
+                lifted: false,
+            }
+        } else {
+            kind
+        };
         (kind, signature.result.clone().unwrap_or(Type::Unknown))
     }
 
@@ -969,28 +1011,6 @@ impl<'a> Typer<'a> {
         }))
     }
 
-    /// True where the call with the arguments `given`, which asks
-    /// `wanted` of its result, names a generic parameter of the
-    /// declaration being read: as an argument's type, as a constant it
-    /// gives, or in the output it asks for. Which candidates admit such a
-    /// call is told by what the declaration's `requires` states of it
-    /// (GEN-7).
-    fn names_own_generics(&self, given: &[Given], wanted: &Wanted) -> bool {
-        let own: Vec<Location> = self
-            .signature
-            .generics
-            .iter()
-            .map(|generic| generic.at)
-            .collect();
-        !own.is_empty()
-            && (given.iter().any(|given| {
-                mentions(given.ty(), &own)
-                    || self
-                        .read_constant(&given.node, None)
-                        .is_ok_and(|value| value.names_one_of(&own))
-            }) || wanted.place.is_some_and(|place| mentions(place, &own)))
-    }
-
     /// What a call of `operator` with the arguments `given`, which asks
     /// `wanted` of its result, comes to in the body of the generic
     /// declaration being read, where which candidates admit it is not
@@ -1000,9 +1020,10 @@ impl<'a> Typer<'a> {
     ///
     /// GEN-7: "A generic body is checked under its stated requirements".
     /// A call that names no generic parameter of the declaration is
-    /// none of this ([`Settled::Elsewhere`]), and nor is one that names
-    /// none the `requires` states a membership of and whose candidate is
-    /// told (`untold` false). Any other is settled by what the
+    /// none of this ([`Settled::Elsewhere`]). A candidate known to take
+    /// generic operand types checks the body; the actual call selects
+    /// again for those types in each instance (GEN-5). A call whose
+    /// candidate is not yet known is settled by what the
     /// `requires` states of those parameters: a membership, `T in {i64, f64}` or `M in {.slow,
     /// .fast}`, or an equality with a type, `T == i64`, authorises the
     /// call where every member, and with two parameters every
@@ -1021,18 +1042,34 @@ impl<'a> Typer<'a> {
     /// rejected here, at the declaration: no candidate is known to admit
     /// it.
     ///
-    /// An argument read as the type of its place is read again for each
-    /// instance, where no local is in scope: one that is no constant,
-    /// `[x]`, so settles nothing.
+    /// The membership check does not specialize locals while trying each
+    /// member. An argument read as the type of its place can only settle
+    /// that check where it is a constant.
     pub(super) fn select_per_instance(
         &mut self,
         operator: OperatorRef,
         given: &[Given],
         (wanted, requested, operator_generics): (&Wanted, Option<&Type>, &[Argument]),
         (form, at, name): (Form, Location, Location),
-        untold: bool,
+        (untold, provisional): (bool, Option<&mut Chosen<'a>>),
     ) -> Settled {
-        if !self.names_own_generics(given, wanted) {
+        let own: Vec<_> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        if own.is_empty() {
+            return Settled::Elsewhere;
+        }
+        let generic_operands = given.iter().any(|given| mentions(given.ty(), &own));
+        if !generic_operands
+            && !wanted.place.is_some_and(|place| mentions(place, &own))
+            && !given.iter().any(|given| {
+                self.read_constant(&given.node, None)
+                    .is_ok_and(|value| value.names_one_of(&own))
+            })
+        {
             return Settled::Elsewhere;
         }
         // The memberships of the parameters the call names: each such
@@ -1051,9 +1088,8 @@ impl<'a> Typer<'a> {
                 }) || wanted.place.is_some_and(|place| mentions(place, &one))
             })
             .collect();
-        // Where no membership speaks for it, a call the body selects for
-        // stays so, and one it cannot tell is not settled.
-        if memberships.is_empty() && !untold {
+        let admits_without_membership = memberships.is_empty() && !untold;
+        if admits_without_membership && (!generic_operands || provisional.is_none()) {
             return Settled::Elsewhere;
         }
         let program = self.program;
@@ -1063,9 +1099,7 @@ impl<'a> Typer<'a> {
         else {
             return Settled::Elsewhere;
         };
-        let operator_name =
-            &program.modules[operator.module].declarations[operator.declaration].name;
-        let record = Selecting {
+        let mut record = Selecting {
             at,
             name,
             operator,
@@ -1077,8 +1111,23 @@ impl<'a> Typer<'a> {
             written: wanted.written,
             graph: self.graph,
             scope: None,
+            result: None,
         };
+        if admits_without_membership {
+            if let Some(chosen) = provisional {
+                // GEN-7: surrounding expressions and inferred locals have
+                // already been checked using this candidate's result.
+                record.result = chosen.taken.result.clone();
+                if record.place.is_none() {
+                    record.place.clone_from(&record.result);
+                }
+                chosen.selecting = Some(Box::new(record));
+            }
+            return Settled::Elsewhere;
+        }
         // The report where nothing the `requires` states settles it.
+        let operator_name =
+            &program.modules[operator.module].declarations[operator.declaration].name;
         let unsettled = |typer: &Self| {
             typer
                 .no_one_candidate((operator_name, name), public, (given, wanted), (true, &[]))
@@ -1237,13 +1286,13 @@ impl<'a> Typer<'a> {
         }
         let built = values.is_some();
         let mut values = values.map(Vec::into_iter);
-        let given: Vec<Given> = selecting
+        let mut given: Vec<Given> = selecting
             .arguments
             .iter()
             .cloned()
             .map(|mut given| {
                 given.explicit = given.explicit.as_ref().map(in_place);
-                given.by_place = given.explicit.is_none() && typed_by_place(&given.node);
+                given.by_place &= given.explicit.is_none();
                 // Without the instance's own value, retain the reading made
                 // in the generic body and substitute its argument's type.
                 given.value = values
@@ -1253,7 +1302,7 @@ impl<'a> Typer<'a> {
                         ty: in_place(&given.value.ty),
                         ..given.value.clone()
                     });
-                given.retried = built && given.by_place;
+                given.retried = false;
                 given
             })
             .collect();
@@ -1275,6 +1324,16 @@ impl<'a> Typer<'a> {
         {
             if let Some(diagnostic) = self.ambiguous_result_reads(&chosen, selecting.name) {
                 return AtInstance::Rejected(diagnostic);
+            }
+            if built && let Some(bound) = bound(&chosen.taken, public, &given) {
+                // Keep an already typed expression where it still fits its
+                // place. Its HIR can contain local declarations and nested
+                // calls that the instance walk specializes in turn.
+                for (given, place) in given.iter_mut().zip(bound) {
+                    given.retried = given.by_place
+                        && parameter_type(&chosen.taken, &chosen.type_packs, place)
+                            .is_some_and(|ty| ty != given.ty() || !whole(given.ty()));
+                }
             }
             return AtInstance::Selected(Box::new(chosen), given);
         }
@@ -1408,15 +1467,13 @@ pub(super) enum AtInstance<'a> {
     Untold,
 }
 
-/// A call of an operator, in the body of a generic declaration, that a
-/// membership the declaration's `requires` states authorises: every
-/// member has a candidate for it, and each instance of the declaration
-/// selects its own with its types ([`Typer::select_per_instance`];
+/// A call of an operator, in the body of a generic declaration, that
+/// an applicable generic candidate or a stated membership authorises.
+/// Each instance selects its own with its types ([`Typer::select_per_instance`];
 /// GEN-3, GEN-7: "Each instance then selects its own candidate").
 #[derive(Debug, Clone)]
 pub(crate) struct Selecting {
-    /// Where the call is written: the expression the body has for it,
-    /// a call with no callee.
+    /// Where the call is written, matching the corresponding body expression.
     pub(crate) at: Location,
     /// Where it names its operator, or where its symbol stands: what a
     /// report of it points at.
@@ -1445,6 +1502,8 @@ pub(crate) struct Selecting {
     /// The lexical locals used to check a call inside a static anonymous
     /// body. Other calls use the declaration's own body.
     pub(crate) scope: Option<std::sync::Arc<[hir::Local]>>,
+    /// The result type used to check the body when a candidate admitted it.
+    pub(super) result: Option<Type>,
 }
 
 /// `signature`, a generic declaration's, as one instance of it reads its
@@ -1540,8 +1599,7 @@ pub(crate) fn select_in_instance(
         .collect();
     // The instance's own locals, which its arguments read: each has a
     // value where a call reads it (EXPR-3).
-    typer.locals = body.locals.clone();
-    typer.assigned = vec![true; body.locals.len()];
+    typer.use_instance_locals(body.locals.clone());
     hir::walk_statements_mut(&mut body.statements, &mut |expression| {
         let ExprKind::Call {
             callee: Callee::Unread,
@@ -1575,10 +1633,24 @@ pub(crate) fn select_in_instance(
             operator_generics,
             (call.form, call.name),
         );
-        expression.kind = kind;
-        expression.ty = ty;
+        let selected = Expr {
+            kind,
+            ty,
+            at: expression.at,
+            category: expression.category,
+        };
+        *expression = if call.result.is_some() && selected.ty != expression.ty {
+            typer.fit(
+                selected,
+                &expression.ty,
+                "the operator call's result in this instance",
+            )
+        } else {
+            selected
+        };
         after(expression);
     });
+    body.locals = typer.locals;
 }
 
 /// One argument of an operator's call, before a candidate is selected.
@@ -1893,6 +1965,8 @@ pub(super) struct Chosen<'s> {
     type_packs: Vec<hir::TypePackArgument>,
     /// Equally preferred choices of which operands to read (ERR-15).
     pub(super) ambiguous_reads: bool,
+    /// The call to select again after its generic operand types are known (GEN-7).
+    selecting: Option<Box<Selecting>>,
 }
 
 impl Chosen<'_> {

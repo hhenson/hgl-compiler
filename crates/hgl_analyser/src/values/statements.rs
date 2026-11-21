@@ -771,22 +771,7 @@ impl<'a> Typer<'a> {
             // What the `var` becomes turns on the value and on every
             // index of the place: `row[index] = 3.0` with `index` a
             // connection selects the element as the graph runs.
-            let mut parts = vec![&value];
-            place_indices(&target, &mut parts);
-            let categories: Vec<(ValueCategory, Location)> = parts
-                .iter()
-                .map(|part| (self.category(part), part.at))
-                .collect();
-            let given = categories
-                .iter()
-                .find(|(category, _)| *category == ValueCategory::Connection)
-                .or_else(|| {
-                    categories
-                        .iter()
-                        .find(|(category, _)| *category == ValueCategory::Unsettled)
-                })
-                .copied()
-                .unwrap_or((ValueCategory::Value, value.at));
+            let given = place_assignment_category(&target, &value, |part| self.category(part));
             self.assigned_category(local, given, true);
         }
         Stmt::AssignPlace {
@@ -895,6 +880,26 @@ fn root_as_declared(place: &mut Expr, locals: &[Local]) {
     if let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &mut place.kind {
         root_as_declared(base, locals);
     }
+}
+
+/// The value and all indices can turn a place assignment into a connection.
+pub(super) fn place_assignment_category(
+    place: &Expr,
+    value: &Expr,
+    category: impl Fn(&Expr) -> ValueCategory,
+) -> (ValueCategory, Location) {
+    use ValueCategory::{Connection, Unsettled, Value};
+    let mut parts = vec![value];
+    place_indices(place, &mut parts);
+    let mut given = (Value, value.at);
+    for part in parts {
+        match category(part) {
+            Connection => return (Connection, part.at),
+            Unsettled if given.0 == Value => given = (Unsettled, part.at),
+            _ => {}
+        }
+    }
+    given
 }
 
 /// Adds to `indices` each index of the place `place`, from the

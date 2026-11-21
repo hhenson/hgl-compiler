@@ -395,12 +395,13 @@ impl<'a> Typer<'a> {
         // states settles it ([`Typer::select_per_instance`]).
         let named = Location::new(self.file, name.span());
         let written = list.parent().map_or(named, |call| self.at(&call));
+        let provisional = (selected.len() == 1).then(|| &mut selected[0]);
         match self.select_per_instance(
             operator,
             &given,
             (&wanted, requested.as_ref(), &operator_generics),
             (Form::Named, written, named),
-            untold,
+            (untold, provisional),
         ) {
             Settled::Deferred(ty) => return (self.unselected(given, Form::Named), ty),
             Settled::Rejected(report) => {
