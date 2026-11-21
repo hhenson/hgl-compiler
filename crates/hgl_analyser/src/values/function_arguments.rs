@@ -5,10 +5,10 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
-use super::candidates::{CallbackRequest, Given, Wanted, in_instance};
+use super::candidates::{CallbackOption, CallbackRequest, Given, Wanted, in_instance};
 use super::fit::whole;
 use super::inference::{ExplicitGenerics, infer};
-use crate::declared::agree;
+use crate::declared::{agree, substitute_within};
 use crate::hir::{
     AnonymousFunction, Callee, Expr, ExprKind, Form, TypePackArgument, ValueCategory,
 };
@@ -202,16 +202,32 @@ impl Typer<'_> {
             && let Detail::Callable(public) =
                 &self.program.modules[operator.module].details[operator.declaration]
         {
-            requested_values.extend(public.generics.iter().zip(&explicit.generics).filter_map(
-                |(parameter, argument)| match argument {
-                    Argument::Constant(value)
-                        if matches!(parameter.kind, GenericKind::Value(_)) =>
-                    {
-                        Some((parameter.name.as_str(), value))
-                    }
-                    _ => None,
-                },
-            ));
+            let start = child(node, SyntaxKind::QualifiedName)
+                .map_or(name.span().start, |qualified| qualified.span().start);
+            let written = self.calls.get(&(self.file, start)).copied();
+            let map: Vec<_> = public
+                .generics
+                .iter()
+                .map(|parameter| parameter.at)
+                .zip(&explicit.generics)
+                .collect();
+            for (index, (parameter, argument)) in
+                public.generics.iter().zip(&explicit.generics).enumerate()
+            {
+                let (GenericKind::Value(ty), Argument::Constant(value)) =
+                    (&parameter.kind, argument)
+                else {
+                    continue;
+                };
+                requested_values.push(CallbackOption {
+                    name: &parameter.name,
+                    value,
+                    ty: substitute_within(ty, &map),
+                    written: written
+                        .and_then(|arguments| arguments.arguments.get(index))
+                        .and_then(|(at, _)| self.node_at(*at)),
+                });
+            }
         }
         let wanted = Wanted {
             place: request.result.as_ref(),

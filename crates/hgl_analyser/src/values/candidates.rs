@@ -265,6 +265,7 @@ impl<'a> Typer<'a> {
                     |generic: &GenericParameter| self.default_constant(candidate, generic);
                 let constant = |node: &SyntaxNode, ty: Option<&Type>| self.given_constant(node, ty);
                 let Some((taken, generics, type_packs, defaulted)) = instance(
+                    program,
                     signature,
                     (given, &bound),
                     wanted,
@@ -1809,7 +1810,19 @@ pub(super) struct CallbackRequest<'w> {
     /// Whether the template expects a designation as its result.
     pub(super) reference: bool,
     /// The operator's compile-time options taken by a candidate that uses them.
-    pub(super) values: &'w [(&'w str, &'w Constant)],
+    pub(super) values: &'w [CallbackOption<'w>],
+}
+
+/// A public option that a candidate may take under the same name.
+pub(super) struct CallbackOption<'w> {
+    /// Its name in the public operator and its candidates.
+    pub(super) name: &'w str,
+    /// Its value as read for the public operator.
+    pub(super) value: &'w Constant,
+    /// The resolved type of the operator's value parameter.
+    pub(super) ty: Type,
+    /// The expression of a supplied option, whose place can give a literal its type.
+    pub(super) written: Option<SyntaxNode>,
 }
 
 impl CallbackRequest<'_> {
@@ -2032,6 +2045,7 @@ impl Chosen<'_> {
 /// parameter can take of an argument (ERR-12, ERR-15).
 #[allow(clippy::type_complexity)]
 fn instance<'s>(
+    program: &crate::program::Program,
     signature: &'s Signature,
     (given, bound): (&[Given], &[Place]),
     wanted: &Wanted,
@@ -2066,12 +2080,12 @@ fn instance<'s>(
     if let Some(callback) = &wanted.callback {
         for (index, generic) in generics.iter().enumerate() {
             if matches!(generic.kind, GenericKind::Value(_))
-                && let Some((_, value)) = callback
+                && let Some(option) = callback
                     .values
                     .iter()
-                    .find(|(name, _)| *name == generic.name)
+                    .find(|option| option.name == generic.name)
             {
-                found[index] = Some(Argument::Constant((*value).clone()));
+                found[index] = Some(Argument::Constant(option.value.clone()));
             }
         }
     }
@@ -2214,8 +2228,42 @@ fn instance<'s>(
             defaulted.push(index);
         }
     }
-    let resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
+    let mut resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
     let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
+    if let Some(callback) = &wanted.callback {
+        let map: Vec<_> = own.iter().copied().zip(&resolved).collect();
+        let mut fitted = Vec::new();
+        for (index, generic) in generics.iter().enumerate() {
+            let GenericKind::Value(ty) = &generic.kind else {
+                continue;
+            };
+            let Some(option) = callback
+                .values
+                .iter()
+                .find(|option| option.name == generic.name)
+            else {
+                continue;
+            };
+            let expected = placed(substitute_within(ty, &map), &own);
+            let value = if let Some(written) = &option.written {
+                constant(written, Some(&expected)).ok()?
+            } else {
+                let read =
+                    crate::constant::Typed::of(option.value.value.clone(), Some(option.ty.clone()));
+                crate::constant::fit(read, Some(&expected), program).ok()?
+            };
+            fitted.push((
+                index,
+                Constant {
+                    text: option.value.text.clone(),
+                    value,
+                },
+            ));
+        }
+        for (index, value) in fitted {
+            resolved[index] = Argument::Constant(value);
+        }
+    }
     let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
     let mut taken = signature.clone();
     for parameter in &mut taken.parameters {

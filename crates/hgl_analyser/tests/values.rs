@@ -4489,6 +4489,31 @@ fn explicit_operator_references_diagnose_unresolved_and_mismatched_templates() {
     );
 }
 
+/// FN-17 and GEN-8: an explicit callback option must fit the candidate's
+/// value parameter after resolving any types it names.
+#[test]
+fn explicit_operator_references_check_candidate_option_types() {
+    let checked = module(concat!(
+        "const fn use_it(f: const fn(i64) -> i64) -> i64 => f(1)\n",
+        "operator select<const mode: bool>(value: i64) -> i64\n",
+        "impl const fn select<const mode: str>(value: i64) -> i64 => value\n",
+        "const fn bad() -> i64 => use_it(select<true>)\n",
+        "const fn wrong_public_type() -> i64 => use_it(select<\"slow\">)\n",
+    ));
+    let faults = checked.summary();
+    assert_eq!(faults.len(), 2, "{}", checked.report);
+    assert!(
+        faults[0].contains("type/type.mismatch FN-17"),
+        "{}",
+        checked.report
+    );
+    assert!(
+        faults[1].contains("type/type.mismatch"),
+        "{}",
+        checked.report
+    );
+}
+
 /// FN-17: a template checks role, written names and plain parameter
 /// modes, and does not take an ordinary runtime value.
 #[test]
