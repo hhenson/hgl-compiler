@@ -368,7 +368,14 @@ impl<'a> Typer<'a> {
             written_generics.as_deref(),
         ) {
             given.retain(value_argument);
-            return self.call_required(operator, result, given, operator_generics, Form::Named);
+            let at = Location::new(self.file, name.span());
+            return self.call_required(
+                operator,
+                result,
+                given,
+                operator_generics,
+                (Form::Named, at),
+            );
         }
         // True where the output requested is the type the call writes
         // for the operator's result that is a type parameter and nothing
@@ -1219,6 +1226,16 @@ impl Unfit {
             "GEN-13",
         )
     }
+}
+
+/// An inherited configuration default can read the operator's generic
+/// arguments even when the call writes none (GEN-6, UNIT-7).
+pub(super) fn has_generic_configuration_default(public: &Signature) -> bool {
+    !public.generics.is_empty()
+        && public
+            .parameters
+            .iter()
+            .any(|parameter| parameter.configuration && parameter.has_default)
 }
 
 /// What the place a call stands in says of the operator's generic

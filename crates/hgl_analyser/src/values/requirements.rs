@@ -12,7 +12,7 @@ use hgl_source::FileId;
 use super::candidates::{AtInstance, Given, Wanted};
 use super::fit::{open, whole};
 use super::inference::{fixed, mentions, placed, unsaid};
-use super::operators::{Requested, from_place, unreadable};
+use super::operators::{Requested, from_place, has_generic_configuration_default, unreadable};
 use super::{REQUIRING, Typer};
 use crate::declared::{names_parameter, same_type, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
@@ -1344,7 +1344,7 @@ impl<'a> Typer<'a> {
         required: Required,
         given: Vec<Given>,
         mut operator_generics: Vec<Argument>,
-        form: Form,
+        (form, at): (Form, Location),
     ) -> (ExprKind, Type) {
         let Required {
             index,
@@ -1356,17 +1356,30 @@ impl<'a> Typer<'a> {
             Detail::Callable(public) => public,
             _ => unreachable!("a requirement names an operator signature"),
         };
-        if !operator_generics.is_empty() {
+        let implicit_configuration =
+            operator_generics.is_empty() && has_generic_configuration_default(public);
+        if implicit_configuration || !operator_generics.is_empty() {
             // The requirement supplies the ordinary operand types. A
             // brace entry is checked against those types (FN-18), so it
             // cannot redefine the generic type of an ordinary operand.
             let mut inferred = vec![None; public.generics.len()];
             from_place(public, result.as_ref(), &mut inferred);
             let supplied = requirement_inputs(public, &operands);
-            self.infer_operator_inputs(public, &mut inferred, &supplied);
-            for (argument, found) in operator_generics.iter_mut().zip(inferred) {
-                if let Some(found) = found {
-                    *argument = found;
+            if implicit_configuration {
+                // A symbol has no written generic arguments. Resolve defaults
+                // in the public signature with the requirement's operand types.
+                let requested = self.output_requested(operator, public, inferred, &supplied, false);
+                if let Some(unfit) = requested.unfit {
+                    self.diagnostics.emit(unfit.diagnostic(public, at));
+                    return (self.unselected(given, form), Type::Unknown);
+                }
+                operator_generics = requested.generics;
+            } else {
+                self.infer_operator_inputs(public, &mut inferred, &supplied);
+                for (argument, found) in operator_generics.iter_mut().zip(inferred) {
+                    if let Some(found) = found {
+                        *argument = found;
+                    }
                 }
             }
         }
