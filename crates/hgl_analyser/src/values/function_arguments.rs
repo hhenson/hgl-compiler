@@ -443,7 +443,8 @@ fn function_type(signature: &Signature, value: bool) -> FunctionType {
     }
 }
 
-fn matches_template(expected: &FunctionType, actual: &FunctionType) -> bool {
+/// FN-17's fixed input types, required names and phase.
+pub(super) fn matches_template(expected: &FunctionType, actual: &FunctionType) -> bool {
     (!expected.value || actual.value)
         && expected.reference == actual.reference
         && expected.parameters.len() == actual.parameters.len()
