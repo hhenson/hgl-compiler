@@ -10,6 +10,5 @@
     "conformance::a_stored_null_is_distinct_from_an_absent_key",
 ]
 
-# Rejection cases the compiler does not yet reject, as in the hgraph
-# target's list: none.
+# Rejection cases the compiler does not yet reject: none.
 [rejections]
