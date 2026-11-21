@@ -171,7 +171,7 @@ impl<'a> Typer<'a> {
         {
             self.diagnostics.emit(error(
                 Category::Type,
-                codes::TYPE_MISMATCH,
+                codes::YIELD_TIME_TYPE,
                 time.at,
                 format!(
                     "this is `{}`, and a yield time is a `duration` or a `datetime`",

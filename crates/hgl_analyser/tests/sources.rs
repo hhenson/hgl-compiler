@@ -129,10 +129,10 @@ fn a_yield_time_is_a_duration_or_datetime() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:11 type/type.mismatch SOURCE-2",
-            "m.hgl:6:11 type/type.mismatch SOURCE-2",
-            "m.hgl:7:11 type/type.mismatch SOURCE-2",
-            "m.hgl:8:11 type/type.mismatch SOURCE-2",
+            "m.hgl:5:11 type/yield.time_type SOURCE-2",
+            "m.hgl:6:11 type/yield.time_type SOURCE-2",
+            "m.hgl:7:11 type/yield.time_type SOURCE-2",
+            "m.hgl:8:11 type/yield.time_type SOURCE-2",
         ]
     );
     for (statement, scalar) in body(&checked, "typed")
