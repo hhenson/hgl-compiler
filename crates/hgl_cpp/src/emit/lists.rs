@@ -389,6 +389,19 @@ impl Family for Lists {
             return Some(emitter.missing(index.at, "a child of a connection at a connection"));
         }
         let port = emitter.wiring_form(scope, base);
+        // EXPR-2: the connection is wired before its index is evaluated:
+        // where the index runs statements or may fail, the port is held
+        // first, as C++ evaluates a call's arguments in no order it
+        // promises.
+        if changes(index) || may_fail(index) {
+            let held = names::temporary("list", emitter.temporary());
+            let at = names::temporary("index", emitter.temporary());
+            let index = emitter.expression(scope, index);
+            return Some(format!(
+                "[&]() {{ const auto {held} = {port}; const ::hgraph::Int {at} = {index}; return ::{}::element_port({held}, {at}); }}()",
+                runtime::NAMESPACE
+            ));
+        }
         let index = emitter.expression(scope, index);
         Some(format!(
             "::{}::element_port({port}, {index})",

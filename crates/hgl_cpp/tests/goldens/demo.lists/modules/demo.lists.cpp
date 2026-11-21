@@ -32,6 +32,7 @@
 #undef only_second
 #undef ordered_child
 #undef ordered_of
+#undef ordered_port
 #undef pair
 #undef part_sum
 #undef part_validity
@@ -50,6 +51,7 @@
 #undef second_delta
 #undef set_part
 #undef set_slot
+#undef shifted_pair
 #undef slot
 #undef slot_of
 #undef span
@@ -57,6 +59,7 @@
 #undef sum
 #undef sum_of_parts
 #undef total
+#undef trigger
 #undef tuple_positions
 #undef value
 #undef values
@@ -736,16 +739,66 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_::shifted_pair
+{
+// shifted_pair(trigger: i64, const first: i64) -> list<i64, 2> (node), module demo.lists, line 153
+struct impl_
+{
+    static constexpr auto name = "demo.lists::shifted_pair";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"trigger", ::hgraph::TS<::hgraph::Int>> trigger, [[maybe_unused]] ::hgraph::Scalar<"first", ::hgraph::Int> first, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> out_)
+    {
+        // when, line 154 (TIME-3)
+        {
+            ::hglrt::publish(out_, std::array<::hgraph::Int, 2>{first.value(), ::hglrt::add__i64_i64(first.value(), 10)});
+            return;
+        }
+    }
+};
+}  // namespace n_::shifted_pair
+namespace w_
+{
+// shifted_pair(trigger: i64, const first: i64) -> list<i64, 2> (node), module demo.lists, line 153
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> shifted_pair(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> trigger, ::hgraph::Int first)
+{
+    return ::hgraph::wire<::hgl::demo::lists::m_::n_::shifted_pair::impl_>(wiring_, trigger, first);
+}
+}  // namespace w_
+
+namespace n_::ordered_port
+{
+// ordered_port(trigger: i64) -> i64 (graph), module demo.lists, line 157
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> trigger)
+    {
+        [[maybe_unused]] ::hgraph::Int at = 0;
+        return [&]() { const auto list_00_ = ::hgl::demo::lists::m_::w_::shifted_pair(wiring_, trigger, at); const ::hgraph::Int index_01_ = [&]() -> ::hgraph::Int {
+    at = 1;
+    return 0;
+}(); return ::hglrt::element_port(list_00_, index_01_); }();
+    }
+};
+}  // namespace n_::ordered_port
+namespace w_
+{
+// ordered_port(trigger: i64) -> i64 (graph), module demo.lists, line 157
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> ordered_port(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> trigger)
+{
+    return ::hgl::demo::lists::m_::n_::ordered_port::impl_::compose(wiring_, trigger);
+}
+}  // namespace w_
+
 namespace n_::relay
 {
-// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 152
+// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 166
 struct impl_
 {
     static constexpr auto name = "demo.lists::relay";
 
     static void eval([[maybe_unused]] ::hgraph::In<"values", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> out_)
     {
-        // when, line 153 (TIME-3)
+        // when, line 167 (TIME-3)
         {
             ::hglrt::publish(out_, ::hglrt::checked_whole(values));
             return;
@@ -755,7 +808,7 @@ struct impl_
 }  // namespace n_::relay
 namespace w_
 {
-// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 152
+// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 166
 ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> relay(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values)
 {
     return ::hgraph::wire<::hgl::demo::lists::m_::n_::relay::impl_>(wiring_, values);
@@ -936,6 +989,15 @@ void children_named_in_a_hook()
     });
         const auto right_030_ = ::hglrt::testing::Dense<::hgraph::Bool>{true};
         ::hglrt::testing::expect_same(left_029_, right_030_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_032_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_031_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{5}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::lists::m_::w_::ordered_port(wiring_, input_031_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_033_ = ::hglrt::testing::Dense<::hgraph::Int>{0};
+        ::hglrt::testing::expect_same(left_032_, right_033_);
     }();
 }
 

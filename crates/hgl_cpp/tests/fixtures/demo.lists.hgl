@@ -148,6 +148,20 @@ fn ordered_child(values: list<list<i64>>) -> bool {
 
 fn ordered_of(count: i64) -> bool => ordered_child(nested(count))
 
+# EXPR-2: a child of a connection, the connection wired before its index
+# changes `at`, which configures it.
+fn shifted_pair(trigger: i64, const first: i64) -> list<i64, 2> {
+    when { return [first, first + 10] }
+}
+
+fn ordered_port(trigger: i64) -> i64 {
+    var at: i64 = 0
+    return shifted_pair(trigger, at)[{
+        at = 1
+        0
+    }]
+}
+
 # A list input replayed from a trace, its cells whole and a delta (TST-9).
 fn relay(values: list<i64>) -> list<i64> {
     when { return values }
@@ -184,6 +198,7 @@ test children_named_in_a_hook {
     assert eval(sum_of_parts(head: [true, false], value: [3, 8])) == [3, 11]
     assert eval(nested_of(count: [0, 7])) == [[true, true, false], [true, true, true]]
     assert eval(ordered_of(count: [0])) == [true]
+    assert eval(ordered_port(trigger: [5])) == [0]
 }
 
 test tuple_positions {
