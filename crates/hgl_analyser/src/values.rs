@@ -92,6 +92,9 @@ mod lifting;
 mod members;
 // A node's body and a source's: hooks, headers, admission (FN-2, TIME-3).
 mod node;
+// Omitted configuration defaults in selected operator calls (GEN-6, UNIT-8).
+mod operator_defaults;
+pub(crate) use operator_defaults::fit_operator_default;
 // A call of an operator: its requested output, arguments and candidates (GEN-5, GEN-6).
 mod operators;
 // `requires`, and what a generic body may call by it (GEN-3, GEN-7, GEN-16).
@@ -311,6 +314,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
     operators::inherit_configuration_defaults(program);
+    operator_defaults::check(program, diagnostics);
     requirements::instances_hold(program, diagnostics);
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.

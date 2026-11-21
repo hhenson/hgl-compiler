@@ -253,6 +253,7 @@ parser: done
 analyser: partial
 
 - Binds configuration only by name in the braces. Checks defaults, missing and misplaced arguments, naming conflicts, and forbidden parameter modes.
+- Holds omitted operator configuration defaults to the selected candidate's parameter types in the operator's defining scope (GEN-6, UNIT-7, UNIT-8).
 - Left: matching a call with a pack declared for a function and checking configuration defaults against function types (#362, #366).
 
 transpiler: partial
