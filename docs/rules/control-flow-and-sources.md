@@ -194,6 +194,7 @@ analyser: done
 - One with a declaration or a hook has its declarations, `start`, one block that holds every `yield` (`{ }`, `while` or `for`), and `stop`, in that order and nothing else: a statement outside the block, a second block, a hook out of order and a `yield` in a hook are `source.statement`
 - Its declarations and hooks stand in its body itself and each hook once, as a node's do (TIME-5)
 - Its body is read: its declarations and hooks as a node's, and its other statements as value code, with each `yield`'s value held to the result's type
+- An anonymous function has its own body (FN-14). Its `yield` is rejected with local `yield.outside_source`, including where the enclosing function is a source. Only the source's own `yield` counts towards its source classification (FN-2).
 - It injects neither `scheduler` nor `alarm`, so `scheduled()` in it is `inject.no_scheduler` (TIME-9)
 - A source with no result arrow is rejected at its name with `source.result`.
 
@@ -210,11 +211,13 @@ transpiler: partial
 analyser: done
 
 - A `yield` time is a `duration` or `datetime` (`yield.time_type` for other types). A nullable or fallible time is read as its payload (ERR-12, ERR-15). Any failure is raised in the source (ERR-5).
+- Agreed. A time of a generic type is admitted when its declared type bounds prove it can only be `duration` or `datetime`, for example `T == duration` or `T in {duration, datetime}` (GEN-7). Positive conjunctions intersect known bounds. In a disjunction, every branch must provide a bound. The typed body retains the time's generic type for each instance.
 
 transpiler: done
 
 - Evaluates each yield's time and payload once in order, then resolves relative or
-  absolute time and validates it.
+  absolute time and validates it. Each generic instance uses the relative or
+  absolute form selected by its actual time type.
 
 ## SOURCE-3
 
