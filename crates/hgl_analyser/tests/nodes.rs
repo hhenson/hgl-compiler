@@ -715,8 +715,8 @@ fn scheduled_asks_the_scheduler_or_the_alarm_the_node_injects() {
 /// initializer is its own. FN-9: "A value function injects none", and
 /// TIME-9: it "has no output or schedule of its own"; a graph is no
 /// node either: "Constructed nodes own their own output and
-/// scheduler". The catalogue has no row for the selector in a value
-/// function or a graph, and the code is local.
+/// scheduler". The selector in a value function or a graph rejects
+/// with `scheduled.outside_node`.
 #[test]
 fn scheduled_is_a_selector_of_a_node_alone() {
     let checked = module(concat!(

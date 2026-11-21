@@ -78,8 +78,8 @@ fn metadata_observes_an_invalid_endpoint() {
 /// guard (`payload.unguarded`, TIME-4), in `stop` with none (TIME-5), in
 /// `start` and a `state`'s initializer, which run before any input has
 /// a value (TIME-5), and in a `cache`'s initializer, which runs on
-/// every start (TIME-6). The catalogue names a state's initializer
-/// alone, and the cache's code is local.
+/// every start (TIME-6). The catalogue has separate codes for those
+/// initializers, `state.input_read` and `cache.input_read`.
 #[test]
 fn a_payload_read_needs_admission() {
     let checked = module(concat!(

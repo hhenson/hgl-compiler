@@ -68,8 +68,8 @@ fn a_header_is_judged_after_five_thousand_handlers() {
 /// in a source, which injects "not `out`, `scheduler`, or `alarm`"
 /// (SOURCE-1); and in a value function, a graph and a test, which are no
 /// node: FN-9, "A value function injects none", and TIME-9, it "has no
-/// output or schedule of its own". The catalogue has no row for those,
-/// and the code is local. A `return` in the function is the function's,
+/// output or schedule of its own" (`scheduled.outside_node`).
+/// A `return` in the function is the function's,
 /// and is no publication of the node's (TIME-7): `returned` publishes an
 /// `i64`, and its function's `bool` is no mismatch.
 #[test]
