@@ -1,7 +1,0 @@
-module payload
-const fn keep(value: i64?) -> i64? => value
-const fn from_members(values: set<i64>) -> i64 => 7
-test lifted {
-    assert eval keep(value: [null, 7]) == [null, 7]
-    assert eval from_members(values: [delta<set<i64>>(added: [1])]) == [7]
-}

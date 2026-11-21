@@ -207,7 +207,7 @@ hgraph::ZonedTime zoned_time_literal(time at, std::string_view name,
 /// checked as `zone_literal` checks it. The offset written is the zone's own
 /// at the instant, or the literal fails: "A time a change of offset repeats
 /// is one instant at each of its two offsets, and a time it skips is at
-/// none", as the hgraph target checks it.
+/// none".
 zoned_datetime zoned_datetime_literal(datetime at, std::int32_t offset_seconds, std::string_view name,
                                       std::source_location where = std::source_location::current());
 

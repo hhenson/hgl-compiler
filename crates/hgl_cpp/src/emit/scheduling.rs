@@ -151,10 +151,9 @@ pub(super) fn made_in(name: &str, hook: Hook) -> String {
 /// What a node with a scheduler or an alarm, as `context` says, of
 /// `body` and the temporal inputs `inputs`, reads of what woke it as its
 /// `eval` is entered, after its capabilities are made: nothing for a node
-/// with neither. It is read once, as the Python-writing target reads it:
-/// a handler before another may ask for a wake under the tag that is due
-/// or passivate the input that ticked, and neither changes what woke the
-/// evaluation.
+/// with neither. It is read once: a handler before another may ask for a
+/// wake under the tag that is due or passivate the input that ticked,
+/// and neither changes what woke the evaluation.
 pub(super) fn woken(context: &Context, body: &Body, inputs: &[usize]) -> String {
     let Some(timer) = context.timer else {
         return String::new();

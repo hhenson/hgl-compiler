@@ -26,7 +26,6 @@ hgl_parser = { path = "crates/hgl_parser" }
 hgl_analyser = { path = "crates/hgl_analyser" }
 hgl_lower = { path = "crates/hgl_lower" }
 hgl_runner = { path = "crates/hgl_runner" }
-hgl_hgraph = { path = "crates/hgl_hgraph" }
 hgl_cpp = { path = "crates/hgl_cpp" }
 clap = { version = "4.6", features = ["derive"] }
 codespan-reporting = "0.13"

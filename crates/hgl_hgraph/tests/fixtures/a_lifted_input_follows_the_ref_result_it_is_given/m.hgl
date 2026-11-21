@@ -1,9 +1,0 @@
-module m
-const fn doubled(value: i64) -> i64 => value * 2
-fn pick(flag: bool, ref low: i64, ref high: i64) -> ref i64 {
-    when {
-        if flag { return high }
-        return low
-    }
-}
-fn twice(flag: bool, low: i64, high: i64) -> i64 => doubled(pick(flag, low, high))

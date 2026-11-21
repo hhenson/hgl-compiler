@@ -77,11 +77,3 @@ pub fn fixture(name: &str) -> String {
         .join(name);
     path.display().to_string()
 }
-
-/// The Python interpreter that has hgraph, which the environment variable
-/// `HGL_HGRAPH_PYTHON` names. The tests that need it are ignored unless
-/// asked for, and fail when it is not named.
-pub fn interpreter() -> String {
-    std::env::var("HGL_HGRAPH_PYTHON")
-        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph")
-}

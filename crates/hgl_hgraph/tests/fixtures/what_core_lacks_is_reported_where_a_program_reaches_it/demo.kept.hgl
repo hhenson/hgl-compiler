@@ -1,8 +1,0 @@
-module demo.kept
-# Core's identity addition is a node written from core's body for each
-# type it is given (OPS-9). For a list of nullables the target does not
-# write what the node publishes.
-impl const fn add_(lhs: list<f64?>, rhs: list<f64?>) -> list<f64?> => lhs
-fn kept(a: list<f64?>, b: list<f64?>) -> list<f64?> => a +{invalid: .identity} b
-const fn fine(value: i64) -> i64 => value + 1
-test doubles { assert fine(1) == 2 }

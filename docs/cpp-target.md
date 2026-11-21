@@ -1,11 +1,9 @@
 # The C++ target
 
-**Status: proposed design.** The compiler's native target writes C++ against
+**Status: built, in part.** The compiler's target writes C++ against
 [hgraph](https://github.com/hhenson/hgraph)'s graph, node, type and runtime
-layers. It replaces the Python target, which gets no further work: it
-stays as it is until this target runs the cases, and is then deleted. A
-case of a rule it does not follow is listed for it
-(`crates/hgl_hgraph/ci/unsupported_cases.toml`). A runtime in
+layers. A case it does not run yet is listed with its reason
+(`crates/hgl_cpp/ci/unsupported_cases.toml`). A runtime in
 Rust ([hgl-runtime](https://github.com/hhenson/hgl-runtime)) follows later,
 with this target as its reference for behaviour and for speed.
 
@@ -20,8 +18,7 @@ with this target as its reference for behaviour and for speed.
 | GCC 15 or later on Linux, with no `manylinux` build; macOS too, and Windows later (2026-11-20) | Owner | C++23 and each platform's standard library are assumed: Linux builds with GCC 15 or later and libstdc++, macOS with Apple clang 21 or later and the system's libc++. What one of them lacks is written once in `libhglrt` and used on every platform, not chosen by platform: Apple's libc++ has no `<generator>`, so a source's body is an `hglrt::generator` |
 
 A trial transcription of four programs (scalar, keyed children, a struct with
-generic functions and a failure, a stateful `switch`) matched the Python
-target's traces exactly, and gave the costs below.
+generic functions and a failure, a stateful `switch`) gave the costs below.
 
 ## Pipeline
 
@@ -38,7 +35,7 @@ one executable for each test module or application
 
 | Part | Where | What it owns |
 | --- | --- | --- |
-| `hgl_lower` | `crates/hgl_lower` | What both targets decide the same way, moved out of `hgl_hgraph` unchanged: the copy rule, instance collection and canonical names, what blocks a piece, eval wiring, the child-graph analyses, HGL type facts. The analyser records what it works out on the analysed program: whether each expression is a connection (`hir::Expr::category`), which calls are lifted (the call's `lifted`), what is a source (`Module::is_source`) |
+| `hgl_lower` | `crates/hgl_lower` | What a target decides from the language's rules alone: the copy rule, instance collection and canonical names, what blocks a piece, eval wiring, the child-graph analyses, HGL type facts. The analyser records what it works out on the analysed program: whether each expression is a connection (`hir::Expr::category`), which calls are lifted (the call's `lifted`), what is a source (`Module::is_source`) |
 | `hgl_cpp` | `crates/hgl_cpp` | C++ for types, value functions, nodes, graphs, tests and applications. No semantic decision that `hgl_lower` or the analyser can make |
 | `libhglrt` | `runtime/cpp` | Core's native declarations; checked reads and failures; sources and wakes; the test and application host (traces, comparison, outcomes) |
 | Build driver | `crates/hgl_cli` | Finds the SDK, writes the build, compiles what changed, links, runs. A failed build never runs an older executable |
@@ -96,7 +93,7 @@ SDK with Arrow and `graph_wiring.h`, as before):
 | A test executable's entry unit: `hglrt.h` against it; `host.h` alone, with none | 0.57 s (0.81 s); 0.06 s |
 | Edit to result, `hgl test --target cpp` of a small module | 0.65 s (0.95 s) |
 | Link with `lld` (GNU `ld`: 0.12 s), on the trial | 0.015 s |
-| Whole suite (about 135 modules), 12 jobs, estimated from the trial | 40 to 55 s (the Python target: about a minute) |
+| Whole suite (about 135 modules), 12 jobs, estimated from the trial | 40 to 55 s |
 | Whole suite on a four-core CI runner, estimated | about 100 s |
 
 The driver keeps these by: one unit for each module; `libhglrt` and core's
@@ -139,7 +136,7 @@ builds the specification's rule, and the difference goes to the
 specification's issue tracker to be decided there, not here.
 
 The scheduler is such a case (CAP-4), and `libhglrt` builds core's rule
-over hgraph's `NodeScheduler`, as the Python-writing target does: hgraph
+over hgraph's `NodeScheduler`: hgraph
 keeps the wake it delivers until the node has run, so in that evaluation
 it counts as pending, `un_schedule()` cancels it, and `is_scheduled_now`
 is false after `reset`; and it keeps no wake under the empty tag. The
@@ -157,19 +154,19 @@ scheduler arms the node again.
 The measure is cases passing on this target: core's runtime cases (182 today)
 and the tests of the fixture programs (about 370 in about 100 programs), all
 of which are HGL with their own expectations and need no change. A case this
-target cannot yet write is listed with its reason, as `unsupported_cases.toml`
-lists them today; a case that passes and is listed fails the check. A
-case's own expectation is the judge: the Python target is not kept in
-step with rules that change, and is no reference for them.
+target cannot yet write is listed with its reason in
+`crates/hgl_cpp/ci/unsupported_cases.toml`; a case that passes and is
+listed fails the check (`crates/hgl_cpp/ci/check_core.py`). A case's own
+expectation is the judge.
 
 ## Order of work
 
 | Step | Work | Done when |
 | --- | --- | --- |
-| 0 | `hgl_lower` by moving code (the Python target's output stays byte-identical); `libhglrt` skeleton, SDK provisioning and a CI job; `hgl_cpp` skeleton, `--target cpp` and the build driver | Every case is reported as not yet written on the new target; CI builds the SDK from a cache and runs the empty suite |
+| 0 | `hgl_lower`; `libhglrt` skeleton, SDK provisioning and a CI job; `hgl_cpp` skeleton, `--target cpp` and the build driver | Every case is reported as not yet written on the new target; CI builds the SDK from a cache and runs the empty suite |
 | 1 | Scalars end to end: value functions, constants, enums, scalar natives, nodes, graphs, tests with core's `replay` and `record` | Core's scalar, handler, activity, graph and lifecycle cases pass |
 | 2 | In parallel lanes: structs, tuples and optionals; sets, dictionaries, lists and deltas; the remaining natives; lifting and capture; `if`, `switch` and `for`; sources; the scheduler and alarm; references; windows; the store, applications and real time | Each lane's cases pass |
-| 3 | Parity | Every case passes; the Python target, its provider and its CI job are deleted, and `hgl_hgraph` with them |
+| 3 | Parity | Every case passes |
 
 ## Not decided here
 

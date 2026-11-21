@@ -1,6 +1,0 @@
-module zones
-test unknown { let at = @[Mars/Olympus] }
-test unknown_time { let at = @09:30[Mars/Olympus] }
-test inconsistent { let at = @2026-09-03T09:30+00:00[Europe/London] }
-test skipped { let at = @2026-03-29T01:30+00:00[Europe/London] }
-test consistent { let at = @2026-03-29T02:30+01:00[Europe/London] }

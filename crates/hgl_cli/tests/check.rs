@@ -312,11 +312,10 @@ fn the_limits_options_apply() {
 }
 
 /// The declarations of core's rejection cases the compiler does not yet
-/// reject: the `[rejections]` of `crates/hgl_hgraph/ci/unsupported_cases.toml`,
+/// reject: the `[rejections]` of `crates/hgl_cpp/ci/unsupported_cases.toml`,
 /// each listed under a reason that names the rule not yet built.
 fn unrejected() -> Vec<String> {
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../hgl_hgraph/ci/unsupported_cases.toml");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../hgl_cpp/ci/unsupported_cases.toml");
     let text = fs::read_to_string(path).expect("the list of unsupported cases");
     text.lines()
         .skip_while(|line| line.trim() != "[rejections]")

@@ -1,6 +1,0 @@
-module demo.sink
-fn drop(value: i64) { when { } }
-fn watched(value: i64) -> error {
-    let boundary = capture(drop, value)
-    return boundary.error
-}

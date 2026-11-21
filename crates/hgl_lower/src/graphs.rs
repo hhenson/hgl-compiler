@@ -1,7 +1,7 @@
 //! What a graph's `if`, `switch` and `for` over connections need of
 //! their statements, as the language says it: what each child graph
-//! takes of the graph it is in, the value of a `switch` label, what is
-//! bound after branches, and which paths return. Part of lowering: a
+//! takes of the graph it is in, the value of a `switch` label, the
+//! `var`s a branch assigns, and which paths return. Part of lowering: a
 //! transpiler writes each branch or loop body as a child graph with
 //! these (CTRL-2, CTRL-7, CTRL-11, CTRL-14, CTRL-15).
 
@@ -106,16 +106,6 @@ pub fn key_read_as_value(program: &Program, key: usize, body: &[Stmt]) -> Option
         _ => {}
     });
     reads.into_iter().find(|at| !given.contains(at))
-}
-
-/// What is bound after branches: what each of `reached`, the bindings of
-/// a branch that reaches its end, binds (CTRL-11, CTRL-14). `None` where
-/// no branch reaches it.
-pub fn joined(reached: impl IntoIterator<Item = Vec<usize>>) -> Option<Vec<usize>> {
-    reached.into_iter().reduce(|mut joined, bound| {
-        joined.retain(|local| bound.contains(local));
-        joined
-    })
 }
 
 /// The statements of a branch of an `if` that stands as a statement:

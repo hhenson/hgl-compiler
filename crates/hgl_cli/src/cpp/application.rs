@@ -5,9 +5,7 @@
 //! The executable is `run/<application>` of the program's workspace,
 //! `EXECUTABLE RESULTS`, and its `main` is the runtime library's host of
 //! the run (`hglrt/application_host.h`). It writes RESULTS as the run
-//! goes, in the form the hgraph target's driver writes it
-//! (`crates/hgl_hgraph/support/run_application.py`), one line for each
-//! thing that happens:
+//! goes, one line for each thing that happens:
 //!
 //! ```text
 //! start                the run is about to start
@@ -32,10 +30,31 @@ use std::thread;
 use std::time::Duration;
 
 use hgl_cpp::{Application, Output};
-use hgl_hgraph::RanApplication;
 
 use super::build::{self, Workspace};
 use super::sdk::{self, Toolchain};
+
+/// What became of an application given to [`run`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum RanApplication {
+    /// The run ended, as core's CRUN-1 has one: built, started,
+    /// evaluated and stopped.
+    Stopped {
+        /// The run's output (RUN-1): each publication of the entry's
+        /// result in time order, as its instant and its value, both as
+        /// text. `None` for an entry with no result.
+        output: Option<Vec<(String, String)>>,
+        /// True where the run ended because its host asked it to
+        /// (RUN-3), and not at its end.
+        by_host: bool,
+    },
+    /// The run failed, with what the host said of it. Core's CRUN-6: "A
+    /// run that failed has no output."
+    Failed(String),
+    /// It was not run to an end, with the reason: its executable was not
+    /// built, did not start or stopped early.
+    NotRun(String),
+}
 
 /// What asks an application's run to stop, as its host (RUN-3: "until
 /// the configuration's end or until its host stops it"). It may be asked

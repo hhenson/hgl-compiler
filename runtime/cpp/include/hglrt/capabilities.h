@@ -216,8 +216,7 @@ void fn_reset(const Scheduler& scheduler);
 /// node, and that evaluation takes the mark away). An alarm made in an
 /// evaluation takes the wake due then, which is delivered and pending no
 /// longer, as the scheduler takes it: a wake asked for in that evaluation
-/// is kept whatever its time. The Python-writing target's alarm is kept so
-/// too.
+/// is kept whatever its time.
 class Alarm {
   public:
     Alarm(hgraph::NodeScheduler view, Hook hook);

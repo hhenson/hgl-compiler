@@ -1,7 +1,0 @@
-module hgraph
-fn pass(value: i64) -> i64 {
-    when { return value }
-}
-test shadows {
-    assert eval pass(value: [1]) == [1]
-}

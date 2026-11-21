@@ -58,13 +58,7 @@ analyser: partial
 - Each call records whether it is lifted: in a graph's body, of a value function or a value candidate that marks no parameter `var` (FN-15), given a connection; its arguments that are connections are the node's inputs, and the rest its configuration
 - Left: an outputless helper as a sink
 
-transpiler: partial
-
-- hgraph: a value function or a candidate of core given a connection in a graph is a node of its own, an input for each connection and a scalar parameter for each ordinary argument; any input wakes it, and each evaluation publishes its result
-- A call given no connection is made where the graph is built
-- An outputless helper is a sink
-- A value function an eval names is lifted with each replay’s payload type, including nullable and set inputs
-- Left: a pack, and types beyond the four scalars
+transpiler: planned
 
 ## FN-7
 
@@ -75,10 +69,7 @@ analyser: partial
 - No value of a type is a function: a call of one, `plus_one(x)()`, `[x][0]()` or `(1 + 2)()`, is `type.mismatch`
 - Left: a composition return; an anonymous function's context
 
-transpiler: partial
-
-- hgraph: a `return` with a value publishes it and ends the evaluation, skipping later handlers; a body that ends with none publishes nothing
-- Left: a `return` after a write through `out`
+transpiler: planned
 
 ## FN-8
 
@@ -112,12 +103,7 @@ analyser: planned
 
 - Which lifted arguments need a valid input
 
-transpiler: partial
-
-- hgraph: an input whose parameter has a default is not required valid, and the default is bound while it is not; every other input is required valid
-- A struct, a tuple and a fixed list are supplied only where they are `all_valid` too: one valid and not all valid binds no fallback, and the helper is not invoked
-- So is a window, to a parameter with a default or of `list<V>?`: the default or the null binds where the window is not valid, and where it is valid and not all valid the helper is not invoked, "its default included"
-- Left: null bound for an input that admits null, which waits on nullable scalars
+transpiler: planned
 
 ## FN-12
 
@@ -126,21 +112,11 @@ analyser: partial
 - A window's connection is given to a value function's parameter in composition as the `list<V>` it holds, which binds its generic parameters: the `T` of `list<T>` is V, and a bare `T` is `list<V>` (TYPE-11, FN-1); a `list<V>?` takes it too, "whatever its default or null contract" (FN-11)
 - Left: which aggregates need `all_valid` (FN-11)
 
-transpiler: partial
-
-- hgraph: a lifted helper is one invocation with the whole value; a fixed list given to one is required `valid`, as any list is
-- A position of an unsized list that holds no value is passed as TIME-1's table reads it, NaN for an `f64` and null for a `V?`, and fails the invocation otherwise (`value.unset_read`)
-- A struct, a tuple and a fixed list are required all valid (TIME-9), an optional child not asked and passed as null
-- A window is required valid, the helper invoked only where it is all valid, with the `list<V>` it holds; one given to a parameter with a default or of `list<V>?` is not required valid, binds that fallback where it is not valid, and invokes nothing where it is valid and not all valid (FN-11)
-- Left, reported: a window that a value function's generic parameter stands for in an instance of a generic declaration, checked once (GEN-7)
+transpiler: planned
 
 ## FN-13
 
-transpiler: done
-
-- hgraph: an argument is a reference the function cannot change, and nothing else runs while it runs; one read from what the same call gives a `var` parameter is a copy (the owner's rule, issue 151), in a graph as in a value function
-- What a function returns of an argument, or of what may be one, what a place keeps, what is published and what a graph gives a node are copies, so a retained result is independent of later changes, of a list and of a struct
-- No argument is a view: hgraph gives a list made of its tuple, a struct made of its bundle, or a `TS`'s value, which nothing changes where it is
+transpiler: planned
 
 ## FN-14
 
@@ -167,14 +143,7 @@ analyser: partial
 - The call is held to what an assignment of the place is: a property of a native value or of a delta is `binding.immutable` (NATIVE-6, TYPE-16), and in a graph a `var` of an ordinary value in a branch selected at runtime is `binding.category` (CTRL-14) and one declared outside a loop that makes a child for each member `loop.carried` (CTRL-15)
 - Left: a native implementation part's `var` marks matched with its declaration's (NATIVE-2)
 
-transpiler: partial
-
-- hgraph: a function, and a candidate of an operator, with `var` parameters returns its result and then what each holds, at every way out; a call that is the whole of a statement, or of what a `let`, an assignment or a `return` takes, is bound to `_given` and assigns each place after it, in the order of the parameters, a place inside a value as an assignment does (EXPR-3)
-- An index or a key of a place is evaluated once, before the call, and held, so that the place read is the place assigned; every argument of such a call is then held too, each evaluated in the order written (EXPR-2), and what an index is of is read before the index is evaluated; the assignment reads it again, so two places inside one root are both assigned
-- A `var` parameter is the caller's place: its list, its dictionary or its struct of more than two scalar fields is changed where it is
-- A function that fails gives back what it raised, `_core.Failed`, beside what each `var` parameter holds then, and the call assigns each place before it raises it again: no change is undone, of a parameter of any type, and of one given a value of its own
-- An argument that fails is evaluated before the call, which assigns nothing
-- Left: such a call inside an expression, which is reported
+transpiler: planned
 
 ## FN-16
 
@@ -193,12 +162,5 @@ analyser: partial
 - A `return` to a `ref` result, and `out =` of one, names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`, and so is a source's `yield` to a `ref` result: a source has no temporal input to name (TIME-7: "A `ref` result takes no value")
 - Left: a native implementation part's marks matched with its declaration's (NATIVE-2)
 
-transpiler: partial
+transpiler: planned
 
-- hgraph: a `ref` parameter and a `ref` result are hgraph's `REF` of the type, bound to and by connections of it as they are; `valid`, `modified`, `last_modified` and activity are the `REF`'s own
-- The provider's `Designation` keeps what the result designates through an evaluation, and the node publishes the last write: `return low` of a whole `ref` parameter samples the reference its own `REF` holds as the `return` runs, and the result keeps it until the node writes again, which no re-binding of the parameter moves (`_designation.sampled(low)`); `return value` of an input that is no `ref` parameter, and `return items[idx]` of a fixed list's position, designate that endpoint, read through a hidden `REF` input beside it, given by a graph of the function's name, and one for each position of a fixed list, which the graph gives each position: hgraph binds that wherever the list comes from, a `ref` result or a graph's `if` among them, and it ticks where the list is re-bound, where hgraph 0.9.8's `TSL` of `REF`s given the list whole does not; `out =` designates alike
-- "Readers follow a later rebinding of that endpoint without waking the node for it": the hidden `REF` input is active, the node returns before its handlers where no active input of its own, its scheduler or its alarm woke it, and no validity is the whole node's
-- A designation the result holds, given again, is published again, as hgraph publishes it: its ordinary reader is not woken for it (TIME-10), and a node active on a `ref` parameter given it is
-- An ordinary value a graph gives a `ref` parameter, a literal, a constant, a `const` parameter or an all-scalar call, is wired as a constant connection of the parameter's type, which it designates (FN-3)
-- A struct's connection given to a `ref` parameter of a struct it inherits from, and a `ref` result given where one is expected, are narrowed as any connection is (TYPE-3); an eval of a `ref` result records what it designates
-- Left, reported: a child of a `ref` parameter or result as an endpoint, and `all_valid` of one; a designation of a dictionary's entry, a struct's field, a tuple's position, an unsized list's position or a child deeper than one step; an input designated whole and by a position in one node

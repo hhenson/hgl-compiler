@@ -5,9 +5,8 @@
 //! environment variables `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name.
 //! They are ignored
 //! unless asked for: `cargo test -p hgl_cli --test cpp -- --ignored`
-//! runs them, as the CI job for C++ does. The CI job for hgraph runs
-//! every ignored test of this crate with no C++ SDK; there they say so
-//! and have nothing to check.
+//! runs them, as the CI job for C++ does. Run with no C++ SDK named,
+//! they say so and have nothing to check.
 
 mod common;
 
@@ -451,9 +450,9 @@ fn run_with_no_sdk_named_says_so() {
     );
 }
 
-/// Whether the C++ SDK is named, and with it the tests that build. The
-/// CI job for hgraph runs every ignored test with none named: there a
-/// test that needs it says so and checks nothing.
+/// Whether the C++ SDK is named, and with it the tests that build. Where
+/// the ignored tests are run with none named, a test that needs it says
+/// so and checks nothing.
 fn sdk_named() -> bool {
     let named = std::env::var_os("HGL_HGRAPH_SDK").is_some_and(|named| !named.is_empty());
     if !named {
@@ -722,8 +721,7 @@ fn nested_forms_run_on_the_sdk() {
 
 /// The temporal code of scalars on the SDK: a graph with lifted calls, a
 /// constant connection, nodes with state, handlers in order and
-/// capabilities, a source, and the evals of them (`demo.temporal`), each
-/// as the hgraph target gives it.
+/// capabilities, a source, and the evals of them (`demo.temporal`).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn temporal_code_runs_on_the_sdk() {
@@ -977,7 +975,7 @@ fn activity_runs_on_the_sdk() {
 /// Lifting and capture on the SDK (`demo.lifting`): lifted calls binding
 /// defaults, a sink, an eval of a value function, captures of a node, a
 /// graph and a lifted call, a write that stands before a failure, a `?` in
-/// a `when` and an error's context, each as the hgraph target gives it.
+/// a `when` and an error's context.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn lifting_code_runs_on_the_sdk() {
@@ -1374,8 +1372,7 @@ fn a_nullables_delta_is_read_and_published() {
 /// offset consistency." A zone the provider's catalogue does not have,
 /// of a `timezone`, a `zoned_time` and a `zoned_datetime`, and an offset
 /// that is not the zone's at the instant written, fail where the literal
-/// is evaluated, as the hgraph target's do; an offset that is the zone's
-/// does not.
+/// is evaluated; an offset that is the zone's does not.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn a_zone_literal_is_checked_by_the_run_provider() {
@@ -1822,6 +1819,150 @@ fn an_application_runs_on_the_sdk() {
     assert!(
         summary.starts_with("ran demo.ticks.live on cpp: "),
         "{printed}"
+    );
+}
+
+/// An application of `ticks` whose arguments and configuration are
+/// replaced together.
+const PACED: &str = concat!(
+    "application demo.ticks.paced\n",
+    "\n",
+    "use demo.ticks::{ticks}\n",
+    "\n",
+    "inject run_config{length: 10s}\n",
+    "eval ticks(values: [1, 2, 3])\n",
+);
+
+/// A module with an entry that takes an enum, and a generic one.
+const SIDES: &str = concat!(
+    "module demo.sides\n",
+    "\n",
+    "export enum Side { buy, sell }\n",
+    "\n",
+    "export fn sided(const side: Side, const upto: i64 = 2) -> i64 {\n",
+    "    cache count: i64 = 0\n",
+    "    while count < upto {\n",
+    "        count += 1\n",
+    "        yield 1s: if side == .buy { count } else { -count }\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "export fn echo<T>(const value: T) -> T {\n",
+    "    yield 1s: value\n",
+    "}\n",
+);
+
+/// The applications of `SIDES`: of the enum's entry; of the generic one,
+/// whose `T` its argument makes an `i64`, a `Side` and an `f64`.
+const SIDED: [(&str, &str); 4] = [
+    (
+        "sided.hgl",
+        "application demo.sides.sided\n\nuse demo.sides::{sided}\n\neval sided(side: .buy)\n",
+    ),
+    (
+        "echoed.hgl",
+        "application demo.sides.echoed\n\nuse demo.sides::{echo}\n\neval echo(value: 3)\n",
+    ),
+    (
+        "member.hgl",
+        "application demo.sides.member\n\nuse demo.sides::{echo, Side}\n\neval echo(value: Side.buy)\n",
+    ),
+    (
+        "real.hgl",
+        "application demo.sides.real\n\nuse demo.sides::{echo}\n\neval echo(value: 2.5)\n",
+    ),
+];
+
+/// RUN-2: the replaced arguments and the replaced field are what the
+/// application runs with, "and what the application writes is the
+/// default". A replacement is read as the argument it replaces was
+/// expected: with the `Side` and the `f64` the application's own
+/// argument made the entry's `T`, `.sell` is a member (TYPE-7) and `3`
+/// an `f64` (EXPR-5). The target is cpp where none is named.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn an_application_runs_with_what_starts_it_replaces() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("replaced");
+    write(&root, "ticks.hgl", TICKS);
+    write(&root, "paced.hgl", PACED);
+    write(&root, "sides.hgl", SIDES);
+    for (name, text) in SIDED {
+        write(&root, name, text);
+    }
+    let run = |application: &str, more: &[&str]| {
+        let mut arguments = vec!["run", root.to_str().unwrap(), "--application", application];
+        arguments.extend(more);
+        hgl_in(&arguments, &[], &[])
+    };
+    // As written: `ticks(values: [1, 2, 3])` a second apart, for 10s.
+    let output = run(
+        "demo.ticks.paced",
+        &[
+            "--arg",
+            "values=[1, 2, 3, 4, 5]",
+            "--arg",
+            "every=500ms",
+            "--config",
+            "length=2s",
+        ],
+    );
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:00.500001Z  1\n",
+            "1970-01-01T00:00:01.000001Z  2\n",
+            "1970-01-01T00:00:01.500001Z  3\n",
+            "ran demo.ticks.paced on cpp: 3 publications\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let output = run("demo.sides.sided", &["--arg", "side=.sell"]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:01.000001Z  -1\n",
+            "1970-01-01T00:00:02.000001Z  -2\n",
+            "ran demo.sides.sided on cpp: 2 publications\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    let output = run("demo.sides.echoed", &["--arg", "value=4 + 1"]);
+    assert_eq!(
+        text(&output.stdout),
+        "1970-01-01T00:00:01.000001Z  5\nran demo.sides.echoed on cpp: 1 publication\n",
+        "{}",
+        text(&output.stderr)
+    );
+    let output = run("demo.sides.member", &["--arg", "value=.sell"]);
+    assert_eq!(
+        text(&output.stdout),
+        "1970-01-01T00:00:01.000001Z  Side.sell\nran demo.sides.member on cpp: 1 publication\n",
+        "{}",
+        text(&output.stderr)
+    );
+    let output = run("demo.sides.real", &["--arg", "value=3"]);
+    assert_eq!(
+        text(&output.stdout),
+        "1970-01-01T00:00:01.000001Z  3.0\nran demo.sides.real on cpp: 1 publication\n",
+        "{}",
+        text(&output.stderr)
+    );
+    // With nothing replaced it runs as it is written.
+    let output = run("demo.ticks.paced", &[]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:01.000001Z  1\n",
+            "1970-01-01T00:00:02.000001Z  2\n",
+            "1970-01-01T00:00:03.000001Z  3\n",
+            "ran demo.ticks.paced on cpp: 3 publications\n",
+        )
     );
 }
 

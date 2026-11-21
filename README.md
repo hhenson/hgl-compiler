@@ -15,10 +15,10 @@ format    Lexer -> Parser -> Formatter
 check     Lexer -> Parser -> Analyser -> Error reporting
 ```
 
-Each stage is a separate crate with one input and one output. Transpilers
-consume only the analysed program, so targets can be added without touching
-the front end. The first target is the
-[hgraph](https://github.com/hhenson/hgraph) runtime.
+Each stage is a separate crate with one input and one output. A transpiler
+consumes only the analysed program, so a target can be added without
+touching the front end. The target, `cpp`, writes C++ against the
+[hgraph](https://github.com/hhenson/hgraph) runtime's C++ layers.
 
 ## State
 
@@ -28,9 +28,9 @@ the front end. The first target is the
 | Parser | implemented: every production of the pinned grammar to a lossless syntax tree; the parser's part of 31 rules |
 | Formatter | planned |
 | Analyser, error reporting | first passes: modules, parts, declarations, imports, test scopes and the names used in signatures and bodies (`hgl check`); types, phases and constants planned |
-| Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics, for every catalogued code the compiler reports (`hgl test`); tests run on hgraph (`hgl test --target hgraph`), where the target writes what they need |
+| Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics, for every catalogued code the compiler reports (`hgl test`); tests built and run on hgraph (`hgl test --target cpp`), where the target writes what they need |
 | Optimiser | planned |
-| Transpiler | hgraph, first slice: scalar nodes, value functions, operator candidates with a body, enums, structs as ordinary values, results and errors, graphs that call nodes and lift value functions and symbols over connections, and tests with dense evals, as Python wiring (`hgl emit`); an application run on hgraph (`hgl run`) |
+| Transpiler | cpp: the program as C++ against hgraph's graph, node, type and runtime layers (`hgl emit`), built with hgraph's C++ SDK and run (`hgl test`, `hgl run`); it runs core's cases but those listed in `crates/hgl_cpp/ci/unsupported_cases.toml` |
 
 Design, crate layout and planned order: [docs/architecture.md](docs/architecture.md).
 Each rule and the stage that implements it: [docs/rules.md](docs/rules.md).
@@ -46,7 +46,8 @@ cargo run -- check path/to/sources --modules
 cargo run -- check --json path/to/sources
 cargo run -- test path/to/sources --rejections-only
 cargo run -- test path/to/sources --integration
-cargo run -- run path/to/sources --application demo.app --python path/to/python
+cargo run -- test path/to/sources --target cpp
+cargo run -- run path/to/sources --application demo.app
 cargo run -- run path/to/sources --arg upto=5 --config length=10s
 cargo doc --workspace --no-deps --open
 ```
@@ -64,19 +65,17 @@ roots hold a `module core` of their own. What an expression is,
 phases and constants are not checked yet. `hgl test` checks the
 program's rejection cases, each an import, declaration or test marked
 `# expect-error(category, "code")`, and lists its tests.
-`hgl test --target hgraph` also runs the tests on hgraph, with the
-Python interpreter `--python PATH` names, or the one the environment
-variable `HGL_HGRAPH_PYTHON` names, which must have hgraph
-installed; a test that needs a form the target does not write yet is
-reported `not run`, with the form. An `integration_test` is left out
+`hgl test --target cpp` also builds the tests and runs them on hgraph; a
+test that needs a form the target does not write yet is reported
+`not run`, with the form. An `integration_test` is left out
 unless `--integration` asks for them or `--test NAME` names it; its
 `run target(...)` is a run in real time, and it has failed if it is still
 running after the limit `@timeout(5s)` gives on the line before it, or
 after a minute where it writes none.
 `hgl emit --out DIR` writes an
-accepted program as Python wiring for hgraph, and reports what the
-target does not write yet. `hgl run` runs an application of the program
-on hgraph, the one `--application PATH` names or the only one, and prints
+accepted program as C++, and reports what the target does not write
+yet. `hgl run` builds an application of the program and runs it on
+hgraph, the one `--application PATH` names or the only one, and prints
 its output when the run has stopped: a line for each publication of its
 entry's result. An `eval` application is a simulation; a `run` one is in
 real time, and an interrupt stops it. `--arg NAME=VALUE` replaces an
@@ -89,16 +88,17 @@ accepted and every selected case passed or the application's run ended,
 the command could not run or a selected test or the application was not
 run.
 
-`--target cpp` is the C++ target, a skeleton that writes value
-functions over `i64`, `f64` and `bool` and tests that assert on them,
-and reports every other form as not written yet. It builds against
-hgraph's C++ SDK, whose install prefix `HGL_HGRAPH_SDK` names and whose
-dependency prefix `HGL_HGRAPH_DEPS` names, with GCC 15 or later on
-Linux or Apple clang 21 or later on macOS, and `ninja`; see [docs/architecture.md](docs/architecture.md#cpp).
+`--target cpp` is the one target, and what `hgl emit` and `hgl run`
+use when none is named. It builds against hgraph's C++ SDK, whose
+install prefix `HGL_HGRAPH_SDK` names and whose dependency prefix
+`HGL_HGRAPH_DEPS` names, with GCC 15 or later on Linux or Apple clang 21
+or later on macOS, and `ninja`; see [docs/architecture.md](docs/architecture.md#cpp).
+`--target` takes no other value: `--target hgraph`, say, is refused
+before anything is read, with `error: invalid value 'hgraph' for
+'--target <TARGET>'` and the values it takes, and status 2.
 
 Before upgrading to an hgraph scheduler that excludes the current delivery from
-pending wakes, regenerate Python targets or rebuild the HGL C++ runtime with
-this adapter. An older runtime can hang on its first wake. Keep its existing
+pending wakes, rebuild the HGL C++ runtime with this adapter. An older runtime can hang on its first wake. Keep its existing
 hgraph version until the runtime is upgraded.
 
 The compiler reports nesting deeper than 100 levels and a syntax tree deeper

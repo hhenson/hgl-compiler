@@ -5,9 +5,7 @@
 
 mod common;
 
-use std::process::Command;
-
-use common::{argument, hgl, interpreter, scratch, text, write};
+use common::{argument, hgl, hgl_with, scratch, text, write};
 
 /// A module with an entry, a source that counts, and one whose run
 /// fails.
@@ -206,15 +204,8 @@ const SIDES: &str = concat!(
     "}\n",
 );
 
-/// An application of the enum's entry, and one of the generic one,
-/// whose `T` its argument makes an `i64`.
-const SIDED: &str = concat!(
-    "application demo.sides.sided\n",
-    "\n",
-    "use demo.sides::{sided}\n",
-    "\n",
-    "eval sided(side: .buy)\n",
-);
+/// An application of the generic entry, whose `T` its argument makes
+/// an `i64`.
 const ECHOED: &str = concat!(
     "application demo.sides.echoed\n",
     "\n",
@@ -259,7 +250,7 @@ fn a_replacement_does_not_change_what_the_entry_is() {
 /// each have a `Side`, and a replacement of one with a member of the
 /// other is of another type, though both are written `Side`: it is
 /// rejected. A member of the same enum is not, and the run then gets
-/// as far as its host, which here is no interpreter: status 2.
+/// as far as its build, which here has no SDK: status 2.
 #[test]
 fn a_type_of_the_same_name_is_another_type() {
     let root = scratch("replacements_same_name");
@@ -295,15 +286,11 @@ fn a_type_of_the_same_name_is_another_type() {
          `demo.sides::echo<Side>`, and with the replacements given it would run \
          `demo.sides::echo<Side>`, whose generic arguments are other types of the same names\n"
     );
-    let missing = root.join("no-such-python");
-    let output = hgl(&[
-        "run",
-        &argument(&root),
-        "--arg",
-        "value=left::Side.sell",
-        "--python",
-        &argument(&missing),
-    ]);
+    let missing = argument(&root.join("no-such-sdk"));
+    let output = hgl_with(
+        &["run", &argument(&root), "--arg", "value=left::Side.sell"],
+        &[("HGL_HGRAPH_SDK", &missing)],
+    );
     assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr));
     assert!(
         text(&output.stderr).contains("was not run"),
@@ -312,162 +299,9 @@ fn a_type_of_the_same_name_is_another_type() {
     );
 }
 
-/// RUN-2: the replaced argument and the replaced field are what the
-/// application runs with, "and what the application writes is the
-/// default". The interpreter is the one `HGL_HGRAPH_PYTHON` names
-/// where `--python` is not given. Needs hgraph, as below.
-#[test]
-#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
-fn an_application_runs_with_what_starts_it_replaces() {
-    // `hgl` finds the interpreter by itself; this checks it is named.
-    interpreter();
-    let root = scratch("replaced");
-    write(&root, "ticks.hgl", TICKS);
-    write(&root, "backtest.hgl", BACKTEST);
-    // As written: `counted(upto: 3)` for a length of `10s`.
-    let output = hgl(&[
-        "run",
-        &argument(&root),
-        "--arg",
-        "upto=5",
-        "--arg",
-        "every=500ms",
-        "--config",
-        "length=2s",
-    ]);
-    assert_eq!(
-        text(&output.stdout),
-        concat!(
-            "1970-01-01T00:00:00.500001Z  1\n",
-            "1970-01-01T00:00:01.000001Z  2\n",
-            "1970-01-01T00:00:01.500001Z  3\n",
-            "ran demo.ticks.backtest on hgraph: 3 publications\n",
-        ),
-        "{}",
-        text(&output.stderr)
-    );
-    assert_eq!(output.status.code(), Some(0));
-    // A member of the enum the parameter is, as the application may
-    // write it (TYPE-7), and a generic entry given another value of
-    // the type its argument is.
-    write(&root, "sides.hgl", SIDES);
-    write(&root, "sided.hgl", SIDED);
-    write(&root, "echoed.hgl", ECHOED);
-    let output = hgl(&[
-        "run",
-        &argument(&root),
-        "--application",
-        "demo.sides.sided",
-        "--arg",
-        "side=.sell",
-    ]);
-    assert_eq!(
-        text(&output.stdout),
-        concat!(
-            "1970-01-01T00:00:01.000001Z  -1\n",
-            "1970-01-01T00:00:02.000001Z  -2\n",
-            "ran demo.sides.sided on hgraph: 2 publications\n",
-        ),
-        "{}",
-        text(&output.stderr)
-    );
-    let output = hgl(&[
-        "run",
-        &argument(&root),
-        "--application",
-        "demo.sides.echoed",
-        "--arg",
-        "value=4 + 1",
-    ]);
-    assert_eq!(
-        text(&output.stdout),
-        concat!(
-            "1970-01-01T00:00:01.000001Z  5\n",
-            "ran demo.sides.echoed on hgraph: 1 publication\n",
-        ),
-        "{}",
-        text(&output.stderr)
-    );
-    // A replacement is read as the argument it replaces was expected:
-    // with the `Side` and the `f64` the application's own argument
-    // made the entry's `T`, `.sell` is a member (TYPE-7) and `3` an
-    // `f64` (EXPR-5).
-    write(
-        &root,
-        "member.hgl",
-        concat!(
-            "application demo.sides.member\n",
-            "\n",
-            "use demo.sides::{echo, Side}\n",
-            "\n",
-            "eval echo(value: Side.buy)\n",
-        ),
-    );
-    write(
-        &root,
-        "real.hgl",
-        concat!(
-            "application demo.sides.real\n",
-            "\n",
-            "use demo.sides::{echo}\n",
-            "\n",
-            "eval echo(value: 2.5)\n",
-        ),
-    );
-    let output = hgl(&[
-        "run",
-        &argument(&root),
-        "--application",
-        "demo.sides.member",
-        "--arg",
-        "value=.sell",
-    ]);
-    assert_eq!(
-        text(&output.stdout),
-        concat!(
-            "1970-01-01T00:00:01.000001Z  .sell\n",
-            "ran demo.sides.member on hgraph: 1 publication\n",
-        ),
-        "{}",
-        text(&output.stderr)
-    );
-    let output = hgl(&[
-        "run",
-        &argument(&root),
-        "--application",
-        "demo.sides.real",
-        "--arg",
-        "value=3",
-    ]);
-    assert_eq!(
-        text(&output.stdout),
-        concat!(
-            "1970-01-01T00:00:01.000001Z  3.0\n",
-            "ran demo.sides.real on hgraph: 1 publication\n",
-        ),
-        "{}",
-        text(&output.stderr)
-    );
-    // With nothing replaced it runs as it is written.
-    let output = hgl(&[
-        "run",
-        &argument(&root),
-        "--application",
-        "demo.ticks.backtest",
-    ]);
-    assert_eq!(
-        text(&output.stdout),
-        concat!(
-            "1970-01-01T00:00:01.000001Z  1\n",
-            "1970-01-01T00:00:02.000001Z  2\n",
-            "1970-01-01T00:00:03.000001Z  3\n",
-            "ran demo.ticks.backtest on hgraph: 3 publications\n",
-        )
-    );
-}
-
 /// An application that needs a form the target does not write yet is
-/// not run, and says what it needs and where: status 2.
+/// not run, and says what it needs and where: status 2. The target is
+/// cpp, the one there is, where none is named.
 #[test]
 fn an_application_the_target_cannot_write_is_not_run() {
     let root = scratch("blocked");
@@ -476,21 +310,19 @@ fn an_application_the_target_cannot_write_is_not_run() {
         "app.hgl",
         concat!(
             "application demo.app\n",
-            "fn one() -> i64 {\n",
-            "    yield 1s: 1\n",
+            // A read of a node's own window result in its `when` is not
+            // written yet.
+            "fn cleared(reading: i64) -> rolling_window<i64, 2> {\n",
+            "    inject out\n",
+            "    when { if valid(out) { return reading } }\n",
             "}\n",
-            // An `if` over a connection whose branches assign two
-            // `var`s is not written yet.
-            "fn waits() -> i64 {\n",
-            "    var first = one()\n",
-            "    var second = one()\n",
-            "    if one() > 0 {\n",
-            "        first = one()\n",
-            "        second = one()\n",
-            "    }\n",
-            "    return first + second\n",
+            "fn counted(readings: rolling_window<i64, 2>) -> i64 {\n",
+            "    when { return delta_value(readings) }\n",
             "}\n",
-            "eval waits()\n",
+            "fn later() -> i64 {\n",
+            "    return counted(readings: cleared(reading: 1))\n",
+            "}\n",
+            "eval later()\n",
         ),
     );
     let output = hgl(&["run", &argument(&root)]);
@@ -498,143 +330,11 @@ fn an_application_the_target_cannot_write_is_not_run() {
     assert_eq!(
         text(&output.stderr),
         format!(
-            "{file}:8:5: the hgraph target does not write an `if` or a `switch` over a connection whose branches assign more than one `var` yet\n"
+            "{file}:4:15: the cpp target does not write a read of a node's own window result in its `when` yet\n"
         )
     );
     assert_eq!(
         text(&output.stdout),
-        "not run: the hgraph target does not write all that demo.app needs yet\n"
-    );
-}
-
-/// A host that does not start runs nothing: status 2.
-#[test]
-fn a_host_that_does_not_start_runs_no_application() {
-    let root = scratch("no_host");
-    write(&root, "ticks.hgl", TICKS);
-    write(&root, "backtest.hgl", BACKTEST);
-    let output = hgl(&["run", &argument(&root), "--python", "hgl-no-such-python"]);
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(text(&output.stdout), "");
-    // What the system says of a program that is not there differs from
-    // one system to another.
-    assert!(
-        text(&output.stderr).starts_with(
-            "hgl: demo.ticks.backtest was not run: `hgl-no-such-python` could not be started: "
-        ),
-        "{}",
-        text(&output.stderr)
-    );
-}
-
-/// An application with no end: it runs until its host stops it.
-const ENDLESS: &str = concat!(
-    "application demo.ticks.endless\n",
-    "\n",
-    "use demo.ticks::{counted}\n",
-    "\n",
-    "run counted(upto: 1000000, every: 20ms)\n",
-);
-
-/// RUN-3: a run in real time goes on "until its host stops it". An
-/// interrupt sent to `hgl` alone, as what supervises it sends one,
-/// stops the run all the same: `hgl` passes it on, and prints what the
-/// run recorded. Needs hgraph, as below, and a system with `kill`.
-#[cfg(unix)]
-#[test]
-#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
-fn an_interrupt_of_hgl_alone_stops_the_run() {
-    let python = interpreter();
-    let root = scratch("interrupted");
-    write(&root, "ticks.hgl", TICKS);
-    write(&root, "endless.hgl", ENDLESS);
-    let child = Command::new(env!("CARGO_BIN_EXE_hgl"))
-        .args(["run", &argument(&root), "--python", &python])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("the hgl binary runs");
-    std::thread::sleep(std::time::Duration::from_millis(2000));
-    // To `hgl` alone: its process, and not its group.
-    let sent = Command::new("kill")
-        .args(["-INT", &child.id().to_string()])
-        .status()
-        .expect("`kill` runs");
-    assert!(sent.success());
-    let output = child.wait_with_output().expect("hgl ends");
-    let printed = text(&output.stdout);
-    assert_eq!(output.status.code(), Some(0), "{printed}");
-    let lines: Vec<&str> = printed.lines().collect();
-    let (summary, published) = lines.split_last().expect("something is printed");
-    // It counted from 1 for as long as it ran: on a slow host that may
-    // be no time at all, where the interrupt comes before the run
-    // starts.
-    for (position, line) in published.iter().enumerate() {
-        assert!(line.ends_with(&format!("  {}", position + 1)), "{printed}");
-    }
-    assert!(
-        summary.starts_with("ran demo.ticks.endless on hgraph until it was stopped: "),
-        "{printed}"
-    );
-}
-
-/// UNIT-14, RUN-1: an application runs, and its output is printed: a
-/// line for each publication of its entry's result, in time order,
-/// its instant and then what was published (core's CRUN-8). A run
-/// that fails has no output (CRUN-6), and says why: status 1. What
-/// was written for the run is kept where `--keep` says.
-///
-/// It needs a Python that has hgraph, named by the environment
-/// variable `HGL_HGRAPH_PYTHON`, so it is not among the tests run by
-/// default: `cargo test -p hgl_cli -- --ignored` runs it.
-#[test]
-#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
-fn an_application_runs_on_hgraph() {
-    let python = interpreter();
-    let root = scratch("on_hgraph");
-    write(&root, "ticks.hgl", TICKS);
-    write(&root, "backtest.hgl", BACKTEST);
-    write(&root, "broken.hgl", BROKEN);
-    let kept = scratch("on_hgraph_kept");
-    let output = hgl(&[
-        "run",
-        &argument(&root),
-        "--application",
-        "demo.ticks.backtest",
-        "--python",
-        &python,
-        "--keep",
-        &argument(&kept),
-    ]);
-    assert_eq!(
-        text(&output.stdout),
-        concat!(
-            "1970-01-01T00:00:01.000001Z  1\n",
-            "1970-01-01T00:00:02.000001Z  2\n",
-            "1970-01-01T00:00:03.000001Z  3\n",
-            "ran demo.ticks.backtest on hgraph: 3 publications\n",
-        )
-    );
-    assert_eq!(output.status.code(), Some(0));
-    assert!(
-        kept.join("_hgl/_m_demo/_m_ticks/_m_backtest/__init__.py")
-            .is_file()
-    );
-
-    let output = hgl(&[
-        "run",
-        &argument(&root),
-        "--application",
-        "demo.ticks.broken",
-        "--python",
-        &python,
-    ]);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(text(&output.stdout), "");
-    let said = text(&output.stderr);
-    let last = said.lines().last().unwrap_or("");
-    assert!(
-        last.starts_with("hgl: demo.ticks.broken failed: numeric.division_by_zero: "),
-        "{said}"
+        "not run: the cpp target does not write all that demo.app needs yet\n"
     );
 }
