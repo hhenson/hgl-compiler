@@ -882,6 +882,83 @@ fn timing_runs_on_the_sdk() {
     );
 }
 
+/// TIME-7 and SOURCE-1: whole yields replace a list and delta yields
+/// change it. An empty delta on a valid list wakes no reader.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_source_yields_whole_values_and_deltas_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("mixed-yields");
+    let module = write(
+        &root,
+        "src/demo.mixed.hgl",
+        r#"module demo.mixed
+
+fn mixed(const step: duration) -> list<i64> {
+    yield step: [1, 2]
+    yield step: delta<list<i64>>(updated: [2: 3])
+    yield step: delta<list<i64>>()
+    yield step: [8]
+    yield step: delta<list<i64>>(updated: [1: 9])
+}
+
+fn read(items: list<i64>) -> i64 {
+    when {
+        var digits = 0
+        for item in items { digits = 10 * digits + item }
+        return digits
+    }
+}
+
+export fn observed(const step: duration) -> i64 => read(mixed(step))
+
+test mixed_in_simulation {
+    assert eval observed(step: 20ms) == [20ms: 12, 40ms: 123, 80ms: 8, 100ms: 89]
+}
+"#,
+    );
+    let simulated = hgl_in(&["test", &module, "--target", "cpp"], &[], &[]);
+    let report = text(&simulated.stdout);
+    assert_eq!(
+        simulated.status.code(),
+        Some(0),
+        "{report}{}",
+        text(&simulated.stderr)
+    );
+    assert!(
+        report.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{report}"
+    );
+
+    write(
+        &root,
+        "src/demo.mixed.live.hgl",
+        "application demo.mixed.live\n\nuse demo.mixed::{observed}\n\n\
+         inject run_config{length: 2s}\nrun observed(step: 20ms)\n",
+    );
+    let source = argument(&root.join("src"));
+    let live = hgl_in(
+        &["run", &source, "--application", "demo.mixed.live"],
+        &[],
+        &[],
+    );
+    assert_eq!(live.status.code(), Some(0), "{}", text(&live.stderr));
+    let report = text(&live.stdout);
+    let lines: Vec<_> = report.lines().collect();
+    let (summary, publications) = lines.split_last().expect("the run reports its output");
+    assert_eq!(
+        *summary, "ran demo.mixed.live on cpp: 4 publications",
+        "{report}"
+    );
+    let values: Vec<_> = publications
+        .iter()
+        .map(|line| line.split_once("Z  ").expect("a timed publication").1)
+        .collect();
+    assert_eq!(values, ["12", "123", "8", "89"], "{report}");
+}
+
 /// TST-17, RUN-6: an integration test injects `run_config`, whose braces'
 /// defaults stand, since `hgl test` supplies nothing; its value code reads
 /// it, as supplied, and each eval's fields it does not name are its.
