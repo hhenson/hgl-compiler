@@ -465,6 +465,43 @@ struct value_text<atomic_trace<S>> {
     static std::string of(const atomic_trace<S>& value) { return text_of(value.value); }
 };
 
+/// The recording of an eval of an atomic struct `S` as a recording of `S`,
+/// to compare with a trace whose cells are `S` (TST-4, TST-5): each whole
+/// publication is the delta of every field (TST-9), and the value the result
+/// then held is the struct published.
+template <class S>
+Recording<S> as_struct_recording(const Recording<atomic_trace<S>>& atomic) {
+    Recording<S> out{atomic.start, {}, Held<S>{}};
+    for (const auto& [at, value] : atomic.entries) {
+        out.entries.emplace_back(at, whole_publication<S>::delta(value));
+        out.held->emplace_back(at, value);
+    }
+    return out;
+}
+
+/// Whether the trace type `Trace` is of an atomic struct's trace.
+template <class Trace>
+inline constexpr bool atomic_traced = false;
+template <class S>
+inline constexpr bool atomic_traced<Recording<atomic_trace<S>>> = true;
+
+/// Where an eval of an atomic struct, which a `let` may hold, and a trace of
+/// the struct's whole values first differ (TST-4): the recording is read as
+/// one of the struct (`as_struct_recording`). Found by argument-dependent
+/// lookup from `expect_same` and `same`.
+template <class S, class Right>
+    requires(!atomic_traced<Right>)
+std::optional<std::string> difference(const Recording<atomic_trace<S>>& left, const Right& right) {
+    return difference(as_struct_recording(left), right);
+}
+
+/// The same, the eval on the right.
+template <class Left, class S>
+    requires(!atomic_traced<Left>)
+std::optional<std::string> difference(const Left& left, const Recording<atomic_trace<S>>& right) {
+    return difference(left, as_struct_recording(right));
+}
+
 /// What publishing a whole struct records (TST-9: "a T whole, which
 /// replaces what the input held"; TST-16: "A T published whole is held as
 /// its delta too"): its delta with every field, each as its whole value

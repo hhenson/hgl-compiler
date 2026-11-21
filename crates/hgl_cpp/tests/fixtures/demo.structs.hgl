@@ -370,3 +370,8 @@ test an_atomic_struct_is_replayed_whole {
         MarketQuote(bid: 3, ask: 4),
     ])) == [1, _, 3]
 }
+
+test an_atomic_eval_kept_in_a_let_is_compared {
+    let seen = eval(whole_quote(bid: [10, 11], ask: [12, _]))
+    assert seen == [MarketQuote(bid: 10, ask: 12), MarketQuote(bid: 11, ask: 12)]
+}

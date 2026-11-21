@@ -24,6 +24,7 @@
 #undef a_whole_struct_is_a_trace_cell
 #undef a_whole_tuple_is_a_trace_cell
 #undef action
+#undef an_atomic_eval_kept_in_a_let_is_compared
 #undef an_atomic_input_is_read_whole
 #undef an_atomic_quote_wakes_its_bid_projection
 #undef an_atomic_struct_is_a_trace_cell
@@ -86,6 +87,7 @@
 #undef sample
 #undef sample_timestamp
 #undef scalar_timestamp
+#undef seen
 #undef set_one_part
 #undef size
 #undef spread
@@ -1467,7 +1469,7 @@ void an_atomic_struct_is_a_trace_cell()
         ::hgl::core::m_::w_::i_::record::of_1atomic_1demo_1structs_1_1MarketQuote_1_(wiring_, held_, ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_07_ = ::hglrt::testing::Dense<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hgl::demo::structs::m_::MarketQuote{10, 12}}, ::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hgl::demo::structs::m_::MarketQuote{10, 13}}, ::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hgl::demo::structs::m_::MarketQuote{11, 13}}};
+        const auto right_07_ = ::hglrt::testing::Dense<::hgl::demo::structs::m_::MarketQuote>{::hglrt::testing::Cell<::hgl::demo::structs::m_::MarketQuote>{::hglrt::testing::Whole<::hgl::demo::structs::m_::MarketQuote>{::hgl::demo::structs::m_::MarketQuote{10, 12}}}, ::hglrt::testing::Cell<::hgl::demo::structs::m_::MarketQuote>{::hglrt::testing::Whole<::hgl::demo::structs::m_::MarketQuote>{::hgl::demo::structs::m_::MarketQuote{10, 13}}}, ::hglrt::testing::Cell<::hgl::demo::structs::m_::MarketQuote>{::hglrt::testing::Whole<::hgl::demo::structs::m_::MarketQuote>{::hgl::demo::structs::m_::MarketQuote{11, 13}}}};
         ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
@@ -1482,6 +1484,28 @@ void an_atomic_struct_is_replayed_whole()
     });
         const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 3};
         ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+}
+
+void an_atomic_eval_kept_in_a_let_is_compared()
+{
+    ::hglrt::testing::statement();
+    [[maybe_unused]] const auto seen = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 11};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{12, std::nullopt};
+        return ::hglrt::testing::evaluate<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const auto held_ = [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::structs::m_::w_::whole_quote(wiring_, argument_04_, argument_05_); }();
+        ::hglrt::testing::keep_held<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>(wiring_, held_);
+        ::hgl::core::m_::w_::i_::record::of_1atomic_1demo_1structs_1_1MarketQuote_1_(wiring_, held_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_06_ = seen;
+        const auto right_07_ = ::hglrt::testing::Dense<::hgl::demo::structs::m_::MarketQuote>{::hglrt::testing::Cell<::hgl::demo::structs::m_::MarketQuote>{::hglrt::testing::Whole<::hgl::demo::structs::m_::MarketQuote>{::hgl::demo::structs::m_::MarketQuote{10, 12}}}, ::hglrt::testing::Cell<::hgl::demo::structs::m_::MarketQuote>{::hglrt::testing::Whole<::hgl::demo::structs::m_::MarketQuote>{::hgl::demo::structs::m_::MarketQuote{11, 12}}}};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 
