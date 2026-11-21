@@ -30,6 +30,12 @@ const DEPTH: usize = 32;
 /// other arguments would double the applications at each depth.
 const APPLICATIONS: usize = 256;
 
+/// How many parts, types and constants and the values inside them, a
+/// struct application followed may have. A struct may apply itself with
+/// an argument that doubles at each depth, `Grow<[N, N]>` in `Grow<N>`,
+/// and an application past this is not followed.
+const PARTS: usize = 1024;
+
 /// A size that TYPE-10 or TYPE-11 rejects, as an application gives it.
 struct Fault {
     /// The field it is in, through the fields of the structs on the
@@ -211,7 +217,7 @@ fn struct_fault(
     // gives no size that is known, and putting its arguments in place
     // again would grow them at each depth: `Grow<N + N>` in the fields of
     // `Grow<const N: i64>` would double.
-    if depth > 0 && names_a_parameter(application) {
+    if depth > 0 && (names_a_parameter(application) || too_large(application)) {
         return None;
     }
     seen.push(application.clone());
@@ -242,6 +248,42 @@ fn names_a_parameter(ty: &Type) -> bool {
         &|part| matches!(part, Type::Parameter { .. }),
         &|constant| symbolic(&constant.value),
     )
+}
+
+/// True when `ty` has more than [`PARTS`] parts: types, constants, and
+/// the values inside a constant that is a list, a tuple or an
+/// expression. Counting stops once past it.
+fn too_large(ty: &Type) -> bool {
+    // `Cell` lets the two counting closures, which `any_part` takes as
+    // shared references, add to one count.
+    let count = std::cell::Cell::new(0usize);
+    ty.any_part(
+        &|_| {
+            count.set(count.get() + 1);
+            count.get() > PARTS
+        },
+        &|constant| {
+            count.set(count.get().saturating_add(value_parts(&constant.value)));
+            count.get() > PARTS
+        },
+    )
+}
+
+/// How many values `value` is made of, itself included.
+fn value_parts(value: &ConstantValue) -> usize {
+    1 + match value {
+        ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
+            value_parts(operand)
+        }
+        ConstantValue::Binary(_, left, right) => {
+            value_parts(left).saturating_add(value_parts(right))
+        }
+        ConstantValue::List(values) | ConstantValue::Tuple(values) => values
+            .iter()
+            .map(value_parts)
+            .fold(0, usize::saturating_add),
+        _ => 0,
+    }
 }
 
 /// True when `value` names a generic value parameter, at any depth.
