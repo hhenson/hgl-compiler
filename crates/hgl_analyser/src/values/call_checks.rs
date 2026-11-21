@@ -354,8 +354,9 @@ impl<'a> Typer<'a> {
                     format!("a constant cannot be assigned, as {takes} is"),
                     "FN-15",
                 )),
-                // What is not read says nothing sure (ERR-9).
-                ExprKind::Unread => {}
+                // A member awaiting its base type is checked with its
+                // instance. What is unread says nothing sure (ERR-9).
+                ExprKind::Unread | ExprKind::DeferredMember { .. } => {}
                 _ => reports.push(
                     error(
                         Category::Type,

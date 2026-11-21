@@ -1613,10 +1613,20 @@ fn graph_instances_resolve_members_of_deferred_bases() {
         "fn ordinary() -> i64 => good(\"s\")\n",
         "fn connected() -> i64 => good(1)\n",
         "fn rejected() -> i64 => bad(1)\n",
+        "const fn bump(var output: i64) { output = 2 }\n",
+        "fn deferred_write<T>(const input: T) -> i64 {\n",
+        "    var held = if predicate(input) { Item(value: 1) }\n",
+        "    bump(held.value)\n",
+        "    return 0\n",
+        "}\n",
+        "fn mutation() -> i64 => deferred_write(1)\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:16:25 name/member.unknown EXPR-7"],
+        [
+            "m.hgl:16:25 name/member.unknown EXPR-7",
+            "m.hgl:23:25 phase/connection.as_constant FN-15",
+        ],
         "{}",
         checked.report
     );
