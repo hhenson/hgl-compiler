@@ -7,6 +7,7 @@
 analyser: partial
 
 - A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded; a value function holds no `state`, `cache`, `inject`, `start`, `when` or `stop`
+- A value function cannot `yield` (FN-2, SOURCE-1). The code is local `yield.outside_source` because the catalogue's `node.in_value_function` row omits `yield`.
 - A parameter of a capability's type, and `endpoint<T>` in a native value function, are admitted (TIME-8, TYPE-12)
 - A `const fn` parameter marked `ref` is `ref.position` (FN-16)
 - A generic parameter of a value function that a call's place, or what the call writes, binds to a type that holds a window is `type.not_ordinary`; one given a window binds to the `list<V>` it holds (GEN-1, TYPE-11)

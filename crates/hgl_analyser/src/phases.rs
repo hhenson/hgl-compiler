@@ -26,7 +26,7 @@ use hgl_source::FileId;
 use crate::program::{Declaration, DeclarationKind, Phase, Program, RUN_CONFIG, Role};
 use crate::syntax::{child, tokens};
 use crate::types::Detail;
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 /// Fills in [`crate::Module::phases`] for every module of the program.
 pub(crate) fn classify(program: &mut Program) {
@@ -128,20 +128,19 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     for module in &program.modules {
         for (index, declaration) in module.declarations.iter().enumerate() {
             let file = module.files[declaration.file].file;
-            match declaration.kind {
-                // A native one states its contract in its body
-                // (NATIVE-3): "A native const implementation stays
-                // value-level and admits neither `inject` nor temporal
-                // lifecycle hooks." NATIVE-5: "A native value function
-                // injects nothing".
+            // Native value implementations state their contract in the
+            // body (NATIVE-3, NATIVE-5).
+            let value_function = matches!(
+                declaration.kind,
                 DeclarationKind::Function(Role::Value)
-                | DeclarationKind::Implementation(Role::Value, _)
-                | DeclarationKind::NativeImplementation(Role::Value)
-                | DeclarationKind::NativeCandidateImplementation(Role::Value) => {
-                    in_value_function(declaration, file, diagnostics);
-                }
-                _ => {}
+                    | DeclarationKind::Implementation(Role::Value, _)
+                    | DeclarationKind::NativeImplementation(Role::Value)
+                    | DeclarationKind::NativeCandidateImplementation(Role::Value)
+            );
+            if value_function {
+                in_value_function(declaration, file, diagnostics);
             }
+            yield_placement(&declaration.syntax, file, value_function, diagnostics);
             if module.phases.get(index) == Some(&Some(Phase::Node)) {
                 let outputless = matches!(
                     module.details.get(index),
@@ -155,7 +154,52 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
         for test in &module.tests {
             let file = module.files[test.file].file;
             test_body(&test.syntax, file, diagnostics);
+            yield_placement(&test.syntax, file, false, diagnostics);
             in_test(&test.syntax, test.integration, file, diagnostics);
+        }
+        for (syntax, file) in module
+            .run
+            .iter()
+            .map(|run| (&run.syntax, run.file))
+            .chain(module.store.iter().map(|store| (&store.syntax, store.file)))
+        {
+            yield_placement(syntax, module.files[file].file, false, diagnostics);
+        }
+    }
+}
+
+/// SOURCE-1 reserves `yield` for a temporal source. An anonymous
+/// function has its own body (FN-14) and never inherits that role, even
+/// inside a source. A value function also cannot yield (FN-1, FN-2).
+/// Direct yields in a source or a test keep their own phase checks.
+fn yield_placement(
+    root: &SyntaxNode,
+    file: FileId,
+    value_function: bool,
+    diagnostics: &mut Diagnostics,
+) {
+    for node in root
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::YieldStmt)
+    {
+        let (context, rule) = if node
+            .ancestors()
+            .any(|ancestor| ancestor.kind() == SyntaxKind::FnExpr)
+        {
+            ("an anonymous function", "SOURCE-1")
+        } else if value_function {
+            ("a value function", "FN-1")
+        } else {
+            continue;
+        };
+        if let Some((_, at)) = keyword(&node, file) {
+            diagnostics.emit(local_error(
+                Category::Phase,
+                codes::local::YIELD_OUTSIDE_SOURCE,
+                at,
+                format!("`yield` belongs to a source, and this one is inside {context}"),
+                rule,
+            ));
         }
     }
 }
