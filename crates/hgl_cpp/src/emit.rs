@@ -48,6 +48,7 @@ mod activity;
 mod apps;
 mod calls;
 mod composites;
+mod configuration;
 mod control;
 mod endpoints;
 mod expressions;
@@ -139,6 +140,7 @@ pub(crate) fn module(
     program: &Program,
     index: usize,
     provides: &dyn Fn(&str) -> bool,
+    file_name: Option<crate::FileName>,
     instances: &Instances,
     diagnostics: &mut Diagnostics,
 ) -> Written {
@@ -146,6 +148,8 @@ pub(crate) fn module(
         program,
         module: index,
         provides,
+        file_name,
+        lines: Vec::new(),
         instances,
         diagnostics,
         piece: Piece::default(),
@@ -190,6 +194,13 @@ struct Emitter<'a> {
     module: usize,
     /// Whether the runtime library defines a native, by its name.
     provides: &'a dyn Fn(&str) -> bool,
+    /// The name of the file a place is in, where the driver gives it: the
+    /// generated code then sets the HGL file and line of each statement
+    /// with `#line` ([`Emitter::line_directive`]).
+    file_name: Option<crate::FileName<'a>>,
+    /// Where each line starts in each file a directive was written for: a
+    /// place in the file, by which it is told apart, and the offsets.
+    lines: Vec<(Location, Vec<usize>)>,
     /// The instances of generic declarations the program asks for.
     instances: &'a Instances,
     /// Where what is not written yet is reported.
@@ -273,10 +284,119 @@ impl Emitter<'_> {
         }
     }
 
+    /// The `#line` directive that gives what follows it the HGL file and
+    /// line of `at`, on a line of its own: a failure the C++ raises there
+    /// names that place, as the runtime library's `std::source_location`
+    /// gives it (`docs/architecture.md`, "The C++ runtime library").
+    /// `assemble` gives what follows each piece its own file and line
+    /// again. `None` where the driver gave no file names, or `at` is in no
+    /// file of the program.
+    fn line_directive(&mut self, at: Location) -> Option<String> {
+        let file_name = self.file_name?;
+        let line = self.hgl_line(at)?;
+        Some(format!("#line {line} {}\n", string(&file_name(at))))
+    }
+
+    /// The line, counted from 1, that `at` is on in its file, read from the
+    /// text of a declaration, a test or a statement of an application in
+    /// that file, one of which holds every place a statement is written at.
+    fn hgl_line(&mut self, at: Location) -> Option<usize> {
+        let starts = match self.lines.iter().position(|(seen, _)| seen.file == at.file) {
+            Some(known) => &self.lines[known].1,
+            None => {
+                let text = file_text(self.program, at)?;
+                let starts: Vec<usize> = std::iter::once(0)
+                    .chain(text.match_indices('\n').map(|(offset, _)| offset + 1))
+                    .collect();
+                self.lines.push((at, starts));
+                &self.lines[self.lines.len() - 1].1
+            }
+        };
+        let offset = at.span.start as usize;
+        Some(starts.partition_point(|&start| start <= offset))
+    }
+
     /// Ends the piece being written, and gives it.
     fn close(&mut self) -> Piece {
         self.temporaries = 0;
         self.ahead.clear();
         std::mem::take(&mut self.piece)
     }
+}
+
+/// The line written after code that sets the HGL file and line of its
+/// statements with `#line` ([`Emitter::line_directive`]), which `assemble`
+/// makes the directive that numbers what follows as the file's own again,
+/// once the file's lines are all written: after each piece of a unit, and
+/// after what a test writes ahead of itself (`tests`).
+pub(crate) const RESTORE: &str = "// The lines of this file again, from here (#line).";
+
+/// `text`, the code written for one HGL statement, with `directive`, the
+/// statement's `#line` ([`Emitter::line_directive`]), before each of its
+/// lines that does not follow a directive already. C++ numbers the line
+/// after `#line N` as N and each line after it one more, so every line the
+/// statement writes is given the statement's line: what it needs run
+/// before it (`Scope::before`), the statement itself, and the lines of a
+/// block around the statements inside it. Each statement inside it has
+/// given its own lines its own line first, and keeps it.
+pub(crate) fn stamped(directive: &str, text: &str) -> String {
+    let mut out = String::with_capacity(text.len() * 2);
+    let mut after_directive = false;
+    for line in text.lines() {
+        let is_directive = line.trim_start().starts_with("#line ");
+        if !is_directive && !after_directive {
+            out.push_str(directive);
+        }
+        out.push_str(line);
+        out.push('\n');
+        after_directive = is_directive;
+    }
+    out
+}
+
+/// Writes [`RESTORE`] on a line of its own at the end of `text`, where
+/// `written`, the code just put there, sets an HGL line: a directive on a
+/// line of its own, at any indent, as a window result's handlers are
+/// written inside the evaluation that holds what they publish (`windows`).
+pub(crate) fn restore_after(text: &mut String, written: &str) {
+    if !written
+        .lines()
+        .any(|line| line.trim_start().starts_with("#line "))
+    {
+        return;
+    }
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(RESTORE);
+    text.push('\n');
+}
+
+/// The text of the file `at` is in: the root of the syntax tree of a
+/// declaration, a test, a store statement or a run statement written in
+/// it. `None` where none of the program's is.
+fn file_text(program: &Program, at: Location) -> Option<String> {
+    let node = program.modules.iter().find_map(|module| {
+        let declarations = module
+            .declarations
+            .iter()
+            .map(|declaration| (declaration.at, &declaration.syntax));
+        let tests = module.tests.iter().map(|test| (test.at, &test.syntax));
+        let store = module
+            .store
+            .iter()
+            .map(|statement| (statement.at, &statement.syntax));
+        let run = module
+            .run
+            .iter()
+            .map(|statement| (statement.at, &statement.syntax));
+        declarations
+            .chain(tests)
+            .chain(store)
+            .chain(run)
+            .find(|(place, _)| place.file == at.file)
+            .map(|(_, syntax)| syntax.clone())
+    })?;
+    let root = node.ancestors().last().unwrap_or(node);
+    Some(root.text().to_string())
 }

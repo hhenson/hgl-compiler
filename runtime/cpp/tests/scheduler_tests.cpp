@@ -272,7 +272,7 @@ TEST_CASE("a duration not admitted fails, and a datetime past is dropped (TIME-8
 struct Alarmed {
     static constexpr auto name = "test::alarmed";
 
-    static void start(hgraph::Scalar<"case", i64> case_, hgraph::SingleShotScheduler view) {
+    static void start(hgraph::Scalar<"case", i64> case_, hgraph::NodeScheduler view) {
         const hglrt::Alarm alarm{view, Hook::start};
         switch (case_.value()) {
         case 0: // asking again keeps the earliest, whichever is first
@@ -286,8 +286,10 @@ struct Alarmed {
         case 2: // a negative duration in `start`
             hglrt::schedule_Alarm_duration(alarm, -1us);
             break;
-        case 5: // a wake the input's tick comes before
+        case 5: // a wake the input's tick comes before, or lands with
             hglrt::schedule_Alarm_duration(alarm, 3us);
+            break;
+        case 7: // a wake asked for at each tick of the input, in `eval`
             break;
         default: // a wake at the start
             hglrt::schedule_Alarm_duration(alarm, 0s);
@@ -295,10 +297,12 @@ struct Alarmed {
         }
     }
 
-    static void eval(hgraph::In<"value", hgraph::TS<i64>, hgraph::InputValidity::Unchecked>,
-                     hgraph::Scalar<"case", i64> case_, hgraph::SingleShotScheduler view,
-                     hgraph::DateTime now) {
+    static void eval(hgraph::In<"value", hgraph::TS<i64>, hgraph::InputValidity::Unchecked> value,
+                     hgraph::Scalar<"case", i64> case_, hgraph::NodeScheduler view, hgraph::DateTime now) {
         const hglrt::Alarm alarm{view, Hook::evaluation};
+        if (case_.value() == 7 && value.modified()) {
+            hglrt::schedule_Alarm_duration(alarm, 3us);
+        }
         if (case_.value() == 3) {
             hglrt::schedule_Alarm_duration(alarm, 0s);
         }
@@ -343,11 +347,25 @@ TEST_CASE("an alarm is asked what the scheduler is (CAP-5, TIME-8)") {
     CHECK(woken == std::vector<Woken>{{start, false, false, std::nullopt}});
 }
 
-TEST_CASE("an alarm is best effort: an input's tick before its wake takes its place (CAP-5)") {
-    // CAP-5: "best effort, with nothing tracked"; hgraph's alarm marks the
-    // node for its time, and an evaluation before then clears the mark.
+TEST_CASE("an alarm keeps its wake when an input's tick evaluates the node first (CAP-5)") {
+    // CAP-5: "`schedule(alarm, at)` asks for a wake ...; asking again keeps
+    // the earliest": an evaluation at an input's tick before the wake is due
+    // takes nothing away from it, asked in `start` or in an evaluation.
     run_alarmed(5, Dense<i64>{std::nullopt, 7});
-    CHECK(woken == std::vector<Woken>{{start + 1us, false, false, std::nullopt}});
+    CHECK(woken == std::vector<Woken>{{start + 1us, false, false, std::nullopt},
+                                      {start + 3us, false, false, std::nullopt}});
+    run_alarmed(7, Dense<i64>{7});
+    CHECK(woken ==
+          std::vector<Woken>{{start, false, false, std::nullopt}, {start + 3us, false, false, std::nullopt}});
+    // Asked again at the second tick, for 4us: the earliest, 3us, is kept.
+    run_alarmed(7, Dense<i64>{7, 8});
+    CHECK(woken == std::vector<Woken>{{start, false, false, std::nullopt},
+                                      {start + 1us, false, false, std::nullopt},
+                                      {start + 3us, false, false, std::nullopt}});
+    // A wake that lands with the input's tick is one evaluation, and spent.
+    run_alarmed(5, Dense<i64>{7, std::nullopt, std::nullopt, 9});
+    CHECK(woken ==
+          std::vector<Woken>{{start, false, false, std::nullopt}, {start + 3us, false, false, std::nullopt}});
 }
 
 } // namespace

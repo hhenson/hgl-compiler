@@ -2051,27 +2051,15 @@ def resume(source, now, scheduler, port, shape=None, entries=None):
 
 
 class Wake:
-    """A node's scheduler for one evaluation (CAP-4, CAP-5).
+    """Capture the current delivery and expose future pending wakes (CAP-4, CAP-5)."""
 
-    hgraph holds the wake it delivers until the node has run: in its own
-    evaluation that wake is still its earliest, so `un_schedule` would
-    cancel it, `is_scheduled` count it and `next_scheduled_time` give the
-    current time. CAP-4 has a wake pending until it is delivered:
-    `is_scheduled` is "True while a wake is pending". So each wake due
-    now is taken as the node is entered, and `is_scheduled_now` keeps
-    that one was: "whether a wake asked of the scheduler is due in the
-    current evaluation", which asking again does not change. The rest is
-    hgraph's scheduler, as it now stands."""
-
-    def __init__(self, scheduler):
+    def __init__(self, scheduler, now):
         self._scheduler = scheduler
-        due = False
-        # hgraph's `un_schedule()` with no tag takes its earliest wake,
-        # and that wake's tag with it.
-        while scheduler.is_scheduled_now:
+        self._now = now
+        self.is_scheduled_now = scheduler.is_scheduled_now
+        # Older hgraph versions keep delivered wakes in the pending queue.
+        while self.is_scheduled_now and scheduler.is_scheduled and scheduler.next_scheduled_time == now:
             scheduler.un_schedule()
-            due = True
-        self.is_scheduled_now = due
 
     def __getattr__(self, name):
         return getattr(self._scheduler, name)
@@ -2124,14 +2112,16 @@ def _alarm(scheduler, at):
     for: it is asked under a second tag, and the tag is taken back.
     hgraph keeps none at a time no cycle can still run at, the current
     evaluation time or before: that wake is not delivered, as a
-    scheduler's is not, and the one pending stays. The alarm's wake that
-    is due was taken as the node was entered (`Wake`).
+    scheduler's is not, and the one pending stays. A tag delivered at
+    this evaluation can still be visible after the pending queue advances.
     """
     scheduler.schedule(at, tag=_ASKED)
     asked = scheduler.pop_tag(_ASKED, None)
     if asked is None:
         return
     pending = scheduler.pop_tag(_ALARM, None)
+    if isinstance(scheduler, Wake) and pending == scheduler._now:
+        pending = None
     scheduler.schedule(asked if pending is None or asked < pending else pending, tag=_ALARM)
 
 

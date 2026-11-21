@@ -520,6 +520,7 @@ impl Emitter<'_> {
         written.push_str(&self.designation_prologue(&designated, body, &inputs, &active));
         written.push_str(&super::scheduling::woken(&context, body, &inputs));
         context.kind = Kind::Hook(Hook::When);
+        let mut handlers = String::new();
         for (handler, at) in running.iter().zip(&places) {
             if !self.handler(
                 &mut context,
@@ -528,10 +529,24 @@ impl Emitter<'_> {
                 &valid,
                 handler,
                 *at,
-                &mut written,
+                &mut handlers,
             ) {
                 return;
             }
+        }
+        // END-5: a result's form may hold what the evaluation publishes,
+        // and publish it once the handlers have run.
+        match &signature.result {
+            Some(result) => {
+                let selected: Vec<(&Handler, Location)> =
+                    running.iter().zip(places.iter().copied()).collect();
+                let mut evaluated = String::new();
+                self.in_context(&mut context, |emitter| {
+                    evaluated = emitter.evaluation(result, &selected, &handlers);
+                });
+                written.push_str(&evaluated);
+            }
+            None => written.push_str(&handlers),
         }
         text.push_str(&format!(
             "\n{INDENT}static void eval({})\n{INDENT}{{\n{written}{INDENT}}}\n",
@@ -610,7 +625,9 @@ impl Emitter<'_> {
             let label = names::string(&parameter.name);
             if parameter.constant {
                 let ty = self.written_type(&parameter.ty, parameter.at)?;
-                written.push(format!("::hgraph::Scalar<{label}, {ty}> {name}"));
+                // FN-1: as hgraph holds a configuration (`configuration`).
+                let held = super::configuration::held(self.program, &parameter.ty, &ty);
+                written.push(format!("::hgraph::Scalar<{label}, {held}> {name}"));
                 continue;
             }
             let schema = self.endpoint_schema(&parameter.ty, parameter.reference, parameter.at)?;
@@ -769,10 +786,17 @@ impl Emitter<'_> {
         if guards.is_empty() {
             text.push_str(&format!("{indent}{{\n{written}{indent}}}\n"));
         } else {
-            text.push_str(&format!(
+            let guarded = format!(
                 "{indent}if ({})\n{indent}{{\n{written}{indent}}}\n",
                 guards.join(" && ")
-            ));
+            );
+            // The HGL file and line of the handler, which a failure of its
+            // condition names, on each line of it that no statement of its
+            // body numbers (`stamped`).
+            match self.line_directive(at) {
+                Some(directive) => text.push_str(&super::stamped(&directive, &guarded)),
+                None => text.push_str(&guarded),
+            }
         }
         true
     }
@@ -820,19 +844,30 @@ impl Emitter<'_> {
         let mut parameters = vec![format!("::hgraph::Wiring& {}", super::graphs::WIRING)];
         let mut given = vec![super::graphs::WIRING.to_string()];
         let mut wired_arguments: Vec<(Option<String>, String)> = Vec::new();
+        // A node's `const` parameters are its `hgraph::Scalar`s; a graph's
+        // `compose` takes each as a value function takes it.
+        let node = wired.starts_with("::hgraph::wire<");
         for (local, parameter) in signature.parameters.iter().enumerate() {
             let name = identifier(&body.locals[local].name);
             if parameter.constant {
                 let ty = self.written_type(&parameter.ty, parameter.at)?;
                 let taken = super::values::parameter_type(program, &parameter.ty, false, &ty);
                 parameters.push(format!("{taken} {name}"));
-                wired_arguments.push((Some(parameter.name.clone()), name.clone()));
+                // FN-1: the value as the node's `hgraph::Scalar` holds it
+                // (`configuration`).
+                let configured = if node {
+                    super::configuration::given(program, &parameter.ty, &ty, &name)
+                } else {
+                    name.clone()
+                };
+                wired_arguments.push((Some(parameter.name.clone()), configured.clone()));
+                given.push(configured);
             } else {
                 let schema = self.temporal_schema(&parameter.ty, parameter.at)?;
                 parameters.push(format!("::hgraph::Port<{schema}> {name}"));
                 wired_arguments.push((None, name.clone()));
+                given.push(name);
             }
-            given.push(name);
         }
         // FN-16: each input a `ref` result designates is given again, to
         // the input the node follows its re-binding through.
@@ -948,12 +983,12 @@ pub(super) fn unique(
         .map(|(_, port)| format!("{port}.erased()"))
         .collect();
     text.push_str(&format!(
-        "{INDENT}{INDENT}const std::array<::hgraph::WiringPortRef, {}> inputs_{{{}}};\n",
+        "{INDENT}{INDENT}const ::std::array<::hgraph::WiringPortRef, {}> inputs_{{{}}};\n",
         ports.len(),
         ports.join(", ")
     ));
     let added = format!(
-        "{wiring}.add_unique_node(typeid({node}), std::move(builder_), std::span<const ::hgraph::WiringPortRef>{{inputs_}}, std::move(scalars_))"
+        "{wiring}.add_unique_node(typeid({node}), ::std::move(builder_), ::std::span<const ::hgraph::WiringPortRef>{{inputs_}}, ::std::move(scalars_))"
     );
     match schema {
         Some(schema) => text.push_str(&format!(

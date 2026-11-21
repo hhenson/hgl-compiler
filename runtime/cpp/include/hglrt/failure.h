@@ -117,7 +117,9 @@ class Failure : public hgraph::ExecutionFailure {
 [[nodiscard]] std::optional<std::source_location> raised_at(const std::exception& failure);
 
 /// `failure` as a person reads it: an HGL failure's code and message, the
-/// node, phase and evaluation time hgraph gave it and where it was raised;
+/// node, phase and evaluation time hgraph gave it, and the HGL file and line
+/// it was raised at, where the generated code set them (`#line`): a place
+/// in this library or in the generated code of a test's body is not said;
 /// any other failure's own text.
 [[nodiscard]] std::string describe(const std::exception& failure);
 

@@ -120,15 +120,23 @@ impl Emitter<'_> {
             > 1
             || arguments.iter().any(|argument| changes(&argument.value))
             || config.is_some_and(changes);
-        // Each held, after what it needs run before it.
-        let hold = |text: &mut String, scope: &mut Scope, line: String| {
-            for before in std::mem::take(&mut scope.before) {
-                for line in before.lines() {
-                    text.push_str(&format!("{INDENT}{line}\n"));
+        // Each held after what it needs run before it, each of those lines
+        // given the HGL file and line of what it holds
+        // (`Emitter::line_directive`, `stamped`).
+        let hold =
+            |text: &mut String, scope: &mut Scope, directive: Option<String>, line: String| {
+                let mut held = String::new();
+                for before in std::mem::take(&mut scope.before) {
+                    for line in before.lines() {
+                        held.push_str(&format!("{INDENT}{line}\n"));
+                    }
                 }
-            }
-            text.push_str(&format!("{INDENT}{line}\n"));
-        };
+                held.push_str(&format!("{INDENT}{line}\n"));
+                match directive {
+                    Some(directive) => text.push_str(&super::stamped(&directive, &held)),
+                    None => text.push_str(&held),
+                }
+            };
         let mut given: Vec<(usize, String)> = Vec::new();
         let mut defaults: Vec<(usize, String)> = Vec::new();
         if held {
@@ -140,9 +148,11 @@ impl Emitter<'_> {
                     return;
                 };
                 let name = names::temporary("argument", self.temporary());
+                let directive = self.line_directive(argument.value.at);
                 hold(
                     &mut text,
                     &mut scope,
+                    directive,
                     format!("const {ty} {name} = {written};"),
                 );
                 given.push((position, name));
@@ -163,9 +173,11 @@ impl Emitter<'_> {
                     return;
                 };
                 let name = names::temporary("argument", self.temporary());
+                let directive = self.line_directive(default.at);
                 hold(
                     &mut text,
                     &mut scope,
+                    directive,
                     format!("const {ty} {name} = {written};"),
                 );
                 defaults.push((*index, name));
@@ -177,14 +189,18 @@ impl Emitter<'_> {
             Some(config) => self.run_bounds(&mut scope, config),
             None => format!("{testing}::Bounds{{}}"),
         };
+        let directive = self.line_directive(config.map_or(run.at, |config| config.at));
         hold(
             &mut text,
             &mut scope,
+            directive,
             format!("const {testing}::Bounds bounds_ = {bounds};"),
         );
 
         // The entry: the call wired, and core's `record` of its result
-        // under the run's key (CRUN-8).
+        // under the run's key (CRUN-8), each of its lines given the HGL
+        // file and line of the call (`stamped`).
+        let directive = self.line_directive(run.call.at);
         let mut entry = String::new();
         let mut called = Scope::cold(program, &none);
         let mut context = Context::new(Kind::Entry, 0);
@@ -219,6 +235,10 @@ impl Emitter<'_> {
                 entry.push_str(&format!("{inner}{target};\n"));
                 format!("::{library}::application::run")
             }
+        };
+        let entry = match directive {
+            Some(directive) => super::stamped(&directive, &entry),
+            None => entry,
         };
         let line = run_line(declared).unwrap_or_else(|| self.line_of(run.at));
         let word = if run.real_time { "run" } else { "eval" };

@@ -19,10 +19,19 @@
 #undef absolute_targets_before_at_and_after_the_start
 #undef absolute_yields
 #undef alarm
+#undef alarm_asked_in_start
+#undef alarm_asked_on_each
+#undef alarm_asked_once
+#undef alarm_beside_a_passive_input
 #undef alarm_or_input
 #undef alarmed
+#undef an_alarm_beside_a_passive_input
+#undef an_alarm_keeps_its_wake_when_an_input_ticks_first
+#undef an_alarm_wake_that_lands_with_an_input_is_the_inputs
 #undef an_alarm_wakes_a_node
 #undef an_empty_selection_is_true_where_it_is_selected
+#undef asked
+#undef asking_an_alarm_again_keeps_the_earliest
 #undef at
 #undef cancel_next
 #undef cause_of_wake
@@ -204,7 +213,7 @@ struct impl_
     static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
     {
         [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start};
-        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{2}, std::nullopt, false);
+        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{2}, ::std::nullopt, false);
     }
 
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
@@ -279,7 +288,7 @@ struct impl_
     static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
     {
         [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start};
-        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{2}, std::nullopt, false);
+        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{2}, ::std::nullopt, false);
     }
 
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
@@ -316,8 +325,8 @@ struct impl_
     static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_00_)
     {
         [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_00_, ::hglrt::Hook::start};
-        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{1}, std::nullopt, false);
-        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{3}, std::nullopt, false);
+        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{1}, ::std::nullopt, false);
+        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{3}, ::std::nullopt, false);
     }
 
     static void eval([[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_00_)
@@ -364,9 +373,9 @@ struct impl_
         [[maybe_unused]] auto& woken = kept_.woken;
         [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start};
         woken = 0;
-        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{1}, std::nullopt, false);
-        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{3}, std::nullopt, false);
-        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{5}, std::nullopt, false);
+        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{1}, ::std::nullopt, false);
+        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{3}, ::std::nullopt, false);
+        ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{5}, ::std::nullopt, false);
     }
 
     static void eval([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
@@ -383,7 +392,7 @@ struct impl_
             woken = ::hglrt::add__i64_i64(woken, 1);
             if (::hglrt::eq__i64_i64_f64_f64(woken, 1, 0.0, 0.0))
             {
-                ::hglrt::fn_un_schedule(scheduler, std::nullopt);
+                ::hglrt::fn_un_schedule(scheduler, ::std::nullopt);
             }
             out_.set((scheduler).is_scheduled_now());
             return;
@@ -437,7 +446,7 @@ struct impl_
         // when, line 91 (TIME-3)
         if (::hglrt::fn_valid(value) && ::hglrt::fn_modified(value))
         {
-            ::hglrt::schedule_Scheduler_datetime_str__bool(scheduler, ::hgl::core::m_::never(), std::nullopt, false);
+            ::hglrt::schedule_Scheduler_datetime_str__bool(scheduler, ::hgl::core::m_::never(), ::std::nullopt, false);
             out_.set(::hgraph::Str{"asked"});
             return;
         }
@@ -469,7 +478,7 @@ struct impl_
         // when, line 101 (TIME-3)
         if (::hglrt::fn_modified(delay))
         {
-            ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hglrt::checked_value(delay), std::nullopt, false);
+            ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hglrt::checked_value(delay), ::std::nullopt, false);
             out_.set(true);
             return;
         }
@@ -492,13 +501,13 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::alarm_or_input";
 
-    static void start([[maybe_unused]] ::hgraph::SingleShotScheduler capability_01_)
+    static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
     {
         [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::start};
         ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{2});
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::SingleShotScheduler capability_01_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
     {
         [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation};
         // TIME-9: what woke the node, read as it is entered.
@@ -541,7 +550,7 @@ struct impl_
         ::hgraph::Int count{};
     };
 
-    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::SingleShotScheduler capability_01_)
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
     {
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
@@ -551,7 +560,7 @@ struct impl_
         ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{1});
     }
 
-    static void eval([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_, [[maybe_unused]] ::hgraph::SingleShotScheduler capability_01_)
+    static void eval([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
     {
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
@@ -597,9 +606,228 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_::alarm_asked_in_start
+{
+// alarm_asked_in_start(value: i64) -> str (node), module demo.timing, line 131
+struct impl_
+{
+    static constexpr auto name = "demo.timing::alarm_asked_in_start";
+
+    static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    {
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::start};
+        ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{3});
+    }
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    {
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation};
+        // TIME-9: what woke the node, read as it is entered.
+        [[maybe_unused]] const bool timer_woke_ = !(::hglrt::ticked(value));
+        [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
+        // when, line 134 (TIME-3)
+        if (timer_woke_)
+        {
+            out_.set(::hgraph::Str{"woke"});
+            return;
+        }
+        // when, line 135 (TIME-3)
+        if (::hglrt::fn_valid(value) && ::hglrt::fn_modified(value))
+        {
+            out_.set(::hgraph::Str{"input"});
+            return;
+        }
+    }
+};
+}  // namespace n_::alarm_asked_in_start
+namespace w_
+{
+// alarm_asked_in_start(value: i64) -> str (node), module demo.timing, line 131
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> alarm_asked_in_start(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::alarm_asked_in_start::impl_>(wiring_, value);
+}
+}  // namespace w_
+
+namespace n_::alarm_asked_once
+{
+// alarm_asked_once(value: i64) -> str (node), module demo.timing, line 138
+struct impl_
+{
+    static constexpr auto name = "demo.timing::alarm_asked_once";
+
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
+    {
+        ::hgraph::Bool asked{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] auto& asked = kept_.asked;
+        asked = false;
+    }
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_02_)
+    {
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] auto& asked = kept_.asked;
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_02_, ::hglrt::Hook::evaluation};
+        // TIME-9: what woke the node, read as it is entered.
+        [[maybe_unused]] const bool timer_woke_ = !(::hglrt::ticked(value));
+        [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
+        // when, line 141 (TIME-3)
+        if (timer_woke_)
+        {
+            out_.set(::hgraph::Str{"woke"});
+            return;
+        }
+        // when, line 142 (TIME-3)
+        if (::hglrt::fn_valid(value) && ::hglrt::fn_modified(value))
+        {
+            if ((!asked))
+            {
+                ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{3});
+                asked = true;
+            }
+            out_.set(::hgraph::Str{"input"});
+            return;
+        }
+    }
+};
+}  // namespace n_::alarm_asked_once
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::alarm_asked_once::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::alarm_asked_once::impl_::state_type_>("hgl:demo.timing::alarm_asked_once.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
+namespace w_
+{
+// alarm_asked_once(value: i64) -> str (node), module demo.timing, line 138
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> alarm_asked_once(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::alarm_asked_once::impl_>(wiring_, value);
+}
+}  // namespace w_
+
+namespace n_::alarm_asked_on_each
+{
+// alarm_asked_on_each(value: i64) -> str (node), module demo.timing, line 151
+struct impl_
+{
+    static constexpr auto name = "demo.timing::alarm_asked_on_each";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    {
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation};
+        // TIME-9: what woke the node, read as it is entered.
+        [[maybe_unused]] const bool timer_woke_ = !(::hglrt::ticked(value));
+        [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
+        // when, line 153 (TIME-3)
+        if (timer_woke_)
+        {
+            out_.set(::hgraph::Str{"woke"});
+            return;
+        }
+        // when, line 154 (TIME-3)
+        if (::hglrt::fn_valid(value) && ::hglrt::fn_modified(value))
+        {
+            ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{3});
+            out_.set(::hgraph::Str{"input"});
+            return;
+        }
+    }
+};
+}  // namespace n_::alarm_asked_on_each
+namespace w_
+{
+// alarm_asked_on_each(value: i64) -> str (node), module demo.timing, line 151
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> alarm_asked_on_each(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::alarm_asked_on_each::impl_>(wiring_, value);
+}
+}  // namespace w_
+
+namespace n_::alarm_beside_a_passive_input
+{
+// alarm_beside_a_passive_input(value: i64) -> i64 (node), module demo.timing, line 161
+struct impl_
+{
+    static constexpr auto name = "demo.timing::alarm_beside_a_passive_input";
+
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
+    {
+        ::hgraph::Int woken{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_02_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] auto& woken = kept_.woken;
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_02_, ::hglrt::Hook::start};
+        woken = 0;
+        ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{3});
+    }
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_02_)
+    {
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] auto& woken = kept_.woken;
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_02_, ::hglrt::Hook::evaluation};
+        // TIME-9: what woke the node, read as it is entered.
+        [[maybe_unused]] const bool timer_woke_ = !(::hglrt::ticked(value));
+        [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
+        // when, line 165 (TIME-3)
+        if (timer_woke_)
+        {
+            woken = ::hglrt::add__i64_i64(woken, 1);
+            out_.set(woken);
+            return;
+        }
+    }
+};
+}  // namespace n_::alarm_beside_a_passive_input
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::alarm_beside_a_passive_input::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::alarm_beside_a_passive_input::impl_::state_type_>("hgl:demo.timing::alarm_beside_a_passive_input.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
+namespace w_
+{
+// alarm_beside_a_passive_input(value: i64) -> i64 (node), module demo.timing, line 161
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> alarm_beside_a_passive_input(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hgraph::wire<::hgl::demo::timing::m_::n_::alarm_beside_a_passive_input::impl_>(wiring_, value);
+}
+}  // namespace w_
+
 namespace n_::time_before_each_delay
 {
-// time_before_each_delay() -> datetime (source), module demo.timing, line 129
+// time_before_each_delay() -> datetime (source), module demo.timing, line 172
 struct impl_
 {
     static constexpr auto name = "demo.timing::time_before_each_delay";
@@ -631,16 +859,16 @@ struct impl_
     {
         ::hglrt::Source<::hgraph::DateTime> source_{};
         // What the body reaches, where it does not move.
-        std::unique_ptr<slot_type_> slot_{};
-        std::optional<body_type_> frame_{};
-        std::optional<body_type_::iterator> at_{};
+        ::std::unique_ptr<slot_type_> slot_{};
+        ::std::optional<body_type_> frame_{};
+        ::std::optional<body_type_::iterator> at_{};
     };
 
     static void start(::hgraph::State<state_type_> state_)
     {
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
-        kept_.slot_ = std::make_unique<slot_type_>();
+        kept_.slot_ = ::std::make_unique<slot_type_>();
         kept_.frame_.emplace(body_(*kept_.slot_));
     }
 
@@ -652,7 +880,7 @@ struct impl_
         const ::hglrt::Lending<::hglrt::Clock> lent_00_{kept_.slot_->clock, ::hglrt::Clock{capability_00_}};
         ::hglrt::resume(
             kept_.source_, now_, scheduler_,
-            [&kept_]() -> std::optional<yielded_type_> {
+            [&kept_]() -> ::std::optional<yielded_type_> {
                 if (!kept_.at_.has_value())
                 {
                     kept_.at_.emplace(kept_.frame_->begin());
@@ -661,11 +889,11 @@ struct impl_
                 {
                     ++*kept_.at_;
                 }
-                if (*kept_.at_ == std::default_sentinel)
+                if (*kept_.at_ == ::std::default_sentinel)
                 {
-                    return std::nullopt;
+                    return ::std::nullopt;
                 }
-                return std::optional<yielded_type_>{**kept_.at_};
+                return ::std::optional<yielded_type_>{**kept_.at_};
             },
             [&out_](::hgraph::DateTime value_) { out_.set(value_); });
     }
@@ -696,7 +924,7 @@ namespace hgl::demo::timing::m_
 {
 namespace w_
 {
-// time_before_each_delay() -> datetime (source), module demo.timing, line 129
+// time_before_each_delay() -> datetime (source), module demo.timing, line 172
 ::hgraph::Port<::hgraph::TS<::hgraph::DateTime>> time_before_each_delay(::hgraph::Wiring& wiring_)
 {
     return ::hgraph::wire<::hgl::demo::timing::m_::n_::time_before_each_delay::impl_>(wiring_);
@@ -705,7 +933,7 @@ namespace w_
 
 namespace n_::absolute_yields
 {
-// absolute_yields(const first: datetime, const second: datetime) -> i64 (source), module demo.timing, line 138
+// absolute_yields(const first: datetime, const second: datetime) -> i64 (source), module demo.timing, line 181
 struct impl_
 {
     static constexpr auto name = "demo.timing::absolute_yields";
@@ -726,8 +954,8 @@ struct impl_
     struct state_type_
     {
         ::hglrt::Source<::hgraph::Int> source_{};
-        std::optional<body_type_> frame_{};
-        std::optional<body_type_::iterator> at_{};
+        ::std::optional<body_type_> frame_{};
+        ::std::optional<body_type_::iterator> at_{};
     };
 
     static void start(::hgraph::Scalar<"first", ::hgraph::DateTime> first, ::hgraph::Scalar<"second", ::hgraph::DateTime> second, ::hgraph::State<state_type_> state_)
@@ -744,7 +972,7 @@ struct impl_
         state_type_& kept_ = state_.modify();
         ::hglrt::resume(
             kept_.source_, now_, scheduler_,
-            [&kept_]() -> std::optional<yielded_type_> {
+            [&kept_]() -> ::std::optional<yielded_type_> {
                 if (!kept_.at_.has_value())
                 {
                     kept_.at_.emplace(kept_.frame_->begin());
@@ -753,11 +981,11 @@ struct impl_
                 {
                     ++*kept_.at_;
                 }
-                if (*kept_.at_ == std::default_sentinel)
+                if (*kept_.at_ == ::std::default_sentinel)
                 {
-                    return std::nullopt;
+                    return ::std::nullopt;
                 }
-                return std::optional<yielded_type_>{**kept_.at_};
+                return ::std::optional<yielded_type_>{**kept_.at_};
             },
             [&out_](::hgraph::Int value_) { out_.set(value_); });
     }
@@ -788,20 +1016,20 @@ namespace hgl::demo::timing::m_
 {
 namespace w_
 {
-// absolute_yields(const first: datetime, const second: datetime) -> i64 (source), module demo.timing, line 138
+// absolute_yields(const first: datetime, const second: datetime) -> i64 (source), module demo.timing, line 181
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> absolute_yields(::hgraph::Wiring& wiring_, ::hgraph::DateTime first, ::hgraph::DateTime second)
 {
     return ::hgraph::wire<::hgl::demo::timing::m_::n_::absolute_yields::impl_>(wiring_, first, second);
 }
 }  // namespace w_
 
-// opening_at(at: datetime) -> RunConfig (`const fn`), module demo.timing, line 144
+// opening_at(at: datetime) -> RunConfig (`const fn`), module demo.timing, line 187
 ::hgl::core::m_::RunConfig opening_at([[maybe_unused]] ::hgraph::DateTime at)
 {
-    return ::hgl::core::m_::RunConfig{at, std::nullopt, std::nullopt};
+    return ::hgl::core::m_::RunConfig{at, ::std::nullopt, ::std::nullopt};
 }
 
-// valid_start(config: RunConfig) -> bool (`const fn`), module demo.timing, line 147
+// valid_start(config: RunConfig) -> bool (`const fn`), module demo.timing, line 190
 ::hgraph::Bool valid_start([[maybe_unused]] const ::hgl::core::m_::RunConfig& config)
 {
     return ((config).start).has_value();
@@ -809,7 +1037,7 @@ namespace w_
 
 namespace n_::finish_or_resume
 {
-// finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 150
+// finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 193
 struct impl_
 {
     static constexpr auto name = "demo.timing::finish_or_resume";
@@ -846,16 +1074,16 @@ struct impl_
     {
         ::hglrt::Source<::hgraph::Int> source_{};
         // What the body reaches, where it does not move.
-        std::unique_ptr<slot_type_> slot_{};
-        std::optional<body_type_> frame_{};
-        std::optional<body_type_::iterator> at_{};
+        ::std::unique_ptr<slot_type_> slot_{};
+        ::std::optional<body_type_> frame_{};
+        ::std::optional<body_type_::iterator> at_{};
     };
 
     static void start(::hgraph::Scalar<"finish_early", ::hgraph::Bool> finish_early, ::hgraph::State<state_type_> state_)
     {
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
-        kept_.slot_ = std::make_unique<slot_type_>();
+        kept_.slot_ = ::std::make_unique<slot_type_>();
         kept_.frame_.emplace(body_(*kept_.slot_, finish_early.value()));
     }
 
@@ -867,7 +1095,7 @@ struct impl_
         const ::hglrt::Lending<::hglrt::Clock> lent_01_{kept_.slot_->clock, ::hglrt::Clock{capability_01_}};
         ::hglrt::resume(
             kept_.source_, now_, scheduler_,
-            [&kept_]() -> std::optional<yielded_type_> {
+            [&kept_]() -> ::std::optional<yielded_type_> {
                 if (!kept_.at_.has_value())
                 {
                     kept_.at_.emplace(kept_.frame_->begin());
@@ -876,11 +1104,11 @@ struct impl_
                 {
                     ++*kept_.at_;
                 }
-                if (*kept_.at_ == std::default_sentinel)
+                if (*kept_.at_ == ::std::default_sentinel)
                 {
-                    return std::nullopt;
+                    return ::std::nullopt;
                 }
-                return std::optional<yielded_type_>{**kept_.at_};
+                return ::std::optional<yielded_type_>{**kept_.at_};
             },
             [&out_](::hgraph::Int value_) { out_.set(value_); });
     }
@@ -911,7 +1139,7 @@ namespace hgl::demo::timing::m_
 {
 namespace w_
 {
-// finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 150
+// finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 193
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> finish_or_resume(::hgraph::Wiring& wiring_, ::hgraph::Bool finish_early)
 {
     return ::hgraph::wire<::hgl::demo::timing::m_::n_::finish_or_resume::impl_>(wiring_, finish_early);
@@ -920,7 +1148,7 @@ namespace w_
 
 namespace n_::counter
 {
-// counter(const limit: i64) -> i64 (source), module demo.timing, line 161
+// counter(const limit: i64) -> i64 (source), module demo.timing, line 204
 struct impl_
 {
     static constexpr auto name = "demo.timing::counter";
@@ -954,16 +1182,16 @@ struct impl_
     {
         ::hglrt::Source<::hgraph::Int> source_{};
         // What the body reaches, where it does not move.
-        std::unique_ptr<slot_type_> slot_{};
-        std::optional<body_type_> frame_{};
-        std::optional<body_type_::iterator> at_{};
+        ::std::unique_ptr<slot_type_> slot_{};
+        ::std::optional<body_type_> frame_{};
+        ::std::optional<body_type_::iterator> at_{};
     };
 
     static void start(::hgraph::Scalar<"limit", ::hgraph::Int> limit, ::hgraph::State<state_type_> state_)
     {
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
-        kept_.slot_ = std::make_unique<slot_type_>();
+        kept_.slot_ = ::std::make_unique<slot_type_>();
         [[maybe_unused]] auto& count = kept_.slot_->count;
         count = 0;
         kept_.frame_.emplace(body_(*kept_.slot_, limit.value()));
@@ -976,7 +1204,7 @@ struct impl_
         state_type_& kept_ = state_.modify();
         ::hglrt::resume(
             kept_.source_, now_, scheduler_,
-            [&kept_]() -> std::optional<yielded_type_> {
+            [&kept_]() -> ::std::optional<yielded_type_> {
                 if (!kept_.at_.has_value())
                 {
                     kept_.at_.emplace(kept_.frame_->begin());
@@ -985,11 +1213,11 @@ struct impl_
                 {
                     ++*kept_.at_;
                 }
-                if (*kept_.at_ == std::default_sentinel)
+                if (*kept_.at_ == ::std::default_sentinel)
                 {
-                    return std::nullopt;
+                    return ::std::nullopt;
                 }
-                return std::optional<yielded_type_>{**kept_.at_};
+                return ::std::optional<yielded_type_>{**kept_.at_};
             },
             [&out_](::hgraph::Int value_) { out_.set(value_); });
     }
@@ -1023,7 +1251,7 @@ namespace hgl::demo::timing::m_
 {
 namespace w_
 {
-// counter(const limit: i64) -> i64 (source), module demo.timing, line 161
+// counter(const limit: i64) -> i64 (source), module demo.timing, line 204
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counter(::hgraph::Wiring& wiring_, ::hgraph::Int limit)
 {
     return ::hgraph::wire<::hgl::demo::timing::m_::n_::counter::impl_>(wiring_, limit);
@@ -1032,7 +1260,7 @@ namespace w_
 
 namespace n_::counting_from
 {
-// counting_from(const first: i64) -> i64 (source), module demo.timing, line 172
+// counting_from(const first: i64) -> i64 (source), module demo.timing, line 215
 struct impl_
 {
     static constexpr auto name = "demo.timing::counting_from";
@@ -1066,16 +1294,16 @@ struct impl_
     {
         ::hglrt::Source<::hgraph::Int> source_{};
         // What the body reaches, where it does not move.
-        std::unique_ptr<slot_type_> slot_{};
-        std::optional<body_type_> frame_{};
-        std::optional<body_type_::iterator> at_{};
+        ::std::unique_ptr<slot_type_> slot_{};
+        ::std::optional<body_type_> frame_{};
+        ::std::optional<body_type_::iterator> at_{};
     };
 
     static void start(::hgraph::Scalar<"first", ::hgraph::Int> first, ::hgraph::State<state_type_> state_)
     {
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
-        kept_.slot_ = std::make_unique<slot_type_>();
+        kept_.slot_ = ::std::make_unique<slot_type_>();
         [[maybe_unused]] auto& next = kept_.slot_->next;
         next = 0;
         kept_.frame_.emplace(body_(*kept_.slot_, first.value()));
@@ -1089,7 +1317,7 @@ struct impl_
         state_type_& kept_ = state_.modify();
         ::hglrt::resume(
             kept_.source_, now_, scheduler_,
-            [&kept_]() -> std::optional<yielded_type_> {
+            [&kept_]() -> ::std::optional<yielded_type_> {
                 if (!kept_.at_.has_value())
                 {
                     kept_.at_.emplace(kept_.frame_->begin());
@@ -1098,11 +1326,11 @@ struct impl_
                 {
                     ++*kept_.at_;
                 }
-                if (*kept_.at_ == std::default_sentinel)
+                if (*kept_.at_ == ::std::default_sentinel)
                 {
-                    return std::nullopt;
+                    return ::std::nullopt;
                 }
-                return std::optional<yielded_type_>{**kept_.at_};
+                return ::std::optional<yielded_type_>{**kept_.at_};
             },
             [&out_](::hgraph::Int value_) { out_.set(value_); });
     }
@@ -1133,7 +1361,7 @@ namespace hgl::demo::timing::m_
 {
 namespace w_
 {
-// counting_from(const first: i64) -> i64 (source), module demo.timing, line 172
+// counting_from(const first: i64) -> i64 (source), module demo.timing, line 215
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counting_from(::hgraph::Wiring& wiring_, ::hgraph::Int first)
 {
     return ::hgraph::wire<::hgl::demo::timing::m_::n_::counting_from::impl_>(wiring_, first);
@@ -1142,7 +1370,7 @@ namespace w_
 
 namespace n_::i_::repeated::of_i64
 {
-// repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 182
+// repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 225
 struct impl_
 {
     static constexpr auto name = "demo.timing::repeated[i64]";
@@ -1176,16 +1404,16 @@ struct impl_
     {
         ::hglrt::Source<::hgraph::Int> source_{};
         // What the body reaches, where it does not move.
-        std::unique_ptr<slot_type_> slot_{};
-        std::optional<body_type_> frame_{};
-        std::optional<body_type_::iterator> at_{};
+        ::std::unique_ptr<slot_type_> slot_{};
+        ::std::optional<body_type_> frame_{};
+        ::std::optional<body_type_::iterator> at_{};
     };
 
     static void start(::hgraph::Scalar<"value", ::hgraph::Int> value, ::hgraph::Scalar<"times", ::hgraph::Int> times, ::hgraph::State<state_type_> state_)
     {
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
-        kept_.slot_ = std::make_unique<slot_type_>();
+        kept_.slot_ = ::std::make_unique<slot_type_>();
         [[maybe_unused]] auto& done = kept_.slot_->done;
         done = 0;
         kept_.frame_.emplace(body_(*kept_.slot_, value.value(), times.value()));
@@ -1198,7 +1426,7 @@ struct impl_
         state_type_& kept_ = state_.modify();
         ::hglrt::resume(
             kept_.source_, now_, scheduler_,
-            [&kept_]() -> std::optional<yielded_type_> {
+            [&kept_]() -> ::std::optional<yielded_type_> {
                 if (!kept_.at_.has_value())
                 {
                     kept_.at_.emplace(kept_.frame_->begin());
@@ -1207,11 +1435,11 @@ struct impl_
                 {
                     ++*kept_.at_;
                 }
-                if (*kept_.at_ == std::default_sentinel)
+                if (*kept_.at_ == ::std::default_sentinel)
                 {
-                    return std::nullopt;
+                    return ::std::nullopt;
                 }
-                return std::optional<yielded_type_>{**kept_.at_};
+                return ::std::optional<yielded_type_>{**kept_.at_};
             },
             [&out_](::hgraph::Int value_) { out_.set(value_); });
     }
@@ -1242,7 +1470,7 @@ namespace hgl::demo::timing::m_
 {
 namespace w_::i_::repeated
 {
-// repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 182
+// repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 225
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> of_i64(::hgraph::Wiring& wiring_, ::hgraph::Int value, ::hgraph::Int times)
 {
     return ::hgraph::wire<::hgl::demo::timing::m_::n_::i_::repeated::of_i64::impl_>(wiring_, value, times);
@@ -1261,7 +1489,7 @@ void a_scheduler_wakes_a_node_with_no_input()
         const auto left_00_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::ticker(wiring_, ::hgraph::TimeDelta{2}, 3), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, std::nullopt, 1, std::nullopt, 2, std::nullopt, 3};
+        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, ::std::nullopt, 1, ::std::nullopt, 2, ::std::nullopt, 3};
         ::hglrt::testing::expect_same(left_00_, right_01_);
     }();
 }
@@ -1271,10 +1499,10 @@ void a_wake_can_coincide_with_an_input()
     ::hglrt::testing::statement();
     [&] {
         const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{7, std::nullopt, 9}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{7, ::std::nullopt, 9}, start_));
         ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::timing::m_::w_::cause_of_wake(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"input"}, std::nullopt, ::hgraph::Str{"input and scheduler"}, std::nullopt, ::hgraph::Str{"scheduler"}};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"input"}, ::std::nullopt, ::hgraph::Str{"input and scheduler"}, ::std::nullopt, ::hgraph::Str{"scheduler"}};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }
@@ -1284,19 +1512,19 @@ void an_empty_selection_is_true_where_it_is_selected()
     ::hglrt::testing::statement();
     [&] {
         const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{7, std::nullopt, 9}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{7, ::std::nullopt, 9}, start_));
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::timing::m_::w_::empty_selected(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, std::nullopt, true};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, ::std::nullopt, true};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
     ::hglrt::testing::statement();
     [&] {
         const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{7, std::nullopt, 9}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{7, ::std::nullopt, 9}, start_));
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::timing::m_::w_::empty_elsewhere(wiring_, input_03_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, std::nullopt, false, std::nullopt, true};
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, ::std::nullopt, false, ::std::nullopt, true};
         ::hglrt::testing::expect_same(left_04_, right_05_);
     }();
 }
@@ -1306,10 +1534,10 @@ void scheduled_is_read_as_a_value()
     ::hglrt::testing::statement();
     [&] {
         const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{7, std::nullopt, 9}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{7, ::std::nullopt, 9}, start_));
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::timing::m_::w_::scheduled_on_input(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, std::nullopt, true};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, ::std::nullopt, true};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }
@@ -1321,7 +1549,7 @@ void the_wake_delivered_is_pending_no_longer()
         const auto left_00_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::timing::m_::w_::pending(wiring_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, std::nullopt, false};
+        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, true, ::std::nullopt, false};
         ::hglrt::testing::expect_same(left_00_, right_01_);
     }();
     ::hglrt::testing::statement();
@@ -1329,7 +1557,7 @@ void the_wake_delivered_is_pending_no_longer()
         const auto left_02_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::timing::m_::w_::cancel_next(wiring_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_03_ = ::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, std::nullopt, std::nullopt, std::nullopt, true};
+        const auto right_03_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, true, ::std::nullopt, ::std::nullopt, ::std::nullopt, true};
         ::hglrt::testing::expect_same(left_02_, right_03_);
     }();
 }
@@ -1339,10 +1567,10 @@ void a_wake_before_now_is_dropped()
     ::hglrt::testing::statement();
     [&] {
         const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{7, std::nullopt, 9}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{7, ::std::nullopt, 9}, start_));
         ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::timing::m_::w_::wake_in_the_past(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"asked"}, std::nullopt, ::hgraph::Str{"asked"}};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"asked"}, ::std::nullopt, ::hgraph::Str{"asked"}};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }
@@ -1374,8 +1602,105 @@ void an_alarm_wakes_a_node()
         const auto left_03_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::alarmed(wiring_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_04_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 1, std::nullopt, 2, std::nullopt, 3};
+        const auto right_04_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 1, ::std::nullopt, 2, ::std::nullopt, 3};
         ::hglrt::testing::expect_same(left_03_, right_04_);
+    }();
+}
+
+void an_alarm_keeps_its_wake_when_an_input_ticks_first()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::timing::m_::w_::alarm_asked_in_start(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"input"}, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"woke"}};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 1}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::timing::m_::w_::alarm_asked_in_start(wiring_, input_03_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Str>{::std::nullopt, ::hgraph::Str{"input"}, ::std::nullopt, ::hgraph::Str{"woke"}};
+        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_07_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_06_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, ::std::nullopt, ::std::nullopt, ::std::nullopt, 1}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::timing::m_::w_::alarm_asked_in_start(wiring_, input_06_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Str>{::std::nullopt, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"woke"}, ::hgraph::Str{"input"}};
+        ::hglrt::testing::expect_same(left_07_, right_08_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_010_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::timing::m_::w_::alarm_asked_once(wiring_, input_09_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"input"}, ::hgraph::Str{"input"}, ::std::nullopt, ::hgraph::Str{"woke"}};
+        ::hglrt::testing::expect_same(left_010_, right_011_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_013_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_012_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::timing::m_::w_::alarm_asked_on_each(wiring_, input_012_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_014_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"input"}, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"woke"}};
+        ::hglrt::testing::expect_same(left_013_, right_014_);
+    }();
+}
+
+void asking_an_alarm_again_keeps_the_earliest()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::timing::m_::w_::alarm_asked_on_each(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"input"}, ::hgraph::Str{"input"}, ::std::nullopt, ::hgraph::Str{"woke"}};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, ::std::nullopt, ::std::nullopt, 5}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::timing::m_::w_::alarm_asked_on_each(wiring_, input_03_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"input"}, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"woke"}, ::hgraph::Str{"input"}, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"woke"}};
+        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+}
+
+void an_alarm_beside_a_passive_input()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 7}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::alarm_beside_a_passive_input(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, ::std::nullopt, ::std::nullopt, 1};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+}
+
+void an_alarm_wake_that_lands_with_an_input_is_the_inputs()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, ::std::nullopt, 4}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::timing::m_::w_::alarm_asked_in_start(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"input"}, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"input"}};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }
 
@@ -1386,7 +1711,7 @@ void a_source_reads_its_clock_when_it_runs()
         const auto left_00_ = ::hglrt::testing::evaluate<::hgraph::DateTime>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_datetime(wiring_, ::hgl::demo::timing::m_::w_::time_before_each_delay(wiring_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::DateTime>{std::nullopt, std::nullopt, ::hgl::core::m_::earliest_start(), std::nullopt, std::nullopt, ::hglrt::add__datetime_duration(::hgl::core::m_::earliest_start(), ::hgraph::TimeDelta{2})};
+        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::DateTime>{::std::nullopt, ::std::nullopt, ::hgl::core::m_::earliest_start(), ::std::nullopt, ::std::nullopt, ::hglrt::add__datetime_duration(::hgl::core::m_::earliest_start(), ::hgraph::TimeDelta{2})};
         ::hglrt::testing::expect_same(left_00_, right_01_);
     }();
 }
@@ -1414,7 +1739,7 @@ void absolute_targets_before_at_and_after_the_start()
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const ::hgraph::DateTime argument_08_ = argument_06_; const ::hgraph::DateTime argument_09_ = argument_07_; return ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, argument_08_, argument_09_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 20};
+        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Int>{10, ::std::nullopt, 20};
         ::hglrt::testing::expect_same(left_010_, right_011_);
     }();
     ::hglrt::testing::statement();
@@ -1436,7 +1761,7 @@ void a_resumed_source_keeps_its_locals_until_it_returns()
         const auto left_00_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::finish_or_resume(wiring_, false), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, std::nullopt, 10, std::nullopt, 20};
+        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, ::std::nullopt, 10, ::std::nullopt, 20};
         ::hglrt::testing::expect_same(left_00_, right_01_);
     }();
     ::hglrt::testing::statement();
@@ -1444,7 +1769,7 @@ void a_resumed_source_keeps_its_locals_until_it_returns()
         const auto left_02_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::finish_or_resume(wiring_, true), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_03_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, std::nullopt, 10};
+        const auto right_03_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, ::std::nullopt, 10};
         ::hglrt::testing::expect_same(left_02_, right_03_);
     }();
 }
@@ -1456,7 +1781,7 @@ void a_source_keeps_its_cache_and_state()
         const auto left_00_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::counter(wiring_, 3), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 1, 2, 3};
+        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 1, 2, 3};
         ::hglrt::testing::expect_same(left_00_, right_01_);
     }();
     ::hglrt::testing::statement();
@@ -1464,7 +1789,7 @@ void a_source_keeps_its_cache_and_state()
         const auto left_02_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::counting_from(wiring_, 10), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_03_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 10, 11, 12};
+        const auto right_03_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 10, 11, 12};
         ::hglrt::testing::expect_same(left_02_, right_03_);
     }();
     ::hglrt::testing::statement();
@@ -1472,7 +1797,7 @@ void a_source_keeps_its_cache_and_state()
         const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::i_::repeated::of_i64(wiring_, 5, 2), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 5, 5};
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 5, 5};
         ::hglrt::testing::expect_same(left_04_, right_05_);
     }();
 }
@@ -1480,9 +1805,9 @@ void a_source_keeps_its_cache_and_state()
 void a_run_configuration_is_a_value()
 {
     ::hglrt::testing::statement();
-    [[maybe_unused]] const ::hgraph::DateTime opening = ::hgraph::DateTime{std::chrono::microseconds{1767605400000000}};
+    [[maybe_unused]] const ::hgraph::DateTime opening = ::hgraph::DateTime{::std::chrono::microseconds{1767605400000000}};
     ::hglrt::testing::statement();
-    [[maybe_unused]] const ::hgl::core::m_::RunConfig times = ::hgl::core::m_::RunConfig{opening, std::nullopt, std::nullopt};
+    [[maybe_unused]] const ::hgl::core::m_::RunConfig times = ::hgl::core::m_::RunConfig{opening, ::std::nullopt, ::std::nullopt};
     ::hglrt::testing::statement();
     [&] {
         const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
@@ -1501,17 +1826,17 @@ void a_run_configuration_is_a_value()
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, argument_03_, argument_04_), ::hgraph::Str{::hglrt::testing::run_output});
     }, bounds_06_);
     }();
-        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 20};
+        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Int>{10, ::std::nullopt, 20};
         ::hglrt::testing::expect_same(left_07_, right_08_);
     }();
     ::hglrt::testing::statement();
-    [[maybe_unused]] const ::hgl::core::m_::RunConfig short_ = ::hgl::core::m_::RunConfig{opening, std::nullopt, ::hgraph::TimeDelta{3}};
+    [[maybe_unused]] const ::hgl::core::m_::RunConfig short_ = ::hgl::core::m_::RunConfig{opening, ::std::nullopt, ::hgraph::TimeDelta{3}};
     ::hglrt::testing::statement();
     [&] {
         const auto left_010_ = ::hglrt::testing::evaluate<::hgraph::DateTime>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_datetime(wiring_, ::hgl::demo::timing::m_::w_::time_before_each_delay(wiring_), ::hgraph::Str{::hglrt::testing::run_output});
     }, [&] { const ::hgl::core::m_::RunConfig config_09_ = (::hgl::demo::timing::m_::valid_start(short_) ? ::hgl::core::m_::RunConfig(short_) : ::hgl::core::m_::RunConfig(times)); return ::hglrt::testing::Bounds{.start = config_09_.start, .end = config_09_.end, .length = config_09_.length}; }());
-        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::DateTime>{std::nullopt, std::nullopt, opening};
+        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::DateTime>{::std::nullopt, ::std::nullopt, opening};
         ::hglrt::testing::expect_same(left_010_, right_011_);
     }();
 }

@@ -26,7 +26,7 @@
 //! is a statement of its own, in that order, in a lambda called where
 //! the call is written.
 
-use hgl_analyser::hir::{Argument, Callee, Expr, ExprKind};
+use hgl_analyser::hir::{Argument, Callee, Expr, ExprKind, Value};
 use hgl_analyser::{
     Argument as GenericArgument, ConstantValue, DeclarationKind, Detail, OperatorRef, Program,
     Role, Signature, Type,
@@ -280,7 +280,7 @@ impl Emitter<'_> {
                     let Some(ty) = self.named_type(&parameter.ty) else {
                         return self.missing(at, &format!("the type `{}`", parameter.ty));
                     };
-                    defaulted.push((index, "std::nullopt".to_string(), false, Held::Value(ty)))
+                    defaulted.push((index, "::std::nullopt".to_string(), false, Held::Value(ty)))
                 }
                 None => {
                     return self
@@ -536,6 +536,9 @@ pub(super) fn changes(value: &Expr) -> bool {
 /// those, and a tuple, a list, a set or a dictionary made of those.
 pub(super) fn may_fail(value: &Expr) -> bool {
     match &value.kind {
+        // LEX-12: a literal that names a zone is checked by the run's
+        // provider where it is evaluated.
+        ExprKind::Literal(Value::Temporal(temporal)) => temporal.zone.is_some(),
         ExprKind::Literal(_) | ExprKind::Local(_) | ExprKind::EnumMember { .. } => false,
         ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => entries.iter().any(may_fail),
         ExprKind::Pairs(entries) => entries

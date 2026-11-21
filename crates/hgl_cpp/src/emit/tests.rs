@@ -71,10 +71,14 @@ impl Emitter<'_> {
         text.push_str("}\n");
         // What the test's evals wire that a function cannot hold, ahead
         // of it: its statements' lines move down by as many lines.
-        let ahead: String = std::mem::take(&mut self.ahead)
+        let mut ahead: String = std::mem::take(&mut self.ahead)
             .into_iter()
             .map(|node| node + "\n")
             .collect();
+        // A node written ahead sets the HGL lines of its statements; the
+        // test's own are the unit's again after it.
+        let nodes = ahead.clone();
+        super::restore_after(&mut ahead, &nodes);
         let moved = ahead.matches('\n').count();
         for (line, _) in &mut self.piece.statements {
             *line += moved;
@@ -364,10 +368,10 @@ impl Emitter<'_> {
                         "{indent}struct {holder}\n{indent}{{\n\
                          {inner}static void eval(::hgraph::In<\"result\", {schema}> result_, ::hgraph::DateTime now_)\n{inner}{{\n\
                          {body}if (!::{runtime}::fn_modified(result_))\n{body}{{\n{body}{INDENT}return;\n{body}}}\n\
-                         {body}std::optional<{written}> whole_;\n\
+                         {body}::std::optional<{written}> whole_;\n\
                          {body}try\n{body}{{\n{body}{INDENT}whole_.emplace({read});\n{body}}}\n\
                          {body}catch (const ::{runtime}::Failure&)\n{body}{{\n{body}}}\n\
-                         {body}{library}::hold<{written}>(now_, std::move(whole_));\n\
+                         {body}{library}::hold<{written}>(now_, ::std::move(whole_));\n\
                          {inner}}}\n{indent}}};\n\
                          {indent}const auto {port} = {target};\n\
                          {indent}::hgraph::wire<{holder}>({WIRING}, {port});\n",
@@ -439,7 +443,7 @@ impl Emitter<'_> {
             for Cell { value: cell, .. } in cells {
                 written_cells.push(match cell {
                     Some(cell) => self.trace_cell(scope, ty, cell),
-                    None => "std::nullopt".to_string(),
+                    None => "::std::nullopt".to_string(),
                 });
             }
             return format!(

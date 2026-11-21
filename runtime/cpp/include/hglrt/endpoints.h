@@ -16,7 +16,9 @@
 // What an endpoint publishes in a cycle, `delta<T>` (TYPE-16), is read from
 // hgraph's delta by `endpoint_read`, the one place a temporal form says how
 // it is read: a scalar's is written here, and each construct lane adds its
-// form's (see `endpoint_read` below). `delta_value` takes its form from its
+// form's (see `endpoint_read` below). How a form is read whole and published
+// where it is a part of another (TYPE-9), `whole` and `publisher`, is here
+// too, for each form's header to specialize. `delta_value` takes its form from its
 // place (ERR-14): `fn_delta_value` is the plain read, and
 // `fn_delta_value_checked` the read where the place takes
 // `result<delta<T>, error>`, which is `hglrt::result` (failure.h), a
@@ -94,20 +96,148 @@ struct endpoint_read<hgraph::TS<T>> {
 /// type gives it, which holds the value published or the null: a published
 /// null is `delta<i64?>()` for an `i64?` endpoint, and is no absent
 /// delta"): hgraph's `TS<Optional<T>>`, whose published null is a value
-/// that holds nothing.
+/// that holds nothing. Its delta is the nullable's (`nullable_delta`).
 template <class T>
 struct endpoint_read<hgraph::TS<hgraph::Optional<T>>> {
-    using delta_type = std::optional<T>;
+    using delta_type = delta_t<std::optional<T>>;
 
     template <class E>
-    static std::optional<T> delta(const E& endpoint) {
+    static delta_type delta(const E& endpoint) {
         const hgraph::OptionalView held = endpoint.value().as_optional();
         if (!held.has_value()) {
-            return std::nullopt;
+            return delta_type{};
         }
-        return held.value().template checked_as<T>();
+        return delta_type{held.value().template checked_as<T>()};
     }
 };
+
+// ---- A form as a part of another (TYPE-9, TIME-1, TIME-7) ------------------
+//
+// TYPE-9: "Temporalization recursively maps tuples/structs to child fields,
+// lists to child positions, dictionaries to keyed children". A form made of
+// parts, a list's elements, a struct's fields, a tuple's positions, reads and
+// publishes each part through the part's own form, whichever header writes
+// it, by these three traits, which each form specializes beside its other
+// code: a scalar's and a nullable's here, a list's in list_endpoints.h, a
+// struct's and a tuple's in structs.h. A part whose form has none of them is
+// one the target does not write, and its whole does not compile.
+
+namespace detail {
+/// Whether `S` is the schema of a nullable scalar, `TS<Optional<T>>`, whose
+/// child is not asked by `all_valid` (TIME-9: "an optional child aside: one
+/// whose type is `T?` ... is not asked") and reads null where it is not valid
+/// (TYPE-15).
+template <class S>
+struct nullable_schema : std::false_type {};
+template <class T>
+struct nullable_schema<hgraph::TS<hgraph::Optional<T>>> : std::true_type {};
+} // namespace detail
+
+/// The HGL value a temporal value of the hgraph schema `S` holds whole: T for
+/// a scalar `TS<T>`, `std::optional<T>` for a nullable one, and each other
+/// form's as its header says.
+template <class S>
+struct schema_value;
+
+/// `schema_value`'s type.
+template <class S>
+using schema_value_t = typename schema_value<S>::type;
+
+template <class T>
+struct schema_value<hgraph::TS<T>> {
+    using type = T;
+};
+
+template <class T>
+struct schema_value<hgraph::TS<hgraph::Optional<T>>> {
+    using type = std::optional<T>;
+};
+
+/// How a temporal value of the schema `S` is read whole: a static
+/// `read(view)` gives its value, a `schema_value_t<S>`, or nothing where it
+/// may not be read whole (TIME-1): a scalar's needs it valid, and a struct, a
+/// tuple or a fixed list "requires `all_valid` of it".
+template <class S>
+struct whole;
+
+template <class T>
+struct whole<hgraph::TS<T>> {
+    template <class E>
+    static std::optional<T> read(const E& endpoint) {
+        if (!endpoint.valid()) {
+            return std::nullopt;
+        }
+        return endpoint_read<hgraph::TS<T>>::delta(endpoint);
+    }
+};
+
+template <class T>
+struct whole<hgraph::TS<hgraph::Optional<T>>> {
+    template <class E>
+    static std::optional<std::optional<T>> read(const E& endpoint) {
+        if (!endpoint.valid()) {
+            return std::nullopt;
+        }
+        // Its delta (`nullable_delta`) holds the value it holds.
+        return endpoint_read<hgraph::TS<hgraph::Optional<T>>>::delta(endpoint).value;
+    }
+};
+
+/// How a value is published to an output of the schema `S` (TIME-7): a static
+/// `whole(out, value, where)` publishes a complete value, a
+/// `schema_value_t<S>`, and `change(out, delta, where)` a delta of it, a
+/// `delta_t<schema_value_t<S>>`, which fails where its form cannot take it.
+template <class S>
+struct publisher;
+
+template <class T>
+struct publisher<hgraph::TS<T>> {
+    template <class O>
+    static void whole(const O& out, const T& value, std::source_location) {
+        out.set(value);
+    }
+    template <class O>
+    static void change(const O& out, const T& value, std::source_location where) {
+        whole(out, value, where);
+    }
+};
+
+/// A nullable scalar publishes whole: a value, or a null (TYPE-15: "`return
+/// null` for an `i64?` result a null, as `return delta<i64?>()` does"); its
+/// delta (`nullable_delta`) holds the same.
+template <class T>
+struct publisher<hgraph::TS<hgraph::Optional<T>>> {
+    template <class O>
+    static void whole(const O& out, const std::optional<T>& value, std::source_location) {
+        if (value.has_value()) {
+            out.set(*value);
+        } else {
+            out.set(hgraph::Null);
+        }
+    }
+    template <class O>
+    static void change(const O& out, const delta_t<std::optional<T>>& delta, std::source_location where) {
+        whole(out, delta.value, where);
+    }
+};
+
+/// Publishes `value` to the output `out` as its form does (TIME-7): a
+/// complete value of its type whole, and a delta of it as that change.
+template <class O, class V>
+void publish_as_form(const O& out, const V& value, std::source_location where) {
+    using S = schema_of<O>;
+    using T = schema_value_t<S>;
+    using Given = std::remove_cvref_t<V>;
+    if constexpr (std::is_same_v<Given, T>) {
+        publisher<S>::whole(out, value, where);
+    } else if constexpr (std::is_same_v<Given, delta_t<T>>) {
+        publisher<S>::change(out, value, where);
+    } else if constexpr (std::is_convertible_v<Given, T>) {
+        publisher<S>::whole(out, T(value), where);
+    } else {
+        static_assert(false, "hglrt: neither a value of the output's type nor its delta");
+    }
+}
 
 /// `valid<T>(input: endpoint<T>) -> bool` (END-1, END-7, END-9, END-10):
 /// whether the endpoint holds a payload, of a collection whether any child

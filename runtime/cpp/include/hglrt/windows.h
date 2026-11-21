@@ -31,9 +31,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace hglrt {
 
@@ -119,6 +121,87 @@ template <window_view E>
 void window_push(const E& window, const window_value_t<E>& value) {
     window.push(value);
 }
+
+/// END-4: discard the samples and their times. Bare hgraph invalidation
+/// retains window history, and a structural clear exposes the old samples
+/// as removals. Empty sample replacement starts the next write fresh.
+template <window_view E>
+void window_invalidate(const E& window) {
+    if (!window.valid()) {
+        return;
+    }
+    const auto now = window.evaluation_time();
+    const auto withdraw = [&] { static_cast<void>(window.base().begin_mutation(now).invalidate()); };
+    if (window.modified()) {
+        // A same-cycle arrival or expiry already used the window's write.
+        withdraw();
+    }
+    const auto* list = hgraph::TypeRegistry::instance().list(window.data_view().schema()->value_type);
+    const hgraph::Value empty{hgraph::ValuePlanFactory::instance().type_for(list)};
+    window.begin_mutation(now).replace_samples(empty.view(), {});
+    withdraw();
+}
+
+/// The arrival that a node's evaluation makes at its window result, held
+/// while the node's handlers run and made once they have run. END-5:
+/// "Further writes to the already modified endpoint in the same evaluation
+/// update its publication without notifying again"; TYPE-11: "A window takes
+/// at most one value a cycle". So each `return value` and `out = value` of
+/// the evaluation holds its value in place of the one written before it, and
+/// the last arrives, once: one arrival, which pushes out the oldest value of
+/// a full window of a tick count once. (hgraph takes one arrival at a window
+/// in an evaluation: a second push fails inside it.)
+///
+/// It refers to the evaluation's view of the result, and lives in that
+/// evaluation alone.
+template <window_view E>
+class WindowArrival {
+  public:
+    explicit WindowArrival(const E& window) : window_(window) {}
+    WindowArrival(const WindowArrival&) = delete;
+    WindowArrival& operator=(const WindowArrival&) = delete;
+
+    /// `return value` or `out = value`: `value` is the cycle's arrival, in
+    /// place of any written before it in the evaluation.
+    void hold(const window_value_t<E>& value) { held_ = value; }
+
+    /// END-4: withdraw even a pending first publication, then let a later
+    /// write start a fresh history. Repeated withdrawals alone stay silent.
+    void invalidate() {
+        if (!window_.valid()) {
+            arrive();
+        }
+        held_.reset();
+        window_invalidate(window_);
+    }
+
+    /// Runs `handlers`, the node's handlers, then makes the arrival held, where
+    /// one was written. Where the handlers fail, the arrival held is made
+    /// before the failure goes on (ERR-8: "Earlier writes remain visible").
+    template <class Handlers>
+    void run(Handlers&& handlers) {
+        try {
+            std::forward<Handlers>(handlers)();
+        } catch (...) {
+            arrive();
+            throw;
+        }
+        arrive();
+    }
+
+  private:
+    /// Pushes the value held, where there is one.
+    void arrive() {
+        if (held_.has_value()) {
+            const window_value_t<E> value = std::move(*held_);
+            held_.reset();
+            window_push(window_, value);
+        }
+    }
+
+    const E& window_;
+    std::optional<window_value_t<E>> held_{};
+};
 
 /// A read of a window's value in a hook or for a lifted helper (TYPE-11,
 /// END-9): "a `list<V>` of the values held, oldest first. Before the window

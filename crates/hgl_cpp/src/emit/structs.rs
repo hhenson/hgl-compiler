@@ -22,12 +22,13 @@
 //! | `update(quote).bid` in a graph (EXPR-7) | `::hglrt::field_port<0>(port)`, the child's own connection |
 //! | `whole(quote).bid` of an atomic struct in a graph | `::hglrt::atomic_field<0, S>(wiring_, port)`, a node that publishes the field at each whole publication |
 //! | A cell of a trace of one (TST-5) | a `hglrt::testing::Cell<T>`: its delta, or its whole value (`Whole<T>`); a trace of an atomic struct one of `hglrt::atomic_trace<S>`, whose cell, the whole struct, is its delta |
+//! | A list field, `counts: list<i64>`, a list position (TYPE-9) | the list's own form, the `lists` family's `TSL`, asked of the dispatch point; the struct's nominal bundle holds the field as the value hgraph holds that `TSL` as, `::hglrt::list_value<::hgraph::Int>`; read and published through the list's own form (endpoints.h, `whole` and `publisher`) |
 //!
 //! Not this family's, and reported: a generic struct and an abstract
 //! one as a temporal value, a struct with no field, a tuple with an
 //! atomic position, a struct or a tuple
-//! with a part whose form is not a scalar's, an enum's, a nullable's or
-//! another of this family's (a list, a set, a dictionary, a window), an
+//! with a part whose form is not a scalar's, an enum's, a nullable's, a
+//! list's or another of this family's (a set, a dictionary, a window), an
 //! atomic struct that holds an optional field (hgraph's own conversion of
 //! a struct does not map a C++ optional to its `Optional`: hgraph issue
 //! 1874), a constant
@@ -53,7 +54,7 @@ pub(super) struct Structs;
 /// The struct `(module, declaration)` that `ty` names, where it is one
 /// hgraph holds as a nominal bundle: concrete, not generic, with a field,
 /// and each field of a type the bundle can hold ([`bundle_field`]).
-fn bundled(program: &Program, ty: &Type) -> Option<(usize, usize)> {
+pub(super) fn bundled(program: &Program, ty: &Type) -> Option<(usize, usize)> {
     let Type::Named {
         module,
         declaration,
@@ -120,6 +121,22 @@ fn bundle_field(program: &Program, ty: &Type, depth: usize) -> Option<String> {
         Type::Atomic(payload) if matches!(**payload, Type::Named { .. }) => {
             bundle_field(program, payload, depth)
         }
+        // A list field, whose temporal form is the `lists` family's `TSL`:
+        // the value schema hgraph holds that `TSL` as, of the element's
+        // (structs.h, `list_value`), which the bundle's field must be.
+        Type::List { element, size } => {
+            let element = bundle_field(program, element, depth)?;
+            match size {
+                None => Some(format!("::{}::list_value<{element}>", runtime::NAMESPACE)),
+                Some(size) => match size.value {
+                    hgl_analyser::ConstantValue::Int(count) if count > 0 => Some(format!(
+                        "::{}::list_value<{element}, {count}>",
+                        runtime::NAMESPACE
+                    )),
+                    _ => None,
+                },
+            }
+        }
         _ => None,
     }
 }
@@ -180,9 +197,11 @@ pub(super) fn unwritten(program: &Program, ty: &Type) -> Option<&'static str> {
 /// The form of a part of a struct or a tuple, a field or a position, of
 /// type `ty`: hgraph's schema of it, where it is one whose value the
 /// library reads and publishes whole or part by part (structs.h): a
-/// scalar's or an enum's `TS<T>`, a nullable's `TS<Optional<T>>`, and a
-/// struct's, a tuple's or an atomic struct's of this family. Asked of
-/// the dispatch point, and checked against what the library takes.
+/// scalar's or an enum's `TS<T>`, a nullable's `TS<Optional<T>>`, a
+/// struct's, a tuple's or an atomic struct's of this family, and a list's
+/// `TSL`, the `lists` family's, read and published through its own form
+/// (TYPE-9; endpoints.h, `whole` and `publisher`). Asked of the dispatch
+/// point, and checked against what the library takes.
 fn part_schema(emitter: &mut Emitter, ty: &Type) -> Option<String> {
     let schema = emitter.temporal_schema_of(ty)?;
     let program = emitter.program;
@@ -201,7 +220,8 @@ fn part_schema(emitter: &mut Emitter, ty: &Type) -> Option<String> {
             .map(|written| format!("::hgraph::TS<::hgraph::Optional<{written}>>")),
         _ => None,
     };
-    (mine || Some(&schema) == whole.as_ref() || Some(&schema) == nullable.as_ref())
+    let list = schema.starts_with("::hgraph::TSL<");
+    (mine || list || Some(&schema) == whole.as_ref() || Some(&schema) == nullable.as_ref())
         .then_some(schema)
 }
 
@@ -696,8 +716,8 @@ impl Emitter<'_> {
         ] {
             text.push_str(&format!(
                 "template <>\nstruct {ns}::type_named<{of}>\n{{\n\
-                 {INDENT}static constexpr std::string_view name = {};\n\
-                 {INDENT}static constexpr std::array<std::string_view, {}> fields{{{}}};\n\
+                 {INDENT}static constexpr ::std::string_view name = {};\n\
+                 {INDENT}static constexpr ::std::array<::std::string_view, {}> fields{{{}}};\n\
                  {INDENT}static constexpr bool delta = {is_delta};\n}};\n",
                 names::string(&named),
                 field_names.len(),

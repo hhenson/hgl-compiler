@@ -137,11 +137,13 @@ impl Emitter<'_> {
                 return;
             };
             taken.push(format!("[[maybe_unused]] {ty} {name}"));
+            // FN-1: as hgraph holds a configuration (`configuration`).
+            let held = super::configuration::held(program, &parameter.ty, &ty);
             views.push(format!(
-                "::hgraph::Scalar<{}, {ty}> {name}",
+                "::hgraph::Scalar<{}, {held}> {name}",
                 names::string(&parameter.name)
             ));
-            given.push(format!("{name}.value()"));
+            given.push(super::configuration::read(program, &parameter.ty, &name));
         }
         let mut context = Context::new(Kind::Source, body.locals.len());
         context.result = Some(result.clone());
@@ -185,8 +187,8 @@ impl Emitter<'_> {
              {INDENT}struct state_type_\n{INDENT}{{\n\
              {INDENT}{INDENT}::{library}::Source<{payload}> source_{{}};\n\
              {kept}\
-             {INDENT}{INDENT}std::optional<body_type_> frame_{{}};\n\
-             {INDENT}{INDENT}std::optional<body_type_::iterator> at_{{}};\n\
+             {INDENT}{INDENT}::std::optional<body_type_> frame_{{}};\n\
+             {INDENT}{INDENT}::std::optional<body_type_::iterator> at_{{}};\n\
              {INDENT}}};\n\n\
              {INDENT}static void start({start})\n{INDENT}{{\n\
              {INDENT}{INDENT}state_.set(state_type_{{}});\n\
@@ -202,7 +204,7 @@ impl Emitter<'_> {
              {eval_before}\
              {INDENT}{INDENT}::{library}::resume(\n\
              {INDENT}{INDENT}{INDENT}kept_.source_, now_, scheduler_,\n\
-             {INDENT}{INDENT}{INDENT}[&kept_]() -> std::optional<yielded_type_> {{\n\
+             {INDENT}{INDENT}{INDENT}[&kept_]() -> ::std::optional<yielded_type_> {{\n\
              {INDENT}{INDENT}{INDENT}{INDENT}if (!kept_.at_.has_value())\n\
              {INDENT}{INDENT}{INDENT}{INDENT}{{\n\
              {INDENT}{INDENT}{INDENT}{INDENT}{INDENT}kept_.at_.emplace(kept_.frame_->begin());\n\
@@ -211,11 +213,11 @@ impl Emitter<'_> {
              {INDENT}{INDENT}{INDENT}{INDENT}{{\n\
              {INDENT}{INDENT}{INDENT}{INDENT}{INDENT}++*kept_.at_;\n\
              {INDENT}{INDENT}{INDENT}{INDENT}}}\n\
-             {INDENT}{INDENT}{INDENT}{INDENT}if (*kept_.at_ == std::default_sentinel)\n\
+             {INDENT}{INDENT}{INDENT}{INDENT}if (*kept_.at_ == ::std::default_sentinel)\n\
              {INDENT}{INDENT}{INDENT}{INDENT}{{\n\
-             {INDENT}{INDENT}{INDENT}{INDENT}{INDENT}return std::nullopt;\n\
+             {INDENT}{INDENT}{INDENT}{INDENT}{INDENT}return ::std::nullopt;\n\
              {INDENT}{INDENT}{INDENT}{INDENT}}}\n\
-             {INDENT}{INDENT}{INDENT}{INDENT}return std::optional<yielded_type_>{{**kept_.at_}};\n\
+             {INDENT}{INDENT}{INDENT}{INDENT}return ::std::optional<yielded_type_>{{**kept_.at_}};\n\
              {INDENT}{INDENT}{INDENT}}},\n\
              {INDENT}{INDENT}{INDENT}[&{OUT}]({payload} value_) {{ {published} }});\n\
              {INDENT}}}\n\n\
