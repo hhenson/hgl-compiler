@@ -157,26 +157,126 @@ fn calls_check_their_pack_arguments() {
     );
 }
 
-/// GEN-8 and GEN-14 (see #336): explicitly written types give the
-/// corresponding pack arguments a type. Named packs use written order.
+/// GEN-8, GEN-10 and GEN-14 (see #336): the explicitly written types
+/// are the entire positional pack. A named pack is inferred.
 #[test]
 fn a_written_type_checks_the_argument_in_its_pack_position() {
     let checked = module(concat!(
         "const fn f<...Ts>(items: ...Ts) -> i64 => 1\n",
-        "const fn names<...Ts>(items: ...{Ts}) -> i64 => 1\n",
-        "const fn accepts() -> i64 => f<i64, bool>(1, true) + names<str, bool>(z: \"a\", a: false)\n",
+        "const fn g<...Ts, ...Fields>(items: ...Ts, named: ...{Fields}) -> i64 => 1\n",
+        "const fn accepts() -> i64 => g<i64, bool>(1, true, label: \"a\") + f(1, true)\n",
         "const fn rejects() -> i64 => f<i64>(true)\n",
-        "const fn rejects_named() -> i64 => names<i64, bool>(z: 1, a: 8)\n",
+        "const fn too_many() -> i64 => f<i64>(1, true)\n",
+        "const fn too_few() -> i64 => f<i64, bool>(1)\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:5:37 type/type.mismatch EXPR-5",
-            "m.hgl:6:62 type/type.mismatch EXPR-5",
+            "m.hgl:6:41 type/pack.cardinality GEN-10",
+            "m.hgl:7:44 type/pack.cardinality GEN-10",
         ],
         "{}",
         checked.report
     );
+}
+
+/// GEN-5, GEN-6 and GEN-10: packed candidate selection checks every
+/// operand and admits only those counts covered by the candidate.
+#[test]
+fn operator_calls_check_pack_types_and_counts() {
+    let checked = module(concat!(
+        "operator first_of<T>(values: ...T{1:*}) -> T\n",
+        "impl const fn first_of(values: ...i64{1:*}) -> i64 => 7\n",
+        "const fn empty() -> i64 => first_of()\n",
+        "const fn wrong() -> i64 => first_of(1, \"a\")\n",
+        "const fn fine() -> i64 => first_of(1, 2)\n",
+        "operator overlapping(values: ...i64) -> i64\n",
+        "impl const fn overlapping(values: ...i64{1:*}) -> i64 => 7\n",
+        "impl const fn overlapping(values: ...i64{1}) -> i64 => 9\n",
+        "const fn tied() -> i64 => overlapping(1)\n",
+        "const fn several() -> i64 => overlapping(1, 2)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:37 type/pack.cardinality GEN-10",
+            "m.hgl:5:28 operator/operator.no_candidate GEN-5",
+            "m.hgl:10:27 operator/operator.ambiguous GEN-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// FN-8 and GEN-10: a selected candidate receives the pack index,
+/// each source key, and the resolved types of each generic pack.
+#[test]
+fn an_operator_call_records_positional_and_named_captures() {
+    let checked = module(concat!(
+        "operator mix<...Ts, ...Fields>(items: ...Ts, named: ...{Fields}) -> i64\n",
+        "impl const fn mix<...Ts, ...Fields>(items: ...Ts, named: ...{Fields}) -> i64 => 7\n",
+        "const fn mixed() -> i64 => mix<f64, bool>(1, true, label: \"a\")\n",
+        "const fn inferred() -> i64 => mix(1.0, true, label: \"a\")\n",
+        "const fn bad_count() -> i64 => mix<i64>(1, true, label: \"a\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:44 type/pack.cardinality GEN-10"],
+        "{}",
+        checked.report
+    );
+    for name in ["mixed", "inferred"] {
+        let mut calls = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::Call {
+                callee: Callee::Candidate { type_packs, .. },
+                arguments,
+                ..
+            } = &expr.kind
+            {
+                let slots: Vec<_> = arguments
+                    .iter()
+                    .map(|argument| {
+                        (
+                            argument.parameter,
+                            argument.pack.clone(),
+                            argument.value.ty.to_string(),
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    slots,
+                    [
+                        (Some(0), Some(PackKey::Position(0)), "f64".into()),
+                        (Some(0), Some(PackKey::Position(1)), "bool".into()),
+                        (Some(1), Some(PackKey::Name("label".into())), "str".into()),
+                    ]
+                );
+                let types: Vec<_> = type_packs
+                    .iter()
+                    .map(|pack| {
+                        (
+                            pack.parameter,
+                            pack.types
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    types,
+                    [
+                        (0, vec!["f64".into(), "bool".into()]),
+                        (1, vec!["str".into()])
+                    ]
+                );
+                calls += 1;
+            }
+        });
+        assert_eq!(calls, 1, "{name}");
+    }
 }
 
 /// FN-8: "Packs have no defaults, cannot be const, and follow all fixed

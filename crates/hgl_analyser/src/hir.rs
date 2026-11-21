@@ -834,6 +834,9 @@ pub enum Callee {
         /// this call (GEN-2), in the order declared. Empty for a
         /// candidate with none.
         generics: Vec<GenericArgument>,
+        /// Resolved type packs (GEN-10), in the order of their generic
+        /// parameters. A pack has no single type in `generics`.
+        type_packs: Vec<TypePackArgument>,
         /// What answers each requirement the candidate states, with
         /// `generics` in place: see [`Answer`].
         requirements: Vec<Answer>,

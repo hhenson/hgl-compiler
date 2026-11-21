@@ -12,7 +12,8 @@ use super::Typer;
 use super::arguments::{Slot, Takes};
 use super::fit::{not_null, open};
 use super::inference::{
-    Inferred, Places, asked_of_result, bare_parameter, infer, mentions, placed,
+    ExplicitGenerics, Inferred, Places, asked_of_result, infer, mentions, pack_bounds, placed,
+    type_pack,
 };
 use super::node::RefRead;
 use super::sizes;
@@ -592,45 +593,7 @@ impl<'a> Typer<'a> {
         let first_pack = generics
             .iter()
             .position(|generic| matches!(generic.kind, GenericKind::Pack { .. }));
-        // What the call writes of the generic parameters. Arguments
-        // that were rejected say nothing: the call is then read as one
-        // whose generic parameters are not known (ERR-9).
-        let written = given.map(|given| given.arguments.as_slice());
-        let explicit = self.generic_arguments(
-            name,
-            generics,
-            written
-                .map(|written| &written[..first_pack.unwrap_or(written.len()).min(written.len())]),
-        );
-        // GEN-8 and #336: a written type fixes its matching argument.
-        // Splitting a written suffix among multiple packs, and comparing
-        // its length with the captured arguments, await the owner.
-        let written_pack = first_pack
-            .filter(|&index| index + 1 == generics.len())
-            .zip(written)
-            .and_then(|(index, written)| {
-                let rest = written.get(index..)?;
-                let types = rest
-                    .iter()
-                    .map(|(at, argument)| match argument {
-                        Argument::Type(ty) => ty.clone(),
-                        Argument::Constant(_) => {
-                            self.diagnostics.emit(error(
-                                Category::Type,
-                                codes::GENERIC_ARGUMENT_KIND,
-                                *at,
-                                format!(
-                                    "the pack `{}` takes types, and this is a value",
-                                    generics[index].name
-                                ),
-                                "GEN-14",
-                            ));
-                            Type::Unknown
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                Some((index, types))
-            });
+        let explicit = self.explicit_generics(name, signature, given);
         let required = |parameter: &crate::types::Parameter| {
             // UNIT-8: "A parameter whose type is written `T?` needs no
             // default to be omitted."
@@ -638,23 +601,14 @@ impl<'a> Typer<'a> {
             // given, whatever its type" (FN-15).
             parameter.var || !parameter.has_default && !matches!(parameter.ty, Type::Nullable(_))
         };
-        let type_pack = |parameter: &Parameter| {
-            parameter.pack?;
-            bare_parameter(&parameter.ty, generics)
-                .filter(|&index| matches!(generics[index].kind, GenericKind::Pack { .. }))
-        };
-        let pack_bounds = |parameter: &Parameter| {
-            let (minimum, maximum) = parameter.pack_bounds;
-            // A pack of a declared type pack observes both bounds (GEN-10).
-            match type_pack(parameter).map(|index| &generics[index].kind) {
-                Some(GenericKind::Pack {
-                    minimum: lower,
-                    maximum: upper,
-                }) => (minimum.max(*lower), maximum.into_iter().chain(*upper).min()),
-                _ => (minimum, maximum),
-            }
-        };
-        let Some((mut found, faulty)) = explicit.filter(|_| !generics.is_empty()) else {
+        let read_pack_bounds =
+            |parameter: &Parameter, written| pack_bounds(parameter, generics, written);
+        let Some(ExplicitGenerics {
+            fixed: mut found,
+            faulty,
+            pack: written_pack,
+        }) = explicit.filter(|_| !generics.is_empty())
+        else {
             // No generic parameter, or none this pass resolves: a type
             // that names one is not known.
             let known = |ty: &Type| {
@@ -672,8 +626,8 @@ impl<'a> Typer<'a> {
                     ty: taken(parameter, known(&parameter.ty)),
                     required: required(parameter),
                     pack: parameter.pack,
-                    pack_bounds: pack_bounds(parameter),
-                    type_pack: type_pack(parameter),
+                    pack_bounds: read_pack_bounds(parameter, None),
+                    type_pack: type_pack(parameter, generics),
                     listed,
                 })
                 .collect();
@@ -742,8 +696,8 @@ impl<'a> Typer<'a> {
                 ty: Type::Unknown,
                 required: required(parameter),
                 pack: parameter.pack,
-                pack_bounds: pack_bounds(parameter),
-                type_pack: type_pack(parameter),
+                pack_bounds: read_pack_bounds(parameter, written_pack.as_ref()),
+                type_pack: type_pack(parameter, generics),
                 listed,
             })
             .collect();
@@ -761,7 +715,7 @@ impl<'a> Typer<'a> {
             values: &named,
             written_pack: written_pack
                 .as_ref()
-                .map(|(index, types)| (*index, types.as_slice())),
+                .map(|pack| (pack.parameter, pack.types.as_slice())),
             defaults: generics
                 .iter()
                 .map(|generic| self.default_constant(callee, generic))
@@ -785,8 +739,8 @@ impl<'a> Typer<'a> {
                         .map(|(position, argument)| {
                             written_pack
                                 .as_ref()
-                                .filter(|(generic, _)| *generic == index)
-                                .and_then(|(_, types)| types.get(position))
+                                .filter(|pack| pack.parameter == index)
+                                .and_then(|pack| pack.types.get(position))
                                 .cloned()
                                 .unwrap_or_else(|| {
                                     self.inferred_from(listed, &argument.value, Takes::Parameters)
@@ -796,8 +750,8 @@ impl<'a> Typer<'a> {
                 });
             }
         }
-        if let Some((index, types)) = &written_pack {
-            inferred_packs[*index].get_or_insert_with(|| types.clone());
+        if let Some(pack) = &written_pack {
+            inferred_packs[pack.parameter].get_or_insert_with(|| pack.types.clone());
         }
         self.generic_values(name, callee, generics, (&named, &defaulted), &mut found);
 

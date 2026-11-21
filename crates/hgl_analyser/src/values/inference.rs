@@ -17,7 +17,10 @@ use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
 use crate::hir::{self, Expr};
 use crate::program::Declaration;
-use crate::types::{Argument, Constant, ConstantValue, GenericKind, GenericParameter, Type};
+use crate::types::{
+    Argument, CallArguments, Constant, ConstantValue, GenericKind, GenericParameter, Pack,
+    Parameter, Signature, Type,
+};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -247,6 +250,73 @@ impl<'a> Typer<'a> {
             Err(fault) if no_member(&fault) && names_parameter(declared) => as_written(),
             Err(_) => None,
         }
+    }
+
+    /// Separate explicitly written generic arguments from the types of
+    /// a positional pack (GEN-8, GEN-14, and the owner's ruling on #336).
+    /// Named packs get their types from the named arguments they capture.
+    pub(super) fn explicit_generics(
+        &mut self,
+        name: &SyntaxToken,
+        signature: &Signature,
+        given: Option<&CallArguments>,
+    ) -> Option<ExplicitGenerics> {
+        let generics = &signature.generics;
+        let first_pack = generics
+            .iter()
+            .position(|generic| matches!(generic.kind, GenericKind::Pack { .. }));
+        let fixed_count = first_pack.unwrap_or(generics.len());
+        let positional = signature
+            .parameters
+            .iter()
+            .find(|parameter| parameter.pack == Some(Pack::Positional))
+            .and_then(|parameter| type_pack(parameter, generics));
+        let written = given.map(|given| given.arguments.as_slice());
+        let prefix = written.map(|written| {
+            if positional.is_some() {
+                &written[..fixed_count.min(written.len())]
+            } else {
+                written
+            }
+        });
+        let (mut fixed, mut faulty) =
+            self.generic_arguments(name, &generics[..fixed_count], prefix)?;
+        fixed.resize(generics.len(), None);
+        let mut pack = None;
+        if let Some(index) = positional
+            && let Some(types) = written.and_then(|written| written.get(fixed_count..))
+            && !types.is_empty()
+        {
+            let types = types
+                .iter()
+                .map(|(at, argument)| match argument {
+                    Argument::Type(ty) => ty.clone(),
+                    Argument::Constant(_) => {
+                        faulty = true;
+                        self.diagnostics.emit(error(
+                            Category::Type,
+                            codes::GENERIC_ARGUMENT_KIND,
+                            *at,
+                            format!(
+                                "the pack `{}` takes types, and this is a value",
+                                generics[index].name
+                            ),
+                            "GEN-14",
+                        ));
+                        Type::Unknown
+                    }
+                })
+                .collect();
+            pack = Some(hir::TypePackArgument {
+                parameter: index,
+                types,
+            });
+        }
+        Some(ExplicitGenerics {
+            fixed,
+            faulty,
+            pack,
+        })
     }
 
     /// What the generic arguments a call writes say of the callee's
@@ -662,6 +732,50 @@ impl<'a> Typer<'a> {
             defaulted,
         }
     }
+}
+
+/// Explicit arguments to ordinary generics and to the positional type
+/// pack, which has no single type (GEN-8, GEN-10).
+pub(super) struct ExplicitGenerics {
+    /// Types or constants aligned with the declared generic parameters.
+    pub(super) fixed: Vec<Option<Argument>>,
+    /// True when one of the arguments was already reported.
+    pub(super) faulty: bool,
+    /// The complete type sequence the call writes for the positional pack.
+    pub(super) pack: Option<hir::TypePackArgument>,
+}
+
+/// The generic parameter of a heterogeneous value pack (FN-8).
+pub(super) fn type_pack(parameter: &Parameter, generics: &[GenericParameter]) -> Option<usize> {
+    parameter.pack?;
+    bare_parameter(&parameter.ty, generics)
+        .filter(|&index| matches!(generics[index].kind, GenericKind::Pack { .. }))
+}
+
+/// A value pack observes its own bounds, those of its type pack, and
+/// the length of any type sequence the call writes (GEN-10, #336).
+pub(super) fn pack_bounds(
+    parameter: &Parameter,
+    generics: &[GenericParameter],
+    written: Option<&hir::TypePackArgument>,
+) -> (u64, Option<u64>) {
+    let (mut minimum, mut maximum) = parameter.pack_bounds;
+    if let Some(index) = type_pack(parameter, generics) {
+        if let GenericKind::Pack {
+            minimum: lower,
+            maximum: upper,
+        } = generics[index].kind
+        {
+            minimum = minimum.max(lower);
+            maximum = maximum.into_iter().chain(upper).min();
+        }
+        if let Some(written) = written.filter(|pack| pack.parameter == index) {
+            let count = written.types.len() as u64;
+            minimum = minimum.max(count);
+            maximum = Some(maximum.map_or(count, |maximum| maximum.min(count)));
+        }
+    }
+    (minimum, maximum)
 }
 
 /// The places a call's arguments are given to, where their types name

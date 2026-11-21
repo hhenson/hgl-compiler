@@ -471,15 +471,25 @@ impl<'a> Typer<'a> {
             }
         }
         for index in [positional_pack, named_pack].into_iter().flatten() {
-            self.check_pack_count(list, &slots[index], &pack_locations[index]);
+            self.check_pack_count(
+                list,
+                slots[index].name,
+                slots[index].pack_bounds,
+                &pack_locations[index],
+            );
         }
         arguments
     }
 
     /// GEN-10 and the owner's decision on #336: blame the first excess
     /// argument, or the closing parenthesis if the pack has too few.
-    fn check_pack_count(&mut self, list: &SyntaxNode, slot: &Slot, given: &[Location]) {
-        let (minimum, maximum) = slot.pack_bounds;
+    pub(super) fn check_pack_count(
+        &mut self,
+        list: &SyntaxNode,
+        name: &str,
+        (minimum, maximum): (u64, Option<u64>),
+        given: &[Location],
+    ) {
         let count = given.len() as u64;
         let (at, bound, direction) = if let Some(maximum) = maximum
             && count > maximum
@@ -506,10 +516,7 @@ impl<'a> Typer<'a> {
             Category::Type,
             codes::PACK_CARDINALITY,
             at,
-            format!(
-                "the pack `{}` takes {direction} {bound} {arguments} and is given {count}",
-                slot.name
-            ),
+            format!("the pack `{name}` takes {direction} {bound} {arguments} and is given {count}"),
             "GEN-10",
         ));
     }

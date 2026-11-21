@@ -1868,7 +1868,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                             // is selected (`Typer::called`): a `var`
                             // parameter's place among them (FN-15).
                             let mark = typer.diagnostics.len();
-                            typer.called(call.operator, chosen, given, (call.form, call.name));
+                            typer.called(call.operator, *chosen, given, (call.form, call.name));
                             let reports = typer.diagnostics.as_slice()[mark..].to_vec();
                             typer.diagnostics.truncate(mark);
                             let fails = !reports.is_empty();
