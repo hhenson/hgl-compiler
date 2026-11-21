@@ -135,7 +135,11 @@ impl<'a> Typer<'a> {
                 if has_results && form != ArgumentForms::Whole {
                     // A more general inference pass can find an admitted
                     // candidate that reads fewer operands (ERR-15).
+                    let keeps_results = admitted.known.iter().any(|(reads, _)| reads.is_empty());
                     converting.include(admitted);
+                    if keeps_results {
+                        break;
+                    }
                     continue;
                 }
                 let takes_types = admitted.fits;
