@@ -31,7 +31,7 @@ use crate::program::{
     Binding, Decision, DeclarationKind, ImportKind, LocalKind, Module, NameUse, PreludeName,
     Program, RUN_CONFIG,
 };
-use crate::syntax::{child, leads_its_test};
+use crate::syntax::{child, has_token, leads_its_test};
 use crate::{INJECTABLES, RESULT_FORMS, codes, error};
 
 /// Resolves the names of every module, filling in [`Module::uses`] and
@@ -312,7 +312,13 @@ impl Resolver<'_> {
         self.hidden.clear();
         for parameter in &parameters {
             if let Some(name) = declared_name(parameter) {
-                self.bind(&name, LocalKind::Parameter);
+                // FN-14, FN-15: a `var` parameter names a mutable place.
+                let kind = if has_token(parameter, SyntaxKind::KwVar) {
+                    LocalKind::Var
+                } else {
+                    LocalKind::Parameter
+                };
+                self.bind(&name, kind);
             }
         }
         // The result type, the constraints, the body.
