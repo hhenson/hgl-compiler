@@ -113,9 +113,13 @@ fn the_warning_codes_are_the_chapters_rows() {
     }
 }
 
-/// "The source and execution catalogs are disjoint". TIME-8: a duration
-/// that is not admitted "rejects where the compiler sees its value ...
-/// with `schedule.duration_bounds`, and elsewhere fails the call as the
+/// "The source and execution catalogs are disjoint, but for two codes.
+/// `store.key_type` is a source rejection where the two uses are in one
+/// program, and an execution failure where they are not. `key.unstable`
+/// is a source rejection where the type is written, and an execution
+/// failure for what an `any` holds." TIME-8: a duration that is not
+/// admitted "rejects where the compiler sees its value ... with
+/// `schedule.duration_bounds`, and elsewhere fails the call as the
 /// program runs, with `schedule.non_positive_duration`": one code in
 /// each.
 #[test]
@@ -133,9 +137,15 @@ fn no_execution_code_is_a_source_code() {
     assert!(!execution.is_empty());
     // The crate's list is the chapter's execution rows, in order.
     assert_eq!(catalogue::EXECUTION_CODES, execution);
+    // The two codes in both lists.
+    let both = ["store.key_type", "key.unstable"];
     for code in execution {
         assert!(catalogue::is_execution(&code));
-        assert_eq!(catalogue::category_of(&code), None, "{code}");
+        if both.contains(&code.as_str()) {
+            assert!(catalogue::category_of(&code).is_some(), "{code}");
+        } else {
+            assert_eq!(catalogue::category_of(&code), None, "{code}");
+        }
     }
     assert_eq!(
         catalogue::category_of("schedule.duration_bounds"),

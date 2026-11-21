@@ -1,5 +1,6 @@
-//! The result forms, `ok`, `err`, `is_ok`, `is_err` and `capture`, the
-//! parts of a result and of an error, and `value?` (ERR-2 to ERR-7).
+//! The result forms, `ok`, `err`, `is_ok`, `is_err` and `capture`, and the
+//! parts of a result and of an error (ERR-2 to ERR-7). The form a result
+//! takes from its place is `forms`'s.
 //! Part of the typing pass ([`super`]).
 
 use hgl_diagnostics::{Category, Location};
@@ -8,8 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::calls::arguments_of;
 use super::fit::{not_null, nullable, open, whole};
 use super::{BOOL, CapturedOutput, Fact, Typer};
-use crate::hir::{Callee, ErrorPart, Expr, ExprKind, Hook, ValueCategory};
-use crate::program::Role;
+use crate::hir::{Callee, ErrorPart, Expr, ExprKind, ValueCategory};
 use crate::syntax::{child, name_token, tokens};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error};
@@ -605,116 +605,5 @@ impl<'a> Typer<'a> {
             error: failure,
         };
         (kind, ty)
-    }
-
-    /// `value?` (ERR-5): "Success yields T. In a value function
-    /// returning `result<U,E>`, failure returns the same E as Err. In
-    /// when, only `result<T,error>` may propagate to node failure ...
-    /// Composition, lifecycle, and generator uses reject
-    /// (`result.propagation_phase`), and an operand or an enclosing
-    /// result of another type rejects (`result.propagation_type`) ...
-    /// It does not unwrap null (ERR-12)."
-    pub(super) fn propagation(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
-        let Some(operand) = node.children().next() else {
-            return (ExprKind::Unread, Type::Unknown);
-        };
-        // The primary location is the `?`.
-        let at = tokens(node)
-            .filter(|token| token.kind() == SyntaxKind::Question)
-            .last()
-            .map_or(self.at(node), |mark| Location::new(self.file, mark.span()));
-        let operand = self.expression(&operand, None);
-        let value_function = self.declaration.kind.role() == Some(Role::Value);
-        // Where it stands, when that is a place nothing propagates from.
-        let forbidden = if value_function {
-            None
-        } else if self.graph {
-            Some("in composition: a graph wires its failures, and has none to leave by")
-        } else {
-            match self.hook {
-                Some(Hook::When) => None,
-                Some(Hook::Start) => Some("in `start`"),
-                Some(Hook::Stop) => Some("in `stop`"),
-                None if self.generating => Some("in a source"),
-                None => Some("outside a `when`"),
-            }
-        };
-        if let Some(place) = forbidden {
-            self.diagnostics.emit(
-                error(
-                    Category::Phase,
-                    codes::RESULT_PROPAGATION_PHASE,
-                    at,
-                    format!("`?` does not propagate {place}"),
-                    "ERR-5",
-                )
-                .with_note(
-                    "`?` stands in a value function that returns a `result`, and in a `when`",
-                ),
-            );
-        }
-        let (value, failure) = match &operand.ty {
-            Type::Result { value, error } => ((**value).clone(), (**error).clone()),
-            other => {
-                // What is not known has been reported, or is for a
-                // later part (ERR-9).
-                if whole(other) && !open(other) {
-                    self.diagnostics.emit(error(
-                        Category::Type,
-                        codes::RESULT_PROPAGATION_TYPE,
-                        at,
-                        format!("`?` propagates a `result<T, E>`, and this is `{other}`"),
-                        "ERR-5",
-                    ));
-                }
-                return (ExprKind::Propagate(Box::new(operand)), Type::Unknown);
-            }
-        };
-        if forbidden.is_none() && whole(&failure) {
-            if value_function {
-                // "Failure returns the same E as Err."
-                match &self.signature.result {
-                    Some(Type::Result { error, .. }) if **error == failure => {}
-                    Some(result) if !whole(result) || open(result) => {}
-                    enclosing => {
-                        let returns = match enclosing {
-                            Some(result) => format!("returns `{result}`"),
-                            None => "returns nothing".to_string(),
-                        };
-                        self.diagnostics.emit(
-                            error(
-                                Category::Type,
-                                codes::RESULT_PROPAGATION_TYPE,
-                                at,
-                                format!(
-                                    "`?` returns a failure of `{failure}` from `{}`, which \
-                                     {returns}",
-                                    self.declaration.name
-                                ),
-                                "ERR-5",
-                            )
-                            .with_note(format!(
-                                "the function's result is a `result<U, {failure}>` for `?` to \
-                                 return its failure"
-                            )),
-                        );
-                    }
-                }
-            } else if failure != Type::Error {
-                // "In when, only `result<T,error>` may propagate to node
-                // failure."
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::RESULT_PROPAGATION_TYPE,
-                    at,
-                    format!(
-                        "in a `when`, `?` fails the node with an `error`, and this failure is \
-                         `{failure}`"
-                    ),
-                    "ERR-5",
-                ));
-            }
-        }
-        (ExprKind::Propagate(Box::new(operand)), value)
     }
 }

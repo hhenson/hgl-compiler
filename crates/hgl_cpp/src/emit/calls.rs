@@ -26,7 +26,7 @@
 //! is a statement of its own, in that order, in a lambda called where
 //! the call is written.
 
-use hgl_analyser::hir::{Argument, Callee, Expr, ExprKind, Value};
+use hgl_analyser::hir::{Argument, Callee, Expr, ExprKind, Raise, Value};
 use hgl_analyser::{
     Argument as GenericArgument, ConstantValue, DeclarationKind, Detail, OperatorRef, Program,
     Role, Signature, Type,
@@ -51,6 +51,64 @@ impl Emitter<'_> {
         callee: &Callee,
         arguments: &[Argument],
         whole: &Expr,
+    ) -> String {
+        self.call_with_lookup(scope, callee, arguments, whole, false)
+    }
+
+    /// Writes an already supported lookup when the recorded form agrees
+    /// with its runtime helper: the store's strict read or a dictionary's
+    /// nullable read (CAP-6, ERR-6, ERR-15).
+    pub(super) fn legacy_lookup(&mut self, scope: &mut Scope, value: &Expr) -> Option<String> {
+        let (call, helper) = match &value.kind {
+            ExprKind::Raised { result, raise }
+                if !matches!(raise, Raise::Return | Raise::CallNode | Raise::Reader) =>
+            {
+                (result, "get_GlobalState_str")
+            }
+            ExprKind::OrNull {
+                result,
+                reader: false,
+            } => (result, "get_dict_K__T__K"),
+            _ => return None,
+        };
+        let ExprKind::Call {
+            callee:
+                callee @ Callee::Candidate {
+                    module,
+                    declaration,
+                    ..
+                },
+            arguments,
+            lifted: false,
+            ..
+        } = &call.kind
+        else {
+            return None;
+        };
+        if Some(*module) != self.program.core() {
+            return None;
+        }
+        let core = &self.program.modules[*module];
+        let declared = &core.declarations[*declaration];
+        let Detail::Callable(signature) = &core.details[*declaration] else {
+            return None;
+        };
+        (matches!(
+            declared.kind,
+            DeclarationKind::NativeCandidate(Role::Value, _)
+        ) && names::native_candidate(&declared.name, signature) == helper)
+            .then(|| self.call_with_lookup(scope, callee, arguments, call, true))
+    }
+
+    /// A value call, with the older lookup helpers available only to the
+    /// two compatible forms selected by `legacy_lookup`.
+    fn call_with_lookup(
+        &mut self,
+        scope: &mut Scope,
+        callee: &Callee,
+        arguments: &[Argument],
+        whole: &Expr,
+        legacy_lookup: bool,
     ) -> String {
         let at = whole.at;
         // True for the call that is the whole of a statement.
@@ -109,6 +167,9 @@ impl Emitter<'_> {
                 }
             }
             DeclarationKind::NativeCandidate(Role::Value, operator) => {
+                if !legacy_lookup && Some(module) == program.core() && declared.name == "get" {
+                    return self.missing(at, "a fallible lookup in this form");
+                }
                 let Some(name) = self.native_candidate(
                     module,
                     declaration,

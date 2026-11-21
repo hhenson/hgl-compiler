@@ -21,7 +21,7 @@ const RESULTS: &str = concat!(
     "    return ok(value)\n",
     "}\n",
     "const fn doubled(value: i64) -> result<i64, error> {\n",
-    "    let price = checked(value)?\n",
+    "    let price: i64 = checked(value)\n",
     "    return ok(price * 2)\n",
     "}\n",
     "const fn recovered(value: i64) -> i64 {\n",
@@ -34,7 +34,7 @@ const RESULTS: &str = concat!(
     "    return outcome.error.message\n",
     "}\n",
     "fn required(value: i64) -> i64 {\n",
-    "    when { return checked(value)? }\n",
+    "    when { return checked(value) }\n",
     "}\n",
     "fn tagged(value: i64) -> result<i64, error> {\n",
     "    when { return checked(value) }\n",
@@ -57,7 +57,7 @@ fn the_chapters_results_are_read() {
     assert_eq!(
         locals(&checked, "doubled"),
         ["value: i64", "price: i64"],
-        "`?` gives the T of a success"
+        "the place takes a success as its T"
     );
     assert_eq!(
         locals(&checked, "recovered"),
@@ -218,7 +218,7 @@ fn a_guard_proves_a_results_tag() {
             "m.hgl:13:36 type/result.required_variant ERR-3",
             "m.hgl:14:28 type/result.required_variant ERR-3",
             "m.hgl:16:43 type/result.required_variant ERR-3",
-            "m.hgl:31:43 name/member.unknown ERR-3",
+            "m.hgl:31:35 type/result.propagation_type ERR-5",
             "m.hgl:32:18 type/type.mismatch ERR-3",
         ]
     );
@@ -300,57 +300,37 @@ fn an_error_owns_a_message_and_a_code() {
     );
 }
 
-/// ERR-5: "Success yields T. In a value function returning
-/// `result<U,E>`, failure returns the same E as Err. In when, only
-/// `result<T,error>` may propagate to node failure ... Composition,
-/// lifecycle, and generator uses reject (`result.propagation_phase`),
-/// and an operand or an enclosing result of another type rejects
-/// (`result.propagation_type`) ... It does not unwrap null (ERR-12)."
+/// ERR-5 and ERR-15: a place asking for T raises an error in its
+/// own phase. A value function that returns a result needs the same
+/// failure type, and elsewhere only an `error` can be raised.
 #[test]
-fn propagation_needs_a_result_and_a_place_to_leave_by() {
+fn a_result_raises_only_where_its_failure_type_is_admitted() {
     let checked = module(concat!(
         "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
         "const fn texted(value: i64) -> result<i64, str> => ok(value)\n",
-        // The same E, whatever the T.
         "const fn doubled(value: i64) -> result<f64, error> {\n",
-        "    let price = checked(value)?\n",
+        "    let price: i64 = checked(value)\n",
         "    return ok(2.0)\n",
         "}\n",
-        // An enclosing result of another E, and no result at all.
         "const fn crossed(value: i64) -> result<i64, error> {\n",
-        "    return ok(texted(value)?)\n",
+        "    return ok(texted(value))\n",
         "}\n",
-        "const fn plain(value: i64) -> i64 {\n",
-        "    return checked(value)?\n",
-        "}\n",
-        // What is no result, a nullable included.
-        "const fn numbers(value: i64, maybe: i64?) -> result<i64, error> {\n",
-        "    let one = value?\n",
-        "    let two = maybe?\n",
-        "    return ok(0)\n",
-        "}\n",
+        "const fn plain(value: i64) -> i64 => checked(value)\n",
         "fn node(value: i64) -> i64 {\n",
-        "    inject out\n",
-        "    start { let early = checked(1)? }\n",
+        "    start { let early: i64 = checked(1) }\n",
         "    when {\n",
-        "        let texts = texted(value)?\n",
-        "        return checked(value)?\n",
+        "        let texts: i64 = texted(value)\n",
+        "        return checked(value)\n",
         "    }\n",
-        "    stop { let late = checked(2)? }\n",
+        "    stop { let late: i64 = checked(2) }\n",
         "}\n",
-        "fn graph(value: result<i64, error>) -> i64 => value?\n",
+        "fn graph(value: result<i64, error>) -> i64 => value\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:9:28 type/result.propagation_type ERR-5",
-            "m.hgl:12:26 type/result.propagation_type ERR-5",
-            "m.hgl:15:20 type/result.propagation_type ERR-5",
-            "m.hgl:16:20 type/result.propagation_type ERR-5",
-            "m.hgl:21:35 phase/result.propagation_phase ERR-5",
-            "m.hgl:23:34 type/result.propagation_type ERR-5",
-            "m.hgl:26:33 phase/result.propagation_phase ERR-5",
-            "m.hgl:28:52 phase/result.propagation_phase ERR-5",
+            "m.hgl:9:15 type/result.propagation_type ERR-5",
+            "m.hgl:15:26 type/result.propagation_type ERR-5",
         ]
     );
     assert_eq!(locals(&checked, "doubled"), ["value: i64", "price: i64"]);
@@ -363,7 +343,7 @@ const CAPTURE: &str = concat!(
     "    return ok(value)\n",
     "}\n",
     "fn required(value: i64) -> i64 {\n",
-    "    when { return checked(value)? }\n",
+    "    when { return checked(value) }\n",
     "}\n",
     "fn forward(value: i64) -> i64 {\n",
     "    when { return value }\n",
@@ -472,7 +452,7 @@ fn a_capture_covers_a_temporal_call_in_a_graph() {
     let checked = module(concat!(
         "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
         "fn required(value: i64) -> i64 {\n",
-        "    when { return checked(value)? }\n",
+        "    when { return checked(value) }\n",
         "}\n",
         "fn sink(value: i64) {\n",
         "    when { }\n",
@@ -580,4 +560,315 @@ fn nothing_takes_the_name_of_a_result_form() {
             "m.hgl:6:9 name/name.duplicate ERR-13",
         ]
     );
+}
+
+/// ERR-5, ERR-12, ERR-15: an inferred local keeps its result. A place
+/// that expects the result keeps it too. A place expecting the value or
+/// its nullable form records which conversion it requires.
+#[test]
+fn value_code_records_each_form_of_a_result() {
+    use hgl_analyser::hir::{NULL_READ_CODE, Raise, walk_statements};
+
+    let checked = module(concat!(
+        "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
+        "const fn forms(value: i64, nullable: i64?) -> result<i64, error> {\n",
+        "    let held = checked(value)\n",
+        "    let whole: result<i64, error> = held\n",
+        "    let raised: i64 = held\n",
+        "    let optional: i64? = held\n",
+        "    let read: i64 = nullable\n",
+        "    return ok(raised + read)\n",
+        "}\n",
+        "const fn nullable_value(value: i64?) -> result<i64?, error> => ok(value)\n",
+        "const fn take_nullable(value: i64?) -> i64? => nullable_value(value)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    assert_eq!(
+        locals(&checked, "forms"),
+        [
+            "value: i64",
+            "nullable: i64?",
+            "held: result<i64, error>",
+            "whole: result<i64, error>",
+            "raised: i64",
+            "optional: i64?",
+            "read: i64",
+        ],
+    );
+    let mut observed = Vec::new();
+    walk_statements(
+        &body(&checked, "forms").statements,
+        &mut |expr| match expr.kind {
+            ExprKind::Raised {
+                raise: Raise::Return,
+                ..
+            } => observed.push("value"),
+            ExprKind::OrNull { reader: false, .. } => observed.push("nullable"),
+            ExprKind::NullRead {
+                raise: Raise::Return,
+                code: NULL_READ_CODE,
+                ..
+            } => {
+                observed.push("null read");
+            }
+            _ => {}
+        },
+    );
+    assert_eq!(observed, ["value", "nullable", "null read"]);
+
+    let mut raised = 0;
+    walk_statements(&body(&checked, "take_nullable").statements, &mut |expr| {
+        if matches!(
+            expr.kind,
+            ExprKind::Raised {
+                raise: Raise::Execution,
+                ..
+            }
+        ) {
+            assert_eq!(expr.ty.to_string(), "i64?");
+            raised += 1;
+        }
+    });
+    assert_eq!(raised, 1);
+}
+
+/// ERR-12 and ERR-15: the lifted call can publish its result unchanged,
+/// raise at its own node, or publish null on failure. A held connection's
+/// conversions and a nullable connection read happen at the reader.
+#[test]
+fn composition_records_each_form_of_a_result() {
+    use hgl_analyser::hir::{NULL_READ_CODE, Raise, ValueCategory, walk_statements};
+
+    let checked = module(concat!(
+        "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
+        "fn forms(value: i64, nullable: i64?) -> i64 {\n",
+        "    let whole: result<i64, error> = checked(value)\n",
+        "    let raised: i64 = checked(value)\n",
+        "    let optional: i64? = checked(value)\n",
+        "    let held_raised: i64 = whole\n",
+        "    let held_optional: i64? = whole\n",
+        "    let read: i64 = nullable\n",
+        "    return raised\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let mut observed = Vec::new();
+    walk_statements(&body(&checked, "forms").statements, &mut |expr| {
+        let form = match expr.kind {
+            ExprKind::Raised {
+                raise: Raise::CallNode,
+                ..
+            } => "call value",
+            ExprKind::Raised {
+                raise: Raise::Reader,
+                ..
+            } => "held value",
+            ExprKind::OrNull { reader: false, .. } => "call nullable",
+            ExprKind::OrNull { reader: true, .. } => "held nullable",
+            ExprKind::NullRead {
+                raise: Raise::Reader,
+                code: NULL_READ_CODE,
+                ..
+            } => "null read",
+            _ => return,
+        };
+        assert_eq!(expr.category, ValueCategory::Connection);
+        observed.push(form);
+    });
+    assert_eq!(
+        observed,
+        [
+            "call value",
+            "call nullable",
+            "held value",
+            "held nullable",
+            "null read"
+        ]
+    );
+}
+
+/// ERR-15 and ERR-12: an operator's places are independent. An
+/// argument can keep its result while another takes the result's
+/// value or reads a nullable payload.
+#[test]
+fn operators_fit_each_argument_to_its_selected_parameter() {
+    use hgl_analyser::hir::{Raise, walk_statements};
+
+    let checked = module(concat!(
+        "operator take<A, B>(keep: A, read: B) -> i64\n",
+        "impl const fn take(keep: result<i64, error>, read: i64) -> i64 => read\n",
+        "operator take_items<A, B>(keep: A, read: B) -> i64\n",
+        "impl const fn take_items<T>(keep: result<i64, error>, read: list<T>) -> i64 => 1\n",
+        "const fn read_result(keep: result<i64, error>, read: result<i64, error>) -> i64 => take(keep, read)\n",
+        "const fn read_nullable(keep: result<i64, error>, read: i64?) -> i64 => take(keep: keep, read: read)\n",
+        "const fn read_items(keep: result<i64, error>, read: result<list<i64>, error>) -> i64 => take_items(keep, read)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for (name, nullable) in [
+        ("read_result", false),
+        ("read_nullable", true),
+        ("read_items", false),
+    ] {
+        let mut calls = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::Call { arguments, .. } = &expr.kind {
+                assert!(matches!(arguments[0].value.kind, ExprKind::Local(_)));
+                let converted = &arguments[1].value.kind;
+                if nullable {
+                    assert!(matches!(
+                        converted,
+                        ExprKind::NullRead {
+                            raise: Raise::Execution,
+                            ..
+                        }
+                    ));
+                } else {
+                    assert!(matches!(
+                        converted,
+                        ExprKind::Raised {
+                            raise: Raise::Execution,
+                            ..
+                        }
+                    ));
+                }
+                calls += 1;
+            }
+        });
+        assert_eq!(calls, 1, "{name}");
+    }
+}
+
+/// GEN-2, ERR-12 and ERR-15: a generic function sees the argument its
+/// parameter can take. An unconstrained parameter keeps the whole type.
+#[test]
+fn generic_functions_infer_from_the_accepted_argument_form() {
+    use hgl_analyser::Argument;
+    use hgl_analyser::hir::{Raise, walk_statements};
+
+    let checked = module(concat!(
+        "const fn count<T>(items: list<T>) -> i64 => 1\n",
+        "const fn accept<T>(item: T) -> i64 => 1\n",
+        "const fn from_result(items: result<list<i64>, error>) -> i64 => count(items)\n",
+        "const fn from_nullable(items: list<i64>?) -> i64 => count(items)\n",
+        "const fn from_both(items: result<list<i64>?, error>) -> i64 => count(items)\n",
+        "const fn from_whole(items: result<list<i64>, error>) -> i64 => accept(items)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for (name, expected, form) in [
+        ("from_result", "i64", "raised"),
+        ("from_nullable", "i64", "read"),
+        ("from_both", "i64", "raised and read"),
+        ("from_whole", "result<list<i64>, error>", "whole"),
+    ] {
+        let mut calls = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::Call {
+                callee, arguments, ..
+            } = &expr.kind
+            {
+                let [Argument::Type(ty)] = callee.generics() else {
+                    panic!("{name} has one resolved type argument");
+                };
+                assert_eq!(ty.to_string(), expected);
+                let given = match &arguments[0].value.kind {
+                    ExprKind::Raised {
+                        raise: Raise::Execution,
+                        ..
+                    } => "raised",
+                    ExprKind::NullRead {
+                        value,
+                        raise: Raise::Execution,
+                        ..
+                    } => match &value.kind {
+                        ExprKind::Raised {
+                            raise: Raise::Execution,
+                            ..
+                        } => "raised and read",
+                        _ => "read",
+                    },
+                    ExprKind::Local(_) => "whole",
+                    kind => panic!("unexpected form in {name}: {kind:?}"),
+                };
+                assert_eq!(given, form);
+                calls += 1;
+            }
+        });
+        assert_eq!(calls, 1, "{name}");
+    }
+}
+
+/// ERR-12, ERR-15: indexing or iterating a fallible nullable collection
+/// first takes the success value, then reads the nullable collection.
+#[test]
+fn indexing_and_iteration_read_nullable_success_payloads() {
+    use hgl_analyser::hir::{NULL_READ_CODE, Raise, walk_statements};
+
+    let checked = module(concat!(
+        "const fn head(items: result<list<i64>?, error>) -> i64 => items[0]\n",
+        "const fn sum(items: result<list<i64>?, error>) -> i64 {\n",
+        "    var total = 0\n",
+        "    for item in items { total += item }\n",
+        "    return total\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for name in ["head", "sum"] {
+        let mut reads = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::NullRead { value, raise, code } = &expr.kind {
+                assert_eq!(*code, NULL_READ_CODE);
+                assert_eq!(*raise, Raise::Execution);
+                assert!(matches!(
+                    value.kind,
+                    ExprKind::Raised {
+                        raise: Raise::Execution,
+                        ..
+                    }
+                ));
+                assert_eq!(expr.ty.to_string(), "list<i64>");
+                reads += 1;
+            }
+        });
+        assert_eq!(reads, 1, "{name}");
+    }
+}
+
+/// ERR-15 with ERR-12 (hhenson/hgl-compiler#345): a non-nullable place
+/// takes a result's success value, then reads it. CTRL-10 and CTRL-13
+/// require the same two reads for a fallible nullable condition.
+#[test]
+fn typed_places_and_conditions_read_nullable_success_payloads() {
+    use hgl_analyser::hir::{NULL_READ_CODE, Raise, walk_statements};
+
+    let checked = module(concat!(
+        "const fn required(flag: result<bool?, error>) -> i64 {\n",
+        "    if flag { return 1 }\n",
+        "    return 0\n",
+        "}\n",
+        "fn choose(flag: result<bool?, error>) -> i64 => if flag { 1 } else { 0 }\n",
+        "const fn read_value(outcome: result<i64?, error>) -> i64 => outcome\n",
+        "const fn checked(value: i64) -> result<i64?, error> => ok(value)\n",
+        "fn read_connection(value: i64) -> i64 => checked(value)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for (name, ty, read_phase, result_phase) in [
+        ("required", "bool", Raise::Execution, Raise::Execution),
+        ("choose", "bool", Raise::Reader, Raise::Reader),
+        ("read_value", "i64", Raise::Execution, Raise::Execution),
+        ("read_connection", "i64", Raise::Reader, Raise::CallNode),
+    ] {
+        let mut reads = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::NullRead { value, raise, code } = &expr.kind {
+                assert_eq!(*code, NULL_READ_CODE);
+                assert_eq!(*raise, read_phase);
+                assert!(
+                    matches!(value.kind, ExprKind::Raised { raise, .. } if raise == result_phase)
+                );
+                assert_eq!(expr.ty.to_string(), ty);
+                reads += 1;
+            }
+        });
+        assert_eq!(reads, 1, "{name}");
+    }
 }

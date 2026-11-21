@@ -206,9 +206,10 @@ fn an_if_in_a_graph_is_composed_or_selected() {
         "    let gated = if open { price }\n",
         "    let some = if wide { 1.0 }\n",
         "    let lone = if wide { price }\n",
-        // A condition that is no `bool`, and branches of two types.
+        // CTRL-13 and ERR-12: a nullable condition is read as bool.
+        // A condition of another type and mismatched branches reject.
         "    let bad1 = if count { price } else { price }\n",
-        "    let bad2 = if maybe { price } else { price }\n",
+        "    let from_nullable = if maybe { price } else { price }\n",
         "    let bad3 = if open { price } else { \"text\" }\n",
         "    return picked\n",
         "}\n",
@@ -217,7 +218,6 @@ fn an_if_in_a_graph_is_composed_or_selected() {
         checked.summary(),
         [
             "m.hgl:11:19 type/type.mismatch CTRL-13",
-            "m.hgl:12:19 type/type.mismatch CTRL-13",
             "m.hgl:13:39 type/type.mismatch CTRL-13",
         ]
     );

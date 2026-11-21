@@ -148,7 +148,7 @@ analyser: done
 
 parser: done
 
-- `?` after a type
+- `?` after a type. The parser rejects postfix expression `?`.
 
 analyser: partial
 
@@ -162,7 +162,7 @@ transpiler: planned
 
 parser: done
 
-- The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart
+- The suffix covers the whole preceding type.
 
 analyser: partial
 

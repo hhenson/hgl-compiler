@@ -10,7 +10,7 @@ use super::candidates::{Chosen, Given, Key, Settled, Wanted, typed_by_place};
 use super::constants::generic_default;
 use super::fit::open;
 use super::inference::{
-    ExplicitGenerics, asked_of_result, bare_parameter, fixed, infer, pack_bounds, placed, unsaid,
+    ExplicitGenerics, bare_parameter, fixed, infer, infer_from_place, pack_bounds, placed, unsaid,
 };
 use super::{Candidate, Typer};
 use crate::declared::{agree, substitute_within};
@@ -869,10 +869,8 @@ pub(super) struct Unfit {
 }
 
 /// What the place a call stands in says of the operator's generic
-/// parameters: its result is the type the place expects (GEN-8). A `T`
-/// is a value of a `T?` (TYPE-14), so a place that expects an optional
-/// type says what a result that is not optional is
-/// ([`asked_of_result`]).
+/// parameters (GEN-2). The candidate can resolve a result parameter
+/// from its own inputs where the place leaves its type open.
 pub(super) fn from_place(
     public: &Signature,
     expected: Option<&Type>,
@@ -881,8 +879,7 @@ pub(super) fn from_place(
     if let (Some(result), Some(expected)) = (&public.result, expected)
         && !open(expected)
     {
-        let place = asked_of_result(result, expected, false);
-        infer(result, place, &public.generics, found);
+        let _ = infer_from_place(result, expected, false, &public.generics, found);
     }
 }
 

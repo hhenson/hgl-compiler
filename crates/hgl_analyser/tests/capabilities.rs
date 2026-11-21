@@ -584,5 +584,5 @@ fn the_supplied_core_declares_scheduling_and_the_store() {
     );
     assert_eq!(checked.prelude_names("m"), [""; 0]);
     assert!(locals(&checked, "counted").contains(&"total: i64".to_string()));
-    assert!(locals(&checked, "lookup").contains(&"price: i64?".to_string()));
+    assert!(locals(&checked, "lookup").contains(&"price: result<i64, error>".to_string()));
 }

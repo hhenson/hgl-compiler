@@ -628,9 +628,9 @@ fn the_fragments_rejected_at_their_declaration() {
 /// candidates of `ratio`: "The first candidate admits each listed value,
 /// and the instance that `ratio_in(a, b, z: .nan)` makes selects it.
 /// Deliberate rejections, at the declaration (`operator.no_candidate`):
-/// the same with no `requires`, as no candidate admits every `z`; and with
-/// `requires z in {.ieee, .error}`, as the candidate for `.error` gives no
-/// `f64`."
+/// the same with no `requires`, as no candidate admits every `z`. The
+/// `.error` candidate supplies an `f64` or raises where an `f64` is
+/// expected (ERR-15)."
 #[test]
 fn the_proposed_option_fragment_is_held_to_its_words() {
     let checked = module(concat!(
@@ -649,15 +649,7 @@ fn the_proposed_option_fragment_is_held_to_its_words() {
     ));
     assert_eq!(
         checked.summary(),
-        [
-            "m.hgl:10:54 operator/operator.no_candidate GEN-5",
-            "m.hgl:12:38 operator/operator.no_candidate GEN-5",
-        ],
-        "{}",
-        checked.report
-    );
-    assert!(
-        checked.report.contains("for `z` = `.error`"),
+        ["m.hgl:10:54 operator/operator.no_candidate GEN-5"],
         "{}",
         checked.report
     );

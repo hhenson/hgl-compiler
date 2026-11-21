@@ -358,6 +358,12 @@ impl<'a> Typer<'a> {
         let Some(identity) = identity else {
             let (left_node, right_node) = (left.node.clone(), right.node.clone());
             let (left, right) = self.operands_as_written(left, right);
+            // ERR-15: a result "compared with `null`, where T is not
+            // nullable, ... expects the `T?`", and where T is nullable
+            // the T; beside any other operand that is no result, the T.
+            let (left_type, right_type) = (left.ty.clone(), right.ty.clone());
+            let left = self.operand_form(left, &right_type, is_null(&right_node));
+            let right = self.operand_form(right, &left_type, is_null(&left_node));
             if !configured {
                 let kind = ExprKind::Binary {
                     operator,
@@ -378,6 +384,26 @@ impl<'a> Typer<'a> {
             return (self.unselected(given, symbol.form), symbol.unjudged);
         }
         self.call_symbol(symbol, identity, given)
+    }
+
+    /// An operand `value` of `==` or another symbol recorded as it is
+    /// written, beside `other`, in the form its place takes: a result
+    /// compared with `null` (`null_beside`) takes the form ERR-15 gives
+    /// that comparison; one beside an operand that is no result, its T
+    /// ("An operand of an operator expects the T where the operator's
+    /// candidates take one"); beside a result, itself, as `==` of two
+    /// results takes them whole (ERR-2).
+    fn operand_form(&mut self, value: Expr, other: &Type, null_beside: bool) -> Expr {
+        if !matches!(value.ty, Type::Result { .. }) {
+            return value;
+        }
+        if null_beside {
+            return self.compared_with_null(value);
+        }
+        if matches!(other, Type::Result { .. }) || open(other) {
+            return value;
+        }
+        self.received(value, |_| false)
     }
 
     /// The operands of a symbol that is recorded as it is written, each
@@ -718,30 +744,7 @@ impl<'a> Typer<'a> {
         if let Some(place) = &symbol.place {
             takes = format!("{takes} to give `{place}`");
         }
-        // ERR-12: "Using it where T is required without that proof
-        // rejects with `nullable.required_presence`." An operand that
-        // may be null is one no candidate takes.
-        let nullable = given.iter().find(|given| {
-            matches!(given.key, Key::Position(_))
-                && !given.by_place
-                && matches!(given.value.ty, Type::Nullable(_))
-        });
-        let diagnostic = if let (true, Some(operand)) = (selected.is_empty(), nullable) {
-            error(
-                Category::Type,
-                codes::NULLABLE_REQUIRED_PRESENCE,
-                operand.value.at,
-                format!(
-                    "this is `{}`, and `{}` takes no {takes}: it may be null here",
-                    operand.value.ty, symbol.text
-                ),
-                "ERR-12",
-            )
-            .with_note(
-                "a test against null proves an immutable binding is not: \
-                 `if value == null { return ... }`",
-            )
-        } else if selected.is_empty() {
+        let diagnostic = if selected.is_empty() {
             error(
                 Category::Operator,
                 codes::OPERATOR_NO_CANDIDATE,

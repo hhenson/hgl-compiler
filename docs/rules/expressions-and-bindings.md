@@ -46,7 +46,7 @@ analyser: partial
 
 analyser: partial
 
-- A value fits the type its place expects, in a value function, a hook and a graph; an integer literal is an `f64` where one is expected, the `f64` of its value (UNIT-13: `let x: f64 = 1` binds `1.0`), and a value that has a type is not converted; `null`, a tuple and a sequence take the expected type, and so does a child read checked when it runs (ERR-14)
+- A value fits the type its place expects, in a value function, a hook and a graph; an integer literal is an `f64` where one is expected, the `f64` of its value (UNIT-13: `let x: f64 = 1` binds `1.0`), and a result or nullable value takes the form its place expects (ERR-12, ERR-15); `null`, a tuple and a sequence take the expected type, and so does a child read checked when it runs (ERR-14)
 - What is read again to learn its place's type is counted for each statement, so a statement is judged the same whatever comes before it; one that needs more than its bound, 10,000 and 16 for each node of its syntax, is local `reading.limit`, and is not accepted
 - Left: const expression restrictions
 
@@ -54,7 +54,7 @@ analyser: partial
 
 analyser: partial
 
-- The Boolean connectives and `!` take bools, in value functions
+- The Boolean connectives and `!` take bools, in value functions, reading a fallible or nullable operand where a bool is expected (ERR-12, ERR-15)
 - A compile-time constant short-circuits (`constant`): the right operand of `false &&` and `true ||` is not needed where it is a parameter, a constant held by its name, or one whose evaluation fails, which is then no failure (`const NO: bool = false && (1 // 0 == 0)` is `false`); one of no type is held to a `bool` still
 - Left: a guard precedes the payload read it protects
 
@@ -117,7 +117,7 @@ analyser: done
 
 analyser: partial
 
-- In a value function, a hook and a graph, an option of an operator's call, by name or as a symbol's configuration, that a candidate's `requires` reads selects the candidate, and so the result type; one that is a generic value parameter is given a compile-time constant
+- In a value function, a hook and a graph, an option of an operator's call, by name or as a symbol's configuration, that a candidate's `requires` reads selects the candidate, and so the result type. A selecting option is a compile-time constant. The use of the result chooses its form (ERR-15).
 - Left: an option that is a parameter of its candidates, given what is no constant, which is not judged
 
 ## EXPR-13

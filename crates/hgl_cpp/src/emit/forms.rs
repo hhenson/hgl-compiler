@@ -406,6 +406,11 @@ fn unwired(value: &Expr) -> &'static str {
         ExprKind::Index { .. } => "a child of a connection",
         ExprKind::Widen(_) => "a connection of `i64` taken as `f64`",
         ExprKind::Call { .. } => "this call of connections",
+        // ERR-15, ERR-12: the forms a place in composition takes of a
+        // connection.
+        ExprKind::Raised { raise, .. } => super::expressions::raised_where(*raise),
+        ExprKind::OrNull { .. } => "a result connection taken as its `T?`",
+        ExprKind::NullRead { .. } => "a `T?` connection read where a T is taken",
         ExprKind::Construct { .. } | ExprKind::Tuple(_) | ExprKind::Sequence(_) => {
             "a value made of connections"
         }

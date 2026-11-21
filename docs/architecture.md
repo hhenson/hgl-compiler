@@ -625,9 +625,9 @@ statement is read as value code, with three things of a source's own:
 | A `yield` inside a block or an `if` whose value is used | The local `yield.in_value`: it stands inside a value expression | SOURCE-4 |
 | `while { }` with no condition | A loop with none | CTRL-15 |
 
-A temporal function called there is `call.role`, a `?`
-`result.propagation_phase`, and a `capture` `capture.phase`, as in a
-hook.
+A temporal function called there is `call.role`, and a `capture` is
+`capture.phase`. A result taken as its value raises a failure in the
+source's phase (ERR-5, ERR-15).
 
 A node's body is then read into the same typed form as a value
 function's (`hir::Body`): a `state` or a `cache` is a local that is
@@ -958,7 +958,7 @@ The pass is built form by form. So far it reads:
 | `is_ok(value)`, `is_err(value)` | ERR-3 | A `bool`, of one result. A direct guard on an immutable result binding proves its tag as a test against null proves presence, over the same paths |
 | `binding.value`, `binding.error` | ERR-3 | The T, or the E, of a binding proved a success, or a failure. With no such proof, or on what is no binding, it is `result.required_variant` |
 | `error(message: text, code: optional_code)`, `.message`, `.code`, `.context` | ERR-4 | An `error`, each part given by its name; the message a `str` and the code a `str?`. The context is an `error context?`, a type of this compiler's that source writes no name for: proved present by a null test on its binding, its `.node` and `.phase` are a `str` and its `.evaluation_time` a `datetime`. It and its parts take no assignment |
-| `value?` | ERR-5 | The T of a `result<T, E>`. It stands in a value function whose result is a `result<U, E>` of the same E, and in a `when` on a `result<T, error>`; elsewhere it is `result.propagation_phase`, and on another type `result.propagation_type` |
+| A result given to a typed place | ERR-5, ERR-15 | A result place takes the whole result. A place for its success type takes the value or raises the failure. A nullable place for a non-nullable success of `result<T, error>` takes the value or null. A raise of a mismatched error type is `result.propagation_type`. |
 | `capture(callable, args...)`, `seen.value`, `seen.error` | ERR-7 | In a graph, the call the first argument names, read from the same list less that name as the call itself is. It is bound with `let`, and read through `.value`, the call's output, and `.error`, an `error`, each a connection. Outside a graph, of no callable, or of a call that composes nothing it is `capture.phase`; `.value` of an outputless call is `capture.output_field` |
 
 A value fits its place when its type is the one expected, when it is a
@@ -967,17 +967,17 @@ struct it inherits from is expected. An integer literal, under a minus
 or not, is an `f64` where one is expected, and is written down as
 widened (EXPR-5). A value that has a type is not converted: an `i64`
 binding where an `f64` is expected is rejected. A `T?` where a `T` is
-expected, or as an operand no candidate takes, is
-`nullable.required_presence` (ERR-12): it may be null there.
+expected is read for its value and fails with `value.null` when null
+(ERR-12). A fallible nullable success can require both a result read
+and a nullable read (ERR-15).
 
 What the pass does not read yet has no type, and nothing is reported of
 it or of what uses it (ERR-9): `&&`, `||` or `!` given configuration,
 an anonymous function's body, a call of a name nothing binds or of an
-operator that has a pack, the payload of a nullable, and a conversion
+operator that has a pack, and a conversion
 written `str(value)`. The arguments of a call that is not
 read are read themselves. After a form that is not read every `var` is
-taken to be assigned. An operand that is nullable is not judged: its
-guard says what it admits. One that is a generic parameter has the
+taken to be assigned. An operand that is a generic parameter has the
 operations its declaration requires: see "Requirements" below.
 
 A generic application that has been reported, `Box<7>(value: 1)`, makes
@@ -1760,7 +1760,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | `let seen = capture(attempt, value)` (ERR-7, ERR-8) | A graph of its own for the call, a struct `captured_00_` in the graph's struct, whose `compose` takes each connection of the call as a port and each other argument as an `hgraph::Scalar`, and calls the callable; the library's `::hglrt::capture<captured_00_>(wiring_, value)`, which is hgraph's `compiled::try_except_` of it with canonical errors (`<hglrt/capture.h>`): a node of its own, which hgraph interns with no other, so that two given `0.0` and `-0.0` stay two |
 | `seen.value`, `seen.error` (ERR-7) | `::hglrt::captured_value(seen)`, `::hglrt::captured_error(seen)`: the ports of the boundary's fields |
 | A temporal value of `error`, of `result<T, error>` (ERR-2, ERR-4) | `TS<::hglrt::error>`, hgraph's `CanonicalError`; `TS<::hglrt::result<T>>`, registered with hgraph as an atomic; read, published, given as a constant and a trace's cell as a scalar is, each compared by its own equality, which excludes an error's provenance |
-| `value?` in a `when` (ERR-5, ERR-8) | The result held before the statement, and `::hglrt::raise(held.error())` where it is a failure, which keeps the context of an error raised again |
+| A result taken as its success value in a `when` (ERR-5, ERR-8, ERR-15) | Hold the result before the statement and call `::hglrt::raise(held.error())` on failure. The raised error keeps its context. |
 | `failure.context`, and its `.node`, `.phase`, `.evaluation_time` (ERR-4) | `(failure).context`, a `std::optional` of hgraph's `ErrorContext`, and its members of those names |
 | A trace written out; `==` and `!=` of two (TST-4, TST-6, TST-7, TST-16) | `::hglrt::testing::Dense<T>`, `Timed<T>`, each cell as its type's family writes it; in an `assert`, `expect_same` or `expect_different` of the two held in order, elsewhere `same`; a trace given to a `const fn`, `publications` |
 | A window of a scalar, `rolling_window<i64, 3, 2>`, `rolling_window<i64, 3us, 1us>` (TYPE-11; core's END-9) | hgraph's `TSW<::hgraph::Int, 3, 2>`, `TSWDuration<::hgraph::Int, 3, 1>` (its bounds in microseconds), whose values leave it by age as hgraph has it; a node's `return value` and `out = value` `arrival_.hold(value)`, its `eval` running its handlers in `::hglrt::WindowArrival::run`, which pushes the last value written once they have run, the cycle's one arrival (END-5; `forms::Family::evaluation`), and a source's `::hglrt::window_push(out_, value)`; a read of a node's own window result in its `when`, which would not see what is held, reported; its value read in a hook `::hglrt::window_value(view)`, which fails before it is all valid, or `window_value_checked` where a `result` is taken (`ExprKind::CheckedWindow`); `all_valid` `::hglrt::fn_all_valid`; `delta_value` plain or checked, and `removed_value`, read only into a `result`, `::hglrt::fn_removed_value_checked`; a lifted helper given its `list<V>` (`forms::Family::read_type`), and not called where it is valid and not all valid (FN-11, FN-12; `lifting`); a trace of one, and a source's payload, of its V (`forms::Family::payload`) |
@@ -2094,11 +2094,10 @@ The target's progress is counted in cases: core's runtime cases, and
 later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml).
-Today it lists 1 of core's 198 runtime cases, with the form it needs
-that the target does not write: a nullable put in the run's store
-(hgl_spec issue 165). `check_core.py`, beside it, builds `hgl` first
-and then runs every test in the pinned core's `tests/conformance` and
-`tests/implementation`, integration tests among them, on the target:
+The list covers nullable store puts and the result and nullable forms
+that the target does not write yet. Build `hgl` and run
+`check_core.py`, which runs the pinned core's `tests/conformance`
+and `tests/implementation` on the target, including integration tests:
 
 ```sh
 cargo build --locked --bin hgl

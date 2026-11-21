@@ -246,12 +246,13 @@ impl Parser<'_> {
                 // reported, and read.
                 LParen if self.suffix_at(0) => CallExpr,
                 LBracket if self.suffix_at(0) => IndexExpr,
-                // LEX-5: `.` and `?` cannot begin a statement, so each may
-                // start a line.
+                // LEX-5: `.` cannot begin a statement, so it may start a
+                // line.
                 Dot if !self.nl() => MemberExpr,
-                // TYPE-15: `?` after an expression propagates a result;
-                // after a type it makes the type nullable.
-                Question if !self.nl() => TryExpr,
+                // TYPE-15: "`?` is written only in a type, where it
+                // declares nullability; no expression takes it." One after
+                // an expression is no suffix, and is reported where the
+                // expression ends.
                 _ => break,
             };
             if bare_fn {
@@ -268,8 +269,7 @@ impl Parser<'_> {
                     self.attached(Bracket::Index);
                     self.index_suffix();
                 }
-                MemberExpr => self.member_suffix(),
-                _ => self.bump(),
+                _ => self.member_suffix(),
             }
             self.wrap(mark, kind);
         }

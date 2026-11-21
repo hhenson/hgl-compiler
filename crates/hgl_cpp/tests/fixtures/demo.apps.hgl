@@ -24,7 +24,7 @@ fn limited(value: i64) -> i64 {
 export fn seeded(const limit: i64, const values: list<i64>) -> i64 {
     inject global_state
     put(global_state, "limit", limit)
-    let seen = get<i64>(global_state, "limit")
+    let seen: i64 = get<i64>(global_state, "limit")
     return limited(ticks(values, every: seen * 1s))
 }
 

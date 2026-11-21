@@ -75,7 +75,7 @@ parser: done
 
 analyser: partial
 
-- In a value function: a block's value; a `bool` condition; the type of an `if` whose value is used, with an `else` and without
+- In a value function: a block's value; a `bool` condition, reading a result or nullable where necessary (ERR-12, ERR-15); the type of an `if` whose value is used
 - Left: temporal bodies
 
 transpiler: planned
@@ -99,7 +99,7 @@ transpiler: planned
 
 analyser: done
 
-- In a graph the condition of an `if` is a `bool`, a value or a connection; the `if` has its branches' one type, and is a connection when its condition or a branch is one; with no `else` it is a `T` connection under a temporal condition, and a `T?` or a `T` connection under a wiring-time one by what its branch is
+- In a graph the condition of an `if` expects a `bool`, a value or a connection, reading a result or nullable where necessary (ERR-12, ERR-15); the `if` has its branches' one type, and is a connection when its condition or a branch is one; with no `else` it is a `T` connection under a temporal condition, and a `T?` or a `T` connection under a wiring-time one by what its branch is
 
 transpiler: planned
 

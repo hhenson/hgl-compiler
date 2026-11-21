@@ -383,11 +383,12 @@ test dictionaries_read_add_and_loop {
     assert book["a"] == 1
     assert book == ["b": 2, "a": 1]
     assert get(book, "c") == null
-    assert get(book, "b") == 2
-    # TYPE-14: `get` of a dictionary of `i64?` gives an `i64?`, null for a
-    # null held.
+    let found: i64? = get(book, "b")
+    assert found == 2
+    # ERR-6: a strict read distinguishes a held null from an absent key.
     let maybes: dict<str, i64?> = ["a": null, "b": 2]
-    assert get(maybes, "a") == null && get(maybes, "b") == 2 && get(maybes, "c") == null
+    assert maybes["a"] == null && maybes["b"] == 2
+    assert raises("value.missing_key") { let absent = maybes["c"] }
     assert total(book) == 3
     assert counted(["x", "y", "x"]) == ["x": 2, "y": 1]
     assert bumped(book, "b") == ["a": 1, "b": 3]

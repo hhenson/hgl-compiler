@@ -33,8 +33,8 @@ fn booked(value: i64) -> i64 {
     when {
         let given: dict<str, i64> = ["a": value]
         put(global_state, "book", given)
-        let book = get<dict<str, i64>>(global_state, "book")
-        let found = get(book, "a")
+        let book: dict<str, i64> = get<dict<str, i64>>(global_state, "book")
+        let found: i64? = get(book, "a")
         if found == null { return -1 }
         return found
     }
@@ -69,7 +69,7 @@ fn bid_plus(x: i64, const extra: i64) -> i64 {
 fn seeded(x: i64) -> i64 {
     inject global_state
     put(global_state, "q", Quote(bid: 5, ask: 6))
-    let q = get<Quote>(global_state, "q")
+    let q: Quote = get<Quote>(global_state, "q")
     return bid_plus(x, q.bid)
 }
 
@@ -77,7 +77,7 @@ fn seeded(x: i64) -> i64 {
 # "by" fails there.
 export fn read_at_build(const values: list<i64>) -> i64 {
     inject global_state
-    let by = get<i64>(global_state, "by")
+    let by: i64 = get<i64>(global_state, "by")
     return bid_plus(ticks(values), by)
 }
 
@@ -91,7 +91,7 @@ export fn ticks(const values: list<i64>) -> i64 {
 fn based(value: i64) -> Quote {
     inject global_state
     when {
-        let q = get<Quote>(global_state, "base")
+        let q: Quote = get<Quote>(global_state, "base")
         return Quote(bid: q.bid + value, ask: q.ask + value)
     }
 }

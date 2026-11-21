@@ -104,7 +104,6 @@ impl<'a> Typer<'a> {
             }
             SyntaxKind::MemberExpr => self.member(node),
             SyntaxKind::TypeCall => self.type_call(node),
-            SyntaxKind::TryExpr => self.propagation(node),
             // An anonymous function's body is for a later part. What it
             // captures of a capability is reported here, and what it
             // reads of a node's inputs where it is written.

@@ -571,6 +571,11 @@ impl<'a> Typer<'a> {
                 .get(*local)
                 .is_some_and(|parameter| parameter.constant),
             ExprKind::Widen(inner) => self.is_fixed(inner),
+            // ERR-12 and ERR-15 read the argument's existing value.
+            ExprKind::Raised { result, .. } | ExprKind::OrNull { result, .. } => {
+                self.is_fixed(result)
+            }
+            ExprKind::NullRead { value, .. } => self.is_fixed(value),
             // `Side(N)`, of what is fixed: the member is fixed too.
             ExprKind::EnumFrom { value, .. } => self.is_fixed(value),
             ExprKind::Unary { operand, .. } => self.is_fixed(operand),

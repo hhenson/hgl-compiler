@@ -37,7 +37,7 @@ analyser: partial
 analyser: done
 
 - `error(message: text, code: optional_code)`: each by its name, `message` a `str` and required, `code` a `str?`; `.message` is a `str` and `.code` a `str?`
-- `.context` is an `error context?`, a type of this compiler's, whose `.node` and `.phase` are a `str` and `.evaluation_time` a `datetime`, read where a null test proves it present (`nullable.required_presence`) and never assigned (`binding.immutable`)
+- `.context` is an `error context?`, a type of this compiler's, whose `.node` and `.phase` are a `str` and `.evaluation_time` a `datetime`, read under ERR-12 and never assigned (`binding.immutable`)
 
 transpiler: planned
 
@@ -45,21 +45,22 @@ transpiler: planned
 
 analyser: partial
 
-- `value?` has the T of a `result<T, E>`
-- In a value function the enclosing result is a `result<U, E>` of the same E, and in a `when` the E is `error` (`result.propagation_type`, which what is no result, a nullable included, is too); in a graph, `start`, `stop`, a node's declarations and a source it is `result.propagation_phase`
-- Left: an anonymous function
+- A place that needs the value of a result records where a failure goes. A value function returning a result requires the same error type. In other phases only `error` can be raised (`result.propagation_type`).
 
-transpiler: planned
+transpiler: partial
+
+- C++ writes a raise in a value function returning a result or in a `when`. Other places are reported as unsupported.
 
 ## ERR-6
 
 analyser: partial
 
-- A list is indexed by an `i64` and a dictionary by its key, for the element or the value
-- `get(book, key)` is core's candidate, a `V?`
-- Left: `at`, and `get` with a fallback (`lookup.default_type`, `nullable.required_presence`)
+- Brackets read an ordinary dictionary by its key. Core's two-argument `get` gives `result<V, error>` and the place selects its form (ERR-15).
+- Left: a fallback (`lookup.default_type`).
 
-transpiler: planned
+transpiler: partial
+
+- C++ brackets perform a strict read. A temporal dictionary child is an endpoint read (ERR-14).
 
 ## ERR-7
 
@@ -108,13 +109,13 @@ transpiler: planned
 analyser: done
 
 - In a value function, a hook and a graph a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns
-- A nullable where its payload is required, as an operand no candidate takes, or read for a member or an element of its payload, is `nullable.required_presence`
+- A nullable read in a place that expects its payload records a possible `value.null` failure and its phase. A written null still needs a nullable type (TYPE-14).
 
 ## ERR-13
 
 parser: done
 
-- The result forms are calls of a name, and `?` a postfix suffix: `ok(value)`, `is_err(value)`, `capture(callable, args)`, `value?`
+- The result forms use calls: `ok(value)`, `is_err(value)`, and `capture(callable, args)` among them.
 
 analyser: done
 
@@ -129,3 +130,15 @@ analyser: done
 - So is `delta_value` of any endpoint, an input, `out` or a child, where the place expects `result<delta<T>, error>`, and core's `removed_value` of a window where it expects `result<V, error>` (`CheckedDelta`), the place saying what V is; where the place takes no `result` a window of a duration's delta and any `removed_value` are `payload.unguarded` (TYPE-11)
 
 transpiler: planned
+
+## ERR-15
+
+analyser: partial
+
+- A call or held result keeps its tag in a result place, gives its success or raises in a T place, and gives its success or null in a `T?` place. An unannotated `let` keeps the result. A nullable success type is itself the T form.
+- A `result<U?, error>` given where a U is expected raises its original error on failure and reads the success under ERR-12. The owner confirmed the two reads while the specification update was in review. [Compiler issue #345](https://github.com/hhenson/hgl-compiler/issues/345#issuecomment-7060418814)
+- In composition the analyser records whether a conversion belongs to the call's node or to a reader of a held connection.
+
+transpiler: partial
+
+- C++ preserves result data and writes raises in the phases listed under ERR-5. Other conversions are reported as unsupported.

@@ -292,8 +292,6 @@ define_syntax_kinds! {
         IndexExpr,
         /// `quote.bid`
         MemberExpr,
-        /// `value?`
-        TryExpr,
         /// `-a` or `!a`
         UnaryExpr,
         /// `a + b`: left operand, operator, any configuration, right operand

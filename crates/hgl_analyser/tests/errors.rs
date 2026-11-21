@@ -113,8 +113,6 @@ fn a_context_is_guarded_typed_and_read_only() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:2:46 type/nullable.required_presence ERR-4",
-            "m.hgl:5:12 type/nullable.required_presence ERR-4",
             "m.hgl:10:25 name/member.unknown ERR-4",
             "m.hgl:11:12 type/type.mismatch EXPR-5",
             "m.hgl:15:5 name/binding.immutable ERR-4",
@@ -171,15 +169,12 @@ fn the_envelopes_are_ordinary_atomic_values() {
     );
 }
 
-/// ERR-12: "Refine that same binding to T on paths proving a non-null T?
-/// value ... Using it where T is required without that proof rejects
-/// with `nullable.required_presence`." EXPR-7: a member and an element
-/// are read of the payload, so a nullable's is read where a test
-/// against null proves the binding present, in a value function and in
-/// a `when`. What is read with no proof is not known, and nothing more
-/// is reported of it (ERR-9): `mistyped` reports the presence alone.
+/// ERR-12 and EXPR-7: a nullable receiver is read at a member or
+/// index. An unguarded read can fail with `value.null`. A presence guard
+/// proves the payload is available. A result still needs its own tag
+/// guard for `.value` (ERR-3).
 #[test]
-fn a_nullables_payload_is_read_where_it_is_proved_present() {
+fn a_nullables_payload_is_read_with_or_without_a_presence_guard() {
     let checked = module(concat!(
         "struct Quote {\n",
         "    bid: f64\n",
@@ -209,13 +204,8 @@ fn a_nullables_payload_is_read_where_it_is_proved_present() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:48 type/nullable.required_presence ERR-12",
-            "m.hgl:6:42 type/nullable.required_presence ERR-12",
-            "m.hgl:7:59 type/nullable.required_presence ERR-12",
-            "m.hgl:8:44 type/nullable.required_presence ERR-12",
-            "m.hgl:9:50 type/nullable.required_presence ERR-12",
-            "m.hgl:10:46 type/nullable.required_presence ERR-12",
-            "m.hgl:24:19 type/nullable.required_presence ERR-12",
+            "m.hgl:7:67 type/result.required_variant ERR-3",
+            "m.hgl:10:46 type/type.mismatch EXPR-5",
         ]
     );
 }

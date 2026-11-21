@@ -13,6 +13,7 @@ use super::constants::{constant_text, generic_default};
 use super::evals::{holds_trace, publications};
 use super::expressions::{holds_block, takes_its_type};
 use super::fit::{not_null, whole};
+use super::forms::Taken;
 use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
 use crate::hir::{self, Expr};
@@ -24,6 +25,64 @@ use crate::types::{
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
+    /// What a partly resolved parameter learns from an argument. Keep
+    /// already resolved parts of the parameter's type (GEN-12), but
+    /// leave its other parts open. For `list<T>` given a
+    /// `result<list<i64>, error>`, ERR-15 gives the list, whose elements
+    /// decide `T`. A bare unresolved `T` takes the whole result unless
+    /// the requested output requires that parameter's payload (GEN-2).
+    pub(super) fn inference_input<'t>(
+        &self,
+        pattern: &Type,
+        actual: &'t Type,
+        generics: &[GenericParameter],
+        found: &[Option<Argument>],
+        result_fallback: Option<(&Type, &'t Type)>,
+    ) -> &'t Type {
+        let payload = match actual {
+            Type::Result { value, .. } | Type::Nullable(value) => value,
+            _ => return actual,
+        };
+        if let Some((result, requested)) = result_fallback
+            && pattern == result
+            && !matches!(requested, Type::Nullable(_))
+            && matches!(actual, Type::Result { .. })
+            && let Some(index) = bare_parameter(pattern, generics)
+            && found[index].is_none()
+            && self.taken(requested, actual).is_some()
+        {
+            // `wrap<T>(value: T) -> result<T, error>` at an `i64`
+            // place takes the value of a `result<i64, error>`. Binding
+            // T to the whole input would produce a nested result.
+            return requested;
+        }
+        let unknown_type = Argument::Type(Type::Unknown);
+        let unknown_constant = Argument::Constant(Constant {
+            text: String::new(),
+            value: ConstantValue::Unknown,
+        });
+        let map: Vec<(Location, &Argument)> = generics
+            .iter()
+            .zip(found)
+            .map(|(generic, argument)| {
+                let unknown = match generic.kind {
+                    GenericKind::Value(_) => &unknown_constant,
+                    _ => &unknown_type,
+                };
+                (generic.at, argument.as_ref().unwrap_or(unknown))
+            })
+            .collect();
+        let expected = substitute_within(pattern, &map);
+        match self.taken(&expected, actual) {
+            Some(Taken::ValueRead) => match payload.as_ref() {
+                Type::Nullable(inner) => inner,
+                _ => unreachable!("ValueRead requires a nullable success"),
+            },
+            Some(_) => payload,
+            None => actual,
+        }
+    }
+
     /// The named arguments of a call that give a generic value
     /// parameter of the callee, each recorded in `found` as the
     /// constant it is. Returns each with the position of its parameter
@@ -446,6 +505,7 @@ impl<'a> Typer<'a> {
             aside,
             values: named,
             written_pack,
+            result_fallback,
             defaults,
         } = places;
         // The parameters being resolved. A place's type that still
@@ -509,6 +569,8 @@ impl<'a> Typer<'a> {
             // What the argument's type says: a parameter not yet found,
             // or a wider one for a parameter an argument decided.
             let mut learn = |this: &Self, actual: &Type, found: &mut Vec<Option<Argument>>| {
+                let actual =
+                    this.inference_input(pattern, actual, generics, found, *result_fallback);
                 if let Some(generic) = widenable {
                     if let Some(Argument::Type(decided)) = &found[generic]
                         && this.widens(decided, actual)
@@ -605,6 +667,14 @@ impl<'a> Typer<'a> {
             let value = self.expression(node, Some(&Type::Unknown));
             infer(pattern, &value.ty, generics, &mut found);
             self.take_back(mark, false);
+        }
+        if let Some((result, requested)) = result_fallback {
+            infer(
+                result,
+                not_null(Some(requested)).unwrap_or(requested),
+                generics,
+                &mut found,
+            );
         }
         // GEN-8: "A generic value parameter the call does not give takes
         // its default, when it has one." Nothing has said what it is,
@@ -799,8 +869,11 @@ pub(super) struct Places<'s> {
     /// What the call gives those: each with the position of its
     /// parameter among `generics`.
     pub(super) values: &'s [(usize, SyntaxNode)],
-    /// The written types of a call's sole trailing type pack, when given.
+    /// The written types of a call's positional type pack, when given.
     pub(super) written_pack: Option<(usize, &'s [Type])>,
+    /// A requested result kept until the inputs determine whether they can
+    /// supply its payload or leave it open.
+    pub(super) result_fallback: Option<(&'s Type, &'s Type)>,
     /// The default of each generic value parameter that has one (GEN-2):
     /// an entry for each of `generics`, or none at all.
     pub(super) defaults: Vec<Option<Constant>>,
@@ -985,33 +1058,43 @@ pub(super) fn infer(
     }
 }
 
-/// What the output a call requests says of a callee's declared result
-/// `result`, for [`infer`] to match the result with. `requested` is the
-/// type the call's place expects, or the one the generic arguments the
-/// call writes make of an operator's result; `written` is true where it
-/// is the type the call writes for an operator's result that is its
-/// type parameter and nothing more.
-///
-/// A result that is nullable itself is matched with what is requested
-/// as it is. GEN-2: "What the call writes, or its place expects, is not
-/// widened", and core's CAP-6: `get<V>(global_state, key)` is "of the
-/// type the call writes", so a type written is taken whole, `?` and
-/// all: `get<i64?>(global_state, key)` gives core's candidate the
-/// `i64?` written.
-///
-/// Otherwise a `T` is a value of a `T?` (TYPE-14), and a result that is
-/// not nullable is asked to be what is under the `?` of a nullable
-/// place: `repeat(3)` given to a `list<str>?` is a `list<str>`. What a
-/// nullable place says of a result that is a type parameter and nothing
-/// more, the `V` of `let saved: i64? = get(global_state, key)`, is not
-/// decided (hhenson/hgl_spec#165, open): it is taken here to be what is
-/// under the `?`, an `i64`.
-pub(super) fn asked_of_result<'t>(result: &Type, requested: &'t Type, written: bool) -> &'t Type {
-    match result {
-        Type::Nullable(_) => requested,
-        Type::Parameter { .. } if written => requested,
-        _ => not_null(Some(requested)).unwrap_or(requested),
+/// What a requested output decides about the result's type (GEN-2).
+/// A nullable place alone leaves a bare type parameter open. An
+/// explicit type argument decides it whole. A requested payload of a
+/// fallible result can also be read from a nullable success (ERR-12,
+/// ERR-15). In that case a bare success parameter can be decided by
+/// the inputs first, such as a dictionary's value type in `get`.
+/// The returned pair supplies the output constraint during inference.
+pub(super) fn infer_from_place<'r, 'p>(
+    result: &'r Type,
+    requested: &'p Type,
+    written: bool,
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) -> Option<(&'r Type, &'p Type)> {
+    let (result, fallible) = if let Type::Result { value, error } = result
+        && !matches!(not_null(Some(requested)), Some(Type::Result { .. }))
+    {
+        (value.as_ref(), **error == Type::Error)
+    } else {
+        (result, false)
+    };
+    if !written && matches!(result, Type::Parameter { .. }) {
+        if fallible {
+            // A store read's inputs say nothing of V (core CAP-6).
+            return Some((result, requested));
+        }
+        if matches!(requested, Type::Nullable(_)) {
+            return None;
+        }
     }
+    let place = if written || matches!(result, Type::Nullable(_)) {
+        requested
+    } else {
+        not_null(Some(requested)).unwrap_or(requested)
+    };
+    infer(result, place, generics, found);
+    None
 }
 
 /// [`infer`], for a size or a constant argument: a generic value
