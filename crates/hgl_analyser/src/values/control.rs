@@ -15,7 +15,7 @@ use crate::hir::{self, Expr, ExprKind, LocalId, Stmt, ValueCategory};
 use crate::program::{LocalKind, Program};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{ConstantValue, Detail, Scalar, Type};
-use crate::{codes, error, local_error};
+use crate::{codes, error};
 
 /// What a `for` binds, and whether it makes one child for each member,
 /// by what it loops over (CTRL-15).
@@ -801,14 +801,14 @@ impl<'a> Typer<'a> {
                         // program's own, is a label: whether it repeats
                         // another is left unjudged (CTRL-6, "compared by
                         // resolved value").
-                        self.diagnostics.emit(local_error(
+                        self.diagnostics.emit(error(
                             Category::Type,
-                            codes::local::SWITCH_LABEL_CONSTANT,
+                            codes::SWITCH_LABEL_CONSTANT,
                             label.at,
                             "a `switch` label is a compile-time constant, and this is known \
                              only when the program runs"
                                 .to_string(),
-                            self.loop_rule(),
+                            "CTRL-12",
                         ));
                     }
                     let constant = read.ok();

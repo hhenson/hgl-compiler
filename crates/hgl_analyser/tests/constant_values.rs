@@ -1440,14 +1440,18 @@ fn a_constant_that_fails_is_rejected_where_it_is_declared() {
         ),
         &[],
     );
-    expect(
-        &format!(
-            "{shared}const BIG: i64 = 9223372036854775807 + 1\n\
-             const DIV: i64 = 1 // 0\n\
-             const fn a(t: IBox<BIG>) -> IBox<BIG> => t\n\
-             const fn b(t: IBox<DIV>) -> i64 => 1\n"
-        ),
-        &["4 constant.failure", "5 constant.failure"],
+    let failed = module(&format!(
+        "{shared}const BIG: i64 = 9223372036854775807 + 1\n\
+         const DIV: i64 = 1 // 0\n\
+         const fn a(t: IBox<BIG>) -> IBox<BIG> => t\n\
+         const fn b(t: IBox<DIV>) -> i64 => 1\n"
+    ));
+    assert_eq!(
+        failed.summary(),
+        [
+            "m.hgl:4:18 type/constant.failure UNIT-13",
+            "m.hgl:5:18 type/constant.failure UNIT-13",
+        ]
     );
     expect(
         &format!(

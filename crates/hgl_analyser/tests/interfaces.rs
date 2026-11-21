@@ -144,8 +144,7 @@ fn structured_keys_name_the_declarations_parameters() {
 /// SDOC-3: the chapter's deliberate rejection, "`Args:` names a
 /// parameter absent from that declaration", and the same of `Type
 /// Args:`. A declaration with no parameters, an enum's member here,
-/// has none for `Args:` to name. The catalogue has no row for it, and
-/// the code is local.
+/// has none for `Args:` to name (`doc.unknown_key`).
 #[test]
 fn a_key_that_names_nothing_is_rejected() {
     let checked = module(concat!(
@@ -172,9 +171,9 @@ fn a_key_that_names_nothing_is_rejected() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:7:5 local:name/doc.unknown_key SDOC-3",
-            "m.hgl:10:5 local:name/doc.unknown_key SDOC-3",
-            "m.hgl:17:9 local:name/doc.unknown_key SDOC-3",
+            "m.hgl:7:5 name/doc.unknown_key SDOC-3",
+            "m.hgl:10:5 name/doc.unknown_key SDOC-3",
+            "m.hgl:17:9 name/doc.unknown_key SDOC-3",
         ]
     );
 }

@@ -3,7 +3,7 @@
 //! Part of the typing pass ([`super`]); `if`, the loops and `switch` are
 //! read in [`super::control`].
 
-use hgl_diagnostics::{Category, Code, Diagnostic, Location};
+use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Typer;
@@ -201,17 +201,15 @@ impl<'a> Typer<'a> {
                 // SOURCE-4: "A valued return and yield inside a value
                 // expression reject."
                 if self.valued > 0 {
-                    self.diagnostics.emit(
-                        Diagnostic::error(
-                            Category::Phase,
-                            Code::Local(codes::local::YIELD_IN_VALUE),
-                            self.at(node),
-                            "a `yield` is a statement of the source, and this one stands inside \
-                             a block or an `if` whose value is used"
-                                .to_string(),
-                        )
-                        .with_rule("SOURCE-4"),
-                    );
+                    self.diagnostics.emit(error(
+                        Category::Phase,
+                        codes::YIELD_IN_VALUE,
+                        self.at(node),
+                        "a `yield` is a statement of the source, and this one stands inside \
+                         a block or an `if` whose value is used"
+                            .to_string(),
+                        "SOURCE-4",
+                    ));
                 }
                 self.yield_statement(node)
             }
@@ -225,17 +223,14 @@ impl<'a> Typer<'a> {
                     .next()
                     .map(|value| self.expression(&value, Some(&Type::Unknown)));
                 if let Some(value) = &value {
-                    self.diagnostics.emit(
-                        Diagnostic::error(
-                            Category::Phase,
-                            Code::Local(codes::local::SOURCE_RETURN_VALUE),
-                            value.at,
-                            "a source writes its output with `yield`: its `return` takes no \
-                             value"
-                                .to_string(),
-                        )
-                        .with_rule("SOURCE-4"),
-                    );
+                    self.diagnostics.emit(error(
+                        Category::Phase,
+                        codes::SOURCE_RETURN_VALUE,
+                        value.at,
+                        "a source writes its output with `yield`: its `return` takes no value"
+                            .to_string(),
+                        "SOURCE-4",
+                    ));
                 }
                 self.returned = true;
                 Stmt::Return {
