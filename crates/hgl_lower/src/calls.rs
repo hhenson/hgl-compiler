@@ -9,6 +9,8 @@ use hgl_analyser::{FieldRef, Parameter, Program, Type};
 /// The evaluated arguments of a call in written order, keeping their
 /// positions in the analysed argument list (EXPR-2). A function
 /// argument is a compile-time binding and has no runtime value (FN-17).
+/// Values supplied in configuration braces (FN-18, EXPR-10) use the
+/// same parameter slots and keep their place in that order.
 pub fn runtime_arguments(arguments: &[Argument]) -> impl Iterator<Item = (usize, &Argument)> {
     arguments
         .iter()
