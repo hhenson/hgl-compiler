@@ -243,7 +243,6 @@ fn a_line_that_cannot_begin_a_statement_continues_the_one_before() {
         (Statements, "let a = b\n    - c", "let a = b - c"),
         (Statements, "return\n    -value", "return -value"),
         (Statements, "let a = b\n    .c\n    .d()", "let a = b.c.d()"),
-        (Statements, "let a = f(x)\n    ?", "let a = f(x)?"),
         (Statements, "let a\n    = 1", "let a = 1"),
         (Statements, "var x: i64\n    = 1", "var x: i64 = 1"),
         (Statements, "var a: f64\n    ?", "var a: f64?"),
@@ -1512,31 +1511,24 @@ fn the_nullable_suffix_covers_the_whole_type_before_it() {
     );
 }
 
+/// ERR-5 and TYPE-15: a place takes the form of the result. The
+/// question mark remains a type suffix.
 #[test]
-fn a_question_mark_after_an_expression_propagates_a_result() {
-    // TYPE-15: "A type-position `?` declares nullability;
-    // expression-position `?` retains ERR-5's result propagation
-    // meaning."
-    assert_eq!(
-        statements("let c = f(x)?"),
-        "LocalDecl[\"let\" \"c\" \"=\" TryExpr[CallExpr[NameExpr[\"f\"] \
-         ArgList[\"(\" Arg[NameExpr[\"x\"]] \")\"]] \"?\"]]"
-    );
-    assert_eq!(
-        statements("let d: f64? = (a /{zero: .error} b)?"),
-        "LocalDecl[\"let\" \"d\" \":\" NullableType[ScalarType[\"f64\"] \"?\"] \"=\" \
-         TryExpr[ParenExpr[\"(\" BinaryExpr[NameExpr[\"a\"] \"/\" \
-         OperatorConfig[\"{\" ConfigArg[\"zero\" \":\" ImpliedMember[\".\" \"error\"]] \"}\"] NameExpr[\"b\"]] \")\"] \"?\"]]"
-    );
+fn postfix_question_mark_is_rejected_in_an_expression() {
+    for source in ["let c = f(x)?", "let d: f64? = (a /{zero: .error} b)?"] {
+        assert!(
+            rejected(Entry::Statements, source)
+                .iter()
+                .any(|finding| { finding.contains("found `?`") })
+        );
+    }
 }
 
 #[test]
-fn the_result_forms_are_calls_and_a_postfix() {
+fn the_result_forms_are_calls() {
     // ERR-13: "`ok`, `err`, `is_ok`, `is_err`, and `capture` are
     // contextual names (LEX-10): as the callee of a call each is the
-    // form this chapter defines". The chapter's grammar: each "is a
-    // `postfix_expr` ... the first four are calls whose callee is the
-    // name written, and `?` is the postfix suffix."
+    // form this chapter defines".
     assert_eq!(
         statements("return ok(v)"),
         "ReturnStmt[\"return\" CallExpr[NameExpr[\"ok\"] ArgList[\"(\" Arg[NameExpr[\"v\"]] \")\"]]]"
@@ -1551,12 +1543,6 @@ fn the_result_forms_are_calls_and_a_postfix() {
         let outline = statements(text);
         assert!(outline.contains("CallExpr[NameExpr["), "{text}: {outline}");
     }
-    // ERR-5: "`a()? + b` propagates before the addition."
-    assert_eq!(
-        statements("let c = a()? + b"),
-        "LocalDecl[\"let\" \"c\" \"=\" BinaryExpr[TryExpr[CallExpr[NameExpr[\"a\"] \
-         ArgList[\"(\" \")\"]] \"?\"] \"+\" NameExpr[\"b\"]]]"
-    );
 }
 
 #[test]
@@ -1610,9 +1596,9 @@ fn operators_bind_by_tier() {
     );
     // Postfix binds tighter than a prefix operator.
     assert_eq!(
-        statements("-a.b(c)[0]?"),
-        "ExprStmt[UnaryExpr[\"-\" TryExpr[IndexExpr[CallExpr[MemberExpr[NameExpr[\"a\"] \".\" \"b\"] \
-         ArgList[\"(\" Arg[NameExpr[\"c\"]] \")\"]] \"[\" Literal[\"0\"] \"]\"] \"?\"]]]"
+        statements("-a.b(c)[0]"),
+        "ExprStmt[UnaryExpr[\"-\" IndexExpr[CallExpr[MemberExpr[NameExpr[\"a\"] \".\" \"b\"] \
+         ArgList[\"(\" Arg[NameExpr[\"c\"]] \")\"]] \"[\" Literal[\"0\"] \"]\"]]]"
     );
 }
 

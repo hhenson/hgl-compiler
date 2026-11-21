@@ -85,7 +85,7 @@ const fn checked(value: i64) -> result<i64, error> {
 }
 
 const fn doubled(value: i64) -> result<i64, error> {
-    let checked_value = checked(value)?
+    let checked_value: i64 = checked(value)
     return ok(checked_value * 2)
 }
 

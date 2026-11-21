@@ -107,7 +107,7 @@ fn book_valid(book: dict<str, i64>) -> bool {
 fn book_wakes(step: i64) -> bool => book_valid(write_book(step))
 
 const fn price_of_a(book: dict<str, i64>) -> i64 {
-    let found = get(book, "A")
+    let found: i64? = get(book, "A")
     if found == null { return -1 }
     return found
 }

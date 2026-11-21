@@ -707,9 +707,52 @@ pub enum ExprKind {
         /// Which of its parts.
         part: ErrorPart,
     },
-    /// `value?`: the T of a success; a failure leaves the function or
-    /// fails the node (ERR-5).
-    Propagate(Box<Expr>),
+    /// A result given where its T is expected (ERR-15: "Where it expects
+    /// T, it gives a success's value, and a failure's own error is
+    /// raised, where raising is admitted (ERR-5)"): what a call gives
+    /// whose function, or whose operator's selected candidate, gives a
+    /// `result<T, error>`, or what a binding holds; or, in a value
+    /// function that gives a `result<U, E>`, a `result<T, E>` of that
+    /// same E. The expression is of the T; `raise` says where a failure
+    /// goes. In composition, where the result is a connection, the
+    /// expression is a connection of T.
+    Raised {
+        /// The result.
+        result: Box<Expr>,
+        /// Where a failure is raised.
+        raise: Raise,
+    },
+    /// A result given where its `T?` is expected, `T` not nullable
+    /// (ERR-15: "Where it expects `T?`, it gives a success's value, or
+    /// null for a failure, whose error is not kept"), a comparison with
+    /// `null` among them. The expression is of the `T?`. In composition,
+    /// where the result is a connection, `reader` says which node turns
+    /// it into a connection of `T?`: false for the node of the call that
+    /// gives it ("of `T?`, where a failure publishes null"), true for the
+    /// node that reads it, a result a binding holds ("takes that form as
+    /// a call's does, in the node that reads it").
+    OrNull {
+        /// The result.
+        result: Box<Expr>,
+        /// True where the node that reads a connection of the result
+        /// takes its `T?`; false otherwise.
+        reader: bool,
+    },
+    /// A `T?` given where a T is expected (ERR-12: "A `T?` value given
+    /// where a T is expected is read as its value: the place tries it,
+    /// and a null fails the read with the code `value.null`, an
+    /// execution failure raised as a result's failure is (ERR-5)"). The
+    /// expression is of the T. A null written there is no such read: it
+    /// rejects (TYPE-14). A binding a null test has proved not null is
+    /// read as its T, and is not one either.
+    NullRead {
+        /// The nullable value read.
+        value: Box<Expr>,
+        /// Where a null's failure is raised.
+        raise: Raise,
+        /// The code of the failure a null gives: [`NULL_READ_CODE`].
+        code: &'static str,
+    },
     /// `capture(callable, args...)`: a temporal error boundary around
     /// the call it holds (ERR-7).
     Capture(Box<Expr>),
@@ -794,6 +837,58 @@ pub enum ErrorPart {
     Phase,
     /// `.evaluation_time` of a context, a `datetime`.
     EvaluationTime,
+}
+
+/// The code of the failure a `T?` read where a T is expected gives
+/// where it holds null (ERR-12; the catalogue's `value.null`).
+pub const NULL_READ_CODE: &str = "value.null";
+
+/// Where a failure raised by a place is raised (ERR-5: "This rule says
+/// what raised means"), for a result given where its T is expected
+/// ([`ExprKind::Raised`]) and a null read where a T is expected
+/// ([`ExprKind::NullRead`]). The analyser decides it from where the
+/// expression stands; a target writes what it says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Raise {
+    /// In a value function that gives a `result<U, E>`: "the function
+    /// gives that E as its failure", and nothing after it is evaluated.
+    Return,
+    /// In a value function whose result is no result, one that gives an
+    /// `i64` or gives nothing: "its failure is an execution failure
+    /// (ERR-1), as an index outside a list is (EXPR-7)". It fails what
+    /// evaluates the function. A constant's value and a default are
+    /// read so too.
+    Execution,
+    /// In a `when`: "the node fails".
+    Node,
+    /// In a source's body: "its failure fails the source, as it fails a
+    /// node in a `when`".
+    Source,
+    /// In a lifecycle hook, `start` or `stop`, and in a node's `state`
+    /// or `cache` initializer, which its start evaluates: "a failure of
+    /// that phase (RUN-4)".
+    Lifecycle(Hook),
+    /// In value code evaluated where a graph is built (ERR-15: "A call
+    /// that is evaluated where the graph is built and gives no
+    /// connection (FN-6, FN-9) takes its form as value code does"): a
+    /// failure of the graph's building.
+    Build,
+    /// Among a test's statements: a failure of the test.
+    Test,
+    /// Among an application's statements: a failure of the run.
+    Application,
+    /// In composition, a connection a call gives, of a temporal function
+    /// or one that is lifted (FN-6): "a success publishes its value and
+    /// a failure fails the call's node in that cycle, as a failure
+    /// raised in a `when` does, within whatever `capture` bounds it
+    /// (ERR-7)".
+    CallNode,
+    /// In composition, any other connection, one a binding holds among
+    /// them, given where a connection of T is taken: the node that reads
+    /// it fails in a cycle that publishes a failure, or a null (ERR-12:
+    /// "the node that reads it failing in a cycle that publishes a
+    /// null").
+    Reader,
 }
 
 /// What a call calls.
@@ -1150,7 +1245,9 @@ impl Expr {
             | ExprKind::TagTest { value: inner, .. }
             | ExprKind::Payload { result: inner, .. }
             | ExprKind::ErrorPart { base: inner, .. }
-            | ExprKind::Propagate(inner)
+            | ExprKind::Raised { result: inner, .. }
+            | ExprKind::OrNull { result: inner, .. }
+            | ExprKind::NullRead { value: inner, .. }
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
             | ExprKind::ChildEndpoint { child: inner, .. }
@@ -1249,7 +1346,9 @@ impl Expr {
             | ExprKind::TagTest { value: inner, .. }
             | ExprKind::Payload { result: inner, .. }
             | ExprKind::ErrorPart { base: inner, .. }
-            | ExprKind::Propagate(inner)
+            | ExprKind::Raised { result: inner, .. }
+            | ExprKind::OrNull { result: inner, .. }
+            | ExprKind::NullRead { value: inner, .. }
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
             | ExprKind::ChildEndpoint { child: inner, .. }

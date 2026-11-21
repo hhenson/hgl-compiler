@@ -113,9 +113,8 @@ fn a_sources_body_is_read() {
 
 /// SOURCE-1: "`yield time: value` writes its output": the value is of
 /// the source's result type (EXPR-5). Its statements are runtime code:
-/// FN-3, "A runtime body calls only value functions"; ERR-5,
-/// "Composition, lifecycle, and generator uses reject
-/// (`result.propagation_phase`)"; ERR-7, in a value function or a hook
+/// FN-3, "A runtime body calls only value functions"; ERR-5 allows a
+/// failure to be raised in a source. ERR-7, in a value function or a hook
 /// a capture rejects; TIME-8, a capability is not "what a node
 /// publishes". CTRL-15: a `while` "with no condition is a source's".
 #[test]
@@ -142,7 +141,7 @@ fn a_yield_writes_a_value_of_the_sources_type() {
         // function called, a failure propagated and a capture.
         "        yield every: clock\n",
         "        yield every: feeder(count)\n",
-        "        let whole = checked(count)?\n",
+        "        let whole: i64 = checked(count)\n",
         "        let seen = capture(feeder, count)\n",
         "    }\n",
         "}\n",
@@ -155,7 +154,6 @@ fn a_yield_writes_a_value_of_the_sources_type() {
             "m.hgl:16:22 injectable/capability.as_value TIME-8",
             "m.hgl:16:22 type/type.mismatch EXPR-5",
             "m.hgl:17:22 function-kind/call.role FN-3",
-            "m.hgl:18:35 phase/result.propagation_phase ERR-5",
             "m.hgl:19:20 phase/capture.phase ERR-7",
         ]
     );

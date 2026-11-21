@@ -26,7 +26,7 @@
 //! candidate.
 
 use hgl_analyser::hir::{
-    Argument, Body, Callee, ErrorPart, Expr, ExprKind, Hook, Local, Stmt, ValueCategory,
+    Argument, Body, Callee, ErrorPart, Expr, ExprKind, Hook, Local, Raise, Stmt, ValueCategory,
 };
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Type};
 use hgl_lower::calls::{LeftOut, left_out};
@@ -686,16 +686,16 @@ impl Emitter<'_> {
         format!("::{}::{field}({boundary})", runtime::NAMESPACE)
     }
 
-    /// `operand?` in a `when` (ERR-5: "In when, only `result<T,error>` may
-    /// propagate to node failure. No success output is written; completed
-    /// effects stand"): the result held under a name of its own before
-    /// the statement, and the node failed with its error where it is a
-    /// failure; the expression is the success's payload. The error is
-    /// raised as it is, so that a retained one keeps its context (ERR-8:
-    /// "A consumer that propagates a retained error with `?` makes a new
-    /// failure event, whose error keeps its first provenance"). Only where
-    /// it is the first thing its statement evaluates, as a value
-    /// function's `?` is (`expressions`).
+    /// A result given where its T is expected in a `when` (ERR-5: "In a
+    /// `when` only a `result<T,error>` raises, and the node fails ... No
+    /// success output is written; completed effects stand"): the result
+    /// held under a name of its own before the statement, and the node
+    /// failed with its error where it is a failure; the expression is the
+    /// success's payload. The error is raised as it is, so that a retained
+    /// one keeps its context (ERR-8: "A consumer that raises a retained
+    /// error again (ERR-5) makes a new failure event, whose error keeps its
+    /// first provenance"). Only where it is the first thing its statement
+    /// evaluates, as a value function's is (`expressions`).
     fn raised(
         &mut self,
         scope: &mut Scope,
@@ -703,10 +703,10 @@ impl Emitter<'_> {
         at: hgl_diagnostics::Location,
     ) -> String {
         if scope.conditional > 0 || scope.acted {
-            return self.missing(at, "a `?` here");
+            return self.missing(at, "a result raised in a `when` here");
         }
         if scope.read {
-            return self.missing(at, "a `?` after a read in its statement");
+            return self.missing(at, "a result raised after a read in its statement");
         }
         let written = self.expression(scope, operand);
         let held = names::temporary("propagated", self.temporary());
@@ -843,8 +843,11 @@ impl Family for Lifting {
         value: &Expr,
     ) -> Option<String> {
         match &value.kind {
-            ExprKind::Propagate(operand) if emitter.kind() == Some(Kind::Hook(Hook::When)) => {
-                Some(emitter.raised(scope, operand, value.at))
+            ExprKind::Raised {
+                result,
+                raise: Raise::Node,
+            } if emitter.kind() == Some(Kind::Hook(Hook::When)) => {
+                Some(emitter.raised(scope, result, value.at))
             }
             // ERR-4: "`.context` is a read-only nullable record of `.node:
             // str`, `.phase: str`, one of `"evaluate"`, `"start"`, and

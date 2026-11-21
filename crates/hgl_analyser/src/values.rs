@@ -77,6 +77,8 @@ mod evals;
 mod expressions;
 // What a place expects of a value, and the values that fit it (EXPR-5, TYPE-14).
 mod fit;
+// The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
+mod forms;
 // What a call's generic parameters stand for (GEN-2, GEN-8, GEN-12).
 mod inference;
 // What a value is in a graph: a connection or an ordinary value (FN-3, FN-6).
@@ -89,7 +91,7 @@ mod node;
 mod operators;
 // `requires`, and what a generic body may call by it (GEN-3, GEN-7, GEN-16).
 mod requirements;
-// The result forms, the parts of a result and of an error, and `value?` (ERR-2 to ERR-7).
+// The result forms, the parts of a result and of an error, and `capture` (ERR-2 to ERR-7).
 mod results;
 // The sizes a struct application or a call gives a list or a window (TYPE-10, TYPE-11).
 mod sizes;

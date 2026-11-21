@@ -16,7 +16,6 @@ tag_test = ( "is_ok" | "is_err" ), "(", expression, ")" ;
 error_constructor = "error", "(", error_argument, [ ",", error_argument ], [ "," ], ")" ;
 error_argument = ( "message" | "code" ), ":", expression ;
 capture_call = "capture", "(", ( IDENTIFIER | qualified_name ), { ",", argument }, [ "," ], ")" ;
-propagation = postfix_expr, "?" ;
 warning_annotation = "@", "suppress_warning", "(", STRING_LITERAL, ")" ;
 # expressions-and-bindings.md
 expression = or_expr ;
@@ -29,7 +28,7 @@ multiplicative_expr = unary_expr, { ( "*" | "/" | "//" | "%" ), [ operator_confi
 unary_expr = ( "-" | "!" ), [ operator_configuration ], unary_expr | postfix_expr ;
 operator_configuration = "{", configuration_argument, { ",", configuration_argument }, [ "," ], "}" ;
 configuration_argument = member_name, ":", expression ;
-postfix_expr = primary_expr, { call_suffix | index_suffix | member_suffix | "?" } ;
+postfix_expr = primary_expr, { call_suffix | index_suffix | member_suffix } ;
 call_suffix = "(", [ arguments ], ")" ;
 index_suffix = "[", expression, "]" ;
 member_suffix = ".", member_name ;

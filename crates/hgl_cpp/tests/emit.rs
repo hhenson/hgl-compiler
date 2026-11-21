@@ -1889,7 +1889,7 @@ fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
                 "const fn half(d: duration) -> result<duration, error> => ok(d)\n",
                 "\n",
                 "fn later(a: duration) -> duration {\n",
-                "    when { return a + half(a)? }\n",
+                "    when { return a + half(a) }\n",
                 "}\n",
                 "\n",
                 "fn kept(a: i64) -> i64 {\n",
@@ -1908,9 +1908,9 @@ fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
         &hgl_cpp::runtime::provides,
     );
     assert!(
-        emitted
-            .blocked("blocked")
-            .is_some_and(|reason| reason.ends_with("does not write a `?` here yet")),
+        emitted.blocked("blocked").is_some_and(
+            |reason| reason.ends_with("does not write a result raised in a `when` here yet")
+        ),
         "{:?}",
         emitted.blocked("blocked")
     );
@@ -2598,9 +2598,8 @@ fn natives_are_called_with_their_templates() {
     assert_eq!(emitted.blocked("natives_are_called"), None);
 }
 
-/// ERR-5, EXPR-2: a `?` is run before its statement, so one after a read
-/// in its statement would run before the read, and could change what it
-/// reads; it is reported, and not written.
+/// ERR-5, EXPR-2: a raise inside an argument's block must follow the
+/// earlier argument's read and the statements in the block.
 #[test]
 fn a_propagation_after_a_read_is_reported() {
     let emitted = emit(&[(
@@ -2614,13 +2613,13 @@ fn a_propagation_after_a_read_is_reported() {
             "    return ok(pick(x, {\n",
             "        x = 2\n",
             "        checked(5)\n",
-            "    }?))\n",
+            "    }))\n",
             "}\n",
         ),
     )]);
     assert_eq!(
         emitted.reported,
-        ["m.hgl:6:23 the cpp target does not write a `?` after a read in its statement yet"]
+        ["m.hgl:8:9 the cpp target does not write a result raised here yet"]
     );
 }
 
@@ -2636,12 +2635,12 @@ fn a_propagation_after_a_constant_that_may_fail_is_reported() {
             "const broken: i64 = [1][2]\n",
             "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
             "const fn pick(a: i64, b: i64) -> i64 => a\n",
-            "const fn both() -> result<i64, error> => ok(pick(broken, checked(11)?))\n",
+            "const fn both() -> result<i64, error> => ok(pick(broken, checked(11)))\n",
         ),
     )]);
     assert_eq!(
         emitted.reported,
-        ["m.hgl:5:58 the cpp target does not write a `?` here yet"]
+        ["m.hgl:5:58 the cpp target does not write a result raised here yet"]
     );
 }
 
@@ -2657,14 +2656,14 @@ fn a_propagation_in_a_compound_assignment_to_an_element_is_reported() {
             "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
             "const fn grown() -> result<list<i64>, error> {\n",
             "    var items = [1]\n",
-            "    items[2] += checked(11)?\n",
+            "    items[2] += checked(11)\n",
             "    return ok(items)\n",
             "}\n",
         ),
     )]);
     assert_eq!(
         emitted.reported,
-        ["m.hgl:5:17 the cpp target does not write a `?` here yet"]
+        ["m.hgl:5:17 the cpp target does not write a result raised here yet"]
     );
 }
 
@@ -2682,14 +2681,16 @@ fn a_propagation_after_a_var_place_is_reported() {
             "}\n",
             "const fn grown() -> result<list<i64>, error> {\n",
             "    var items = [1]\n",
-            "    bump(items[2], checked(11)?)\n",
+            "    bump(items[2], checked(11))\n",
             "    return ok(items)\n",
             "}\n",
         ),
     )]);
     assert_eq!(
         emitted.reported,
-        ["m.hgl:8:20 the cpp target does not write a `?` after a read in its statement yet"]
+        [
+            "m.hgl:8:20 the cpp target does not write a result raised after a read in its statement yet"
+        ]
     );
 }
 

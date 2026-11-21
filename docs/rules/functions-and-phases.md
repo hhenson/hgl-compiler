@@ -101,7 +101,7 @@ parser: done
 
 analyser: planned
 
-- Which lifted arguments need a valid input
+- Left: which lifted arguments need a valid input. The analyser records a nullable connection read as T at the reader (ERR-12).
 
 transpiler: planned
 

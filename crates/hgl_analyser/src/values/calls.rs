@@ -11,7 +11,7 @@ use hgl_source::{FileId, Span};
 use super::Typer;
 use super::arguments::{Slot, Takes};
 use super::fit::{not_null, open};
-use super::inference::{Inferred, Places, asked_of_result, infer, mentions, placed};
+use super::inference::{Inferred, Places, infer_from_place, mentions, placed};
 use super::node::RefRead;
 use super::sizes;
 use crate::declared::{names_parameter, substitute_within};
@@ -675,15 +675,15 @@ impl<'a> Typer<'a> {
         let named = self.named_generics(list, generics, &mut found);
 
         // The requested output: `let names: list<str> = repeat(3)` says
-        // what the `T` of `repeat<T>(count: i64) -> list<T>` is. A `T`
-        // result given to a `T?` place is the `T` (`asked_of_result`).
+        // what the `T` of `repeat<T>(count: i64) -> list<T>` is.
         // What the call writes is found already, and is not changed.
-        if let (Some(result), Some(expected)) = (&signature.result, expected)
-            && !open(expected)
-        {
-            let wanted = asked_of_result(result, expected, false);
-            infer(result, wanted, generics, &mut found);
-        }
+        let result_fallback = signature
+            .result
+            .as_ref()
+            .zip(expected.filter(|ty| !open(ty)))
+            .and_then(|(result, expected)| {
+                infer_from_place(result, expected, false, generics, &mut found)
+            });
         // The inputs.
         let slots: Vec<Slot> = signature
             .parameters
@@ -708,6 +708,7 @@ impl<'a> Typer<'a> {
             settled: !expected.is_some_and(open),
             aside: &value_names,
             values: &named,
+            result_fallback,
             defaults: generics
                 .iter()
                 .map(|generic| self.default_constant(callee, generic))
