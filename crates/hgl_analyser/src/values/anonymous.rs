@@ -128,7 +128,8 @@ impl Typer<'_> {
             .map(|(name, ty)| Slot {
                 name: name.text(),
                 ty: ty.clone().unwrap_or(Type::Unknown),
-                required: true,
+                // UNIT-8: an omitted argument of a written nullable type is null.
+                required: !matches!(ty, Some(Type::Nullable(_))),
                 pack: None,
                 pack_bounds: (0, None),
                 type_pack: None,

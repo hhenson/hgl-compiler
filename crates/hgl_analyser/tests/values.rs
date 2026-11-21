@@ -4336,3 +4336,13 @@ fn a_default_is_a_value_of_its_parameters_type() {
         "the `2` of `factor: f64 = 2` is widened"
     );
 }
+
+/// UNIT-8: a direct anonymous call may omit an input written as nullable.
+#[test]
+fn a_direct_anonymous_call_may_omit_a_nullable_argument() {
+    let checked = module(concat!(
+        "const fn omitted() -> i64 => (fn(x: i64?) -> i64 => 1)()\n",
+        "const fn supplied() -> i64 => (fn(x: i64?) -> i64 => 1)(2)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
