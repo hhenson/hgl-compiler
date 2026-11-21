@@ -686,3 +686,90 @@ fn composition_records_each_form_of_a_result() {
         ]
     );
 }
+
+/// ERR-15 and ERR-12: an operator's places are independent. An
+/// argument can keep its result while another takes the result's
+/// value or reads a nullable payload.
+#[test]
+fn operators_fit_each_argument_to_its_selected_parameter() {
+    use hgl_analyser::hir::{Raise, walk_statements};
+
+    let checked = module(concat!(
+        "operator take<A, B>(keep: A, read: B) -> i64\n",
+        "impl const fn take(keep: result<i64, error>, read: i64) -> i64 => read\n",
+        "operator take_items<A, B>(keep: A, read: B) -> i64\n",
+        "impl const fn take_items<T>(keep: result<i64, error>, read: list<T>) -> i64 => 1\n",
+        "const fn read_result(keep: result<i64, error>, read: result<i64, error>) -> i64 => take(keep, read)\n",
+        "const fn read_nullable(keep: result<i64, error>, read: i64?) -> i64 => take(keep: keep, read: read)\n",
+        "const fn read_items(keep: result<i64, error>, read: result<list<i64>, error>) -> i64 => take_items(keep, read)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for (name, nullable) in [
+        ("read_result", false),
+        ("read_nullable", true),
+        ("read_items", false),
+    ] {
+        let mut calls = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::Call { arguments, .. } = &expr.kind {
+                assert!(matches!(arguments[0].value.kind, ExprKind::Local(_)));
+                let converted = &arguments[1].value.kind;
+                if nullable {
+                    assert!(matches!(
+                        converted,
+                        ExprKind::NullRead {
+                            raise: Raise::Execution,
+                            ..
+                        }
+                    ));
+                } else {
+                    assert!(matches!(
+                        converted,
+                        ExprKind::Raised {
+                            raise: Raise::Execution,
+                            ..
+                        }
+                    ));
+                }
+                calls += 1;
+            }
+        });
+        assert_eq!(calls, 1, "{name}");
+    }
+}
+
+/// ERR-12, ERR-15: indexing or iterating a fallible nullable collection
+/// first takes the success value, then reads the nullable collection.
+#[test]
+fn indexing_and_iteration_read_nullable_success_payloads() {
+    use hgl_analyser::hir::{NULL_READ_CODE, Raise, walk_statements};
+
+    let checked = module(concat!(
+        "const fn head(items: result<list<i64>?, error>) -> i64 => items[0]\n",
+        "const fn sum(items: result<list<i64>?, error>) -> i64 {\n",
+        "    var total = 0\n",
+        "    for item in items { total += item }\n",
+        "    return total\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for name in ["head", "sum"] {
+        let mut reads = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::NullRead { value, raise, code } = &expr.kind {
+                assert_eq!(*code, NULL_READ_CODE);
+                assert_eq!(*raise, Raise::Execution);
+                assert!(matches!(
+                    value.kind,
+                    ExprKind::Raised {
+                        raise: Raise::Execution,
+                        ..
+                    }
+                ));
+                assert_eq!(expr.ty.to_string(), "list<i64>");
+                reads += 1;
+            }
+        });
+        assert_eq!(reads, 1, "{name}");
+    }
+}

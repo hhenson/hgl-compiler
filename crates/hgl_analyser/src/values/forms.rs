@@ -128,10 +128,13 @@ impl<'a> Typer<'a> {
     /// one this place reads, a struct's for a member, a list's for an
     /// index; what is not is left as it is.
     pub(super) fn received(&mut self, base: Expr, reads: impl Fn(&Type) -> bool) -> Expr {
-        match &base.ty {
+        let base = match &base.ty {
             Type::Result { value, .. } if whole(&base.ty) && !open(value) => {
                 self.take(base, Taken::Value)
             }
+            _ => base,
+        };
+        match &base.ty {
             Type::Nullable(payload) if reads(payload) => self.take(base, Taken::Read),
             _ => base,
         }
