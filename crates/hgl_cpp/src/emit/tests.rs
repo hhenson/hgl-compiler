@@ -67,10 +67,6 @@ impl Emitter<'_> {
             // ERR-1: preserve the source statement of a runtime failure.
             let marked = names::testing("statement");
             text.push_str(&format!("{INDENT}{marked}();\n"));
-            if let hgl_analyser::hir::Stmt::Return { at, .. } = statement {
-                self.unsupported(*at, "a `return` in a test");
-                continue;
-            }
             self.statement(&mut scope, statement, 1, &mut text);
         }
         text.push_str("}\n");

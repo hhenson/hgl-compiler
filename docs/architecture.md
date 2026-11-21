@@ -492,7 +492,7 @@ else".
 | `state`, `cache`, `start`, `when` or `stop` in a `const fn` | `node.in_value_function` | FN-1 |
 | `inject` in a `const fn`, or in the contract of a native one | `node.in_value_function` | FN-9, NATIVE-3 |
 | `inject`, `state`, `cache` or a hook in an anonymous function written in a node | `node.in_value_function` | FN-9, FN-3 |
-| A temporal input read in a `cache`'s initialiser | local `cache.input_read` | TIME-1 |
+| A temporal input read in a `cache`'s initialiser | `cache.input_read` | TIME-5, TIME-6 |
 | A connection in a graph given to a value candidate's option by a symbol's configuration, `a =={abs: tolerance} b` | `connection.as_constant` | EXPR-14 |
 
 A value function injects no capability (owner's decision of 2026-11-16
@@ -622,8 +622,8 @@ statement is read as value code, with three things of a source's own:
 | In a source | Read as | Rule |
 | --- | --- | --- |
 | `yield time: value` | `Stmt::Yield`: the value is of the result's type, and is not a capability. What the time may be is proposed, and is not judged | SOURCE-1, SOURCE-2 |
-| `return` with no value | Ends the source. One with a value is the local `source.return_value` | SOURCE-4 |
-| A `yield` inside a block or an `if` whose value is used | The local `yield.in_value`: it stands inside a value expression | SOURCE-4 |
+| `return` with no value | Ends the source. One with a value is `source.return_value` | SOURCE-4 |
+| A `yield` inside a block or an `if` whose value is used | `yield.in_value` | SOURCE-4 |
 | `while { }` with no condition | A loop with none | CTRL-15 |
 
 A temporal function called there is `call.role`, and a `capture` is
@@ -661,7 +661,7 @@ What is rejected there:
 | `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
 | A temporal function called in a hook | `call.role` | FN-3 |
 | `scheduled()` in a node that injects neither `scheduler` nor `alarm`: in a hook, a `state`'s or a `cache`'s initialiser, or a source's body | `inject.no_scheduler` | TIME-9, SOURCE-1 |
-| `scheduled()` in a value function, a graph or a test, which is no node | local `scheduled.outside_node` | FN-9 |
+| `scheduled()` in a value function, a graph or a test, which is no node | `scheduled.outside_node` | FN-9, TIME-9 |
 | A capability retained: the value of a `state` or a `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published: `(clock, value)`, `return clock` | `capability.as_value` | TIME-8 |
 | `alarm` and `scheduler` injected in one node | `inject.alarm_and_scheduler` | TIME-8 |
 | `scheduled()` in `start` or `stop` | `scheduled.lifecycle` | TIME-9 |
@@ -853,7 +853,7 @@ A `switch` and the loops of a graph are told apart the same way
 | `switch` over an ordinary value | One case is composed: read as in a value function |
 | `switch` over a connection | Each case is a child graph selected at runtime: an assignment or a `return` in a case follows the rules of a branch selected at runtime |
 | A label that is a connection | `connection.as_constant` |
-| A label that is no compile-time constant: a `let`, a `const` parameter, a call (UNIT-13, GEN-8), here and in a value function or a hook | local `switch.label_constant` |
+| A label that is no compile-time constant: a `let`, a `const` parameter, a call (UNIT-13, GEN-8), here and in a value function or a hook | `switch.label_constant` |
 | `for item in items`, `items` an ordinary list, set or dictionary | Unrolled while the graph is built: ordinary values bound, and a `var` may be carried from pass to pass |
 | `items` a connection of `list<T, N>` | Composed `N` times: `item` is a connection of `T` |
 | `items` a connection of `list<T>`, `set<T>` or `dict<K, V>` | One child for each member. `item` is a connection of `T` for a list and the member, an ordinary `T`, for a set; `key` is an ordinary `K` and `value` a connection of `V`. An assignment to a `var` declared outside the loop, and a `return`, are `loop.carried` |
@@ -906,7 +906,7 @@ is the text a target keys an instance by, one for each constant.
 | A field's conflict, a parent's argument | `declared::may_be_one`: not known to differ | No conflict |
 | `requires` | `holds`: `equals` of the option's value and each operand | Not told for a generic parameter the call passes on: told for each instance a call that gives every argument makes (`requirements::instances_hold`). Not told for a constant not worked out: `requires.unmet` |
 | A call's generic value argument | GEN-8 | `generic.argument_constant`: what is no constant, and one not worked out |
-| A `switch` label | CTRL-6: `equals` of two labels | No constant: local `switch.label_constant`. One not worked out is a label whose repeat is not judged |
+| A `switch` label | CTRL-6: `equals` of two labels | No constant: `switch.label_constant`. One not worked out is a label whose repeat is not judged |
 | A delta's key, a tuple's index | TYPE-16: `equals` of two keys; EXPR-7 | No overlap, and the element's type not known |
 
 Not done: an operation the reader does not work out (one given
@@ -1598,14 +1598,12 @@ reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
 the limit is the compiler's, not the language's. The analyser's codes
-are catalogued (`hgl_analyser::codes`), one of them a warning, but for
-the local ones in `codes::local`, for rejections the catalogue has no
-row for: `cache.input_read` (TIME-1), `doc.unknown_key` (SDOC-3),
-`source.return_value` and `yield.in_value` (SOURCE-4), and
-`scheduled.outside_node` (FN-9), and `reading.limit` (EXPR-5), whose
-limit is the compiler's: an expression that takes its type from its
-place is read again as each candidate's parameter it is tried as, and
-those readings nest. Each statement read where no expression is, each
+are catalogued (`hgl_analyser::codes`), one of them a warning. Its local
+codes are `loop.carried` (CTRL-15), `reading.limit` (EXPR-5), and
+`function.value` and `function.reference_unread` (FN-17).
+An expression that takes its type from its place is read again as
+each candidate's parameter it is tried as, and those readings nest.
+Each statement read where no expression is, each
 declaration of a node and each body written as one expression may read
 10,000 expressions again, and 16 more for each node of its syntax; one
 that needs more is rejected, and what is read before it changes
@@ -1697,7 +1695,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 
 | HGL | C++ |
 | --- | --- |
-| Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, namespace `hgl::demo::calc::m_`; `modules/demo.calc.types.h` where it declares a type: its enums, and its structs, each after those it holds (UNIT-6), which its header includes |
+| Module `demo.calc` (UNIT-1, UNIT-2) | `modules/mod-demo-calc.h` and `modules/mod-demo-calc.cpp` in namespace `hgl::demo::calc::m_`. Its header includes `modules/type-demo-calc.h` where it declares types, with each struct after those it holds (UNIT-6) |
 | `const fn` (FN-1); an HGL candidate of an operator (GEN-4) | A function, with its HGL name, signature and line in a comment; a candidate an overload of its operator's name in `c_` |
 | A generic one (GEN-2) | One function for each instance `hgl_lower` collects (`Instances::typed`), named by its suffix in `i_::name`: `i_::first::of_i64` |
 | A parameter; a `var` parameter (FN-15) | By value where it is small (`types::by_value`), a `const` reference otherwise; a reference to the place the call gives |
@@ -1719,7 +1717,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | A call with more than one argument that may fail | Its arguments evaluated one statement at a time, in the order written (EXPR-2), in a lambda called where it stands |
 | A tuple or a list with an entry after the first that runs statements; an element read whose list and index both may fail, or either runs statements | Each entry held as a value of its own type first, in order; the list held, then the index (`expressions::held_read`), the element a value of its own |
 | Named test | A function of `hgl::demo::calc::m_::t_`; each statement told to the library's test host first, `::hglrt::testing::statement()`; `assert` is `::hglrt::testing::check`, `assert raises` `::hglrt::testing::raises` of a lambda (TST-10) |
-| The tests of a module | `tests/demo.calc.cpp`: a `hglrt::testing::Registration` of each by its identity, and a `main` that is `hglrt::testing::main`; one executable |
+| The tests of a module | `tests/test-demo-calc.cpp` registers each test by its identity with `hglrt::testing::Registration` and defines the executable's `main` |
 | Temporal function `count` (FN-2), and each instance of a generic one (GEN-2) | A struct `n_::count::impl_` of the module's namespace, in its unit (`impl_` in a namespace of the function's name, so that no member, `name` or `compose`, is named as its struct), and a wiring function `w_::count(wiring_, ...)`, declared in its header, which adds it to a graph: a call names the wiring function, so that no other unit instantiates hgraph's templates of it; an instance's are `n_::i_::record::of_i64::impl_`, `w_::i_::record::of_i64` |
 | A node (FN-2, TIME-3 to TIME-8) | A static node of hgraph's front end (`<hgraph/types/generated.h>`): `eval`, and `start` and `stop` where it needs them, each given hgraph's views. A temporal parameter is an `hgraph::In` of its temporal form, `Passive` where no handler subscribes to it and `Unchecked` where not every executed handler requires it (TIME-4, `hgl_lower::nodes`); a `const` one an `hgraph::Scalar`; the result `hgraph::Out`, `out_` |
 | `state`, `cache` (TIME-5, TIME-6) | Members of the node's one `state_type_`, which hgraph holds as the node's `State`, registered with its type registry; each is given its first value in `start`, before the hook's statements, and bound by reference in each hook |
@@ -1737,7 +1735,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | A source's `state`, `cache`, `inject`, `start` and `stop` (SOURCE-1) | Each `state` and `cache`, and each capability the body reads, a member of a `slot_type_` that the node's state keeps on the heap and the body is given by reference; `start` makes the slot, gives each its first value, makes the body and runs its statements; `eval` lends the body each capability for the resumption (`::hglrt::Lending`); `stop` destroys the body, then runs its statements (`emit/scheduling.rs`) |
 | A graph (FN-2, FN-7) | A struct with static `compose(::hgraph::Wiring& wiring_, ...)`, a temporal parameter an `hgraph::Port` and a `const` one a value; a connection `let` a `const ::hgraph::Port<S>`, `return` the port given |
 | A lifted call (FN-6, FN-11) | A node of its own (`emit/lifting.rs`), a struct `lifted_00_` in the graph's struct, where the analyser marks the call lifted: each argument that is a connection an input, and each other configuration, an `hgraph::Scalar`; its `eval` calls the function and publishes what it gives, and one with no result is a sink. An input is required valid, but where its parameter has a default or admits null: that one is `InputValidity::Unchecked`, under a name of its own, and binds the parameter to the fallback where it is not valid, `fn_valid(input_00_) ? T{read} : T{default}`. A parameter the call leaves out binds its default as configuration where the graph is built (FN-6), after the arguments, in the order of the parameters (EXPR-2). A struct, a tuple, a fixed list or a window given to one calls nothing where it is valid and not all valid |
-| A temporal candidate of an operator, `lhs +{invalid: .identity} rhs` (GEN-4, OPS-9) | A node or a graph of its module, as a temporal function is, each instance in `c_::i_` |
+| A temporal candidate of an operator, `lhs +{invalid: .identity} rhs` (GEN-4, OPS-9) | A node or a graph of its module, as a temporal function is, using the selected candidate's own name, with each generic instance in its namespace under `c_::i_` |
 | A value where a connection is expected (FN-3) | Its temporal form's constant, `::hglrt::constant<::hgraph::Int>(wiring_, 5)` |
 | A connection of T where one of `T?` is taken, a value of T too (TYPE-14) | hgraph's own read-only nullable widening, the port as one of `T?`: `(x).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>()` (`graphs::widened_from`); a lifted call's input binds the `T?` itself. Given to a `ref` parameter of `T?`, the node's `REF` input designates that widened view of the producer's endpoint (FN-16) |
 | A `ref` parameter, `ref low: i64`, and a `ref` result (FN-16, TIME-10; core's END-10) | The parameter uses an hgraph `REF` input. Default admission permits an empty reference, and an explicit `valid(target)` requires a designation (TIME-3). Returning an empty reference withdraws the result's designation (FN-16, TIME-10). The wiring function exposes the `REF` output as a connection of the target type, such as `.as<::hgraph::TS<::hgraph::Int>>()`. hgraph binds an ordinary reader to its designated endpoint. |
@@ -2036,7 +2034,12 @@ one calls into, through those (a unit is linked whole). Where the
 build fails, an executable is run only where `ninja -n` says nothing is
 left to do for it, and the tests of every other are not run, with the
 failure: an older executable is never run in a newer one's place.
-Executables run side by side.
+Executables run side by side. File stems replace each dot of a module
+or application path with a hyphen and mark folded uppercase letters
+with `+`. The `mod-`, `type-`, `test-` and `app-` prefixes
+distinguish artifact roles. `tm.pricing.app` and `tm.Pricing.App`
+give `bin/test-tm-pricing-app` and `bin/test-tm-+pricing-+app`
+on macOS. Reports keep the original HGL paths.
 
 `hgl emit --target cpp --out DIR` writes the files. `hgl run --target
 cpp` runs an application (UNIT-14, "Running an application" above),
@@ -2044,9 +2047,9 @@ with what it replaces read again: it builds the
 application's executable, `run/<application-stem>`, in the program's
 workspace (`--keep`'s directory, or the one under the cache), linked
 from its entry unit and the units its module's reaches, and runs it as
-`EXECUTABLE RESULTS` (`cpp/application.rs`). Application artifacts share a
-stem such as `app-demo-pricing-app` for `demo.pricing.app`, and reports
-keep the HGL path. The executable's host
+`EXECUTABLE RESULTS` (`cpp/application.rs`). The entry unit, executable
+and run results share a stem such as `app-demo-pricing-app` for
+`demo.pricing.app`. The executable's host
 (`hglrt/application_host.h`) runs the run statement once and writes
 RESULTS (`start`, `published TIME TEXT`, `stopped`, `stopped none`,
 `host`, `failed TEXT`). `hgl` reads it and reports the outcome. A failed

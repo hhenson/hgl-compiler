@@ -1,0 +1,7 @@
+module tm.pricing.app
+
+struct Quote { cents: i64 }
+
+test lower_price {
+    assert Quote(cents: 11).cents == 11
+}
