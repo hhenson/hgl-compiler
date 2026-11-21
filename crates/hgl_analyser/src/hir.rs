@@ -965,6 +965,8 @@ pub enum Callee {
         /// Whether its template composes a temporal function.
         temporal: bool,
     },
+    /// A statically selected anonymous function, with explicit lexical captures.
+    Anonymous(Box<AnonymousFunction>),
     /// No callee: a name left for the prelude, a function that is
     /// itself an expression, or an operator of which no candidate is
     /// selected, by its name or by a symbol.
@@ -989,7 +991,10 @@ impl Callee {
                 declaration,
                 ..
             } => Some((*module, *declaration)),
-            Callee::Required { .. } | Callee::Parameter { .. } | Callee::Unread => None,
+            Callee::Required { .. }
+            | Callee::Parameter { .. }
+            | Callee::Anonymous(_)
+            | Callee::Unread => None,
         }
     }
 
@@ -999,7 +1004,10 @@ impl Callee {
     pub fn generics(&self) -> &[GenericArgument] {
         match self {
             Callee::Function { generics, .. } | Callee::Candidate { generics, .. } => generics,
-            Callee::Required { .. } | Callee::Parameter { .. } | Callee::Unread => &[],
+            Callee::Required { .. }
+            | Callee::Parameter { .. }
+            | Callee::Anonymous(_)
+            | Callee::Unread => &[],
         }
     }
 
@@ -1009,9 +1017,27 @@ impl Callee {
             Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } => {
                 type_packs
             }
-            Callee::Required { .. } | Callee::Parameter { .. } | Callee::Unread => &[],
+            Callee::Required { .. }
+            | Callee::Parameter { .. }
+            | Callee::Anonymous(_)
+            | Callee::Unread => &[],
         }
     }
+}
+
+/// The checked body of an anonymous argument and its lexical environment (FN-14, FN-17).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnonymousFunction {
+    /// Where it is written, for identity and diagnostics.
+    pub at: Location,
+    /// Its concrete parameter and result template.
+    pub template: crate::types::FunctionType,
+    /// The inputs come first in the local table, then its captures, then its other locals.
+    pub body: Body,
+    /// The bindings in the expression's enclosing body that supply those captures.
+    pub captures: Vec<LocalId>,
+    /// Type and value arguments of the enclosing specialization, if any.
+    pub specialization: Vec<GenericArgument>,
 }
 
 /// The ordered list of types that a call gives one generic type pack.

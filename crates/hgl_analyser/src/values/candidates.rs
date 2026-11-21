@@ -1687,6 +1687,13 @@ pub(super) struct Chosen<'s> {
     type_packs: Vec<hir::TypePackArgument>,
 }
 
+impl Chosen<'_> {
+    /// The resolved signature of this operator candidate.
+    pub(super) fn signature(&self) -> &Signature {
+        &self.taken
+    }
+}
+
 /// A candidate as a call takes it: itself where it has no generic
 /// parameter, and otherwise with each resolved (GEN-2) and put in
 /// place. `None` when the call does not say what one of them is, or

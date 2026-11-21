@@ -4336,3 +4336,63 @@ fn a_default_is_a_value_of_its_parameters_type() {
         "the `2` of `factor: f64 = 2` is widened"
     );
 }
+
+/// FN-17: a function template admits declared, generic and operator
+/// targets. A function passed on is never a runtime value.
+#[test]
+fn function_arguments_select_static_targets() {
+    let checked = module(concat!(
+        "const fn apply_callback(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "const fn apply_typed<V>(f: const fn(V) -> V, x: V) -> V => f(x)\n",
+        "const fn inc_callback(x: i64) -> i64 => x + 1\n",
+        "const fn callback_identity<T>(x: T) -> T => x\n",
+        "const fn plain_callback(x: i64) -> i64 => apply_callback(inc_callback, x)\n",
+        "const fn explicit_callback(x: i64) -> i64 => apply_callback(callback_identity<i64>, x)\n",
+        "const fn inferred_callback(x: f64) -> f64 => apply_typed(callback_identity, x)\n",
+        "const fn forward_callback(g: const fn(i64) -> i64, x: i64) -> i64 => apply_callback(g, x)\n",
+        "operator twice_callback<T>(value: T) -> T\n",
+        "impl const fn twice_callback(value: i64) -> i64 => value + value\n",
+        "const fn operator_callback(x: i64) -> i64 => apply_callback(twice_callback, x)\n",
+        "const fn lambda_callback(x: i64) -> i64 => apply_callback(fn(n) => n + 1, x)\n",
+        "fn graph_callback(f: fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "fn node_callback(x: i64) -> i64 { when { return x } }\n",
+        "fn graph_lambda(x: i64) -> i64 => graph_callback(fn(n) => node_callback(n), x)\n",
+        "fn lifted_callback(x: i64) -> i64 => graph_callback(inc_callback, x)\n",
+    ));
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+}
+
+/// FN-17: a template checks role, written names and plain parameter
+/// modes, and does not take an ordinary runtime value.
+#[test]
+fn function_arguments_check_their_template() {
+    let checked = module(concat!(
+        "const fn by_name(f: const fn(item: i64) -> i64, x: i64) -> i64 => f(item: x)\n",
+        "const fn unnamed(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "const fn different_name(value: i64) -> i64 => value\n",
+        "const fn modify_callback(var item: i64) -> i64 => item\n",
+        "fn temporal_callback(item: i64) -> i64 { when { return item } }\n",
+        "const fn wrong_name(x: i64) -> i64 => by_name(different_name, x)\n",
+        "const fn wrong_mode(x: i64) -> i64 => unnamed(modify_callback, x)\n",
+        "const fn wrong_role(x: i64) -> i64 => unnamed(temporal_callback, x)\n",
+        "const fn wrong_value(x: i64) -> i64 => unnamed(x, x)\n",
+        "const fn wrong_lambda(x: i64) -> i64 => unnamed(fn(n) => temporal_callback(n), x)\n",
+    ));
+    let codes: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "type/type.mismatch",
+            "type/type.mismatch",
+            "type/type.mismatch",
+            "type/function.argument",
+            "function-kind/call.role"
+        ],
+        "{}",
+        checked.report,
+    );
+}

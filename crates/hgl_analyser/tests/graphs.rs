@@ -126,7 +126,9 @@ fn composition_takes_the_temporal_definition_and_candidate() {
                 declaration,
                 ..
             } => (*module, *declaration),
-            Callee::Required { .. } | Callee::Unread => panic!("a callee"),
+            Callee::Required { .. } | Callee::Parameter { .. } | Callee::Unread => {
+                panic!("a callee")
+            }
         };
         match checked.program.modules[module].declarations[declaration].kind {
             DeclarationKind::Function(role) | DeclarationKind::Implementation(role, _) => role,

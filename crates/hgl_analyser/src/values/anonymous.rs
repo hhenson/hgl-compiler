@@ -7,7 +7,10 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
-use crate::hir::{Callee, ExprKind, Form, LocalId};
+use crate::hir::{
+    Body, Callee, ExprKind, Form, LocalId, Node, NodeMut, Stmt, ValueCategory,
+    walk_statement_nodes, walk_statement_nodes_mut,
+};
 use crate::program::LocalKind;
 use crate::read::is_type;
 use crate::syntax::{child, tokens};
@@ -75,40 +78,73 @@ impl Typer<'_> {
         parameters: Vec<(SyntaxToken, Option<Type>)>,
         result: &Type,
     ) {
-        // CTRL-5: a return belongs to this function alone. Keep the
-        // enclosing context for captured inputs but isolate flow state.
+        self.checked_anonymous(function, parameters, Some(result), None);
+    }
+
+    /// Read a static anonymous argument in the phase supplied by FN-17.
+    pub(super) fn anonymous_definition(
+        &mut self,
+        function: &SyntaxNode,
+        parameters: Vec<(SyntaxToken, Option<Type>)>,
+        result: Option<&Type>,
+        temporal: bool,
+    ) -> Option<(Body, Vec<LocalId>)> {
+        self.checked_anonymous(function, parameters, result, Some(temporal))
+    }
+
+    fn checked_anonymous(
+        &mut self,
+        function: &SyntaxNode,
+        parameters: Vec<(SyntaxToken, Option<Type>)>,
+        result: Option<&Type>,
+        specialization: Option<bool>,
+    ) -> Option<(Body, Vec<LocalId>)> {
+        // CTRL-5: a return belongs to this function alone.
         self.check_capability_captures(function);
         let mark = self.mark();
+        let first_local = mark.locals;
         let outer = self.anonymous.replace(Anonymous {
-            result: result.clone(),
-            first_local: mark.locals,
+            result: result.cloned().unwrap_or(Type::Unknown),
+            first_local,
         });
         let temporal = self.temporal.take();
         let dynamic = self.dynamic.take();
         let must_return = std::mem::take(&mut self.must_return);
         self.returned = false;
         self.unsure = false;
+        let count = parameters.len();
         for (name, ty) in parameters {
             let at = Location::new(self.file, name.span());
-            self.declare(
+            let local = self.declare(
                 name.text(),
                 at,
                 LocalKind::Parameter,
                 ty.unwrap_or(Type::Unknown),
                 true,
             );
+            if specialization == Some(true) {
+                self.locals[local].category = ValueCategory::Connection;
+            }
         }
-        self.check_body(
+        let statements = self.check_body(
             function,
-            Some(result),
+            result,
             self.at(function),
             "this anonymous function",
         );
+        let output = specialization.and(statements).map(|statements| {
+            let body = Body {
+                locals: self.locals.clone(),
+                statements,
+            };
+            close(body, first_local, count)
+        });
         self.restore_read(mark, false);
         self.anonymous = outer;
         self.temporal = temporal;
         self.dynamic = dynamic;
         self.must_return = must_return;
+        output
     }
 
     /// The direct call `(fn(x) => x + 1)(7)` supplies the parameter
@@ -157,4 +193,95 @@ impl Typer<'_> {
         };
         (kind, result)
     }
+}
+
+/// Put the anonymous function's inputs and captures first in its own
+/// local table. Every outer reference then has an explicit input.
+fn close(mut body: Body, first: LocalId, parameters: usize) -> (Body, Vec<LocalId>) {
+    let mut captures = Vec::new();
+    let mut captured = |local: LocalId| {
+        if local < first && !captures.contains(&local) {
+            captures.push(local);
+        }
+    };
+    walk_statement_nodes(&body.statements, &mut |node| {
+        let Node::Expression(expression) = node else {
+            return;
+        };
+        match &expression.kind {
+            ExprKind::Local(local) | ExprKind::EndpointOf(local) => captured(*local),
+            ExprKind::Endpoint {
+                inputs: Some(locals),
+                ..
+            } => {
+                locals.iter().copied().for_each(&mut captured);
+            }
+            ExprKind::Call {
+                callee: Callee::Anonymous(function),
+                ..
+            } => {
+                function.captures.iter().copied().for_each(&mut captured);
+            }
+            ExprKind::StaticCallable(callee) => {
+                if let Callee::Anonymous(function) = &**callee {
+                    function.captures.iter().copied().for_each(&mut captured);
+                }
+            }
+            _ => {}
+        }
+    });
+    let mut remapped = vec![0; body.locals.len()];
+    let order = (first..first + parameters)
+        .chain(captures.iter().copied())
+        .chain(first + parameters..body.locals.len());
+    body.locals = order
+        .enumerate()
+        .map(|(new, old)| {
+            remapped[old] = new;
+            body.locals[old].clone()
+        })
+        .collect();
+    remap_locals(&mut body, &remapped);
+    (body, captures)
+}
+
+/// Remap the local references of a body. A nested anonymous target has
+/// its own table, so only its capture list refers to the surrounding body.
+pub(crate) fn remap_locals(body: &mut Body, slots: &[LocalId]) {
+    let change = |local: &mut LocalId| *local = slots[*local];
+    let change_callee = |callee: &mut Callee| {
+        if let Callee::Anonymous(function) = callee {
+            function.captures.iter_mut().for_each(change);
+        }
+    };
+    walk_statement_nodes_mut(&mut body.statements, &mut |node| match node {
+        NodeMut::Statement(statement) => match statement {
+            Stmt::Declare { local, .. }
+            | Stmt::Assign { local, .. }
+            | Stmt::Inject { local, .. } => change(local),
+            Stmt::For { names, .. } => names.iter_mut().for_each(change),
+            Stmt::Hook {
+                header: Some(header),
+                ..
+            } => {
+                header.subscribed.iter_mut().for_each(change);
+                header.required.iter_mut().for_each(change);
+            }
+            _ => {}
+        },
+        NodeMut::Expression(expression) => match &mut expression.kind {
+            ExprKind::Local(local) | ExprKind::EndpointOf(local) => change(local),
+            ExprKind::Endpoint {
+                inputs: Some(locals),
+                ..
+            } => locals.iter_mut().for_each(change),
+            ExprKind::Eval {
+                inherited: Some(local),
+                ..
+            } => change(local),
+            ExprKind::Call { callee, .. } => change_callee(callee),
+            ExprKind::StaticCallable(callee) => change_callee(callee),
+            _ => {}
+        },
+    });
 }

@@ -517,6 +517,8 @@ pub mod codes {
     pub const SWITCH_DUPLICATE_LABEL: &str = "switch.duplicate_label";
     /// A `while` with no condition in a value function (CTRL-12).
     pub const WHILE_CONDITION: &str = "while.condition";
+    /// A function argument must name a known callable (FN-17).
+    pub const FUNCTION_ARGUMENT: &str = "function.argument";
 
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
@@ -564,8 +566,11 @@ pub mod codes {
         /// rejects the dynamic sequence instead. See issue #373.
         pub const LOOP_CARRIED: &str = "loop.carried";
 
+        /// A compile-time function used as a runtime value (FN-17).
+        pub const FUNCTION_VALUE: &str = "function.value";
+
         /// Every local code of this stage.
-        pub const ALL: [&str; 9] = [
+        pub const ALL: [&str; 10] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
@@ -575,6 +580,7 @@ pub mod codes {
             SCHEDULED_OUTSIDE_NODE,
             READING_LIMIT,
             LOOP_CARRIED,
+            FUNCTION_VALUE,
         ];
     }
 }

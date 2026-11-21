@@ -544,6 +544,21 @@ impl<'a> Typer<'a> {
                 continue;
             }
             let pattern = patterns[index];
+            if let Type::Function(_) = pattern {
+                let arguments: Vec<_> = found
+                    .iter()
+                    .map(|found| found.clone().unwrap_or(Argument::Type(Type::Unknown)))
+                    .collect();
+                let map: Vec<_> = own.iter().copied().zip(&arguments).collect();
+                let Type::Function(template) = substitute_within(pattern, &map) else {
+                    continue;
+                };
+                let mark = self.mark();
+                let actual = self.function_argument(node, &template);
+                self.take_back(mark, false);
+                infer(pattern, &actual.ty, generics, &mut found);
+                continue;
+            }
             let unfound: Vec<Location> = generics
                 .iter()
                 .zip(&found)
@@ -740,6 +755,7 @@ impl<'a> Typer<'a> {
                 // `same(repeat(1), repeat(2))`. `null` and `.member`
                 // have no reading of their own.
                 let placeless = *settled
+                    && !matches!(slot.ty, Type::Function(_))
                     && slot.type_pack.is_none()
                     && !takes_its_type(node)
                     && mentions(patterns[index], &unfound);

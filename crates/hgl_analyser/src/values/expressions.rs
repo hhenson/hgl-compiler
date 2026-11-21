@@ -281,6 +281,10 @@ impl<'a> Typer<'a> {
             category: ValueCategory::Unsettled,
         };
         if let Some(local) = self.local_of(node) {
+            if matches!(self.locals[local].ty, Type::Function(_)) {
+                self.function_value(at);
+                return unread;
+            }
             return self.read_local(local, node);
         }
         let Some(name) = name_token(node) else {

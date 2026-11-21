@@ -36,7 +36,7 @@ use hgl_diagnostics::Location;
 
 use crate::declared::substitute_within;
 use crate::hir::{Answer, Body, Callee, Expr, ExprKind, ValueCategory, walk_statements_mut};
-use crate::program::{Phase, Program};
+use crate::program::{LocalKind, Phase, Program, Role};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
 
 /// Where each generic parameter of a declaration is declared, with what
@@ -92,7 +92,7 @@ impl Program {
             .map(|generic| generic.at)
             .zip(generics)
             .collect();
-        let taken = Signature {
+        let mut taken = Signature {
             generics: Vec::new(),
             parameters: signature
                 .parameters
@@ -109,11 +109,13 @@ impl Program {
             reference: signature.reference,
         };
         let mut body = body.clone();
+        let temporal = declared.declarations[declaration].kind.role() == Some(Role::Temporal);
+        let functions = hidden_captures(functions, &mut taken, &mut body, temporal);
         for local in &mut body.locals {
             local.ty = substitute_within(&local.ty, &map);
         }
         walk_statements_mut(&mut body.statements, &mut |expression| {
-            self.place(expression, &map, requirements, functions);
+            self.place(expression, &map, requirements, &functions);
         });
         // GEN-5: a call a membership authorises is the call of the
         // candidate it selects with these arguments in place, which is
@@ -123,7 +125,7 @@ impl Program {
             (module, declaration),
             generics,
             &mut body,
-            &|call| call.walk_mut(&mut |inner| self.place(inner, &map, requirements, functions)),
+            &|call| call.walk_mut(&mut |inner| self.place(inner, &map, requirements, &functions)),
         );
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
@@ -157,9 +159,36 @@ impl Program {
                     expression.kind = kind;
                 }
             }
-            ExprKind::Call { callee, .. } => place_callee(callee, map, answers, functions),
-            ExprKind::StaticCallable(callee) => place_callee(callee, map, answers, functions),
+            ExprKind::Call { callee, .. } => self.place_target(callee, map, answers, functions),
+            ExprKind::StaticCallable(callee) => self.place_target(callee, map, answers, functions),
             _ => {}
+        }
+    }
+
+    fn place_target(
+        &self,
+        callee: &mut Callee,
+        map: &Map,
+        answers: &[Answer],
+        functions: &[(usize, Callee)],
+    ) {
+        if let Callee::Anonymous(function) = callee {
+            let template = Type::Function(Box::new(function.template.clone()));
+            if let Type::Function(template) = substitute_within(&template, map) {
+                function.template = *template;
+            }
+            function
+                .specialization
+                .extend(map.iter().map(|(_, value)| (*value).clone()));
+            for local in &mut function.body.locals {
+                local.ty = substitute_within(&local.ty, map);
+            }
+            walk_statements_mut(&mut function.body.statements, &mut |inner| {
+                self.place(inner, map, answers, functions);
+            });
+            crate::values::record(self, &mut function.body, !function.template.value);
+        } else {
+            place_callee(callee, map, answers, functions);
         }
     }
 
@@ -254,6 +283,64 @@ impl Program {
     }
 }
 
+/// Carry an anonymous function's immutable environment as ordinary
+/// parameters of the specialized function. Its compile-time identity is
+/// kept separately from the captures supplied by each invocation.
+fn hidden_captures(
+    functions: &[(usize, Callee)],
+    signature: &mut Signature,
+    body: &mut Body,
+    temporal: bool,
+) -> Vec<(usize, Callee)> {
+    let mut functions = functions.to_vec();
+    functions.sort_by_key(|(parameter, _)| *parameter);
+    let original = signature.parameters.len();
+    let mut locals = Vec::new();
+    for (slot, callee) in &mut functions {
+        let Callee::Anonymous(function) = callee else {
+            continue;
+        };
+        let start = function.template.parameters.len();
+        for (index, capture) in function.captures.iter_mut().enumerate() {
+            let mut local = function.body.locals[start + index].clone();
+            let mut name = format!("fn_capture_{slot}_{index}");
+            while body.locals.iter().any(|other| other.name == name) {
+                name.push('_');
+            }
+            local.name = name.clone();
+            local.kind = LocalKind::Parameter;
+            *capture = signature.parameters.len();
+            signature.parameters.push(Parameter {
+                name,
+                at: local.at,
+                constant: temporal && local.category == ValueCategory::Value,
+                var: false,
+                reference: false,
+                ty: local.ty.clone(),
+                pack: None,
+                pack_bounds: (0, None),
+                has_default: false,
+            });
+            locals.push(local);
+        }
+    }
+    if !locals.is_empty() {
+        let added = locals.len();
+        let remapped = (0..body.locals.len())
+            .map(|index| {
+                if index < original {
+                    index
+                } else {
+                    index + added
+                }
+            })
+            .collect::<Vec<_>>();
+        crate::values::remap_locals(body, &remapped);
+        body.locals.splice(original..original, locals);
+    }
+    functions
+}
+
 /// Puts what `map` gives in place in what a call calls. A call of an
 /// operation the declaration requires becomes the call of the candidate
 /// that answers the requirement (GEN-16); one nothing answers is left
@@ -310,7 +397,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
                 };
             }
         }
-        Callee::Parameter { .. } | Callee::Unread => {}
+        Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {}
     }
 }
 

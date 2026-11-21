@@ -562,6 +562,13 @@ impl<'a> Typer<'a> {
         takes: Takes,
     ) -> hir::Argument {
         let value = match slot {
+            Some((
+                Slot {
+                    ty: Type::Function(template),
+                    ..
+                },
+                _,
+            )) => self.function_argument(node, template),
             Some((slot, traced)) => {
                 let value = self.expression(node, Some(&slot.ty));
                 let value = if slot.listed {
