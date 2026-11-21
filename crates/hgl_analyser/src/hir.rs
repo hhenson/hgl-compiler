@@ -691,6 +691,15 @@ pub enum ExprKind {
         /// the delta of.
         member: usize,
     },
+    /// A graph member read awaiting the base type of a selected instance.
+    DeferredMember {
+        /// What the member is read from.
+        base: Box<Expr>,
+        /// The member's spelling before its position is known.
+        name: String,
+        /// Where the member name is written.
+        at: Location,
+    },
     /// A delta that is a type of its own made from its properties:
     /// `delta<set<i64>>(added: [1, 2], removed: [3])`, `delta<i64?>()`,
     /// `delta<Quote>(bid: 1.0)` (TYPE-16). The expression's type is
@@ -1380,6 +1389,7 @@ impl Expr {
             | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
             | ExprKind::Field { base: inner, .. }
+            | ExprKind::DeferredMember { base: inner, .. }
             | ExprKind::Tagged { payload: inner, .. }
             | ExprKind::TagTest { value: inner, .. }
             | ExprKind::Payload { result: inner, .. }
@@ -1491,6 +1501,7 @@ impl Expr {
             | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
             | ExprKind::Field { base: inner, .. }
+            | ExprKind::DeferredMember { base: inner, .. }
             | ExprKind::Tagged { payload: inner, .. }
             | ExprKind::TagTest { value: inner, .. }
             | ExprKind::Payload { result: inner, .. }

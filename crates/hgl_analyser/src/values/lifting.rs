@@ -5,9 +5,10 @@
 use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 
 use super::Typer;
-use super::control::{bound_by_loop, no_else_type, while_connection};
+use super::control::{bound_by_loop, iterates, iteration_types, no_else_type, while_connection};
 use super::expressions::sequence_element;
 use super::fit::{open, whole};
+use super::forms::received_type;
 use super::members::{index_result, indexed_payload};
 use crate::hir::{
     Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Run, Stmt, Value, ValueCategory,
@@ -375,7 +376,7 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
         // OPS-6: the list converted is what it is given, lifted
         // over a connection as a conversion is (FN-6).
         ExprKind::ParentList(inner) => category(inner),
-        ExprKind::Field { base, .. } => category(base),
+        ExprKind::Field { base, .. } | ExprKind::DeferredMember { base, .. } => category(base),
         // An enum constructed from a connection is lifted (FN-6).
         ExprKind::EnumFrom { value, .. } => category(value),
         // A result form over a connection is lifted, as a value
@@ -495,6 +496,14 @@ pub(super) fn record_with(
                 NodeMut::Statement(Stmt::For {
                     names, sequence, ..
                 }) if composition => {
+                    let ty = received_type(&sequence.ty, iterates);
+                    if let Some(types) = iteration_types(ty, names.len()) {
+                        for (&local, given) in names.iter().zip(types) {
+                            if !whole(&locals[local].ty) {
+                                settling |= fill_type(&mut locals[local].ty, given.clone());
+                            }
+                        }
+                    }
                     if names
                         .iter()
                         .all(|&local| locals[local].category != Unsettled)
@@ -504,10 +513,10 @@ pub(super) fn record_with(
                     let over = category(program, locals, sequence);
                     // A connection still needs its collection kind to
                     // decide whether each iteration binding is one.
-                    if over == Unsettled || over == Connection && open(&sequence.ty) {
+                    if over == Unsettled || over == Connection && open(ty) {
                         return;
                     }
-                    let (categories, _) = bound_by_loop(over, &sequence.ty, names.len());
+                    let (categories, _) = bound_by_loop(over, ty, names.len());
                     for (&local, given) in names.iter().zip(categories) {
                         if locals[local].category == Unsettled && given != Unsettled {
                             locals[local].category = given;
@@ -517,6 +526,15 @@ pub(super) fn record_with(
                     return;
                 }
                 NodeMut::Expression(value) if composition && !whole(&value.ty) => {
+                    if let ExprKind::DeferredMember { base, name, at } = &value.kind
+                        && let Some(typer) = typer.as_deref_mut()
+                        && let Some((kind, ty)) = typer.settle_member(base, name, *at)
+                    {
+                        value.kind = kind;
+                        value.ty = ty;
+                        settling = true;
+                        return;
+                    }
                     if let Some(ty) = settled_type(program, locals, value, typer.as_deref_mut()) {
                         settling |= fill_type(&mut value.ty, ty);
                     }

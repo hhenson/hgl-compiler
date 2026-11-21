@@ -78,6 +78,20 @@ pub(super) fn bound_by_loop(
     }
 }
 
+/// CTRL-12 and CTRL-15: a `for` reads these collection types.
+pub(super) fn iterates(ty: &Type) -> bool {
+    matches!(ty, Type::List { .. } | Type::Set(_) | Type::Dict { .. })
+}
+
+/// The types of the loop bindings in order, for the supported shape.
+pub(super) fn iteration_types(ty: &Type, names: usize) -> Option<Vec<&Type>> {
+    match (ty, names) {
+        (Type::List { element, .. } | Type::Set(element), 1) => Some(vec![element]),
+        (Type::Dict { key, value }, 2) => Some(vec![key, value]),
+        _ => None,
+    }
+}
+
 /// What a block or an `if` comes to.
 ///
 /// `#[derive(Clone)]` asks the compiler to write the code that copies
@@ -647,32 +661,8 @@ impl<'a> Typer<'a> {
         // ERR-15: "what a `for` iterates ... expect[s] the T", and CTRL-12:
         // "a nullable list, set, or dictionary there is read, and a null
         // fails the read (ERR-12)".
-        let sequence = self.received(sequence, |payload| {
-            matches!(
-                payload,
-                Type::List { .. } | Type::Set(_) | Type::Dict { .. }
-            )
-        });
-        let types: Vec<Type> = match (&sequence.ty, names.len()) {
-            (ty, count) if open(ty) => vec![Type::Unknown; count],
-            (Type::List { element, .. } | Type::Set(element), 1) => vec![(**element).clone()],
-            (Type::Dict { key, value }, 2) => vec![(**key).clone(), (**value).clone()],
-            (ty, count) => {
-                let takes = if count == 1 {
-                    "`for` with one name loops over a list or a set"
-                } else {
-                    "`for` with two names loops over a dictionary"
-                };
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::TYPE_MISMATCH,
-                    sequence.at,
-                    format!("this is `{ty}`, and {takes}"),
-                    self.loop_rule(),
-                ));
-                vec![Type::Unknown; count]
-            }
-        };
+        let sequence = self.received(sequence, iterates);
+        let types = self.loop_bindings(&sequence, names.len());
         // CTRL-15: what the loop binds, and whether it makes one child
         // for each member.
         let over = if self.graph {
@@ -709,6 +699,29 @@ impl<'a> Typer<'a> {
             body,
             at,
         }
+    }
+
+    /// The source check for a `for` sequence and its binding types.
+    pub(super) fn loop_bindings(&mut self, sequence: &Expr, count: usize) -> Vec<Type> {
+        let ty = &sequence.ty;
+        if let Some(types) = iteration_types(ty, count) {
+            return types.into_iter().cloned().collect();
+        }
+        if !open(ty) {
+            let takes = if count == 1 {
+                "`for` with one name loops over a list or a set"
+            } else {
+                "`for` with two names loops over a dictionary"
+            };
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                sequence.at,
+                format!("this is `{ty}`, and {takes}"),
+                self.loop_rule(),
+            ));
+        }
+        vec![Type::Unknown; count]
     }
 
     /// How many members the enum `ty` has; `None` for a type that is no

@@ -171,7 +171,7 @@ analyser: partial
 - A graph supports `switch` over an ordinary value or a connection with compile-time labels, and `while` with an ordinary condition. It binds loop items by sequence type.
 - A graph instance rechecks a `while` condition after selecting deferred operator calls. A connection there is `connection.as_constant` (FN-3, GEN-7).
 - A `switch` with a newly settled selector or label rechecks the selector type and fits the affected labels against it (CTRL-12, GEN-7).
-- Selection also settles each `for` binding's category from the sequence before the instance checks its uses (FN-3, GEN-7).
+- Selection also settles each `for` binding's type and category from the sequence before the instance checks its uses (CTRL-12, FN-3, GEN-7).
 - A loop that selects a temporal sequence now creating children checks outer writes, including through `var` parameters, and returns against the existing `loop.carried` restrictions.
 - CTRL-15 allows an outer `var` to carry across passes over a connection of `list<T, N>` or a range with constant bounds (EXPR-16). Each pass rebinds the `var` at wiring time (EXPR-15). #368 tracks constant ranges.
 - Struct and atomic struct iteration and the proposed `for.sequence` diagnostic await #373. Dynamic loops continue to accept temporal collections and report local `loop.carried` for an outer assignment or a return.

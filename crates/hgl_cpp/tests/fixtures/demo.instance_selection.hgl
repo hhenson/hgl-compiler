@@ -164,6 +164,28 @@ fn inferred_holder<T>(const value: T) -> i64 {
     return chosen_or_skip(values[0])
 }
 
+# CTRL-15: inferred list elements become the types of loop bindings.
+fn inferred_iteration<T>(const value: T) -> i64 {
+    var total = 0
+    for item in [if live_helper(value) > 0 { 2 }] {
+        let copied = item
+        total = chosen_or_skip(copied)
+    }
+    return total
+}
+
+# EXPR-7: a member can be selected once the condition and branch settle.
+struct Item { value: i64 }
+
+operator item_of<T>(input: T) -> Item
+impl const fn item_of<T>(input: T) -> Item => Item(value: 2)
+impl fn item_of(input: i64) -> Item { when { return Item(value: input) } }
+
+fn deferred_member<T>(const value: T) -> i64 {
+    let held = if live_helper(value) > 0 { item_of(value) }
+    return held.value
+}
+
 # CTRL-15: a deferred selector and its label settle to i64.
 fn selected_case<T>(const value: T) -> i64 {
     let key = if live_helper(value) > 0 { 1 }
@@ -194,6 +216,9 @@ test an_instance_settles_its_graph_conditions {
     assert eval dictionary_entries(value: 3) == [4]
     assert raises("value.null") { eval dictionary_entries(value: "s") }
     assert eval inferred_holder(value: "s") == [2]
+    assert eval inferred_iteration(value: "s") == [2]
+    assert eval deferred_member(value: "s") == [2]
+    assert eval deferred_member(value: 3) == [3]
     assert eval selected_case(value: 3) == [4]
     assert eval value_phase_choice(value: 3) == [1]
     assert eval value_phase_choice(value: "s") == [-1]

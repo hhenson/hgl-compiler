@@ -192,11 +192,11 @@ impl<'a> Typer<'a> {
     pub(super) fn payload(
         &mut self,
         base: Expr,
-        name: &SyntaxToken,
+        name: &str,
+        at: Location,
         (value, failure): (Type, Type),
     ) -> (ExprKind, Type) {
-        let at = Location::new(self.file, name.span());
-        let success = match name.text() {
+        let success = match name {
             "value" => true,
             "error" => false,
             other => {
@@ -227,13 +227,12 @@ impl<'a> Typer<'a> {
             let message = match &base.kind {
                 ExprKind::Local(local) => format!(
                     "`.{}` is read where `{}` is {tag}, and nothing here proves it one",
-                    name.text(),
-                    self.locals[*local].name
+                    name, self.locals[*local].name
                 ),
                 _ => format!(
                     "`.{}` is read of a binding a guard has proved {tag}, and this is no \
                      binding",
-                    name.text()
+                    name
                 ),
             };
             self.diagnostics.emit(
@@ -260,8 +259,8 @@ impl<'a> Typer<'a> {
     /// `.message`, `.code` or `.context` of an error (ERR-4):
     /// "`.message` is the `str` and `.code` the `str?`. `.context` is a
     /// read-only nullable record", an `error context?`.
-    pub(super) fn error_part(&mut self, base: Expr, name: &SyntaxToken) -> (ExprKind, Type) {
-        let (part, ty) = match name.text() {
+    pub(super) fn error_part(&mut self, base: Expr, name: &str, at: Location) -> (ExprKind, Type) {
+        let (part, ty) = match name {
             "message" => (ErrorPart::Message, Type::Scalar(Scalar::Str)),
             "code" => (ErrorPart::Code, nullable(Type::Scalar(Scalar::Str))),
             "context" => (ErrorPart::Context, nullable(Type::ErrorContext)),
@@ -269,7 +268,7 @@ impl<'a> Typer<'a> {
                 self.diagnostics.emit(error(
                     Category::Name,
                     codes::MEMBER_UNKNOWN,
-                    Location::new(self.file, name.span()),
+                    at,
                     format!(
                         "an `error` has no `{other}`: it has `.message`, `.code` and `.context`"
                     ),
@@ -289,8 +288,13 @@ impl<'a> Typer<'a> {
     /// (ERR-4): "a read-only nullable record of `.node: str`, `.phase:
     /// str`, one of `"evaluate"`, `"start"`, and `"stop"`, and
     /// `.evaluation_time: datetime`". `base` has been proved present.
-    pub(super) fn context_part(&mut self, base: Expr, name: &SyntaxToken) -> (ExprKind, Type) {
-        let (part, ty) = match name.text() {
+    pub(super) fn context_part(
+        &mut self,
+        base: Expr,
+        name: &str,
+        at: Location,
+    ) -> (ExprKind, Type) {
+        let (part, ty) = match name {
             "node" => (ErrorPart::Node, Type::Scalar(Scalar::Str)),
             "phase" => (ErrorPart::Phase, Type::Scalar(Scalar::Str)),
             "evaluation_time" => (ErrorPart::EvaluationTime, Type::Scalar(Scalar::Datetime)),
@@ -298,7 +302,7 @@ impl<'a> Typer<'a> {
                 self.diagnostics.emit(error(
                     Category::Name,
                     codes::MEMBER_UNKNOWN,
-                    Location::new(self.file, name.span()),
+                    at,
                     format!(
                         "an error's context has no `{other}`: it has `.node`, `.phase` and \
                          `.evaluation_time`"

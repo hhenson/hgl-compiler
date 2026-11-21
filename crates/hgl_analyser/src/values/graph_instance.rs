@@ -8,7 +8,7 @@ use hgl_diagnostics::{Diagnostics, Location};
 use hgl_source::Span;
 
 use super::arguments::Takes;
-use super::control::bound_by_loop;
+use super::control::{bound_by_loop, iterates};
 use super::fit::{open, whole};
 use super::inference::type_pack;
 use super::lifting::{assignment_category, record, record_with};
@@ -122,6 +122,15 @@ impl GraphDestinations {
                 ..
             }) => {
                 self.fit_condition(typer, condition);
+                return;
+            }
+            NodeMut::Statement(Stmt::For {
+                names, sequence, ..
+            }) => {
+                if self.known(sequence) {
+                    *sequence = typer.received(sequence.clone(), iterates);
+                    typer.loop_bindings(sequence, names.len());
+                }
                 return;
             }
             NodeMut::Statement(Stmt::Switch {

@@ -8,6 +8,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::fit::{not_null, open, whole};
+use super::forms::received_type;
 use super::inference::{fixed, placed};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
@@ -39,7 +40,7 @@ impl<'a> Typer<'a> {
         {
             return self.enum_member(&name, module, declaration);
         }
-        let mut base = self.expression(&base, None);
+        let base = self.expression(&base, None);
         // ERR-7: a capture is "read through two connections".
         let captured = match &base.kind {
             ExprKind::Local(local) => self.captures.get(local).cloned(),
@@ -49,15 +50,58 @@ impl<'a> Typer<'a> {
         if let Some(output) = captured {
             return self.captured(base, &name, output);
         }
+        let at = Location::new(self.file, name.span());
+        if self.graph
+            && matches!(not_null(Some(&base.ty)), Some(Type::Unknown))
+            && !matches!(base.kind, ExprKind::Unread)
+        {
+            return (
+                ExprKind::DeferredMember {
+                    base: Box::new(base),
+                    name: name.text().to_owned(),
+                    at,
+                },
+                Type::Unknown,
+            );
+        }
+        self.member_value(base, name.text(), at)
+    }
+
+    /// Replay a projection when its input becomes concrete. The two
+    /// result variant accesses also need control-flow evidence (ERR-3),
+    /// which the member's stored type alone cannot establish.
+    pub(super) fn settle_member(
+        &mut self,
+        base: &crate::hir::Expr,
+        name: &str,
+        at: Location,
+    ) -> Option<(ExprKind, Type)> {
+        if !whole(&base.ty)
+            || (matches!(name, "value" | "error")
+                && matches!(not_null(Some(&base.ty)), Some(Type::Result { .. })))
+        {
+            return None;
+        }
+        Some(self.member_value(base.clone(), name, at))
+    }
+
+    /// Resolve a member against a known value, retaining its implicit reads.
+    pub(super) fn member_value(
+        &mut self,
+        mut base: crate::hir::Expr,
+        name: &str,
+        at: Location,
+    ) -> (ExprKind, Type) {
+        let program = self.program;
         // What the member is read from, in the form that place takes it:
         // each form taken is read again for its member.
         loop {
             match &base.ty {
                 // ERR-3: `.value` and `.error` "read from a result ...
                 // are the result's own".
-                Type::Result { value, error } if matches!(name.text(), "value" | "error") => {
+                Type::Result { value, error } if matches!(name, "value" | "error") => {
                     let sides = ((**value).clone(), (**error).clone());
-                    return self.payload(base, &name, sides);
+                    return self.payload(base, name, at, sides);
                 }
                 // ERR-15: "What a member or an index is read from ...
                 // expect[s] the T too": `checked(quote).bid` is the bid of
@@ -70,8 +114,8 @@ impl<'a> Typer<'a> {
                     base = read;
                 }
                 // ERR-4: a part of an error, and of its context.
-                Type::Error => return self.error_part(base, &name),
-                Type::ErrorContext => return self.context_part(base, &name),
+                Type::Error => return self.error_part(base, name, at),
+                Type::ErrorContext => return self.context_part(base, name, at),
                 // ERR-12: "A `T?` value given where a T is expected is
                 // read as its value": a member of a nullable's payload
                 // reads it, where no test against null has proved it a
@@ -84,7 +128,7 @@ impl<'a> Typer<'a> {
                 // `removed`, each a `set<K>`".
                 Type::Delta(of) => {
                     let of = of.clone();
-                    return self.delta_property(base, &name, &of);
+                    return self.delta_property(base, name, at, &of);
                 }
                 _ => break,
             }
@@ -115,13 +159,13 @@ impl<'a> Typer<'a> {
             let Some(member) = native
                 .properties
                 .iter()
-                .position(|property| property.name == name.text())
+                .position(|property| property.name == name)
             else {
                 self.diagnostics.emit(error(
                     Category::Name,
                     codes::MEMBER_UNKNOWN,
-                    Location::new(self.file, name.span()),
-                    format!("`{}` has no property `{}`", base.ty, name.text()),
+                    at,
+                    format!("`{}` has no property `{name}`", base.ty),
                     "NATIVE-6",
                 ));
                 return (ExprKind::Unread, Type::Unknown);
@@ -136,16 +180,12 @@ impl<'a> Typer<'a> {
         let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
             return (ExprKind::Unread, Type::Unknown);
         };
-        let Some(member) = read
-            .members
-            .iter()
-            .position(|member| member.name == name.text())
-        else {
+        let Some(member) = read.members.iter().position(|member| member.name == name) else {
             self.diagnostics.emit(error(
                 Category::Name,
                 codes::MEMBER_UNKNOWN,
-                Location::new(self.file, name.span()),
-                format!("`{}` has no field `{}`", base.ty, name.text()),
+                at,
+                format!("`{}` has no field `{name}`", base.ty),
                 "EXPR-7",
             ));
             return (ExprKind::Unread, Type::Unknown);
@@ -359,14 +399,7 @@ pub(super) fn index_collection(ty: &Type) -> bool {
 /// ERR-12 and ERR-15: the type an index sees after the same implicit
 /// reads as `Typer::received`. Settlement uses it before inserting reads.
 pub(super) fn indexed_payload(ty: &Type) -> &Type {
-    let received = match ty {
-        Type::Result { value, .. } if whole(ty) && !open(value) => value,
-        _ => ty,
-    };
-    match received {
-        Type::Nullable(payload) if index_collection(payload) => payload,
-        _ => received,
-    }
+    received_type(ty, index_collection)
 }
 
 /// EXPR-7: what type a bracket index must have for each collection.

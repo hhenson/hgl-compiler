@@ -1525,6 +1525,132 @@ fn graph_instances_finish_inferred_constructor_arguments() {
     ));
 }
 
+/// GEN-7 and CTRL-15: settled sequence types reach the iteration
+/// binding and its local reads, using the existing rules for shape.
+#[test]
+fn graph_instances_settle_iteration_binding_types() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn list_loop<T>(const input: T) -> i64 {\n",
+        "    for item in [if predicate(input) { 1 }] { let copied = item }\n",
+        "    return 0\n",
+        "}\n",
+        "fn dict_loop<T>(const input: T) -> i64 {\n",
+        "    let entries: dict<str, i64> = [\"key\": 1]\n",
+        "    for key, value in (if predicate(input) { entries }) {\n",
+        "        let copied_key = key\n",
+        "        let copied_value = value\n",
+        "    }\n",
+        "    return 0\n",
+        "}\n",
+        "fn wrong<T>(const input: T) -> i64 {\n",
+        "    for item in (if predicate(input) { (1, 2) }) { let copied = item }\n",
+        "    return 0\n",
+        "}\n",
+        "fn ordinary() -> i64 => list_loop(\"s\")\n",
+        "fn connected() -> i64 => list_loop(1)\n",
+        "fn keyed() -> i64 => dict_loop(\"s\")\n",
+        "fn rejected() -> i64 => wrong(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:24:25 type/type.mismatch CTRL-15"],
+        "{}",
+        checked.report
+    );
+    for (name, ty, category) in [
+        ("ordinary", "i64?", ValueCategory::Value),
+        ("connected", "i64", ValueCategory::Connection),
+    ] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        for local in &instance.locals[1..] {
+            assert_eq!(
+                (local.ty.to_string().as_str(), local.category),
+                (ty, category),
+                "{name}"
+            );
+        }
+    }
+    let instance = instance_called_by(&checked, body(&checked, "keyed"));
+    for (name, ty) in [
+        ("key", "str"),
+        ("value", "i64"),
+        ("copied_key", "str"),
+        ("copied_value", "i64"),
+    ] {
+        let local = instance
+            .locals
+            .iter()
+            .find(|local| local.name == name)
+            .expect(name);
+        assert_eq!(local.ty.to_string(), ty);
+    }
+    let Some(Stmt::For { sequence, .. }) = instance.statements.get(1) else {
+        panic!("dictionary loop")
+    };
+    assert!(matches!(sequence.kind, ExprKind::NullRead { .. }));
+}
+
+/// GEN-7 and EXPR-7: a member name and base survive the source pass
+/// until selection can check the field and choose its read form.
+#[test]
+fn graph_instances_resolve_members_of_deferred_bases() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "struct Item { value: i64 }\n",
+        "fn good<T>(const input: T) -> i64 {\n",
+        "    let held = if predicate(input) { Item(value: 1) }\n",
+        "    return held.value\n",
+        "}\n",
+        "fn bad<T>(const input: T) -> i64 {\n",
+        "    let held = if predicate(input) { Item(value: 1) }\n",
+        "    return held.missing\n",
+        "}\n",
+        "fn ordinary() -> i64 => good(\"s\")\n",
+        "fn connected() -> i64 => good(1)\n",
+        "fn rejected() -> i64 => bad(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:16:25 name/member.unknown EXPR-7"],
+        "{}",
+        checked.report
+    );
+    let sources = body(&checked, "good");
+    let Some(Stmt::Return {
+        value: Some(source),
+        ..
+    }) = sources.statements.last()
+    else {
+        panic!("the function returns the member");
+    };
+    assert!(matches!(source.kind, ExprKind::DeferredMember { .. }));
+    for (name, nullable, category) in [
+        ("ordinary", true, ValueCategory::Value),
+        ("connected", false, ValueCategory::Connection),
+    ] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        let Some(Stmt::Return {
+            value: Some(returned),
+            ..
+        }) = instance.statements.last()
+        else {
+            panic!("the instance returns the member");
+        };
+        let ExprKind::Field { base, member } = &returned.kind else {
+            panic!("a resolved field")
+        };
+        assert_eq!(*member, 0);
+        assert_eq!(returned.ty.to_string(), "i64");
+        assert_eq!(returned.category, category);
+        assert_eq!(matches!(base.kind, ExprKind::NullRead { .. }), nullable);
+    }
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

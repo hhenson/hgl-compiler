@@ -114,22 +114,21 @@ impl<'a> Typer<'a> {
     pub(super) fn delta_property(
         &mut self,
         base: Expr,
-        name: &SyntaxToken,
+        name: &str,
+        at: Location,
         of: &Type,
     ) -> (ExprKind, Type) {
         let Some(properties) = self.delta_properties(of) else {
             return (ExprKind::Unread, Type::Unknown);
         };
-        let member = properties
-            .iter()
-            .position(|(property, _)| property == name.text());
+        let member = properties.iter().position(|(property, _)| property == name);
         let Some(member) = member else {
             self.diagnostics.emit(
                 error(
                     Category::Name,
                     codes::MEMBER_UNKNOWN,
-                    Location::new(self.file, name.span()),
-                    format!("`{}` has no property `{}`", base.ty, name.text()),
+                    at,
+                    format!("`{}` has no property `{}`", base.ty, name),
                     "TYPE-16",
                 )
                 .with_note(format!("it has {}", listed(&properties))),

@@ -26,6 +26,18 @@ use crate::program::Role;
 use crate::types::Type;
 use crate::{codes, error};
 
+/// The type after the same result and nullable reads as `Typer::received`.
+pub(super) fn received_type(ty: &Type, reads: impl Fn(&Type) -> bool) -> &Type {
+    let received = match ty {
+        Type::Result { value, .. } if whole(ty) && !open(value) => value,
+        _ => ty,
+    };
+    match received {
+        Type::Nullable(payload) if reads(payload) => payload,
+        _ => received,
+    }
+}
+
 /// What a place that expects another type takes of a value given to it
 /// (ERR-12, ERR-15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
