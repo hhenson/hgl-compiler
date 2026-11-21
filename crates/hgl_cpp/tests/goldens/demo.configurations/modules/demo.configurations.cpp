@@ -860,7 +860,7 @@ namespace w_
 // looked(x: str, book: dict<str, i64>) -> i64 (`const fn`), module demo.configurations, line 142
 ::hgraph::Int looked([[maybe_unused]] const ::hgraph::Str& x, [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book)
 {
-    [[maybe_unused]] const ::std::optional<::hgraph::Int> found = ::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, x);
+    [[maybe_unused]] const ::std::optional<::hgraph::Int> found = ::hglrt::result_or_null(::hglrt::get_dict_result<::hgraph::Str, ::hgraph::Int>(book, x));
     if ((!found.has_value()))
     {
         return ::hglrt::neg__i64(1);

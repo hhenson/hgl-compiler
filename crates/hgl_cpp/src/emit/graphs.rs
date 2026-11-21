@@ -28,7 +28,7 @@ use super::Emitter;
 use super::calls::{changes, may_fail};
 use super::forms::Family;
 use super::names::{self, identifier};
-use super::nodes::{Context, IMPLEMENTATION, Kind, Placed, Role, nested};
+use super::nodes::{Context, IMPLEMENTATION, Kind, Placed, ResultForm, Role, nested};
 use super::statements::Scope;
 use super::values::INDENT;
 
@@ -36,6 +36,17 @@ use super::values::INDENT;
 /// eval's entry are given: hgraph's `Wiring`. No HGL name gives it
 /// (`names::identifier`).
 pub(super) const WIRING: &str = "wiring_";
+
+/// Inputs a caller has already evaluated or wired.
+#[derive(Default)]
+pub(super) struct HeldInputs<'a> {
+    /// Supplied arguments, indexed by their position in the call.
+    pub(super) given: &'a [(usize, String)],
+    /// Supplied defaults, indexed by parameter position.
+    pub(super) defaults: &'a [(usize, String)],
+    /// Supplied arguments that still need a read at the consuming node.
+    pub(super) raw_ports: &'a [usize],
+}
 
 impl Emitter<'_> {
     /// Writes the graph `index`, or its instance `instance`, of
@@ -173,6 +184,30 @@ impl Emitter<'_> {
         given: &[(usize, String)],
         defaults: &[(usize, String)],
     ) -> String {
+        self.temporal_call_in_form(
+            scope,
+            value,
+            HeldInputs {
+                given,
+                defaults,
+                ..HeldInputs::default()
+            },
+            ResultForm::Whole,
+        )
+    }
+
+    /// Wire a temporal call with its recorded result form (ERR-15).
+    pub(super) fn temporal_call_in_form(
+        &mut self,
+        scope: &mut Scope,
+        value: &Expr,
+        HeldInputs {
+            given,
+            defaults,
+            raw_ports,
+        }: HeldInputs<'_>,
+        result_form: ResultForm,
+    ) -> String {
         let ExprKind::Call {
             callee:
                 Callee::Function {
@@ -212,7 +247,22 @@ impl Emitter<'_> {
             .reach
             .uses
             .insert((module, declaration, suffix.clone()));
-        let placed = Placed::of(program, module, declaration, suffix.as_deref());
+        let readers = self.readers;
+        let reader = readers
+            .at_call(program, self.instances, value)
+            .filter(|(_, reads)| {
+                !arguments.iter().enumerate().any(|(position, argument)| {
+                    given.iter().any(|(provided, _)| *provided == position)
+                        && !raw_ports.contains(&position)
+                        && reads
+                            .iter()
+                            .any(|read| Some(read.parameter) == argument.parameter)
+                })
+            });
+        let mut placed = Placed::of(program, module, declaration, suffix.as_deref());
+        if let Some((number, _)) = reader {
+            placed.add_input_variant(number);
+        }
         let mut written: Vec<Option<String>> = vec![None; signature.parameters.len()];
         // The parameters in the order their arguments are written, and
         // what may fail or run statements among those (EXPR-2).
@@ -234,6 +284,11 @@ impl Emitter<'_> {
             written[index] = Some(match port {
                 Some(port) => port,
                 None if parameter.constant => self.expression(scope, &argument.value),
+                None if reader
+                    .is_some_and(|(_, reads)| reads.iter().any(|read| read.parameter == index)) =>
+                {
+                    self.wiring_form(scope, super::lifting::reader_operand(&argument.value))
+                }
                 None => self.connection(scope, &argument.value, &parameter.ty),
             });
             order.push(index);
@@ -287,7 +342,11 @@ impl Emitter<'_> {
                 },
             );
         }
-        let called = placed.wiring_qualified(program, module);
+        let called = format!(
+            "{}{}",
+            placed.wiring_qualified(program, module),
+            result_form.suffix()
+        );
         // EXPR-2: the arguments in the order written, then the defaults of
         // those left out. C++ evaluates a call's arguments in no order it
         // promises, so where more than one may fail, or one runs

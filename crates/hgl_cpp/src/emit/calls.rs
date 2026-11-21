@@ -26,7 +26,7 @@
 //! is a statement of its own, in that order, in a lambda called where
 //! the call is written.
 
-use hgl_analyser::hir::{Argument, Callee, Expr, ExprKind, Raise, Value};
+use hgl_analyser::hir::{Argument, Callee, Expr, ExprKind, Value};
 use hgl_analyser::{
     Argument as GenericArgument, ConstantValue, DeclarationKind, Detail, OperatorRef, Program,
     Role, Signature, Type,
@@ -38,11 +38,30 @@ use hgl_lower::copies::place_of;
 use super::Emitter;
 use super::expressions::integer_literal;
 use super::names::{self, identifier};
-use super::statements::{Scope, refers};
+use super::statements::Scope;
 use super::types::enum_name;
 use hgl_analyser::hir::Body;
 
 impl Emitter<'_> {
+    /// Respect expression order when an apparent local read is a
+    /// contextual connection read in the consuming handler (EXPR-2).
+    pub(super) fn may_fail_here(&self, value: &Expr) -> bool {
+        if may_fail(value) {
+            return true;
+        }
+        let mut reads_connection = false;
+        if self
+            .temporal
+            .as_ref()
+            .is_some_and(|context| !context.input_reads.is_empty())
+        {
+            value.walk(&mut |expression| {
+                reads_connection |= matches!(expression.kind, ExprKind::Local(local) if self.input_reader(local).is_some());
+            });
+        }
+        reads_connection
+    }
+
     /// A call of `callee` with `arguments` as C++ (FN-5, NATIVE-7);
     /// `whole` is the call.
     pub(super) fn call(
@@ -51,64 +70,6 @@ impl Emitter<'_> {
         callee: &Callee,
         arguments: &[Argument],
         whole: &Expr,
-    ) -> String {
-        self.call_with_lookup(scope, callee, arguments, whole, false)
-    }
-
-    /// Writes an already supported lookup when the recorded form agrees
-    /// with its runtime helper: the store's strict read or a dictionary's
-    /// nullable read (CAP-6, ERR-6, ERR-15).
-    pub(super) fn legacy_lookup(&mut self, scope: &mut Scope, value: &Expr) -> Option<String> {
-        let (call, helper) = match &value.kind {
-            ExprKind::Raised { result, raise }
-                if !matches!(raise, Raise::Return | Raise::CallNode | Raise::Reader) =>
-            {
-                (result, "get_GlobalState_str")
-            }
-            ExprKind::OrNull {
-                result,
-                reader: false,
-            } => (result, "get_dict_K__T__K"),
-            _ => return None,
-        };
-        let ExprKind::Call {
-            callee:
-                callee @ Callee::Candidate {
-                    module,
-                    declaration,
-                    ..
-                },
-            arguments,
-            lifted: false,
-            ..
-        } = &call.kind
-        else {
-            return None;
-        };
-        if Some(*module) != self.program.core() {
-            return None;
-        }
-        let core = &self.program.modules[*module];
-        let declared = &core.declarations[*declaration];
-        let Detail::Callable(signature) = &core.details[*declaration] else {
-            return None;
-        };
-        (matches!(
-            declared.kind,
-            DeclarationKind::NativeCandidate(Role::Value, _)
-        ) && names::native_candidate(&declared.name, signature) == helper)
-            .then(|| self.call_with_lookup(scope, callee, arguments, call, true))
-    }
-
-    /// A value call, with the older lookup helpers available only to the
-    /// two compatible forms selected by `legacy_lookup`.
-    fn call_with_lookup(
-        &mut self,
-        scope: &mut Scope,
-        callee: &Callee,
-        arguments: &[Argument],
-        whole: &Expr,
-        legacy_lookup: bool,
     ) -> String {
         let at = whole.at;
         // True for the call that is the whole of a statement.
@@ -167,9 +128,6 @@ impl Emitter<'_> {
                 }
             }
             DeclarationKind::NativeCandidate(Role::Value, operator) => {
-                if !legacy_lookup && Some(module) == program.core() && declared.name == "get" {
-                    return self.missing(at, "a fallible lookup in this form");
-                }
                 let Some(name) = self.native_candidate(
                     module,
                     declaration,
@@ -264,14 +222,24 @@ impl Emitter<'_> {
                         return self
                             .missing(argument.value.at, "this place given to a `var` parameter");
                     };
-                    written.push((index, place, may_fail(&argument.value), Held::Steps(steps)));
+                    written.push((
+                        index,
+                        place,
+                        self.may_fail_here(&argument.value),
+                        Held::Steps(steps),
+                    ));
                     continue;
                 }
                 let Some(place) = self.place(scope, &argument.value) else {
                     return self
                         .missing(argument.value.at, "this place given to a `var` parameter");
                 };
-                written.push((index, place, may_fail(&argument.value), Held::Place));
+                written.push((
+                    index,
+                    place,
+                    self.may_fail_here(&argument.value),
+                    Held::Place,
+                ));
                 continue;
             }
             let value = self.expression(scope, &argument.value);
@@ -288,12 +256,12 @@ impl Emitter<'_> {
                     return self.missing(at, &format!("the type `{}`", parameter.ty));
                 };
                 (format!("{ty}({value})"), Held::Value(ty))
-            } else if refers(&argument.value) {
+            } else if self.refers(&argument.value) {
                 (value, Held::Reference(ty))
             } else {
                 (value, Held::Value(ty))
             };
-            written.push((index, value, may_fail(&argument.value), held));
+            written.push((index, value, self.may_fail_here(&argument.value), held));
         }
         let mut defaulted: Vec<(usize, String, bool, Held)> = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
@@ -410,13 +378,20 @@ impl Emitter<'_> {
         let program = self.program;
         let declared = &program.modules[module].declarations[declaration];
         let name = names::native_candidate(&declared.name, signature);
+        // ERR-6 and CAP-6: the native returns the whole result.
+        // A recorded HIR read applies the form independently of the lookup.
+        let name = match (name.as_str(), &signature.result) {
+            ("get_GlobalState_str", Some(Type::Result { .. })) => "get_store_result",
+            ("get_dict_K__T__K", Some(Type::Result { .. })) => "get_dict_result",
+            (name, _) => name,
+        };
         let types: Vec<String> = signature
             .parameters
             .iter()
             .map(|parameter| parameter.ty.to_string())
             .collect();
         let shown = format!("the candidate `{}({})`", declared.name, types.join(", "));
-        if Some(module) != program.core() || !(self.provides)(&name) {
+        if Some(module) != program.core() || !(self.provides)(name) {
             self.unsupported(at, &shown);
             return None;
         }
@@ -435,7 +410,7 @@ impl Emitter<'_> {
             };
             first.push(gives);
         }
-        self.templated(&names::native(&name), &first, generics, at)
+        self.templated(&names::native(name), &first, generics, at)
     }
 
     /// `name` with the arguments of its template: `first`, and then each

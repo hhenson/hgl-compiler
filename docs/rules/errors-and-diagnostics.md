@@ -47,9 +47,9 @@ analyser: partial
 
 - A place that needs the value of a result records where a failure goes. A value function returning a result requires the same error type. In other phases only `error` can be raised (`result.propagation_type`).
 
-transpiler: partial
+transpiler: done
 
-- C++ writes a raise in a value function returning a result or in a `when`. Other places are reported as unsupported.
+- C++ returns the original error from a fallible value function. In a `when`, `start`, `stop` or source body, at graph build, and in test or application statements, it raises the error at the HGL read.
 
 ## ERR-6
 
@@ -60,7 +60,8 @@ analyser: partial
 
 transpiler: partial
 
-- C++ brackets perform a strict read. A temporal dictionary child is an endpoint read (ERR-14).
+- C++ brackets perform a strict read. Two-argument `get` returns the whole result to the recorded ERR-15 form. A temporal dictionary child is an endpoint read (ERR-14).
+- Left: a fallback.
 
 ## ERR-7
 
@@ -111,6 +112,10 @@ analyser: done
 - In a value function, a hook and a graph a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns
 - A nullable read in a place that expects its payload records a possible `value.null` failure and its phase. A written null still needs a nullable type (TYPE-14).
 
+transpiler: done
+
+- C++ reads the payload at the recorded expression and reports `value.null` in its recorded phase. A connection's reading node performs that read.
+
 ## ERR-13
 
 parser: done
@@ -141,4 +146,5 @@ analyser: partial
 
 transpiler: partial
 
-- C++ preserves result data and writes raises in the phases listed under ERR-5. Other conversions are reported as unsupported.
+- C++ follows the recorded whole, success or nullable form. A lifted call or node publishes the chosen form. Held results convert in the consuming handler or through a projected endpoint for consumers that need child tracking.
+- Open: collection guards, child tracking, and handlers that skip a read in a cycle with a held failure. [Compiler issue #355](https://github.com/hhenson/hgl-compiler/issues/355)

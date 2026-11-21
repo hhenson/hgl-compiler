@@ -1886,10 +1886,8 @@ fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
             concat!(
                 "module m\n",
                 "\n",
-                "const fn half(d: duration) -> result<duration, error> => ok(d)\n",
-                "\n",
                 "fn later(a: duration) -> duration {\n",
-                "    when { return a + half(a) }\n",
+                "    when { return a + 1s }\n",
                 "}\n",
                 "\n",
                 "fn kept(a: i64) -> i64 {\n",
@@ -1905,12 +1903,11 @@ fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
                 "}\n",
             ),
         )],
-        &hgl_cpp::runtime::provides,
+        &|name| name != "add__duration_duration" && hgl_cpp::runtime::provides(name),
     );
     assert!(
-        emitted.blocked("blocked").is_some_and(
-            |reason| reason.ends_with("does not write a result raised in a `when` here yet")
-        ),
+        emitted.blocked("blocked").is_some_and(|reason| reason
+            .ends_with("does not write the candidate `add_(duration, duration)` yet")),
         "{:?}",
         emitted.blocked("blocked")
     );
@@ -2601,7 +2598,7 @@ fn natives_are_called_with_their_templates() {
 /// ERR-5, EXPR-2: a raise inside an argument's block must follow the
 /// earlier argument's read and the statements in the block.
 #[test]
-fn a_propagation_after_a_read_is_reported() {
+fn a_propagation_in_a_later_arguments_block_is_written() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
@@ -2617,17 +2614,13 @@ fn a_propagation_after_a_read_is_reported() {
             "}\n",
         ),
     )]);
-    assert_eq!(
-        emitted.reported,
-        ["m.hgl:8:9 the cpp target does not write a result raised here yet"]
-    );
+    assert_propagation(&emitted);
 }
 
 /// UNIT-13, EXPR-2: a constant's value is made where it is first read, so
-/// a read of one whose value may fail is something that may fail: a `?`
-/// after it in its statement would run first, and is reported.
+/// its failure precedes a contextual result read in a later argument.
 #[test]
-fn a_propagation_after_a_constant_that_may_fail_is_reported() {
+fn a_propagation_after_a_constant_read_is_written() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
@@ -2638,17 +2631,13 @@ fn a_propagation_after_a_constant_that_may_fail_is_reported() {
             "const fn both() -> result<i64, error> => ok(pick(broken, checked(11)))\n",
         ),
     )]);
-    assert_eq!(
-        emitted.reported,
-        ["m.hgl:5:58 the cpp target does not write a result raised here yet"]
-    );
+    assert_propagation(&emitted);
 }
 
 /// EXPR-3, EXPR-13: a compound assignment reads its place first, and a
-/// read of a list's element may fail (EXPR-7), so a `?` in its value
-/// would run before that read; it is reported.
+/// read of a list's element may fail before the value is evaluated (EXPR-7).
 #[test]
-fn a_propagation_in_a_compound_assignment_to_an_element_is_reported() {
+fn a_propagation_in_a_compound_assignment_to_an_element_is_written() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
@@ -2661,16 +2650,13 @@ fn a_propagation_in_a_compound_assignment_to_an_element_is_reported() {
             "}\n",
         ),
     )]);
-    assert_eq!(
-        emitted.reported,
-        ["m.hgl:5:17 the cpp target does not write a result raised here yet"]
-    );
+    assert_propagation(&emitted);
 }
 
 /// EXPR-2: a `var` argument's place is read first, and an element's
-/// lookup is checked; a `?` in a later argument is reported.
+/// lookup is checked before a later argument reads a result.
 #[test]
-fn a_propagation_after_a_var_place_is_reported() {
+fn a_propagation_after_a_var_place_is_written() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
@@ -2686,12 +2672,17 @@ fn a_propagation_after_a_var_place_is_reported() {
             "}\n",
         ),
     )]);
-    assert_eq!(
-        emitted.reported,
-        [
-            "m.hgl:8:20 the cpp target does not write a result raised after a read in its statement yet"
-        ]
-    );
+    assert_propagation(&emitted);
+}
+
+/// A contextual return is written at the read and caught by the value
+/// function's own result boundary (ERR-5).
+fn assert_propagation(emitted: &Emitted) {
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    assert!(emitted.output.files.iter().any(|file| {
+        file.text.contains("::hglrt::propagate(")
+            && file.text.contains("catch (const ::hglrt::return_error<")
+    }));
 }
 
 /// UNIT-12: a `switch` case binds in the block around the `switch`, and

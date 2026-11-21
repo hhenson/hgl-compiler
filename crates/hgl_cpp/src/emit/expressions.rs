@@ -15,7 +15,7 @@
 //! | `{ statements; value }` | a lambda called where it is written, where the statements do not return |
 //! | `ok(v)`, `err(e)`, `is_ok(r)`, `r.value`, `r.error` | `result<T>{v}`, `result<T>{std::unexpect, e}`, `(r).has_value()`, `(*r)`, `(r).error()` (ERR-2, ERR-3) |
 //! | `error(message: m, code: c)`, `e.message`, `e.code` | `::hglrt::make_error(m, c)`, `(e).message`, `(e).code` (ERR-4) |
-//! | `value?` | the result held before the statement, the function left with its failure, and `(*held)` (ERR-5) |
+//! | A result or nullable given where its payload is expected | A read at the expression, raising its failure or returning an error from the enclosing value function (ERR-5, ERR-12, ERR-15) |
 //! | A constant `name` | `name()` (UNIT-13) |
 //! | `@[Europe/London]`, `@09:30[Europe/London]` | hgraph's `ZoneId` and `ZonedTime` of them |
 //! | A struct, a field, a set, a dictionary, a delta, `Side(1)`, `maybe == 1` | `composites`' |
@@ -32,9 +32,8 @@ use hgl_diagnostics::Location;
 use super::Emitter;
 use super::calls::{changes, may_fail};
 use super::names::{self, identifier};
-use super::statements::{Scope, refers, returns};
+use super::statements::{Scope, returns};
 use super::types::enum_name;
-use super::values::INDENT;
 use crate::runtime;
 
 impl Emitter<'_> {
@@ -55,10 +54,12 @@ impl Emitter<'_> {
         }
         // The temporal forms, and the reads of a hook, are the dispatch
         // point's (`forms`), which a construct lane adds to.
-        if let Some(written) = self
-            .legacy_lookup(scope, value)
-            .or_else(|| self.form_expression(scope, value))
+        if let ExprKind::Local(local) = value.kind
+            && let Some(written) = self.reader_value(scope, local, value)
         {
+            return written;
+        }
+        if let Some(written) = self.form_expression(scope, value) {
             return written;
         }
         if matches!(value.kind, ExprKind::Local(_) | ExprKind::Constant { .. }) {
@@ -245,11 +246,11 @@ impl Emitter<'_> {
                 // holds (`refers`) and the index changes nothing: any
                 // other may be part of a value that ends with its
                 // declaration, `[[7]][0]`.
-                Type::List { .. } if held_read(base, index) => {
+                Type::List { .. } if self.held_read(base, index) => {
                     let Some(ty) = self.written_type(&value.ty, value.at) else {
                         return "0".to_string();
                     };
-                    let held = if refers(base) && !changes(index) {
+                    let held = if self.refers(base) && !changes(index) {
                         "const auto&"
                     } else {
                         "const auto"
@@ -343,7 +344,8 @@ impl Emitter<'_> {
             ExprKind::Error { message, code } => {
                 let ordered = changes(message)
                     || code.as_deref().is_some_and(changes)
-                    || (may_fail(message) && code.as_deref().is_some_and(may_fail));
+                    || (self.may_fail_here(message)
+                        && code.as_deref().is_some_and(|code| self.may_fail_here(code)));
                 let code_first = code
                     .as_deref()
                     .is_some_and(|code| code.at.span.start < message.at.span.start);
@@ -382,21 +384,24 @@ impl Emitter<'_> {
                     _ => self.missing(value.at, "this part of an error"),
                 }
             }
-            // ERR-5, ERR-15: a result given where its T is expected, in a
-            // value function that gives a result: its failure leaves the
-            // function. Every other place a failure is raised, a result's
-            // `T?` and a `T?` read where a T is expected are not written
-            // yet.
-            ExprKind::Raised {
-                result,
-                raise: Raise::Return,
-            } => self.propagated(scope, result, value.at),
-            ExprKind::Raised { raise, .. } => self.missing(value.at, raised_where(*raise)),
-            ExprKind::OrNull { .. } => {
-                self.missing(value.at, "a result given where its `T?` is expected")
+            // ERR-5, ERR-12 and ERR-15: the HIR records the form
+            // and where a failure goes. Read it at this expression:
+            // conditional and earlier effects retain their order.
+            ExprKind::Raised { result, raise } => {
+                let result = self.expression(scope, result);
+                self.result_value(*raise, &result, value.at)
             }
-            ExprKind::NullRead { .. } => {
-                self.missing(value.at, "a `T?` read where its T is expected")
+            ExprKind::OrNull { result, .. } => {
+                let result = self.expression(scope, result);
+                format!("::{}::result_or_null({result})", runtime::NAMESPACE)
+            }
+            ExprKind::NullRead {
+                value: operand,
+                raise,
+                ..
+            } => {
+                let operand = self.expression(scope, operand);
+                self.nullable_payload(*raise, &operand, &value.ty, value.at)
             }
             ExprKind::Eval { .. } => self.missing(value.at, "an eval"),
             // TST-4: the harness's own comparison of two traces; what
@@ -491,29 +496,75 @@ impl Emitter<'_> {
         text
     }
 
-    /// A result given where its T is expected in a value function that
-    /// gives a result (ERR-5: "the function gives that E as its
-    /// failure"): the result is held under a name of its own before the
-    /// statement, and a failure leaves the function with its error; the
-    /// expression is the success's payload. Only where it is the first
-    /// thing its statement evaluates: nothing before it in the statement
-    /// has been run that may fail, or read a local, a constant or a
-    /// place, which it would otherwise run before (EXPR-2, EXPR-13).
-    fn propagated(&mut self, scope: &mut Scope, operand: &Expr, at: Location) -> String {
-        let gives_result = matches!(scope.result, Some(Type::Result { .. }));
-        if scope.conditional > 0 || scope.acted || !gives_result || scope.testing {
-            return self.missing(at, "a result raised here");
+    /// A result's success, eventually yielding the recorded raise
+    /// (ERR-5, ERR-15). A return uses a typed carrier caught by the
+    /// generated value function, so a read can stand in any expression.
+    pub(super) fn result_value(&mut self, raise: Raise, value: &str, at: Location) -> String {
+        let library = runtime::NAMESPACE;
+        match raise {
+            Raise::Return => format!("::{library}::propagate({value})"),
+            _ => {
+                let place = self.source_location(at);
+                format!("::{library}::require_result({value}, {place})")
+            }
         }
-        if scope.read {
-            return self.missing(at, "a result raised after a read in its statement");
+    }
+
+    /// Read a projected argument using the consuming node's physical
+    /// input. The read is evaluated only where the handler uses it.
+    fn reader_value(&mut self, scope: &Scope, local: usize, read: &Expr) -> Option<String> {
+        let form = self.input_reader(local)?.clone();
+        let underlying = super::lifting::reader_operand(&form);
+        let name = identifier(&scope.body.locals[local].name);
+        let value = self.temporal_read(&underlying.ty, &name, read.at);
+        let value = self.apply_reader_chain(&form, &value);
+        Some(match &form.ty {
+            Type::Nullable(payload) if **payload == read.ty => format!("(*({value}))"),
+            _ => value,
+        })
+    }
+
+    /// The contextual read written when the handler uses this parameter.
+    pub(super) fn input_reader(&self, local: usize) -> Option<&Expr> {
+        self.temporal
+            .as_ref()?
+            .input_reads
+            .iter()
+            .find(|read| read.parameter == local)
+            .map(|read| &read.form)
+    }
+
+    /// The payload of an optional, using the raise recorded by the
+    /// analyser (ERR-5, ERR-12). Specify T so a literal null converts to
+    /// the same optional type as a nullable binding.
+    pub(super) fn nullable_payload(
+        &mut self,
+        raise: Raise,
+        value: &str,
+        ty: &Type,
+        at: Location,
+    ) -> String {
+        let Some(ty) = self.written_type(ty, at) else {
+            return "0".to_string();
+        };
+        let library = runtime::NAMESPACE;
+        match raise {
+            Raise::Return => format!("::{library}::propagate_non_null<{ty}>({value})"),
+            _ => {
+                let place = self.source_location(at);
+                format!("::{library}::require_non_null<{ty}>({value}, {place})")
+            }
         }
-        let written = self.expression(scope, operand);
-        let held = names::temporary("propagated", self.temporary());
-        scope.before.push(format!("const auto {held} = {written};"));
-        scope.before.push(format!(
-            "if (!{held}.has_value())\n{{\n{INDENT}return ::std::unexpected({held}.error());\n}}"
-        ));
-        format!("(*{held})")
+    }
+
+    /// A source location at the read itself, even inside a multiline
+    /// statement or a test whose generated body has no `#line`.
+    fn source_location(&mut self, at: Location) -> String {
+        let current = "::std::source_location::current()";
+        self.line_directive(at).map_or_else(
+            || current.to_string(),
+            |line| format!("[] {{\n{line}return {current};\n{}\n}}()", super::RESTORE),
+        )
     }
 
     /// A literal of type `ty` as C++.
@@ -576,13 +627,15 @@ impl Emitter<'_> {
     }
 }
 
-/// True where an element read of the list `base` at `index` holds the
-/// list, then the index, before it reads, so that they are evaluated in
-/// that order (EXPR-2): where either runs statements, which may change
-/// what the other reads, and where both may fail, which C++ would
-/// evaluate in either order. The element read is then a value of its own.
-pub(super) fn held_read(base: &Expr, index: &Expr) -> bool {
-    changes(base) || changes(index) || (may_fail(base) && may_fail(index))
+impl Emitter<'_> {
+    /// True where an element read of the list `base` at `index` holds the
+    /// list, then the index, before it reads, so that they are evaluated in
+    /// that order (EXPR-2): where either runs statements, which may change
+    /// what the other reads, and where both may fail, which C++ would
+    /// evaluate in either order. The element read is then a value of its own.
+    pub(super) fn held_read(&self, base: &Expr, index: &Expr) -> bool {
+        changes(base) || changes(index) || (self.may_fail_here(base) && self.may_fail_here(index))
+    }
 }
 
 /// True where the place `place` is, at any depth, an element of a list

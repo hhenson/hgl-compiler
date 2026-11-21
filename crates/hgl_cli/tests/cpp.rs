@@ -1079,6 +1079,68 @@ fn lifting_code_runs_on_the_sdk() {
     );
 }
 
+/// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code
+/// and temporal nodes, including an application-phase failure.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn contextual_result_reads_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("fallible_forms");
+    let file = write(
+        &root,
+        "demo.fallible.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.fallible.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+
+    let app = write(
+        &root,
+        "demo.fallible.app.hgl",
+        concat!(
+            "application demo.fallible.app\n",
+            "use demo.fallible::{from_source}\n",
+            "const fn bad() -> result<i64, error> => err(error(message: \"invalid configuration\", code: \"convert.invalid\"))\n",
+            "inject global_state\n",
+            "put(global_state, \"start\", {\n",
+            "    let value: i64 = bad()\n",
+            "    value\n",
+            "})\n",
+            "eval from_source(input: 1)\n",
+        ),
+    );
+    let output = hgl_in(
+        &[
+            "run",
+            &argument(&root),
+            "--target",
+            "cpp",
+            "--application",
+            "demo.fallible.app",
+        ],
+        &[],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+    let stderr = text(&output.stderr);
+    let expected = format!(
+        "hgl: demo.fallible.app failed: convert.invalid: invalid configuration, raised at {app}:6"
+    );
+    assert_eq!(stderr.lines().last(), Some(expected.as_str()), "{stderr}");
+}
+
 /// Control flow over connections on the SDK (`demo.control`): each
 /// branch of an `if` or a `switch` over a connection a child graph that
 /// hgraph's `compiled::switch_` runs while it is selected, started fresh

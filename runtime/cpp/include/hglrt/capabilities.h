@@ -285,11 +285,10 @@ void store_registered() {
     (void)registered;
 }
 
-/// Fails a read of the store under `key`, which holds nothing.
-[[noreturn]] void store_missing(std::string_view key, std::source_location where);
-/// Fails a read or a write of the store under `key`, which holds a value of
-/// another type.
-[[noreturn]] void store_type(std::string_view key, std::source_location where);
+/// The error of a read of the store under `key`, which holds nothing.
+error store_missing(std::string_view key);
+/// The error of a read or write under `key`, which holds another type.
+error store_type(std::string_view key);
 } // namespace detail
 
 // CAP-6: "`get<V>(global_state, key)` is the value under `key`, of the type
@@ -304,20 +303,26 @@ void store_registered() {
 /// value (CAP-6).
 bool has_GlobalState_str(const GlobalState& store, std::string_view key);
 
-/// `get<V>(store: GlobalState, const key: str) -> V`: a copy of the value
-/// under `key`, which is of the type `V` the call gives (CAP-6). An absent
-/// key fails, and so does a value of another type.
+/// `get<V>(store: GlobalState, const key: str) -> result<V, error>`: a
+/// copy of the value or an error (CAP-6). A held null is a success.
 template <class V>
-V get_GlobalState_str(const GlobalState& store, std::string_view key,
-                      std::source_location where = std::source_location::current()) {
+result<V> get_store_result(const GlobalState& store, std::string_view key) {
     if (!store.view().contains(key)) {
-        detail::store_missing(key, where);
+        return std::unexpected(detail::store_missing(key));
     }
     const detail::Stored<V>* held = store.view().get(key).template try_as<detail::Stored<V>>();
     if (held == nullptr) {
-        detail::store_type(key, where);
+        return std::unexpected(detail::store_type(key));
     }
-    return held->value;
+    return result<V>{std::in_place, held->value};
+}
+
+/// The value of a store result where the runtime's own caller requires
+/// it (CAP-6, ERR-15).
+template <class V>
+V get_GlobalState_str(const GlobalState& store, std::string_view key,
+                      std::source_location where = std::source_location::current()) {
+    return require_result(get_store_result<V>(store, key), where);
 }
 
 /// `put<V>(store: GlobalState, const key: str, value: V)`: puts a copy of
@@ -326,7 +331,7 @@ template <class V>
 void put_GlobalState_str_V(const GlobalState& store, std::string_view key, const V& value,
                            std::source_location where = std::source_location::current()) {
     if (store.view().contains(key) && store.view().get(key).template try_as<detail::Stored<V>>() == nullptr) {
-        detail::store_type(key, where);
+        raise(detail::store_type(key), where);
     }
     detail::store_registered<V>();
     store.view().set(key, hgraph::Value{detail::Stored<V>{value}});
