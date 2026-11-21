@@ -5,7 +5,7 @@
 use hgl_analyser::hir::{
     Argument, Body, Callee, ExprKind, LocalId, NodeMut, PackKey, Stmt, walk_statement_nodes_mut,
 };
-use hgl_analyser::{Program, Signature, Type};
+use hgl_analyser::{Program, Signature, Type, substitute_within};
 use hgl_diagnostics::Location;
 
 use crate::canonical::canonical;
@@ -41,6 +41,12 @@ impl Captures {
     ) -> Self {
         let mut entries = Vec::new();
         let mut counts = vec![0; signature.parameters.len()];
+        let bindings: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|parameter| parameter.at)
+            .zip(callee.generics())
+            .collect();
         for argument in arguments {
             let (Some(parameter), Some(pack)) = (argument.parameter, &argument.pack) else {
                 continue;
@@ -52,11 +58,13 @@ impl Captures {
                         .then(|| given.types.get(counts[parameter]))
                         .flatten()
                 }),
-                _ => Some(&declared.ty),
+                _ => None,
             };
             let ty = expected
-                .filter(|ty| canonical(program, ty).is_some())
                 .cloned()
+                .unwrap_or_else(|| substitute_within(&declared.ty, &bindings));
+            let ty = canonical(program, &ty)
+                .map(|_| ty)
                 .or_else(|| trace_payload(&argument.value.ty))
                 .unwrap_or_else(|| argument.value.ty.clone());
             counts[parameter] += 1;

@@ -102,6 +102,7 @@ use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_parser::SyntaxNode;
 use hgl_source::{FileId, Span};
 
+pub use declared::substitute_within;
 pub use program::{
     Binding, Decision, Declaration, DeclarationKind, Import, ImportKind, LocalKind, Module,
     ModuleFile, NameUse, OperatorRef, Phase, PreludeName, Program, RUN_CONFIG, Role, Test,
