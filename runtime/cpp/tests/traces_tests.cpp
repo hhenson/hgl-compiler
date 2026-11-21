@@ -59,12 +59,14 @@ constexpr hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept {
 }
 } // namespace demo_trade
 
-TEST_CASE("a delta is T for a scalar and a nullable, and a value of its own otherwise (TYPE-16)") {
+TEST_CASE("a delta is T for a scalar, and a value of its own for a nullable and a list (TYPE-16)") {
+    using MaybeDelta = hglrt::nullable_delta<i64>;
     static_assert(std::is_same_v<hglrt::delta_t<i64>, i64>);
-    static_assert(std::is_same_v<hglrt::delta_t<Maybe>, Maybe>);
+    static_assert(std::is_same_v<hglrt::delta_t<Maybe>, MaybeDelta>);
+    static_assert(std::is_same_v<hglrt::delta_t<MaybeDelta>, MaybeDelta>);
     static_assert(std::is_same_v<PairDelta, std::tuple<Maybe, Maybe>>);
     static_assert(
-        std::is_same_v<hglrt::delta_t<std::tuple<Maybe, i64>>, std::tuple<std::optional<Maybe>, Maybe>>);
+        std::is_same_v<hglrt::delta_t<std::tuple<Maybe, i64>>, std::tuple<std::optional<MaybeDelta>, Maybe>>);
     static_assert(std::is_same_v<ValuesDelta, list_delta<Values>>);
     static_assert(!std::is_same_v<FlagsDelta, hglrt::delta_t<list<bool>>>);
     static_assert(hglrt::testing::publishes_whole<Maybe>);
@@ -88,8 +90,10 @@ TEST_CASE("a delta is T for a scalar and a nullable, and a value of its own othe
 TEST_CASE("a trace of a nullable has published nulls apart from no publication (TST-5, TST-16)") {
     // core's case a_null_publication_has_a_tuple_in_the_recording:
     // `[_, null, 7, _, null]`.
-    const Recording<Maybe> recorded{start,
-                                    {{start + 1us, Maybe{}}, {start + 2us, 7}, {start + 4us, Maybe{}}}};
+    // Each publication's delta, a published null's among them.
+    using MaybeDelta = hglrt::nullable_delta<i64>;
+    const Recording<Maybe> recorded{
+        start, {{start + 1us, MaybeDelta{}}, {start + 2us, 7}, {start + 4us, MaybeDelta{}}}};
     const Dense<Maybe> written{std::nullopt, Maybe{}, Maybe{7}, std::nullopt, Maybe{}};
     CHECK(hglrt::testing::same(recorded, written));
     CHECK(hglrt::testing::same(written, Timed<Maybe>{{{1us, Maybe{}}, {2us, 7}, {4us, Maybe{}}}}));

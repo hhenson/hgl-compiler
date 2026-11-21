@@ -696,8 +696,8 @@ impl Emitter<'_> {
         ] {
             text.push_str(&format!(
                 "template <>\nstruct {ns}::type_named<{of}>\n{{\n\
-                 {INDENT}static constexpr std::string_view name = {};\n\
-                 {INDENT}static constexpr std::array<std::string_view, {}> fields{{{}}};\n\
+                 {INDENT}static constexpr ::std::string_view name = {};\n\
+                 {INDENT}static constexpr ::std::array<::std::string_view, {}> fields{{{}}};\n\
                  {INDENT}static constexpr bool delta = {is_delta};\n}};\n",
                 names::string(&named),
                 field_names.len(),

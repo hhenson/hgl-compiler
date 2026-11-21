@@ -267,7 +267,7 @@ impl Family for Lists {
             ))
         } else {
             Some(format!(
-                "{library}::Cell<{written}>{{std::in_place_index<0>, {cell}}}"
+                "{library}::Cell<{written}>{{::std::in_place_index<0>, {cell}}}"
             ))
         }
     }

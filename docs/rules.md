@@ -108,7 +108,7 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A set and a dictionary, in no order, equal whatever the order; their literals; a strict read that fails with `value.missing_key`, an assignment that adds a key, core's `get`; `for` over each | TYPE-14, EXPR-3, EXPR-9, ERR-6, CTRL-12, OPS-2 |
 | The delta of a nullable, a list, a set, a dictionary and a struct, built by its properties and read through them; a tuple's as a tuple | TYPE-16 |
 | An enum's member made from its number or its name | TYPE-7 |
-| `timezone` and `zoned_time`, and their literals; a `T?` compared with a `T` | TYPE-2, TYPE-14, OPS-2 |
+| `timezone` and `zoned_time`, and their literals; a zone's literal checked against the run provider's catalogue, and a `zoned_datetime`'s offset against its zone; a `T?` compared with a `T` | TYPE-2, LEX-12, TYPE-14, OPS-2 |
 | A `var` place beside an argument that runs statements, taken where the call is made | FN-15, EXPR-2 |
 | A node of scalars: its inputs' activity and validity, handlers in source order, `state` and `cache`, `start` and `stop` | FN-2, TIME-3, TIME-4, TIME-5, TIME-6 |
 | `return value`, `out = value`, `invalidate(out)` in a handler | TIME-7, FN-7, END-4 |

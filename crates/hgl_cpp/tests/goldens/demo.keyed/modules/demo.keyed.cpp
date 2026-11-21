@@ -396,7 +396,7 @@ namespace w_
 // price_of_a(book: dict<str, i64>) -> i64 (`const fn`), module demo.keyed, line 109
 ::hgraph::Int price_of_a([[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book)
 {
-    [[maybe_unused]] const std::optional<::hgraph::Int> found = ::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"A"});
+    [[maybe_unused]] const ::std::optional<::hgraph::Int> found = ::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"A"});
     if ((!found.has_value()))
     {
         return ::hglrt::neg__i64(1);
@@ -586,7 +586,7 @@ struct impl_
                 out_.set(::hgraph::Str{"ok"});
                 return;
             }
-            [[maybe_unused]] const std::optional<::hgraph::Str> code = ((read).error()).code;
+            [[maybe_unused]] const ::std::optional<::hgraph::Str> code = ((read).error()).code;
             if ((!code.has_value()))
             {
                 out_.set(::hgraph::Str{"no code"});
@@ -650,7 +650,7 @@ void a_set_ticks_only_where_it_changes()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{0, 0, 4, 0}, start_));
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::keyed::m_::w_::member_wakes(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt, false, true};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, false, true};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
     ::hglrt::testing::statement();
@@ -659,7 +659,7 @@ void a_set_ticks_only_where_it_changes()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 1, 3, 2, 2}, start_));
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::keyed::m_::w_::member_wakes(wiring_, input_03_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt, std::nullopt, true, std::nullopt};
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, ::std::nullopt, true, ::std::nullopt};
         ::hglrt::testing::expect_same(left_04_, right_05_);
     }();
 }
@@ -678,7 +678,7 @@ void two_writes_of_a_set_are_one_change()
                 {
                     return;
                 }
-                std::optional<::hglrt::set<::hgraph::Int>> whole_;
+                ::std::optional<::hglrt::set<::hgraph::Int>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::keyed_value(result_));
@@ -686,7 +686,7 @@ void two_writes_of_a_set_are_one_change()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<::hglrt::set<::hgraph::Int>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::hglrt::set<::hgraph::Int>>(now_, ::std::move(whole_));
             }
         };
         const auto result_02_ = ::hgl::demo::keyed::m_::w_::member_changes(wiring_, input_00_);
@@ -725,7 +725,7 @@ void a_set_relayed_whole_publishes_its_change()
                 {
                     return;
                 }
-                std::optional<::hglrt::set<::hgraph::Int>> whole_;
+                ::std::optional<::hglrt::set<::hgraph::Int>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::keyed_value(result_));
@@ -733,14 +733,14 @@ void a_set_relayed_whole_publishes_its_change()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<::hglrt::set<::hgraph::Int>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::hglrt::set<::hgraph::Int>>(now_, ::std::move(whole_));
             }
         };
         const auto result_02_ = ::hgl::demo::keyed::m_::w_::relay_members(wiring_, input_00_);
         ::hgraph::wire<held_01_>(wiring_, result_02_);
         ::hgl::core::m_::w_::i_::record::of_1set_1i64_1_(wiring_, result_02_, ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_04_ = ::hglrt::testing::Dense<::hglrt::set<::hgraph::Int>>{::hglrt::set_delta<::hgraph::Int>{::hglrt::set<::hgraph::Int>{1, 2}, ::hglrt::set<::hgraph::Int>{}}, ::hglrt::set_delta<::hgraph::Int>{::hglrt::set<::hgraph::Int>{3}, ::hglrt::set<::hgraph::Int>{1}}, std::nullopt, ::hglrt::set_delta<::hgraph::Int>{::hglrt::set<::hgraph::Int>{}, ::hglrt::set<::hgraph::Int>{2, 3}}};
+        const auto right_04_ = ::hglrt::testing::Dense<::hglrt::set<::hgraph::Int>>{::hglrt::set_delta<::hgraph::Int>{::hglrt::set<::hgraph::Int>{1, 2}, ::hglrt::set<::hgraph::Int>{}}, ::hglrt::set_delta<::hgraph::Int>{::hglrt::set<::hgraph::Int>{3}, ::hglrt::set<::hgraph::Int>{1}}, ::std::nullopt, ::hglrt::set_delta<::hgraph::Int>{::hglrt::set<::hgraph::Int>{}, ::hglrt::set<::hgraph::Int>{2, 3}}};
         ::hglrt::testing::expect_same(left_03_, right_04_);
     }();
     ::hglrt::testing::statement();
@@ -755,7 +755,7 @@ void a_set_relayed_whole_publishes_its_change()
                 {
                     return;
                 }
-                std::optional<::hglrt::set<::hgraph::Int>> whole_;
+                ::std::optional<::hglrt::set<::hgraph::Int>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::keyed_value(result_));
@@ -763,7 +763,7 @@ void a_set_relayed_whole_publishes_its_change()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<::hglrt::set<::hgraph::Int>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::hglrt::set<::hgraph::Int>>(now_, ::std::move(whole_));
             }
         };
         const auto result_07_ = ::hgl::demo::keyed::m_::w_::relay_members(wiring_, input_05_);
@@ -789,7 +789,7 @@ void a_set_of_floats()
                 {
                     return;
                 }
-                std::optional<::hglrt::set<::hgraph::Float>> whole_;
+                ::std::optional<::hglrt::set<::hgraph::Float>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::keyed_value(result_));
@@ -797,7 +797,7 @@ void a_set_of_floats()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<::hglrt::set<::hgraph::Float>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::hglrt::set<::hgraph::Float>>(now_, ::std::move(whole_));
             }
         };
         const auto result_02_ = ::hgl::demo::keyed::m_::w_::relay_floats(wiring_, input_00_);
@@ -817,7 +817,7 @@ void a_dictionary_ticks_only_where_it_changes()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{0, 0, 4, 0}, start_));
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::keyed::m_::w_::book_wakes(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt, false, true};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, false, true};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
     ::hglrt::testing::statement();
@@ -826,7 +826,7 @@ void a_dictionary_ticks_only_where_it_changes()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 3, 2}, start_));
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::keyed::m_::w_::book_wakes(wiring_, input_03_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt, true};
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, true};
         ::hglrt::testing::expect_same(left_04_, right_05_);
     }();
     ::hglrt::testing::statement();
@@ -835,7 +835,7 @@ void a_dictionary_ticks_only_where_it_changes()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_06_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{5, 5, 6, 6}, start_));
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::keyed::m_::w_::book_wakes(wiring_, input_06_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt, true, true};
+        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, true, true};
         ::hglrt::testing::expect_same(left_07_, right_08_);
     }();
 }
@@ -848,7 +848,7 @@ void a_lifted_call_reads_the_dictionary_whole()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{0, 1, 4, 6}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::keyed::m_::w_::priced(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{::hglrt::neg__i64(1), 7, std::nullopt, 7};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{::hglrt::neg__i64(1), 7, ::std::nullopt, 7};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }
@@ -858,7 +858,7 @@ void a_dictionary_relayed_whole_publishes_each_entry()
     ::hglrt::testing::statement();
     [&] {
         const auto left_03_ = ::hglrt::testing::evaluate<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1dict_1str_1_1i64_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"bid"}, 10}, {::hgraph::Str{"ask"}, 12}})}, std::nullopt, ::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"bid"}, 11}})}}, start_));
+        const ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1dict_1str_1_1i64_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"bid"}, 10}, {::hgraph::Str{"ask"}, 12}})}, ::std::nullopt, ::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"bid"}, 11}})}}, start_));
         struct held_01_
         {
             static void eval(::hgraph::In<"result", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> result_, ::hgraph::DateTime now_)
@@ -867,7 +867,7 @@ void a_dictionary_relayed_whole_publishes_each_entry()
                 {
                     return;
                 }
-                std::optional<::hglrt::dict<::hgraph::Str, ::hgraph::Int>> whole_;
+                ::std::optional<::hglrt::dict<::hgraph::Str, ::hgraph::Int>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::keyed_value(result_));
@@ -875,14 +875,14 @@ void a_dictionary_relayed_whole_publishes_each_entry()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(now_, ::std::move(whole_));
             }
         };
         const auto result_02_ = ::hgl::demo::keyed::m_::w_::relay_book(wiring_, input_00_);
         ::hgraph::wire<held_01_>(wiring_, result_02_);
         ::hgl::core::m_::w_::i_::record::of_1dict_1str_1_1i64_1_(wiring_, result_02_, ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_04_ = ::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"bid"}, 10}, {::hgraph::Str{"ask"}, 12}})}, std::nullopt, ::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"bid"}, 11}})}};
+        const auto right_04_ = ::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"bid"}, 10}, {::hgraph::Str{"ask"}, 12}})}, ::std::nullopt, ::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"bid"}, 11}})}};
         ::hglrt::testing::expect_same(left_03_, right_04_);
     }();
     ::hglrt::testing::statement();
@@ -897,7 +897,7 @@ void a_dictionary_relayed_whole_publishes_each_entry()
                 {
                     return;
                 }
-                std::optional<::hglrt::dict<::hgraph::Str, ::hgraph::Int>> whole_;
+                ::std::optional<::hglrt::dict<::hgraph::Str, ::hgraph::Int>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::keyed_value(result_));
@@ -905,7 +905,7 @@ void a_dictionary_relayed_whole_publishes_each_entry()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(now_, ::std::move(whole_));
             }
         };
         const auto result_07_ = ::hgl::demo::keyed::m_::w_::book_changes(wiring_, input_05_);
@@ -931,7 +931,7 @@ void a_dictionary_of_sets()
                 {
                     return;
                 }
-                std::optional<::hglrt::dict<::hgraph::Str, ::hglrt::set<::hgraph::Int>>> whole_;
+                ::std::optional<::hglrt::dict<::hgraph::Str, ::hglrt::set<::hgraph::Int>>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::keyed_value(result_));
@@ -939,7 +939,7 @@ void a_dictionary_of_sets()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<::hglrt::dict<::hgraph::Str, ::hglrt::set<::hgraph::Int>>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::hglrt::dict<::hgraph::Str, ::hglrt::set<::hgraph::Int>>>(now_, ::std::move(whole_));
             }
         };
         const auto result_02_ = ::hgl::demo::keyed::m_::w_::relay_groups(wiring_, input_00_);
@@ -959,13 +959,13 @@ void an_entry_of_a_dictionary_is_read_checked()
         const ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1dict_1str_1_1i64_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"A"}, 1}})}, ::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"B"}, 2}})}, ::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"A"}, 3}, {::hgraph::Str{"B"}, 2}})}}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::keyed::m_::w_::entry_a(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 3};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, 3};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
     ::hglrt::testing::statement();
     [&] {
         const auto left_09_ = [&]() {
-        const auto trace_03_ = ::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"A"}, 1}, {::hgraph::Str{"B"}, 2}})}, std::nullopt};
+        const auto trace_03_ = ::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"A"}, 1}, {::hgraph::Str{"B"}, 2}})}, ::std::nullopt};
         const auto trace_05_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"B"}, ::hgraph::Str{"A"}};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> input_04_ = ::hgl::core::m_::w_::i_::replay::of_1dict_1str_1_1i64_1_(wiring_, ::hglrt::testing::replay_items(trace_03_, start_));
@@ -991,7 +991,7 @@ void an_entry_of_a_dictionary_is_read_checked()
     ::hglrt::testing::statement();
     [&] {
         const auto left_023_ = [&]() {
-        const auto trace_017_ = ::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"A"}, 1}})}, std::nullopt};
+        const auto trace_017_ = ::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"A"}, 1}})}, ::std::nullopt};
         const auto trace_019_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"A"}, ::hgraph::Str{"C"}};
         return ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> input_018_ = ::hgl::core::m_::w_::i_::replay::of_1dict_1str_1_1i64_1_(wiring_, ::hglrt::testing::replay_items(trace_017_, start_));
@@ -1008,7 +1008,7 @@ void an_entry_of_a_dictionary_is_read_checked()
         const ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> input_025_ = ::hgl::core::m_::w_::i_::replay::of_1dict_1str_1_1i64_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"A"}, 1}})}, ::hglrt::dict_delta<::hgraph::Str, ::hgraph::Int>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"B"}, 3}}), ::hglrt::set<::hgraph::Str>{}}, ::hglrt::dict_delta<::hgraph::Str, ::hgraph::Int>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"A"}, 4}}), ::hglrt::set<::hgraph::Str>{}}}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::keyed::m_::w_::entry_delta(wiring_, input_025_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_027_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 4};
+        const auto right_027_ = ::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, 4};
         ::hglrt::testing::expect_same(left_026_, right_027_);
     }();
 }

@@ -52,8 +52,8 @@ struct impl_
     struct state_type_
     {
         ::hglrt::Source<::hgraph::Int> source_{};
-        std::optional<body_type_> frame_{};
-        std::optional<body_type_::iterator> at_{};
+        ::std::optional<body_type_> frame_{};
+        ::std::optional<body_type_::iterator> at_{};
     };
 
     static void start(::hgraph::Scalar<"values", ::hglrt::list<::hgraph::Int>> values, ::hgraph::Scalar<"every", ::hgraph::TimeDelta> every, ::hgraph::State<state_type_> state_)
@@ -70,7 +70,7 @@ struct impl_
         state_type_& kept_ = state_.modify();
         ::hglrt::resume(
             kept_.source_, now_, scheduler_,
-            [&kept_]() -> std::optional<yielded_type_> {
+            [&kept_]() -> ::std::optional<yielded_type_> {
                 if (!kept_.at_.has_value())
                 {
                     kept_.at_.emplace(kept_.frame_->begin());
@@ -79,11 +79,11 @@ struct impl_
                 {
                     ++*kept_.at_;
                 }
-                if (*kept_.at_ == std::default_sentinel)
+                if (*kept_.at_ == ::std::default_sentinel)
                 {
-                    return std::nullopt;
+                    return ::std::nullopt;
                 }
-                return std::optional<yielded_type_>{**kept_.at_};
+                return ::std::optional<yielded_type_>{**kept_.at_};
             },
             [&out_](::hgraph::Int value_) { out_.set(value_); });
     }

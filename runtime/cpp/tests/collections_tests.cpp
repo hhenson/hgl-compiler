@@ -184,6 +184,25 @@ TEST_CASE("get gives the value of a key, or null (ERR-6)") {
     CHECK(hglrt::get_dict_K__T__K(nullable, "a") == std::nullopt);
     CHECK(hglrt::get_dict_K__T__K(nullable, "b") == std::optional<i64>{2});
     CHECK(hglrt::get_dict_K__T__K(nullable, "c") == std::nullopt);
+    // TYPE-16: a nullable's delta is no nullable. A published null held is
+    // a value, which a missing key is not.
+    using Published = hglrt::delta_t<std::optional<i64>>;
+    const hglrt::dict<str, Published> published{{"a", Published{}}, {"b", 2}};
+    static_assert(
+        std::is_same_v<decltype(hglrt::get_dict_K__T__K(published, "a")), std::optional<Published>>);
+    CHECK(hglrt::get_dict_K__T__K(published, "a").has_value());
+    CHECK(hglrt::get_dict_K__T__K(published, "a") == Published{});
+    CHECK(hglrt::get_dict_K__T__K(published, "b") == Published{2});
+    CHECK_FALSE(hglrt::get_dict_K__T__K(published, "c").has_value());
+    // A `delta<i64?>?` compared with a `delta<i64?>`: as the value it is.
+    CHECK_FALSE(std::optional<Published>{} == Published{});
+    CHECK(std::optional<Published>{Published{}} == Published{});
+    // A `delta<i64?>` as a key: a published null and 0 are two.
+    const hglrt::set<Published> keys{Published{}, Published{0}, Published{}};
+    CHECK(keys.size() == 2);
+    CHECK(hglrt::type_name<Published>() == "delta<i64?>");
+    CHECK(hglrt::type_name<hglrt::nullable_delta<hglrt::list<i64>, hglrt::list<i64>>>() ==
+          "delta<atomic<list<i64>>?>");
 }
 
 TEST_CASE("a struct is a key through its fields") {

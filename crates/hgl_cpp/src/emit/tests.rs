@@ -364,10 +364,10 @@ impl Emitter<'_> {
                         "{indent}struct {holder}\n{indent}{{\n\
                          {inner}static void eval(::hgraph::In<\"result\", {schema}> result_, ::hgraph::DateTime now_)\n{inner}{{\n\
                          {body}if (!::{runtime}::fn_modified(result_))\n{body}{{\n{body}{INDENT}return;\n{body}}}\n\
-                         {body}std::optional<{written}> whole_;\n\
+                         {body}::std::optional<{written}> whole_;\n\
                          {body}try\n{body}{{\n{body}{INDENT}whole_.emplace({read});\n{body}}}\n\
                          {body}catch (const ::{runtime}::Failure&)\n{body}{{\n{body}}}\n\
-                         {body}{library}::hold<{written}>(now_, std::move(whole_));\n\
+                         {body}{library}::hold<{written}>(now_, ::std::move(whole_));\n\
                          {inner}}}\n{indent}}};\n\
                          {indent}const auto {port} = {target};\n\
                          {indent}::hgraph::wire<{holder}>({WIRING}, {port});\n",
@@ -439,7 +439,7 @@ impl Emitter<'_> {
             for Cell { value: cell, .. } in cells {
                 written_cells.push(match cell {
                     Some(cell) => self.trace_cell(scope, ty, cell),
-                    None => "std::nullopt".to_string(),
+                    None => "::std::nullopt".to_string(),
                 });
             }
             return format!(

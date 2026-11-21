@@ -428,7 +428,8 @@ struct publisher<hgraph::TS<T>> {
     }
 };
 
-/// A nullable scalar publishes whole: a value, or a null (TYPE-15).
+/// A nullable scalar publishes whole: a value, or a null (TYPE-15); its
+/// delta (`nullable_delta`) holds the same.
 template <class T>
 struct publisher<hgraph::TS<hgraph::Optional<T>>> {
     template <class O>
@@ -440,8 +441,8 @@ struct publisher<hgraph::TS<hgraph::Optional<T>>> {
         }
     }
     template <class O>
-    static void change(const O& out, const std::optional<T>& value, std::source_location where) {
-        whole(out, value, where);
+    static void change(const O& out, const delta_t<std::optional<T>>& delta, std::source_location where) {
+        whole(out, delta.value, where);
     }
 };
 

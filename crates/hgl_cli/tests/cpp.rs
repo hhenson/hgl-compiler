@@ -1000,7 +1000,7 @@ fn composite_values_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 14 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 16 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1048,6 +1048,228 @@ fn a_struct_that_holds_another_modules_is_built() {
     );
     assert!(
         stdout.contains("passed   executable  demo.outer::each_names_the_other"),
+        "{stdout}"
+    );
+}
+
+/// UNIT-12: "A member name is not a binding and may match any name", and
+/// GEN-1's parameters are named as any declaration is. A module whose
+/// path has a part named `std`, a struct with a field of its own name,
+/// and generic parameters named as what a struct's C++ declares (a
+/// hash's argument, the list of its fields, a comparison's operands)
+/// and as a field: each is built, and its tests pass.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn names_the_generated_cpp_declares_are_built() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("declared-names");
+    write(
+        &root,
+        "src/demo.named.hgl",
+        concat!(
+            "module demo.named\n",
+            "struct value {\n",
+            "    value: i64\n",
+            "}\n",
+            "test a_field_named_as_its_struct {\n",
+            "    assert value(value: 1).value == 1\n",
+            "    assert delta<value>(value: 2).value == 2\n",
+            "}\n",
+        ),
+    );
+    write(
+        &root,
+        "src/demo.std.hgl",
+        concat!(
+            "module demo.std\n",
+            "struct Point {\n",
+            "    x: f64\n",
+            "    note: str? = null\n",
+            "}\n",
+            "struct Limited<const value: i64> {\n",
+            "    n: i64\n",
+            "}\n",
+            "struct Group<const members: i64> {\n",
+            "    n: i64\n",
+            "}\n",
+            "abstract struct Compared<const lhs: i64> {\n",
+            "    n: i64\n",
+            "}\n",
+            "struct One : Compared<1> {}\n",
+            "abstract struct Capped<const value: i64> {\n",
+            "    n: i64\n",
+            "}\n",
+            "struct Ten : Capped<10> {}\n",
+            "struct Counted<const count: i64> {\n",
+            "    count: i64\n",
+            "}\n",
+            "struct Carton<item> {\n",
+            "    item: item\n",
+            "}\n",
+            "const fn read(capped: Capped<10>) -> i64 => capped.n\n",
+            "const fn same(a: Compared<1>, b: Compared<1>) -> bool => a == b\n",
+            "test each_is_built {\n",
+            "    assert Point(x: 1.0).note == null\n",
+            "    assert Limited<10>(n: 1).n == 1\n",
+            "    assert Group<3>(n: 1).n == 1\n",
+            "    assert same(One(n: 1), One(n: 1))\n",
+            "    assert read(Ten(n: 1)) == 1\n",
+            "    assert Counted<3>(count: 2).count == 2\n",
+            "    assert Carton<i64>(item: 2).item == 2\n",
+            "}\n",
+        ),
+    );
+    let source = argument(&root.join("src"));
+    let output = hgl_in(&["test", &source, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    for test in [
+        "demo.named::a_field_named_as_its_struct",
+        "demo.std::each_is_built",
+    ] {
+        assert!(
+            stdout.contains(&format!("passed   executable  {test}")),
+            "{stdout}"
+        );
+    }
+}
+
+/// TYPE-16: a nullable's delta is a type of its own, which holds what was
+/// published, a null among them. A temporal `i64?` read by its delta,
+/// published by one, and relayed, its trace's cells written as values and
+/// as deltas (TST-5), and a temporal `list<i64?>` relayed and read by its
+/// delta, a published null at a position among it: each runs, and its
+/// tests pass.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_nullables_delta_is_read_and_published() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nullable-deltas");
+    let file = write(
+        &root,
+        "src/demo.deltas.hgl",
+        concat!(
+            "module demo.deltas\n",
+            "fn relay(value: i64?) -> i64? {\n",
+            "    when { return value }\n",
+            "}\n",
+            "fn read(value: i64?) -> i64? {\n",
+            "    when { return delta_value(value) }\n",
+            "}\n",
+            "fn published(step: i64) -> i64? {\n",
+            "    when {\n",
+            "        if step == 0 { return delta<i64?>() }\n",
+            "        if step == 1 { return delta<i64?>(value: 7) }\n",
+            "        return null\n",
+            "    }\n",
+            "}\n",
+            "fn relay_list(values: list<i64?>) -> list<i64?> {\n",
+            "    when { return values }\n",
+            "}\n",
+            "fn read_list(values: list<i64?>) -> list<i64?> {\n",
+            "    when { return delta_value(values) }\n",
+            "}\n",
+            "test a_nullable_publishes_its_delta {\n",
+            "    assert eval(relay(value: [1, null, 2])) == [1, null, 2]\n",
+            "    assert eval(read(value: [1, null, 2])) == [1, null, 2]\n",
+            "    assert eval(published(step: [0, 1, 2])) == [null, 7, null]\n",
+            "    # A cell written as the delta it publishes, a published null among them.\n",
+            "    assert eval(relay(value: [delta<i64?>(), delta<i64?>(value: 3), 4])) ==\n",
+            "        [null, delta<i64?>(value: 3), delta<i64?>(value: 4)]\n",
+            "    assert eval(read(value: [delta<i64?>(), 5])) == [delta<i64?>(), 5]\n",
+            "}\n",
+            "test a_list_of_nullables_publishes_its_delta {\n",
+            "    assert eval(relay_list(values: [[1, null], [null, 2]])) == [[1, null], [null, 2]]\n",
+            "    assert eval(read_list(values: [[1, null], delta<list<i64?>>(updated: [0: delta<i64?>()])])) ==\n",
+            "        [[1, null], delta<list<i64?>>(updated: [0: delta<i64?>()])]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// LEX-12: "The selected run provider checks exact catalog membership and
+/// offset consistency." A zone the provider's catalogue does not have,
+/// of a `timezone`, a `zoned_time` and a `zoned_datetime`, and an offset
+/// that is not the zone's at the instant written, fail where the literal
+/// is evaluated, as the hgraph target's do; an offset that is the zone's
+/// does not.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_zone_literal_is_checked_by_the_run_provider() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("zones");
+    let file = write(
+        &root,
+        "src/demo.zones.hgl",
+        concat!(
+            "module demo.zones\n",
+            "test a_zone_not_in_the_catalogue {\n",
+            "    let zone = @[Nowhere/Atlantis]\n",
+            "    assert zone == zone\n",
+            "}\n",
+            "test a_time_in_a_zone_not_in_the_catalogue {\n",
+            "    let opening = @09:30[Nowhere/Atlantis]\n",
+            "    assert opening == opening\n",
+            "}\n",
+            "test an_instant_in_a_zone_not_in_the_catalogue {\n",
+            "    let at = @2026-09-03T09:30+01:00[Nowhere/Atlantis]\n",
+            "    assert at == at\n",
+            "}\n",
+            "test an_offset_the_zone_does_not_have {\n",
+            "    let at = @2026-09-03T08:30+00:00[Europe/London]\n",
+            "    assert at == at\n",
+            "}\n",
+            "test an_offset_the_zone_has {\n",
+            "    let at = @2026-09-03T09:30+01:00[Europe/London]\n",
+            "    assert at == @2026-09-03T09:30+01:00[Europe/London]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let absent = "the zone `Nowhere/Atlantis` is not in the run provider's zone catalogue";
+    for (test, line, message) in [
+        ("a_zone_not_in_the_catalogue", 3, absent),
+        ("a_time_in_a_zone_not_in_the_catalogue", 7, absent),
+        ("an_instant_in_a_zone_not_in_the_catalogue", 11, absent),
+        (
+            "an_offset_the_zone_does_not_have",
+            15,
+            "the offset of `2026-09-03T08:30:00` is not the offset of the zone `Europe/London` at that time",
+        ),
+    ] {
+        let row = format!("FAILED   executable  demo.zones::{test}\n    {file}:{line}:");
+        let at = stdout
+            .find(&row)
+            .unwrap_or_else(|| panic!("{row}\n{stdout}"));
+        let reason = stdout[at + row.len()..].lines().next().unwrap_or_default();
+        assert!(reason.contains(message), "{stdout}");
+    }
+    assert!(
+        stdout.contains("passed   executable  demo.zones::an_offset_the_zone_has"),
         "{stdout}"
     );
 }

@@ -212,7 +212,7 @@ impl Emitter<'_> {
                                     }
                                     written
                                 }
-                                LeftOut::Null => "std::nullopt".to_string(),
+                                LeftOut::Null => "::std::nullopt".to_string(),
                             };
                             // "one that is valid and not all valid binds no
                             // fallback, its default included, and the

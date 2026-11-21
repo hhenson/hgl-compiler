@@ -187,7 +187,7 @@ TEST_CASE("a dense trace's cells are publications a smallest step apart (TST-4, 
                                      Dense<hglrt::f64>{not_a_number}));
     // A published null is a cell, `_` is none.
     using Maybe = std::optional<i64>;
-    const Recording<Maybe> nulls{start, {{start, std::nullopt}, {start + 1us, 3}}};
+    const Recording<Maybe> nulls{start, {{start, hglrt::delta_t<Maybe>{}}, {start + 1us, 3}}};
     CHECK(hglrt::testing::same(nulls, Dense<Maybe>{Maybe{}, Maybe{3}}));
     CHECK_FALSE(hglrt::testing::same(nulls, Dense<Maybe>{std::nullopt, Maybe{3}}));
 }

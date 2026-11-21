@@ -96,10 +96,10 @@ const ::hgraph::TimeDelta& step();
 ::hglrt::list<::hgraph::Int> bumped(const ::hglrt::list<::hgraph::Int>& values, ::hgraph::Int at);
 
 // scaled(value: i64, factor: i64 = ..., offset: i64? = ...) -> i64 (`const fn`), module demo.values, line 66
-::hgraph::Int scaled(::hgraph::Int value, ::hgraph::Int factor, std::optional<::hgraph::Int> offset);
+::hgraph::Int scaled(::hgraph::Int value, ::hgraph::Int factor, ::std::optional<::hgraph::Int> offset);
 
 // swapped(pair: tuple<i64, str>) -> tuple<str, i64> (`const fn`), module demo.values, line 77
-std::tuple<::hgraph::Str, ::hgraph::Int> swapped(const std::tuple<::hgraph::Int, ::hgraph::Str>& pair);
+::std::tuple<::hgraph::Str, ::hgraph::Int> swapped(const ::std::tuple<::hgraph::Int, ::hgraph::Str>& pair);
 
 // checked(value: i64) -> result<i64, error> (`const fn`), module demo.values, line 80
 ::hglrt::result<::hgraph::Int> checked(::hgraph::Int value);
@@ -135,7 +135,7 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped(const std::tuple<::hgraph::Int,
 ::hglrt::list<::hglrt::list<::hgraph::Int>> indices_in_order();
 
 // present(a: i64?) -> bool (`const fn`), module demo.values, line 170
-::hgraph::Bool present(std::optional<::hgraph::Int> a);
+::hgraph::Bool present(::std::optional<::hgraph::Int> a);
 
 // never_null(a: i64) -> bool (`const fn`), module demo.values, line 177
 ::hgraph::Bool never_null(::hgraph::Int a);
@@ -147,16 +147,16 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped(const std::tuple<::hgraph::Int,
 ::hglrt::list<::hgraph::Int> index_first();
 
 // index_once() -> tuple<list<i64>, i64> (`const fn`), module demo.values, line 193
-std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once();
+::std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once();
 
 // held_text() -> str (`const fn`), module demo.values, line 205
 ::hgraph::Str held_text();
 
 // tuple_first() -> tuple<i64, i64> (`const fn`), module demo.values, line 216
-std::tuple<::hgraph::Int, ::hgraph::Int> tuple_first();
+::std::tuple<::hgraph::Int, ::hgraph::Int> tuple_first();
 
 // text_first() -> tuple<str, i64> (`const fn`), module demo.values, line 224
-std::tuple<::hgraph::Str, ::hgraph::Int> text_first();
+::std::tuple<::hgraph::Str, ::hgraph::Int> text_first();
 
 // from_a_made_row(one: i64) -> i64 (`const fn`), module demo.values, line 234
 ::hgraph::Int from_a_made_row(::hgraph::Int one);

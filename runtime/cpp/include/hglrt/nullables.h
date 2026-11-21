@@ -2,8 +2,9 @@
 // hgraph's `TS<Optional<T>>`, whose published null is a value that holds
 // nothing, valid and modified as any publication is. What the generated
 // code reads of one and how it publishes to one are here; its delta is
-// endpoints.h's (`endpoint_read<TS<Optional<T>>>`), the optional that a
-// nullable's `delta<T?>` is (TYPE-16).
+// endpoints.h's (`endpoint_read<TS<Optional<T>>>`), a nullable's
+// `delta<T?>`, `nullable_delta`, which holds the optional of what was
+// published (TYPE-16).
 #pragma once
 
 #include <hglrt/checked.h>
@@ -26,11 +27,12 @@ namespace hglrt {
 /// from an invalid temporal input or silence"). The read is checked when it
 /// runs: one of an endpoint that is not valid fails with `value.unset_read`.
 template <class E>
-endpoint_delta_t<E> nullable_value(const E& input, std::source_location where = std::source_location::current()) {
+std::optional<typename endpoint_delta_t<E>::payload_type>
+nullable_value(const E& input, std::source_location where = std::source_location::current()) {
     if (!input.valid()) {
         unset_read("the nullable read is not valid", where);
     }
-    return endpoint_read<schema_of<E>>::delta(input);
+    return endpoint_read<schema_of<E>>::delta(input).value;
 }
 
 /// The payload of the nullable endpoint `input` where a test against null
@@ -39,8 +41,8 @@ endpoint_delta_t<E> nullable_value(const E& input, std::source_location where = 
 /// nothing, which the analyser has ruled out, fails with no code.
 template <class E>
 auto nullable_payload(const E& input, std::source_location where = std::source_location::current()) ->
-    typename endpoint_delta_t<E>::value_type {
-    endpoint_delta_t<E> held = nullable_value(input, where);
+    typename endpoint_delta_t<E>::payload_type {
+    std::optional<typename endpoint_delta_t<E>::payload_type> held = nullable_value(input, where);
     if (!held.has_value()) {
         fail_uncoded("a null is read where a test proved a value", where);
     }
@@ -49,14 +51,20 @@ auto nullable_payload(const E& input, std::source_location where = std::source_l
 
 /// `return value` and `out = value` of a nullable result (TIME-7): "`return
 /// null` for an `i64?` result a null, as `return delta<i64?>()` does". The
-/// value, a T or the optional that is its delta, ticks the output: a held T
-/// as that T, and an optional that holds nothing as hgraph's published null.
-template <class E>
-void publish_nullable(const E& out, const endpoint_delta_t<E>& value) {
-    if (value.has_value()) {
-        out.set(*value);
+/// value, a T, the nullable or its delta (`nullable_delta`), ticks the
+/// output: a held T as that T, and one that holds nothing as hgraph's
+/// published null.
+template <class E, class V>
+void publish_nullable(const E& out, const V& value) {
+    if constexpr (detail::is_nullable_delta<V>::value) {
+        publish_nullable(out, value.value);
     } else {
-        out.set(hgraph::Null);
+        const std::optional<typename endpoint_delta_t<E>::payload_type> held(value);
+        if (held.has_value()) {
+            out.set(*held);
+        } else {
+            out.set(hgraph::Null);
+        }
     }
 }
 

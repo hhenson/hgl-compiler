@@ -6,9 +6,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string>
 
 namespace hglrt {
 
@@ -100,7 +102,69 @@ zoned_datetime in_zone(i64 instant, const zoned_datetime& like, std::source_loca
     }
 }
 
+/// The zone `name`, where the provider's catalogue has it (LEX-12), and
+/// otherwise a failure at `where`.
+hgraph::ZoneId catalogued(std::string_view name, std::source_location where) {
+    const hgraph::ZoneId zone{name};
+    if (!zones().contains(zone)) {
+        fail_uncoded("the zone `" + std::string{name} + "` is not in the run provider's zone catalogue",
+                     where);
+    }
+    return zone;
+}
+
+/// The local clock `micros`, counted from the epoch, as a date and a time
+/// with the seconds, and the microseconds where there are any: the text the
+/// hgraph target's failure gives the literal.
+std::string local_text(i64 micros) {
+    const std::chrono::sys_time<duration> at{duration{micros}};
+    const sys_days day = std::chrono::floor<std::chrono::days>(at);
+    const std::chrono::year_month_day civil{day};
+    const std::chrono::hh_mm_ss<duration> clock{at - day};
+    char text[40];
+    std::snprintf(text, sizeof text, "%04d-%02u-%02uT%02lld:%02lld:%02lld", static_cast<int>(civil.year()),
+                  static_cast<unsigned>(civil.month()), static_cast<unsigned>(civil.day()),
+                  static_cast<long long>(clock.hours().count()),
+                  static_cast<long long>(clock.minutes().count()),
+                  static_cast<long long>(clock.seconds().count()));
+    std::string written{text};
+    if (const auto fraction = clock.subseconds().count(); fraction != 0) {
+        std::snprintf(text, sizeof text, ".%06lld", static_cast<long long>(fraction));
+        written += text;
+    }
+    return written;
+}
+
 } // namespace
+
+// ---- Zones -------------------------------------------------------------------
+
+hgraph::ZoneId zone_literal(std::string_view name, std::source_location where) {
+    return catalogued(name, where);
+}
+
+hgraph::ZonedTime zoned_time_literal(time at, std::string_view name, std::source_location where) {
+    return hgraph::ZonedTime{at, catalogued(name, where)};
+}
+
+zoned_datetime zoned_datetime_literal(datetime at, std::int32_t offset_seconds, std::string_view name,
+                                      std::source_location where) {
+    const hgraph::ZoneId zone = catalogued(name, where);
+    // The zone's offset at the instant: none where its wall clock is past
+    // the years hgraph holds, which is then not the one written.
+    std::optional<std::int32_t> offset;
+    try {
+        offset = hgraph::at_zone(at, zone, zones()).offset_seconds();
+    } catch (const std::overflow_error&) {
+    }
+    if (offset != offset_seconds) {
+        fail_uncoded("the offset of `" +
+                         local_text(at.time_since_epoch().count() + i64{offset_seconds} * 1'000'000) +
+                         "` is not the offset of the zone `" + std::string{name} + "` at that time",
+                     where);
+    }
+    return zoned_datetime::from_resolved(at, zone, offset_seconds);
+}
 
 // ---- Durations -------------------------------------------------------------
 

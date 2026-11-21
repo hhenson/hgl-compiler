@@ -379,11 +379,13 @@ auto value_of(const E& view) {
         return endpoint_read<S>::value(view);
     } else if constexpr (nullable_schema<S>::value) {
         // TIME-1: "In the value it reads, an optional child (TIME-9) that is
-        // not valid is null".
-        return view.valid() ? endpoint_read<S>::delta(view) : endpoint_delta_t<E>{};
+        // not valid is null". Its delta (`nullable_delta`) holds the value
+        // it holds.
+        using Value = std::optional<typename endpoint_delta_t<E>::payload_type>;
+        return view.valid() ? Value{endpoint_read<S>::delta(view).value} : Value{};
     } else {
-        // A scalar, an enum and a nullable publish whole: the delta they
-        // read is the value they hold (endpoints.h).
+        // A scalar and an enum publish whole: the delta they read is the
+        // value they hold (endpoints.h).
         return endpoint_read<S>::delta(view);
     }
 }

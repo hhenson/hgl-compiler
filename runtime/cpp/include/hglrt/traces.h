@@ -7,7 +7,8 @@
 // (TIME-7) ... a T, published whole, or a `delta<T>`". Where a T publishes
 // whole, as a scalar and a nullable scalar do, "the two are one", and a
 // cell is a T (a nullable's `std::optional`, where a published null is an
-// optional that holds nothing). Where T's delta is a value of another type,
+// optional that holds nothing, and its delta the `nullable_delta` that
+// holds the same). Where T's delta is a value of another type,
 // a tuple's or a list's (values.h), a cell is either, `Cell<T>`: a
 // `delta_t<T>`, "compared with the delta its cycle published", or a
 // `Whole<T>`, compared "with the value the result holds once its cycle has
@@ -55,9 +56,24 @@ struct Whole {
     T value;
 };
 
-/// Whether a T publishes whole: its delta is a T.
+namespace detail {
+/// Whether a T publishes whole (`publishes_whole`).
 template <class T>
-inline constexpr bool publishes_whole = std::is_same_v<delta_t<T>, T>;
+constexpr bool published_whole() {
+    if constexpr (hglrt::detail::is_optional<T>::value) {
+        using P = typename T::value_type;
+        return std::is_same_v<delta_t<P>, P>;
+    } else {
+        return std::is_same_v<delta_t<T>, T>;
+    }
+}
+} // namespace detail
+
+/// Whether a T publishes whole: its delta is a T, or, of a nullable whose
+/// payload's delta is the payload, the `nullable_delta` that holds the
+/// same as the nullable.
+template <class T>
+inline constexpr bool publishes_whole = detail::published_whole<T>();
 
 /// A cell of a trace of a T: a T where a T publishes whole, and otherwise a
 /// delta of it or a whole value.
@@ -180,6 +196,11 @@ std::string text_of(const T& value) {
             text += ", size_modified: " + text_of(*value.size_modified);
         }
         return text + ")";
+    } else if constexpr (hglrt::detail::is_nullable_delta<T>::value) {
+        // TYPE-16: `delta<i64?>(value: 7)`, and `delta<i64?>()` a published
+        // null.
+        return type_name<T>() + "(" + (value.value.has_value() ? "value: " + text_of(*value.value) : "") +
+               ")";
     } else if constexpr (detail::is_whole<T>::value) {
         return text_of(value.value);
     } else if constexpr (detail::is_variant<T>::value) {
@@ -345,7 +366,7 @@ bool same_written(const Cell<T>& left, const Cell<T>& right) {
 template <class T>
 bool matches(const Cell<T>& cell, const Seen<T>& seen) {
     if constexpr (publishes_whole<T>) {
-        return eq__T_T(cell, *seen.published);
+        return eq__T_T(delta_t<T>(cell), *seen.published);
     } else {
         if (cell.index() == 0) {
             return eq__T_T(std::get<0>(cell), *seen.published);
@@ -376,7 +397,13 @@ std::string seen_text(const Seen<T>& seen) {
     if (seen.written != nullptr) {
         return text_of(*seen.written);
     }
-    std::string text = text_of(*seen.published);
+    std::string text;
+    if constexpr (hglrt::detail::is_nullable_delta<delta_t<T>>::value && publishes_whole<T>) {
+        // "the two are one": the delta is written as the value it holds.
+        text = text_of(seen.published->value);
+    } else {
+        text = text_of(*seen.published);
+    }
     if constexpr (!publishes_whole<T>) {
         if (seen.held != nullptr) {
             text += ", holding " + text_of(*seen.held);
@@ -480,20 +507,34 @@ std::size_t size_after(std::size_t size, const list_delta<L>& delta) {
 /// The delta that publishing `value` whole records, to a value that held
 /// `size` positions, where it is a list (TST-9: "a T whole, which replaces
 /// what the input held"; TST-16: "A T published whole is held as its delta
-/// too"): a tuple's, each position; a fixed list's, each position; an
-/// unsized list's, each position, the tail past them removed, and the new
-/// size where it moves (TYPE-16: "on a shrink names the tail positions it
-/// drops in `removed`"). Each part publishes whole.
+/// too"): a nullable's, what it holds; a tuple's, each position; a fixed
+/// list's, each position; an unsized list's, each position, the tail past
+/// them removed, and the new size where it moves (TYPE-16: "on a shrink
+/// names the tail positions it drops in `removed`"). Each part publishes
+/// whole.
 template <class T>
 delta_t<T> whole_delta(const T& value, std::size_t size) {
     if constexpr (requires { whole_publication<T>::delta(value); }) {
         return whole_publication<T>::delta(value);
+    } else if constexpr (hglrt::detail::is_optional<T>::value) {
+        // A nullable: a published null, or what it holds, as its payload
+        // published whole records it (`nullable_delta`).
+        if (!value.has_value()) {
+            return delta_t<T>{};
+        }
+        if constexpr (publishes_whole<typename T::value_type>) {
+            return delta_t<T>{*value};
+        } else {
+            return delta_t<T>{whole_delta(*value, 0)};
+        }
     } else if constexpr (hglrt::detail::is_tuple<T>::value) {
         return std::apply(
             [](const auto&... part) {
                 static_assert((publishes_whole<std::remove_cvref_t<decltype(part)>> && ...),
                               "hglrt: a whole tuple cell of parts that publish whole");
-                return delta_t<T>{part...};
+                // Each position published: a null one is a published null.
+                return delta_t<T>{std::optional<delta_t<std::remove_cvref_t<decltype(part)>>>{
+                    std::in_place, delta_t<std::remove_cvref_t<decltype(part)>>(part)}...};
             },
             value);
     } else {
@@ -525,7 +566,7 @@ class Publisher {
   public:
     delta_t<T> operator()(const Cell<T>& cell) {
         if constexpr (publishes_whole<T>) {
-            return cell;
+            return delta_t<T>(cell);
         } else {
             delta_t<T> delta =
                 cell.index() == 0 ? std::get<0>(cell) : whole_delta(std::get<1>(cell).value, size_);

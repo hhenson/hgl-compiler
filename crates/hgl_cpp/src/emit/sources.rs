@@ -185,8 +185,8 @@ impl Emitter<'_> {
              {INDENT}struct state_type_\n{INDENT}{{\n\
              {INDENT}{INDENT}::{library}::Source<{payload}> source_{{}};\n\
              {kept}\
-             {INDENT}{INDENT}std::optional<body_type_> frame_{{}};\n\
-             {INDENT}{INDENT}std::optional<body_type_::iterator> at_{{}};\n\
+             {INDENT}{INDENT}::std::optional<body_type_> frame_{{}};\n\
+             {INDENT}{INDENT}::std::optional<body_type_::iterator> at_{{}};\n\
              {INDENT}}};\n\n\
              {INDENT}static void start({start})\n{INDENT}{{\n\
              {INDENT}{INDENT}state_.set(state_type_{{}});\n\
@@ -202,7 +202,7 @@ impl Emitter<'_> {
              {eval_before}\
              {INDENT}{INDENT}::{library}::resume(\n\
              {INDENT}{INDENT}{INDENT}kept_.source_, now_, scheduler_,\n\
-             {INDENT}{INDENT}{INDENT}[&kept_]() -> std::optional<yielded_type_> {{\n\
+             {INDENT}{INDENT}{INDENT}[&kept_]() -> ::std::optional<yielded_type_> {{\n\
              {INDENT}{INDENT}{INDENT}{INDENT}if (!kept_.at_.has_value())\n\
              {INDENT}{INDENT}{INDENT}{INDENT}{{\n\
              {INDENT}{INDENT}{INDENT}{INDENT}{INDENT}kept_.at_.emplace(kept_.frame_->begin());\n\
@@ -211,11 +211,11 @@ impl Emitter<'_> {
              {INDENT}{INDENT}{INDENT}{INDENT}{{\n\
              {INDENT}{INDENT}{INDENT}{INDENT}{INDENT}++*kept_.at_;\n\
              {INDENT}{INDENT}{INDENT}{INDENT}}}\n\
-             {INDENT}{INDENT}{INDENT}{INDENT}if (*kept_.at_ == std::default_sentinel)\n\
+             {INDENT}{INDENT}{INDENT}{INDENT}if (*kept_.at_ == ::std::default_sentinel)\n\
              {INDENT}{INDENT}{INDENT}{INDENT}{{\n\
-             {INDENT}{INDENT}{INDENT}{INDENT}{INDENT}return std::nullopt;\n\
+             {INDENT}{INDENT}{INDENT}{INDENT}{INDENT}return ::std::nullopt;\n\
              {INDENT}{INDENT}{INDENT}{INDENT}}}\n\
-             {INDENT}{INDENT}{INDENT}{INDENT}return std::optional<yielded_type_>{{**kept_.at_}};\n\
+             {INDENT}{INDENT}{INDENT}{INDENT}return ::std::optional<yielded_type_>{{**kept_.at_}};\n\
              {INDENT}{INDENT}{INDENT}}},\n\
              {INDENT}{INDENT}{INDENT}[&{OUT}]({payload} value_) {{ {published} }});\n\
              {INDENT}}}\n\n\

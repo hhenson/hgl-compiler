@@ -754,7 +754,7 @@ impl Emitter<'_> {
              {INDENT}{INDENT}static constexpr auto name = {label};\n\
              {INDENT}{INDENT}static void compose({})\n{INDENT}{INDENT}{{\n{statements}{INDENT}{INDENT}}}\n{INDENT}}};\n\n\
              {INDENT}static void wire_({})\n{INDENT}{{\n\
-             {deeper}const std::array<::hgraph::WiringPortRef, {}> broadcast_{{{}}};\n\
+             {deeper}const ::std::array<::hgraph::WiringPortRef, {}> broadcast_{{{}}};\n\
              {deeper}::hgraph::compiled::map_sink_({WIRING}, collection_, broadcast_, ::hgraph::compile_subgraph<child_>({}), {keyed});\n\
              {INDENT}}}\n}};\n",
             parameters.join(", "),
@@ -1419,7 +1419,7 @@ impl Emitter<'_> {
             parameters.push(format!("[[maybe_unused]] {taken} {scalar}"));
         }
         let deeper = INDENT.repeat(2);
-        let mut wiring = format!("{deeper}std::vector<::hgraph::SwitchBranchGraph> branches_;\n");
+        let mut wiring = format!("{deeper}::std::vector<::hgraph::SwitchBranchGraph> branches_;\n");
         for graph in &compiled {
             wiring.push_str(&format!("{deeper}branches_.push_back({graph});\n"));
         }
@@ -1428,11 +1428,11 @@ impl Emitter<'_> {
             .map(|(port, _)| format!("{port}.erased()"))
             .collect();
         wiring.push_str(&format!(
-            "{deeper}const std::array<::hgraph::WiringPortRef, {}> inputs_{{{}}};\n",
+            "{deeper}const ::std::array<::hgraph::WiringPortRef, {}> inputs_{{{}}};\n",
             erased.len(),
             erased.join(", ")
         ));
-        let mut arguments = format!("{WIRING}, key_.erased(), inputs_, std::move(branches_)");
+        let mut arguments = format!("{WIRING}, key_.erased(), inputs_, ::std::move(branches_)");
         if let Some(fallback) = &fallback {
             arguments.push_str(&format!(", {fallback}"));
         }
