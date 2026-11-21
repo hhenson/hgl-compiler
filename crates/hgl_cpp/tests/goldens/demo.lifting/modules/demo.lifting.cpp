@@ -675,7 +675,7 @@ namespace hgl::demo::lifting::m_::t_
 {
 
 // The call of `scaled` on line 140, lifted (FN-6).
-struct lifted_00_4004_
+struct lifted_00_4003_
 {
     static constexpr auto name = "demo.lifting:scaled";
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::In<"factor", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> input_014_, [[maybe_unused]] ::hgraph::In<"offset", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> input_015_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
@@ -688,7 +688,7 @@ struct lifted_00_4004_
 };
 
 // The call of `scaled` on line 141, lifted (FN-6).
-struct lifted_00_4082_
+struct lifted_00_4080_
 {
     static constexpr auto name = "demo.lifting:scaled";
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor, [[maybe_unused]] ::hgraph::Scalar<"offset", ::hgraph::Int> offset, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
@@ -724,7 +724,7 @@ void a_default_binds_until_its_input_publishes()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_08_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_011_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_010_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_013_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_012_, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_4004_>(wiring_, input_09_, input_011_, input_013_), ::hgraph::Str{::hglrt::testing::run_output});
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_4003_>(wiring_, input_09_, input_011_, input_013_), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
         const auto right_017_ = ::hglrt::testing::Dense<::hgraph::Int>{3, 7};
@@ -734,7 +734,7 @@ void a_default_binds_until_its_input_publishes()
     [&] {
         const auto left_019_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_018_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_4082_>(wiring_, input_018_, static_cast<::hgraph::Int>(2), static_cast<::hgraph::Int>(0)), ::hgraph::Str{::hglrt::testing::run_output});
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_4080_>(wiring_, input_018_, static_cast<::hgraph::Int>(2), static_cast<::hgraph::Int>(0)), ::hgraph::Str{::hglrt::testing::run_output});
     });
         const auto right_020_ = ::hglrt::testing::Dense<::hgraph::Int>{2, 4};
         ::hglrt::testing::expect_same(left_019_, right_020_);
@@ -742,7 +742,7 @@ void a_default_binds_until_its_input_publishes()
 }
 
 // The call of `multiplied` on line 146, lifted (FN-6).
-struct lifted_00_4200_
+struct lifted_00_4197_
 {
     static constexpr auto name = "demo.lifting:multiplied";
     static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Scalar<"factor", ::hgraph::Int> factor, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
@@ -766,7 +766,7 @@ void an_evals_configuration_is_evaluated_once()
 }();
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_4200_>(wiring_, input_01_, static_cast<::hgraph::Int>(argument_02_)), ::hgraph::Str{::hglrt::testing::run_output});
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgraph::wire<lifted_00_4197_>(wiring_, input_01_, static_cast<::hgraph::Int>(argument_02_)), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
         const auto right_04_ = ::hglrt::testing::Dense<::hgraph::Int>{3, 6};

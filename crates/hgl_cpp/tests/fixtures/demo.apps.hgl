@@ -45,5 +45,5 @@ export fn quiet(const values: list<i64>) {
 }
 
 test the_store_is_set_where_the_graph_is_built {
-    assert eval(seeded(limit: 2, values: [1, 2, 3])) == [2s: 1, 4s: 2]
+    assert eval seeded(limit: 2, values: [1, 2, 3]) == [2s: 1, 4s: 2]
 }

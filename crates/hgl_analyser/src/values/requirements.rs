@@ -1575,9 +1575,6 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
         }
         if let Some(run) = &module.run_body {
             made_by(&run.call, &mut given);
-            if let Some(config) = &run.config {
-                made_by(config, &mut given);
-            }
         }
         for constant in module.constants.iter().flatten() {
             made_by(constant, &mut given);

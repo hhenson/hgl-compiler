@@ -26,7 +26,7 @@ fn constructed_context(value: i64) -> bool {
 
 # ERR-4: "a constructed error has none".
 test a_constructed_error_has_no_context {
-    assert eval(constructed_context(value: [1])) == [true]
+    assert eval constructed_context(value: [1]) == [true]
 }
 
 fn described(failure: error) -> str {
@@ -60,8 +60,8 @@ fn captured_time(value: i64) -> datetime? {
 # and evaluation time": the node, the phase `"evaluate"` and the cycle the
 # failure was met in.
 test a_captured_error_has_its_node_phase_and_time {
-    assert eval(captured_phase(value: [1, -1, 2])) == [_, "evaluate", _]
-    assert eval(captured_time(value: [1, 2, -1])) == [_, _, earliest_start + 2us]
+    assert eval captured_phase(value: [1, -1, 2]) == [_, "evaluate", _]
+    assert eval captured_time(value: [1, 2, -1]) == [_, _, earliest_start + 2us]
 }
 
 fn raise_again(first: error, repeat: bool) -> error {
@@ -94,7 +94,7 @@ fn kept_context(value: i64, repeat: bool) -> bool {
 # ERR-4: "propagation/capture preserve them"; OPS-2: two contexts compare
 # by value.
 test a_propagated_error_keeps_an_equal_context {
-    assert eval(kept_context(value: [8, -1], repeat: [_, _, true])) == [_, _, true]
+    assert eval kept_context(value: [8, -1], repeat: [_, _, true]) == [_, _, true]
 }
 
 # ---- ERR-7: a capture of a graph given a wiring-time value ----
@@ -111,7 +111,7 @@ fn scaled_by_three(value: i64) -> i64 {
 # ERR-7: "capturing a graph covers failures that leave that subgraph",
 # here a graph that takes a `const` parameter.
 test a_captured_graph_given_a_constant_runs_on {
-    assert eval(scaled_by_three(value: [1, -1, 2])) == [3, _, 6]
+    assert eval scaled_by_three(value: [1, -1, 2]) == [3, _, 6]
 }
 
 fn offset(value: i64, const by: i64, const plus: i64 = 10) -> i64 {
@@ -127,7 +127,7 @@ fn offsets(value: i64, const by: i64) -> i64 {
 # `const` parameter of the enclosing graph, a connection that is a call,
 # and a default left out.
 test a_captured_graph_takes_named_constants_and_defaults {
-    assert eval(offsets(value: [1, -1, 2], by: 2)) == [12, _, 14]
+    assert eval offsets(value: [1, -1, 2], by: 2) == [12, _, 14]
 }
 
 fn both(value: i64) -> i64 {
@@ -138,7 +138,7 @@ fn both(value: i64) -> i64 {
 
 # Each capture binds its own value.
 test two_captures_bind_their_own_constants {
-    assert eval(both(value: [1, -1, 2])) == [7, _, 14]
+    assert eval both(value: [1, -1, 2]) == [7, _, 14]
 }
 
 fn is_negative(failure: error) -> bool {
@@ -151,7 +151,7 @@ fn scaled_failures(value: i64) -> bool {
 }
 
 test a_captured_graph_given_a_constant_gives_its_errors {
-    assert eval(scaled_failures(value: [1, -1, 2, -3])) == [_, true, _, true]
+    assert eval scaled_failures(value: [1, -1, 2, -3]) == [_, true, _, true]
 }
 
 fn dropped(value: i64) { when { } }
@@ -167,7 +167,7 @@ fn sink_failures(value: i64) -> bool {
 
 # ERR-7: "outputless calls expose only `.error`".
 test an_outputless_graph_given_a_constant_gives_its_errors {
-    assert eval(sink_failures(value: [1, -1, 2])) == [_, true, _]
+    assert eval sink_failures(value: [1, -1, 2]) == [_, true, _]
 }
 
 # ---- ERR-7: a capture of a lifted value function ----
@@ -195,8 +195,8 @@ fn hundredth_failures(value: i64) -> str {
 # FN-6: a value function given a connection is lifted, and ERR-7 captures
 # its node: a zero divisor fails one evaluation, which the capture ends.
 test a_captured_lifted_function_runs_on {
-    assert eval(hundredths(value: [4, 0, 5])) == [25, _, 20]
-    assert eval(hundredth_failures(value: [4, 0, 5, 0])) ==
+    assert eval hundredths(value: [4, 0, 5]) == [25, _, 20]
+    assert eval hundredth_failures(value: [4, 0, 5, 0]) ==
         [_, "numeric.division_by_zero", _, "numeric.division_by_zero"]
 }
 
@@ -242,15 +242,15 @@ fn nested_start(value: i64, flag: bool) -> i64 {
 # starts, or stops, fails, and the run fails with it, through every
 # capture around it.
 test a_triggered_start_or_stop_failure_escapes {
-    assert eval(captured_start(value: [1, 2], flag: [false, false])) == [1, 2]
+    assert eval captured_start(value: [1, 2], flag: [false, false]) == [1, 2]
     assert raises("numeric.division_by_zero") {
-        eval(captured_start(value: [1, 2, 3], flag: [false, true, false]))
+        eval captured_start(value: [1, 2, 3], flag: [false, true, false])
     }
     assert raises("numeric.division_by_zero") {
-        eval(captured_stop(value: [1, 2, 3], flag: [true, false, false]))
+        eval captured_stop(value: [1, 2, 3], flag: [true, false, false])
     }
     assert raises("numeric.division_by_zero") {
-        eval(nested_start(value: [1, 2, 3], flag: [false, true, false]))
+        eval nested_start(value: [1, 2, 3], flag: [false, true, false])
     }
 }
 
@@ -266,7 +266,7 @@ fn switched_phase(value: i64, flag: bool) -> str {
 
 # An evaluation failure inside a selected branch is captured as any is.
 test an_evaluation_failure_in_a_branch_is_captured {
-    assert eval(switched_phase(value: [1, -2, 3], flag: [true, _, _])) == [_, "evaluate", _]
+    assert eval switched_phase(value: [1, -2, 3], flag: [true, _, _]) == [_, "evaluate", _]
 }
 
 # ---- TYPE-13 and ERR-3: a temporal `result` ----
@@ -286,13 +286,13 @@ fn outcomes(value: i64) -> bool {
 # `result` is an output and an input, published whole. ERR-3: "In
 # composition a test of a connection is an ordinary lifted call (FN-6)".
 test a_result_is_an_input_and_an_output {
-    assert eval(outcome(value: [1, -1, -1])) == [
+    assert eval outcome(value: [1, -1, -1]) == [
         ok(1),
         err(error(message: "negative", code: "demo.negative")),
         err(error(message: "negative", code: "demo.negative")),
     ]
-    assert eval(failed(value: [ok(1), err(error(message: "x")), ok(2)])) == [false, true, false]
-    assert eval(outcomes(value: [1, -1, 2])) == [false, true, false]
+    assert eval failed(value: [ok(1), err(error(message: "x")), ok(2)]) == [false, true, false]
+    assert eval outcomes(value: [1, -1, 2]) == [false, true, false]
 }
 
 # ---- ERR-11: NaN, infinity and an unordered outcome are data ----
@@ -337,10 +337,10 @@ fn ordered(numerator: f64) -> CmpResult {
 # data, not execution errors or silence": each publishes, in a node and in
 # a lifted value function, and no capture sees a failure.
 test nonfinite_numbers_and_unordered_outcomes_are_data {
-    assert eval(nonfinite(numerator: [0.0, 1.0, -1.0, 2.0])) ==
+    assert eval nonfinite(numerator: [0.0, 1.0, -1.0, 2.0]) ==
         ["NaN", "+infinity", "-infinity", "+infinity"]
-    assert eval(lifted_nonfinite(numerator: [0.0, 1.0, -1.0])) == ["NaN", "+infinity", "-infinity"]
-    assert eval(ordered(numerator: [0.0, 1.0, -1.0])) ==
+    assert eval lifted_nonfinite(numerator: [0.0, 1.0, -1.0]) == ["NaN", "+infinity", "-infinity"]
+    assert eval ordered(numerator: [0.0, 1.0, -1.0]) ==
         [CmpResult.unordered, CmpResult.greater, CmpResult.less]
 }
 
@@ -394,11 +394,11 @@ fn divided_twins(value: i64) -> i64 {
 # capture, in a sibling graph, of a lifted function or given a
 # constant, still fails the run (CRUN-6).
 test a_capture_covers_its_own_call_alone {
-    assert raises("numeric.division_by_zero") { eval(captured_and_plain(value: [4, 0, 5])) }
-    assert raises("numeric.division_by_zero") { eval(plain_and_captured(value: [4, 0, 5])) }
-    assert raises("numeric.division_by_zero") { eval(side_by_side(value: [4, 0, 5])) }
-    assert raises("numeric.division_by_zero") { eval(lifted_twins(value: [4, 0, 5])) }
-    assert raises("numeric.division_by_zero") { eval(divided_twins(value: [4, 0, 5])) }
+    assert raises("numeric.division_by_zero") { eval captured_and_plain(value: [4, 0, 5]) }
+    assert raises("numeric.division_by_zero") { eval plain_and_captured(value: [4, 0, 5]) }
+    assert raises("numeric.division_by_zero") { eval side_by_side(value: [4, 0, 5]) }
+    assert raises("numeric.division_by_zero") { eval lifted_twins(value: [4, 0, 5]) }
+    assert raises("numeric.division_by_zero") { eval divided_twins(value: [4, 0, 5]) }
 }
 
 fn both_failed(one: error, other: error) -> bool {
@@ -414,7 +414,7 @@ fn two_boundaries(value: i64) -> bool {
 # ERR-8: each boundary is the nearest to its own call, and sees its
 # failure.
 test two_captures_of_one_call_each_see_its_failure {
-    assert eval(two_boundaries(value: [4, 0, 5, 0])) == [_, true, _, true]
+    assert eval two_boundaries(value: [4, 0, 5, 0]) == [_, true, _, true]
 }
 
 # ---- ERR-7: captures of nodes given wiring-time values ----
@@ -429,7 +429,7 @@ fn limited_failures(value: i64) -> str {
 }
 
 test an_outputless_node_given_a_constant_is_captured {
-    assert eval(limited_failures(value: [4, 0, 5])) == [_, "numeric.division_by_zero", _]
+    assert eval limited_failures(value: [4, 0, 5]) == [_, "numeric.division_by_zero", _]
 }
 
 fn beats(const every: duration, const times: i64) -> i64 {
@@ -450,7 +450,7 @@ fn captured_beats() -> i64 {
 
 # A node with no temporal input, given only wiring-time values (TIME-3).
 test a_node_with_no_input_given_constants_is_captured {
-    assert eval(captured_beats()) == [1s: 1, 2s: 2, 3s: 3]
+    assert eval captured_beats() == [1s: 1, 2s: 2, 3s: 3]
 }
 
 # ---- ERR-8: keyed children ----
@@ -498,17 +498,17 @@ fn captured_children(key: str, price: i64, tick: bool, const shown: str) -> i64 
 # outer/sibling work continues": the child of "b" fails, is captured, and
 # takes its key's next value; the child of "a" goes on.
 test a_failed_keyed_child_stays_live_for_its_key {
-    assert eval(captured_children(
+    assert eval captured_children(
         key:   ["a", _,    "b", _,    "b", _],
         price: [1,   _,    200, _,    3,   _],
         tick:  [_,   true, _,   true, _,   true],
-        shown: "b")) ==
+        shown: "b") ==
                [_,   0,    _,   0,    _,   3]
-    assert eval(captured_children(
+    assert eval captured_children(
         key:   ["a", _,    "b", _,    "a", _],
         price: [1,   _,    200, _,    4,   _],
         tick:  [_,   true, _,   true, _,   true],
-        shown: "a")) ==
+        shown: "a") ==
                [_,   1,    _,   1,    _,   4]
 }
 
@@ -538,11 +538,11 @@ fn inside_children(key: str, price: i64, tick: bool, const shown: str) -> i64 {
 # a keyed child is the child's; one of "b" counts nothing of "a", and a
 # fresh child of "a" has a capture of its own.
 test a_capture_in_a_keyed_child_is_that_childs {
-    assert eval(inside_children(
+    assert eval inside_children(
         key:   ["a", "b", _,    "a", _,    "a", "a", _],
         price: [5,   5,   _,    8,   _,    0,   5,   _],
         tick:  [_,   _,   true, _,   true, _,   _,   true],
-        shown: "a")) ==
+        shown: "a") ==
                [_,   _,   1,    _,   1,    _,   _,   2]
 }
 
@@ -569,6 +569,6 @@ fn tagged_given(value: i64) -> i64 {
 # A captured node keeps its configuration, given or left out, as a call
 # of it does.
 test a_captured_node_keeps_its_configuration {
-    assert eval(tagged_sums(value: [4, 0, 5])) == [28, _, 23]
-    assert eval(tagged_given(value: [4, 0, 5])) == [30, _, 25]
+    assert eval tagged_sums(value: [4, 0, 5]) == [28, _, 23]
+    assert eval tagged_given(value: [4, 0, 5]) == [30, _, 25]
 }

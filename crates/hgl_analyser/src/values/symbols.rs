@@ -401,7 +401,7 @@ impl<'a> Typer<'a> {
         // and `None` where it has not yet. A sequence or a tuple
         // written out beside an operand whose type is not known has
         // nothing to be read as, and that is the other operand's doing:
-        // nothing is reported of it (ERR-9). So `eval(...) == []` says
+        // nothing is reported of it (ERR-9). So `eval f(...) == []` says
         // nothing of its `[]` while `eval` is not read.
         let reread = |this: &mut Self, operand: &Given, other: Option<&Type>| {
             if takes_its_type(&operand.node) {

@@ -12,8 +12,8 @@ const fn total(values: list<i64>) -> i64 {
 }
 fn total_after(size: i64) -> i64 => total(resize(size))
 test shrinks {
-    assert eval(total_after(size: [3, 1])) == [60, 10]
+    assert eval total_after(size: [3, 1]) == [60, 10]
 }
 test negative {
-    assert eval(total_after(size: [3, -1, -5])) == [60, 30, 0]
+    assert eval total_after(size: [3, -1, -5]) == [60, 30, 0]
 }

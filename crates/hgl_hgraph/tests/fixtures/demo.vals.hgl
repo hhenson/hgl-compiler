@@ -36,8 +36,8 @@ test values_are_instances {
     assert paired(1) == "ab"
     assert hundred == 100
     assert twice([2]) == [22]
-    assert eval(joined(value: [1, 2])) == [11, 22]
-    assert eval(graphed(value: [1.5])) == [3.0]
+    assert eval joined(value: [1, 2]) == [11, 22]
+    assert eval graphed(value: [1.5]) == [3.0]
     # TST-8: a value function an eval names is lifted.
-    assert eval(twice(value: [3])) == [33]
+    assert eval twice(value: [3]) == [33]
 }

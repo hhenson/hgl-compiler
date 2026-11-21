@@ -29,7 +29,6 @@
 #undef flags
 #undef handlers_run_in_order
 #undef item
-#undef length
 #undef lhs
 #undef log_debug
 #undef logger
@@ -48,7 +47,6 @@
 #undef seen
 #undef sources_and_constants
 #undef stamped
-#undef start
 #undef temporal
 #undef the_clock_is_read
 #undef ticks
@@ -610,19 +608,15 @@ void a_run_is_bounded()
     ::hglrt::testing::statement();
     [[maybe_unused]] const ::hgraph::DateTime opening = ::hgraph::DateTime{std::chrono::microseconds{1767605400000000}};
     ::hglrt::testing::statement();
-    [[maybe_unused]] const auto seen = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3};
-        const auto bounds_02_ = ::hglrt::testing::Bounds{.start = opening, .length = ::hgraph::TimeDelta{2}};
-        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
-        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::temporal::m_::w_::add_one(wiring_, input_01_), ::hgraph::Str{::hglrt::testing::run_output});
-    }, bounds_02_);
-    }();
+    [[maybe_unused]] const auto seen = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::temporal::m_::w_::add_one(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    }, ::hglrt::testing::Bounds{.start = opening, .length = ::hgraph::TimeDelta{2}});
     ::hglrt::testing::statement();
     [&] {
-        const auto left_03_ = seen;
-        const auto right_04_ = ::hglrt::testing::Dense<::hgraph::Int>{2, 3};
-        ::hglrt::testing::expect_same(left_03_, right_04_);
+        const auto left_01_ = seen;
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{2, 3};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }
 

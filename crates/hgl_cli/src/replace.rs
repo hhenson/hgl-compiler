@@ -1,27 +1,39 @@
-//! What `hgl run` replaces in an application before it runs it.
+//! What `hgl run` replaces in an application before it runs it, and
+//! the configuration it supplies the application's run.
 //!
-//! RUN-2: "What starts an application may replace an argument of its
-//! entry or a field of its configuration with a constant checked
-//! against the type it replaces, and what the application writes is the
-//! default. It does not change the word of the run statement."
+//! RUN-2: "What starts an application supplies its run's configuration
+//! (RUN-6), and may replace an argument of its entry with a constant
+//! checked against the type it replaces: what the application writes is
+//! the default. It does not change the word of the run statement."
+//! RUN-6: "the application gives the fields that leaves out their
+//! defaults, `inject run_config{length: 3s}` ... An `end` or a `length`
+//! that what starts an application gives replaces a default of either."
 //!
-//! `--arg upto=5` replaces an argument of the entry and `--config
-//! length=10s` a field of the configuration. The value is HGL, one
-//! expression. It is put in the text of the application's run
-//! statement, in place of what the application wrote there or beside
-//! it, and the program is then read and checked again as if the
-//! application had written it. So a replacement is held to every rule
-//! an argument written in the application is: its type, that it is a
-//! constant, and the names it may use.
+//! `--arg upto=5` replaces an argument of the entry, and `--config
+//! length=10s` supplies a field of the configuration: `start`, `end` or
+//! `length`, core's `RunConfig`'s. The value is HGL, one expression. An
+//! argument is put in the text of the application's run statement, in
+//! place of what the application wrote there or beside it. A field is
+//! put in the braces of the application's `inject run_config`, in place
+//! of the default it gives the field, beside the others, or in braces
+//! of its own; an `end` takes out a default `length` and a `length` a
+//! default `end`. Where the application injects no `run_config`, one is
+//! written before its run statement. The program is then read and
+//! checked again as if the application had written it, so a value is
+//! held to every rule one written in the application is: its type, that
+//! it is value code, and the names it may use. `run_config` then reads
+//! the configuration as supplied.
 //!
 //! ```text
-//! eval(counted(upto: 3))                       the application
-//! --arg upto=5 --config length=10s             what starts it
-//! eval(counted(upto: (5)), RunConfig(length: (10s)))
+//! inject run_config{length: 3s}                the application
+//! eval counted(upto: 3)
+//! --arg upto=5 --config end=@2026-01-02T00:00:00Z
+//! inject run_config{end: (@2026-01-02T00:00:00Z)}
+//! eval counted(upto: (5))
 //! ```
 
 use hgl_analyser::hir::{Argument, ExprKind};
-use hgl_analyser::{Argument as GenericArgument, Detail, ParsedFile, Program};
+use hgl_analyser::{Argument as GenericArgument, Detail, ParsedFile, Program, RUN_CONFIG, Type};
 use hgl_diagnostics::Diagnostics;
 use hgl_lexer::{lex, literal};
 use hgl_parser::{Entry, Limits, SyntaxKind, SyntaxNode};
@@ -149,8 +161,8 @@ fn separator(root: &SyntaxNode, close: u32) -> Result<&'static str, String> {
     }
 }
 
-/// One list of arguments of the run statement that replacements are
-/// made in: the entry's call, or the configuration's `RunConfig(...)`.
+/// The list of arguments of the run statement that replacements are
+/// made in: the entry's call.
 struct Written<'a> {
     /// What takes the arguments, to say in a message: "the entry
     /// `counted`".
@@ -420,68 +432,24 @@ pub(crate) fn replaced(
     };
     entry.changes(root, arguments, &mut changes)?;
 
-    // The configuration: `RunConfig(length: 10s)`, or none written.
+    // RUN-6: the configuration what starts the application supplies,
+    // over the defaults of its `inject run_config{...}`.
     if !config.is_empty() {
-        let fields = |module: usize, declaration: usize| -> Result<Vec<&str>, String> {
-            match program.modules[module].details.get(declaration) {
-                Some(Detail::Struct(of)) => Ok(of
-                    .members
-                    .iter()
-                    .map(|member| member.name.as_str())
-                    .collect()),
-                _ => Err(unread()),
-            }
-        };
-        match run.config.as_ref() {
-            Some(written) => {
-                let ExprKind::Construct {
-                    module,
-                    declaration,
-                    arguments: given,
-                } = &written.kind
-                else {
-                    return Err(format!(
-                        "the configuration of `{path}` is not written as `RunConfig(...)`: \
-                         a field of one that is named or computed is not replaced yet"
-                    ));
-                };
-                let configuration = Written {
-                    owner: "the configuration `RunConfig`".to_string(),
-                    what: "field",
-                    names: fields(*module, *declaration)?,
-                    given,
-                    close: written.at.span.end.saturating_sub(1),
-                };
-                configuration.changes(root, config, &mut changes)?;
-            }
-            // "or `RunConfig()` where none is written" (RUN-1): one is
-            // written here, with the fields given.
-            None => {
-                let core = program.core().ok_or_else(unread)?;
-                let declaration = program.modules[core]
-                    .declarations
-                    .iter()
-                    .position(|declared| declared.name == "RunConfig")
-                    .ok_or_else(unread)?;
-                let close = run.at.span.end.saturating_sub(1);
-                let configuration = Written {
-                    owner: "the configuration `RunConfig`".to_string(),
-                    what: "field",
-                    names: fields(core, declaration)?,
-                    given: &[],
-                    close,
-                };
-                let mut given = Vec::new();
-                for Replacement { name, value } in config {
-                    configuration.place(name)?;
-                    given.push(format!("{name}: ({value})"));
-                }
-                changes.push((
-                    Span::empty(close),
-                    format!("{}RunConfig({})", separator(root, close)?, given.join(", ")),
+        let fields = run_config_fields(program).ok_or_else(unread)?;
+        for Replacement { name, .. } in config {
+            if !fields.contains(&name.as_str()) {
+                return Err(format!(
+                    "the configuration `RunConfig` has no field `{name}`: it has {}",
+                    fields.join(", ")
                 ));
             }
         }
+        let module = program
+            .modules
+            .iter()
+            .find(|module| module.path == path)
+            .ok_or_else(unread)?;
+        changes.push(configuration_change(module, run.at.span.start, config)?);
     }
 
     // The changes are made from the last to the first, so that each is
@@ -492,6 +460,126 @@ pub(crate) fn replaced(
         text.replace_range(span.range(), &with);
     }
     Ok((file, text))
+}
+
+/// The fields of core's `RunConfig`, the type of the capability
+/// `run_config` (RUN-6, core's CAP-7), in the order core declares them.
+/// `None` where the program has no core.
+fn run_config_fields(program: &Program) -> Option<Vec<&str>> {
+    let Type::Named {
+        module,
+        declaration,
+        ..
+    } = program.run_config_type()?
+    else {
+        return None;
+    };
+    match program.modules[module].details.get(declaration) {
+        Some(Detail::Native(native)) => Some(
+            native
+                .properties
+                .iter()
+                .map(|property| property.name.as_str())
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// The change of text that supplies `config` to the application
+/// `module`'s run, `before` being where its run statement starts.
+///
+/// RUN-6: "what starts the application supplies its run's
+/// configuration, and the application gives the fields that leaves out
+/// their defaults, `inject run_config{length: 3s}` ... An `end` or a
+/// `length` that what starts an application gives replaces a default of
+/// either." The braces of the application's `inject run_config` are
+/// written again: each default in the order written, a field supplied
+/// in place of its default or after them, and a default `end` or
+/// `length` left out where the other is supplied. Where the application
+/// injects no `run_config`, an `inject run_config{...}` of the fields
+/// supplied is written before the run statement.
+fn configuration_change(
+    module: &hgl_analyser::Module,
+    before: u32,
+    config: &[Replacement],
+) -> Result<(Span, String), String> {
+    // The application's `inject run_config`, and the braces written
+    // after the name, where it has them.
+    let injected = module.store.iter().find_map(|store| {
+        let inject = store
+            .syntax
+            .children()
+            .find(|node| node.kind() == SyntaxKind::InjectDecl)?;
+        let mut elements = inject.children_with_tokens();
+        elements.find(|element| {
+            element.as_token().is_some_and(|token| {
+                token.kind() == SyntaxKind::Ident && token.text() == RUN_CONFIG
+            })
+        })?;
+        let name_end = elements
+            .clone()
+            .next()
+            .map_or(u32::from(inject.text_range().end()), |next| {
+                u32::from(next.text_range().start())
+            });
+        let braces = elements
+            .find(|element| !element.kind().is_trivia())
+            .and_then(|element| element.into_node())
+            .filter(|node| node.kind() == SyntaxKind::OperatorConfig);
+        Some((name_end, braces))
+    });
+    // The defaults written, each its field and the text of its value.
+    let mut entries: Vec<(String, String)> = injected
+        .as_ref()
+        .and_then(|(_, braces)| braces.as_ref())
+        .map(|braces| {
+            braces
+                .children()
+                .filter(|entry| entry.kind() == SyntaxKind::ConfigArg)
+                .filter_map(|entry| {
+                    let name = entry
+                        .children_with_tokens()
+                        .filter_map(|element| element.into_token())
+                        .find(|token| !token.kind().is_trivia())?;
+                    let value = entry.children().next()?;
+                    Some((name.text().to_string(), value.text().to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for Replacement { name, value } in config {
+        let value = format!("({value})");
+        match entries.iter_mut().find(|(field, _)| field == name) {
+            Some(entry) => entry.1 = value,
+            None => entries.push((name.clone(), value)),
+        }
+    }
+    let supplied = |field: &str| config.iter().any(|replacement| replacement.name == field);
+    for (given, other) in [("end", "length"), ("length", "end")] {
+        if supplied(given) && !supplied(other) {
+            entries.retain(|(field, _)| field != other);
+        }
+    }
+    let written: Vec<String> = entries
+        .iter()
+        .map(|(field, value)| format!("{field}: {value}"))
+        .collect();
+    let braces = format!("{{{}}}", written.join(", "));
+    Ok(match injected {
+        Some((_, Some(written))) => {
+            let range = written.text_range();
+            (
+                Span::new(u32::from(range.start()), u32::from(range.end())),
+                braces,
+            )
+        }
+        Some((name_end, None)) => (Span::empty(name_end), braces),
+        None => (
+            Span::empty(before),
+            format!("inject {RUN_CONFIG}{braces}\n"),
+        ),
+    })
 }
 
 #[cfg(test)]
@@ -517,13 +605,14 @@ mod tests {
         "}\n",
     );
 
-    /// The run statement of an application that ends with the line
-    /// `statement`, once `arguments` and `config` are replaced in it:
-    /// its last line. Or the message that says why they are not.
-    fn rewritten(statement: &str, arguments: &[&str], config: &[&str]) -> Result<String, String> {
+    /// The statements of an application that ends with the lines
+    /// `statements`, once `arguments` and `config` are replaced in them:
+    /// each line after its `use` and its constant, joined by ` / `. Or
+    /// the message that says why they are not.
+    fn rewritten(statements: &str, arguments: &[&str], config: &[&str]) -> Result<String, String> {
         let application = format!(
             "application demo.app\nuse demo.ticks::{{counted, once, echo}}\n\
-             const standard: RunConfig = RunConfig(length: 1m)\n{statement}\n"
+             const opening: datetime = @2026-01-05T09:30:00Z\n{statements}\n"
         );
         let mut sources = SourceMap::new();
         let mut diagnostics = Diagnostics::new();
@@ -565,7 +654,7 @@ mod tests {
             inferred_generics(&files, &program, "demo.app").as_ref(),
             Limits::DEFAULT,
         )
-        .map(|(_, text)| text.lines().last().unwrap().to_string())
+        .map(|(_, text)| text.lines().skip(3).collect::<Vec<_>>().join(" / "))
     }
 
     /// RUN-2: "replace an argument of its entry": the value the
@@ -574,85 +663,121 @@ mod tests {
     #[test]
     fn an_argument_is_replaced_where_it_is_written_or_added() {
         assert_eq!(
-            rewritten("eval(counted(upto: 3))", &["upto=5"], &[]).unwrap(),
-            "eval(counted(upto: (5)))"
+            rewritten("eval counted(upto: 3)", &["upto=5"], &[]).unwrap(),
+            "eval counted(upto: (5))"
         );
         assert_eq!(
-            rewritten("eval(counted(3, 2s))", &["every=1s", "upto = 5"], &[]).unwrap(),
-            "eval(counted((5), (1s)))"
+            rewritten("eval counted(3, 2s)", &["every=1s", "upto = 5"], &[]).unwrap(),
+            "eval counted((5), (1s))"
         );
         assert_eq!(
-            rewritten("eval(counted(3))", &["every=2s"], &[]).unwrap(),
-            "eval(counted(3, every: (2s)))"
+            rewritten("eval counted(3)", &["every=2s"], &[]).unwrap(),
+            "eval counted(3, every: (2s))"
         );
         // After a trailing comma no comma is added.
         assert_eq!(
-            rewritten("eval(counted(3, ))", &["every=2s"], &[]).unwrap(),
-            "eval(counted(3, every: (2s)))"
+            rewritten("eval counted(3, )", &["every=2s"], &[]).unwrap(),
+            "eval counted(3, every: (2s))"
         );
         // A value may hold an `=`, and names the application may use.
         assert_eq!(
-            rewritten(
-                "eval(counted(3))",
-                &["upto=if 1 == 1 { 2 } else { 3 }"],
-                &[]
-            )
-            .unwrap(),
-            "eval(counted((if 1 == 1 { 2 } else { 3 })))"
+            rewritten("eval counted(3)", &["upto=if 1 == 1 { 2 } else { 3 }"], &[]).unwrap(),
+            "eval counted((if 1 == 1 { 2 } else { 3 }))"
         );
         // A member of the enum the place expects, and a tuple.
         assert_eq!(
-            rewritten("eval(counted(3))", &["upto=.most"], &[]).unwrap(),
-            "eval(counted((.most)))"
+            rewritten("eval counted(3)", &["upto=.most"], &[]).unwrap(),
+            "eval counted((.most))"
         );
         assert_eq!(
-            rewritten("eval(counted(3))", &["upto=(1, 2)"], &[]).unwrap(),
-            "eval(counted(((1, 2))))"
+            rewritten("eval counted(3)", &["upto=(1, 2)"], &[]).unwrap(),
+            "eval counted(((1, 2)))"
         );
         // With none given the text is as it was.
         assert_eq!(
-            rewritten("eval(counted(3))", &[], &[]).unwrap(),
-            "eval(counted(3))"
+            rewritten("eval counted(3)", &[], &[]).unwrap(),
+            "eval counted(3)"
         );
     }
 
-    /// RUN-2: "or a field of its configuration". RUN-1: the
-    /// configuration is "`RunConfig()` where none is written", so one
-    /// is written with the fields given.
+    /// RUN-6: "what starts the application supplies its run's
+    /// configuration, and the application gives the fields that leaves
+    /// out their defaults, `inject run_config{length: 3s}`". A field
+    /// supplied takes the place of its default or is written beside
+    /// them; where the application injects no `run_config`, one is
+    /// written before its run statement.
     #[test]
-    fn a_field_of_the_configuration_is_replaced_or_added() {
+    fn a_field_of_the_configuration_is_supplied_over_the_defaults() {
         assert_eq!(
-            rewritten("eval(counted(3))", &[], &["length=10s"]).unwrap(),
-            "eval(counted(3), RunConfig(length: (10s)))"
+            rewritten("eval counted(3)", &[], &["length=10s"]).unwrap(),
+            "inject run_config{length: (10s)} / eval counted(3)"
         );
         assert_eq!(
             rewritten(
-                "run(counted(3), RunConfig(length: 1m))",
+                "inject run_config{length: 1m}\nrun counted(3)",
                 &["upto=4"],
                 &["length=10s", "start=@2026-01-01T00:00:00Z"]
             )
             .unwrap(),
-            "run(counted((4)), RunConfig(length: (10s), start: (@2026-01-01T00:00:00Z)))"
+            "inject run_config{length: (10s), start: (@2026-01-01T00:00:00Z)} / run counted((4))"
+        );
+        // A default the application gives stands where nothing is
+        // supplied for its field, and may name what the application
+        // may.
+        assert_eq!(
+            rewritten(
+                "inject run_config{start: opening}\neval once()",
+                &[],
+                &["length=1s"]
+            )
+            .unwrap(),
+            "inject run_config{start: opening, length: (1s)} / eval once()"
+        );
+        // `inject run_config` with no braces is given them.
+        assert_eq!(
+            rewritten(
+                "inject run_config, global_state\nput(global_state, \"k\", 1)\neval once()",
+                &[],
+                &["start=opening"]
+            )
+            .unwrap(),
+            "inject run_config{start: (opening)}, global_state / put(global_state, \"k\", 1) / \
+             eval once()"
+        );
+    }
+
+    /// RUN-6: "An `end` or a `length` that what starts an application
+    /// gives replaces a default of either."
+    #[test]
+    fn an_end_or_a_length_supplied_replaces_a_default_of_either() {
+        assert_eq!(
+            rewritten(
+                "inject run_config{start: opening, length: 3s}\neval once()",
+                &[],
+                &["end=@2026-01-06T00:00:00Z"]
+            )
+            .unwrap(),
+            "inject run_config{start: opening, end: (@2026-01-06T00:00:00Z)} / eval once()"
         );
         assert_eq!(
             rewritten(
-                "eval(once(), RunConfig())",
+                "inject run_config{end: @2026-01-06T00:00:00Z}\neval once()",
                 &[],
-                &["end=@2026-01-01T00:00:00Z"]
+                &["length=2s"]
             )
             .unwrap(),
-            "eval(once(), RunConfig(end: (@2026-01-01T00:00:00Z)))"
+            "inject run_config{length: (2s)} / eval once()"
         );
-        // A configuration that is named: an argument is replaced, and a
-        // field of it is not yet.
+        // Both supplied are both the run's, which refuses them
+        // (`run.end_and_length`, core's CRUN-2).
         assert_eq!(
-            rewritten("eval(counted(3), standard)", &["upto=4"], &[]).unwrap(),
-            "eval(counted((4)), standard)"
-        );
-        assert_eq!(
-            rewritten("eval(counted(3), standard)", &[], &["length=10s"]).unwrap_err(),
-            "the configuration of `demo.app` is not written as `RunConfig(...)`: \
-             a field of one that is named or computed is not replaced yet"
+            rewritten(
+                "inject run_config{length: 3s}\neval once()",
+                &[],
+                &["end=@2026-01-06T00:00:00Z", "length=2s"]
+            )
+            .unwrap(),
+            "inject run_config{length: (2s), end: (@2026-01-06T00:00:00Z)} / eval once()"
         );
     }
 
@@ -663,16 +788,21 @@ mod tests {
     #[test]
     fn inferred_generic_arguments_are_written() {
         assert_eq!(
-            rewritten("eval(echo(value: 3))", &["value=4"], &[]).unwrap(),
-            "eval(echo<i64>(value: (4)))"
+            rewritten("eval echo(value: 3)", &["value=4"], &[]).unwrap(),
+            "eval echo<i64>(value: (4))"
         );
         assert_eq!(
-            rewritten("eval(echo(2.5), RunConfig(length: 1m))", &["value=3"], &[]).unwrap(),
-            "eval(echo<f64>((3)), RunConfig(length: 1m))"
+            rewritten(
+                "inject run_config{length: 1m}\neval echo(2.5)",
+                &["value=3"],
+                &[]
+            )
+            .unwrap(),
+            "inject run_config{length: 1m} / eval echo<f64>((3))"
         );
         assert_eq!(
-            rewritten("eval(echo<i64>(value: 3))", &["value=4"], &[]).unwrap(),
-            "eval(echo<i64>(value: (4)))"
+            rewritten("eval echo<i64>(value: 3)", &["value=4"], &[]).unwrap(),
+            "eval echo<i64>(value: (4))"
         );
     }
 
@@ -692,6 +822,11 @@ mod tests {
                 "the configuration `RunConfig` has no field `until`: it has start, end, length",
             ),
             (&["upto=1", "upto=2"], &[], "`upto` is replaced twice"),
+            (
+                &[],
+                &["length=1s", "length=2s"],
+                "`length` is replaced twice",
+            ),
             // Text that would add an argument of its own.
             (
                 &["upto=3, every: 2s"],
@@ -721,12 +856,12 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                rewritten("eval(counted(3))", arguments, config).unwrap_err(),
+                rewritten("eval counted(3)", arguments, config).unwrap_err(),
                 message
             );
         }
         assert_eq!(
-            rewritten("eval(once())", &["upto=3"], &[]).unwrap_err(),
+            rewritten("eval once()", &["upto=3"], &[]).unwrap_err(),
             "the entry `once` has no parameter `upto`: it has none"
         );
     }

@@ -89,5 +89,5 @@ test writes {
     assert moved.sizes == ["top": 1]
     assert book.levels == [1.0, 2.0]
     assert grid() == [[1, 2], [9, 4]]
-    assert eval(tallied(name: ["a", "b", "a"])) == [1, 1, 2]
+    assert eval tallied(name: ["a", "b", "a"]) == [1, 1, 2]
 }

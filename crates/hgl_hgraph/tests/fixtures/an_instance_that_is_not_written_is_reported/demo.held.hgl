@@ -4,8 +4,8 @@ fn held<T>(value: T) -> T {
 }
 fn again<T>(value: T) -> T => held(value)
 test whole {
-    assert eval(again(value: [1])) == [1]
+    assert eval again(value: [1]) == [1]
 }
 test listed {
-    let seen = eval(again(value: [[[1]]]))
+    let seen = eval again(value: [[[1]]])
 }

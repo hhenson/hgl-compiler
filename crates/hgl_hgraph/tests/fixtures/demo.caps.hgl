@@ -38,11 +38,11 @@ fn levelled(value: i64) -> bool {
 }
 
 test capabilities {
-    assert eval(counted(value: [7, _, 7])) == [1, _, 2]
-    assert eval(stamped(value: [1, _, 3])) == [earliest_start, _, earliest_start + 2us]
-    assert eval(next_step(value: [1])) == [1us]
+    assert eval counted(value: [7, _, 7]) == [1, _, 2]
+    assert eval stamped(value: [1, _, 3]) == [earliest_start, _, earliest_start + 2us]
+    assert eval next_step(value: [1]) == [1us]
     # CRUN-7: a run's store is empty when its graph is built.
-    assert eval(remembered(value: [5, 6, _, 7])) == [0, 5, _, 6]
-    assert eval(remembered(value: [8])) == [0]
-    assert eval(levelled(value: [1])) == [true]
+    assert eval remembered(value: [5, 6, _, 7]) == [0, 5, _, 6]
+    assert eval remembered(value: [8]) == [0]
+    assert eval levelled(value: [1]) == [true]
 }

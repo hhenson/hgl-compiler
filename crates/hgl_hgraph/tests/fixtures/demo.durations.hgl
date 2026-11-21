@@ -17,5 +17,5 @@ test durations_are_values_and_ticks {
     assert scaled(3us, 0.5) == 2us
     # OPS-10: a duration times an infinity is out of range.
     assert raises("numeric.out_of_range") { scaled(1s, 1.0 / 0.0) }
-    assert eval(sum(lhs: [1s, _, 5m], rhs: [2s, 3s])) == [3s, 4s, 5m3s]
+    assert eval sum(lhs: [1s, _, 5m], rhs: [2s, 3s]) == [3s, 4s, 5m3s]
 }

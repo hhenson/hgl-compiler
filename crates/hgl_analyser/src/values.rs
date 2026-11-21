@@ -289,7 +289,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         }
         for value in run_body
             .iter_mut()
-            .flat_map(|run| std::iter::once(&mut run.call).chain(&mut run.config))
+            .map(|run| &mut run.call)
             .chain(defaults.iter_mut().flatten().flatten())
         {
             lifting::record_value(program, value);
@@ -468,8 +468,13 @@ struct Typer<'a> {
     /// (UNIT-14).
     value_code: bool,
     /// True while the block read is an integration test's (TST-17):
-    /// there `run(...)` is written beside `eval(...)`.
+    /// there `run` is written beside `eval`, and `run_config` may be
+    /// injected (RUN-6).
     integration: bool,
+    /// True while an application's statements before its run statement
+    /// are read (UNIT-14): there `run_config` and `global_state` are
+    /// injected (FN-9, RUN-6).
+    applying: bool,
     /// True while the statements of a source that yield are read
     /// (SOURCE-1): there a `yield` is a statement, a `return` with no
     /// value ends the source, and a `while` may have no condition.
@@ -638,6 +643,7 @@ impl<'a> Typer<'a> {
             testing: false,
             value_code: false,
             integration: false,
+            applying: false,
             generating: false,
             valued: 0,
             captures: HashMap::new(),

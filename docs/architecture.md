@@ -523,19 +523,23 @@ The block of an `assert raises` is read with the test's scope.
 
 ### Eval
 
-`eval(target(...))` is read in a named test (`Typer::eval`, TST-5). Its
-first argument is a call of a function of a module, the temporal
-definition where the name has both (FN-4); anything else, a call of an
-operator among them, is `eval.target`. The call is read as any call of
+`eval target(...)` is read in a named test (`Typer::eval`, TST-5). Its
+call is of a function of a module, the temporal definition where the
+name has both (FN-4); a call of anything else, an operator among them,
+is `eval.target`, and no call after the word is the parser's
+`syntax.expected_token`. The call is read as any call of
 that function is, so positional and named arguments, defaults, generic
 arguments written after the name, and a generic target's parameters are
 handled as any call's are. The one difference is what a parameter
 takes: a `const` parameter takes configuration, an ordinary value, and
-every other parameter a trace. A second argument is the run's
-configuration, read as a value of core's `RunConfig` (RUN-1); an eval
-takes no third (`argument.unexpected`). The typed eval is
-`ExprKind::Eval`, with its call and its configuration where it writes
-one.
+every other parameter a trace. The run's configuration is written in
+braces after the word, `eval{length: 4s} target(...)`, as an operator's
+is, and read first (RUN-6, EXPR-13): each entry names a property of
+core's native `RunConfig` (`argument.unknown`, `argument.duplicate`) and
+is value code of its type (`Typer::run_configuration`). The typed eval
+is `ExprKind::Eval`, with its call, its entries, and, in an integration
+test that injects `run_config`, the local the fields it leaves out are
+read from (`inherited`).
 
 | Form | Rule | Read as |
 | --- | --- | --- |
@@ -544,7 +548,7 @@ one.
 | A `_` anywhere else | EXPR-8 | `trace.placeholder` |
 | An eval's traces | TST-7 | Of one style, the expectation included (`trace.style`, at the later trace) |
 | An eval of a target with no result | TST-8 | A statement. Bound or compared, it is `eval.no_result` |
-| `eval(...) == [...]`, `seen != other` | TST-4 | `ExprKind::TraceCompare`, a `bool`: the harness's own comparison, selected through no operator. The side that gives a trace says what the other, a sequence written out, is read as |
+| `eval target(...) == [...]`, `seen != other` | TST-4 | `ExprKind::TraceCompare`, a `bool`: the harness's own comparison, selected through no operator. The side that gives a trace says what the other, a sequence written out, is read as |
 | A trace, or a value that holds one, given to a field or to a temporal function | TST-3 | `trace.escape`, reported where the construction or the call is finished (`Typer::traces_given`), so that a generic place and a trace wrapped in a sequence are held to it too |
 | A trace given to a `const fn` | TST-3, TST-16 | The list of its publications, a `list<tuple<datetime, delta<T>>>`: `Publications` in the tree, held to the parameter's type |
 
@@ -570,19 +574,32 @@ what an application has that a module has not:
 The run statement is kept on its unit, `Module::run`, and read by the
 passes that read a test: its names are resolved in the unit's scope, the
 types it writes are read, and `Typer::run_statement` types it as
-`hir::Run` in `Module::run_body` (RUN-1). Its first argument is a call
-of an entry, a temporal function with no temporal parameters; anything
-else is `run.entry`. The call is read as a graph's call of the entry is,
-and the configuration as an eval's is.
+`hir::Run` in `Module::run_body` (RUN-1). Its call is of an entry, a
+temporal function with no temporal parameters; anything else is
+`run.entry`. The call is read as a graph's call of the entry is. It
+gives no configuration (`run.configuration`): what starts the
+application supplies it, over the defaults of an `inject
+run_config{...}` among the statements before it (RUN-6), whose entries
+are an eval's and are the `Stmt::Inject` of `Module::store_body`. A
+value given to `put` there may read `run_config`, and no other
+capability.
+
+| Check | Rule | Code |
+| --- | --- | --- |
+| `inject run_config` in a function, in a test that is no integration test, or after an integration test's other statements (the phase pass) | RUN-6 | `inject.position` |
+| Braces after any capability but `run_config` | RUN-6 | `inject.configuration` |
+| A key of the global store written out, used with two types in one program (`store_keys`, once every body is typed); a `get` of `T` beside a key of `T?` is not judged, awaiting hhenson/hgl_spec#165 | TIME-8 | `store.key_type` |
 
 ### Integration tests
 
 `integration_test name { ... }` is a test (TST-17): `Test::integration`
-marks it, and everything a test is held to holds of it. In a test's
-block the parser reads `run(` as the run form, so the analyser sees a
-`RunExpr` there and nowhere else in a body. It is read as an eval is,
+marks it, and everything a test is held to holds of it. `run` is a
+reserved word (LEX-10), and the parser reads `run target(...)` wherever
+an operand is due, as `eval target(...)` is. It is read as an eval is,
 `ExprKind::Eval` with `real_time` set, and in a test that is no
-integration test it is `run.position` (RUN-3).
+integration test it is `run.position` (RUN-3). An integration test may
+inject `run_config` before its other statements (TST-17): `hgl test`
+supplies nothing to it, so its braces' defaults are its configuration.
 
 A source, a temporal function whose body has a `yield`, is a node of
 another shape (SOURCE-1), and is held to it:
@@ -1697,9 +1714,9 @@ only where the program reaches it, at core's source.
 | `r?` in a `when` (ERR-5) | `_core.succeeded(r)`, which fails the node with the error's message and code |
 | A named test | A function `test_name` |
 | `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
-| `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, {"input": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, input=[7, None, 9])` of `_hgl._harness`: the target; core's `replay` for each temporal input the eval gives a trace, by the input's name; core's `record` for the target's result, or `None`; and then the arguments. Core has the two as HGL for any type, so each is the instance written for the type it is of (GEN-2). The harness wires the run from those |
-| `eval(target(input: [7]), RunConfig(length: 2us))` (RUN-1, core's CRUN-2) | `_harness.evaluate(target, {...}, ..., input=[7], _config=...)`: the configuration last, by a name no input has, so that it is evaluated after the call's arguments (EXPR-13). The harness reads its `start`, `end` and `length`, refuses an `end` with a `length` (`run.end_and_length`), and runs the entry from the start to the end, which hgraph also takes as exclusive |
-| `eval(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
+| `eval target(input: [7, _, 9])` | `_harness.evaluate(target, {"input": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, input=[7, None, 9])` of `_hgl._harness`: the target; core's `replay` for each temporal input the eval gives a trace, by the input's name; core's `record` for the target's result, or `None`; and then the arguments. Core has the two as HGL for any type, so each is the instance written for the type it is of (GEN-2). The harness wires the run from those |
+| `eval{length: 2us} target(input: [7])` (RUN-6, core's CRUN-2) | `_harness.evaluate(target, {...}, ..., input=[7], _config=_harness.RunConfig(length=...))`: the configuration's entries, by a name no input has. An application's `inject run_config{...}` gives `_harness.run` its `_config` the same way; a read of `run_config`, and an eval in an integration test that injects it, are reported. The harness reads its `start`, `end` and `length`, refuses an `end` with a `length` (`run.end_and_length`), and runs the entry from the start to the end, which hgraph also takes as exclusive |
+| `eval target(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
 | `const scale: i64 = 2`, and `scale` read (UNIT-13) | `@_core.constant` over `def scale(): return 2`, and `scale()`. The provider runs the function once, when the constant is first read, so its expression may name what is written after it (UNIT-6) |
 | A trace given to a `const fn` (TST-16) | `_harness.publications(trace)`: a list with a tuple for each publication, its instant and what was published |
 | `assert raises("code") { ... }` (TST-10, TST-11) | A `try` around the block. Its handler calls `_harness.raised(error, "code")`, which lets the error out again unless it is an HGL error with that code, or has one as its cause, as a node's failure in an `eval` has; its `else` calls `_harness.not_raised("code")`, which fails the test |
@@ -1972,22 +1989,36 @@ values and offsets from their respective starts.
 FIELD=VALUE]...` runs an application (UNIT-14) on hgraph: the program's
 one application, or the one named.
 
-What starts an application "may replace an argument of its entry or a
-field of its configuration with a constant checked against the type it
-replaces, and what the application writes is the default" (RUN-2).
-`--arg` replaces an argument and `--config` a field. The value is HGL,
-one expression on one line. `hgl_cli`'s `replace` puts it, in
-parentheses, in the text of the application's run statement: in place
-of the value the application wrote for that parameter or field, or as
-an argument by name where it wrote none. The program is then read and
-checked again as if the application had written that, so the analyser
-holds a replacement to every rule it holds a written argument to, and
-no stage knows of replacements.
+What starts an application "supplies its run's configuration (RUN-6),
+and may replace an argument of its entry with a constant checked
+against the type it replaces: what the application writes is the
+default" (RUN-2). `hgl run` is what starts it, and this is the command
+line it gives for both: "Compiler/runner documentation specifies CLI
+options" (the program-execution chapter's core boundary):
+
+| Option | What it gives |
+| --- | --- |
+| `--arg NAME=VALUE` | The argument `NAME` of the entry, in place of the application's |
+| `--config start=VALUE`, `--config end=VALUE`, `--config length=VALUE` | That field of the run's configuration, core's `RunConfig`'s, over the default the application's `inject run_config{...}` gives it. An `end` given takes out a default `length`, and a `length` a default `end` (RUN-6: "An `end` or a `length` that what starts an application gives replaces a default of either"); both given are the run's, which refuses them (`run.end_and_length`) |
+
+The value is HGL, one expression on one line. `hgl_cli`'s `replace`
+puts it, in parentheses, in the application's text: an argument in the
+run statement, in place of the value the application wrote for that
+parameter or by name where it wrote none; a field in the braces of the
+application's `inject run_config`, in place of its default or after
+them, or in an `inject run_config{...}` written before the run
+statement where the application has none. The program is then read
+and checked again as if the application had written that, so the
+analyser holds each to every rule it holds what is written to, and no
+stage knows of replacements. `run_config` then reads the configuration
+as supplied (RUN-6).
 
 ```text
-eval(counted(upto: 3))                         the application
---arg upto=5 --config length=10s               what starts it
-eval(counted(upto: (5)), RunConfig(length: (10s)))
+inject run_config{length: 3s}                  the application
+eval counted(upto: 3)
+--arg upto=5 --config end=@2026-01-02T00:00:00Z
+inject run_config{end: (@2026-01-02T00:00:00Z)}
+eval counted(upto: (5))
 ```
 
 A name the entry or the configuration has not, a name given twice, and
@@ -2006,9 +2037,7 @@ which the application's file may have no name for: they are left out
 where the application, with them written and nothing replaced, does not
 read as it did. In either case, where the call with the replacements is
 of another entry than the application's, or of the same one with other
-generic arguments, the program is rejected. A configuration that is not written as
-`RunConfig(...)`, a constant's name, has its fields replaced by nothing
-yet.
+generic arguments, the program is rejected.
 
 | Step | What does it |
 | --- | --- |
@@ -2156,12 +2185,13 @@ test --target cpp` runs over any program to its end.
 | `for` over a connection of `dict<K, V>` or `list<T>` (CTRL-7, CTRL-15) | A struct `each_00_` in the graph's struct, its child graph `child_` given the key where the body reads it (only as the whole argument of a temporal parameter, `hgl_lower::graphs::key_read_as_value`: hgraph gives it as a connection), the member, the connections the body takes, whole, and its ordinary values, and its `wire_`, which wires it with `compiled::map_sink_`, one child for each key or position; over `list<T, N>`, the body `N` times, `item` the list's child at each position |
 | An `if` over an ordinary value whose value is a connection (CTRL-1, CTRL-13) | C++'s `if` where the graph is built, in a lambda called where it stands; a branch of no value `::hglrt::never` |
 | A node whose configuration holds an `f64` | Wired with `Wiring::add_unique_node` and not `hgraph::wire`: hgraph interns two nodes whose configurations are `==`, as `0.0` and `-0.0` are ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)), until it tells them apart |
-| `eval(target(value: [1, _, 3]))` (TST-5 to TST-8, CEVAL-1) | `::hglrt::testing::evaluate<T>` of an entry that wires core's `replay` instance of each trace written to its input, the target's wiring function, and core's `record` of the result under `"run.output"`; `run(...)` in real time; for a result whose delta is no T, a node of the entry's own, `held_00_`, which keeps the result read whole at each publication (`::hglrt::testing::hold`, none where the read fails), so that a cell written whole is compared with it (TST-5); a target with no result `::hglrt::testing::run`. A value function's is its lifted node, given the replays as its inputs and each default the call leaves out as configuration: a struct `lifted_0F_O_` (the file and the offset of the call) of the test's namespace, ahead of the test |
-| `eval(call, RunConfig(start: s, length: l))` (RUN-1, CRUN-2) | The run given `::hglrt::testing::Bounds{.start = s, .length = l}`, each field the configuration writes (`lifecycle`); the call's arguments and the configuration held first, in the order written, where more than one may fail (EXPR-2). A configuration that is a value of `RunConfig` made otherwise, held in a `let` or given by a function, is held once, and each of its fields is that bound |
-| `let seen = eval(...)` | `const auto seen = ...;`, the recording, read where a trace is |
+| `eval target(value: [1, _, 3])` (TST-5 to TST-8, CEVAL-1) | `::hglrt::testing::evaluate<T>` of an entry that wires core's `replay` instance of each trace written to its input, the target's wiring function, and core's `record` of the result under `"run.output"`; `run target(...)` in real time; for a result whose delta is no T, a node of the entry's own, `held_00_`, which keeps the result read whole at each publication (`::hglrt::testing::hold`, none where the read fails), so that a cell written whole is compared with it (TST-5); a target with no result `::hglrt::testing::run`. A value function's is its lifted node, given the replays as its inputs and each default the call leaves out as configuration: a struct `lifted_0F_O_` (the file and the offset of the call) of the test's namespace, ahead of the test |
+| `eval{start: s, length: l} call` (RUN-6, CRUN-2) | The run given `::hglrt::testing::Bounds{.start = s, .length = l}`, each field the configuration names (`lifecycle`); the configuration and then the call's arguments held first, in the order written, where more than one may fail (EXPR-2, EXPR-13). In an integration test that injects `run_config`, a field the eval does not name is the injected one's, `.end = run_config.end()` |
+| `inject run_config{length: 3s}` in an integration test (TST-17, RUN-6) | `const ::hglrt::RunConfig run_config = ::hglrt::RunConfig{::hglrt::RunConfig::Fields{.length = ...}};`: `hgl test` supplies nothing, and the defaults stand. `run_config.start` is `(run_config).start()`, a `std::optional` |
+| `let seen = eval target(...)` | `const auto seen = ...;`, the recording, read where a trace is |
 | Application `demo.app` (UNIT-14) | In its module's unit, `::hglrt::application::Output application_()`, which runs its run statement once; `applications/demo.app.cpp`, an entry unit whose `main` is the library's host of that run, `::hglrt::application::main` (`apps`, `assemble`) |
-| Its `inject global_state` and `put`s before its run statement (UNIT-14) | The function's first statements, in the order written, on a store of its own, `::hglrt::application::Store store_`, which the run gives its graph before the entry is wired |
-| `eval(call, config)`, `run(call, config)` (RUN-1, RUN-3) | `::hglrt::application::run<T>(store_, entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"`, as an eval's does; `run` of an entry with no result. The call's arguments and the configuration's bounds are an eval's (`lifecycle`), held in the order written where that shows (EXPR-2); none is `Bounds{}`. `eval` is a simulation, `run` in real time |
+| Its `inject run_config{...}`, `inject global_state` and `put`s before its run statement (UNIT-14, RUN-6) | The function's first statements, in the order written: `const ::hglrt::RunConfig run_config = ...;` of the braces, which `hgl run` has written what starts it gives over, and a store of its own, `::hglrt::application::Store store_`, which the run gives its graph before the entry is wired |
+| `eval call`, `run call` (RUN-1, RUN-3) | `::hglrt::application::run<T>(store_, entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"`, as an eval's does; `run` of an entry with no result. The call's arguments are an eval's, held in the order written where that shows (EXPR-2); `bounds_` is each field of `run_config`, or `Bounds{}` where the application injects none. `eval` is a simulation, `run` in real time |
 | `let seen = capture(attempt, value)` (ERR-7, ERR-8) | A graph of its own for the call, a struct `captured_00_` in the graph's struct, whose `compose` takes each connection of the call as a port and each other argument as an `hgraph::Scalar`, and calls the callable; the library's `::hglrt::capture<captured_00_>(wiring_, value)`, which is hgraph's `try_except_` of it with canonical errors (`<hglrt/capture.h>`). One given an `f64` configuration is reported: hgraph would take two boundaries given `0.0` and `-0.0` for one ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)), and `try_except_` has no wiring as a node of its own |
 | `seen.value`, `seen.error` (ERR-7) | `::hglrt::captured_value(seen)`, `::hglrt::captured_error(seen)`: the ports of the boundary's fields |
 | A temporal value of `error`, of `result<T, error>` (ERR-2, ERR-4) | `TS<::hglrt::error>`, hgraph's `CanonicalError`; `TS<::hglrt::result<T>>`, registered with hgraph as an atomic; read, published and given as a constant as a scalar is |

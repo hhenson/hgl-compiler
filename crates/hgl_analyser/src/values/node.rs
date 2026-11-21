@@ -5,17 +5,17 @@
 
 use hgl_diagnostics::{Category, Location};
 use hgl_lexer::literal::decode_string;
-use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
+use hgl_parser::{HasSpan, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::endpoints::endpoint_argument;
 use super::fit::{accepts_float, is_integer_literal, open};
 use super::{Fact, Typer, children};
 use crate::hir::{
-    self, Body, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt, ValueCategory,
+    self, Body, ConfigEntry, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt, ValueCategory,
 };
-use crate::program::{Binding, LocalKind};
+use crate::program::{Binding, LocalKind, RUN_CONFIG};
 use crate::syntax::{child, tokens};
-use crate::types::Type;
+use crate::types::{Detail, Type};
 use crate::{codes, error, local_error, warning};
 
 impl<'a> Typer<'a> {
@@ -159,14 +159,59 @@ impl<'a> Typer<'a> {
     /// (TIME-8). `out` is its result (TIME-7): "`inject out` exposes
     /// that same result for reads, assignment, and admitted piecewise
     /// mutation." What the others are used for is for a later part.
+    ///
+    /// RUN-6: an application and an integration test inject
+    /// `run_config`, "giving the fields that leaves out their defaults,
+    /// `inject run_config{length: 3s}`", whose entries are read here
+    /// ([`Typer::run_configuration`]) before the name is bound. Where
+    /// `inject run_config` has no place is the phase pass's to report
+    /// (`inject.position`). Braces "on an `inject` of any other
+    /// capability" reject (`inject.configuration`), and what they hold
+    /// is not read (ERR-9).
     pub(super) fn inject(&mut self, node: &SyntaxNode) -> Vec<Stmt> {
-        let names: Vec<SyntaxToken> = tokens(node)
-            .filter(|token| token.kind() == SyntaxKind::Ident)
-            .collect();
-        names
+        // Each name, and the configuration written after it, which the
+        // parser keeps beside the name in the `InjectDecl`.
+        let mut injected: Vec<(SyntaxToken, Option<SyntaxNode>)> = Vec::new();
+        for element in node.children_with_tokens() {
+            match element {
+                SyntaxElement::Token(token) if token.kind() == SyntaxKind::Ident => {
+                    injected.push((token, None));
+                }
+                SyntaxElement::Node(braces) if braces.kind() == SyntaxKind::OperatorConfig => {
+                    if let Some((_, config)) = injected.last_mut() {
+                        *config = Some(braces);
+                    }
+                }
+                _ => {}
+            }
+        }
+        injected
             .into_iter()
-            .map(|name| {
+            .map(|(name, braces)| {
                 let at = Location::new(self.file, name.span());
+                let config = match braces {
+                    // Where `run_config` has a place: what the phase pass
+                    // reports elsewhere is not judged again (ERR-9).
+                    Some(braces) if name.text() == RUN_CONFIG => {
+                        if self.applying || self.integration {
+                            self.run_configuration(&braces)
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    Some(braces) => {
+                        // An application's `inject` of a capability it
+                        // may not inject has been reported itself
+                        // (`application.statement`).
+                        // And so has any capability but `run_config` in a test
+                        // (`test.statement_phase`).
+                        if !self.testing && (!self.applying || name.text() == "global_state") {
+                            self.inject_configuration(&braces, name.text());
+                        }
+                        Vec::new()
+                    }
+                    None => Vec::new(),
+                };
                 let is_out = name.text() == "out";
                 // TIME-8: "`inject` binds each of the others to a local
                 // of its capability's type, which core declares".
@@ -210,9 +255,126 @@ impl<'a> Typer<'a> {
                 if is_out {
                     self.out = Some(local);
                 }
-                Stmt::Inject { local, at }
+                Stmt::Inject { local, config, at }
             })
             .collect()
+    }
+
+    /// Reports the braces `braces` written after `name`, a capability
+    /// that is not `run_config` (RUN-6: "and so do braces on an `inject`
+    /// of any other capability (`inject.configuration`)"), at the brace.
+    fn inject_configuration(&mut self, braces: &SyntaxNode, name: &str) {
+        let at = match braces.first_token() {
+            Some(brace) => Location::new(self.file, brace.span()),
+            None => self.at(braces),
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Injectable,
+                codes::INJECT_CONFIGURATION,
+                at,
+                format!("`{name}` takes no configuration: only `run_config` is injected with one"),
+                "RUN-6",
+            )
+            .with_note("`inject run_config{length: 3s}` gives the run's configuration defaults"),
+        );
+    }
+
+    /// The entries of a run's configuration, `braces` being the braces
+    /// they are written in: after `eval` or `run` in a test, or after
+    /// `run_config` in an `inject` (RUN-6).
+    ///
+    /// RUN-6: "Each entry names a field of the configuration, and its
+    /// value is value code of that field's type; a field no entry names
+    /// is left out. An entry that names no field is an argument that
+    /// names no parameter (`argument.unknown`)." The fields are the
+    /// properties of core's `RunConfig` (core's CAP-7). EXPR-10, whose
+    /// form the braces have: "Reject empty configuration, duplicate
+    /// options": the parser reports empty braces, and a field named
+    /// twice is a parameter given twice (`argument.duplicate`). The
+    /// entries are read in the order written (EXPR-13).
+    pub(super) fn run_configuration(&mut self, braces: &SyntaxNode) -> Vec<ConfigEntry> {
+        let fields: Vec<(String, Type)> = self
+            .program
+            .run_config_type()
+            .and_then(|ty| match ty {
+                Type::Named {
+                    module,
+                    declaration,
+                    ..
+                } => match self.program.modules[module].details.get(declaration) {
+                    Some(Detail::Native(native)) => Some(
+                        native
+                            .properties
+                            .iter()
+                            .map(|property| (property.name.clone(), property.ty.clone()))
+                            .collect(),
+                    ),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap_or_default();
+        let mut entries: Vec<ConfigEntry> = Vec::new();
+        let mut named: Vec<String> = Vec::new();
+        for entry in braces
+            .children()
+            .filter(|entry| entry.kind() == SyntaxKind::ConfigArg)
+        {
+            // `configuration_argument = member_name, ":", expression ;`
+            let Some(name) = tokens(&entry).next() else {
+                continue;
+            };
+            let Some(value) = entry.children().next() else {
+                continue;
+            };
+            let at = Location::new(self.file, name.span());
+            let field = name.text().to_string();
+            let Some((_, ty)) = fields.iter().find(|(known, _)| *known == field) else {
+                // Core not supplied, or its `RunConfig` not read: what
+                // the field is is not known, and nothing is judged.
+                if !fields.is_empty() {
+                    let known: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
+                    self.diagnostics.emit(
+                        error(
+                            Category::Name,
+                            codes::ARGUMENT_UNKNOWN,
+                            at,
+                            format!("a run's configuration has no field `{field}`"),
+                            "RUN-6",
+                        )
+                        .with_note(format!(
+                            "its fields are `{}`, core's `RunConfig`'s",
+                            known.join("`, `")
+                        )),
+                    );
+                }
+                // The value is read all the same, with nothing expected
+                // of it.
+                self.expression(&value, Some(&Type::Unknown));
+                continue;
+            };
+            if named.contains(&field) {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::ARGUMENT_DUPLICATE,
+                    at,
+                    format!("the field `{field}` of the run's configuration is given twice"),
+                    "EXPR-10",
+                ));
+                self.expression(&value, Some(&Type::Unknown));
+                continue;
+            }
+            named.push(field.clone());
+            let read = self.expression(&value, Some(ty));
+            let value = self.fit(
+                read,
+                ty,
+                &format!("the field `{field}` of the run's configuration"),
+            );
+            entries.push(ConfigEntry { field, value });
+        }
+        entries
     }
 
     /// `start { ... }`, `when condition { ... }`, `stop { ... }`: a hook

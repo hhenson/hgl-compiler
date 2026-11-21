@@ -187,6 +187,17 @@ def _deltas(cells):
         yield key, published
 
 
+class RunConfig:
+    """A run's configuration, as an eval or an application gives it (the
+    language's RUN-6, core's CAP-7): `start`, `end` and `length`, each
+    `None` where it is left out."""
+
+    def __init__(self, start=None, end=None, length=None):
+        self.start = start
+        self.end = end
+        self.length = length
+
+
 def _bounds(config, unstated):
     """The start a run has, and the end its configuration gives it,
     `None` where it gives none (core's CRUN-2). `unstated` is the start

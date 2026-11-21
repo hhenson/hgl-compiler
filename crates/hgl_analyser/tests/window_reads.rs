@@ -260,11 +260,11 @@ fn a_windows_cell_in_a_trace_is_a_v() {
         "}\n",
         "const fn first(trace: list<tuple<datetime, i64>>) -> i64 => trace[0][1]\n",
         "test traces {\n",
-        "    assert eval(collect(reading: [1, 2])) == [1, 2]\n",
-        "    assert eval(arrived(readings: [1, _, 3])) == [1, _, 3]\n",
-        "    assert eval(counted<i64, 4>(values: [1, 2])) == [1, 1]\n",
-        "    assert first(eval(collect(reading: [1]))) == 1\n",
-        "    assert eval(arrived(readings: [\"x\"])) == []\n",
+        "    assert eval collect(reading: [1, 2]) == [1, 2]\n",
+        "    assert eval arrived(readings: [1, _, 3]) == [1, _, 3]\n",
+        "    assert eval counted<i64, 4>(values: [1, 2]) == [1, 1]\n",
+        "    assert first(eval collect(reading: [1])) == 1\n",
+        "    assert eval arrived(readings: [\"x\"]) == []\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), ["m.hgl:17:36 type/type.mismatch EXPR-5"]);
@@ -332,7 +332,7 @@ fn a_window_of_a_nullable_has_the_nullables_delta() {
         "    when { return delta<f64?>() }\n",
         "}\n",
         "test traces {\n",
-        "    assert eval(arrived(readings: [1.0, null, _])) == [1.0, null]\n",
+        "    assert eval arrived(readings: [1.0, null, _]) == [1.0, null]\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), ["m.hgl:15:19 type/type.mismatch EXPR-5"]);

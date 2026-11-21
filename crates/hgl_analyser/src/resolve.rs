@@ -428,9 +428,12 @@ impl Resolver<'_> {
         }
     }
 
-    /// `inject out, clock`.
+    /// `inject out, clock`, or `inject run_config{length: 3s}`: what a
+    /// configuration in braces holds is read before the names are bound
+    /// (RUN-6), as the value code of the statements before.
     #[inline(never)]
     fn inject(&mut self, node: &SyntaxNode) {
+        self.children(node);
         for name in identifiers(node) {
             // TIME-8: "`inject` names no other."
             if !INJECTABLES.contains(&name.text()) {

@@ -65,6 +65,7 @@ parser: done
 parser: done
 
 - Contextual names take their meaning by position; `str(value)` is a conversion and `error(...)` a constructor
+- `run` is a hard reserved word, as `eval` is, and names nothing
 
 ## LEX-11
 

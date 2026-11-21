@@ -455,10 +455,10 @@ fn a_test_is_a_composition_block_with_assertions() {
             "}\n",
             // Assertions, bindings, and a block that is expected to fail.
             "test accepted {\n",
-            "    let outcome = eval(forward(value: [7, _, 9]))\n",
+            "    let outcome = eval forward(value: [7, _, 9])\n",
             "    assert outcome == [7, _, 9]\n",
             "    assert raises(\"value.missing_key\") {\n",
-            "        let inner = eval(forward(value: [1]))\n",
+            "        let inner = eval forward(value: [1])\n",
             "    }\n",
             "}\n",
             "test shaped {\n",

@@ -21,5 +21,5 @@ fn watch(input: i64) -> bool {
 fn watched(flag: bool, x: i64) -> bool => watch(maybe(flag, x))
 
 test invalidate_reaches_a_follower {
-    assert eval(watched(flag: [true, false, true], x: [1, _, _])) == [true, false, true]
+    assert eval watched(flag: [true, false, true], x: [1, _, _]) == [true, false, true]
 }

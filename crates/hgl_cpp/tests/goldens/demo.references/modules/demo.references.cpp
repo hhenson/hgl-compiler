@@ -52,7 +52,6 @@
 #undef selected_present
 #undef set_item
 #undef slot
-#undef start
 #undef take
 #undef target
 #undef wakes

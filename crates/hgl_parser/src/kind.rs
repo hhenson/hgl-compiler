@@ -75,7 +75,7 @@ define_syntax_kinds! {
         KwInstantiate, KwOperator, KwFn, KwStruct, KwEnum, KwRequires, KwIs,
         KwLet, KwVar, KwState, KwCache, KwInject, KwReturn, KwIf, KwElse,
         KwStart, KwWhen, KwStop, KwFor, KwWhile, KwYield, KwTest, KwAssert,
-        KwEval, KwTrue, KwFalse, KwNull, KwBool, KwI64, KwF64, KwStr,
+        KwEval, KwRun, KwTrue, KwFalse, KwNull, KwBool, KwI64, KwF64, KwStr,
         KwBytes, KwAny, KwDate, KwTime, KwDatetime, KwDuration, KwTenor,
         KwCivilDatetime, KwZonedDatetime, KwZonedTime, KwTimezone,
         KwAtomic, KwTuple, KwList, KwSet, KwDict, KwRollingWindow, KwResult, KwRef,
@@ -106,9 +106,10 @@ define_syntax_kinds! {
         /// An application's run statement: a `RunExpr` or an `EvalExpr`
         /// that stands as an item of the file (RUN-1)
         RunStmt,
-        /// `inject global_state` or `put(global_state, "limit", 3)` as an
-        /// item of the file: what an application sets its run's store
-        /// with (UNIT-14)
+        /// `inject run_config{length: 3s}`, `inject global_state` or
+        /// `put(global_state, "limit", 3)` as an item of the file: what
+        /// an application gives its run's configuration as defaults and
+        /// sets its run's store with (UNIT-14, RUN-6)
         StoreStmt,
         /// `pricing.curves`
         ModulePath,
@@ -277,9 +278,10 @@ define_syntax_kinds! {
         LambdaParam,
         /// `if a { b } else { c }`
         IfExpr,
-        /// `eval(doubled(value: [1.0, _, 3.0]))`
+        /// `eval doubled(value: [1.0, _, 3.0])` or `eval{length: 4s} beats()`:
+        /// the configuration, where one is written, then the call (RUN-6)
         EvalExpr,
-        /// `run(heartbeat(every: 1s))`: an application's run statement,
+        /// `run heartbeat(every: 1s)`: an application's run statement,
         /// or a run in real time in an integration test (TST-17)
         RunExpr,
         /// `{ statements }`
@@ -296,7 +298,9 @@ define_syntax_kinds! {
         UnaryExpr,
         /// `a + b`: left operand, operator, any configuration, right operand
         BinaryExpr,
-        /// `{zero: .error}` directly after an operator
+        /// `{zero: .error}` directly after an operator, and a run's
+        /// configuration, `{length: 4s}` after `eval` or `run` and after
+        /// `run_config` in an `inject` (RUN-6)
         OperatorConfig,
         /// `zero: .error` in an operator configuration
         ConfigArg,
@@ -318,7 +322,7 @@ define_syntax_kinds! {
         StateDecl,
         /// `cache last: f64 = 0.0`
         CacheDecl,
-        /// `inject out, clock`
+        /// `inject out, clock` or `inject run_config{length: 3s}`
         InjectDecl,
         /// `start { ... }` or `stop { ... }`
         LifecycleBlock,

@@ -263,7 +263,7 @@ fn activity_is_an_observation_of_a_direct_input() {
         "    stop { let final_activity = is_active(data) }\n",
         "}\n",
         "fn wired(data: i64) -> bool => is_active(data)\n",
-        "test no_node { let unused = eval(is_active<i64>(input: [])) }\n",
+        "test no_node { let unused = eval is_active<i64>(input: []) }\n",
     ));
     assert_eq!(
         checked.summary(),

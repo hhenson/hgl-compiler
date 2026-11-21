@@ -87,31 +87,31 @@ fn an_eval_is_the_call_of_its_target_with_traces() {
         "test evaluated {\n",
         // Dense, with `_`; all `_`; none. Bound, and compared either
         // way round and with another eval.
-        "    assert eval(pass(value: [7, _, 7, 9])) == [7, _, 7, 9]\n",
-        "    assert eval(pass(value: [_, _, _])) == []\n",
-        "    assert eval(pass(value: [])) == []\n",
-        "    let seen = eval(pass(value: [7, _, 7, 9]))\n",
+        "    assert eval pass(value: [7, _, 7, 9]) == [7, _, 7, 9]\n",
+        "    assert eval pass(value: [_, _, _]) == []\n",
+        "    assert eval pass(value: []) == []\n",
+        "    let seen = eval pass(value: [7, _, 7, 9])\n",
         "    assert seen == [7, _, 7, 9]\n",
         "    assert seen != [7]\n",
         "    assert [7] != seen\n",
-        "    assert seen == eval(pass(value: [7, _, 7, 9]))\n",
+        "    assert seen == eval pass(value: [7, _, 7, 9])\n",
         // Timed.
-        "    assert eval(pass(value: [0s: 7, 2s: 9])) == [0s: 7, 2s: 9]\n",
+        "    assert eval pass(value: [0s: 7, 2s: 9]) == [0s: 7, 2s: 9]\n",
         // Configuration for a `const` parameter; by name and by place.
-        "    assert eval(scaled(left: [1, 2], right: [3, 4], factor: 2)) == [8, 12]\n",
-        "    assert eval(scaled([1, 2], [3, 4], doubled(1))) == [8, 12]\n",
+        "    assert eval scaled(left: [1, 2], right: [3, 4], factor: 2) == [8, 12]\n",
+        "    assert eval scaled([1, 2], [3, 4], doubled(1)) == [8, 12]\n",
         // No result: a statement.
-        "    eval(sink(value: [7, _, 9]))\n",
-        "    (eval(sink(value: [])))\n",
+        "    eval sink(value: [7, _, 9])\n",
+        "    (eval sink(value: []))\n",
         // A structural input and result: each cell is its delta.
-        "    assert eval(relay(enabled: [true, _], members: [_, delta<set<i64>>(added: [1])]))\n",
+        "    assert eval relay(enabled: [true, _], members: [_, delta<set<i64>>(added: [1])])\n",
         "        == [_, delta<set<i64>>(added: [1])]\n",
         // A generic target: its cells say what T is.
-        "    let sums = eval(same(lhs: [1, 2], rhs: [3, 4]))\n",
+        "    let sums = eval same(lhs: [1, 2], rhs: [3, 4])\n",
         "    assert sums == [4, 6]\n",
         // A value function is lifted (FN-4), and a graph is a target.
-        "    assert eval(doubled(value: [1, _])) == [2]\n",
-        "    assert eval(forward(value: [1])) == [1]\n",
+        "    assert eval doubled(value: [1, _]) == [2]\n",
+        "    assert eval forward(value: [1]) == [1]\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE);
@@ -119,7 +119,7 @@ fn an_eval_is_the_call_of_its_target_with_traces() {
         locals(&checked, "evaluated"),
         ["seen: trace of i64", "sums: trace of i64"]
     );
-    // `let seen = eval(...)`: an eval, of the call of `pass` with one
+    // `let seen = eval pass(...)`: an eval, of the call of `pass` with one
     // argument, a trace of four cells of which the second is `_`.
     let module = checked.program.module("m").expect("module m exists");
     let body = module.test_bodies[0]
@@ -155,16 +155,16 @@ fn a_trace_comparison_reads_its_operands_in_order() {
         "test ordered {\n",
         // Read on the left before the right assigns it.
         "    var first: i64\n",
-        "    assert [first] == eval(pass(value: [{\n",
+        "    assert [first] == eval pass(value: [{\n",
         "        first = 7\n",
         "        7\n",
-        "    }]))\n",
+        "    }])\n",
         // Assigned on the left, and read on the right.
         "    var second: i64\n",
         "    assert [{\n",
         "        second = 7\n",
         "        7\n",
-        "    }] == eval(pass(value: [second]))\n",
+        "    }] == eval pass(value: [second])\n",
         "}\n",
     ));
     assert_eq!(
@@ -173,9 +173,10 @@ fn a_trace_comparison_reads_its_operands_in_order() {
     );
 }
 
-/// TST-5: "Its first argument names a function of a module ... An
-/// operator is no target: a function wraps it". TST-8: "binding or
-/// comparing it rejects". TST-7: "Keys strictly increase; no `_` occurs
+/// TST-5: "Eval takes a call of a module function ... An operator is
+/// no target: a function wraps it". RUN-6: "An entry that names no field
+/// is an argument that names no parameter (`argument.unknown`)". TST-8:
+/// "binding or comparing it rejects". TST-7: "Keys strictly increase; no `_` occurs
 /// in timed traces. Within one eval all inputs and expectation use the
 /// same dense/timed style." EXPR-8: "outside them a sequence is ordinary
 /// data and a placeholder is not a value."
@@ -183,35 +184,36 @@ fn a_trace_comparison_reads_its_operands_in_order() {
 fn an_eval_written_wrong_is_reported() {
     let checked = module(concat!(
         "test wrong {\n",
-        // No function: a value, an operator, a struct.
-        "    assert eval(7) == [7]\n",
-        "    assert eval(add_(lhs: [7], rhs: [9])) == [16]\n",
-        "    assert eval(Kept(values: [7])) == [7]\n",
+        // A field the configuration has not; no function: an
+        // operator, a struct.
+        "    assert eval{until: 3us} pass(value: [7]) == [7]\n",
+        "    assert eval add_(lhs: [7], rhs: [9]) == [16]\n",
+        "    assert eval Kept(values: [7]) == [7]\n",
         // No result to bind or to compare.
-        "    let none = eval(sink(value: [7]))\n",
-        "    assert eval(sink(value: [7])) == []\n",
+        "    let none = eval sink(value: [7])\n",
+        "    assert eval sink(value: [7]) == []\n",
         // A `_` in a timed trace, as a value and as a time; a `_`
         // outside a trace.
-        "    assert eval(pass(value: [0s: 7, 2s: _])) == [0s: 7]\n",
-        "    assert eval(pass(value: [_: 7])) == []\n",
+        "    assert eval pass(value: [0s: 7, 2s: _]) == [0s: 7]\n",
+        "    assert eval pass(value: [_: 7]) == []\n",
         "    let loose = [1, _, 3]\n",
         // Two styles: between inputs, and in the expectation.
-        "    assert eval(scaled(left: [1, 2], right: [0s: 3], factor: 2)) == [8]\n",
-        "    assert eval(pass(value: [7, 9])) == [0s: 7]\n",
+        "    assert eval scaled(left: [1, 2], right: [0s: 3], factor: 2) == [8]\n",
+        "    assert eval pass(value: [7, 9]) == [0s: 7]\n",
         // Keys that do not increase; keys of two kinds; a key that is
         // no time.
-        "    assert eval(pass(value: [2s: 7, 1s: 9, 1s: 5])) == [2s: 7]\n",
-        "    assert eval(pass(value: [1: 7])) == []\n",
+        "    assert eval pass(value: [2s: 7, 1s: 9, 1s: 5]) == [2s: 7]\n",
+        "    assert eval pass(value: [1: 7]) == []\n",
         // The arguments are a call's: a cell of another type, a name
         // the target has not, a parameter given nothing, a `const`
         // parameter given a trace.
-        "    assert eval(pass(value: [\"a\"])) == [7]\n",
-        "    assert eval(pass(value: [7])) == [\"a\"]\n",
-        "    assert eval(pass(other: [7])) == [7]\n",
-        "    assert eval(pass()) == [7]\n",
-        "    assert eval(scaled(left: [1], right: [2], factor: [3])) == [9]\n",
+        "    assert eval pass(value: [\"a\"]) == [7]\n",
+        "    assert eval pass(value: [7]) == [\"a\"]\n",
+        "    assert eval pass(other: [7]) == [7]\n",
+        "    assert eval pass() == [7]\n",
+        "    assert eval scaled(left: [1], right: [2], factor: [3]) == [9]\n",
         // A trace is no `bool`, and no operand of another symbol.
-        "    let seen = eval(pass(value: [7]))\n",
+        "    let seen = eval pass(value: [7])\n",
         "    assert seen\n",
         "    assert seen < [7]\n",
         "}\n",
@@ -219,7 +221,7 @@ fn an_eval_written_wrong_is_reported() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:32:17 type/eval.target TST-5",
+            "m.hgl:32:17 name/argument.unknown RUN-6",
             "m.hgl:33:17 type/eval.target TST-5",
             "m.hgl:34:17 type/eval.target TST-5",
             "m.hgl:35:16 type/eval.no_result TST-8",
@@ -228,12 +230,12 @@ fn an_eval_written_wrong_is_reported() {
             "m.hgl:38:30 type/trace.placeholder TST-7",
             "m.hgl:39:21 type/trace.placeholder EXPR-8",
             "m.hgl:40:45 type/trace.style TST-7",
-            "m.hgl:41:41 type/trace.style TST-7",
+            "m.hgl:41:40 type/trace.style TST-7",
             "m.hgl:42:37 type/trace.key_order TST-7",
             "m.hgl:42:44 type/trace.key_order TST-7",
             "m.hgl:43:30 type/type.mismatch TST-7",
             "m.hgl:44:30 type/type.mismatch EXPR-5",
-            "m.hgl:45:39 type/type.mismatch EXPR-5",
+            "m.hgl:45:38 type/type.mismatch EXPR-5",
             "m.hgl:46:17 type/argument.missing EXPR-2",
             "m.hgl:46:22 name/argument.unknown EXPR-2",
             "m.hgl:47:17 type/argument.missing EXPR-2",
@@ -244,32 +246,43 @@ fn an_eval_written_wrong_is_reported() {
     );
 }
 
-/// TST-5: "A second argument is the run's configuration, a `RunConfig`
-/// (RUN-1), and where none is written the configuration is
-/// `RunConfig()`." The call "binds ... its generic arguments as any call
-/// does".
+/// TST-5: "The eval's configuration, `eval{length: 4s} target(...)`, is
+/// the run's (RUN-6)." RUN-6: "Each entry names a field of the
+/// configuration, and its value is value code of that field's type; a
+/// field no entry names is left out." The call "binds ... its generic
+/// arguments as any call does".
 #[test]
 fn an_eval_takes_a_call_and_a_run_configuration() {
     let checked = module(concat!(
         "test configured {\n",
-        "    assert eval(pass(value: [7])) == [7]\n",
-        "    assert eval(pass(value: [7]), RunConfig()) == [7]\n",
-        "    assert eval(pass(value: [7]), RunConfig(end: @2026-01-01T00:00:00Z),) == [7]\n",
-        "    assert eval(through<i64>(value: [7])) == [7]\n",
+        "    assert eval pass(value: [7]) == [7]\n",
+        "    assert eval{start: @2026-01-01T00:00:00Z} pass(value: [7]) == [7]\n",
+        "    assert eval {end: @2026-01-01T00:00:00Z, length: 2us,} pass(value: [7]) == [7]\n",
+        "    assert eval through<i64>(value: [7]) == [7]\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
     let module = checked.program.module("m").unwrap();
     let body = module.test_bodies[0].as_ref().unwrap();
-    // Each assertion compares an eval with a trace: whether the eval
-    // has a configuration, in order.
-    let configured: Vec<bool> = body
+    // Each assertion compares an eval with a trace: the fields the
+    // eval's configuration names, and their types, in order.
+    let configured: Vec<Vec<String>> = body
         .statements
         .iter()
         .filter_map(|statement| match statement {
             Stmt::Assert { condition, .. } => match &condition.kind {
                 ExprKind::TraceCompare { left, .. } => match &left.kind {
-                    ExprKind::Eval { config, .. } => Some(config.is_some()),
+                    ExprKind::Eval {
+                        config, inherited, ..
+                    } => {
+                        assert!(inherited.is_none(), "a test that injects nothing");
+                        Some(
+                            config
+                                .iter()
+                                .map(|entry| format!("{}: {}", entry.field, entry.value.ty))
+                                .collect(),
+                        )
+                    }
                     _ => None,
                 },
                 _ => None,
@@ -277,27 +290,35 @@ fn an_eval_takes_a_call_and_a_run_configuration() {
             _ => None,
         })
         .collect();
-    assert_eq!(configured, [false, true, true, false]);
+    assert_eq!(
+        configured,
+        [
+            vec![],
+            vec!["start: datetime".to_string()],
+            vec!["end: datetime".to_string(), "length: duration".to_string()],
+            vec![],
+        ]
+    );
 
     let wrong = module_text(concat!(
         "test wrong {\n",
-        // No `RunConfig`; an argument past it; a label.
-        "    assert eval(pass(value: [7]), 3) == [7]\n",
-        "    assert eval(pass(value: [7]), RunConfig(), 4) == [7]\n",
+        // A field given a value of another type, and one given twice.
+        "    assert eval{length: 3} pass(value: [7]) == [7]\n",
+        "    assert eval{length: 3us, length: 4us} pass(value: [7]) == [7]\n",
         // The call's generic arguments are checked as a call's are.
-        "    assert eval(through<i64, i64>(value: [7])) == [7]\n",
+        "    assert eval through<i64, i64>(value: [7]) == [7]\n",
         // "A trace is an argument of that call and of no call inside
         // it": the call inside takes a value, and gives one.
-        "    assert eval(pass(value: forward(value: [7]))) == [7]\n",
+        "    assert eval pass(value: forward(value: [7])) == [7]\n",
         // FN-3: a `const` parameter of the call is given no connection.
-        "    assert eval(scaled(left: [1], right: [2], factor: forward(3))) == [9]\n",
+        "    assert eval scaled(left: [1], right: [2], factor: forward(3)) == [9]\n",
         "}\n",
     ));
     assert_eq!(
         wrong.summary(),
         [
-            "m.hgl:32:35 type/type.mismatch EXPR-5",
-            "m.hgl:33:48 type/argument.unexpected TST-5",
+            "m.hgl:32:25 type/type.mismatch EXPR-5",
+            "m.hgl:33:30 name/argument.duplicate EXPR-10",
             "m.hgl:34:17 type/generic.argument_count GEN-8",
             "m.hgl:35:29 type/type.mismatch EXPR-5",
             "m.hgl:35:44 type/type.mismatch EXPR-5",
@@ -310,17 +331,18 @@ fn an_eval_takes_a_call_and_a_run_configuration() {
 
 /// TST-17: "An integration test, `integration_test name { ... }`, is a
 /// named test that may run in real time: beside `eval` it writes
-/// `run(call, config)` (RUN-3), whose value is the run's output as an
-/// eval's is ... in a test that is no integration test it rejects ...
+/// `run call` (RUN-3), whose value is the run's output as an eval's
+/// is ... `run` in a test that is no integration test rejects
+/// (`run.position`) ...
 /// In every other respect it is a test: its name is one of its module's
 /// test names (TST-2), and its block is a test's (TST-3, TST-4)."
 #[test]
 fn an_integration_test_writes_run_and_a_test_does_not() {
     let checked = module(concat!(
         "integration_test live {\n",
-        "    let seen = run(pass(value: [7]))\n",
+        "    let seen = run pass(value: [7])\n",
         "    assert seen == [7]\n",
-        "    assert run(pass(value: [7]), RunConfig()) == eval(pass(value: [7]))\n",
+        "    assert run pass(value: [7]) == eval pass(value: [7])\n",
         "}\n",
         // TST-17: "the duration `@timeout(5s)` gives on the line before
         // it, or one minute where none is written".
@@ -347,26 +369,27 @@ fn an_integration_test_writes_run_and_a_test_does_not() {
         panic!("a `let`");
     };
     assert!(matches!(
-        value.kind,
+        &value.kind,
         ExprKind::Eval {
             real_time: true,
-            config: None,
+            config,
+            inherited: None,
             ..
-        }
+        } if config.is_empty()
     ));
 
     let wrong = module_text(concat!(
         // `run` in a test that is no integration test, read all the
         // same: its trace is compared as an eval's is.
         "test plain {\n",
-        "    assert run(pass(value: [7])) == [7]\n",
+        "    assert run pass(value: [7]) == [7]\n",
         "}\n",
         // An integration test is a test: what a test may not hold, its
         // assertion's type, and its name among the module's.
         "integration_test live {\n",
         "    state count: i64 = 0\n",
-        "    assert run(pass(value: [7]))\n",
-        "    assert run(7) == [7]\n",
+        "    assert run pass(value: [7])\n",
+        "    assert run add_(lhs: [7], rhs: [9]) == [16]\n",
         "}\n",
         "integration_test plain { assert true }\n",
     ));
@@ -392,59 +415,142 @@ fn an_evals_call_may_be_one_the_parser_left_undecided() {
     let checked = module(concat!(
         "enum Side { buy, sell }\n",
         "test generic {\n",
-        "    assert eval(through<Side>([.buy, _, .sell])) == [.buy, _, .sell]\n",
-        "    let seen = eval(through<Side>([.buy]), RunConfig())\n",
+        "    assert eval through<Side>([.buy, _, .sell]) == [.buy, _, .sell]\n",
+        "    let seen = eval through<Side>([.buy])\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
     assert_eq!(locals(&checked, "generic"), ["seen: trace of Side"]);
 }
 
-/// EXPR-1: "parentheses group". A call in parentheses is the eval's
-/// call, and what is no call is reported where the argument is written.
+/// TST-17: "An integration test may inject `run_config`, before its
+/// other statements: what runs the test supplies the configuration of
+/// its runs, and the braces give defaults ... Its value code may read
+/// `run_config` then". RUN-6: "In an integration test that injects
+/// `run_config`, an entry of a run statement's configuration is that
+/// statement's own value for its field, and a field the statement does
+/// not name is the injected configuration's."
 #[test]
-fn an_evals_call_may_stand_in_parentheses() {
+fn an_integration_test_injects_its_run_configuration() {
     let checked = module(concat!(
-        "enum Side { buy, sell }\n",
-        "test grouped {\n",
-        "    assert eval((pass(value: [7]))) == [7]\n",
-        "    assert eval(((through<Side>([.buy]))), (RunConfig())) == [.buy]\n",
-        "    assert eval((7)) == [7]\n",
+        "integration_test configured {\n",
+        "    inject run_config{length: 1s}\n",
+        "    let bound = run_config.length\n",
+        "    let seen = run{start: @2026-01-01T00:00:00Z} pass(value: [7])\n",
+        "    assert seen == eval pass(value: [7])\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    assert_eq!(
+        locals(&checked, "configured"),
+        [
+            "run_config: RunConfig",
+            "bound: duration?",
+            "seen: trace of i64"
+        ]
+    );
+    let module = checked.program.module("m").unwrap();
+    let body = module.test_bodies[0].as_ref().unwrap();
+    let Stmt::Inject { local, config, .. } = &body.statements[0] else {
+        panic!("the inject is the test's first statement");
+    };
+    assert_eq!(config.len(), 1);
+    assert_eq!(config[0].field, "length");
+    // The run's own entry, and the injected configuration for the rest.
+    let Stmt::Declare {
+        value: Some(value), ..
+    } = &body.statements[2]
+    else {
+        panic!("a `let`");
+    };
+    let ExprKind::Eval {
+        config, inherited, ..
+    } = &value.kind
+    else {
+        panic!("a run");
+    };
+    assert_eq!(*inherited, Some(*local));
+    assert_eq!(config.len(), 1);
+    assert_eq!(config[0].field, "start");
+}
+
+/// RUN-6: "`inject run_config` where it has no place rejects
+/// (`inject.position`), and so do braces on an `inject` of any other
+/// capability (`inject.configuration`)". "A test that is no integration
+/// test does not, and neither does a function". TST-17: an integration
+/// test injects it "before its other statements". "`RunConfig` is the
+/// type of the capability `run_config` (TIME-8): no expression
+/// constructs one" (`call.not_callable`).
+#[test]
+fn run_config_where_it_has_no_place_is_reported() {
+    let wrong = module_text(concat!(
+        "test unit {\n",
+        "    inject run_config\n",
+        "}\n",
+        "integration_test late {\n",
+        "    assert true\n",
+        "    inject run_config\n",
+        "}\n",
+        "fn node(value: i64) -> i64 {\n",
+        "    inject run_config\n",
+        "    when { return value }\n",
+        "}\n",
+        "fn clocked(value: i64) -> datetime {\n",
+        "    inject clock{step: 1s}\n",
+        "    when { return clock.evaluation_time }\n",
+        "}\n",
+        "const fn bounded() -> i64 {\n",
+        "    inject run_config\n",
+        "    return 1\n",
+        "}\n",
+        "test constructed {\n",
+        "    let bounds = RunConfig(length: 3s)\n",
+        "}\n",
+        "integration_test clocked_test {\n",
+        "    inject run_config, clock\n",
         "}\n",
     ));
     assert_eq!(
-        checked.summary(),
-        ["m.hgl:35:17 type/eval.target TST-5"],
+        wrong.summary(),
+        [
+            "m.hgl:32:12 injectable/inject.position RUN-6",
+            "m.hgl:36:12 injectable/inject.position RUN-6",
+            "m.hgl:39:12 injectable/inject.position RUN-6",
+            "m.hgl:43:17 injectable/inject.configuration RUN-6",
+            "m.hgl:47:12 injectable/inject.position RUN-6",
+            "m.hgl:51:18 type/call.not_callable NATIVE-6",
+            "m.hgl:54:5 phase/test.statement_phase TST-3",
+        ],
         "{}",
-        checked.report
+        wrong.report
     );
 }
 
-/// EXPR-13: arguments are evaluated in the order written. An eval's
-/// call is read before its configuration, so what the call assigns the
-/// configuration may read, and not the other way about.
+/// EXPR-13: operands are evaluated in the order written. An eval's
+/// configuration is written before its call (RUN-6) and read first, so
+/// what the configuration assigns the call may read, and not the other
+/// way about.
 #[test]
-fn an_evals_call_is_read_before_its_configuration() {
+fn an_evals_configuration_is_read_before_its_call() {
     let checked = module(concat!(
-        "const fn configured(count: i64) -> RunConfig => RunConfig()\n",
         "test order {\n",
         "    var x: i64\n",
-        "    assert eval(pass(value: [{\n",
+        "    assert eval{length: {\n",
         "        x = 7\n",
-        "        7\n",
-        "    }]), configured(x)) == [7]\n",
+        "        7us\n",
+        "    }} pass(value: [x]) == [7]\n",
         "}\n",
         "test reversed {\n",
         "    var y: i64\n",
-        "    assert eval(pass(value: [y]), {\n",
+        "    assert eval{length: if y == 0 { 1us } else { 2us }} pass(value: [{\n",
         "        y = 7\n",
-        "        RunConfig()\n",
-        "    }) == [7]\n",
+        "        7\n",
+        "    }]) == [7]\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:41:30 name/binding.unassigned EXPR-3"],
+        ["m.hgl:40:28 name/binding.unassigned EXPR-3"],
         "{}",
         checked.report
     );
@@ -470,17 +576,17 @@ fn a_const_fn_is_given_a_trace_as_the_list_of_its_publications() {
         "const fn nulls(seen: list<tuple<datetime, delta<i64?>>>) -> i64 => 0\n",
         "test counted {\n",
         // The specification's own case; and a trace bound first.
-        "    assert ticks(eval(pass(value: [7, _, 7, 9]))) == 3\n",
-        "    let seen = eval(pass(value: [0s: 7, 2s: 9]))\n",
+        "    assert ticks(eval pass(value: [7, _, 7, 9])) == 3\n",
+        "    let seen = eval pass(value: [0s: 7, 2s: 9])\n",
         "    let twice = ticks(seen)\n",
         // What the trace is of says what a generic parameter is.
         "    assert tally(seen) == 0\n",
         "    let one: i64 = first(seen, 1)\n",
         // A structural result is given as its deltas; a nullable
         // scalar's as the optional that holds what was published.
-        "    let members = eval(relay(enabled: [true], members: [delta<set<i64>>(added: [1])]))\n",
+        "    let members = eval relay(enabled: [true], members: [delta<set<i64>>(added: [1])])\n",
         "    assert changes(members) == 0\n",
-        "    assert nulls(eval(maybe(value: [1, null]))) == 0\n",
+        "    assert nulls(eval maybe(value: [1, null])) == 0\n",
         // Rejected: a parameter of another type; and a trace of `i64`
         // where the place has said that `T` is `str`.
         "    assert wholes(members) == 0\n",
@@ -548,16 +654,16 @@ fn a_tuple_cell_is_the_whole_tuple_where_it_is_one() {
         "}\n",
         "const fn pairs_seen(published: list<tuple<datetime, delta<tuple<i64, i64?>>>>) -> i64 => 0\n",
         "test cells {\n",
-        "    assert eval(second_null(pair: [(1, 5), (2, null)])) == [false, true]\n",
-        "    assert eval(second_digits(pair: [(1, [1, 2, 3]), (2, [1])])) == [0, 0]\n",
-        "    assert eval(second_digits(pair: [\n",
+        "    assert eval second_null(pair: [(1, 5), (2, null)]) == [false, true]\n",
+        "    assert eval second_digits(pair: [(1, [1, 2, 3]), (2, [1])]) == [0, 0]\n",
+        "    assert eval second_digits(pair: [\n",
         "        (1, [1]),\n",
         "        (null, delta<list<i64>>(size_modified: -1)),\n",
-        "    ])) == [0, 0]\n",
-        "    assert eval(first_of(pair: [(1, 2), (null, 3)])) == [1, _]\n",
-        "    assert eval(pair_out(command: [7])) == [(7, [1, 2, 3])]\n",
-        "    assert eval(pair_of(command: [7, 8])) == [(7, null), (null, 9)]\n",
-        "    let count = pairs_seen(eval(pair_of(command: [7])))\n",
+        "    ]) == [0, 0]\n",
+        "    assert eval first_of(pair: [(1, 2), (null, 3)]) == [1, _]\n",
+        "    assert eval pair_out(command: [7]) == [(7, [1, 2, 3])]\n",
+        "    assert eval pair_of(command: [7, 8]) == [(7, null), (null, 9)]\n",
+        "    let count = pairs_seen(eval pair_of(command: [7]))\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
@@ -636,15 +742,15 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
         "    when all_valid(pair) { return pair }\n",
         "}\n",
         "test given {\n",
-        "    let pairs = eval(two(command: [1, 2]))\n",
-        "    assert eval(forwarded(pair: pairs, tag: 1)) == [(1, 1), (2, 2)]\n",
-        "    assert eval(consume(pair: [(1, null)], tag: 1)) == [1]\n",
-        "    assert eval(same_pair(pair: pairs)) == [1, 1]\n",
-        "    assert eval(same_pair(pair: [(1, 2), (null, 3)])) == [1, 1]\n",
-        "    let snaps = eval(snap(command: [1]))\n",
-        "    assert eval(kept_whole(pair: snaps, tag: 1)) == [1]\n",
-        "    assert eval(kept_whole(pair: [(1, 2)], tag: 1)) == [1]\n",
-        "    assert eval(kept_part(pair: snaps, tag: 1)) == [1]\n",
+        "    let pairs = eval two(command: [1, 2])\n",
+        "    assert eval forwarded(pair: pairs, tag: 1) == [(1, 1), (2, 2)]\n",
+        "    assert eval consume(pair: [(1, null)], tag: 1) == [1]\n",
+        "    assert eval same_pair(pair: pairs) == [1, 1]\n",
+        "    assert eval same_pair(pair: [(1, 2), (null, 3)]) == [1, 1]\n",
+        "    let snaps = eval snap(command: [1])\n",
+        "    assert eval kept_whole(pair: snaps, tag: 1) == [1]\n",
+        "    assert eval kept_whole(pair: [(1, 2)], tag: 1) == [1]\n",
+        "    assert eval kept_part(pair: snaps, tag: 1) == [1]\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
@@ -701,7 +807,7 @@ fn a_malformed_delta_is_reported_once() {
         "    when { return delta<set<i64>>(added: [1], removed: [1]) }\n",
         "}\n",
         "test overlapping {\n",
-        "    assert eval(kept_set(values: [delta<set<i64>>(added: [2], removed: [2])])) == [[2]]\n",
+        "    assert eval kept_set(values: [delta<set<i64>>(added: [2], removed: [2])]) == [[2]]\n",
         "}\n",
     ));
     assert_eq!(
@@ -726,12 +832,12 @@ fn a_malformed_delta_is_reported_once() {
 fn a_trace_goes_to_a_const_fn_and_nowhere_else() {
     let checked = module(concat!(
         "test given {\n",
-        "    let seen = eval(pass(value: [7, _, 9]))\n",
-        "    let spaced = eval(pass(value: [0s: 7, 2s: 9]))\n",
+        "    let seen = eval pass(value: [7, _, 9])\n",
+        "    let spaced = eval pass(value: [0s: 7, 2s: 9])\n",
         // To a `const fn`, of either style, bound or not: the list of
         // its publications. One whose parameter is another type.
         "    assert close(seen, [7, null, 9])\n",
-        "    assert close(eval(pass(value: [1])), [1])\n",
+        "    assert close(eval pass(value: [1]), [1])\n",
         "    assert close(spaced, [])\n",
         "    assert timed(seen)\n",
         "    let listed = [seen]\n",
@@ -779,7 +885,7 @@ fn timed_traces_can_name_instants_in_different_ways() {
     let checked = module(concat!(
         "test times {\n",
         "    let at = @2026-01-05T09:30:00Z\n",
-        "    assert eval(scaled(left: [0s: 2], right: [at: 3], factor: 1)) == [at: 5]\n",
+        "    assert eval scaled(left: [0s: 2], right: [at: 3], factor: 1) == [at: 5]\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE);

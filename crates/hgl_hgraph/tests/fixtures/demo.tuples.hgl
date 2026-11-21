@@ -133,33 +133,33 @@ fn kept_first(a: i64, b: str) -> i64 {
 }
 
 test a_tuple_ticks_by_its_positions {
-    assert eval(paired(a: [1, 2], b: ["x", _])) == [(1, "x"), (2, "x")]
-    assert eval(set_one(first: [true, false], value: [3, 4])) == [(3, null), (null, 4)]
-    assert eval(first_of_pair(a: [1, _, 3], b: ["x", "y", _])) == [1, 1, 3]
-    assert eval(second_of_pair(a: [1, _], b: ["x", "y"])) == ["x", "y"]
-    assert eval(first_by_sum(a: [1, _, 3], b: ["x", "y", _])) == [1, 1, 3]
-    assert eval(second_by_constant(a: [1, _], b: ["x", "y"])) == ["x", "y"]
-    assert eval(read_first(a: [1, 2], b: ["x", _])) == [1, 2]
-    assert eval(summed(a: [3, _, 4], b: [4, 5, _])) == [7, 8, 9]
-    assert eval(valid_once(
+    assert eval paired(a: [1, 2], b: ["x", _]) == [(1, "x"), (2, "x")]
+    assert eval set_one(first: [true, false], value: [3, 4]) == [(3, null), (null, 4)]
+    assert eval first_of_pair(a: [1, _, 3], b: ["x", "y", _]) == [1, 1, 3]
+    assert eval second_of_pair(a: [1, _], b: ["x", "y"]) == ["x", "y"]
+    assert eval first_by_sum(a: [1, _, 3], b: ["x", "y", _]) == [1, 1, 3]
+    assert eval second_by_constant(a: [1, _], b: ["x", "y"]) == ["x", "y"]
+    assert eval read_first(a: [1, 2], b: ["x", _]) == [1, 2]
+    assert eval summed(a: [3, _, 4], b: [4, 5, _]) == [7, 8, 9]
+    assert eval valid_once(
         probe: [true, true, true, true],
         first: [_, true, _, false],
         value: [_, 3, _, 8],
-    )) == [[false, false], [true, false], [true, false], [true, true]]
-    assert eval(changes_of(first: [true, false, true], value: [3, 4, 5])) == [3, -1, 5]
-    assert eval(first_set_of(value: [1, -1, 2])) == [true, false, true]
-    assert eval(nested_ask_of(bid: [1, 2], size: [3, _])) == [8, 9]
-    assert eval(nested_bid_of(bid: [1, _, 2], size: [3, 4, _])) == [1, 1, 2]
-    assert eval(nested_changes_of(bid: [1, 2], size: [3, _])) == [6, 6]
-    assert eval(total_of(a: [1, 2], b: ["x", _])) == [2, 3]
-    assert eval(swapped_second(a: [1, 2], b: ["x", _])) == [1, 2]
-    assert eval(made(a: [1, _], b: ["x", "y"])) == [(1, "x"), (null, "y")]
-    assert eval(snap_pair_of(bid: [1, _], n: [10, 20])) ==
+    ) == [[false, false], [true, false], [true, false], [true, true]]
+    assert eval changes_of(first: [true, false, true], value: [3, 4, 5]) == [3, -1, 5]
+    assert eval first_set_of(value: [1, -1, 2]) == [true, false, true]
+    assert eval nested_ask_of(bid: [1, 2], size: [3, _]) == [8, 9]
+    assert eval nested_bid_of(bid: [1, _, 2], size: [3, 4, _]) == [1, 1, 2]
+    assert eval nested_changes_of(bid: [1, 2], size: [3, _]) == [6, 6]
+    assert eval total_of(a: [1, 2], b: ["x", _]) == [2, 3]
+    assert eval swapped_second(a: [1, 2], b: ["x", _]) == [1, 2]
+    assert eval made(a: [1, _], b: ["x", "y"]) == [(1, "x"), (null, "y")]
+    assert eval snap_pair_of(bid: [1, _], n: [10, 20]) ==
         [(Quote(bid: 1, ask: 2), 10), (Quote(bid: 1, ask: 2), 20)]
-    assert eval(snap_ask(pair: [(Quote(bid: 1, ask: 2), 10), (null, 20)])) == [12, 22]
-    assert eval(made_first(a: [1, _, 2], b: ["x", "y", _])) == [1, 1, 2]
-    assert eval(made_total(a: [1, 2])) == [2, 3]
-    assert eval(kept_first(a: [1, 2], b: ["x", _])) == [1, 2]
+    assert eval snap_ask(pair: [(Quote(bid: 1, ask: 2), 10), (null, 20)]) == [12, 22]
+    assert eval made_first(a: [1, _, 2], b: ["x", "y", _]) == [1, 1, 2]
+    assert eval made_total(a: [1, 2]) == [2, 3]
+    assert eval kept_first(a: [1, 2], b: ["x", _]) == [1, 2]
 }
 
 # TYPE-3, TYPE-4: a generic struct's fields have the types its arguments
@@ -202,10 +202,10 @@ fn boxed_port(value: i64) -> i64 => boxed(value).value
 fn boxed_ask_of(bid: i64) -> i64 => boxed_ask(boxed_quote(bid))
 
 test a_generic_struct_ticks_by_its_fields {
-    assert eval(boxed_sum(value: [1, 2])) == [2, 4]
-    assert eval(boxed_port(value: [1, _, 3])) == [1, _, 3]
-    assert eval(boxed_ask_of(bid: [1, 5])) == [2, 6]
-    assert eval(boxed_whole_of(value: [4, 5])) == [4, 5]
+    assert eval boxed_sum(value: [1, 2]) == [2, 4]
+    assert eval boxed_port(value: [1, _, 3]) == [1, _, 3]
+    assert eval boxed_ask_of(bid: [1, 5]) == [2, 6]
+    assert eval boxed_whole_of(value: [4, 5]) == [4, 5]
 }
 
 # TYPE-3: a struct is a value where an abstract struct it inherits from
@@ -267,13 +267,13 @@ fn kept_shape(id: i64, radius: i64) -> i64 {
 }
 
 test an_abstract_struct_ticks_by_its_own_fields {
-    assert eval(circle_id(id: [1, _, 2], radius: [5, 6, _])) == [1, _, 2]
-    assert eval(shape_id(id: [1, 2], radius: [5, _])) == [1, 2]
-    assert eval(square_id(id: [3, 4])) == [3, 4]
-    assert eval(renamed_id(id: [7, 8])) == [7, 8]
-    assert eval(circle_changes(id: [1, _, 2], radius: [5, 6, _])) == [1, _, 2]
-    assert eval(kept_shape(id: [1, _], radius: [5, 6])) == [1, _]
-    assert eval(shape_pair(id: [1, 2], radius: [3, _])) == [4, 5]
+    assert eval circle_id(id: [1, _, 2], radius: [5, 6, _]) == [1, _, 2]
+    assert eval shape_id(id: [1, 2], radius: [5, _]) == [1, 2]
+    assert eval square_id(id: [3, 4]) == [3, 4]
+    assert eval renamed_id(id: [7, 8]) == [7, 8]
+    assert eval circle_changes(id: [1, _, 2], radius: [5, 6, _]) == [1, _, 2]
+    assert eval kept_shape(id: [1, _], radius: [5, 6]) == [1, _]
+    assert eval shape_pair(id: [1, 2], radius: [3, _]) == [4, 5]
 }
 
 # TIME-7: a whole struct published sets each field, a struct field's by
@@ -308,11 +308,11 @@ fn order_ask_of(bid: i64, size: i64) -> i64 => ordered(bid, size).quote.ask
 fn tags_of(tag: i64) -> set<i64> => tagged(tag).tags
 
 test a_whole_struct_publishes_each_field {
-    assert eval(order_total_of(bid: [1, 2], size: [3, _])) == [5, 6]
-    assert eval(order_ask_of(bid: [1, _, 2], size: [3, 4, _])) == [2, 2, 3]
+    assert eval order_total_of(bid: [1, 2], size: [3, _]) == [5, 6]
+    assert eval order_ask_of(bid: [1, _, 2], size: [3, 4, _]) == [2, 2, 3]
     # TIME-7: "a set given the members it holds ... is no tick", though
     # the struct's other field given again ticks.
-    assert eval(tags_of(tag: [1, 2, 2])) == [
+    assert eval tags_of(tag: [1, 2, 2]) == [
         delta<set<i64>>(added: [1]),
         delta<set<i64>>(added: [2], removed: [1]),
         _,
@@ -424,18 +424,18 @@ fn slotted_first(slot: i64, value: i64) -> i64 => slotted(slot, value)[0]
 const fn width(quote: Quote) -> i64 => quote.ask - quote.bid + quote.ask
 
 test a_part_of_out_is_assigned_through_its_port {
-    assert eval(raised(bid: [1, 3])) == [delta<Quote>(bid: 1, ask: 2), delta<Quote>(bid: 3, ask: 4)]
-    assert eval(raised_whole(bid: [1, 3])) == [3, 5]
-    assert eval(raised_twice(bid: [1, 3])) == [delta<Quote>(bid: 1, ask: 2), delta<Quote>(bid: 3, ask: 6)]
-    assert eval(reordered_ask(bid: [1, _, 2], size: [_, 3, _])) == [_, 30, 2]
-    assert eval(pair_first(value: [1, 2])) == [2, 4]
-    assert eval(second_out(first: [true, false, false], value: [1, 2, 3])) ==
+    assert eval raised(bid: [1, 3]) == [delta<Quote>(bid: 1, ask: 2), delta<Quote>(bid: 3, ask: 4)]
+    assert eval raised_whole(bid: [1, 3]) == [3, 5]
+    assert eval raised_twice(bid: [1, 3]) == [delta<Quote>(bid: 1, ask: 2), delta<Quote>(bid: 3, ask: 6)]
+    assert eval reordered_ask(bid: [1, _, 2], size: [_, 3, _]) == [_, 30, 2]
+    assert eval pair_first(value: [1, 2]) == [2, 4]
+    assert eval second_out(first: [true, false, false], value: [1, 2, 3]) ==
         [(1, null), (null, 2), (null, 3)]
-    assert eval(level_set_of(price: [1, -1, 2])) == [true, false, true]
-    assert eval(snapped_ask(bid: [1, 2])) == [6, 7]
-    assert eval(listed_second(value: [1, 2])) == [2, 3]
-    assert eval(slotted_first(slot: [0, 1, 0], value: [4, 5, 6])) == [4, _, 6]
-    assert eval(keyed(key: ["a", "b"], value: [1, 2])) == [
+    assert eval level_set_of(price: [1, -1, 2]) == [true, false, true]
+    assert eval snapped_ask(bid: [1, 2]) == [6, 7]
+    assert eval listed_second(value: [1, 2]) == [2, 3]
+    assert eval slotted_first(slot: [0, 1, 0], value: [4, 5, 6]) == [4, _, 6]
+    assert eval keyed(key: ["a", "b"], value: [1, 2]) == [
         delta<dict<str, i64>>(updated: ["a": 1]),
         delta<dict<str, i64>>(updated: ["b": 2]),
     ]

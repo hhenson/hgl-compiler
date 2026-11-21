@@ -18,7 +18,7 @@ fn relay(outer: Outer, book: dict<str, dict<str, i64>>, nulls: list<i64?, 2>) ->
     when { return 1 }
 }
 test nested_cells {
-    assert eval(relay(outer: [Outer(inner: Inner(value: 7))], book: [["a": ["b": 1]]], nulls: [[null, 3]])) == [1]
+    assert eval relay(outer: [Outer(inner: Inner(value: 7))], book: [["a": ["b": 1]]], nulls: [[null, 3]]) == [1]
 }
 abstract struct Shape { id: i64 }
 struct Circle : Shape { radius: i64 }
@@ -26,11 +26,11 @@ fn identified(shape: Shape) -> i64 {
     when { return 1 }
 }
 test below_cells {
-    assert eval(identified(shape: [Circle(id: 1, radius: 2)])) == [1]
+    assert eval identified(shape: [Circle(id: 1, radius: 2)]) == [1]
 }
 fn halves(pair: tuple<i64, list<i64>>) -> i64 {
     when { return 1 }
 }
 test tuple_cells {
-    assert eval(halves(pair: [(1, [2])])) == [1]
+    assert eval halves(pair: [(1, [2])]) == [1]
 }

@@ -23,7 +23,6 @@
 #undef early_total
 #undef error
 #undef held
-#undef length
 #undef lifted_total
 #undef observe_arrival
 #undef observe_checked
@@ -994,16 +993,12 @@ void a_value_leaves_a_window_of_a_duration()
     }();
     ::hglrt::testing::statement();
     [&] {
-        const auto left_012_ = [&]() {
-        const auto trace_09_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, std::nullopt, std::nullopt, 3};
-        const auto bounds_011_ = ::hglrt::testing::Bounds{.length = ::hgraph::TimeDelta{6}};
-        return ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_010_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_09_, start_));
-        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::windows::m_::w_::observe_recent_departure(wiring_, input_010_), ::hgraph::Str{::hglrt::testing::run_output});
-    }, bounds_011_);
-    }();
-        const auto right_013_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"value.unset_read"}, std::nullopt, std::nullopt, ::hgraph::Str{"1"}, ::hgraph::Str{"2"}};
-        ::hglrt::testing::expect_same(left_012_, right_013_);
+        const auto left_010_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, std::nullopt, std::nullopt, 3}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::windows::m_::w_::observe_recent_departure(wiring_, input_09_), ::hgraph::Str{::hglrt::testing::run_output});
+    }, ::hglrt::testing::Bounds{.length = ::hgraph::TimeDelta{6}});
+        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"value.unset_read"}, std::nullopt, std::nullopt, ::hgraph::Str{"1"}, ::hgraph::Str{"2"}};
+        ::hglrt::testing::expect_same(left_010_, right_011_);
     }();
 }
 

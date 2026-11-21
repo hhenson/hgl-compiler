@@ -39,8 +39,8 @@ test conversions {
     assert whole_of(-9223372036854775808.0) == -9223372036854775807 - 1
     assert invalid(0.0 /{zero: .nan} 0.0) && !invalid(1.0)
     assert flag_of("true") && is_ok(flag("false")) && !flag_of("false")
-    assert eval(floats(value: [1, 2])) == [1.0, 2.0]
-    assert eval(wholes(value: [0.5, 1.5, 2.5])) == [0, 2, 2]
+    assert eval floats(value: [1, 2]) == [1.0, 2.0]
+    assert eval wholes(value: [0.5, 1.5, 2.5]) == [0, 2, 2]
 }
 # OPS-6: a number as text. An `i64` is its decimal digits after a
 # `-`; an `f64` the shortest text that reads back, with a `.` or an
@@ -58,7 +58,7 @@ const fn repeated(text: str, times: i64) -> str {
 }
 fn shown(value: f64) -> str => convert<str>(value)
 test numbers_as_text {
-    assert eval(shown(value: [2.5, 1e21])) == ["2.5", "1e21"]
+    assert eval shown(value: [2.5, 1e21]) == ["2.5", "1e21"]
 }
 # OPS-6: text as a number, a literal of the type after one `-`;
 # OPS-7: any other text fails.

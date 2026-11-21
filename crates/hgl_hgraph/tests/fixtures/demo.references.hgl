@@ -226,64 +226,64 @@ fn bids_left_out(value: i64) -> i64 => bid_or(value)
 fn snapshots(bid: i64, ask: i64) -> i64 => counted(snapshot(bid, ask))
 
 test a_reader_observes_what_a_reference_designates {
-    assert eval(followed(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+    assert eval followed(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11]) ==
         [1, 2, 10, 11]
-    assert eval(repointed(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+    assert eval repointed(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11]) ==
         [1, _, 2, _]
-    assert eval(kept_of(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+    assert eval kept_of(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11]) ==
         [1, 2, 10, 11]
-    assert eval(checked_of(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _])) ==
+    assert eval checked_of(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _]) ==
         [true, _, true]
-    assert eval(doubled_of(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+    assert eval doubled_of(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11]) ==
         [2, 4, 20, 22]
-    assert eval(through_graphs(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+    assert eval through_graphs(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11]) ==
         [1, 2, 10, 11]
-    assert eval(branched_of(flag: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+    assert eval branched_of(flag: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11]) ==
         [1, 2, 10, 11]
-    assert eval(generic_follows(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+    assert eval generic_follows(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11]) ==
         [1, 2, 3, 4]
-    assert eval(generic_designates(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+    assert eval generic_designates(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11]) ==
         [1, _, 2, _]
-    assert eval(requested_ticks(left: [1, 2, 3])) == [1, _, _]
+    assert eval requested_ticks(left: [1, 2, 3]) == [1, _, _]
     # An eval of a `ref` result records what it designates.
-    assert eval(pick(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _])) == [1, 2, 10]
+    assert eval pick(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _]) == [1, 2, 10]
 }
 
 test a_ref_result_designates_what_its_return_names {
-    assert eval(routed(
+    assert eval routed(
         idx:     [ 1,  _,  _, 2,  _,  0],
         slot:    [ 1,  1,  0, _,  2,  0],
         reading: [20, 21, 10, _, 30, 11],
-    )) ==        [20, 21,  _, _, 30, 11]
-    assert eval(routed_out(
+    )  ==        [20, 21,  _, _, 30, 11]
+    assert eval routed_out(
         idx:     [ 1,  _,  _, 2,  _,  0],
         slot:    [ 1,  1,  0, _,  2,  0],
         reading: [20, 21, 10, _, 30, 11],
-    )) ==        [20, 21,  _, _, 30, 11]
-    assert eval(followed_hold(flag: [true, _, true], value: [1, 2, 3])) == [1, 2, 3]
+    )  ==        [20, 21,  _, _, 30, 11]
+    assert eval followed_hold(flag: [true, _, true], value: [1, 2, 3]) == [1, 2, 3]
 }
 
 test a_signal_wakes_its_node {
-    assert eval(sampled_of(value: [1, 2, _, 3], probe: [_, true, true, _])) == [_, 2, 2, _]
-    assert eval(woken(value: [1, _, 2])) == [1, _, 2]
-    assert eval(woken_by_struct(bid: [1, _, 2], ask: [5, _, _])) == [1, _, 2]
-    assert eval(woken_by_reference(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+    assert eval sampled_of(value: [1, 2, _, 3], probe: [_, true, true, _]) == [_, 2, 2, _]
+    assert eval woken(value: [1, _, 2]) == [1, _, 2]
+    assert eval woken_by_struct(bid: [1, _, 2], ask: [5, _, _]) == [1, _, 2]
+    assert eval woken_by_reference(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11]) ==
         [1, 2, 3, 4]
-    assert eval(passed(value: [1, 2])) == [1, 2]
-    assert eval(left_out(value: [1, 2])) == [-1, -2]
-    assert eval(left_out_captured(value: [1, 2])) == [-1, -2]
-    assert eval(given(value: [1, 2, _], probe: [_, true, true])) == [-1, 2, 2]
+    assert eval passed(value: [1, 2]) == [1, 2]
+    assert eval left_out(value: [1, 2]) == [-1, -2]
+    assert eval left_out_captured(value: [1, 2]) == [-1, -2]
+    assert eval given(value: [1, 2, _], probe: [_, true, true]) == [-1, 2, 2]
 }
 
 test an_atomic_struct_ticks_once_with_its_whole_value {
-    assert eval(width_of(bid: [1, 2, _], ask: [5, _, 9])) == [4, 3, 7]
-    assert eval(raised_bid(bid: [1, 2], ask: [5, _])) == [2, 3]
-    assert eval(widened_ask(bid: [1, 2])) == [5, 6]
-    assert eval(whole_asks(bid: [1, 2, _], ask: [5, _, 6])) == [5, 5, 6]
-    assert eval(changed_copy_of(a: [1, 2])) == [102, 104]
-    assert eval(bids(value: [1, 2], bid: [5, _], ask: [6, _])) == [5, 5]
-    assert eval(bids_left_out(value: [1, 2])) == [-1, -2]
-    assert eval(snapshots(bid: [1, 2, 3], ask: [5, 6, _])) == [1, 2, 3]
+    assert eval width_of(bid: [1, 2, _], ask: [5, _, 9]) == [4, 3, 7]
+    assert eval raised_bid(bid: [1, 2], ask: [5, _]) == [2, 3]
+    assert eval widened_ask(bid: [1, 2]) == [5, 6]
+    assert eval whole_asks(bid: [1, 2, _], ask: [5, _, 6]) == [5, 5, 6]
+    assert eval changed_copy_of(a: [1, 2]) == [102, 104]
+    assert eval bids(value: [1, 2], bid: [5, _], ask: [6, _]) == [5, 5]
+    assert eval bids_left_out(value: [1, 2]) == [-1, -2]
+    assert eval snapshots(bid: [1, 2, 3], ask: [5, 6, _]) == [1, 2, 3]
 }
 
 # TYPE-3: a struct's connection is given where an abstract struct it
@@ -321,6 +321,6 @@ fn narrowed_follow(id: i64) -> i64 => shape_id(same_circle(circled(id)))
 fn narrowed_designation(id: i64) -> i64 => shapes_designated(circled(id))
 
 test a_struct_is_narrowed_across_a_ref {
-    assert eval(narrowed_follow(id: [1, 2])) == [1, 2]
-    assert eval(narrowed_designation(id: [1, 2])) == [1, _]
+    assert eval narrowed_follow(id: [1, 2]) == [1, 2]
+    assert eval narrowed_designation(id: [1, 2]) == [1, _]
 }

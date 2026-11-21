@@ -27,5 +27,5 @@ test instants_are_values_and_ticks {
     # Core's named times (its CRUN-3) are constants of these types.
     assert earliest_start == never + smallest_step
     assert latest_end == forever - smallest_step
-    assert eval(shifted(at: [opened], by: [1h])) == [@2026-09-03T10:30:00Z]
+    assert eval shifted(at: [opened], by: [1h]) == [@2026-09-03T10:30:00Z]
 }

@@ -13,7 +13,7 @@ use super::fit::open;
 use crate::hir::{
     BinaryOperator, Body, ErrorPart, Expr, ExprKind, Hook, Local, Stmt, ValueCategory,
 };
-use crate::program::{DeclarationKind, LocalKind};
+use crate::program::{DeclarationKind, LocalKind, RUN_CONFIG};
 use crate::read::is_type;
 use crate::syntax::{child, tokens};
 use crate::types::{NamedKind, Type};
@@ -159,6 +159,19 @@ impl<'a> Typer<'a> {
                     self.unread(node)
                 } else {
                     bound.swap_remove(0)
+                }
+            }
+            // TST-17: an integration test "may inject `run_config`,
+            // before its other statements". Where that has no place, and
+            // any other capability in a test, the phase pass reports.
+            SyntaxKind::InjectDecl if self.testing && self.integration => {
+                let mut bound = self.inject(node);
+                match bound.iter().position(|statement| {
+                    matches!(statement, Stmt::Inject { local, .. }
+                        if self.locals[*local].name == RUN_CONFIG)
+                }) {
+                    Some(position) => bound.swap_remove(position),
+                    None => self.unread(node),
                 }
             }
             SyntaxKind::AssignStmt => self.assignment(node),

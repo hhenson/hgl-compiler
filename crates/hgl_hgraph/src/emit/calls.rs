@@ -954,7 +954,7 @@ impl<'a> Emitter<'a> {
         format!("{python}({arguments})")
     }
 
-    /// `eval(target, ...)`: the harness's `evaluate`, given the target,
+    /// `eval target(...)`: the harness's `evaluate`, given the target,
     /// what its run is wired with ([`Emitter::run_wired`]), and each
     /// argument by its parameter's name.
     ///
@@ -965,21 +965,22 @@ impl<'a> Emitter<'a> {
     /// run's key (CRUN-8); and the eval's value is that recording
     /// written dense, of a run of its own (CEVAL-5).
     ///
-    /// RUN-1, core's CRUN-2: a run's configuration is given last, as
-    /// `_config`, a name no parameter has, so that it is evaluated
-    /// after the call's arguments, as EXPR-13 has them. The harness
-    /// reads its `start`, `end` and `length`.
+    /// RUN-6, core's CRUN-2: a run's configuration, the entries the
+    /// eval writes in braces, is given as `_config`, a name no parameter
+    /// has, before the call's arguments, as EXPR-13 evaluates them: the
+    /// harness's `RunConfig` of them (`run_config`). The harness reads
+    /// its `start`, `end` and `length`.
     ///
     /// TST-17: "An integration test ... beside `eval` it writes
-    /// `run(call, config)` (RUN-3), whose value is the run's output as
-    /// an eval's is." `real_time` is true for that form, and the
-    /// harness is told so with `_real_time=True`.
+    /// `run call` (RUN-3), whose value is the run's output as an eval's
+    /// is." `real_time` is true for that form, and the harness is told
+    /// so with `_real_time=True`.
     pub(super) fn eval(
         &mut self,
         function: &Function,
         call: &Expr,
         ty: &Type,
-        config: Option<&Expr>,
+        config: &[ConfigEntry],
         real_time: bool,
     ) -> String {
         let ExprKind::Call {
@@ -1069,17 +1070,36 @@ impl<'a> Emitter<'a> {
         function: &Function,
         mut given: Vec<String>,
         call: &Expr,
-        config: Option<&Expr>,
+        config: &[ConfigEntry],
         real_time: bool,
     ) -> String {
-        if let Some(config) = config {
-            given.push(format!("_config={}", self.expression(function, config)));
+        // EXPR-13: the configuration is written before the call (RUN-6),
+        // and so is evaluated before the call's arguments, which are
+        // given by name after the target and its wiring.
+        if !config.is_empty() {
+            let at = given.len().min(2);
+            given.insert(at, format!("_config={}", self.run_config(function, config)));
         }
         if real_time {
             given.push("_real_time=True".to_string());
         }
         given.extend(self.held_reader(&call.ty, call.at));
         format!("_harness.evaluate({})", given.join(", "))
+    }
+
+    /// The run's configuration `config`, the entries an eval or an
+    /// application writes in braces (RUN-6), as the harness's
+    /// `RunConfig`: each field by its name, in the order written, and a
+    /// field left out `None`.
+    pub(super) fn run_config(&mut self, function: &Function, config: &[ConfigEntry]) -> String {
+        let fields: Vec<String> = config
+            .iter()
+            .map(|entry| {
+                let value = self.expression(function, &entry.value);
+                format!("{}={value}", entry.field)
+            })
+            .collect();
+        format!("_harness.RunConfig({})", fields.join(", "))
     }
 
     /// True where this target reads a temporal value of `ty` whole from

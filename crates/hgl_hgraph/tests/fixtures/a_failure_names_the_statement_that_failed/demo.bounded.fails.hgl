@@ -6,8 +6,8 @@ fn slow() -> i64 {
     yield 1s: 1
 }
 test both_ends {
-    eval(pass(value: [1]), RunConfig(end: earliest_start + 1us, length: 1us))
+    eval{end: earliest_start + 1us, length: 1us} pass(value: [1])
 }
 test too_dense {
-    assert eval(slow()) == [1]
+    assert eval slow() == [1]
 }

@@ -13,7 +13,7 @@ fn wired(value: i64) -> i64 => offset(value)
 test defaults {
     assert scale(3) == 6
     assert scale(3, 5) == 15
-    assert eval(offset(value: [1])) == [11]
-    assert eval(offset(value: [1], by: 1)) == [2]
-    assert eval(wired(value: [5])) == [15]
+    assert eval offset(value: [1]) == [11]
+    assert eval offset(value: [1], by: 1) == [2]
+    assert eval wired(value: [5]) == [15]
 }

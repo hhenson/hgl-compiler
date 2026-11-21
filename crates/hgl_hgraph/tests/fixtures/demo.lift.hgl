@@ -24,17 +24,17 @@ fn watched(value: i64) -> i64 {
 }
 
 test lifts {
-    assert eval(doubled(value: [1, _, 3])) == [2, _, 6]
-    assert eval(summed(left: [1, _, 3], right: [_, 10])) == [_, 11, 13]
-    assert eval(scaled(price: [1.0, _, 3.0, 3.0], factor: [_, 4.0])) ==
+    assert eval doubled(value: [1, _, 3]) == [2, _, 6]
+    assert eval summed(left: [1, _, 3], right: [_, 10]) == [_, 11, 13]
+    assert eval scaled(price: [1.0, _, 3.0, 3.0], factor: [_, 4.0]) ==
         [2.0, 4.0, 12.0, 12.0]
-    assert eval(half_configured(price: [1.0, 2.0])) == [3.0, 6.0]
-    assert eval(defaulted(price: [1.5])) == [3.0]
-    assert eval(nested(left: [1, 2], right: [10])) == [23, 25]
-    assert eval(twice(left: [1, 2], right: [10])) == [22, 24]
-    assert eval(positive(price: [1.0, -1.0])) == [true, false]
-    assert eval(fixed(value: [1, 2], factor: 5)) == [11, 12]
-    assert eval(scale(value: [1.0, _, 3.0], factor: [_, 4.0])) == [2.0, 4.0, 12.0]
-    assert eval(watched(value: [1, 2])) == [1, 2]
-    assert eval(labelled(value: [1])) == ["{NAME}"]
+    assert eval half_configured(price: [1.0, 2.0]) == [3.0, 6.0]
+    assert eval defaulted(price: [1.5]) == [3.0]
+    assert eval nested(left: [1, 2], right: [10]) == [23, 25]
+    assert eval twice(left: [1, 2], right: [10]) == [22, 24]
+    assert eval positive(price: [1.0, -1.0]) == [true, false]
+    assert eval fixed(value: [1, 2], factor: 5) == [11, 12]
+    assert eval scale(value: [1.0, _, 3.0], factor: [_, 4.0]) == [2.0, 4.0, 12.0]
+    assert eval watched(value: [1, 2]) == [1, 2]
+    assert eval labelled(value: [1]) == ["{NAME}"]
 }

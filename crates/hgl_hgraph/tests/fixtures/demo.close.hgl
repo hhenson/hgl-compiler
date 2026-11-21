@@ -37,5 +37,5 @@ test closeness {
     assert !whole(7, 10, 2.0)
     assert mixed(9007199254740993, 9007199254740992.0, 1.0)
     assert !mixed(9007199254740993, 9007199254740992.0, 0.5)
-    assert eval(closes(a: [1.0, 2.0], b: [1.4])) == [true, false]
+    assert eval closes(a: [1.0, 2.0], b: [1.4]) == [true, false]
 }

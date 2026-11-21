@@ -450,13 +450,23 @@ impl Emitter<'_> {
                 format!("{{{}}}", entries.join(", "))
             }
             ExprKind::Delta { arguments } => self.delta(function, value, arguments),
-            // TST-17, RUN-3: `run(...)` in an integration test is the
-            // eval's run in real time.
+            // TST-17, RUN-3: `run target(...)` in an integration test is
+            // the eval's run in real time. A configuration an integration
+            // test injects (RUN-6) is not written by this target.
             ExprKind::Eval {
                 call,
                 config,
+                inherited,
                 real_time,
-            } => self.eval(function, call, &value.ty, config.as_deref(), *real_time),
+            } => {
+                if inherited.is_some() {
+                    self.unsupported(
+                        value.at,
+                        "an eval in an integration test that injects `run_config`",
+                    );
+                }
+                self.eval(function, call, &value.ty, config, *real_time)
+            }
             // TST-16: "A trace given to a `const fn` is an ordinary
             // value there: ... a `list<tuple<datetime, delta<T>>>`, one
             // tuple for each publication". The harness makes it of the

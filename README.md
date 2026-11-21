@@ -70,7 +70,7 @@ variable `HGL_HGRAPH_PYTHON` names, which must have hgraph
 installed; a test that needs a form the target does not write yet is
 reported `not run`, with the form. An `integration_test` is left out
 unless `--integration` asks for them or `--test NAME` names it; its
-`run(...)` is a run in real time, and it has failed if it is still
+`run target(...)` is a run in real time, and it has failed if it is still
 running after the limit `@timeout(5s)` gives on the line before it, or
 after a minute where it writes none.
 `hgl emit --out DIR` writes an
@@ -80,9 +80,10 @@ on hgraph, the one `--application PATH` names or the only one, and prints
 its output when the run has stopped: a line for each publication of its
 entry's result. An `eval` application is a simulation; a `run` one is in
 real time, and an interrupt stops it. `--arg NAME=VALUE` replaces an
-argument of the application's entry and `--config FIELD=VALUE` a field
-of its run configuration, each with an HGL constant checked as if the
-application had written it. Exit status is 0 when the source is
+argument of the application's entry, and `--config FIELD=VALUE` supplies
+a field of its run's configuration, `start`, `end` or `length`, over the
+default its `inject run_config{...}` gives, each an HGL value checked as
+if the application had written it. Exit status is 0 when the source is
 accepted and every selected case passed or the application's run ended,
 1 when the source is rejected, a case failed or the run failed, 2 when
 the command could not run or a selected test or the application was not

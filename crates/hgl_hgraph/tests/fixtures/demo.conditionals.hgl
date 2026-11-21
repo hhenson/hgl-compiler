@@ -11,7 +11,7 @@ fn gated(open: bool, price: i64) -> i64 {
 }
 
 test an_if_with_no_else_is_silent_while_false {
-    assert eval(gated(open: [true, false, _, true], price: [1, 2, 3, 4])) == [1, _, _, 4]
+    assert eval gated(open: [true, false, _, true], price: [1, 2, 3, 4]) == [1, _, _, 4]
 }
 
 fn picked(open: bool, left: i64, right: i64) -> i64 {
@@ -19,7 +19,7 @@ fn picked(open: bool, left: i64, right: i64) -> i64 {
 }
 
 test an_if_with_else_forwards_the_selected_branch {
-    assert eval(picked(open: [true, false, _, true], left: [1, 2, 3, 4], right: [10, 20, 30, 40])) ==
+    assert eval picked(open: [true, false, _, true], left: [1, 2, 3, 4], right: [10, 20, 30, 40]) ==
         [1, 20, 30, 4]
 }
 
@@ -30,7 +30,7 @@ fn graded(score: i64) -> str {
 }
 
 test an_else_if_chain_selects_one_constant {
-    assert eval(graded(score: [12, 7, 2, 15])) == ["high", "mid", "low", "high"]
+    assert eval graded(score: [12, 7, 2, 15]) == ["high", "mid", "low", "high"]
 }
 
 fn floored(open: bool, price: i64) -> i64 {
@@ -38,7 +38,7 @@ fn floored(open: bool, price: i64) -> i64 {
 }
 
 test an_ordinary_value_in_a_branch_is_a_constant {
-    assert eval(floored(open: [true, false, _, true], price: [1, 2, 3, 4])) == [1, 0, _, 4]
+    assert eval floored(open: [true, false, _, true], price: [1, 2, 3, 4]) == [1, 0, _, 4]
 }
 
 # CTRL-14: "A `return value` in a branch of a temporal `if` makes the
@@ -51,7 +51,7 @@ fn bypassed(skip: bool, value: i64) -> i64 {
 }
 
 test a_returning_branch_takes_the_rest_as_the_other {
-    assert eval(bypassed(skip: [true, false, _, true], value: [1, 2, 3, 4])) == [1, 4, 6, 4]
+    assert eval bypassed(skip: [true, false, _, true], value: [1, 2, 3, 4]) == [1, 4, 6, 4]
 }
 
 # CTRL-14: "After the `if` the `var` is one connection: the branch's
@@ -64,7 +64,7 @@ fn adjusted(rising: bool, price: i64) -> i64 {
 }
 
 test a_branch_that_does_not_assign_keeps_the_binding {
-    assert eval(adjusted(rising: [true, false, _, true], price: [1, 2, 3, 4])) == [10, 2, 3, 40]
+    assert eval adjusted(rising: [true, false, _, true], price: [1, 2, 3, 4]) == [10, 2, 3, 40]
 }
 
 fn shifted(rising: bool, price: i64) -> i64 {
@@ -74,7 +74,7 @@ fn shifted(rising: bool, price: i64) -> i64 {
 }
 
 test both_branches_assign_one_var {
-    assert eval(shifted(rising: [true, false, _, true], price: [1, 2, 3, 4])) == [10, 3, 4, 40]
+    assert eval shifted(rising: [true, false, _, true], price: [1, 2, 3, 4]) == [10, 3, 4, 40]
 }
 
 # CTRL-15: "a case's assignments and returns follow CTRL-14".
@@ -89,11 +89,11 @@ fn routed(route: str, left: i64, right: i64, fallback: i64) -> i64 {
 }
 
 test a_switch_with_a_default_assigns_a_var {
-    assert eval(routed(
+    assert eval routed(
         route:    ["left", "right", "other", _, "left"],
         left:     [1,      2,       3,       4, 5],
         right:    [10,     20,      30,      40, 50],
-        fallback: [100,    200,     300,     400, 500])) ==
+        fallback: [100,    200,     300,     400, 500]) ==
                   [1,      20,      301,     401, 5]
 }
 
@@ -106,7 +106,7 @@ fn chosen_by(route: i64, left: i64, right: i64) -> i64 {
 }
 
 test a_switch_whose_cases_all_return {
-    assert eval(chosen_by(route: [1, 2, 3, _, 1], left: [1, 2, 3, 4, 5], right: [10, 20, 30, 40, 50])) ==
+    assert eval chosen_by(route: [1, 2, 3, _, 1], left: [1, 2, 3, 4, 5], right: [10, 20, 30, 40, 50]) ==
         [1, 20, 0, _, 5]
 }
 
@@ -118,8 +118,8 @@ fn sized(price: i64, const wide: bool) -> i64 {
 }
 
 test a_wiring_time_if_returns_from_one_branch {
-    assert eval(sized(price: [1, 2], wide: true)) == [2, 4]
-    assert eval(sized(price: [1, 2], wide: false)) == [1, 2]
+    assert eval sized(price: [1, 2], wide: true) == [2, 4]
+    assert eval sized(price: [1, 2], wide: false) == [1, 2]
 }
 
 fn scaled(price: i64, const wide: bool) -> i64 {
@@ -128,8 +128,8 @@ fn scaled(price: i64, const wide: bool) -> i64 {
 }
 
 test a_wiring_time_if_gives_a_let_its_value {
-    assert eval(scaled(price: [1, 2], wide: true)) == [3, 6]
-    assert eval(scaled(price: [1, 2], wide: false)) == [1, 2]
+    assert eval scaled(price: [1, 2], wide: true) == [3, 6]
+    assert eval scaled(price: [1, 2], wide: false) == [1, 2]
 }
 
 # An `if` in a branch is its own child graph, inside the branch's.
@@ -140,7 +140,7 @@ fn nested(open: bool, high: bool, price: i64) -> i64 {
 }
 
 test an_if_nested_in_a_branch {
-    assert eval(nested(open: [true, _, false, true], high: [true, false, _, _], price: [1, 2, 3, 4])) ==
+    assert eval nested(open: [true, _, false, true], high: [true, false, _, _], price: [1, 2, 3, 4]) ==
         [10, 2, _, 4]
 }
 
@@ -153,7 +153,7 @@ fn stepped(first: bool, second: bool, price: i64) -> i64 {
 }
 
 test a_statement_else_if_tests_its_condition {
-    assert eval(stepped(first: [true, false, _, false], second: [false, true, _, false], price: [1, 2, 3, 4])) ==
+    assert eval stepped(first: [true, false, _, false], second: [false, true, _, false], price: [1, 2, 3, 4]) ==
         [10, 200, 300, 4]
 }
 
@@ -170,7 +170,7 @@ fn partly(outer: bool, inner: bool, price: i64) -> i64 {
 }
 
 test a_nested_branch_that_may_not_assign_keeps_the_binding {
-    assert eval(partly(outer: [true, _, false, true], inner: [true, false, _, _], price: [1, 2, 3, 4])) ==
+    assert eval partly(outer: [true, _, false, true], inner: [true, false, _, _], price: [1, 2, 3, 4]) ==
         [10, 2, 4, 4]
 }
 
@@ -185,8 +185,8 @@ fn widened(price: i64, rising: bool, const wide: bool) -> i64 {
 }
 
 test an_if_over_a_connection_in_a_wiring_time_branch {
-    assert eval(widened(price: [1, 2, 3], rising: [true, false, true], wide: true)) == [10, 2, 30]
-    assert eval(widened(price: [1, 2, 3], rising: [true, false, true], wide: false)) == [1, 2, 3]
+    assert eval widened(price: [1, 2, 3], rising: [true, false, true], wide: true) == [10, 2, 30]
+    assert eval widened(price: [1, 2, 3], rising: [true, false, true], wide: false) == [1, 2, 3]
 }
 
 # A read after the branch has assigned the `var` is the branch's own
@@ -203,7 +203,7 @@ fn assigned_first(flag: bool, left: i64, right: i64) -> i64 {
 }
 
 test a_read_after_an_assignment_is_no_capture {
-    assert eval(assigned_first(flag: [true, false, true], left: [1, 2, 3], right: [10, 20, 30])) ==
+    assert eval assigned_first(flag: [true, false, true], left: [1, 2, 3], right: [10, 20, 30]) ==
         [1, 20, 3]
 }
 
@@ -222,7 +222,7 @@ fn fallback_inside(outer: bool, inner: bool, left: i64, right: i64) -> i64 {
 }
 
 test a_nested_fallback_is_a_capture {
-    assert eval(fallback_inside(outer: [true, false, _, true], inner: [false, false, true, false], left: [1, 2, 3, 4], right: [10, 20, 30, 40])) ==
+    assert eval fallback_inside(outer: [true, false, _, true], inner: [false, false, true, false], left: [1, 2, 3, 4], right: [10, 20, 30, 40]) ==
         [10, 2, 3, 40]
 }
 
@@ -239,7 +239,7 @@ fn wired_inside(outer: bool, left: i64, right: i64, const wide: bool) -> i64 {
 }
 
 test a_wiring_time_fallback_is_no_capture {
-    assert eval(wired_inside(outer: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [1, 20]
+    assert eval wired_inside(outer: [true, false], left: [1, 2], right: [10, 20], wide: true) == [1, 20]
 }
 
 # An assignment under a temporal `if` inside a `let`'s wiring-time `if`
@@ -261,7 +261,7 @@ fn assigned_in_a_value(outer: bool, inner: bool, left: i64, right: i64, const wi
 }
 
 test an_assignment_in_a_lets_value_is_captured {
-    assert eval(assigned_in_a_value(outer: [true, false], inner: [false, true], left: [1, 2], right: [10, 20], wide: true)) ==
+    assert eval assigned_in_a_value(outer: [true, false], inner: [false, true], left: [1, 2], right: [10, 20], wide: true) ==
         [10, 2]
 }
 
@@ -279,7 +279,7 @@ fn returned_inside(flag: bool, left: i64, right: i64, const wide: bool, const ot
 }
 
 test a_nested_return_leaves_the_other_binding {
-    assert eval(returned_inside(flag: [true, false], left: [1, 2], right: [10, 20], wide: false, other_wide: false)) ==
+    assert eval returned_inside(flag: [true, false], left: [1, 2], right: [10, 20], wide: false, other_wide: false) ==
         [11, 2]
 }
 
@@ -295,7 +295,7 @@ fn returned_in_a_value(flag: bool, left: i64, right: i64, const wide: bool) -> i
 }
 
 test a_returning_value_branch_leaves_the_other_binding {
-    assert eval(returned_in_a_value(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) ==
+    assert eval returned_in_a_value(flag: [true, false], left: [1, 2], right: [10, 20], wide: false) ==
         [11, 2]
 }
 
@@ -306,8 +306,8 @@ fn wide_pick(flag: bool, left: i64, right: i64, const wide: bool) -> i64 {
 }
 
 test a_connections_if_in_a_wiring_time_value {
-    assert eval(wide_pick(flag: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [1, 20]
-    assert eval(wide_pick(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) == [1, 2]
+    assert eval wide_pick(flag: [true, false], left: [1, 2], right: [10, 20], wide: true) == [1, 20]
+    assert eval wide_pick(flag: [true, false], left: [1, 2], right: [10, 20], wide: false) == [1, 2]
 }
 
 # A `switch` some of whose cases return and others assign: a case that
@@ -322,7 +322,7 @@ fn part_returned(route: i64, left: i64, right: i64) -> i64 {
 }
 
 test a_switch_case_that_returns_skips_the_rest {
-    assert eval(part_returned(route: [1, 2], left: [1, 2], right: [10, 20])) == [10, 4]
+    assert eval part_returned(route: [1, 2], left: [1, 2], right: [10, 20]) == [10, 4]
 }
 
 # A returning `if` in a branch whose value is the graph's: the branch's
@@ -337,7 +337,7 @@ fn returned_before_value(outer: bool, inner: bool, left: i64, right: i64) -> i64
 }
 
 test a_return_before_a_branchs_value {
-    assert eval(returned_before_value(outer: [true, true, false], inner: [true, false, true], left: [1, 2, 3], right: [10, 20, 30])) ==
+    assert eval returned_before_value(outer: [true, true, false], inner: [true, false, true], left: [1, 2, 3], right: [10, 20, 30]) ==
         [1, 20, 30]
 }
 
@@ -354,8 +354,8 @@ fn returned_in_a_let(flag: bool, left: i64, right: i64, const wide: bool) -> i64
 }
 
 test a_return_in_a_lets_wiring_time_value {
-    assert eval(returned_in_a_let(flag: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [10, 3]
-    assert eval(returned_in_a_let(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) == [2, 3]
+    assert eval returned_in_a_let(flag: [true, false], left: [1, 2], right: [10, 20], wide: true) == [10, 3]
+    assert eval returned_in_a_let(flag: [true, false], left: [1, 2], right: [10, 20], wide: false) == [2, 3]
 }
 
 # The same for a wiring-time `if` that stands as a statement.
@@ -367,8 +367,8 @@ fn returned_in_a_statement(flag: bool, left: i64, right: i64, const wide: bool) 
 }
 
 test a_return_in_a_wiring_time_statement {
-    assert eval(returned_in_a_statement(flag: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [10, 2]
-    assert eval(returned_in_a_statement(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) == [1, 2]
+    assert eval returned_in_a_statement(flag: [true, false], left: [1, 2], right: [10, 20], wide: true) == [10, 2]
+    assert eval returned_in_a_statement(flag: [true, false], left: [1, 2], right: [10, 20], wide: false) == [1, 2]
 }
 
 # The same with no `else`: the absent value is given before what follows.
@@ -381,8 +381,8 @@ fn returned_with_no_else(price: i64, const wide: bool, const narrow: bool) -> i6
 }
 
 test an_absent_value_comes_before_the_rest {
-    assert eval(returned_with_no_else(price: [1, 2], wide: false, narrow: false)) == []
-    assert eval(returned_with_no_else(price: [1, 2], wide: true, narrow: false)) == [1, 2]
+    assert eval returned_with_no_else(price: [1, 2], wide: false, narrow: false) == []
+    assert eval returned_with_no_else(price: [1, 2], wide: true, narrow: false) == [1, 2]
 }
 
 # A returning `if` in a branch's value, itself a wiring-time `if`: what
@@ -402,8 +402,8 @@ fn returned_in_a_value_if(flag: bool, price: i64, const wide: bool, const narrow
 }
 
 test a_return_in_a_nested_value {
-    assert eval(returned_in_a_value_if(flag: [true, false], price: [1, 2], wide: true, narrow: true)) == [1, 3]
-    assert eval(returned_in_a_value_if(flag: [true, false], price: [1, 2], wide: false, narrow: true)) == [2, 3]
+    assert eval returned_in_a_value_if(flag: [true, false], price: [1, 2], wide: true, narrow: true) == [1, 3]
+    assert eval returned_in_a_value_if(flag: [true, false], price: [1, 2], wide: false, narrow: true) == [2, 3]
 }
 
 # CTRL-13: an `if` is a connection where a branch's value is one, an
@@ -414,6 +414,6 @@ fn gated_wide(flag: bool, price: i64, const wide: bool) -> i64 {
 }
 
 test an_uncomposed_branch_of_a_connection_never_ticks {
-    assert eval(gated_wide(flag: [true, false], price: [5, 6], wide: true)) == [5]
-    assert eval(gated_wide(flag: [true, false], price: [5, 6], wide: false)) == []
+    assert eval gated_wide(flag: [true, false], price: [5, 6], wide: true) == [5]
+    assert eval gated_wide(flag: [true, false], price: [5, 6], wide: false) == []
 }

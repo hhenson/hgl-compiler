@@ -41,12 +41,12 @@ fn bump_captured(value: i64) -> str {
 }
 
 test an_unset_out_read_fails_with_its_code {
-    assert raises("value.unset_read") { eval(bump(value: [1, 2])) }
-    assert eval(running(value: [1, 2, 3])) == [1, 3, 6]
+    assert raises("value.unset_read") { eval bump(value: [1, 2]) }
+    assert eval running(value: [1, 2, 3]) == [1, 3, 6]
 }
 
 test an_unset_out_read_is_captured {
-    assert eval(bump_captured(value: [1, 2])) == ["value.unset_read", "value.unset_read"]
+    assert eval bump_captured(value: [1, 2]) == ["value.unset_read", "value.unset_read"]
 }
 
 # `out` read by a part: a field of a struct.
@@ -56,7 +56,7 @@ fn bid_bumped(value: i64) -> Quote {
 }
 
 test an_unset_part_of_out_read_fails_with_its_code {
-    assert raises("value.unset_read") { eval(bid_bumped(value: [1])) }
+    assert raises("value.unset_read") { eval bid_bumped(value: [1]) }
 }
 
 # `out` read in `stop`: it ends the run, and a failure there escapes
@@ -69,8 +69,8 @@ fn last_published(value: i64) -> i64 {
 }
 
 test an_unset_out_read_in_stop_fails_with_its_code {
-    assert eval(last_published(value: [1, 0])) == [1]
-    assert raises("value.unset_read") { eval(last_published(value: [0, 0])) }
+    assert eval last_published(value: [1, 0]) == [1]
+    assert raises("value.unset_read") { eval last_published(value: [0, 0]) }
 }
 
 # `out` of a collection read whole: a list and a dictionary.
@@ -103,7 +103,7 @@ fn keyed(value: i64) -> dict<str, i64> {
 }
 
 test an_unset_collection_out_read_fails_with_its_code {
-    assert raises("value.unset_read") { eval(grown(value: [1, 2])) }
-    assert eval(grown_once_valid(value: [1, 2])) == [[1], [1, 2]]
-    assert raises("value.unset_read") { eval(keyed(value: [1, 2])) }
+    assert raises("value.unset_read") { eval grown(value: [1, 2]) }
+    assert eval grown_once_valid(value: [1, 2]) == [[1], [1, 2]]
+    assert raises("value.unset_read") { eval keyed(value: [1, 2]) }
 }

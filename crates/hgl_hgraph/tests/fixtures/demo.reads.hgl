@@ -8,5 +8,5 @@ fn wired(value: i64) -> i64 => scaled(value, scale)
 test constants_are_imported {
     assert twice == 4
     assert choose(twice) == 11
-    assert eval(wired(value: [1, 2])) == [2, 4]
+    assert eval wired(value: [1, 2]) == [2, 4]
 }

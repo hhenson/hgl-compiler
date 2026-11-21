@@ -7,6 +7,6 @@ fn outcome(value: CmpResult) -> CmpResult {
     when { return value }
 }
 test right_sides {
-    assert eval(kept(side: [.up, .down])) == [.up, .down]
-    assert eval(outcome(value: [.less, .greater, .unordered])) == [.less, .greater, .unordered]
+    assert eval kept(side: [.up, .down]) == [.up, .down]
+    assert eval outcome(value: [.less, .greater, .unordered]) == [.less, .greater, .unordered]
 }

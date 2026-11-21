@@ -128,7 +128,7 @@ pub(crate) enum Choice {
 /// The opening brackets that directly follow what they apply to (LEX-27).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Bracket {
-    /// The `(` of a call: `f(x)`, `Box<i64>(x)`, `str(x)`, `eval(...)`.
+    /// The `(` of a call: `f(x)`, `Box<i64>(x)`, `str(x)`, `eval f(x)`.
     Call,
     /// The `[` of an index: `rows[i]`.
     Index,
@@ -196,10 +196,6 @@ pub(crate) struct Parser<'a> {
     last_error_at: Option<usize>,
     /// What the enclosing construct allows.
     pub(crate) context: Context,
-    /// True inside the block of a named test. TST-17: "In a test's
-    /// block `run` as the callee of a call is that form, whatever else
-    /// is in scope".
-    pub(crate) in_test: bool,
     /// Set when `>=` has been taken as the `>` that closes a generic
     /// argument list (LEX-17): the cursor is then standing where the `=`
     /// would have been, at this position.
@@ -244,7 +240,6 @@ impl<'a> Parser<'a> {
             errors: 0,
             last_error_at: None,
             context: Context::BLOCK,
-            in_test: false,
             glued_assign: None,
             entry_start: None,
             no_generic_at: None,

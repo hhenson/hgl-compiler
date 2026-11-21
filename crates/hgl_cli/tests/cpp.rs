@@ -34,7 +34,7 @@ const FLAGS: &str = concat!(
     "}\n",
     "\n",
     "test evaluates {\n",
-    "    assert eval(pass(value: [[[true]]])) == [[[true]]]\n",
+    "    assert eval pass(value: [[[true]]]) == [[[true]]]\n",
     "}\n",
 );
 
@@ -125,6 +125,15 @@ const TICKS: &str = concat!(
     "export fn failing() -> i64 {\n",
     "    return inverse(ticks([1, 2, 3]))\n",
     "}\n",
+    "\n",
+    "fn told(value: i64) -> bool {\n",
+    "    inject global_state\n",
+    "    when { return get<bool>(global_state, \"started\") }\n",
+    "}\n",
+    "\n",
+    "export fn started(const values: list<i64>) -> bool {\n",
+    "    return told(ticks(values))\n",
+    "}\n",
 );
 
 /// RUN-3: `eval`, a simulation.
@@ -135,7 +144,7 @@ const BACKTEST: &str = concat!(
     "\n",
     "const rounds: list<i64> = [1, 2, 3]\n",
     "\n",
-    "eval(doubled(values: rounds))\n",
+    "eval doubled(values: rounds)\n",
 );
 
 /// UNIT-14: an application that sets the run's store before its run.
@@ -149,7 +158,7 @@ const STORED: &str = concat!(
     "inject global_state\n",
     "put(key: \"limit\", store: global_state, value: sum(1, 1))\n",
     "\n",
-    "eval(bounded(values: [1, 2, 3, 4]))\n",
+    "eval bounded(values: [1, 2, 3, 4])\n",
 );
 
 /// FN-9: one whose entry is a graph that sets the store as it is built.
@@ -158,7 +167,7 @@ const SEEDED: &str = concat!(
     "\n",
     "use demo.ticks::{seeded}\n",
     "\n",
-    "eval(seeded(limit: 2, values: [1, 2, 3]))\n",
+    "eval seeded(limit: 2, values: [1, 2, 3])\n",
 );
 
 /// An entry with no result: the run has no output (CRUN-8).
@@ -167,7 +176,7 @@ const SILENT: &str = concat!(
     "\n",
     "use demo.ticks::{quiet}\n",
     "\n",
-    "eval(quiet(values: [1, 2]))\n",
+    "eval quiet(values: [1, 2])\n",
 );
 
 /// An application whose run fails.
@@ -176,7 +185,7 @@ const BROKEN: &str = concat!(
     "\n",
     "use demo.ticks::{failing}\n",
     "\n",
-    "eval(failing())\n",
+    "eval failing()\n",
 );
 
 /// CRUN-2: a simulation from a start of its own, for a length: its end
@@ -186,7 +195,8 @@ const LATER: &str = concat!(
     "\n",
     "use demo.ticks::{doubled}\n",
     "\n",
-    "eval(doubled(values: [1, 2, 3, 4]), RunConfig(start: @2026-01-02T00:00:00Z, length: 3s))\n",
+    "inject run_config{start: @2026-01-02T00:00:00Z, length: 3s}\n",
+    "eval doubled(values: [1, 2, 3, 4])\n",
 );
 
 /// CRUN-2: a configuration with both an `end` and a `length`, refused
@@ -196,7 +206,23 @@ const BOTH: &str = concat!(
     "\n",
     "use demo.ticks::{doubled}\n",
     "\n",
-    "eval(doubled(values: [1]), RunConfig(end: @2026-01-02T00:00:00Z, length: 3s))\n",
+    "inject run_config{end: @2026-01-02T00:00:00Z, length: 3s}\n",
+    "eval doubled(values: [1])\n",
+);
+
+/// RUN-6: an application gives its run's configuration defaults, and its
+/// store reads the configuration as it is supplied: "a start left out is
+/// null there".
+const STARTED: &str = concat!(
+    "application demo.ticks.started\n",
+    "\n",
+    "use demo.ticks::{started}\n",
+    "\n",
+    "inject run_config{length: 3s}\n",
+    "inject global_state\n",
+    "put(global_state, \"started\", run_config.start != null)\n",
+    "\n",
+    "eval started(values: [1, 2])\n",
 );
 
 /// RUN-3: `run`, in real time, here for a fifth of a second: it ends at
@@ -206,7 +232,8 @@ const LIVE: &str = concat!(
     "\n",
     "use demo.ticks::{counted}\n",
     "\n",
-    "run(counted(every: 50ms), RunConfig(length: 220ms))\n",
+    "inject run_config{length: 220ms}\n",
+    "run counted(every: 50ms)\n",
 );
 
 /// RUN-3: `run`, in real time, with no end: until its host stops it.
@@ -215,7 +242,7 @@ const ENDLESS: &str = concat!(
     "\n",
     "use demo.ticks::{counted}\n",
     "\n",
-    "run(counted(every: 20ms))\n",
+    "run counted(every: 20ms)\n",
 );
 
 /// Runs `hgl` with `arguments`, with `set` in its environment and each
@@ -386,7 +413,7 @@ fn run_says_what_an_application_lacks() {
             "fn later() -> i64 {\n",
             "    return counted(readings: cleared(reading: 1))\n",
             "}\n",
-            "eval(later())\n",
+            "eval later()\n",
         ),
     );
     let output = hgl_in(&["run", &argument(&root), "--target", "cpp"], &[], &[]);
@@ -753,8 +780,9 @@ fn references_run_on_the_sdk() {
 /// and `modified([])` read as values, a wake dropped and one that fails
 /// (CAP-4, CAP-5, TIME-3, TIME-8, TIME-9), and sources that read their
 /// clock, keep a `cache` or a `state` and have `start` and `stop`
-/// (SOURCE-1 to SOURCE-4), and runs whose configuration is a `RunConfig`
-/// value held or made elsewhere (RUN-1). Every test of it passes.
+/// (SOURCE-1 to SOURCE-4), and runs whose configuration's entries are
+/// held, made by a function or chosen by an `if` (RUN-6). Every test of it
+/// passes.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn timing_runs_on_the_sdk() {
@@ -777,6 +805,65 @@ fn timing_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 13 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// TST-17, RUN-6: an integration test injects `run_config`, whose braces'
+/// defaults stand, since `hgl test` supplies nothing; its value code reads
+/// it, as supplied, and each eval's fields it does not name are its.
+const CONFIGURED: &str = concat!(
+    "module demo.configured\n",
+    "\n",
+    "fn beats(const every: duration) -> i64 {\n",
+    "    cache count: i64 = 0\n",
+    "    while count < 5 {\n",
+    "        count += 1\n",
+    "        yield every: count\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "const fn ticks(seen: list<tuple<datetime, i64>>) -> i64 {\n",
+    "    var count = 0\n",
+    "    for tick in seen { count += 1 }\n",
+    "    return count\n",
+    "}\n",
+    "\n",
+    "integration_test configured {\n",
+    "    inject run_config{length: 4s}\n",
+    "    assert run_config.length == 4s\n",
+    "    assert run_config.start == null\n",
+    "    assert ticks(eval beats(every: 1s)) == 3\n",
+    "    assert ticks(eval{length: 2s} beats(every: 1s)) == 1\n",
+    "    let opening = @2026-01-05T09:30:00Z\n",
+    "    let seen = eval{start: opening} beats(every: 1s)\n",
+    "    assert seen == [1s: 1, 2s: 2, 3s: 3]\n",
+    "}\n",
+);
+
+/// The integration test above passes on the SDK.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn an_integration_tests_run_configuration_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("configured");
+    let file = write(&root, "src/demo.configured.hgl", CONFIGURED);
+    let output = hgl_in(
+        &["test", &file, "--target", "cpp", "--integration"],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -898,7 +985,7 @@ fn an_unmatched_connection_selector_fails_the_run() {
             "}\n",
             "\n",
             "test another_value {\n",
-            "    assert eval(routed(route: [\"a\", \"c\"], value: [1, 2])) == [2, 3]\n",
+            "    assert eval routed(route: [\"a\", \"c\"], value: [1, 2]) == [2, 3]\n",
             "}\n",
         ),
     );
@@ -1280,6 +1367,7 @@ fn an_application_runs_on_the_sdk() {
         ("later.hgl", LATER),
         ("both.hgl", BOTH),
         ("live.hgl", LIVE),
+        ("started.hgl", STARTED),
     ] {
         write(&root, name, text);
     }
@@ -1383,6 +1471,42 @@ fn an_application_runs_on_the_sdk() {
     assert_eq!(
         text(&output.stdout),
         "2026-01-02T00:00:01Z  2\nran demo.ticks.later on cpp: 1 publication\n",
+        "{}",
+        text(&output.stderr)
+    );
+
+    // RUN-6: `run_config` reads the configuration as supplied: the
+    // application's defaults, then a start supplied over them, and an end
+    // supplied, which replaces the default length.
+    let output = run("demo.ticks.started", &[]);
+    assert_eq!(
+        text(&output.stdout),
+        "1970-01-01T00:00:01.000001Z  false\n1970-01-01T00:00:02.000001Z  false\n\
+         ran demo.ticks.started on cpp: 2 publications\n",
+        "{}",
+        text(&output.stderr)
+    );
+    let opening = ["--config", "start=@2026-01-02T00:00:00Z"];
+    let output = run("demo.ticks.started", &opening);
+    assert_eq!(
+        text(&output.stdout),
+        "2026-01-02T00:00:01Z  true\n2026-01-02T00:00:02Z  true\n\
+         ran demo.ticks.started on cpp: 2 publications\n",
+        "{}",
+        text(&output.stderr)
+    );
+    let output = run(
+        "demo.ticks.started",
+        &[
+            opening[0],
+            opening[1],
+            "--config",
+            "end=@2026-01-02T00:00:02Z",
+        ],
+    );
+    assert_eq!(
+        text(&output.stdout),
+        "2026-01-02T00:00:01Z  true\nran demo.ticks.started on cpp: 1 publication\n",
         "{}",
         text(&output.stderr)
     );

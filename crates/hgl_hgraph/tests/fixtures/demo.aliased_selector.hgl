@@ -17,6 +17,6 @@ fn written_with_its_type(a: i64, b: i64) -> i64 {
 }
 
 test a_selector_named_through_an_alias {
-    assert eval(qualified(a: [1, _, 3], b: [_, 10, _])) == [1, 11, 13]
-    assert eval(written_with_its_type(a: [1, _], b: [_, 2])) == [1, 1]
+    assert eval qualified(a: [1, _, 3], b: [_, 10, _]) == [1, 11, 13]
+    assert eval written_with_its_type(a: [1, _], b: [_, 2]) == [1, 1]
 }

@@ -59,24 +59,12 @@ impl Program {
         })
     }
 
-    /// The type of a run's configuration: core's struct `RunConfig`
-    /// (RUN-1, core's CRUN-2). `None` where core is not supplied or
+    /// The type of a run's configuration (RUN-6): "`RunConfig` is the
+    /// type of the capability `run_config` (TIME-8)", a native type of
+    /// core's (core's CAP-7). `None` where core is not supplied or
     /// declares none.
     pub fn run_config_type(&self) -> Option<Type> {
-        const NAME: &str = "RunConfig";
-        let core = self.core()?;
-        let module = &self.modules[core];
-        let declaration = module.scope.get(NAME)?.iter().copied().find(|&index| {
-            let declaration = &module.declarations[index];
-            declaration.kind == DeclarationKind::Struct && declaration.is_public()
-        })?;
-        Some(Type::Named {
-            name: NAME.to_string(),
-            module: core,
-            declaration,
-            arguments: Vec::new(),
-            kind: NamedKind::Struct,
-        })
+        self.capability_type(RUN_CONFIG)
     }
 
     /// True for the type of a capability: one of core's native types
@@ -504,15 +492,21 @@ impl DeclarationKind {
 }
 
 /// Each capability that has a type, with the type's name (TIME-8):
-/// "`Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`". `out` is
-/// the node's result, and has none.
-pub const CAPABILITY_TYPES: [(&str, &str); 5] = [
+/// "`Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`,
+/// `RunConfig`". `out` is the node's result, and has none.
+pub const CAPABILITY_TYPES: [(&str, &str); 6] = [
     ("logger", "Logger"),
     ("clock", "Clock"),
     ("scheduler", "Scheduler"),
     ("alarm", "Alarm"),
     ("global_state", "GlobalState"),
+    (RUN_CONFIG, "RunConfig"),
 ];
+
+/// The capability that is a run's configuration (RUN-6): an
+/// application's and an integration test's, and no function's, and the
+/// one capability an `inject` gives a configuration in braces.
+pub const RUN_CONFIG: &str = "run_config";
 
 /// Where an operator is declared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

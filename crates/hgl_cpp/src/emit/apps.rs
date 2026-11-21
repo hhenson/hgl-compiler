@@ -1,17 +1,20 @@
 //! Writes the run's store where a program sets it before its nodes run,
-//! and an application (UNIT-14, RUN-1 to RUN-3): its run statement, as
-//! the function its executable runs. Part of the transpiler, the last
-//! stage; a family of the dispatch point (`forms`) for `inject
-//! global_state` in a graph.
+//! and an application (UNIT-14, RUN-1 to RUN-3, RUN-6): its run
+//! statement, as the function its executable runs. Part of the
+//! transpiler, the last stage; a family of the dispatch point (`forms`)
+//! for `inject global_state` in a graph and `inject run_config` in an
+//! integration test.
 //!
 //! | HGL | C++ |
 //! | --- | --- |
 //! | `inject global_state` in a graph (FN-9) | `const ::hglrt::GlobalState global_state{wiring_.global_state()};`: the store of the run whose graph is being built, which hgraph's `Wiring` holds and carries onto the graph it builds |
 //! | `put(global_state, "limit", limit)`, `get`, `has` in a graph (FN-9) | the library's natives, as a node's hook calls them (`capabilities.h`), called as `compose` runs: once, in the order written, before any node of the graph starts |
 //! | `application demo.app` (UNIT-14) | `::hglrt::application::Output application_()` in the namespace of its module's unit, and an entry unit, `applications/demo.app.cpp`, whose `main` is the library's host of it (`assemble`) |
-//! | `inject global_state` and each `put` before the run statement (UNIT-14) | the function's first statements, on a store of its own, `::hglrt::application::Store store_;`: `const ::hglrt::GlobalState global_state{store_.view()};` and the natives' calls, which the run gives its graph before the entry is wired |
-//! | `eval(counted(upto: 3), config)`, `run(...)` (RUN-1, RUN-3) | `::hglrt::application::run<T>(store_, entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"` (CRUN-8), as an eval's does; `run` of an entry with no result. `eval` is `Mode::simulation`, `run` `Mode::real_time` |
-//! | The call's arguments and the configuration, core's `RunConfig` (RUN-1) | `const ::hglrt::testing::Bounds bounds_ = ...;`, as an eval's configuration is written (`lifecycle`), after the store; with none written, `RunConfig()`'s, `Bounds{}`. Where more than one of the arguments and the configuration may fail, or one runs statements, each argument is held before it, in the order written (EXPR-2), as an eval's are |
+//! | `inject run_config{length: 3s}`, `inject global_state` and each `put` before the run statement (UNIT-14, RUN-6) | the function's first statements, in the order written, on a store of its own, `::hglrt::application::Store store_;`: `const ::hglrt::RunConfig run_config = ...;` (`lifecycle`), `const ::hglrt::GlobalState global_state{store_.view()};` and the natives' calls, which the run gives its graph before the entry is wired |
+//! | `eval counted(upto: 3)`, `run counted()` (RUN-1, RUN-3) | `::hglrt::application::run<T>(store_, entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"` (CRUN-8), as an eval's does; `run` of an entry with no result. `eval` is `Mode::simulation`, `run` `Mode::real_time` |
+//! | The run's configuration (RUN-6) | `const ::hglrt::testing::Bounds bounds_ = ...;`, each field of the application's `run_config`, or `Bounds{}` where it injects none. `hgl run` writes what starts the application supplies over the braces before the program is compiled (`hgl_cli`) |
+//! | The call's arguments (RUN-1) | where more than one of them may fail, or one runs statements, each argument is held first, in the order written (EXPR-2), as an eval's are |
+//! | `inject run_config{...}` in an integration test (TST-17, RUN-6) | `const ::hglrt::RunConfig run_config = ...;` of its entries: `hgl test` supplies nothing, and the defaults stand |
 //!
 //! The library's `run` gives the run's output as text, and its host
 //! (`hglrt/application_host.h`) writes it for the driver (`hgl_cli`).
@@ -29,6 +32,7 @@ use super::nodes::{Context, Kind};
 use super::statements::Scope;
 use super::values::INDENT;
 use crate::runtime;
+use hgl_analyser::RUN_CONFIG;
 
 /// The name of the function an application's run statement is written
 /// as, in its module's namespace. No HGL name gives it
@@ -43,18 +47,21 @@ const STORE: &str = "global_state";
 const SET: &str = "store_";
 
 impl Emitter<'_> {
-    /// Writes the module's application (UNIT-14): what sets its run's
-    /// store and its run statement, as the function [`APPLICATION`].
+    /// Writes the module's application (UNIT-14): its run's
+    /// configuration, what sets its run's store, and its run statement,
+    /// as the function [`APPLICATION`].
     ///
     /// UNIT-14: "Between its declarations and its run statement it may
-    /// set the run's store: `inject global_state`, and then calls of
-    /// `put` on it. Each is evaluated once, in the order written, before
-    /// the run's graph is built". RUN-1: "its run statement is `run(call,
-    /// config)` or `eval(call, config)`, where the call is of an entry
-    /// ... and the configuration is a value of core's `RunConfig`, or
-    /// `RunConfig()` where none is written. The entry's result, if any,
-    /// is the run's output". RUN-3: "The word of a run statement is its
-    /// mode."
+    /// inject `run_config`, giving the run's configuration its defaults
+    /// (RUN-6), and set the run's store: `inject global_state`, and then
+    /// calls of `put` on it. Each is evaluated once, in the order
+    /// written, before the run's graph is built". RUN-1: "its run
+    /// statement is `run call` or `eval call` ... The statement gives no
+    /// configuration: the run's is supplied to it (RUN-6). The entry's
+    /// result, if any, is the run's output". RUN-3: "The word of a run
+    /// statement is its mode." RUN-6: "`run_config` reads the
+    /// configuration as supplied, what starts the application over
+    /// those defaults": `hgl run` has written that over the braces.
     pub(super) fn application(&mut self) {
         let program = self.program;
         let declared = &program.modules[self.module];
@@ -76,13 +83,32 @@ impl Emitter<'_> {
         let testing = testing.trim_end_matches("::");
         let inner = INDENT.repeat(2);
 
-        // UNIT-14: the store, set first, in the order written, by value
-        // code "read as a constant's is ... with no parameter in scope".
+        // UNIT-14: the run's configuration and the store, set first, in
+        // the order written, by value code "read as a constant's is ...
+        // with no parameter in scope".
         let mut text = format!("{INDENT}::{library}::application::Store {SET};\n");
+        // The C++ name of the application's `run_config`, where it
+        // injects one.
+        let mut configured: Option<String> = None;
         if let Some(store) = &declared.store_body {
             let mut setting = Scope::cold(program, store);
             for statement in &store.statements {
                 match statement {
+                    Stmt::Inject { local, config, .. }
+                        if store.locals[*local].name == RUN_CONFIG =>
+                    {
+                        let name = identifier(&store.locals[*local].name);
+                        let value = self.run_config_value(&mut setting, config);
+                        for before in std::mem::take(&mut setting.before) {
+                            for line in before.lines() {
+                                text.push_str(&format!("{INDENT}{line}\n"));
+                            }
+                        }
+                        text.push_str(&format!(
+                            "{INDENT}[[maybe_unused]] const ::{library}::RunConfig {name} = {value};\n"
+                        ));
+                        configured = Some(name);
+                    }
                     Stmt::Inject { local, .. } => text.push_str(&format!(
                         "{INDENT}[[maybe_unused]] const ::{library}::GlobalState {}{{{SET}.view()}};\n",
                         identifier(&store.locals[*local].name)
@@ -93,10 +119,9 @@ impl Emitter<'_> {
         }
 
         // EXPR-2: "the arguments written, then the defaults of those left
-        // out", and the configuration after the call, as an eval's
-        // (`tests`): where more than one of them may fail, or one runs
-        // statements, each argument and each default is held first, in
-        // that order, as its HGL type, before the configuration.
+        // out", as an eval's (`tests`): where more than one of them may
+        // fail, or one runs statements, each argument and each default is
+        // held first, in that order, as its HGL type.
         let none = Body {
             locals: Vec::new(),
             statements: Vec::new(),
@@ -109,17 +134,14 @@ impl Emitter<'_> {
             _ => (None, &[][..]),
         };
         let left = callee.map_or_else(Vec::new, |callee| left_defaults(program, callee, arguments));
-        let config = run.config.as_ref();
         let held = arguments
             .iter()
             .map(|argument| &argument.value)
             .chain(left.iter().map(|(_, default)| *default))
-            .chain(config)
             .filter(|part| may_fail(part))
             .count()
             > 1
-            || arguments.iter().any(|argument| changes(&argument.value))
-            || config.is_some_and(changes);
+            || arguments.iter().any(|argument| changes(&argument.value));
         // Each held, after what it needs run before it.
         let hold = |text: &mut String, scope: &mut Scope, line: String| {
             for before in std::mem::take(&mut scope.before) {
@@ -171,10 +193,10 @@ impl Emitter<'_> {
                 defaults.push((*index, name));
             }
         }
-        // RUN-1, CRUN-2: the configuration's bounds, as an eval's are
-        // (`lifecycle`).
-        let bounds = match config {
-            Some(config) => self.run_bounds(&mut scope, config),
+        // RUN-6, CRUN-2: the bounds of the configuration supplied, the
+        // application's `run_config` (`lifecycle`).
+        let bounds = match &configured {
+            Some(local) => self.bounds_of(local),
             None => format!("{testing}::Bounds{{}}"),
         };
         hold(
@@ -281,7 +303,8 @@ fn run_line(declared: &hgl_analyser::Module) -> Option<usize> {
     )
 }
 
-/// The store's family: `inject global_state` where a graph is built.
+/// The store's family: `inject global_state` where a graph is built,
+/// and `inject run_config` in an integration test.
 pub(super) struct Apps;
 
 impl Family for Apps {
@@ -300,10 +323,29 @@ impl Family for Apps {
         depth: usize,
         text: &mut String,
     ) -> bool {
-        let Stmt::Inject { local, .. } = statement else {
+        let Stmt::Inject { local, config, .. } = statement else {
             return false;
         };
         let name = &scope.body.locals[*local].name;
+        // TST-17: "An integration test may inject `run_config`, before its
+        // other statements: what runs the test supplies the configuration
+        // of its runs, and the braces give defaults". `hgl test` supplies
+        // nothing, so the configuration is the defaults.
+        if name == RUN_CONFIG && scope.testing {
+            let indent = INDENT.repeat(depth);
+            let value = emitter.run_config_value(scope, config);
+            for before in std::mem::take(&mut scope.before) {
+                for line in before.lines() {
+                    text.push_str(&format!("{indent}{line}\n"));
+                }
+            }
+            text.push_str(&format!(
+                "{indent}[[maybe_unused]] const ::{}::RunConfig {} = {value};\n",
+                runtime::NAMESPACE,
+                identifier(name)
+            ));
+            return true;
+        }
         if name != STORE || emitter.kind() != Some(Kind::Graph) {
             return false;
         }

@@ -13,7 +13,7 @@
 //! | An input that must be valid (FN-11) | `hgraph::In<"value", S>`, which hgraph evaluates the node only once valid, and read checked (TIME-1) |
 //! | An input whose parameter has a default, or admits null (FN-11) | `hgraph::In<"factor", S, InputValidity::Unchecked>` under a name of its own, `input_00_`, and the value bound to the parameter's name at the top of `eval`: `::hglrt::fn_valid(input_00_) ? T{read} : T{default}` |
 //! | A struct, a tuple, a fixed list or a window given to one (FN-11, FN-12) | the helper is not called where it is valid and not all valid: `if (!::hglrt::fn_all_valid(view)) return;` |
-//! | `eval(scale(value: [1, _, 3]))` of a value function (TST-8) | the same node, given the replays of the traces as its inputs, at the scope of the test's namespace ahead of the test |
+//! | `eval scale(value: [1, _, 3])` of a value function (TST-8) | the same node, given the replays of the traces as its inputs, at the scope of the test's namespace ahead of the test |
 //! | `let seen = capture(attempt, value)` (ERR-7) | a graph of its own for the call, a struct `captured_00_` in the graph's struct, wired by hgraph's `try_except_` with canonical errors, `::hglrt::capture<captured_00_>(wiring_, value)` (`<hglrt/capture.h>`) |
 //! | `seen.value`, `seen.error` (ERR-7) | `::hglrt::captured_value(seen)`, `::hglrt::captured_error(seen)` |
 //! | A temporal value of `error`, of `result<T, error>` | `TS<::hglrt::error>`, which is hgraph's `CanonicalError`; `TS<::hglrt::result<T>>`, a `std::expected` registered with hgraph as an atomic (`<hglrt/capture.h>`) |

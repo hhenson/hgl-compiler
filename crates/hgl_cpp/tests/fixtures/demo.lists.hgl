@@ -191,51 +191,51 @@ fn relay(values: list<i64>) -> list<i64> {
 }
 
 test published_whole_and_by_delta {
-    assert eval(total(count: [0, 0, 3, -1, -5])) == [0, _, 6, 3, 0]
-    assert eval(changes_of(count: [2, 1])) == [
+    assert eval total(count: [0, 0, 3, -1, -5]) == [0, _, 6, 3, 0]
+    assert eval changes_of(count: [2, 1]) == [
         delta<list<i64>>(updated: [0: 1, 1: 2], size_modified: 2),
         delta<list<i64>>(updated: [0: 1], removed: [1], size_modified: 1),
     ]
 }
 
 test fixed_list_children {
-    assert eval(observe(
+    assert eval observe(
         probe:   [true, true, true],
         slot:    [   _,    0,    1],
         reading: [   _,    3,    8],
         at:      [   1,    1,    1],
-    )) == [[false, false, false], [true, false, false], [true, true, true]]
-    assert eval(span_of(slot: [0, 1, _, 0], reading: [3, 8, _, 4])) == [_, 5, _, 4]
-    assert eval(slot_of(slot: [0], reading: [3], at: [0])) == [3]
+    ) == [[false, false, false], [true, false, false], [true, true, true]]
+    assert eval span_of(slot: [0, 1, _, 0], reading: [3, 8, _, 4]) == [_, 5, _, 4]
+    assert eval slot_of(slot: [0], reading: [3], at: [0]) == [3]
     assert raises("value.unset_read") {
-        eval(slot_of(slot: [0, _], reading: [3, _], at: [0, 1]))
+        eval slot_of(slot: [0, _], reading: [3, _], at: [0, 1])
     }
     assert raises("value.index_out_of_range") {
-        eval(slot_of(slot: [0], reading: [3], at: [2]))
+        eval slot_of(slot: [0], reading: [3], at: [2])
     }
 }
 
 test children_named_in_a_hook {
-    assert eval(first_slot(slot: [1, 0], reading: [5, 3])) == [_, 3]
-    assert eval(second_changed(slot: [0, 1, 0], reading: [3, 8, 4])) == [_, true, false]
-    assert eval(sum_of_parts(head: [true, false], value: [3, 8])) == [3, 11]
-    assert eval(nested_of(count: [0, 7])) == [[true, true, false], [true, true, true]]
-    assert eval(ordered_of(count: [0])) == [true]
-    assert eval(ordered_port(trigger: [5])) == [0]
-    assert eval(ordered_row_of(count: [0])) == [false]
-    assert eval(ordered_connection(trigger: [5])) == [11]
+    assert eval first_slot(slot: [1, 0], reading: [5, 3]) == [_, 3]
+    assert eval second_changed(slot: [0, 1, 0], reading: [3, 8, 4]) == [_, true, false]
+    assert eval sum_of_parts(head: [true, false], value: [3, 8]) == [3, 11]
+    assert eval nested_of(count: [0, 7]) == [[true, true, false], [true, true, true]]
+    assert eval ordered_of(count: [0]) == [true]
+    assert eval ordered_port(trigger: [5]) == [0]
+    assert eval ordered_row_of(count: [0]) == [false]
+    assert eval ordered_connection(trigger: [5]) == [11]
 }
 
 test tuple_positions {
-    assert eval(observe_parts(
+    assert eval observe_parts(
         probe: [true, true, true],
         first: [   _, true, false],
         value: [   _,    3,     8],
-    )) == [[false, false], [true, false], [true, true]]
+    ) == [[false, false], [true, false], [true, true]]
 }
 
 test a_list_input_replays_its_cells {
-    assert eval(relay(values: [[1, 2], delta<list<i64>>(updated: [2: 3]), [5]])) == [
+    assert eval relay(values: [[1, 2], delta<list<i64>>(updated: [2: 3]), [5]]) == [
         [1, 2],
         [1, 2, 3],
         delta<list<i64>>(updated: [0: 5], removed: [1, 2], size_modified: 1),

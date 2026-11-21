@@ -7,28 +7,27 @@ use hgl_diagnostics::{Category, Location};
 use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::calls::arguments_of;
 use super::expressions::written_null;
 use super::fit::open;
 use super::{BOOL, Called, Typer};
 use crate::hir::{
-    self, BinaryOperator, Body, Expr, ExprKind, Hook, Run, Stmt, Value, ValueCategory,
+    self, BinaryOperator, Body, Expr, ExprKind, Hook, LocalId, Run, Stmt, Value, ValueCategory,
 };
-use crate::program::{DeclarationKind, LocalKind, Role, StoreStatement};
+use crate::program::{DeclarationKind, LocalKind, RUN_CONFIG, Role, StoreStatement};
 use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{ConstantValue, Detail, NamedKind, Scalar, TraceStyle, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
-    /// The block of a named test (TST-3): "A test is a
-    /// composition-phase block with assertions." Outside the argument
-    /// of an `eval` or a `run` its statements are value code, as an
-    /// application's are (UNIT-14): the owner, "inside of a test, outside
-    /// of eval / run only const fns can be called. A non-const function
-    /// must fail" (hhenson/hgl_spec#162). A call of a temporal function
+    /// The block of a named test (TST-3): "A test is a block with
+    /// assertions. Outside the call an `eval` or a `run` takes, which is
+    /// composition (TST-5, TST-8), its statements are value code, as an
+    /// application's are (UNIT-14)". A call of a temporal function
     /// there is `call.role`, an operator selects among its value
     /// candidates, and nothing is lifted. The call an `eval` or a `run`
-    /// takes is read as composition is (`Typer::eval`).
+    /// takes is read as composition is (`Typer::eval`). TST-17: an
+    /// integration test "may inject `run_config`, before its other
+    /// statements ... Its value code may read `run_config` then".
     pub(super) fn test(mut self, integration: bool) -> Option<Body> {
         let block = child(&self.declaration.syntax, SyntaxKind::Block)?;
         self.graph = false;
@@ -45,18 +44,23 @@ impl<'a> Typer<'a> {
         })
     }
 
-    /// The statements an application sets its run's store with
-    /// (UNIT-14): "`inject global_state`, and then calls of `put` on
-    /// it. Each is evaluated once, in the order written, before the
-    /// run's graph is built, and its value is read as a constant's is
-    /// (UNIT-13), with no parameter in scope. Any other statement
-    /// there rejects (`application.statement`)."
+    /// The statements of an application before its run statement
+    /// (UNIT-14): "it may inject `run_config`, giving the run's
+    /// configuration its defaults (RUN-6), and set the run's store:
+    /// `inject global_state`, and then calls of `put` on it. Each is
+    /// evaluated once, in the order written, before the run's graph is
+    /// built, and its value is read as a constant's is (UNIT-13), with
+    /// no parameter in scope, but that a value given to `put` may read
+    /// `run_config` where the application has injected it before that
+    /// statement (RUN-6). Any other statement there rejects
+    /// (`application.statement`)."
     ///
     /// They are read as the statements of a node's `start` are, which
     /// is where a node uses a capability before its graph runs: with
     /// no parameter and no input, each is value code.
     pub(super) fn store(mut self, written: &[StoreStatement]) -> Option<Body> {
         self.hook = Some(Hook::Start);
+        self.applying = true;
         // UNIT-14: "Those statements ... are value code", whose operators
         // select among all candidates (GEN-5).
         self.value_code = true;
@@ -66,17 +70,19 @@ impl<'a> Typer<'a> {
                 continue;
             };
             if node.kind() == SyntaxKind::InjectDecl {
-                // "An application injects `global_state` and no other"
-                // (FN-9).
+                // FN-9: "An application injects `global_state`, which it
+                // uses only to set the run's store before its run
+                // statement (UNIT-14), and `run_config` (RUN-6), and no
+                // other."
                 for name in tokens(&node).filter(|token| token.kind() == SyntaxKind::Ident) {
-                    if name.text() != "global_state" {
+                    if name.text() != "global_state" && name.text() != RUN_CONFIG {
                         self.diagnostics.emit(error(
                             Category::Phase,
                             codes::APPLICATION_STATEMENT,
                             Location::new(self.file, name.span()),
                             format!(
-                                "an application injects `global_state` alone, to set its \
-                                 run's store, and not `{}`",
+                                "an application injects `run_config` and `global_state`, and \
+                                 not `{}`",
                                 name.text()
                             ),
                             "UNIT-14",
@@ -108,7 +114,9 @@ impl<'a> Typer<'a> {
                 // store is `put`'s own argument, and is read by nothing
                 // the call is given. A value that reads the store,
                 // `get<i64>(global_state, "limit") + 1`, is no
-                // constant's.
+                // constant's. RUN-6: "Its `put` values may read
+                // `run_config` after that `inject`, and no other
+                // capability."
                 for at in self.reads_of_the_store(&statement) {
                     self.diagnostics.emit(
                         error(
@@ -116,12 +124,14 @@ impl<'a> Typer<'a> {
                             codes::APPLICATION_STATEMENT,
                             at,
                             "what a store statement puts is read as a constant's value is, \
-                             and reads no capability: the store is `put`'s own argument"
+                             and reads no capability but `run_config`: the store is `put`'s \
+                             own argument"
                                 .to_string(),
                             "UNIT-14",
                         )
                         .with_note(
-                            "a constant, or a call of a `const fn` on constants, is such a value",
+                            "a constant, a call of a `const fn` on constants, or a property of \
+                             `run_config` is such a value",
                         ),
                     );
                 }
@@ -135,8 +145,8 @@ impl<'a> Typer<'a> {
     }
 
     /// Where a `put` on the store reads the store again, in what it is
-    /// given beside the store itself: each use of the injected
-    /// capability inside its key or its value.
+    /// given beside the store itself: each use of an injected
+    /// capability but `run_config` inside its key or its value.
     fn reads_of_the_store(&self, statement: &Stmt) -> Vec<Location> {
         let Stmt::Expr(Expr {
             kind: ExprKind::Call { arguments, .. },
@@ -154,6 +164,7 @@ impl<'a> Typer<'a> {
             argument.value.walk(&mut |part| {
                 if let ExprKind::Local(local) = &part.kind
                     && self.locals[*local].kind == LocalKind::Inject
+                    && self.locals[*local].name != RUN_CONFIG
                 {
                     reads.push(part.at);
                 }
@@ -333,29 +344,35 @@ impl<'a> Typer<'a> {
         (kind, BOOL)
     }
 
-    /// `eval(target(...))` in a named test.
+    /// `eval target(...)` in a named test.
     ///
     /// TST-5: "Eval takes a call of a module function, written as any
-    /// call is: `eval(target(value: [7, _, 9]))`. The call binds its
+    /// call is: `eval target(value: [7, _, 9])`. The call binds its
     /// arguments by the function's public positional/named rules, and
     /// its generic arguments as any call does. Temporal/value role
     /// selection follows FN-4 ... An operator is no target: a function
     /// wraps it ... Const parameters receive configuration; temporal
     /// parameters receive contextually typed publication traces. A
-    /// trace is an argument of that call and of no call inside it. A
-    /// second argument is the run's configuration, a `RunConfig`".
+    /// trace is an argument of that call and of no call inside it. The
+    /// eval's configuration, `eval{length: 4s} target(...)`, is the
+    /// run's (RUN-6)."
     ///
     /// TST-3: "An eval of a target that has a result is a trace of that
     /// result's type". TST-8: "an outputless target has no recorder or
     /// comparable result. Its eval stands as a statement and has no
-    /// value: binding or comparing it rejects."
+    /// value: binding or comparing it rejects." TST-8 too: "The run is
+    /// a simulation (RUN-3) under its configuration (RUN-6): the eval's
+    /// own entries and, in an integration test that injects
+    /// `run_config`, the injected configuration's for the fields the
+    /// eval does not name."
     ///
-    /// TST-17: in an integration test `run(call, config)` is written
-    /// beside it, "whose value is the run's output as an eval's is ...
-    /// in a test that is no integration test it rejects." It is read
-    /// as an eval is, and is one in real time (RUN-3).
+    /// TST-17: in an integration test `run call` is written beside it,
+    /// "whose value is the run's output as an eval's is ... `run` in a
+    /// test that is no integration test rejects (`run.position`)." It is
+    /// read as an eval is, and is one in real time (RUN-3).
     ///
-    /// The call is read as any call of its function is, with a trace
+    /// The configuration is read first, as it is written (EXPR-13), and
+    /// then the call, as any call of its function is, with a trace
     /// expected of each temporal parameter.
     pub(super) fn eval(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         let at = self.at(node);
@@ -375,21 +392,20 @@ impl<'a> Typer<'a> {
                     "RUN-3",
                 )
                 .with_note(
-                    "a test evaluates in simulation, `eval(...)`; an `integration_test` may \
-                     run in real time",
+                    "a test evaluates in simulation, `eval target(...)`; an `integration_test` \
+                     may run in real time",
                 ),
             );
         }
-        let Some(list) = child(node, SyntaxKind::ArgList) else {
+        let config = match child(node, SyntaxKind::OperatorConfig) {
+            Some(braces) => self.run_configuration(&braces),
+            None => Vec::new(),
+        };
+        let inherited = self.injected_run_config();
+        // The parser has reported a form with no call.
+        let Some(target) = run_target(node) else {
             return (ExprKind::Unread, Type::Unknown);
         };
-        let given = arguments_of(&list);
-        // The parser has reported an eval given nothing.
-        let Some((_, argument)) = given.first().cloned() else {
-            return (ExprKind::Unread, Type::Unknown);
-        };
-        // EXPR-1: "parentheses group", so `(call)` is the call.
-        let target = ungrouped(argument.clone());
         let called = self.call_taken(&target);
         let function = called
             .as_ref()
@@ -402,23 +418,19 @@ impl<'a> Typer<'a> {
                     error(
                         Category::Type,
                         codes::EVAL_TARGET,
-                        self.at(&argument),
-                        "an eval's first argument is a call of a function of a module, and this \
-                         is none"
-                            .to_string(),
+                        self.at(&target),
+                        "an eval's call is of a function of a module, and this is none".to_string(),
                         "TST-5",
                     )
                     .with_note("an operator is evaluated through a function that calls it"),
                 );
             }
             // What the call was given is read all the same, with
-            // nothing expected of it, and then what follows the call.
-            let unread = match &called {
+            // nothing expected of it.
+            return match &called {
                 Some(called) => self.unread_call(&called.arguments),
                 None => (ExprKind::Unread, Type::Unknown),
             };
-            self.after_call(&given, "an eval", "TST-5");
-            return unread;
         };
         // FN-15: a function that declares a `var` parameter "is no
         // target of an `eval`": an eval lifts a value function (TST-8),
@@ -430,7 +442,7 @@ impl<'a> Typer<'a> {
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::EVAL_TARGET,
-                self.at(&argument),
+                self.at(&target),
                 format!(
                     "`{}` has a `var` parameter, and is no target of an eval",
                     called.name.text()
@@ -438,9 +450,7 @@ impl<'a> Typer<'a> {
                 "FN-15",
             ));
             // Nothing more is reported of the call (ERR-9).
-            let unread = self.unread_call(&called.arguments);
-            self.after_call(&given, "an eval", "TST-5");
-            return unread;
+            return self.unread_call(&called.arguments);
         }
         let name = called.name.clone();
         // TST-5: the call an eval takes is composition's: "Composition
@@ -459,9 +469,6 @@ impl<'a> Typer<'a> {
         // The call is held to what any call in a graph is: a `const`
         // parameter is given no connection (FN-3).
         self.constants_of(&kind);
-        // EXPR-13: arguments are read in the order written, so the
-        // call's before the configuration.
-        let config = self.after_call(&given, "an eval", "TST-5");
         // TST-7: "Within one eval all inputs and expectation use the
         // same dense/timed style." The first trace that has cells says
         // which, and a later one of the other is reported.
@@ -523,6 +530,7 @@ impl<'a> Typer<'a> {
                 ExprKind::Eval {
                     call: Box::new(call),
                     config,
+                    inherited,
                     real_time,
                 },
                 Type::Unknown,
@@ -543,39 +551,28 @@ impl<'a> Typer<'a> {
             ExprKind::Eval {
                 call: Box::new(call),
                 config,
+                inherited,
                 real_time,
             },
             ty,
         )
     }
 
-    /// What an eval or a run statement, `what`, is given after its
-    /// call, `given` being all it is given: the run's configuration,
-    /// and nothing more. "A second argument is the run's configuration"
-    /// (TST-5, RUN-1); a third is reported under `rule` and read with
-    /// nothing expected of it.
-    fn after_call(
-        &mut self,
-        given: &[(Option<SyntaxToken>, SyntaxNode)],
-        what: &str,
-        rule: &'static str,
-    ) -> Option<Box<Expr>> {
-        let config = given.get(1).map(|(_, written)| self.run_config(written));
-        for (_, extra) in given.iter().skip(2) {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::ARGUMENT_UNEXPECTED,
-                self.at(extra),
-                format!("{what} takes a call and a run configuration, and nothing more"),
-                rule,
-            ));
-            self.expression(extra, None);
+    /// The local an integration test has bound `run_config` to, where it
+    /// injects it (TST-17, RUN-6): "In an integration test that injects
+    /// `run_config` ... a field the statement does not name is the
+    /// injected configuration's." `None` anywhere else.
+    fn injected_run_config(&self) -> Option<LocalId> {
+        if !self.integration {
+            return None;
         }
-        config
+        self.locals
+            .iter()
+            .position(|local| local.kind == LocalKind::Inject && local.name == RUN_CONFIG)
     }
 
-    /// The call an eval or a run statement takes, `target` being its
-    /// first argument: `name(arguments)`, or `name<generics>(arguments)`.
+    /// The call an eval or a run statement takes, `target` being the
+    /// form's call: `name(arguments)`, or `name<generics>(arguments)`.
     /// GEN-14: `name<...>(...)` the parser left undecided is the call
     /// too, where the resolver decided it is one. `None` for anything
     /// else.
@@ -653,30 +650,48 @@ impl<'a> Typer<'a> {
     }
 
     /// An application's run statement (RUN-1): "its run statement is
-    /// `run(call, config)` or `eval(call, config)`, where the call is
-    /// of an entry, written as any call is and giving the entry's const
-    /// arguments, and the configuration is a value of core's
-    /// `RunConfig`, or `RunConfig()` where none is written." "An entry
-    /// is a temporal function with no temporal parameters."
+    /// `run call` or `eval call`, where the call is of an entry, written
+    /// as any call is and giving the entry's const arguments. The
+    /// statement gives no configuration: the run's is supplied to it
+    /// (RUN-6)." "An entry is a temporal function with no temporal
+    /// parameters." RUN-6: "a configuration on an application's run
+    /// statement" rejects (`run.configuration`), at the brace, and what
+    /// it holds is not read (ERR-9).
     ///
-    /// UNIT-14: "the arguments of the run statement's call and its
-    /// configuration, are value code; the call itself, of the entry, is
-    /// composition (RUN-1)". The entry is its temporal definition
-    /// (`evaluated`), and what it is given, and the configuration, are
-    /// read as value code is: a `const` parameter takes a value, and a
-    /// temporal call there is `call.role`.
+    /// UNIT-14: "the arguments of the run statement's call are value
+    /// code; the call itself, of the entry, is composition (RUN-1)". The
+    /// entry is its temporal definition (`evaluated`), and what it is
+    /// given is read as value code is: a `const` parameter takes a
+    /// value, and a temporal call there is `call.role`.
     pub(super) fn run_statement(mut self) -> Option<Run> {
         self.graph = false;
         self.value_code = true;
         let form = self.declaration.syntax.children().next()?;
         let at = self.at(&form);
         let real_time = form.kind() == SyntaxKind::RunExpr;
-        let list = child(&form, SyntaxKind::ArgList)?;
-        let given = arguments_of(&list);
-        // The parser has reported a run statement given nothing.
-        let (_, argument) = given.first().cloned()?;
-        // EXPR-1: "parentheses group", so `(call)` is the call.
-        let target = ungrouped(argument.clone());
+        if let Some(braces) = child(&form, SyntaxKind::OperatorConfig) {
+            let brace = match braces.first_token() {
+                Some(brace) => Location::new(self.file, brace.span()),
+                None => self.at(&braces),
+            };
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::RUN_CONFIGURATION,
+                    brace,
+                    "an application's run statement gives no configuration: what starts the \
+                     application supplies it"
+                        .to_string(),
+                    "RUN-6",
+                )
+                .with_note(
+                    "`inject run_config{length: 3s}` before the run statement gives the \
+                     configuration defaults",
+                ),
+            );
+        }
+        // The parser has reported a run statement with no call.
+        let target = run_target(&form)?;
         let called = self.call_taken(&target);
         let function = called
             .as_ref()
@@ -715,10 +730,8 @@ impl<'a> Typer<'a> {
                         error(
                             Category::Type,
                             codes::RUN_ENTRY,
-                            self.at(&argument),
-                            "a run statement's first argument is a call of an entry, and this \
-                             is none"
-                                .to_string(),
+                            self.at(&target),
+                            "a run statement's call is of an entry, and this is none".to_string(),
                             "RUN-1",
                         )
                         .with_note("an entry is a temporal function with no temporal parameters"),
@@ -738,26 +751,11 @@ impl<'a> Typer<'a> {
             at: self.at(&target),
             category: ValueCategory::Unsettled,
         };
-        // EXPR-13: the call is read before the configuration.
-        let config = self
-            .after_call(&given, "a run statement", "RUN-1")
-            .map(|config| *config);
         Some(Run {
             real_time,
             call,
-            config,
             at,
         })
-    }
-
-    /// The configuration of a run, written as the second argument of
-    /// an eval: a value of core's `RunConfig` (RUN-1, core's CRUN-2).
-    fn run_config(&mut self, written: &SyntaxNode) -> Box<Expr> {
-        let Some(expected) = self.program.run_config_type() else {
-            return Box::new(self.expression(written, None));
-        };
-        let value = self.expression(written, Some(&expected));
-        Box::new(self.fit(value, &expected, "the configuration of a run"))
     }
 
     /// Reports a trace of one style where the eval it belongs to has
@@ -990,6 +988,14 @@ impl<'a> Typer<'a> {
             rule,
         ));
     }
+}
+
+/// The call an `eval` or a `run` takes, `form` being the `EvalExpr` or
+/// the `RunExpr`: its one node but the configuration (`run_target` in
+/// the grammar). `None` where the parser found none.
+fn run_target(form: &SyntaxNode) -> Option<SyntaxNode> {
+    form.children()
+        .find(|part| part.kind() != SyntaxKind::OperatorConfig)
 }
 
 /// TST-16: "A trace given to a `const fn` is an ordinary value there:

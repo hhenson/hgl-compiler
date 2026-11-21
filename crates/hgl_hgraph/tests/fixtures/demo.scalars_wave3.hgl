@@ -98,21 +98,21 @@ test zoned_datetimes_compared_as_utc_are_equal_by_instant {
 test zoned_datetimes_are_compared_in_a_node_and_a_graph {
     let london = @2026-09-03T09:30+01:00[Europe/London]
     let utc = @2026-09-03T08:30+00:00[UTC]
-    assert eval(compared(a: [london, _], b: [utc, london])) == [false, true]
-    assert eval(compared_as_utc(a: [london, _], b: [utc, london])) == [true, true]
-    assert eval(compared_by(a: [london, _], b: [utc, _], flag: [true, false])) == [false, true]
-    assert eval(compared_with<true>(a: [london], b: [utc])) == [true]
-    assert eval(compared_with<false>(a: [london], b: [utc])) == [false]
-    assert eval(wired(a: [london, _], b: [utc, london])) == [false, true]
-    assert eval(wired_as_utc(a: [london, _], b: [utc, london])) == [true, true]
-    assert eval(wired_by(a: [london], b: [utc], as_utc: true)) == [false]
-    assert eval(wired_by(a: [london], b: [utc], as_utc: false)) == [true]
-    assert eval(wired_with<true>(a: [london], b: [utc])) == [true]
-    assert eval(wired_with<false>(a: [london], b: [utc])) == [false]
+    assert eval compared(a: [london, _], b: [utc, london]) == [false, true]
+    assert eval compared_as_utc(a: [london, _], b: [utc, london]) == [true, true]
+    assert eval compared_by(a: [london, _], b: [utc, _], flag: [true, false]) == [false, true]
+    assert eval compared_with<true>(a: [london], b: [utc]) == [true]
+    assert eval compared_with<false>(a: [london], b: [utc]) == [false]
+    assert eval wired(a: [london, _], b: [utc, london]) == [false, true]
+    assert eval wired_as_utc(a: [london, _], b: [utc, london]) == [true, true]
+    assert eval wired_by(a: [london], b: [utc], as_utc: true) == [false]
+    assert eval wired_by(a: [london], b: [utc], as_utc: false) == [true]
+    assert eval wired_with<true>(a: [london], b: [utc]) == [true]
+    assert eval wired_with<false>(a: [london], b: [utc]) == [false]
     # The option's input is invalid at first: `utc` is then false.
-    assert eval(wired_named(a: [london, _, _], b: [utc, _, _], flag: [_, true, false])) ==
+    assert eval wired_named(a: [london, _, _], b: [utc, _, _], flag: [_, true, false]) ==
         [false, true, false]
-    assert eval(compared_when_given(b: [london, _, utc], a: [null, london, _])) == [false, true, false]
+    assert eval compared_when_given(b: [london, _, utc], a: [null, london, _]) == [false, true, false]
 }
 
 # OPS-2: "Two structs are equal when ... each field is equal as `==` of
@@ -193,10 +193,10 @@ test a_duration_moves_a_zoned_instant_across_a_change_of_offset {
     assert later(@2026-03-29T00:30+00:00[Europe/London], 1h) == @2026-03-29T02:30+01:00[Europe/London]
     assert later(@2026-03-07T12:00-05:00[America/New_York], 1d) ==
         @2026-03-08T13:00-04:00[America/New_York]
-    assert eval(moved(at: [spring, autumn], by: [1d])) ==
+    assert eval moved(at: [spring, autumn], by: [1d]) ==
         [@2026-03-29T13:00+01:00[Europe/London], @2026-10-25T11:00+00:00[Europe/London]]
-    assert eval(moved_back(at: [@2026-03-29T13:00+01:00[Europe/London]], by: [1d])) == [spring]
-    assert eval(shifted(at: [spring, autumn], by: [1d])) ==
+    assert eval moved_back(at: [@2026-03-29T13:00+01:00[Europe/London]], by: [1d]) == [spring]
+    assert eval shifted(at: [spring, autumn], by: [1d]) ==
         [@2026-03-29T13:00+01:00[Europe/London], @2026-10-25T11:00+00:00[Europe/London]]
     # OPS-10: an instant result "outside its type's range is an HGL error
     # with code `numeric.out_of_range`".
@@ -229,9 +229,9 @@ test the_temporal_scalars_are_ordered {
     assert longer(1s, 999999us) && !longer(-1us, 0s)
     assert not_shorter(0s, 0s) && !not_shorter(-1d, 1us)
     assert @2026-09-03 < @2026-09-04 && @23:00 > @01:00 && 1h <= 60m
-    assert eval(not_before(a: [@2026-09-03T09:30+01:00, @2026-09-03T08:00Z], b: [@2026-09-03T08:30Z])) ==
+    assert eval not_before(a: [@2026-09-03T09:30+01:00, @2026-09-03T08:00Z], b: [@2026-09-03T08:30Z]) ==
         [true, false]
-    assert eval(span_order(a: [1s, -1s, 60s], b: [1m])) == [.less, .less, .equivalent]
+    assert eval span_order(a: [1s, -1s, 60s], b: [1m]) == [.less, .less, .equivalent]
 }
 
 # OPS-1: "`*` | `str` and `i64`, in either order | `str`": the text that
@@ -248,5 +248,5 @@ test a_string_times_a_count_is_repeated {
     assert repeated("h\u{e9}", 2) == "h\u{e9}h\u{e9}"
     assert repeated_before(3, "x") == "xxx"
     assert "ab" * 2 == 2 * "ab"
-    assert eval(wired_repeat(text: ["ab", _, "c"], count: [2, 0, _])) == ["abab", "", ""]
+    assert eval wired_repeat(text: ["ab", _, "c"], count: [2, 0, _]) == ["abab", "", ""]
 }

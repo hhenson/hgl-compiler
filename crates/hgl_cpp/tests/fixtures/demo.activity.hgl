@@ -39,20 +39,20 @@ fn same_twice(value: i64) -> bool => bindings(value, value)
 fn listening(data: i64) -> i64 => gated(.listen, data)
 
 test a_passive_input_wakes_no_node {
-    assert eval(gated(
+    assert eval gated(
         mode: [.listen, .ignore, _, .ignore, .listen, _],
         data: [      1,       _, 2,       3,       _, 4],
-    )) ==     [      1,       _, _,      -3,       _, 4]
+    )  ==     [      1,       _, _,      -3,       _, 4]
 }
 
 test an_enum_is_published {
-    assert eval(mode_of(value: [1, -1, 2])) == [.listen, .ignore, .listen]
+    assert eval mode_of(value: [1, -1, 2]) == [.listen, .ignore, .listen]
 }
 
 test activity_belongs_to_the_binding {
-    assert eval(same_twice(value: [7, _, 7])) == [true, _, true]
+    assert eval same_twice(value: [7, _, 7]) == [true, _, true]
 }
 
 test an_enum_is_a_constant_connection {
-    assert eval(listening(data: [1, 2])) == [1, 2]
+    assert eval listening(data: [1, 2]) == [1, 2]
 }

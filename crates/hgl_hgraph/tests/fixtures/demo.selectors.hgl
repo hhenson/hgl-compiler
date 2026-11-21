@@ -16,7 +16,7 @@ fn recovering(command: i64) -> i64 {
 }
 
 test selectors {
-    assert eval(both_valid(a: [1, _], b: [_, 2], c: [])) == [_, 3]
-    assert eval(repeated(a: [1, _, 3], b: [_, 2, _])) == [_, 2, 3]
-    assert eval(recovering(command: [0, 5])) == [1, 5]
+    assert eval both_valid(a: [1, _], b: [_, 2], c: []) == [_, 3]
+    assert eval repeated(a: [1, _, 3], b: [_, 2, _]) == [_, 2, 3]
+    assert eval recovering(command: [0, 5]) == [1, 5]
 }

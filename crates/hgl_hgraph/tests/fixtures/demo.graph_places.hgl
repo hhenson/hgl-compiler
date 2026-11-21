@@ -56,10 +56,10 @@ fn added(a: i64, b: i64) -> i64 {
 }
 
 test a_field_of_a_connection_is_assigned_by_a_new_connection {
-    assert eval(placed(a: [1, 2], b: [5, 6])) == [502, 603]
-    assert eval(kept(a: [1, 2], b: [5, 6])) == [102, 203]
-    assert eval(constant_ask(a: [1, 2])) == [109, 209]
-    assert eval(added(a: [1, 2], b: [5, 6])) == [602, 803]
+    assert eval placed(a: [1, 2], b: [5, 6]) == [502, 603]
+    assert eval kept(a: [1, 2], b: [5, 6]) == [102, 203]
+    assert eval constant_ask(a: [1, 2]) == [109, 209]
+    assert eval added(a: [1, 2], b: [5, 6]) == [602, 803]
 }
 
 # A place at depth: a field of a field.
@@ -107,9 +107,9 @@ fn relisted(a: i64, b: i64) -> i64 {
 }
 
 test a_place_inside_a_connection_is_assigned_by_a_new_connection {
-    assert eval(rebooked(a: [1, 2], b: [5, 6])) == [501, 602]
-    assert eval(repaired(a: [1, 2], b: [5, 6])) == [105, 206]
-    assert eval(relisted(a: [1, 2], b: [5, 6])) == [502, 603]
+    assert eval rebooked(a: [1, 2], b: [5, 6]) == [501, 602]
+    assert eval repaired(a: [1, 2], b: [5, 6]) == [105, 206]
+    assert eval relisted(a: [1, 2], b: [5, 6]) == [502, 603]
 }
 
 # TYPE-14: "a T is a value where a T? is expected". A nullable field
@@ -144,8 +144,8 @@ fn cleared_maybe(a: i64) -> i64 {
 }
 
 test a_nullable_field_of_a_connection_is_assigned {
-    assert eval(given_maybe(a: [1, 2], b: [5, 6])) == [501, 602]
-    assert eval(cleared_maybe(a: [1, 2])) == [1, 2]
+    assert eval given_maybe(a: [1, 2], b: [5, 6]) == [501, 602]
+    assert eval cleared_maybe(a: [1, 2]) == [1, 2]
 }
 
 # CTRL-14 through a place: a branch selected at runtime assigns a field.
@@ -158,5 +158,5 @@ fn chosen(flag: bool, a: i64, b: i64) -> i64 {
 }
 
 test a_branch_assigns_a_field_of_a_connection {
-    assert eval(chosen(flag: [true, false], a: [1, 2], b: [5, 6])) == [502, 203]
+    assert eval chosen(flag: [true, false], a: [1, 2], b: [5, 6]) == [502, 203]
 }

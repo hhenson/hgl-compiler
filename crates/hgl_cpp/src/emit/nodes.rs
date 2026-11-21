@@ -314,7 +314,7 @@ impl Emitter<'_> {
                 {
                     states.push((*local, value.as_ref()));
                 }
-                Stmt::Inject { local, at } => {
+                Stmt::Inject { local, at, .. } => {
                     let name = &body.locals[*local].name;
                     if name == "out" {
                         continue;

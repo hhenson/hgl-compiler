@@ -231,13 +231,13 @@ test {
 }
 
 test everything {
-    assert eval(arrow(x: [1, _])) == [2, _]
+    assert eval arrow(x: [1, _]) == [2, _]
     assert raises("value.missing_key") { lookup(key) }
 }
 
 @timeout(5s)
 integration_test live {
-    let seen = run(arrow(x: [1]), RunConfig())
+    let seen = run arrow(x: [1])
 }
 
 fn body(
@@ -290,7 +290,7 @@ use tour.all::{arrow}
 inject global_state
 put(global_state, "limit", 3)
 
-run(arrow(1), RunConfig())
+run arrow(1)
 "#;
 
 #[test]

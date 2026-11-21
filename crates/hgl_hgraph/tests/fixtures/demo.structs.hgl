@@ -121,5 +121,5 @@ test identity {
 }
 
 test walks {
-    assert eval(travelled(step: [1.0, _, 2.0])) == [3.0, _, 9.0]
+    assert eval travelled(step: [1.0, _, 2.0]) == [3.0, _, 9.0]
 }

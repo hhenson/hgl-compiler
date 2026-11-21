@@ -104,23 +104,23 @@ fn negative() -> i64 {
 }
 
 test sources {
-    assert eval(two_values()) == [_, 7, 9]
-    assert eval(greeting()) == [_, "hello", "world"]
-    assert eval(greeting(every: 2us)) == [_, _, "hello", _, "world"]
-    assert eval(counter()) == [_, 1, 2, 3]
-    assert eval(counter(limit: 0)) == []
-    assert eval(at_once(first: 5)) == [5, _, 6]
-    assert eval(absolute()) == [_, _, _, 1, _, 2, 3]
-    assert eval(late(), RunConfig(start: earliest_start + 2us)) == [_, _, 2]
-    assert eval(ended(limit: 2)) == [_, 1, 2]
-    assert eval(wired()) == [_, 14, 18]
-    assert eval(trailed(first: 6)) == [_, 6]
-    assert eval(guarded(wanted: true)) == [_, 1]
-    assert eval(guarded(wanted: false)) == []
-    assert eval(started(quiet: true)) == [_, 4]
-    assert eval(started(quiet: false)) == [_, 4]
+    assert eval two_values() == [_, 7, 9]
+    assert eval greeting() == [_, "hello", "world"]
+    assert eval greeting(every: 2us) == [_, _, "hello", _, "world"]
+    assert eval counter() == [_, 1, 2, 3]
+    assert eval counter(limit: 0) == []
+    assert eval at_once(first: 5) == [5, _, 6]
+    assert eval absolute() == [_, _, _, 1, _, 2, 3]
+    assert eval{start: earliest_start + 2us} late() == [_, _, 2]
+    assert eval ended(limit: 2) == [_, 1, 2]
+    assert eval wired() == [_, 14, 18]
+    assert eval trailed(first: 6) == [_, 6]
+    assert eval guarded(wanted: true) == [_, 1]
+    assert eval guarded(wanted: false) == []
+    assert eval started(quiet: true) == [_, 4]
+    assert eval started(quiet: false) == [_, 4]
     # CRUN-2: a run ends before its `end`, with the source suspended.
-    assert eval(counter(limit: 9), RunConfig(length: 3us)) == [_, 1, 2]
-    assert raises("yield.non_increasing_time") { eval(backwards()) }
-    assert raises("yield.negative_duration") { eval(negative()) }
+    assert eval{length: 3us} counter(limit: 9) == [_, 1, 2]
+    assert raises("yield.non_increasing_time") { eval backwards() }
+    assert raises("yield.negative_duration") { eval negative() }
 }

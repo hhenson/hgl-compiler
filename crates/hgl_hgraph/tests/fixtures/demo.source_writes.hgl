@@ -36,7 +36,7 @@ fn first_captured() -> i64 {
 }
 
 test a_sources_publication_before_its_failure_stands {
-    assert eval(counted_captured(), RunConfig(length: 5s)) == [1s: 50, 2s: 100]
-    assert eval(first_captured(), RunConfig(length: 5s)) == [0s: 7]
-    assert raises("numeric.division_by_zero") { eval(counted(), RunConfig(length: 5s)) }
+    assert eval{length: 5s} counted_captured() == [1s: 50, 2s: 100]
+    assert eval{length: 5s} first_captured() == [0s: 7]
+    assert raises("numeric.division_by_zero") { eval{length: 5s} counted() }
 }

@@ -30,7 +30,7 @@ fn recent(price: f64) -> rolling_window<f64, 5s> {
     when { return price }
 }
 test recorded {
-    assert eval(recent(price: [1.0])) == [1.0]
+    assert eval recent(price: [1.0]) == [1.0]
 }
 const fn total(values: list<f64>) -> f64 => 0.0
 fn collected(price: f64) -> rolling_window<f64, 3, 1> {

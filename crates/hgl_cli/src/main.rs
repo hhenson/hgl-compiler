@@ -238,8 +238,12 @@ struct RunArgs {
     #[arg(long = "arg", value_name = "NAME=VALUE", value_parser = replace::replacement)]
     arguments: Vec<Replacement>,
 
-    /// Replace a field of the application's run configuration, as
-    /// `--arg` replaces an argument: `--config length=10s`.
+    /// Supply a field of the run's configuration, over the default the
+    /// application's `inject run_config{...}` gives it (RUN-6):
+    /// `--config length=10s`. The fields are `start`, `end` and
+    /// `length`, core's `RunConfig`'s; the value is HGL, of the field's
+    /// type, as an argument's is. An `end` or a `length` given replaces
+    /// a default of either. It may be given more than once.
     #[arg(long = "config", value_name = "FIELD=VALUE", value_parser = replace::replacement)]
     config: Vec<Replacement>,
 
@@ -875,9 +879,11 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
 /// the host's stop: the run ends as it does at its end, and what it
 /// recorded up to then is printed.
 ///
-/// RUN-2: `--arg` and `--config` replace an argument of the entry and
-/// a field of the configuration; `replace` writes each into the run
-/// statement and the program is checked again.
+/// RUN-2: `--arg` replaces an argument of the entry, and `--config`
+/// supplies a field of the run's configuration (RUN-6); `replace`
+/// writes each into the application, an argument in the run statement
+/// and a field in its `inject run_config`, and the program is checked
+/// again.
 fn run(arguments: &RunArgs) -> ExitCode {
     let limits = arguments.limits.limits();
     let Parsed {
@@ -899,10 +905,10 @@ fn run(arguments: &RunArgs) -> ExitCode {
         Err(status) => return status,
     };
     // RUN-2: what starts the application replaces an argument of its
-    // entry or a field of its configuration. The application is read
-    // again with each replacement written in its run statement, and the
-    // program checked again: the replacement is held to what an
-    // argument the application writes is.
+    // entry, and supplies its run's configuration (RUN-6). The
+    // application is read again with each written in it, and the
+    // program checked again: each is held to what the application
+    // writes is.
     if !arguments.arguments.is_empty() || !arguments.config.is_empty() {
         let written = replace::EntryCall::of(&program, &chosen);
         let written_as = written

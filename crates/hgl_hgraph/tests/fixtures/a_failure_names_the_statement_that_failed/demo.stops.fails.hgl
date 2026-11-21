@@ -6,4 +6,4 @@ fn ends_badly(value: i64) -> i64 {
         if valid(value) { ended = value // 0 }
     }
 }
-test stop_fails { eval(ends_badly(value: [7])) }
+test stop_fails { eval ends_badly(value: [7]) }

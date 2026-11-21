@@ -139,24 +139,24 @@ fn alarm_earliest() -> i64 {
 }
 
 test a_wake_that_is_not_ahead_is_not_delivered {
-    assert eval(alarm_now(value: [0s: 1, 1s: 2], at: @2000-01-01T00:00:00Z), RunConfig(start: @2026-01-01T00:00:00Z, length: 3s)) == [0s: 1, 1s: 2, 2s: 0]
-    assert eval(alarm_past(value: [1, 2], at: @2000-01-01T00:00:00Z), RunConfig(start: @2026-01-01T00:00:00Z)) == [1, 2]
-    assert eval(scheduler_now(value: [0s: 1, 1s: 2], at: @2000-01-01T00:00:00Z), RunConfig(start: @2026-01-01T00:00:00Z, length: 3s)) == [0s: 1, 1s: 2, 2s: 0]
+    assert eval{start: @2026-01-01T00:00:00Z, length: 3s} alarm_now(value: [0s: 1, 1s: 2], at: @2000-01-01T00:00:00Z) == [0s: 1, 1s: 2, 2s: 0]
+    assert eval{start: @2026-01-01T00:00:00Z} alarm_past(value: [1, 2], at: @2000-01-01T00:00:00Z) == [1, 2]
+    assert eval{start: @2026-01-01T00:00:00Z, length: 3s} scheduler_now(value: [0s: 1, 1s: 2], at: @2000-01-01T00:00:00Z) == [0s: 1, 1s: 2, 2s: 0]
 }
 
 test a_node_with_no_input_and_no_handler_starts {
-    assert eval(started_then_read(tick: [_, true])) == [_, 1]
+    assert eval started_then_read(tick: [_, true]) == [_, 1]
 }
 
 test the_empty_tag_is_a_tag {
-    assert eval(empty_tag()) == [2s: true]
-    assert eval(empty_tag_cancelled()) == [2s: true]
+    assert eval empty_tag() == [2s: true]
+    assert eval empty_tag_cancelled() == [2s: true]
 }
 
 test the_wake_being_delivered_is_not_pending {
-    assert eval(cancel_next()) == [1s: true]
-    assert eval(still_pending()) == [1s: true, 3s: false]
-    assert eval(next_after(every: 1s)) == [1s: 2s, 3s: null]
-    assert eval(agree(), RunConfig(length: 2500ms)) == [1s: true, 2s: true]
-    assert eval(alarm_earliest(), RunConfig(length: 5s)) == [1s: 1, 2s: 2, 3s: 3]
+    assert eval cancel_next() == [1s: true]
+    assert eval still_pending() == [1s: true, 3s: false]
+    assert eval next_after(every: 1s) == [1s: 2s, 3s: null]
+    assert eval{length: 2500ms} agree() == [1s: true, 2s: true]
+    assert eval{length: 5s} alarm_earliest() == [1s: 1, 2s: 2, 3s: 3]
 }

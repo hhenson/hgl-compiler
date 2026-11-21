@@ -150,24 +150,24 @@ fn source_width() -> i64 => width(two_quotes())
 fn widened_width(bid: i64, ask: i64) -> i64 => width(widened(quoted(bid, ask)))
 
 test struct_fields_tick_as_their_own {
-    assert eval(boxed_sum(value: [1, 2])) == [3, 5]
-    assert eval(boxed_valid(value: [1, 2])) == [2, 3]
-    assert eval(raised_ask(bid: [1, 3])) == [3, 7]
-    assert eval(present_of(bid: [1, -1, 2])) == [true, false, true]
-    assert eval(level_set_of(price: [1, -1, 2])) == [true, false, true]
-    assert eval(source_width()) == [_, 1, 2]
-    assert eval(widened_width(bid: [1, _], ask: [5, 9])) == [6, 10]
-    assert eval(spread_of(bid: [1, 2, _], ask: [5, _, 9])) == [4, 3, 7]
-    assert eval(whole_spread_of(bid: [1, 2], ask: [5, _])) == [4, 3]
-    assert eval(ask_of(is_bid: [false, true, false], price: [7, 3, 8])) == [7, _, 8]
-    assert eval(bids_of(bid: [1, _, 3], ask: [5, 6, _])) == [1, -1, 3]
-    assert eval(order_bid_of(bid: [4, 5], size: [1, _])) == [4, 5]
-    assert eval(nested_bid_of(bid: [4, _, 6], size: [1, 2, _])) == [4, 4, 6]
-    assert eval(moved(is_bid: [true, false], price: [3, 4])) ==
+    assert eval boxed_sum(value: [1, 2]) == [3, 5]
+    assert eval boxed_valid(value: [1, 2]) == [2, 3]
+    assert eval raised_ask(bid: [1, 3]) == [3, 7]
+    assert eval present_of(bid: [1, -1, 2]) == [true, false, true]
+    assert eval level_set_of(price: [1, -1, 2]) == [true, false, true]
+    assert eval source_width() == [_, 1, 2]
+    assert eval widened_width(bid: [1, _], ask: [5, 9]) == [6, 10]
+    assert eval spread_of(bid: [1, 2, _], ask: [5, _, 9]) == [4, 3, 7]
+    assert eval whole_spread_of(bid: [1, 2], ask: [5, _]) == [4, 3]
+    assert eval ask_of(is_bid: [false, true, false], price: [7, 3, 8]) == [7, _, 8]
+    assert eval bids_of(bid: [1, _, 3], ask: [5, 6, _]) == [1, -1, 3]
+    assert eval order_bid_of(bid: [4, 5], size: [1, _]) == [4, 5]
+    assert eval nested_bid_of(bid: [4, _, 6], size: [1, 2, _]) == [4, 4, 6]
+    assert eval moved(is_bid: [true, false], price: [3, 4]) ==
         [delta<Quote>(bid: 3), delta<Quote>(ask: 4)]
 }
 
 test an_atomic_struct_publishes_whole {
-    assert eval(atomic_ask_of(bid: [1, 2, _], ask: [5, _, 6])) == [5, 5, 6]
-    assert eval(atomic_read_of(bid: [1, 2], ask: [5, _])) == [5, 5]
+    assert eval atomic_ask_of(bid: [1, 2, _], ask: [5, _, 6]) == [5, 5, 6]
+    assert eval atomic_read_of(bid: [1, 2], ask: [5, _]) == [5, 5]
 }

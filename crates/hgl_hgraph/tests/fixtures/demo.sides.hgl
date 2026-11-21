@@ -2,5 +2,5 @@ module demo.sides
 use demo.kept::{held}
 enum Side { buy, sell }
 test an_instance_of_a_callers_type {
-    assert eval(held(value: [Side.buy, Side.sell])) == [Side.buy, Side.sell]
+    assert eval held(value: [Side.buy, Side.sell]) == [Side.buy, Side.sell]
 }

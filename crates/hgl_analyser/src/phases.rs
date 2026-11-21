@@ -23,7 +23,7 @@ use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
-use crate::program::{Declaration, DeclarationKind, Phase, Program, Role};
+use crate::program::{Declaration, DeclarationKind, Phase, Program, RUN_CONFIG, Role};
 use crate::syntax::{child, tokens};
 use crate::types::Detail;
 use crate::{codes, error};
@@ -150,10 +150,98 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                 node_body(declaration, file, outputless, diagnostics);
                 in_anonymous_function(declaration, file, diagnostics);
             }
+            in_function(&declaration.syntax, file, diagnostics);
         }
         for test in &module.tests {
-            test_body(&test.syntax, module.files[test.file].file, diagnostics);
+            let file = module.files[test.file].file;
+            test_body(&test.syntax, file, diagnostics);
+            in_test(&test.syntax, test.integration, file, diagnostics);
         }
+    }
+}
+
+/// True for an `inject` of `run_config` alone, which RUN-6 places
+/// (`inject.position`), and no other rule judges.
+fn injects_run_config_alone(node: &SyntaxNode) -> bool {
+    let mut names = tokens(node)
+        .filter(|token| token.kind() == SyntaxKind::Ident)
+        .peekable();
+    names.peek().is_some() && names.all(|name| name.text() == RUN_CONFIG)
+}
+
+/// Each `run_config` an `inject` of a body names, where it is written:
+/// the statement's own nodes, and not an anonymous function's, which
+/// injects nothing (FN-9).
+fn run_config_injections(root: &SyntaxNode, file: FileId) -> Vec<(SyntaxNode, Location)> {
+    own_nodes(root)
+        .into_iter()
+        .filter(|node| node.kind() == SyntaxKind::InjectDecl)
+        .flat_map(|node| {
+            tokens(&node)
+                .filter(|token| token.kind() == SyntaxKind::Ident && token.text() == RUN_CONFIG)
+                .map(|name| (node.clone(), Location::new(file, name.span())))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// RUN-6: "An application injects `run_config`, and so does an
+/// integration test (TST-17) ... A test that is no integration test
+/// does not, and neither does a function: one that needs a bound of the
+/// run takes it as a `const` argument." So an `inject run_config` in a
+/// function's body rejects, at the name (`inject.position`).
+fn in_function(root: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) {
+    for (_, at) in run_config_injections(root, file) {
+        diagnostics.emit(
+            error(
+                Category::Injectable,
+                codes::INJECT_POSITION,
+                at,
+                "a function does not inject `run_config`: it is an application's and an \
+                 integration test's"
+                    .to_string(),
+                "RUN-6",
+            )
+            .with_note("a function that needs a bound of the run takes it as a `const` argument"),
+        );
+    }
+}
+
+/// RUN-6 and TST-17 for a test's `inject run_config`: "An integration
+/// test may inject `run_config`, before its other statements", and "A
+/// test that is no integration test does not". Each that has no place
+/// there rejects, at the name (`inject.position`): in a test that is no
+/// integration test, and in one that is, after another statement or
+/// inside one.
+fn in_test(test: &SyntaxNode, integration: bool, file: FileId, diagnostics: &mut Diagnostics) {
+    let block = child(test, SyntaxKind::Block);
+    // The test's leading `inject` statements, which come before its
+    // other statements.
+    let leading: Vec<SyntaxNode> = block
+        .iter()
+        .flat_map(|block| block.children())
+        .take_while(|statement| statement.kind() == SyntaxKind::InjectDecl)
+        .collect();
+    for (statement, at) in run_config_injections(test, file) {
+        if integration && leading.contains(&statement) {
+            continue;
+        }
+        let message = if integration {
+            "an integration test injects `run_config` before its other statements"
+        } else {
+            "a test that is no integration test does not inject `run_config`: its evals give \
+             their configuration in braces"
+        };
+        diagnostics.emit(
+            error(
+                Category::Injectable,
+                codes::INJECT_POSITION,
+                at,
+                message.to_string(),
+                "RUN-6",
+            )
+            .with_note("`eval{length: 4s} target(...)` gives an eval its configuration"),
+        );
     }
 }
 
@@ -164,7 +252,10 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
 /// so an `inject` in one is rejected as they are.
 fn in_value_function(declaration: &Declaration, file: FileId, diagnostics: &mut Diagnostics) {
     for node in declaration.syntax.descendants() {
-        if !is_node_construct(node.kind()) {
+        // RUN-6 places `inject run_config` (`in_function`).
+        if !is_node_construct(node.kind())
+            || (node.kind() == SyntaxKind::InjectDecl && injects_run_config_alone(&node))
+        {
             continue;
         }
         let Some((word, at)) = keyword(&node, file) else {
@@ -253,6 +344,10 @@ fn in_anonymous_function(declaration: &Declaration, file: FileId, diagnostics: &
 fn test_body(test: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) {
     for node in own_nodes(test) {
         match node.kind() {
+            // TST-3: "an integration test injects `run_config`, and no
+            // other capability (TST-17)". Where it has a place is RUN-6's
+            // to say (`in_test`).
+            SyntaxKind::InjectDecl if injects_run_config_alone(&node) => {}
             SyntaxKind::StateDecl
             | SyntaxKind::CacheDecl
             | SyntaxKind::InjectDecl

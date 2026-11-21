@@ -23,7 +23,7 @@ fn doubled_or_silent(value: i64) -> i64 {
 }
 
 test a_captured_graph_keeps_running {
-    assert eval(doubled_or_silent(value: [1, -1, 3])) == [2, _, 6]
+    assert eval doubled_or_silent(value: [1, -1, 3]) == [2, _, 6]
 }
 
 fn is_negative(failure: error) -> bool {
@@ -37,7 +37,7 @@ fn failures(value: i64) -> bool {
 }
 
 test a_captured_error_keeps_its_message_and_code {
-    assert eval(failures(value: [1, -1, 2, -5])) == [_, true, _, true]
+    assert eval failures(value: [1, -1, 2, -5]) == [_, true, _, true]
 }
 
 fn raise_again(first: error, repeat: bool) -> error {
@@ -61,5 +61,5 @@ fn seen_outside(value: i64, repeat: bool) -> bool {
 # ERR-8: "The nearest boundary consumes the event once", and propagating
 # a retained error with `?` "makes a new failure event".
 test the_nearest_capture_consumes_a_failure {
-    assert eval(seen_outside(value: [8, -1], repeat: [_, _, _, true])) == [_, _, _, true]
+    assert eval seen_outside(value: [8, -1], repeat: [_, _, _, true]) == [_, _, _, true]
 }

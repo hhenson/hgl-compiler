@@ -107,7 +107,7 @@ impl Emitter<'_> {
                 Stmt::Declare { local, .. } => {
                     self.unsupported(body.locals[*local].at, "this declaration of a node");
                 }
-                Stmt::Inject { local, at } => {
+                Stmt::Inject { local, at, .. } => {
                     let injected = &body.locals[*local].name;
                     if injected == "out" {
                         has_out = true;
@@ -835,7 +835,7 @@ impl Emitter<'_> {
         let mut block: Vec<Stmt> = Vec::new();
         for statement in rest {
             match statement {
-                Stmt::Inject { local, at } => {
+                Stmt::Inject { local, at, .. } => {
                     let injected = &body.locals[*local].name;
                     match capability(injected) {
                         // SOURCE-1: a source injects "not `out`,

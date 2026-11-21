@@ -61,15 +61,15 @@ const fn nulls(seen: list<tuple<datetime, delta<i64?>>>) -> i64 {
 
 test nullable {
     # A published null is a publication, and `_` is silence.
-    assert eval(publish_nullable(command: [7, 0, _, 0, 9])) == [7, null, _, null, 9]
-    assert eval(read_back(value: [null, _, 7, null, _])) == [-1, _, 107, -1]
-    assert eval(recorded(value: [null, _, 7, null, _])) == [null, _, 7, null]
-    assert eval(unwrapped(value: [null, 7])) == [0, 1]
-    assert eval(made(command: [0, 5])) == [null, 5]
-    assert eval(through_out(command: [0, 5, 0])) == [null, 5, null]
-    assert eval(nothing_then_null()) == [_, null, 3]
-    assert eval(lifted_in(value: [null, 3])) == [0, 3]
-    assert eval(lifted_out(value: [0, 3])) == [null, 3]
-    assert eval(wired(command: [0, 4])) == [-1, 104]
-    assert nulls(eval(publish_nullable(command: [7, 0, _, 0]))) == 2
+    assert eval publish_nullable(command: [7, 0, _, 0, 9]) == [7, null, _, null, 9]
+    assert eval read_back(value: [null, _, 7, null, _]) == [-1, _, 107, -1]
+    assert eval recorded(value: [null, _, 7, null, _]) == [null, _, 7, null]
+    assert eval unwrapped(value: [null, 7]) == [0, 1]
+    assert eval made(command: [0, 5]) == [null, 5]
+    assert eval through_out(command: [0, 5, 0]) == [null, 5, null]
+    assert eval nothing_then_null() == [_, null, 3]
+    assert eval lifted_in(value: [null, 3]) == [0, 3]
+    assert eval lifted_out(value: [0, 3]) == [null, 3]
+    assert eval wired(command: [0, 4]) == [-1, 104]
+    assert nulls(eval publish_nullable(command: [7, 0, _, 0])) == 2
 }

@@ -3,7 +3,7 @@
 
 // Names this file writes, which no macro of a header above takes.
 #undef a_resumed_source_keeps_its_locals_until_it_returns
-#undef a_run_configuration_is_a_value
+#undef a_run_configuration_is_given_in_braces
 #undef a_scheduler_wakes_a_node_with_no_input
 #undef a_source_keeps_its_cache_and_state
 #undef a_source_reads_its_clock_when_it_runs
@@ -32,7 +32,7 @@ void a_source_reads_its_clock_when_it_runs();
 void absolute_targets_before_at_and_after_the_start();
 void a_resumed_source_keeps_its_locals_until_it_returns();
 void a_source_keeps_its_cache_and_state();
-void a_run_configuration_is_a_value();
+void a_run_configuration_is_given_in_braces();
 }  // namespace hgl::demo::timing::m_::t_
 
 namespace
@@ -50,7 +50,7 @@ const ::hglrt::testing::Registration test_8{"demo.timing::a_source_reads_its_clo
 const ::hglrt::testing::Registration test_9{"demo.timing::absolute_targets_before_at_and_after_the_start", &::hgl::demo::timing::m_::t_::absolute_targets_before_at_and_after_the_start};
 const ::hglrt::testing::Registration test_10{"demo.timing::a_resumed_source_keeps_its_locals_until_it_returns", &::hgl::demo::timing::m_::t_::a_resumed_source_keeps_its_locals_until_it_returns};
 const ::hglrt::testing::Registration test_11{"demo.timing::a_source_keeps_its_cache_and_state", &::hgl::demo::timing::m_::t_::a_source_keeps_its_cache_and_state};
-const ::hglrt::testing::Registration test_12{"demo.timing::a_run_configuration_is_a_value", &::hgl::demo::timing::m_::t_::a_run_configuration_is_a_value};
+const ::hglrt::testing::Registration test_12{"demo.timing::a_run_configuration_is_given_in_braces", &::hgl::demo::timing::m_::t_::a_run_configuration_is_given_in_braces};
 }  // namespace
 
 int main(int argc, char **argv)

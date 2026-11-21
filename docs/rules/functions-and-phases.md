@@ -95,7 +95,7 @@ analyser: done
 analyser: partial
 
 - An `inject` in a `const fn`, a value candidate, the contract of a native value function, or an anonymous function written in a node is rejected (`node.in_value_function`); a value function is given a capability by a parameter of its type (TIME-8)
-- An application injects `global_state` alone, for the statements before its run statement (UNIT-14)
+- An application injects `global_state`, for the statements before its run statement (UNIT-14), and `run_config` (RUN-6), and no other
 - A graph injects it alone too, and a call on it there is given no connection (`connection.as_constant`)
 - `scheduled()` in a value function or a graph, which has no schedule of its own (TIME-9), is local `scheduled.outside_node`: the catalogue has no row for it; so is one in an anonymous function written there, and `scheduled<T>()`
 - Left: an anonymous function written in a graph; a capability used outside a hook or a source's body

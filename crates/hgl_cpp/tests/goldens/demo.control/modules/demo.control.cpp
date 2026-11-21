@@ -74,7 +74,6 @@
 #undef scaled
 #undef selected
 #undef sized
-#undef start
 #undef switch_input
 #undef three_way
 #undef unmatched

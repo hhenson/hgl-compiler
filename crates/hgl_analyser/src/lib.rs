@@ -53,7 +53,9 @@
 //!   graph and test, and writes each down as a [`hir::Body`] for the
 //!   stages after this one;
 //! * `cycles` rejects a constant whose value depends on itself, read
-//!   from the typed program (UNIT-13).
+//!   from the typed program (UNIT-13);
+//! * `store_keys` rejects a key of the global store used with two
+//!   types in one program, read from the typed program (TIME-8).
 //!
 //! The repository's `docs/rules.md` says what each pass leaves of each
 //! rule.
@@ -91,6 +93,7 @@ mod read;
 mod resolve;
 mod signals;
 mod signatures;
+mod store_keys;
 mod syntax;
 mod types;
 mod values;
@@ -101,7 +104,7 @@ use hgl_source::{FileId, Span};
 
 pub use program::{
     Binding, Decision, Declaration, DeclarationKind, Import, ImportKind, LocalKind, Module,
-    ModuleFile, NameUse, OperatorRef, Phase, PreludeName, Program, Role, Test,
+    ModuleFile, NameUse, OperatorRef, Phase, PreludeName, Program, RUN_CONFIG, Role, Test,
 };
 pub use types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumOf, EnumType, Field,
@@ -222,6 +225,12 @@ pub mod codes {
     pub const CAPABILITY_AS_VALUE: &str = "capability.as_value";
     /// `alarm` and `scheduler` injected in one node (TIME-8).
     pub const INJECT_ALARM_AND_SCHEDULER: &str = "inject.alarm_and_scheduler";
+    /// `inject run_config` in a function, or in a test that is no
+    /// integration test (RUN-6).
+    pub const INJECT_POSITION: &str = "inject.position";
+    /// A configuration in braces on an `inject` of a capability that is
+    /// not `run_config` (RUN-6).
+    pub const INJECT_CONFIGURATION: &str = "inject.configuration";
     /// `scheduled()` in a node that injects neither `scheduler` nor
     /// `alarm` (TIME-9).
     pub const INJECT_NO_SCHEDULER: &str = "inject.no_scheduler";
@@ -252,7 +261,7 @@ pub mod codes {
     /// `assert raises(...)` given what is no literal catalogued
     /// execution code (TST-10).
     pub const TEST_RAISES_CODE: &str = "test.raises_code";
-    /// Eval's first argument names no function of a module (TST-5).
+    /// Eval's call is of no function of a module (TST-5).
     pub const EVAL_TARGET: &str = "eval.target";
     /// The value of an eval of an outputless target is bound or
     /// compared (TST-8).
@@ -283,6 +292,9 @@ pub mod codes {
     pub const INPUT_LIFECYCLE: &str = "input.lifecycle";
     /// A key of the global store that is the run's own (TIME-8).
     pub const STORE_RESERVED_KEY: &str = "store.reserved_key";
+    /// A key of the global store used with two types in one program
+    /// (TIME-8, core's CAP-6).
+    pub const STORE_KEY_TYPE: &str = "store.key_type";
     /// A `use` line names an application (UNIT-14).
     pub const APPLICATION_IMPORT: &str = "application.import";
     /// A declaration of an application is marked `export` (UNIT-14).
@@ -293,16 +305,18 @@ pub mod codes {
     /// its application (UNIT-14); `run` is written in a test that is no
     /// integration test (RUN-3).
     pub const RUN_POSITION: &str = "run.position";
-    /// A statement of an application that is no `inject global_state`
-    /// and no call of `put` on it, or that follows the run statement
-    /// or precedes a declaration; and either of those in a module
-    /// (UNIT-14).
+    /// A statement of an application that is no `inject` of
+    /// `run_config` or of `global_state` and no call of `put` on the
+    /// store, or that follows the run statement or precedes a
+    /// declaration; and either of those in a module (UNIT-14).
     pub const APPLICATION_STATEMENT: &str = "application.statement";
     /// An application's path is a module's or another application's
     /// (UNIT-14).
     pub const APPLICATION_DUPLICATE_PATH: &str = "application.duplicate_path";
-    /// A run statement's first argument is no call of an entry (RUN-1).
+    /// A run statement's call is of no entry (RUN-1).
     pub const RUN_ENTRY: &str = "run.entry";
+    /// A configuration on an application's run statement (RUN-6).
+    pub const RUN_CONFIGURATION: &str = "run.configuration";
     /// A constant's value depends on itself (UNIT-13).
     pub const CONSTANT_CYCLE: &str = "constant.cycle";
     /// An endpoint operation given what is no temporal input of its
@@ -636,6 +650,9 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.
     cycles::check(&program, diagnostics);
+    // TIME-8: "a use of another type in one program rejects", asked of
+    // every typed body of the program at once.
+    store_keys::key_types(&program, diagnostics);
     program
 }
 
@@ -728,13 +745,14 @@ pub const CORE_FILES: [(&str, &str); 7] = [
 pub const RESULT_FORMS: [&str; 5] = ["ok", "err", "is_ok", "is_err", "capture"];
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,
-/// `logger`, `clock`, and `scheduler`, and the proposed `alarm` and
-/// `global_state` below; `inject` names no other."
-pub const INJECTABLES: [&str; 6] = [
+/// `logger`, `clock`, `scheduler`, `alarm`, `global_state`, and
+/// `run_config`; `inject` names no other."
+pub const INJECTABLES: [&str; 7] = [
     "out",
     "logger",
     "clock",
     "scheduler",
     "alarm",
     "global_state",
+    program::RUN_CONFIG,
 ];

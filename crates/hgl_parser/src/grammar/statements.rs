@@ -174,21 +174,44 @@ impl Parser<'_> {
         self.finish();
     }
 
-    /// `inject_decl = "inject", IDENTIFIER, { ",", IDENTIFIER }, [ "," ] ;`
+    /// ```text
+    /// inject_decl = "inject", injected, { ",", injected }, [ "," ] ;
+    /// injected = IDENTIFIER, [ operator_configuration ] ;
+    /// ```
+    ///
+    /// Each name is a token of the `InjectDecl`, and the configuration
+    /// written after one, an `OperatorConfig`, follows it there. RUN-6:
+    /// "`run_config` takes one, and no other capability does": which
+    /// name has one is the analyser's to judge (`inject.configuration`).
+    /// The brace stands on the name's line; on the next it begins a
+    /// statement of its own (LEX-5).
     pub(crate) fn inject_decl(&mut self) {
         self.start(InjectDecl);
         self.bump();
-        self.expect_name("a name");
+        if self.at(Ident) {
+            self.injected();
+        } else {
+            self.expect_name("a name");
+        }
         while self.eat(Comma) {
             // LEX-6: "An inject list may continue after a comma when the
             // next line begins with a name."
             if self.at(Ident) && !self.cut() {
-                self.bump();
+                self.injected();
             } else {
                 break;
             }
         }
         self.finish();
+    }
+
+    /// `injected = IDENTIFIER, [ operator_configuration ] ;`, the cursor
+    /// on the name.
+    fn injected(&mut self) {
+        self.bump();
+        if self.at(LBrace) && !self.nl() {
+            self.configuration();
+        }
     }
 
     /// ```text

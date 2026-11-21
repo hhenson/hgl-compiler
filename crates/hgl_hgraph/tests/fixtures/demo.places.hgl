@@ -131,5 +131,5 @@ test places {
     assert raises("numeric.division_by_zero") { deep("a", 0) }
     assert deep("a", 1) == 7
     assert crossed("a", 0, 1) == 65
-    assert eval(counted(value: [1, _, 2])) == [101, _, 203]
+    assert eval counted(value: [1, _, 2]) == [101, _, 203]
 }

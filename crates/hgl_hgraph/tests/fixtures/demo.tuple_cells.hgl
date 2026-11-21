@@ -26,9 +26,9 @@ fn summed(pair: tuple<i64, i64>) -> i64 {
 }
 
 test a_whole_tuple_cell_publishes_its_null {
-    assert eval(second_null(pair: [(1, 5), (2, null)])) == [false, true]
-    assert eval(hook_second_null(command: [0, 1])) == [false, true]
-    assert eval(summed(pair: [(1, 2), (null, 3)])) == [3, 4]
+    assert eval second_null(pair: [(1, 5), (2, null)]) == [false, true]
+    assert eval hook_second_null(command: [0, 1]) == [false, true]
+    assert eval summed(pair: [(1, 2), (null, 3)]) == [3, 4]
 }
 
 # TST-5: "An expectation's cell written as a `delta<T>` is compared with
@@ -42,7 +42,7 @@ fn first_only(command: i64) -> tuple<i64, i64> {
 }
 
 test a_whole_tuple_expectation_is_the_value_held {
-    assert eval(pairs(command: [0, 1])) == [(1, 5), (2, null)]
-    assert eval(first_only(command: [0, 7])) == [(1, 2), (7, 2)]
-    assert eval(first_only(command: [0, 7])) == [(1, 2), (7, null)]
+    assert eval pairs(command: [0, 1]) == [(1, 5), (2, null)]
+    assert eval first_only(command: [0, 7]) == [(1, 2), (7, 2)]
+    assert eval first_only(command: [0, 7]) == [(1, 2), (7, null)]
 }

@@ -24,9 +24,9 @@ fn defaulted(value: i64 = 2) -> i64 {
 const fn packed(rest: ...i64) -> i64 => 1
 const fn lone(value: i64) -> i64 => value
 test timed {
-    assert eval(pass(value: [0s: 7])) == [0s: 7]
+    assert eval pass(value: [0s: 7]) == [0s: 7]
     let wired = lone(7)
-    assert eval(lone(value: [1])) == [1]
+    assert eval lone(value: [1]) == [1]
 }
 fn chosen(flag: bool, value: i64) -> i64 {
     if flag {

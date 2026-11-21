@@ -20,9 +20,9 @@ fn weighted(price: i64, const weights: dict<str, i64>) -> i64 {
 }
 
 test a_wiring_time_for_carries_a_var {
-    assert eval(chained(price: [1, 2], factors: [2, 3])) == [6, 12]
-    assert eval(chained(price: [1, 2], factors: [])) == [1, 2]
-    assert eval(weighted(price: [1, 2], weights: ["a": 10, "b": 100])) == [111, 112]
+    assert eval chained(price: [1, 2], factors: [2, 3]) == [6, 12]
+    assert eval chained(price: [1, 2], factors: []) == [1, 2]
+    assert eval weighted(price: [1, 2], weights: ["a": 10, "b": 100]) == [111, 112]
 }
 
 # CTRL-15: "Over a connection of `list<T, N>` it composes its body `N`
@@ -40,7 +40,7 @@ fn summed(low: i64) -> i64 {
 }
 
 test a_fixed_list_composes_its_body_for_each_position {
-    assert eval(summed(low: [1, 5])) == [4, 16]
+    assert eval summed(low: [1, 5]) == [4, 16]
 }
 
 # CTRL-7: "Dynamic independent dictionary/list bodies create one child
@@ -98,23 +98,23 @@ fn each_price(key: str, price: i64, tick: bool, const shown: str) -> i64 {
 test a_dictionary_has_a_child_for_each_key {
     # "a" ticks twice in one child, is removed, and is added again to a
     # fresh child; "b" has a child of its own throughout.
-    assert eval(each_price(
+    assert eval each_price(
         key:   ["a", _,    "b", _,    "a", _,    "a", _,    "a", _],
         price: [1,   _,    7,   _,    2,   _,    -1,  _,    5,   _],
         tick:  [_,   true, _,   true, _,   true, _,   true, _,   true],
-        shown: "a")) ==
+        shown: "a") ==
                [_,   1,    _,   1,    _,   2,    _,   2,    _,   1]
-    assert eval(each_price(
+    assert eval each_price(
         key:   ["a", _,    "b", _,    "a", _,    "a", _,    "a", _],
         price: [1,   _,    7,   _,    2,   _,    -1,  _,    5,   _],
         tick:  [_,   true, _,   true, _,   true, _,   true, _,   true],
-        shown: "started")) ==
+        shown: "started") ==
                [_,   1,    _,   2,    _,   2,    _,   2,    _,   3]
-    assert eval(each_price(
+    assert eval each_price(
         key:   ["a", _,    "b", _,    "a", _,    "a", _,    "a", _],
         price: [1,   _,    7,   _,    2,   _,    -1,  _,    5,   _],
         tick:  [_,   true, _,   true, _,   true, _,   true, _,   true],
-        shown: "stopped")) ==
+        shown: "stopped") ==
                [_,   0,    _,   0,    _,   0,    _,   1,    _,   1]
 }
 
@@ -153,20 +153,20 @@ fn each_reading(reading: i64, tick: bool, const shown: str) -> i64 {
 test a_list_has_a_child_for_each_position {
     # Position 1 changes, so its child counts a second tick; the list
     # shrinks, which stops it, and grows, which starts a fresh one.
-    assert eval(each_reading(
+    assert eval each_reading(
         reading: [5, _,    6, _,    -1, _,    7, _],
         tick:    [_, true, _, true, _,  true, _, true],
-        shown: "seen")) ==
+        shown: "seen") ==
                  [_, 1,    _, 2,    _,  2,    _, 1]
-    assert eval(each_reading(
+    assert eval each_reading(
         reading: [5, _,    6, _,    -1, _,    7, _],
         tick:    [_, true, _, true, _,  true, _, true],
-        shown: "started")) ==
+        shown: "started") ==
                  [_, 2,    _, 2,    _,  2,    _, 3]
-    assert eval(each_reading(
+    assert eval each_reading(
         reading: [5, _,    6, _,    -1, _,    7, _],
         tick:    [_, true, _, true, _,  true, _, true],
-        shown: "stopped")) ==
+        shown: "stopped") ==
                  [_, 0,    _, 0,    _,  1,    _, 1]
 }
 
@@ -187,15 +187,15 @@ fn each_member(member: i64, tick: bool, const shown: str) -> i64 {
 }
 
 test a_set_has_a_child_for_each_member {
-    assert eval(each_member(
+    assert eval each_member(
         member: [1, _,    2, _,    -1, _,    1, _],
         tick:   [_, true, _, true, _,  true, _, true],
-        shown: "started")) ==
+        shown: "started") ==
                 [_, 1,    _, 2,    _,  2,    _, 3]
-    assert eval(each_member(
+    assert eval each_member(
         member: [1, _,    2, _,    -1, _,    1, _],
         tick:   [_, true, _, true, _,  true, _, true],
-        shown: "stopped")) ==
+        shown: "stopped") ==
                 [_, 0,    _, 0,    _,  1,    _, 1]
 }
 
@@ -210,12 +210,12 @@ fn each_open(key: str, price: i64, open: bool, tick: bool, const shown: str) -> 
 }
 
 test a_child_reads_a_connection_from_outside {
-    assert eval(each_open(
+    assert eval each_open(
         key:   ["a",  _,    "a", _,    "a",  _,    "a", _],
         price: [1,    _,    2,   _,    3,    _,    4,   _],
         open:  [true, _,    _,   _,    false, _,   true, _],
         tick:  [_,    true, _,   true, _,    true, _,   true],
-        shown: "a")) ==
+        shown: "a") ==
                [_,    1,    _,   2,    _,    2,    _,   1]
 }
 
@@ -230,7 +230,7 @@ fn boosted(price: i64, rising: bool, const factors: list<i64>) -> i64 {
 }
 
 test an_if_over_a_connection_on_each_pass {
-    assert eval(boosted(price: [1, 2], rising: [true, false], factors: [2, 3])) == [6, 2]
+    assert eval boosted(price: [1, 2], rising: [true, false], factors: [2, 3]) == [6, 2]
 }
 
 # CTRL-15: "The condition of a `while` is an ordinary `bool`, tested
@@ -246,8 +246,8 @@ fn doubled_times(price: i64, const times: i64) -> i64 {
 }
 
 test a_while_composes_its_body_on_each_pass {
-    assert eval(doubled_times(price: [1, 2], times: 3)) == [8, 16]
-    assert eval(doubled_times(price: [1, 2], times: 0)) == [1, 2]
+    assert eval doubled_times(price: [1, 2], times: 3) == [8, 16]
+    assert eval doubled_times(price: [1, 2], times: 0) == [1, 2]
 }
 
 # CTRL-15: "a `switch` over an ordinary value composes the one case
@@ -281,13 +281,13 @@ fn routed_inside(flag: bool, price: i64, const route: i64) -> i64 {
 }
 
 test a_wiring_time_switch_composes_one_case {
-    assert eval(picked_by(price: [1, 2], route: 1)) == [1, 2]
-    assert eval(picked_by(price: [1, 2], route: 2)) == [2, 4]
-    assert eval(picked_by(price: [1, 2], route: 5)) == [3, 6]
-    assert eval(scaled_by(price: [1, 2], route: 1)) == [10, 20]
-    assert eval(scaled_by(price: [1, 2], route: 2)) == [2, 3]
-    assert eval(routed_inside(flag: [true, false], price: [1, 2], route: 1)) == [1, 4]
-    assert eval(routed_inside(flag: [true, false], price: [1, 2], route: 2)) == [2, 4]
+    assert eval picked_by(price: [1, 2], route: 1) == [1, 2]
+    assert eval picked_by(price: [1, 2], route: 2) == [2, 4]
+    assert eval picked_by(price: [1, 2], route: 5) == [3, 6]
+    assert eval scaled_by(price: [1, 2], route: 1) == [10, 20]
+    assert eval scaled_by(price: [1, 2], route: 2) == [2, 3]
+    assert eval routed_inside(flag: [true, false], price: [1, 2], route: 1) == [1, 4]
+    assert eval routed_inside(flag: [true, false], price: [1, 2], route: 2) == [2, 4]
 }
 
 # CTRL-2: "Only the selected temporal child runs. A changed selector
@@ -301,17 +301,17 @@ fn gated_count(open: bool, price: i64, tick: bool, const shown: str) -> i64 {
 }
 
 test a_selected_child_keeps_its_state_until_another_is_selected {
-    assert eval(gated_count(
+    assert eval gated_count(
         open:  [true, _,    true, _,    false, _,    true, _],
         price: [1,    _,    2,    _,    3,     _,    4,    _],
         tick:  [_,    true, _,    true, _,     true, _,    true],
-        shown: "a")) ==
+        shown: "a") ==
                [_,    1,    _,    2,    _,     2,    _,    1]
-    assert eval(gated_count(
+    assert eval gated_count(
         open:  [true, _,    true, _,    false, _,    true, _],
         price: [1,    _,    2,    _,    3,     _,    4,    _],
         tick:  [_,    true, _,    true, _,     true, _,    true],
-        shown: "stopped")) ==
+        shown: "stopped") ==
                [_,    0,    _,    0,    _,     1,    _,    1]
 }
 
@@ -344,12 +344,12 @@ fn switched_in_a_let(route: i64, price: i64, const wide: bool) -> i64 {
 }
 
 test a_return_in_an_if_that_gives_a_let_its_value {
-    assert eval(returned_from_a_let(flag: [true, false, _, true], left: [1, 2, 3, 4], right: [10, 20, 30, 40])) ==
+    assert eval returned_from_a_let(flag: [true, false, _, true], left: [1, 2, 3, 4], right: [10, 20, 30, 40]) ==
         [1, 41, 61, 4]
-    assert eval(returned_in_a_branch_value(outer: [true, true, false], inner: [true, false, _], left: [1, 2, 3], right: [10, 20, 30])) ==
+    assert eval returned_in_a_branch_value(outer: [true, true, false], inner: [true, false, _], left: [1, 2, 3], right: [10, 20, 30]) ==
         [1, 21, 61]
-    assert eval(switched_in_a_let(route: [1, 2, 1], price: [1, 2, 3], wide: true)) == [1, 20, 3]
-    assert eval(switched_in_a_let(route: [1, 2, 1], price: [1, 2, 3], wide: false)) == [3, 5, 7]
+    assert eval switched_in_a_let(route: [1, 2, 1], price: [1, 2, 3], wide: true) == [1, 20, 3]
+    assert eval switched_in_a_let(route: [1, 2, 1], price: [1, 2, 3], wide: false) == [3, 5, 7]
 }
 
 # CTRL-8: "During node evaluation, traversal uses current values ...
@@ -375,8 +375,8 @@ fn total_price(prices: dict<str, i64>) -> i64 {
 fn total_price_of(key: str, price: i64) -> i64 => total_price(priced(key, price))
 
 test a_hook_loops_over_current_values {
-    assert eval(digits_of(reading: [5, -1, 7])) == [15, 1, 17]
-    assert eval(total_price_of(key: ["a", "b", "a", "a"], price: [1, 2, 3, -1])) == [1, 3, 5, 2]
+    assert eval digits_of(reading: [5, -1, 7]) == [15, 1, 17]
+    assert eval total_price_of(key: ["a", "b", "a", "a"], price: [1, 2, 3, -1]) == [1, 3, 5, 2]
 }
 
 # CTRL-10: "A block whose last statement is an expression has that
@@ -454,5 +454,5 @@ test a_block_and_an_if_are_values {
     assert early(2) == 5
     assert or_zero(tripled_if_positive(2)) == 6
     assert tripled_if_positive(-2) == null
-    assert eval(shaped(value: [1, -1])) == [10, -1]
+    assert eval shaped(value: [1, -1]) == [10, -1]
 }
