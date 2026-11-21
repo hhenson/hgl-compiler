@@ -285,6 +285,8 @@ pub mod codes {
     pub const SOURCE_WHEN: &str = "source.when";
     /// A temporal parameter of a source (SOURCE-1).
     pub const SOURCE_INPUT: &str = "source.input";
+    /// A source with no result arrow (SOURCE-1).
+    pub const SOURCE_RESULT: &str = "source.result";
     /// `out` used in `start` or written in `stop`, or a `return` with a
     /// value in either (TIME-7).
     pub const OUT_LIFECYCLE: &str = "out.lifecycle";

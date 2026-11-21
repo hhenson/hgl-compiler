@@ -134,14 +134,14 @@ transpiler: planned
 
 ## SOURCE-1
 
-analyser: partial
+analyser: done
 
 - A source's shape: no temporal parameter (`source.input`), no `when` (`source.when`), no `var`, and no `inject` of `out`, `scheduler` or `alarm` (`source.statement`)
 - One with a declaration or a hook has its declarations, `start`, one block that holds every `yield` (`{ }`, `while` or `for`), and `stop`, in that order and nothing else: a statement outside the block, a second block, a hook out of order and a `yield` in a hook are `source.statement`
 - Its declarations and hooks stand in its body itself and each hook once, as a node's do (TIME-5)
 - Its body is read: its declarations and hooks as a node's, and its other statements as value code, with each `yield`'s value held to the result's type
 - It injects neither `scheduler` nor `alarm`, so `scheduled()` in it is `inject.no_scheduler` (TIME-9)
-- The analyser still accepts a source without a result. The rejection and its proposed `source.result` code await #337.
+- A source with no result arrow is rejected at its name with `source.result`.
 
 transpiler: planned
 

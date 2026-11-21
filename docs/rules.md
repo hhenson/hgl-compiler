@@ -168,7 +168,6 @@ analyser reads.
 | Rule | Remaining work |
 | --- | --- |
 | CTRL-7, CTRL-12, CTRL-15, CTRL-2 | Unroll graph loops over fields and fixed structure, reject changing membership (`for.sequence` proposed) and move dynamic child startup to core mapping. The dictionary conformance case stays passing. [#373](https://github.com/hhenson/hgl-compiler/issues/373), [#370](https://github.com/hhenson/hgl-compiler/issues/370) |
-| SOURCE-1 | Require a source result (`source.result` proposed). The analyser still accepts sources without a result. [#337](https://github.com/hhenson/hgl-compiler/issues/337) |
 | FN-8, GEN-6 | Check duplicate pack declarations (`pack.duplicate`) and a fixed candidate parameter in place of an operator pack (`impl.pack` proposed). Existing declarations keep their behavior. |
 | ERR-6, ERR-15 | Implement the exact-type `get` fallback, including a nullable fallback value, and reject equally preferred result reads within one candidate. [#356](https://github.com/hhenson/hgl-compiler/issues/356) |
 | FN-17, GEN-17, FN-8 | Function parameters, parameter reflection and packs declared for a function, with `function.argument` and `pack.name`. [#362](https://github.com/hhenson/hgl-compiler/issues/362), [#366](https://github.com/hhenson/hgl-compiler/issues/366) |

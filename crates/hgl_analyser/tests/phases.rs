@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::check;
+use common::{check, check_broken};
 
 /// FN-2: "`state`, `cache`, `start`, `when`, `stop`, `yield`, or an
 /// `inject` of any capability but `global_state` classifies that
@@ -313,6 +313,44 @@ fn a_value_function_has_no_state_no_capability_and_no_hooks() {
             "m.hgl:19:37 phase/node.in_value_function FN-9",
         ]
     );
+}
+
+/// SOURCE-1: "A source declares a result, which is what it exists to
+/// publish: one with no result arrow rejects."
+#[test]
+fn a_source_requires_a_result() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn ticking() {\n",
+            "    yield 1s: 7\n",
+            "    yield 1s: 9\n",
+            "}\n",
+            "fn repeating() { while { yield 1s: 7 } }\n",
+            "fn source() -> i64 { yield 1s: 7 }\n",
+            "fn sink(value: i64) { when { } }\n",
+            "fn graph(value: i64) { sink(value) }\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:4 phase/source.result SOURCE-1",
+            "m.hgl:6:4 phase/source.result SOURCE-1",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// SOURCE-1 checks the missing arrow. The parser reports a missing type
+/// after a written arrow (ERR-9).
+#[test]
+fn a_source_with_a_malformed_result_has_only_its_parse_error() {
+    let checked = check_broken(&[("m.hgl", "module m\nfn ticking() -> { yield 1s: 7 }\n")]);
+    assert_eq!(checked.front_end_errors, 1, "{}", checked.report);
+    assert!(checked.summary().is_empty(), "{}", checked.report);
 }
 
 /// SOURCE-1: "A temporal `fn` whose body has a `yield` is a source: a
