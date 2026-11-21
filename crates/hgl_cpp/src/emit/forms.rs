@@ -183,6 +183,7 @@ static FAMILIES: &[&dyn Family] = &[
     &super::activity::Activity,
     &super::lifting::Lifting,
     &super::control::Control,
+    &super::lists::Lists,
     &super::scalars::Scalars,
     &super::tests::Tests,
     &super::sources::Sources,

@@ -975,8 +975,8 @@ fn references_are_written() {
 }
 
 /// FN-16: a designation of a position of a list is reported, after the
-/// list's own temporal form where that is not written yet, so that a case
-/// is listed for the first form it reaches.
+/// list's own temporal form (`lists`), so that a case is listed for the
+/// first form it reaches.
 #[test]
 fn a_designation_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -994,7 +994,7 @@ fn a_designation_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.reported,
-        ["m.hgl:4:33 the cpp target does not write a temporal value of `list<i64, 3>` yet"]
+        ["m.hgl:4:33 the cpp target does not write a designation of a position of a list yet"]
     );
 }
 
@@ -1122,7 +1122,7 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
     // its result.
     assert_eq!(
         blocked.message,
-        "the cpp target does not write a temporal value of `list<i64>` yet"
+        "the cpp target does not write a constant connection of `list<i64>` yet"
     );
     assert_eq!(application.source, None);
     assert!(
@@ -1206,10 +1206,36 @@ fn a_capture_given_an_f64_configuration_is_reported() {
     );
 }
 
-/// A temporal form the target does not write yet is reported through the
-/// dispatch point, where it is written, and blocks what reaches it: a
-/// temporal value of a type no family writes, and a capability no family
-/// makes. A test that reaches neither is run.
+/// The temporal forms of a list and of a tuple (`lists`): published whole
+/// and by delta, read whole and by child, a child wired, a list replayed
+/// and recorded, and the value an eval's result holds kept for a cell
+/// written whole (TST-5).
+#[test]
+fn list_code_is_written() {
+    let emitted = emit_with(
+        &[("demo.lists.hgl", include_str!("fixtures/demo.lists.hgl"))],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.lists", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    // TIME-7: core's `replay` of a list yields the delta of each cell,
+    // which the list's form publishes as that change (`sources`).
+    assert!(
+        core.contains("::hglrt::Yielded<::hglrt::list_delta<::hglrt::list<::hgraph::Int>>>"),
+        "{core}"
+    );
+}
+
 /// The timing the target writes (`emit/scheduling.rs`): nodes woken by a
 /// scheduler or an alarm, and sources with declarations and hooks, each
 /// as the goldens under `tests/goldens/demo.timing` have it. Each test of
@@ -1336,6 +1362,10 @@ fn a_keyed_form_not_written_yet_is_reported() {
     );
 }
 
+/// A temporal form the target does not write yet is reported through the
+/// dispatch point, where it is written, and blocks what reaches it: a
+/// temporal value of a type no family writes. A test that reaches none is
+/// run.
 #[test]
 fn a_temporal_form_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -1344,7 +1374,7 @@ fn a_temporal_form_not_written_yet_is_reported() {
             concat!(
                 "module m\n",
                 "\n",
-                "fn first(values: list<i64>) -> i64 {\n",
+                "fn first(values: set<list<i64>>) -> i64 {\n",
                 "    when { return 1 }\n",
                 "}\n",
                 "\n",
@@ -1359,7 +1389,7 @@ fn a_temporal_form_not_written_yet_is_reported() {
                 "}\n",
                 "\n",
                 "test a_list {\n",
-                "    assert eval(first(values: [[1, 2]])) == [1]\n",
+                "    assert eval(first(values: [[[1, 2]]])) == [1]\n",
                 "}\n",
                 "\n",
                 "test a_scheduler {\n",
@@ -1375,7 +1405,7 @@ fn a_temporal_form_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.blocked("a_list").as_deref(),
-        Some("m.hgl:18:31 the cpp target does not write a temporal value of `list<i64>` yet")
+        Some("m.hgl:18:31 the cpp target does not write a temporal value of `set<list<i64>>` yet")
     );
     // CAP-4: the scheduler is written (`scheduling`).
     assert_eq!(emitted.blocked("a_scheduler"), None);

@@ -9,60 +9,15 @@
 "a child of a connection" = [
     "conformance::switching_keys_follows_the_new_child",
 ]
+"a designation of a position of a list" = [
+    "conformance::a_ref_result_follows_the_element_it_designates",
+]
 "a nullable value put in the run's store (hgl_spec issue 165)" = [
     "conformance::a_stored_null_is_distinct_from_an_absent_key",
 ]
 "a run's configuration that is no `RunConfig(...)`" = [
     "conformance::absolute_targets_before_at_and_after_start",
     "conformance::skipped_targets_still_establish_source_order",
-]
-"a temporal value of `list<f64>`" = [
-    "conformance::a_whole_f64_list_reads_nan_in_a_gap",
-]
-"a temporal value of `list<i64, 2>`" = [
-    "conformance::a_fixed_list_is_all_valid_once_every_position_is",
-    "conformance::a_fixed_list_is_valid_once_one_position_is",
-    "conformance::a_result_accepts_the_read_of_an_invalid_child",
-    "conformance::an_entry_past_a_fixed_lists_end_fails",
-    "conformance::fixed_list_children_become_readable_independently",
-    "conformance::reading_an_invalid_child_at_a_runtime_index_fails",
-]
-"a temporal value of `list<i64, 3>`" = [
-    "conformance::a_ref_result_follows_the_element_it_designates",
-]
-"a temporal value of `list<i64>`" = [
-    "conformance::a_negative_size_reduces_the_list_by_that_count",
-    "conformance::a_retained_list_is_independent_of_later_input_changes",
-    "conformance::a_size_only_delta_shrinks_the_list",
-    "conformance::a_whole_i64_list_with_a_gap_fails",
-    "conformance::an_empty_list_delta_ticks_only_where_it_makes_the_list_valid",
-    "conformance::an_empty_list_given_to_an_empty_list_is_no_tick",
-    "conformance::an_entry_after_the_last_position_extends_the_list",
-    "conformance::an_entry_at_or_past_the_size_written_with_it_fails",
-    "conformance::lifting_observes_the_complete_list_including_empty",
-    "conformance::reducing_a_list_past_its_length_leaves_it_empty",
-    "conformance::removing_only_a_position_that_holds_no_value_is_no_tick",
-]
-"a trace of `list<bool, 2>`" = [
-    "conformance::a_tuple_is_valid_once_one_position_is_and_all_valid_once_both_are",
-    "conformance::a_window_emptied_by_exits_stays_valid",
-    "conformance::a_window_is_valid_before_its_minimum_and_all_valid_at_it",
-    "conformance::a_window_of_a_duration_falls_back_under_its_minimum",
-    "conformance::an_empty_selection_is_true_in_its_handler_when_an_input_ticks",
-]
-"a trace of `list<bool, 3>`" = [
-    "conformance::a_struct_with_an_optional_field_is_all_valid_and_read_whole",
-    "conformance::an_entry_past_a_gap_leaves_the_positions_between_not_valid",
-    "conformance::removing_a_position_that_never_held_a_value_is_ignored",
-]
-"a trace of `list<i64, 2>`" = [
-    "conformance::a_fixed_list_delta_reports_the_position_in_updated",
-]
-"a trace of `list<i64>`" = [
-    "conformance::a_recording_of_a_window_holds_its_arrivals_and_replays_the_same_window",
-]
-"a trace of `list<str, 2>`" = [
-    "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
 ]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph

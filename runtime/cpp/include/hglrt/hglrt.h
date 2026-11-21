@@ -7,7 +7,8 @@
 // (failure.h), a capture and the temporal values of errors and results
 // (capture.h), sets, dictionaries and what a struct tells the library
 // (collections.h), the temporal forms of a nullable scalar (nullables.h), of
-// a struct and a tuple (structs.h) and of a set and a dictionary (keyed.h),
+// a struct and a tuple (structs.h), of a set and a dictionary (keyed.h) and of
+// a list (list_endpoints.h),
 // the reads checked when they run (checked.h), constants and sources
 // (sources.h) with the coroutine type of a source's body (generator.h), what
 // tells a node's wakes apart and what a source's body is lent (timing.h),
@@ -29,6 +30,7 @@
 #include <hglrt/failure.h>
 #include <hglrt/generator.h>
 #include <hglrt/keyed.h>
+#include <hglrt/list_endpoints.h>
 #include <hglrt/lists.h>
 #include <hglrt/nullables.h>
 #include <hglrt/references.h>

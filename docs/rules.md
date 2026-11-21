@@ -124,6 +124,7 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A temporal candidate of an operator | GEN-4, OPS-9 |
 | A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
 | A window of a scalar, of a tick count or of a duration: a publication to one, `all_valid`, its value read in a hook or given to a lifted helper where it is all valid, its delta and `removed_value` in the form their place takes, its trace, record and replay | TYPE-11, TYPE-16, END-3, END-9, ERR-14, FN-12, TIME-7, TST-16 |
+| A temporal list, growing and fixed: published whole and by delta, read whole, `valid`, `all_valid` and `delta_value` of one; a child read, at a constant index and one that runs, plain and into a `result`, given to `valid` and the other operations, and wired; a trace cell of one, whole or a delta, an input of one replayed, and a whole cell compared with the value the result holds | TYPE-9, TYPE-10, TYPE-16, TIME-1, TIME-7, TIME-9, END-3, END-7, END-8, ERR-14, TST-5, TST-9 |
 | A `ref` parameter and result: hgraph's `REF` input and output; a whole `ref` parameter returned sampled; an input that is no `ref` parameter designated whole, and followed through its re-binding with no handler run for it; `out =` and `invalidate(out)` of a `ref` result | FN-16, TIME-10, END-10 |
 | `inject global_state` in a graph, and `get`, `has`, `put` on it where the graph is built, once each, in the order written | FN-9, CAP-6, CRUN-7 |
 | An application: its statements setting the run's store before its run statement, in the order written; its run statement, `eval` in simulation and `run` in real time, with the entry's arguments and its `RunConfig` held in the order written; its entry unit and executable | UNIT-14, RUN-1, RUN-3, EXPR-2 |
@@ -142,15 +143,15 @@ field's default that runs statements, a field of an abstract struct
 assigned, a dictionary written with keys that may be one, a dictionary's
 entry given to a `var` parameter, an application of a generic struct its
 C++ template is not, a window of any but a scalar, and of temporal code: a
-temporal list, a generic or an abstract struct as a temporal value, a
-struct or a tuple with a part of a form the library does not read whole,
-an atomic struct that holds an optional field (hgraph issue 1874), a set's
-element or a dictionary's key of any but a scalar, a constant connection
-of a set or a dictionary, an entry of a dictionary's entry, a key's child
-as a connection of a graph (EXPR-7), a nullable put in the run's store
-(hgl_spec issue 165), a designation of a child of an input (FN-16),
-`all_valid` of a list or a set, a change of an input's activity in `stop`
-(END-5), a `for` over a connection of a set (CTRL-15), in a branch or a
+generic or an abstract struct as a temporal value, a struct or a tuple
+with a part of a form the library does not read whole, a list with a part
+that is no scalar, enum, nullable or list, an atomic struct that holds an
+optional field (hgraph issue 1874), a set's element or a dictionary's key
+of any but a scalar, a constant connection of a set or a dictionary, an
+entry of a dictionary's entry, a key's child as a connection of a graph
+(EXPR-7), a nullable put in the run's store (hgl_spec issue 165), a
+designation of a child of an input (FN-16), `all_valid` of a set, a
+change of an input's activity in `stop` (END-5), a `for` over a connection of a set (CTRL-15), in a branch or a
 loop's body the store or an ordinary value that may fail (FN-9: hgraph
 builds each child as the graph around it is built), a `return` under a
 branch selected at runtime in a loop unrolled where the graph is built,
@@ -188,6 +189,7 @@ the chapters' entries stay the hgraph target's.
 | `append`, `extend` | LIST-1, LIST-2, LIST-3 | `lists.h` | `capabilities_tests.cpp` |
 | A set and a dictionary, hash containers equal where their members are; a key told apart by `==` of its type, and its hash; a strict read, `value.missing_key`; the place an assignment adds a key at; core's `get`; the deltas of a set and a dictionary, and a list's delta's properties; what a struct names of its fields, a value of an abstract struct, and what a struct inherits from; an enum's member made from a value | TYPE-3, TYPE-7, TYPE-14, TYPE-16, EXPR-3, ERR-6, OPS-2 | `collections.h` | `collections_tests.cpp` |
 | The operations on an endpoint of a scalar or a nullable scalar, input or result: `valid`, `modified`, `delta_value` plain and where a `result` is taken, `last_modified`, `invalidate` of the result, `is_active`, `activate`, `passivate`; `all_valid` and a form's own delta wait for their forms | TIME-9, END-1 to END-6, ERR-14 | `endpoints.h` | `endpoint_tests.cpp` |
+| A temporal list, growing and fixed: a value published whole or as its delta, and a delta that it cannot take refused; read whole, a gap of a growing list as TIME-1's table has it; `all_valid`; its delta read from hgraph's; a child of one, read, given to the operations on an endpoint, and wired | TYPE-9, TYPE-10, TYPE-16, TIME-1, TIME-7, TIME-9, END-3, END-7, END-8, ERR-14, EXPR-3, TST-5 | `list_endpoints.h` | `list_endpoints_tests.cpp` |
 | `Logger` and `log`, `Clock` and its four properties | CAP-1, CAP-2, CAP-3 | `capabilities.h` | `capabilities_tests.cpp` |
 | `Scheduler`: its three properties, `schedule` with a duration or a datetime under a tag or none, on the wall clock in real time and unchanged by it in simulation, `un_schedule`, `reset`; `Alarm` and its `schedule`; what may be asked of each | CAP-4, CAP-5, TIME-8 | `capabilities.h` | `scheduler_tests.cpp` |
 | `get`, `has`, `put` of the global store, in a node and where a graph is built | CAP-6, FN-9 | `capabilities.h` | `capabilities_tests.cpp` |
@@ -197,6 +199,7 @@ the chapters' entries stay the hgraph target's.
 | The branch of no `else`, a connection that never ticks; the branch of no `default`, which fails with the selector's value | CTRL-3, CTRL-6, CTRL-13 | `control.h` | `control_tests.cpp` |
 | A nullable scalar's temporal form: its payload read checked, a published null; a nullable value held by hgraph as an atomic | TYPE-14, TYPE-15, TIME-1, TIME-7 | `nullables.h` | `structs_tests.cpp` |
 | A struct's, a tuple's and an atomic struct's temporal forms: a child's view and connection, a whole read checked, `all_valid`, a publication whole and by a delta, the delta read, a field of an atomic struct, what a whole cell publishes and the text of a struct | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, TST-9 | `structs.h` | `structs_tests.cpp` |
+| A set's and a dictionary's temporal forms, hgraph's `TSS` and `TSD`: published whole and by a delta, an empty delta and a removal of what is not held no tick but where it makes one valid, two deltas in a cycle one change, an invalidation emptying it; read whole checked; an entry of a dictionary an endpoint whether or not it is held; whole trace cells published as their change; their names and text | TYPE-9, TYPE-16, TIME-1, TIME-2, TIME-7, TIME-9, END-4, END-5, ERR-14, TST-9 | `keyed.h` | `keyed_tests.cpp` |
 | An enum as a value of the library and of the test host: its HGL name, its members' text, its schema with hgraph; core's `CmpResult`, `ZeroPolicy`, `Rounding`, `InvalidPolicy`, `LogLevel` | TYPE-7, TST-4, TST-5, OPS-3 | `values.h`, `traces.h` | `traces_tests.cpp` |
 | The timing of a source's `yield`, and its completion | SOURCE-2, SOURCE-3, SOURCE-4 | `sources.h` | `sources_tests.cpp` |
 | Whether an input ticked in an evaluation, published or lost its value, by which a node with a timer tells its wakes apart; a capability lent to a source's body for one resumption | TIME-3, TIME-9, END-4, SOURCE-1, TIME-8 | `timing.h` | `timing_tests.cpp` |

@@ -30,7 +30,9 @@
 //! scheduler, an alarm, and a source's declarations and hooks),
 //! `activity` (an input's activity, and an enum's temporal form),
 //! `control` (`if`, `switch` and `for` over connections in a graph),
-//! `keyed` (a set's and a dictionary's temporal form);
+//! `nullables` (a nullable scalar's temporal form), `structs` (a struct's,
+//! a tuple's and an atomic struct's), `keyed` (a set's and a
+//! dictionary's), `lists` (a list's);
 //! `lifecycle` writes a run's bounds for `tests` and `apps`. A construct
 //! lane adds its family as a module here and one entry in
 //! `forms::FAMILIES`.
@@ -54,6 +56,7 @@ mod graphs;
 mod keyed;
 mod lifecycle;
 mod lifting;
+mod lists;
 mod names;
 mod nodes;
 mod nullables;
