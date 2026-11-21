@@ -24,7 +24,7 @@
 //! piece is left out of the files.
 
 use hgl_analyser::hir::{
-    BinaryOperator, ErrorPart, Expr, ExprKind, Stmt, Tenor, UnaryOperator, Value,
+    BinaryOperator, ErrorPart, Expr, ExprKind, Raise, Stmt, Tenor, UnaryOperator, Value,
 };
 use hgl_analyser::{Scalar, Type};
 use hgl_diagnostics::Location;
@@ -379,7 +379,22 @@ impl Emitter<'_> {
                     _ => self.missing(value.at, "this part of an error"),
                 }
             }
-            ExprKind::Propagate(operand) => self.propagated(scope, operand, value.at),
+            // ERR-5, ERR-15: a result given where its T is expected, in a
+            // value function that gives a result: its failure leaves the
+            // function. Every other place a failure is raised, a result's
+            // `T?` and a `T?` read where a T is expected are not written
+            // yet.
+            ExprKind::Raised {
+                result,
+                raise: Raise::Return,
+            } => self.propagated(scope, result, value.at),
+            ExprKind::Raised { raise, .. } => self.missing(value.at, raised_where(*raise)),
+            ExprKind::OrNull { .. } => {
+                self.missing(value.at, "a result given where its `T?` is expected")
+            }
+            ExprKind::NullRead { .. } => {
+                self.missing(value.at, "a `T?` read where its T is expected")
+            }
             ExprKind::Eval { .. } => self.missing(value.at, "an eval"),
             // TST-4: the harness's own comparison of two traces; what
             // either side lacks is reported first.
@@ -473,20 +488,21 @@ impl Emitter<'_> {
         text
     }
 
-    /// `operand?` (ERR-5): the result is held under a name of its own
-    /// before the statement, and a failure leaves the function with its
-    /// error; the expression is the success's payload. Only in a
-    /// function that gives a result, and where it is the first thing its
-    /// statement evaluates: nothing before it in the statement has been
-    /// run that may fail, or read a local, a constant or a place, which
-    /// it would otherwise run before (EXPR-2, EXPR-13).
+    /// A result given where its T is expected in a value function that
+    /// gives a result (ERR-5: "the function gives that E as its
+    /// failure"): the result is held under a name of its own before the
+    /// statement, and a failure leaves the function with its error; the
+    /// expression is the success's payload. Only where it is the first
+    /// thing its statement evaluates: nothing before it in the statement
+    /// has been run that may fail, or read a local, a constant or a
+    /// place, which it would otherwise run before (EXPR-2, EXPR-13).
     fn propagated(&mut self, scope: &mut Scope, operand: &Expr, at: Location) -> String {
         let gives_result = matches!(scope.result, Some(Type::Result { .. }));
         if scope.conditional > 0 || scope.acted || !gives_result || scope.testing {
-            return self.missing(at, "a `?` here");
+            return self.missing(at, "a result raised here");
         }
         if scope.read {
-            return self.missing(at, "a `?` after a read in its statement");
+            return self.missing(at, "a result raised after a read in its statement");
         }
         let written = self.expression(scope, operand);
         let held = names::temporary("propagated", self.temporary());
@@ -798,5 +814,23 @@ mod tests {
         assert_eq!(days_from_civil(2000, 3, 1), 11_017);
         assert_eq!(days_from_civil(1969, 12, 31), -1);
         assert_eq!(days_from_civil(2026, 9, 3), 20_699);
+    }
+}
+
+/// What a result raised as `raise` says, and not written here, is reported
+/// as (ERR-5): each place a failure is raised that the target does not
+/// write yet.
+pub(super) fn raised_where(raise: Raise) -> &'static str {
+    match raise {
+        Raise::Return => "a result raised here",
+        Raise::Execution => "a result raised as an execution failure",
+        Raise::Node => "a result raised in a `when` here",
+        Raise::Source => "a result raised in a source's body",
+        Raise::Lifecycle(_) => "a result raised in a lifecycle hook",
+        Raise::Build => "a result raised where a graph is built",
+        Raise::Test => "a result raised among a test's statements",
+        Raise::Application => "a result raised among an application's statements",
+        Raise::CallNode => "a call's result connection taken as its T",
+        Raise::Reader => "a held result connection taken as its T",
     }
 }

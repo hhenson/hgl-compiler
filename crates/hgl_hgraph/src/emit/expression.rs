@@ -5,6 +5,7 @@
 //! module with them.
 
 use super::*;
+use hgl_analyser::hir::Raise;
 
 impl Emitter<'_> {
     /// An expression as Python. One with no Python here yet is reported
@@ -843,21 +844,19 @@ impl Emitter<'_> {
                 };
                 format!("{base}.{part}")
             }
-            // ERR-5: "Postfix `?` evaluates once. Success yields T. In
-            // a value function returning `result<U,E>`, failure
-            // returns the same E as Err. In when, only
-            // `result<T,error>` may propagate to node failure."
-            ExprKind::Propagate(result) => {
-                let called = match function.mode {
-                    Mode::Value => {
+            // ERR-5, ERR-15: a result given where its T is expected. A
+            // value function that gives a `result` returns the failure,
+            // and a `when` fails the node; the other places a failure is
+            // raised are not written here.
+            ExprKind::Raised { result, raise } => {
+                let called = match (function.mode, raise) {
+                    (Mode::Value, Raise::Return) => {
                         self.propagates = true;
                         "propagated"
                     }
-                    Mode::Node => "succeeded",
-                    // The analyser rejects a `?` anywhere else
-                    // (`result.propagation_phase`).
+                    (Mode::Node, Raise::Node) => "succeeded",
                     _ => {
-                        self.unsupported(value.at, "a `?` here");
+                        self.unsupported(value.at, "a result raised here");
                         return "None".to_string();
                     }
                 };

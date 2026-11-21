@@ -859,9 +859,12 @@ impl<'a> Typer<'a> {
     }
 
     /// True when `value` is one the place of type `whole` takes: of that
-    /// type, or an integer literal where an `f64` is expected (EXPR-5).
+    /// type, an integer literal where an `f64` is expected (EXPR-5), or a
+    /// result or a `T?` whose form the place takes (ERR-12, ERR-15).
     fn fits_whole(&self, value: &Expr, whole: &Type) -> bool {
-        self.admits(whole, &value.ty) || (is_integer_literal(value) && accepts_float(whole))
+        self.admits(whole, &value.ty)
+            || (is_integer_literal(value) && accepts_float(whole))
+            || self.taken(whole, &value.ty).is_some()
     }
 
     /// True when the function acknowledges the warning `code` (ERR-10):

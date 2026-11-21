@@ -11,7 +11,7 @@ use super::fit::{not_null, open};
 use super::inference::{fixed, placed};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
-use crate::hir::{Expr, ExprKind};
+use crate::hir::ExprKind;
 use crate::program::DeclarationKind;
 use crate::syntax::{name_token, tokens};
 use crate::types::{Argument, ConstantValue, Detail, NamedKind, Scalar, Type};
@@ -21,8 +21,8 @@ impl<'a> Typer<'a> {
     // ---- Members and elements ----
 
     /// `base.member`: a member of an enum, or a field of a struct
-    /// value. Any other base is for a later part: the payload of a
-    /// nullable or a result needs its guard (ERR-3, ERR-12).
+    /// value. A result and a `T?` are read for the T they hold (ERR-12,
+    /// ERR-15). Any other base is for a later part.
     pub(super) fn member(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         // The member's name is the last token: any word (LEX-9).
         let (Some(base), Some(name)) = (node.children().next(), tokens(node).last()) else {
@@ -39,7 +39,7 @@ impl<'a> Typer<'a> {
         {
             return self.enum_member(&name, module, declaration);
         }
-        let base = self.expression(&base, None);
+        let mut base = self.expression(&base, None);
         // ERR-7: a capture is "read through two connections".
         let captured = match &base.kind {
             ExprKind::Local(local) => self.captures.get(local).cloned(),
@@ -49,27 +49,45 @@ impl<'a> Typer<'a> {
         if let Some(output) = captured {
             return self.captured(base, &name, output);
         }
-        // ERR-3 and ERR-4: the payload of a result, and a part of an
-        // error.
-        match &base.ty {
-            Type::Result { value, error } => {
-                let sides = ((**value).clone(), (**error).clone());
-                return self.payload(base, &name, sides);
+        // What the member is read from, in the form that place takes it:
+        // each form taken is read again for its member.
+        loop {
+            match &base.ty {
+                // ERR-3: `.value` and `.error` "read from a result ...
+                // are the result's own".
+                Type::Result { value, error } if matches!(name.text(), "value" | "error") => {
+                    let sides = ((**value).clone(), (**error).clone());
+                    return self.payload(base, &name, sides);
+                }
+                // ERR-15: "What a member or an index is read from ...
+                // expect[s] the T too": `checked(quote).bid` is the bid of
+                // the success, or raises the failure.
+                Type::Result { .. } => {
+                    let read = self.received(base, |_| false);
+                    if matches!(read.ty, Type::Result { .. }) {
+                        return (ExprKind::Unread, Type::Unknown);
+                    }
+                    base = read;
+                }
+                // ERR-4: a part of an error, and of its context.
+                Type::Error => return self.error_part(base, &name),
+                Type::ErrorContext => return self.context_part(base, &name),
+                // ERR-12: "A `T?` value given where a T is expected is
+                // read as its value": a member of a nullable's payload
+                // reads it, where no test against null has proved it a
+                // T. ERR-4: "A nullable code or context read where a
+                // value is expected is read as ERR-12 says."
+                Type::Nullable(inner) if has_members(inner) => {
+                    base = self.received(base, has_members);
+                }
+                // TYPE-16: a set's delta has "the properties `added` and
+                // `removed`, each a `set<K>`".
+                Type::Delta(of) => {
+                    let of = of.clone();
+                    return self.delta_property(base, &name, &of);
+                }
+                _ => break,
             }
-            Type::Error => return self.error_part(base, &name),
-            Type::ErrorContext => return self.context_part(base, &name),
-            // ERR-12: a member of the payload of a nullable is read
-            // where a test against null has proved it present. ERR-4:
-            // "Nullable code/context observations require presence
-            // checking".
-            Type::Nullable(inner) if has_members(inner) => {
-                self.unproved_payload(&base, &format!("`.{}`", name.text()));
-                return (ExprKind::Unread, Type::Unknown);
-            }
-            // TYPE-16: a set's delta has "the properties `added` and
-            // `removed`, each a `set<K>`".
-            Type::Delta(of) => return self.delta_property(base.clone(), &name, of),
-            _ => {}
         }
         // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary
         // V": an `atomic<Quote>` holds whole quotes, and its field is
@@ -238,35 +256,6 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// Reports `base`, a nullable value, read for `what` of its payload
-    /// with no test against null that proves it present (ERR-12: "Using
-    /// it where T is required without that proof rejects with
-    /// `nullable.required_presence`"). What is read is then not known,
-    /// and nothing more is reported of it (ERR-9).
-    fn unproved_payload(&mut self, base: &Expr, what: &str) {
-        // ERR-4: "Nullable code/context observations require presence
-        // checking".
-        let rule = match &base.ty {
-            Type::Nullable(inner) if **inner == Type::ErrorContext => "ERR-4",
-            _ => "ERR-12",
-        };
-        self.diagnostics.emit(
-            error(
-                Category::Type,
-                codes::NULLABLE_REQUIRED_PRESENCE,
-                base.at,
-                format!(
-                    "this is `{}`, and {what} of it is read where it may be null",
-                    base.ty
-                ),
-                rule,
-            )
-            .with_note(
-                "bind it with `let` and test it against null: `if value == null { return ... }`",
-            ),
-        );
-    }
-
     /// `base[index]`: an element of a list or a tuple, or the value a
     /// dictionary has for a key (EXPR-7; ERR-6: "Ordinary/atomic
     /// dictionary brackets ... are strict point-in-time reads"). Any
@@ -277,6 +266,14 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, Type::Unknown);
         };
         let base = self.expression(&base, None);
+        // ERR-15, ERR-12: what an index is read from expects the T: a
+        // result's, and a nullable list's, tuple's or dictionary's.
+        let base = self.received(base, |payload| {
+            matches!(
+                payload,
+                Type::List { .. } | Type::Tuple(_) | Type::Dict { .. }
+            )
+        });
         let (index, ty) = match &base.ty {
             Type::List { element, .. } => {
                 let integer = Type::Scalar(Scalar::I64);
@@ -355,17 +352,6 @@ impl<'a> Typer<'a> {
                     ),
                     "EXPR-7",
                 ));
-                (self.expression(&index, Some(&Type::Unknown)), Type::Unknown)
-            }
-            // ERR-12: an element of the payload of a nullable is read
-            // where a test against null has proved it present.
-            Type::Nullable(inner)
-                if matches!(
-                    **inner,
-                    Type::List { .. } | Type::Tuple(_) | Type::Dict { .. }
-                ) =>
-            {
-                self.unproved_payload(&base, "an element");
                 (self.expression(&index, Some(&Type::Unknown)), Type::Unknown)
             }
             _ => (self.expression(&index, Some(&Type::Unknown)), Type::Unknown),

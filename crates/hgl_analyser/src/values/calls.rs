@@ -11,7 +11,7 @@ use hgl_source::{FileId, Span};
 use super::Typer;
 use super::arguments::{Slot, Takes};
 use super::fit::{not_null, open};
-use super::inference::{Inferred, Places, asked_of_result, infer, mentions, placed};
+use super::inference::{Inferred, Places, infer_from_place, mentions, placed};
 use super::node::RefRead;
 use super::sizes;
 use crate::declared::{names_parameter, substitute_within};
@@ -681,8 +681,7 @@ impl<'a> Typer<'a> {
         if let (Some(result), Some(expected)) = (&signature.result, expected)
             && !open(expected)
         {
-            let wanted = asked_of_result(result, expected, false);
-            infer(result, wanted, generics, &mut found);
+            infer_from_place(result, expected, false, generics, &mut found);
         }
         // The inputs.
         let slots: Vec<Slot> = signature

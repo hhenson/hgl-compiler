@@ -508,13 +508,17 @@ impl<'a> Typer<'a> {
                     (Vec::new(), false, false),
                     Some(&target),
                 );
-                self.conforms(&result, &target, self.at(&value), "the type of the `var`");
-                Expr {
+                // What the operator gives is given to the `var`, in the
+                // form the place takes (ERR-15).
+                let given = Expr {
                     kind,
                     ty: result,
-                    at,
+                    at: self.at(&value),
                     category: ValueCategory::Unsettled,
-                }
+                };
+                let mut given = self.fit(given, &target, "the type of the `var`");
+                given.at = at;
+                given
             }
         };
         self.assigned[local] = true;
@@ -724,13 +728,15 @@ impl<'a> Typer<'a> {
                     (Vec::new(), false, false),
                     Some(&target.ty),
                 );
-                self.conforms(&result, &target.ty, self.at(value), "the type of the place");
-                Expr {
+                let given = Expr {
                     kind,
                     ty: result,
-                    at,
+                    at: self.at(value),
                     category: ValueCategory::Unsettled,
-                }
+                };
+                let mut given = self.fit(given, &target.ty, "the type of the place");
+                given.at = at;
+                given
             }
         };
         // EXPR-15: in a graph the `var` is rebound, so the assignment

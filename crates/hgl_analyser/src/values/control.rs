@@ -208,10 +208,16 @@ impl<'a> Typer<'a> {
     }
 
     /// CTRL-10: "In a value function the condition of an `if` or a
-    /// `while` is a `bool`: a `bool?`, a number, or any other type
-    /// rejects."
+    /// `while` is a `bool`: a `bool?` there is read, and a null fails the
+    /// read (ERR-12); a number, or any other type, rejects." CTRL-13: in
+    /// composition "A `bool?` there is read as ERR-12 says". ERR-15: "a
+    /// condition ... expect[s] the T": a `result<bool, error>` there is
+    /// its `bool`, a failure raised.
     pub(super) fn condition(&mut self, node: &SyntaxNode) -> Expr {
         let value = self.expression(node, Some(&BOOL));
+        if let Some(taken) = self.taken(&BOOL, &value.ty) {
+            return self.take(value, taken);
+        }
         if !open(&value.ty) && value.ty != BOOL {
             self.diagnostics.emit(error(
                 Category::Type,
@@ -592,7 +598,7 @@ impl<'a> Typer<'a> {
     /// list, in index order, or of a set, and `for key, value in
     /// entries` for each key and value of a dictionary. One name over a
     /// dictionary, two over a list or a set, and any other type after
-    /// `in` reject."
+    /// `in` reject; a nullable list, set, or dictionary there is read".
     pub(super) fn for_loop(&mut self, node: &SyntaxNode) -> Stmt {
         let at = self.at(node);
         // The pattern's names: the identifiers directly inside the
@@ -610,6 +616,15 @@ impl<'a> Typer<'a> {
             return self.unread(node);
         };
         let sequence = self.expression(&sequence, None);
+        // ERR-15: "what a `for` iterates ... expect[s] the T", and CTRL-12:
+        // "a nullable list, set, or dictionary there is read, and a null
+        // fails the read (ERR-12)".
+        let sequence = self.received(sequence, |payload| {
+            matches!(
+                payload,
+                Type::List { .. } | Type::Set(_) | Type::Dict { .. }
+            )
+        });
         let types: Vec<Type> = match (&sequence.ty, names.len()) {
             (ty, count) if open(ty) => vec![Type::Unknown; count],
             (Type::List { element, .. } | Type::Set(element), 1) => vec![(**element).clone()],

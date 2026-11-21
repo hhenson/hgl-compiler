@@ -9,7 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::candidates::{Chosen, Given, Key, Settled, Wanted, typed_by_place};
 use super::constants::generic_default;
 use super::fit::open;
-use super::inference::{asked_of_result, bare_parameter, fixed, infer, placed, unsaid};
+use super::inference::{bare_parameter, fixed, infer, infer_from_place, placed, unsaid};
 use super::{Candidate, Typer};
 use crate::declared::{agree, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
@@ -825,8 +825,7 @@ pub(super) fn from_place(
     if let (Some(result), Some(expected)) = (&public.result, expected)
         && !open(expected)
     {
-        let place = asked_of_result(result, expected, false);
-        infer(result, place, &public.generics, found);
+        infer_from_place(result, expected, false, &public.generics, found);
     }
 }
 

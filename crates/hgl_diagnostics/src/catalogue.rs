@@ -17,7 +17,8 @@ use crate::Category;
 ///
 /// The catalogue's execution codes, such as `value.missing_key`, name
 /// failures of a running program. They are a different list and are not
-/// here ("The source and execution catalogs are disjoint").
+/// here ("The source and execution catalogs are disjoint, but for two
+/// codes": `store.key_type` and `key.unstable` are in both).
 pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Parse, "syntax.expected_token"),
     (Category::Parse, "syntax.invalid_encoding"),
@@ -107,6 +108,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "signal.position"),
     (Category::Type, "endpoint.position"),
     (Category::Type, "nullable.key"),
+    (Category::Type, "key.unstable"),
     (Category::Type, "generic.argument_count"),
     (Category::Type, "list.size"),
     (Category::Type, "generic.kind_conflict"),
@@ -131,6 +133,8 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "type.mismatch"),
     (Category::Type, "null.context_type"),
     (Category::Type, "sequence.context_type"),
+    (Category::Type, "dict.duplicate_key"),
+    (Category::Type, "set.duplicate_member"),
     (Category::Type, "enum.context_type"),
     (Category::Name, "binding.unassigned"),
     (Category::Name, "binding.immutable"),
@@ -166,12 +170,10 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "trace.style"),
     (Category::Type, "trace.key_order"),
     (Category::Type, "trace.escape"),
-    (Category::Type, "nullable.required_presence"),
     (Category::Type, "lookup.default_type"),
     (Category::Type, "result.context_type"),
     (Category::Type, "result.required_variant"),
     (Category::Type, "result.propagation_type"),
-    (Category::Phase, "result.propagation_phase"),
     (Category::Phase, "capture.phase"),
     (Category::Type, "capture.output_field"),
     (Category::Type, "value.constant_capability"),
@@ -197,16 +199,22 @@ pub fn contains(category: Category, code: &str) -> bool {
 /// Every execution code of the catalogue, in the specification's
 /// order: a failure of a running program that has a stable code. An
 /// `assert raises("code")` names one (TST-10). "The source and
-/// execution catalogs are disjoint": TIME-8's wake whose duration is
-/// not more than zero is `schedule.non_positive_duration` here, where
-/// the program runs, and `schedule.duration_bounds` among the source
-/// codes, where the compiler sees the value.
+/// execution catalogs are disjoint, but for two codes": TIME-8's wake
+/// whose duration is not more than zero is `schedule.non_positive_duration`
+/// here, where the program runs, and `schedule.duration_bounds` among the
+/// source codes, where the compiler sees the value; `store.key_type` and
+/// `key.unstable` are in both lists.
 pub const EXECUTION_CODES: &[&str] = &[
     "value.missing_key",
+    "key.unstable",
+    "value.null",
     "value.index_out_of_range",
     "value.unset_read",
     "value.capability",
     "value.byte_range",
+    "enum.no_member",
+    "switch.unmatched",
+    "store.key_type",
     "numeric.division_by_zero",
     "numeric.out_of_range",
     "tenor.mixed_units",
@@ -216,6 +224,7 @@ pub const EXECUTION_CODES: &[&str] = &[
     "yield.non_increasing_time",
     "eval.input_delta_profile",
     "run.end_and_length",
+    "run.bounds",
 ];
 
 /// True when the catalogue lists `code` as an execution code.

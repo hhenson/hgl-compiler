@@ -1,6 +1,7 @@
 //! What a place expects of a value: whether a value of one type is a
-//! value of another, an integer widened to an `f64`, and a struct where an
-//! abstract one it inherits from is expected (EXPR-5, TYPE-6, TYPE-14).
+//! value of another, an integer widened to an `f64`, a struct where an
+//! abstract one it inherits from is expected, and the form a result or a
+//! `T?` takes there (EXPR-5, TYPE-6, TYPE-14, ERR-12, ERR-15).
 //! Part of the typing pass ([`super`]).
 
 use std::collections::HashMap;
@@ -103,6 +104,13 @@ impl<'a> Typer<'a> {
                 category: ValueCategory::Unsettled,
             };
         }
+        // EXPR-5: "Two are the exception, read by the place and not
+        // converted: a `result<T, error>`, a call's or a binding's, takes
+        // its form from the place (ERR-15) ... and a `T?` where a T is
+        // expected is read (ERR-12)."
+        if let Some(taken) = self.taken(expected, &value.ty) {
+            return self.take(value, taken);
+        }
         self.conforms(&value.ty, expected, value.at, what);
         value
     }
@@ -182,26 +190,6 @@ impl<'a> Typer<'a> {
     /// when it is no value of that type.
     pub(super) fn conforms(&mut self, ty: &Type, expected: &Type, at: Location, what: &str) {
         if self.admits(expected, ty) {
-            return;
-        }
-        // ERR-12: "Using it where T is required without that proof
-        // rejects with `nullable.required_presence`."
-        if let Type::Nullable(payload) = ty
-            && self.admits(expected, payload)
-        {
-            self.diagnostics.emit(
-                error(
-                    Category::Type,
-                    codes::NULLABLE_REQUIRED_PRESENCE,
-                    at,
-                    format!("this is `{ty}`, and {what} is `{expected}`: it may be null here"),
-                    "ERR-12",
-                )
-                .with_note(
-                    "a test against null proves an immutable binding is not: \
-                     `if value == null { return ... }`",
-                ),
-            );
             return;
         }
         self.diagnostics.emit(error(

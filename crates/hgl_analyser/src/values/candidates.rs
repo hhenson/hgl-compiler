@@ -11,7 +11,7 @@ use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::expressions::takes_its_type;
 use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, whole};
-use super::inference::{asked_of_result, bare_parameter, infer, mentions, placed};
+use super::inference::{bare_parameter, infer, infer_from_place, mentions, placed};
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use crate::constant::Fault;
@@ -32,6 +32,16 @@ impl<'a> Typer<'a> {
     /// EXPR-5: an integer literal is an `f64` where one is expected; it
     /// selects as the `i64` it is where a candidate takes one. So the
     /// candidates are tried first with no literal widened.
+    ///
+    /// ERR-15: "An operand of an operator expects the T where the
+    /// operator's candidates take one ... Where a candidate takes the
+    /// result itself, as `==` and `!=` of two results do (ERR-2), that
+    /// candidate is selected and the operands are given whole." ERR-12:
+    /// a `T?` "given where a T is expected is read". So the candidates
+    /// are tried with each argument as it is, and where none takes the
+    /// call so, again with each result and each `T?` among the arguments
+    /// as the T its place takes ([`forms_of`]). The argument is given its
+    /// form where the candidate's parameter takes it (`Typer::fit`).
     pub(super) fn admitted(
         &mut self,
         operator: OperatorRef,
@@ -39,6 +49,30 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
     ) -> (Vec<Chosen<'a>>, bool) {
+        let (selected, untold, fits) = self.admitted_as(operator, candidates, given, wanted);
+        if fits {
+            return (selected, untold);
+        }
+        match forms_of(given) {
+            Some(formed) => {
+                let (selected, untold, _) = self.admitted_as(operator, candidates, &formed, wanted);
+                (selected, untold)
+            }
+            None => (selected, untold),
+        }
+    }
+
+    /// [`Typer::admitted`], with the arguments `given` of the types they
+    /// have: the candidates selected, whether one could not be told to
+    /// admit the call, and whether any candidate takes the call by its
+    /// result and parameter types, whatever its condition says.
+    fn admitted_as(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[(usize, usize, &'a Signature)],
+        given: &[Given],
+        wanted: &Wanted,
+    ) -> (Vec<Chosen<'a>>, bool, bool) {
         let program = self.program;
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
@@ -46,7 +80,7 @@ impl<'a> Typer<'a> {
             .details
             .get(operator.declaration)
         else {
-            return (Vec::new(), false);
+            return (Vec::new(), false, false);
         };
         let mut selected: Vec<Chosen> = Vec::new();
         let mut untold = false;
@@ -56,6 +90,8 @@ impl<'a> Typer<'a> {
         // True when the candidates were tried with integer literals
         // widened.
         let mut widened = false;
+        // True when a candidate takes the call by its types.
+        let mut any_fits = false;
         for widening in [false, true] {
             // True when a candidate takes the call by its result and
             // parameter types, whatever its condition says.
@@ -138,6 +174,7 @@ impl<'a> Typer<'a> {
             // that do. An option so does not change what a literal is."
             if fits {
                 widened = widening;
+                any_fits = true;
                 break;
             }
         }
@@ -200,7 +237,7 @@ impl<'a> Typer<'a> {
                 !outranked[position - 1]
             });
         }
-        (selected, untold)
+        (selected, untold, any_fits)
     }
 
     /// GEN-5: "Among candidates that tie and differ only in which
@@ -441,8 +478,15 @@ impl<'a> Typer<'a> {
             // An output requested in part, a `list<T, 3>` with `T` not
             // said, is matched as far as it is known: `admits` compares
             // what each type says and lets what is not said pass, and
-            // keeps a `T` a value of a `T?` (TYPE-14).
-            (Some(wanted), Some(result)) => self.admits(wanted, result),
+            // keeps a `T` a value of a `T?` (TYPE-14). GEN-5: "A
+            // candidate that gives `result<T, error>` meets a requested T
+            // or `T?` as one that gives T does, and its call takes the
+            // form the place expects (ERR-15)".
+            (Some(wanted), Some(result)) => {
+                self.admits(wanted, result)
+                    || matches!(result, Type::Result { error, .. } if **error == Type::Error)
+                        && self.taken(wanted, result).is_some()
+            }
             (Some(_), None) => false,
             (None, _) => true,
         };
@@ -1333,6 +1377,7 @@ pub(crate) fn select_in_instance(
 }
 
 /// One argument of an operator's call, before a candidate is selected.
+#[derive(Clone)]
 pub(super) struct Given {
     /// How it is written: in a position, or by a name. Which parameter
     /// of a candidate that is, is the candidate's to say (GEN-6).
@@ -1364,7 +1409,40 @@ impl Given {
     }
 }
 
+/// The arguments `given` as their places take them where those expect
+/// the T (ERR-12, ERR-15): each result as its T, and each `T?` as its T,
+/// for the candidates to be tried with; `None` where no argument is
+/// either. An argument read as the type of its place is as it is.
+fn forms_of(given: &[Given]) -> Option<Vec<Given>> {
+    let formed_type = |given: &Given| -> Option<Type> {
+        if given.by_place || !whole(&given.value.ty) {
+            return None;
+        }
+        match &given.value.ty {
+            Type::Result { value, .. } => Some((**value).clone()),
+            Type::Nullable(payload) => Some((**payload).clone()),
+            _ => None,
+        }
+    };
+    if !given.iter().any(|given| formed_type(given).is_some()) {
+        return None;
+    }
+    Some(
+        given
+            .iter()
+            .map(|given| {
+                let mut formed = given.clone();
+                if let Some(ty) = formed_type(given) {
+                    formed.value.ty = ty;
+                }
+                formed
+            })
+            .collect(),
+    )
+}
+
 /// How a call writes an argument.
+#[derive(Clone)]
 pub(super) enum Key {
     /// With no name: the place it stands in, from 0.
     Position(usize),
@@ -1551,8 +1629,7 @@ fn instance<'s>(
     // str) -> V` is the `i64?` that `get<i64?>(global_state, key)`
     // writes (core's CAP-6): see `asked_of_result`.
     if let (Some(place), Some(result)) = (wanted.place, &signature.result) {
-        let place = asked_of_result(result, place, wanted.written);
-        infer(result, place, generics, &mut found);
+        infer_from_place(result, place, wanted.written, generics, &mut found);
     }
     // The generic parameters an argument decided: what the call writes,
     // or its place expects, is not widened (GEN-2).

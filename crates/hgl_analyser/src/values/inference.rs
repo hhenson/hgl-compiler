@@ -858,24 +858,47 @@ pub(super) fn infer(
 ///
 /// A result that is nullable itself is matched with what is requested
 /// as it is. GEN-2: "What the call writes, or its place expects, is not
-/// widened", and core's CAP-6: `get<V>(global_state, key)` is "of the
-/// type the call writes", so a type written is taken whole, `?` and
-/// all: `get<i64?>(global_state, key)` gives core's candidate the
-/// `i64?` written.
+/// widened ... What the call writes is taken whole: `same<i64?>(1, 2)`
+/// is an `i64?`."
 ///
 /// Otherwise a `T` is a value of a `T?` (TYPE-14), and a result that is
 /// not nullable is asked to be what is under the `?` of a nullable
 /// place: `repeat(3)` given to a `list<str>?` is a `list<str>`. What a
 /// nullable place says of a result that is a type parameter and nothing
-/// more, the `V` of `let saved: i64? = get(global_state, key)`, is not
-/// decided (hhenson/hgl_spec#165, open): it is taken here to be what is
-/// under the `?`, an `i64`.
+/// more is taken here to be what is under the `?`.
 pub(super) fn asked_of_result<'t>(result: &Type, requested: &'t Type, written: bool) -> &'t Type {
     match result {
         Type::Nullable(_) => requested,
         Type::Parameter { .. } if written => requested,
         _ => not_null(Some(requested)).unwrap_or(requested),
     }
+}
+
+/// [`infer`], for a callee's declared result `result` and the type
+/// `requested` of the call's place, as [`asked_of_result`] says what the
+/// place asks of it. GEN-2: a call resolves a generic "from the type its
+/// place expects of the result", and ERR-15: a `result<T, error>` "takes
+/// its form from its place": where the place expects no result, what it
+/// asks is of the T, in the form the place takes. A `T?` place, `T` not
+/// nullable, takes the `T?` form, so the `V` of core's
+/// `get<K, V>(store: dict<K, V>, key: K) -> result<V, error>` given to an
+/// `i64?` is an `i64`, as a `V` result's would be.
+pub(super) fn infer_from_place(
+    result: &Type,
+    requested: &Type,
+    written: bool,
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) {
+    if let Type::Result { value, .. } = result
+        && !matches!(not_null(Some(requested)), Some(Type::Result { .. }))
+    {
+        let place = asked_of_result(value, requested, written);
+        infer(value, place, generics, found);
+        return;
+    }
+    let place = asked_of_result(result, requested, written);
+    infer(result, place, generics, found);
 }
 
 /// [`infer`], for a size or a constant argument: a generic value

@@ -286,7 +286,11 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
         ExprKind::TagTest { value, .. } => category(value),
         ExprKind::Payload { result, .. } => category(result),
         ExprKind::ErrorPart { base, .. } => category(base),
-        ExprKind::Propagate(operand) => category(operand),
+        // ERR-15, ERR-12: a result's form and a `T?` read are what the
+        // value they take is: a connection of the form where it is one.
+        ExprKind::Raised { result: inner, .. }
+        | ExprKind::OrNull { result: inner, .. }
+        | ExprKind::NullRead { value: inner, .. } => category(inner),
         // ERR-7: a capture is a temporal boundary, and what is read
         // of it a connection.
         ExprKind::Capture(_) | ExprKind::Captured { .. } => Connection,
@@ -394,6 +398,9 @@ pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
 /// [`record`] does for one expression of a body with `locals`.
 fn recorded(program: &Program, locals: &[Local], composition: bool, value: &mut Expr) {
     value.category = category(program, locals, value);
+    if composition {
+        formed_in_composition(program, locals, value);
+    }
     if let ExprKind::Call {
         callee,
         arguments,
@@ -406,6 +413,45 @@ fn recorded(program: &Program, locals: &[Local], composition: bool, value: &mut 
             && arguments.iter().any(|argument| {
                 category(program, locals, &argument.value) == ValueCategory::Connection
             });
+    }
+}
+
+/// Where the form a place in a graph's body takes of `value` is made
+/// (ERR-15, ERR-12), now that what `value` holds is known to be a
+/// connection or an ordinary value. ERR-15: "In composition a call that
+/// gives a connection, of a temporal function or one that is lifted
+/// (FN-6), takes its form as the connection's: ... of T, where a success
+/// publishes its value and a failure fails the call's node in that cycle
+/// ... A call that is evaluated where the graph is built and gives no
+/// connection (FN-6, FN-9) takes its form as value code does. A
+/// connection of `result<T, error>` that a binding holds, given where a
+/// connection of T or of `T?` is taken, takes that form as a call's
+/// does, in the node that reads it." ERR-12: "A connection of `T?` given
+/// where a connection of T is taken ... is read so too, the node that
+/// reads it failing in a cycle that publishes a null."
+fn formed_in_composition(program: &Program, locals: &[Local], value: &mut Expr) {
+    use crate::hir::Raise;
+    let connection = |inner: &Expr| category(program, locals, inner) == ValueCategory::Connection;
+    let of_call = |inner: &Expr| matches!(inner.kind, ExprKind::Call { .. });
+    match &mut value.kind {
+        ExprKind::Raised { result, raise } => {
+            *raise = match (connection(result), of_call(result)) {
+                (true, true) => Raise::CallNode,
+                (true, false) => Raise::Reader,
+                (false, _) => Raise::Build,
+            };
+        }
+        ExprKind::OrNull { result, reader } => {
+            *reader = connection(result) && !of_call(result);
+        }
+        ExprKind::NullRead { value, raise, .. } => {
+            *raise = if connection(value) {
+                Raise::Reader
+            } else {
+                Raise::Build
+            };
+        }
+        _ => {}
     }
 }
 

@@ -243,7 +243,9 @@ impl Copies {
             | ExprKind::Widen(inner)
             | ExprKind::Payload { result: inner, .. }
             | ExprKind::Tagged { payload: inner, .. }
-            | ExprKind::Propagate(inner) => self.elsewhere(program, locals, inner),
+            | ExprKind::Raised { result: inner, .. }
+            | ExprKind::OrNull { result: inner, .. }
+            | ExprKind::NullRead { value: inner, .. } => self.elsewhere(program, locals, inner),
             ExprKind::Block { value, .. } => value
                 .as_ref()
                 .is_some_and(|last| self.elsewhere(program, locals, last)),
@@ -635,7 +637,9 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::TagTest { value: inner, .. }
         | ExprKind::Payload { result: inner, .. }
         | ExprKind::ErrorPart { base: inner, .. }
-        | ExprKind::Propagate(inner)
+        | ExprKind::Raised { result: inner, .. }
+        | ExprKind::OrNull { result: inner, .. }
+        | ExprKind::NullRead { value: inner, .. }
         | ExprKind::Capture(inner)
         | ExprKind::Captured { capture: inner, .. }
         | ExprKind::ChildEndpoint { child: inner, .. }
