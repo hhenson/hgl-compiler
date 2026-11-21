@@ -237,6 +237,9 @@ pub mod codes {
     pub const INJECT_NO_SCHEDULER: &str = "inject.no_scheduler";
     /// `scheduled()` in `start` or `stop` (TIME-9).
     pub const SCHEDULED_LIFECYCLE: &str = "scheduled.lifecycle";
+    /// `scheduled()` in a value function, a graph or a test, which has
+    /// no schedule of its own (FN-9, TIME-9). The catalogue row is proposed.
+    pub const SCHEDULED_OUTSIDE_NODE: &str = "scheduled.outside_node";
     /// A wake asked of the scheduler or the alarm with a `duration` the
     /// compiler sees, that is not more than zero, other than a zero in
     /// `start` (TIME-8). Where the program runs such a wake fails with
@@ -287,6 +290,11 @@ pub mod codes {
     pub const SOURCE_INPUT: &str = "source.input";
     /// A source with no result arrow (SOURCE-1).
     pub const SOURCE_RESULT: &str = "source.result";
+    /// A source's `return` has a value (proposed SOURCE-4).
+    pub const SOURCE_RETURN_VALUE: &str = "source.return_value";
+    /// A `yield` inside a block or an `if` whose value is used
+    /// (proposed SOURCE-4).
+    pub const YIELD_IN_VALUE: &str = "yield.in_value";
     /// A `yield` time of a type other than `duration` or `datetime` (SOURCE-2).
     pub const YIELD_TIME_TYPE: &str = "yield.time_type";
     /// `out` used in `start` or written in `stop`, or a `return` with a
@@ -324,6 +332,9 @@ pub mod codes {
     pub const RUN_CONFIGURATION: &str = "run.configuration";
     /// A constant's value depends on itself (UNIT-13).
     pub const CONSTANT_CYCLE: &str = "constant.cycle";
+    /// A module constant whose evaluation fails (UNIT-13, ERR-9).
+    /// The catalogue row is proposed.
+    pub const CONSTANT_FAILURE: &str = "constant.failure";
     /// An endpoint operation given what is no temporal input of its
     /// function and not `out` (TIME-9).
     pub const ENDPOINT_ARGUMENT: &str = "endpoint.argument";
@@ -346,6 +357,12 @@ pub mod codes {
     pub const BINDING_CATEGORY: &str = "binding.category";
     /// A state initializer reads a temporal input (TIME-5).
     pub const STATE_INPUT_READ: &str = "state.input_read";
+    /// A cache initializer reads a temporal input (TIME-5, TIME-6).
+    /// The catalogue row is proposed.
+    pub const CACHE_INPUT_READ: &str = "cache.input_read";
+    /// An `Args:` or `Type Args:` key names no parameter or generic
+    /// parameter of its declaration (SDOC-3). The catalogue row is proposed.
+    pub const DOC_UNKNOWN_KEY: &str = "doc.unknown_key";
     /// A window's size is neither a tick count nor a duration, or its
     /// two sizes are of different kinds (TYPE-11).
     pub const ROLLING_WINDOW_SIZE_KIND: &str = "rolling_window.size_kind";
@@ -519,6 +536,9 @@ pub mod codes {
     pub const RETURN_MISSING: &str = "return.missing";
     /// A `switch` label has the value of an earlier label (CTRL-6).
     pub const SWITCH_DUPLICATE_LABEL: &str = "switch.duplicate_label";
+    /// A `switch` label that is no compile-time constant (CTRL-12,
+    /// UNIT-13). The catalogue row is proposed.
+    pub const SWITCH_LABEL_CONSTANT: &str = "switch.label_constant";
     /// A `while` with no condition in a value function (CTRL-12).
     pub const WHILE_CONDITION: &str = "while.condition";
     /// A function argument must name a known callable (FN-17).
@@ -529,34 +549,6 @@ pub mod codes {
     /// proposed to the specification, and is replaced by the catalogued
     /// code when one is agreed.
     pub mod local {
-        /// A node's `cache` initializer reads a temporal input (TIME-1):
-        /// a cache is initialized on every start, before any input has
-        /// a value (TIME-6, TIME-5). Local: the catalogue's
-        /// `state.input_read` names a state's initializer alone.
-        pub const CACHE_INPUT_READ: &str = "cache.input_read";
-        /// A key of a documentation comment's `Args:` or `Type Args:`
-        /// section names no parameter, or no generic parameter, of the
-        /// declaration it documents (SDOC-3). Local: the catalogue has
-        /// no row for it.
-        pub const DOC_UNKNOWN_KEY: &str = "doc.unknown_key";
-        /// A source's `return` has a value (SOURCE-4).
-        pub const SOURCE_RETURN_VALUE: &str = "source.return_value";
-        /// A source's `yield` stands inside a block or an `if` whose
-        /// value is used (SOURCE-4).
-        pub const YIELD_IN_VALUE: &str = "yield.in_value";
-        /// A `switch` label that is no compile-time constant (CTRL-12,
-        /// UNIT-13). Local: the catalogue has no row for it.
-        pub const SWITCH_LABEL_CONSTANT: &str = "switch.label_constant";
-        /// A module's constant whose evaluation fails: an `i64` out of
-        /// range, a division by zero (UNIT-13: "a failure in evaluating
-        /// it is a required-constant failure (ERR-9)"; ERR-9: "Required
-        /// constant failures reject"). Local: the catalogue has no row
-        /// for it.
-        pub const CONSTANT_FAILURE: &str = "constant.failure";
-        /// `scheduled()` in a value function, a graph or a test, which is
-        /// no node and has no schedule of its own (FN-9, TIME-9). Local:
-        /// the catalogue's `inject.no_scheduler` names a node alone.
-        pub const SCHEDULED_OUTSIDE_NODE: &str = "scheduled.outside_node";
         /// A statement whose judging reads its expressions again more
         /// often than this compiler does for one: an expression that
         /// takes its type from its place is tried for each candidate
@@ -583,14 +575,7 @@ pub mod codes {
         pub const YIELD_OUTSIDE_SOURCE: &str = "yield.outside_source";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 12] = [
-            CACHE_INPUT_READ,
-            DOC_UNKNOWN_KEY,
-            SOURCE_RETURN_VALUE,
-            YIELD_IN_VALUE,
-            SWITCH_LABEL_CONSTANT,
-            CONSTANT_FAILURE,
-            SCHEDULED_OUTSIDE_NODE,
+        pub const ALL: [&str; 5] = [
             READING_LIMIT,
             LOOP_CARRIED,
             FUNCTION_VALUE,

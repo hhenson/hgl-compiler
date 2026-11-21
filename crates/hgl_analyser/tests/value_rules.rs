@@ -190,10 +190,10 @@ fn a_source_returns_no_value_and_yields_in_statements() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:19:22 local:phase/source.return_value SOURCE-4",
-            "m.hgl:23:9 local:phase/yield.in_value SOURCE-4",
-            "m.hgl:30:9 local:phase/yield.in_value SOURCE-4",
-            "m.hgl:40:13 local:phase/yield.in_value SOURCE-4",
+            "m.hgl:19:22 phase/source.return_value SOURCE-4",
+            "m.hgl:23:9 phase/yield.in_value SOURCE-4",
+            "m.hgl:30:9 phase/yield.in_value SOURCE-4",
+            "m.hgl:40:13 phase/yield.in_value SOURCE-4",
         ]
     );
 }

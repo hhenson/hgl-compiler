@@ -49,7 +49,7 @@ analyser: partial
 
 analyser: partial
 
-- A label is a compile-time constant of the selector's type (local `switch.label_constant`, UNIT-13), read by the one reader (`constant`) and compared as the selector's `==` compares them (`ConstantValue::equals`): a literal however written, an enum member however written, a constant followed to its value, and a constant expression of those
+- A label is a compile-time constant of the selector's type (`switch.label_constant`, CTRL-12 and UNIT-13), read by the one reader (`constant`) and compared as the selector's `==` compares them (`ConstantValue::equals`): a literal however written, an enum member however written, a constant followed to its value, and a constant expression of those
 - A repeated value is rejected (`switch.duplicate_label`), `case 1:` beside `case 0x1:` among them, and an enum's coverage by such labels stands for a `default`
 - Two labels are duplicates where `==` of the selector's type holds for them, as CTRL-6 has it; a selector is a `bool`, an `i64`, a `str` or an enum (CTRL-12), whose `==` is their sameness as constants (UNIT-13)
 - Left: a label whose value is not worked out, a generic value parameter's or one of a candidate of the program's own, whose repeat is not judged
@@ -165,6 +165,7 @@ transpiler: partial
 analyser: partial
 
 - A graph supports `switch` over an ordinary value or a connection with compile-time labels, and `while` with an ordinary condition. It binds loop items by sequence type.
+- CTRL-15 allows an outer `var` to carry across passes over a connection of `list<T, N>` or a range with constant bounds (EXPR-16). Each pass rebinds the `var` at wiring time (EXPR-15). #368 tracks constant ranges.
 - Struct and atomic struct iteration and the proposed `for.sequence` diagnostic await #373. Dynamic loops continue to accept temporal collections and report local `loop.carried` for an outer assignment or a return.
 
 transpiler: partial
@@ -227,7 +228,7 @@ transpiler: done
 
 analyser: done
 
-- A source's `return` with a value, and a `yield` in a block or an `if` whose value is used, rejected: the local `source.return_value` and `yield.in_value`
+- Proposed SOURCE-4 rejects a source's `return` with a value and a `yield` inside a block or an `if` whose value is used. The proposed catalogue codes are `source.return_value` and `yield.in_value`.
 
 transpiler: done
 

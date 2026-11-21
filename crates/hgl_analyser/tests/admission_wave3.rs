@@ -68,8 +68,8 @@ fn a_header_is_judged_after_five_thousand_handlers() {
 /// in a source, which injects "not `out`, `scheduler`, or `alarm`"
 /// (SOURCE-1); and in a value function, a graph and a test, which are no
 /// node: FN-9, "A value function injects none", and TIME-9, it "has no
-/// output or schedule of its own". The catalogue has no row for those,
-/// and the code is local. A `return` in the function is the function's,
+/// output or schedule of its own" (`scheduled.outside_node`).
+/// A `return` in the function is the function's,
 /// and is no publication of the node's (TIME-7): `returned` publishes an
 /// `i64`, and its function's `bool` is no mismatch.
 #[test]
@@ -124,10 +124,10 @@ fn scheduled_in_an_anonymous_function_is_judged_where_it_is_written() {
             "m.hgl:12:34 injectable/inject.no_scheduler TIME-9",
             "m.hgl:18:28 phase/scheduled.lifecycle TIME-9",
             "m.hgl:22:31 phase/scheduled.lifecycle TIME-9",
-            "m.hgl:24:39 local:phase/scheduled.outside_node FN-9",
+            "m.hgl:24:39 phase/scheduled.outside_node FN-9",
             "m.hgl:26:24 injectable/inject.no_scheduler TIME-9",
-            "m.hgl:28:45 local:phase/scheduled.outside_node FN-9",
-            "m.hgl:30:21 local:phase/scheduled.outside_node FN-9",
+            "m.hgl:28:45 phase/scheduled.outside_node FN-9",
+            "m.hgl:30:21 phase/scheduled.outside_node FN-9",
         ]
     );
 }
@@ -160,7 +160,7 @@ fn scheduled_takes_no_generic_argument() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:2:29 local:phase/scheduled.outside_node FN-9",
+            "m.hgl:2:29 phase/scheduled.outside_node FN-9",
             "m.hgl:2:29 type/generic.argument_count GEN-8",
             "m.hgl:6:10 type/generic.argument_count GEN-8",
             "m.hgl:9:19 injectable/inject.no_scheduler TIME-9",

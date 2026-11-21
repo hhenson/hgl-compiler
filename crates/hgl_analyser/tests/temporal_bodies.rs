@@ -78,8 +78,8 @@ fn metadata_observes_an_invalid_endpoint() {
 /// guard (`payload.unguarded`, TIME-4), in `stop` with none (TIME-5), in
 /// `start` and a `state`'s initializer, which run before any input has
 /// a value (TIME-5), and in a `cache`'s initializer, which runs on
-/// every start (TIME-6). The catalogue names a state's initializer
-/// alone, and the cache's code is local.
+/// every start (TIME-6). The catalogue has separate codes for those
+/// initializers, `state.input_read` and `cache.input_read`.
 #[test]
 fn a_payload_read_needs_admission() {
     let checked = module(concat!(
@@ -96,7 +96,7 @@ fn a_payload_read_needs_admission() {
         checked.summary(),
         [
             "m.hgl:3:23 phase/state.input_read TIME-5",
-            "m.hgl:4:23 local:phase/cache.input_read TIME-1",
+            "m.hgl:4:23 phase/cache.input_read TIME-5",
             "m.hgl:6:23 phase/input.lifecycle TIME-5",
             "m.hgl:7:29 phase/payload.unguarded TIME-4",
             "m.hgl:8:19 phase/payload.unguarded TIME-5",
@@ -163,7 +163,7 @@ fn an_anonymous_function_reads_where_it_is_written() {
             "m.hgl:7:35 phase/input.lifecycle TIME-5",
             "m.hgl:13:28 phase/payload.unguarded TIME-5",
             "m.hgl:16:32 phase/state.input_read TIME-5",
-            "m.hgl:17:32 local:phase/cache.input_read TIME-1",
+            "m.hgl:17:32 phase/cache.input_read TIME-5",
             "m.hgl:21:56 phase/payload.unguarded TIME-4",
         ]
     );

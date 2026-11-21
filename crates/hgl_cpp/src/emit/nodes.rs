@@ -341,9 +341,10 @@ impl Emitter<'_> {
     ) {
         let module = &self.program.modules[self.module];
         let at = module.declarations[index].at;
-        // FN-16: a `ref` parameter or result, which `references` writes,
-        // or reports where it does not.
-        if !self.references_written(signature, phase, module.is_source(index), at) {
+        // SOURCE-1 and FN-16: writing a source with a `ref` result
+        // would need a designation without a temporal input.
+        if module.is_source(index) && signature.reference {
+            self.unsupported(at, "a `ref` result of a source");
             return;
         }
         // The body's locals start with its parameters, in order.
@@ -596,7 +597,7 @@ impl Emitter<'_> {
             let Some(schema) = self.temporal_schema(&parameter.ty, form.at) else {
                 return;
             };
-            let view = format!("result_watch_{local}_");
+            let view = names::result_watch(local);
             // The extra subscription sees Err even if the HGL input is
             // passive. A successful observation does not wake a handler.
             parameters.push(format!(
@@ -1526,7 +1527,7 @@ impl Placed {
     /// Distinguish a physical reader variant without changing the
     /// node identity that a failure reports (ERR-4, ERR-15).
     pub(super) fn add_input_variant(&mut self, number: usize) {
-        let suffix = format!("_read_{number}_");
+        let suffix = names::reader_suffix(number);
         self.name.push_str(&suffix);
         self.structs.push_str(&suffix);
     }

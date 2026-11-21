@@ -340,9 +340,9 @@ fn constant_failures(program: &Program, diagnostics: &mut Diagnostics) {
             else {
                 continue;
             };
-            diagnostics.emit(crate::local_error(
+            diagnostics.emit(crate::error(
                 Category::Type,
-                codes::local::CONSTANT_FAILURE,
+                codes::CONSTANT_FAILURE,
                 Location::new(file, expression.span()),
                 format!(
                     "evaluating `{}` fails: an operation in it is out of its type's range, \

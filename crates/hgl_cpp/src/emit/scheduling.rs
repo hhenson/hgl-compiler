@@ -313,12 +313,6 @@ impl Emitter<'_> {
                     body: statements,
                     ..
                 } => stop = Some(statements),
-                // SOURCE-1: "A source has no `when`", which the analyser
-                // rejects.
-                Stmt::Hook { at, .. } => {
-                    self.unsupported(*at, "a `when` in a source");
-                    return None;
-                }
                 other => yielding.push(other.clone()),
             }
         }
