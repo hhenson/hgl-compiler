@@ -98,8 +98,8 @@ def save_native(bundle, cache):
 
 def github_items(endpoint, key):
     """Read every page of a GitHub Actions list, surfacing API errors."""
-    pages = json.loads(command("gh", "api", "--paginate", "--slurp", endpoint))
-    return (item for page in pages for item in page[key])
+    rows = command("gh", "api", "--paginate", "--jq", f".{key}[] | @json", endpoint)
+    return (json.loads(row) for row in rows.splitlines())
 
 
 def verified_run(repository, commit, current_run):
