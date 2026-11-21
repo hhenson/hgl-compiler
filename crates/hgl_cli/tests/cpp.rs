@@ -1142,9 +1142,10 @@ fn names_the_generated_cpp_declares_are_built() {
 
 /// TYPE-16: a nullable's delta is a type of its own, which holds what was
 /// published, a null among them. A temporal `i64?` read by its delta,
-/// published by one, and relayed, and a temporal `list<i64?>` relayed and
-/// read by its delta, a published null at a position among it: each runs,
-/// and its tests pass.
+/// published by one, and relayed, its trace's cells written as values and
+/// as deltas (TST-5), and a temporal `list<i64?>` relayed and read by its
+/// delta, a published null at a position among it: each runs, and its
+/// tests pass.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn a_nullables_delta_is_read_and_published() {
@@ -1180,6 +1181,10 @@ fn a_nullables_delta_is_read_and_published() {
             "    assert eval(relay(value: [1, null, 2])) == [1, null, 2]\n",
             "    assert eval(read(value: [1, null, 2])) == [1, null, 2]\n",
             "    assert eval(published(step: [0, 1, 2])) == [null, 7, null]\n",
+            "    # A cell written as the delta it publishes, a published null among them.\n",
+            "    assert eval(relay(value: [delta<i64?>(), delta<i64?>(value: 3), 4])) ==\n",
+            "        [null, delta<i64?>(value: 3), delta<i64?>(value: 4)]\n",
+            "    assert eval(read(value: [delta<i64?>(), 5])) == [delta<i64?>(), 5]\n",
             "}\n",
             "test a_list_of_nullables_publishes_its_delta {\n",
             "    assert eval(relay_list(values: [[1, null], [null, 2]])) == [[1, null], [null, 2]]\n",

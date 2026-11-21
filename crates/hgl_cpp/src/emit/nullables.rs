@@ -11,7 +11,7 @@
 //! | `value == null`, `value != null` of it (ERR-12) | whether that read holds nothing, or something |
 //! | `return value`, `out = value` (TIME-7) | `::hglrt::publish_nullable(view, value);`: "`return null` for an `i64?` result a null, as `return delta<i64?>()` does" |
 //! | `delta_value(view)` (END-3, ERR-14) | `::hglrt::fn_delta_value(view)`, the optional that is `delta<T?>`, or `fn_delta_value_checked` where its place takes a `result` |
-//! | A cell of a trace of it (TST-5) | a `std::optional<T>`: a nullable publishes whole, a published null among it |
+//! | A cell of a trace of it (TST-5) | a `std::optional<T>`: a nullable publishes whole, a published null among it; a cell written as its delta, the optional the delta holds |
 //!
 //! A nullable of any other type, and a nullable where a connection is
 //! expected (FN-3), are not this family's, and are reported. A `T?` of
@@ -142,7 +142,9 @@ impl Family for Nullables {
     }
 
     // TST-5: a cell is "written as a `return` is": a nullable publishes
-    // whole, so its cell is the optional, a null that holds nothing.
+    // whole, so its cell is the optional, a null that holds nothing. One
+    // written as the delta it publishes, `delta<i64?>()`, is the optional
+    // that delta holds (`nullable_delta`), a published null among them.
     fn cell(
         &self,
         emitter: &mut Emitter<'_>,
@@ -151,8 +153,16 @@ impl Family for Nullables {
         value: &Expr,
     ) -> Option<String> {
         let written = payload(emitter, ty)?;
+        // A null cell is the null it publishes, whatever the type the
+        // trace gives its cells.
+        let delta = matches!(value.ty, Type::Delta(_))
+            && !matches!(value.kind, ExprKind::Literal(Value::Null));
         let value = emitter.expression(scope, value);
-        Some(format!("::std::optional<{written}>{{{value}}}"))
+        Some(if delta {
+            format!("::std::optional<{written}>{{({value}).value}}")
+        } else {
+            format!("::std::optional<{written}>{{{value}}}")
+        })
     }
 
     fn expression(
