@@ -138,7 +138,7 @@ impl<'a> Typer<'a> {
             generics: if public
                 .parameters
                 .iter()
-                .any(|parameter| parameter.configuration && parameter.has_default)
+                .any(|parameter| parameter.configuration)
             {
                 explicit
             } else {

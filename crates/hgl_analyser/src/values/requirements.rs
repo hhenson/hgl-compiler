@@ -11,7 +11,7 @@ use hgl_source::FileId;
 
 use super::candidates::{AtInstance, Given, Wanted};
 use super::fit::{open, whole};
-use super::inference::{fixed, mentions, placed, unsaid};
+use super::inference::{fixed, infer, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, unreadable};
 use super::{REQUIRING, Typer};
 use crate::declared::{names_parameter, same_type, substitute_within};
@@ -1089,16 +1089,12 @@ impl<'a> Typer<'a> {
             let parameter = argument.key.public_parameter(public)?;
             // A requirement names ordinary operands (GEN-16). Their
             // positions skip the configuration slots from FN-18.
-            if public.parameters[parameter].configuration {
-                return None;
-            }
-            let operand = public.parameters[..parameter]
-                .iter()
-                .filter(|parameter| !parameter.configuration)
-                .count();
-            if operand >= given.len() || places.iter().any(|place| place.operand == operand) {
-                return None;
-            }
+            let operand = (!public.parameters[parameter].configuration).then(|| {
+                public.parameters[..parameter]
+                    .iter()
+                    .filter(|parameter| !parameter.configuration)
+                    .count()
+            });
             places.push(RequiredPlace { operand, parameter });
         }
         // Past the function's bound no argument is tried, and the call
@@ -1110,9 +1106,18 @@ impl<'a> Typer<'a> {
         let wanted = expected.filter(|expected| !open(expected));
         let mut first: Option<Required> = None;
         // The argument given to each place, in the operator's order.
-        let mut ordered: Vec<&Given> = given.to_vec();
-        for (argument, place) in given.iter().zip(&places) {
-            ordered[place.operand] = argument;
+        let mut ordered: Vec<_> = given
+            .iter()
+            .zip(&places)
+            .filter_map(|(&argument, place)| Some((place.operand?, argument)))
+            .collect();
+        ordered.sort_unstable_by_key(|&(operand, _)| operand);
+        if ordered
+            .iter()
+            .enumerate()
+            .any(|(index, &(operand, _))| index != operand)
+        {
+            return None;
         }
         for requirement in self.requirements() {
             // One that names a generic parameter of the declaration,
@@ -1184,7 +1189,7 @@ impl<'a> Typer<'a> {
                 }
             }
             let mut supplied = true;
-            for (operand, argument) in requirement.operands.iter().zip(&ordered) {
+            for (operand, &(_, argument)) in requirement.operands.iter().zip(&ordered) {
                 supplied &= if argument.retried {
                     // Read again as the type supplied; what the trial
                     // reports is taken back.
@@ -1237,7 +1242,7 @@ impl<'a> Typer<'a> {
         operator: OperatorRef,
         required: Required,
         given: Vec<Given>,
-        operator_generics: Vec<Argument>,
+        mut operator_generics: Vec<Argument>,
         form: Form,
     ) -> (ExprKind, Type) {
         let Required {
@@ -1246,16 +1251,51 @@ impl<'a> Typer<'a> {
             operands,
             places,
         } = required;
+        let public = match &self.program.modules[operator.module].details[operator.declaration] {
+            Detail::Callable(public) => public,
+            _ => unreachable!("a requirement names an operator signature"),
+        };
+        if !operator_generics.is_empty() {
+            // The requirement supplies the ordinary operand types. A
+            // brace entry is checked against those types (FN-18), so it
+            // cannot redefine the generic type of an ordinary operand.
+            let mut inferred = vec![None; public.generics.len()];
+            from_place(public, result.as_ref(), &mut inferred);
+            for (parameter, operand) in public
+                .parameters
+                .iter()
+                .filter(|parameter| !parameter.configuration)
+                .zip(&operands)
+            {
+                infer(&parameter.ty, operand, &public.generics, &mut inferred);
+            }
+            for (argument, found) in operator_generics.iter_mut().zip(inferred) {
+                if let Some(found) = found {
+                    *argument = found;
+                }
+            }
+        }
+        let map: Vec<_> = fixed(&public.generics).zip(&operator_generics).collect();
         let arguments = given
             .into_iter()
             .zip(places)
             .map(|(given, place)| {
-                let value = if given.retried {
-                    let operand = &operands[place.operand];
-                    let value = self.expression(&given.node, Some(operand));
-                    self.fit(value, operand, "the operand its requirement supplies")
-                } else {
-                    given.value
+                let value = match place.operand {
+                    Some(operand) if given.retried => self.argument_value(
+                        given,
+                        &operands[operand],
+                        "the operand its requirement supplies",
+                    ),
+                    Some(_) => given.value,
+                    None => {
+                        let configuration = &public.parameters[place.parameter];
+                        let ty = substitute_within(&configuration.ty, &map);
+                        self.argument_value(
+                            given,
+                            &ty,
+                            &format!("configuration parameter `{}`", configuration.name),
+                        )
+                    }
                 };
                 hir::Argument {
                     parameter: Some(place.parameter),
@@ -1355,7 +1395,8 @@ pub(super) struct Required {
 #[derive(Clone)]
 struct RequiredPlace {
     /// Position among the requirement's ordinary operands (GEN-16).
-    operand: usize,
+    /// A configuration argument has no operand position (FN-18).
+    operand: Option<usize>,
     /// Index in the public signature, including configuration (FN-18).
     parameter: usize,
 }
