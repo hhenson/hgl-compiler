@@ -13,7 +13,7 @@ use hgl_source::FileId;
 use super::candidates::{AtInstance, Given, Wanted};
 use super::fit::{open, whole};
 use super::inference::{fixed, mentions, placed, unsaid};
-use super::operators::{Requested, from_place, unreadable};
+use super::operators::{Requested, from_place, has_generic_configuration_default, unreadable};
 use super::{REQUIRING, Typer};
 use crate::declared::{names_parameter, same_type, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
@@ -1345,7 +1345,7 @@ impl<'a> Typer<'a> {
         required: Required,
         given: Vec<Given>,
         mut operator_generics: Vec<Argument>,
-        form: Form,
+        (form, at): (Form, Location),
     ) -> (ExprKind, Type) {
         let Required {
             index,
@@ -1357,17 +1357,30 @@ impl<'a> Typer<'a> {
             Detail::Callable(public) => public,
             _ => unreachable!("a requirement names an operator signature"),
         };
-        if !operator_generics.is_empty() {
+        let implicit_configuration =
+            operator_generics.is_empty() && has_generic_configuration_default(public);
+        if implicit_configuration || !operator_generics.is_empty() {
             // The requirement supplies the ordinary operand types. A
             // brace entry is checked against those types (FN-18), so it
             // cannot redefine the generic type of an ordinary operand.
             let mut inferred = vec![None; public.generics.len()];
             from_place(public, result.as_ref(), &mut inferred);
             let supplied = requirement_inputs(public, &operands);
-            self.infer_operator_inputs(public, &mut inferred, &supplied);
-            for (argument, found) in operator_generics.iter_mut().zip(inferred) {
-                if let Some(found) = found {
-                    *argument = found;
+            if implicit_configuration {
+                // A symbol has no written generic arguments. Resolve defaults
+                // in the public signature with the requirement's operand types.
+                let requested = self.output_requested(operator, public, inferred, &supplied, false);
+                if let Some(unfit) = requested.unfit {
+                    self.diagnostics.emit(unfit.diagnostic(public, at));
+                    return (self.unselected(given, form), Type::Unknown);
+                }
+                operator_generics = requested.generics;
+            } else {
+                self.infer_operator_inputs(public, &mut inferred, &supplied);
+                for (argument, found) in operator_generics.iter_mut().zip(inferred) {
+                    if let Some(found) = found {
+                        *argument = found;
+                    }
                 }
             }
         }
@@ -1582,7 +1595,7 @@ fn result_sets(node: &SyntaxNode, name: &str, sets: &mut Vec<SyntaxNode>) {
 /// A call, in a typed body, of a function or a struct with generic
 /// parameters: what it calls, what it gives those parameters, and where
 /// it is written.
-struct Made {
+pub(super) struct Made {
     callee: (usize, usize),
     generics: Vec<Argument>,
     /// What answers each requirement the callee states at this call
@@ -1673,7 +1686,11 @@ fn nesting<'t>(ty: &'t Type) -> usize {
 /// argument, through calls at any depth, and is reported at that call.
 /// Not told is never taken to hold: one still not told for a constant
 /// this compiler does not work out is reported too.
-pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
+pub(super) fn instances_hold(
+    program: &Program,
+    mut given: Vec<Made>,
+    diagnostics: &mut Diagnostics,
+) {
     // The generic parameters of `(module, declaration)`, by where each
     // is declared.
     let own = |(module, declaration): (usize, usize)| -> Vec<Location> {
@@ -1687,7 +1704,6 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     // declaration it is the body of; and what every body makes that
     // gives every argument.
     let mut passed: HashMap<(usize, usize), Vec<Made>> = HashMap::new();
-    let mut given: Vec<Made> = Vec::new();
     // The declarations whose body gives a callee a generic argument it
     // works out from its own generic parameters.
     let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
@@ -1705,7 +1721,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 .flatten()
                 .flatten()
             {
-                made_by(default, &mut made);
+                made_by(&default.value, &mut made);
             }
             // A struct a type written in it applies, a field's or a
             // parameter's (GEN-3: "an application of a struct whose
@@ -1861,12 +1877,14 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 == Some(&Some(Phase::Graph));
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
             let mut graph_reports = Diagnostics::new();
+            let mut defaults = Vec::new();
             let instance = if configured.contains(&made.callee) {
                 super::operator_defaults::check_instance(
                     program,
                     made.callee,
                     &made.generics,
                     &made.answers,
+                    &mut defaults,
                     diagnostics,
                     &mut graph_reports,
                 )
@@ -1891,7 +1909,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     "this destination in the generic graph is checked for this instance",
                 );
             }
-            if inner.is_empty() && selecting.is_empty() {
+            if inner.is_empty() && selecting.is_empty() && defaults.is_empty() {
                 continue;
             }
             let declared = own(made.callee);
@@ -1900,7 +1918,15 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             // What each call of the instance calls, with what it gives
             // the callee's generic parameters and what answers the
             // callee's requirements there, and where it is written.
-            let mut calls: Vec<Resolved> = Vec::new();
+            let mut calls: Vec<Resolved> = defaults
+                .into_iter()
+                .map(|call| Resolved {
+                    callee: call.callee,
+                    generics: call.generics,
+                    answers: call.answers,
+                    at: call.at,
+                })
+                .collect();
             for call in inner {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
@@ -2491,6 +2517,31 @@ fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
 /// The calls of generic declarations `expression` makes, at any depth.
 fn made_by(expression: &Expr, made: &mut Vec<Made>) {
     expression.walk(&mut |expression| made_at(expression, made));
+}
+
+/// The calls an omitted, specialized default makes with resolved arguments
+/// and evidence. Follow these as ordinary instances, including helper bodies
+/// that can themselves omit an inherited default (GEN-16, UNIT-8).
+pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
+    fn concrete(answer: &hir::Answer) -> bool {
+        match answer {
+            hir::Answer::Candidate {
+                generics,
+                requirements,
+                ..
+            } => {
+                generics.iter().all(resolved_default_argument) && requirements.iter().all(concrete)
+            }
+            hir::Answer::Stated(_) | hir::Answer::Unread => false,
+        }
+    }
+    let mut calls = Vec::new();
+    made_by(expression, &mut calls);
+    made.extend(calls.into_iter().filter(|call| {
+        call.required.is_none()
+            && call.generics.iter().all(resolved_default_argument)
+            && call.answers.iter().all(concrete)
+    }));
 }
 
 /// The call `expression` is, where it is one of a function, an

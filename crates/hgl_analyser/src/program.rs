@@ -11,7 +11,7 @@ use hgl_parser::{HasSpan, SyntaxNode};
 use hgl_source::FileId;
 
 use crate::declared::{names_one_of, substitute_within};
-use crate::hir::{Body, Expr, Run};
+use crate::hir::{Body, DefaultExpr, Expr, Run};
 use crate::types::{Argument, CallArguments, Detail, GenericKind, NamedKind, Type, WrittenType};
 
 /// Every module found in the files analysed, in order of module path.
@@ -229,8 +229,8 @@ pub struct Module {
     /// of its parameters (UNIT-8), and a struct's one for each of its
     /// own `fields` (TYPE-4), `None` for one with no default. It is
     /// empty for any other declaration. A default names no parameter
-    /// and no field (UNIT-7), so it is read with no local in scope.
-    pub defaults: Vec<Vec<Option<Expr>>>,
+    /// and no field (UNIT-7). It can declare local bindings of its own.
+    pub defaults: Vec<Vec<Option<DefaultExpr>>>,
     /// What the body of each temporal function describes (FN-2): one
     /// entry for each of `declarations`, in the same order, `None` for
     /// a declaration that is no temporal function or has no body

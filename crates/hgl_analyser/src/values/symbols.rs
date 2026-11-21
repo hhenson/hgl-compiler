@@ -10,7 +10,9 @@ use super::candidates::{Given, Key, Settled, Wanted, typed_by_place};
 use super::control::joined;
 use super::expressions::{takes_its_type, written_null};
 use super::fit::{open, whole};
-use super::operators::{from_place, options_of, public_inputs, unreadable};
+use super::operators::{
+    from_place, has_generic_configuration_default, options_of, public_inputs, unreadable,
+};
 use super::{BOOL, Typer};
 use crate::constant::is_least_magnitude;
 use crate::hir::{BinaryOperator, Expr, ExprKind, Form, UnaryOperator, Value, ValueCategory};
@@ -93,7 +95,7 @@ impl<'a> Typer<'a> {
                         result,
                         vec![only],
                         Vec::new(),
-                        symbol.form,
+                        (symbol.form, symbol.at),
                     );
                 }
                 // An operand whose operators are not judged here: see
@@ -378,7 +380,7 @@ impl<'a> Typer<'a> {
                 result,
                 vec![left, right],
                 Vec::new(),
-                symbol.form,
+                (symbol.form, symbol.at),
             );
         }
         let identity = identity.filter(|_| !(as_written(&left) || as_written(&right)));
@@ -703,11 +705,7 @@ impl<'a> Typer<'a> {
         }
         // An implicit configuration default can read the operator's
         // generics without changing what the symbol asks of its candidates.
-        let has_default = !public.generics.is_empty()
-            && public
-                .parameters
-                .iter()
-                .any(|parameter| parameter.configuration && parameter.has_default);
+        let has_default = has_generic_configuration_default(public);
         let (requested, among, operator_generics) = if said || has_default {
             from_place(public, symbol.place.as_ref(), &mut found);
             let supplied = public_inputs(public, &given);

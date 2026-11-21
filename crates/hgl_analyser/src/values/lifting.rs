@@ -735,9 +735,8 @@ fn formed_in_composition(program: &Program, locals: &[Local], value: &mut Expr) 
     }
 }
 
-/// [`record`] for an expression that stands in no body: a constant's
-/// value (UNIT-13) or a default (UNIT-7). Each is read with no local
-/// in scope, and neither composes a graph.
+/// [`record`] for a module constant's expression (UNIT-13). It has
+/// no enclosing body and does not compose a graph.
 pub(crate) fn record_value(program: &Program, value: &mut Expr) {
     value.walk_mut(&mut |inner| recorded(program, &[], false, inner));
 }

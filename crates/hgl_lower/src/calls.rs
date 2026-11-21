@@ -5,7 +5,7 @@
 
 use std::ops::Deref;
 
-use hgl_analyser::hir::{Argument, Callee, Expr, ExprKind};
+use hgl_analyser::hir::{Argument, Body, Callee, DefaultExpr, Expr, ExprKind};
 use hgl_analyser::{FieldRef, Parameter, Program, Type};
 
 /// The evaluated arguments of a call in written order, keeping their
@@ -22,7 +22,7 @@ pub fn runtime_arguments(arguments: &[Argument]) -> impl Iterator<Item = (usize,
 
 /// What a call that leaves a parameter out gives it (UNIT-8).
 pub enum LeftOut<'p> {
-    /// Its default, read with no local in scope (UNIT-7).
+    /// Its default, in the declaration’s enclosing scope (UNIT-7).
     Default(DefaultValue<'p>),
     /// `null`. UNIT-8: "A parameter whose type is written `T?` needs no
     /// default to be omitted: it is taken to have a default of `null`".
@@ -32,15 +32,26 @@ pub enum LeftOut<'p> {
 /// A checked default, with any operator generics of the call put in place.
 pub enum DefaultValue<'p> {
     /// The original checked expression.
-    Declared(&'p Expr),
+    Declared(&'p DefaultExpr),
     /// An expression specialized for this call (GEN-6, UNIT-7).
-    Specialized(Box<Expr>),
+    Specialized(Box<DefaultExpr>),
 }
 
 impl Deref for DefaultValue<'_> {
     type Target = Expr;
 
     fn deref(&self) -> &Expr {
+        &self.checked().value
+    }
+}
+
+impl DefaultValue<'_> {
+    /// The expression and its local bindings as an isolated body (UNIT-7).
+    pub fn body(&self) -> Body {
+        self.checked().clone().into_body()
+    }
+
+    fn checked(&self) -> &DefaultExpr {
         match self {
             Self::Declared(default) => default,
             Self::Specialized(default) => default,
@@ -101,4 +112,5 @@ pub fn field_default(program: &Program, default: FieldRef) -> Option<&Expr> {
         .get(default.declaration)
         .and_then(|defaults| defaults.get(default.field))
         .and_then(Option::as_ref)
+        .map(|default| &default.value)
 }

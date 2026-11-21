@@ -55,7 +55,7 @@ analyser: done
 
 analyser: partial
 
-- A default reads no parameter of its declaration and no field of its struct
+- A default reads no parameter of its declaration and no field of its struct. Its own block bindings stay in scope when the default is specialized.
 - Left: the closure an imported default keeps; defaults that read a function's laws (#367).
 
 ## UNIT-8
@@ -72,8 +72,9 @@ transpiler: partial
 
 - Binds omitted defaults or null after explicit arguments. Wires an omitted temporal
   default as a constant or leaves an optional input silent.
-- Left: defaults that run statements, propagate a failure, recursively leave
-  themselves out or have unsupported types. A graph call leaving out a nullable
+- An inherited operator configuration default can run a block in its own lexical scope.
+- Left: statement blocks in other defaults and defaults that propagate a failure,
+  recursively leave themselves out or have unsupported types. A graph call leaving out a nullable
   temporal input is reported (#399), as is a fallible default of a lifted nullable
   argument.
 

@@ -277,18 +277,9 @@ impl Emitter<'_> {
                 if !temporal && !may_fail(&default) {
                     continue;
                 }
-                if changes(&default) {
-                    return self.missing(default.at, "a default that runs statements");
-                }
-                let cold = hgl_analyser::hir::Body {
-                    locals: Vec::new(),
-                    statements: Vec::new(),
+                let Some(written) = self.write_default(&default) else {
+                    return "0".to_string();
                 };
-                let mut cold_scope = Scope::cold(program, &cold);
-                let written = self.expression(&mut cold_scope, &default);
-                if !cold_scope.before.is_empty() {
-                    return self.missing(default.at, "a default that propagates a failure");
-                }
                 let name = names::temporary("argument", self.temporary());
                 let Some(ty) = self.written_type(&default.ty, default.at) else {
                     return "0".to_string();

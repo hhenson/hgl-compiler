@@ -258,13 +258,15 @@ fn a_fields_default_is_a_value_of_its_type() {
         .map(|default| {
             default
                 .as_ref()
-                .map_or("none".to_string(), |value| value.ty.to_string())
+                .map_or("none".to_string(), |value| value.value.ty.to_string())
         })
         .collect();
     assert_eq!(types, ["i64", "str", "Side", "str?", "f64"]);
     assert!(
         matches!(
-            module.defaults[order][4].as_ref().map(|value| &value.kind),
+            module.defaults[order][4]
+                .as_ref()
+                .map(|value| &value.value.kind),
             Some(ExprKind::Widen(_))
         ),
         "the `3` of `size: f64? = 3` is widened"

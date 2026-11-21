@@ -551,7 +551,12 @@ impl Instances {
             }
             // What is worked out with no body around it: a constant's
             // value, and a default (UNIT-13, UNIT-8).
-            let defaults = module.defaults.iter().flatten().flatten();
+            let defaults = module
+                .defaults
+                .iter()
+                .flatten()
+                .flatten()
+                .map(|default| &default.value);
             for value in module.constants.iter().flatten().chain(defaults) {
                 waiting.extend(instances.asked_in(program, value));
             }
@@ -744,7 +749,9 @@ impl Instances {
                     left_out(program, callee, index, parameter)
                 {
                     expanding.push(key);
-                    default.walk(&mut |value| found.extend(self.asks(program, value, expanding)));
+                    default
+                        .value
+                        .walk(&mut |value| found.extend(self.asks(program, value, expanding)));
                     expanding.pop();
                 }
             }

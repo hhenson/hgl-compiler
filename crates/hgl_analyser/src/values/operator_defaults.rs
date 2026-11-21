@@ -11,6 +11,7 @@ use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::HasSpan;
 
 use super::fit::{open, whole};
+use super::requirements::{Made, concrete_default_calls};
 use super::{Tables, Typer, lifting};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Body, Callee, ConfigurationRead, Expr, ExprKind, Value};
@@ -19,9 +20,10 @@ use crate::types::{Argument, Detail, Parameter, Signature, Type};
 use crate::{codes, error};
 
 /// Visit the selected calls once the declaration pass has read every default.
-pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) {
+pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) -> Vec<Made> {
+    let mut made = Vec::new();
     for module in &program.modules {
-        let mut visit = |value: &Expr| check_expression(program, value, diagnostics);
+        let mut visit = |value: &Expr| check_expression(program, value, &mut made, diagnostics);
         for body in module
             .bodies
             .iter()
@@ -41,15 +43,16 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) {
             let span = declaration.syntax.span();
             for default in defaults.iter().flatten() {
                 // Check inherited defaults at their original declarations.
-                if default.at.file == declaration.at.file
-                    && span.start <= default.at.span.start
-                    && default.at.span.end <= span.end
+                if default.value.at.file == declaration.at.file
+                    && span.start <= default.value.at.span.start
+                    && default.value.at.span.end <= span.end
                 {
-                    default.walk(&mut visit);
+                    default.value.walk(&mut visit);
                 }
             }
         }
     }
+    made
 }
 
 /// Each used default is specialized once in its effective environment.
@@ -69,10 +72,16 @@ struct DefaultUse {
     expected: Type,
 }
 
-fn check_expression(program: &Program, value: &Expr, diagnostics: &mut Diagnostics) {
+fn check_expression(
+    program: &Program,
+    value: &Expr,
+    made: &mut Vec<Made>,
+    diagnostics: &mut Diagnostics,
+) {
     let mut defaults = Defaults::default();
     defaults.visit(program, value, diagnostics);
     while let Some(default) = defaults.pending.pop() {
+        concrete_default_calls(&default, made);
         default.walk(&mut |value| defaults.visit(program, value, diagnostics));
     }
 }
@@ -162,6 +171,7 @@ pub(super) fn check_instance(
     callee: (usize, usize),
     generics: &[Argument],
     requirements: &[hir::Answer],
+    made: &mut Vec<Made>,
     diagnostics: &mut Diagnostics,
     graph_diagnostics: &mut Diagnostics,
 ) -> Option<(Signature, Body)> {
@@ -176,7 +186,7 @@ pub(super) fn check_instance(
     )?;
     let mut reports = reports.into_inner();
     hir::walk_statements(&body.statements, &mut |value| {
-        check_expression(program, value, &mut reports)
+        check_expression(program, value, made, &mut reports)
     });
     for report in reports.as_slice() {
         if !diagnostics.as_slice().contains(report) {
@@ -244,7 +254,7 @@ fn check_call(
             ..parameter.clone()
         };
         let use_key = DefaultUse {
-            at: default.at,
+            at: default.value.at,
             operator: *operator,
             generics: operator_generics.clone(),
             expected: concrete.ty.clone(),
@@ -269,7 +279,7 @@ fn check_call(
         if !reports.has_errors() {
             // GEN-16: the specialized expression can call a candidate
             // that was not known when its source declaration was read.
-            checking.pending.push(specialized);
+            checking.pending.push(specialized.value);
         }
     }
 }

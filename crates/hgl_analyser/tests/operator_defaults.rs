@@ -144,6 +144,72 @@ const fn rejected() -> bool => pick(false)",
 }
 
 #[test]
+fn a_membership_selected_default_can_read_locals_of_its_own() {
+    // UNIT-7 and CTRL-10: the inherited default retains its local scope
+    // when membership selection reuses the cold block's argument.
+    let checked = module(
+        "operator make<T>(value: i64) -> T
+impl const fn make(value: i64) -> i64 => value
+impl const fn make(value: i64) -> bool => value > 0
+operator pick<T>{fallback: T = {
+    let saved = 1
+    make<T>(saved)
+}}(value: T) -> T requires T in {i64, bool}
+impl const fn pick{fallback: bool}(value: bool) -> bool => fallback
+const fn accepted() -> bool => pick(false)",
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
+#[test]
+fn a_helper_in_an_inherited_default_checks_its_own_omitted_default() {
+    // GEN-16 forwards the outer evidence to the helper. As a concrete
+    // instance, it checks the selected inner parameter's default (UNIT-8).
+    let checked = module(
+        "operator inner<T>{fallback: T = 1}() -> T
+impl const fn inner{fallback: bool}() -> bool => fallback
+impl const fn inner{fallback: i64}() -> i64 => fallback
+const fn helper<T>() -> T requires inner() -> T => inner<T>()
+operator outer<T>{fallback: T = helper<T>()}(value: T) -> T requires inner() -> T
+impl const fn outer{fallback: bool}(value: bool) -> bool => fallback
+impl const fn outer{fallback: i64}(value: i64) -> i64 => fallback
+const fn accepted() -> i64 => outer(6)
+const fn explicit() -> bool => outer{fallback: true}(false)
+const fn rejected() -> bool => outer(false)",
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:33 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+}
+
+#[test]
+fn a_helper_in_an_inherited_default_requires_concrete_evidence() {
+    // A still-generic call passes the evidence on (GEN-16). The concrete
+    // bool caller needs it only when actually using the inherited default.
+    let source = "operator inner<T>() -> T
+impl const fn inner() -> i64 => 41
+const fn helper<T>() -> T requires inner() -> T => inner<T>()
+operator outer<T>{fallback: T = helper<T>()}(value: T) -> T requires inner() -> T
+impl const fn outer<T>{fallback: T}(value: T) -> T => fallback
+const fn accepted() -> i64 => outer(6)
+const fn explicit() -> bool => outer{fallback: true}(false)";
+    let accepted = module(source);
+    assert!(accepted.findings.is_empty(), "{}", accepted.report);
+    let checked = module(&format!(
+        "{source}\nconst fn rejected() -> bool => outer(false)"
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:33 constraint/requires.unmet GEN-3"],
+        "{}",
+        checked.report
+    );
+}
+
+#[test]
 fn an_inherited_default_selects_a_candidate_under_membership() {
     // GEN-7 selects the call whose candidate depends on a member of T.
     let checked = module(
@@ -194,7 +260,7 @@ const fn use_default() -> bool => pick(false)",
     );
     assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
     assert!(matches!(
-        specialized.kind,
+        specialized.value.kind,
         ExprKind::Call {
             callee: Callee::Candidate { .. },
             ..
