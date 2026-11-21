@@ -135,6 +135,7 @@ if(BUILD_TESTING)
         tests/references_tests.cpp
         tests/scalar_tests.cpp
         tests/scheduler_tests.cpp
+        tests/structs_tests.cpp
         tests/sources_tests.cpp
         tests/temporal_tests.cpp
         tests/tenor_tests.cpp

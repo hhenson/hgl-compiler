@@ -14,8 +14,8 @@
 //! `start`, `stop`; SOURCE-1) add to its node is `scheduling`'s: the
 //! parts it gives are written in their places here.
 
-use hgl_analyser::Signature;
 use hgl_analyser::hir::{Body, Stmt};
+use hgl_analyser::{Signature, Type};
 
 use super::Emitter;
 use super::forms::Family;
@@ -92,7 +92,35 @@ impl Emitter<'_> {
             self.unsupported(at, "a source with no result");
             return;
         };
-        let Some(payload) = self.payload_type(result, at) else {
+        // TIME-7: a `yield` gives "a complete value of the result's type
+        // T, published whole, or a `delta<T>`": the body's yields give what
+        // their values are, which is T's delta where every one is a delta
+        // and T's is no T, as core's `replay` yields.
+        let mut yielded: Vec<Type> = Vec::new();
+        hgl_analyser::hir::walk_statement_nodes(&body.statements, &mut |node| {
+            if let hgl_analyser::hir::Node::Statement(Stmt::Yield { value, .. }) = node
+                && !yielded.contains(&value.ty)
+            {
+                yielded.push(value.ty.clone());
+            }
+        });
+        let delta = Type::delta(result.clone());
+        let given = match yielded.as_slice() {
+            [only] if *only == delta => &delta,
+            // "A result of `atomic<V>` takes a V", which is its delta.
+            _ if matches!(result, Type::Atomic(_)) => &delta,
+            _ => result,
+        };
+        if delta != *result && yielded.contains(&delta) && yielded.len() > 1 {
+            self.unsupported(at, "a source that yields both a whole value and a delta");
+            return;
+        }
+        let payload = if given == result {
+            self.payload_type(result, at)
+        } else {
+            self.written_type(given, at)
+        };
+        let Some(payload) = payload else {
             return;
         };
         let Some(schema) = self.temporal_schema(result, at) else {

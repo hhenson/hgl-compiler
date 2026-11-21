@@ -2095,7 +2095,7 @@ test --target cpp` runs over any program to its end.
 
 | Part | Where | What it does |
 | --- | --- | --- |
-| Emitter | `crates/hgl_cpp/src/emit.rs` and `emit/` by concern: `names`, `types`, `composites`, `values`, `statements`, `expressions`, `calls`, `nodes`, `graphs`, `sources`, `tests`, `apps`; the temporal forms through the dispatch point, `forms` ("Temporal forms: what a construct lane reads" below), and its families `scalars`, `endpoints`, `nodes`, `sources`, `graphs`, `tests`, `windows`, `references`, `apps`, `scheduling`, `activity`, `lifting`, `control` | Writes each declaration, instance, named test and application's run statement as a piece: a prototype for the module's header, a definition for its unit, the functions it calls, and the first form in it not written |
+| Emitter | `crates/hgl_cpp/src/emit.rs` and `emit/` by concern: `names`, `types`, `composites`, `values`, `statements`, `expressions`, `calls`, `nodes`, `graphs`, `sources`, `tests`, `apps`; the temporal forms through the dispatch point, `forms` ("Temporal forms: what a construct lane reads" below), and its families `scalars`, `endpoints`, `nodes`, `sources`, `graphs`, `tests`, `windows`, `references`, `apps`, `scheduling`, `activity`, `lifting`, `control`, `nullables`, `structs` | Writes each declaration, instance, named test and application's run statement as a piece: a prototype for the module's header, a definition for its unit, the functions it calls, and the first form in it not written |
 | Assembly | `crates/hgl_cpp/src/assemble.rs` | Leaves out each piece that is not written or reaches one that is not, puts the rest into each module's types header, header and unit, and writes an entry unit for each module with a test that can be run and for each application that can be |
 | Runtime library | `crates/hgl_cpp/src/runtime.rs`, `build.rs` | Carries `runtime/cpp` in `hgl`, and reads from its headers which of core's natives it defines |
 | Build driver | `crates/hgl_cli/src/cpp.rs` and `cpp/` | Finds the toolchain, prepares it once, builds a program in a workspace kept between runs, runs the executables and reads their results |
@@ -2165,7 +2165,11 @@ test --target cpp` runs over any program to its end.
 | `failure.context`, and its `.node`, `.phase`, `.evaluation_time` (ERR-4) | `(failure).context`, a `std::optional` of hgraph's `ErrorContext`, and its members of those names |
 | A trace written out; `==` and `!=` of two (TST-4, TST-6, TST-7, TST-16) | `::hglrt::testing::Dense<T>`, `Timed<T>`, each cell as its type's family writes it; in an `assert`, `expect_same` or `expect_different` of the two held in order, elsewhere `same`; a trace given to a `const fn`, `publications` |
 | A window of a scalar, `rolling_window<i64, 3, 2>`, `rolling_window<i64, 3us, 1us>` (TYPE-11; core's END-9) | hgraph's `TSW<::hgraph::Int, 3, 2>`, `TSWDuration<::hgraph::Int, 3, 1>` (its bounds in microseconds), whose values leave it by age as hgraph has it; a publication `::hglrt::window_push(out_, value)`; its value read in a hook `::hglrt::window_value(view)`, which fails before it is all valid, or `window_value_checked` where a `result` is taken (`ExprKind::CheckedWindow`); `all_valid` `::hglrt::fn_all_valid`; `delta_value` plain or checked, and `removed_value`, read only into a `result`, `::hglrt::fn_removed_value_checked`; a lifted helper given its `list<V>` (`forms::Family::read_type`), and not called where it is valid and not all valid (FN-11, FN-12; `lifting`); a trace of one, and a source's payload, of its V (`forms::Family::payload`) |
-| Everything else | Reported: `the cpp target does not write ... yet`: a window of any but a scalar; a temporal value of any but a scalar, an enum, an `error` and a `result`; `all_valid` of any but a window, a change of an input's activity in `stop`; a `for` over a connection of a set, in a branch or a loop's body the store (a child graph's wiring neither sees nor sets the root's store) or an ordinary value that may fail (hgraph builds every child as the graph around it is built, FN-9), a `return` under a branch selected at runtime in a loop unrolled while the graph is built, branches that assign two `var`s; a run's configuration that is no `RunConfig(...)` written in its eval or its run statement |
+| A temporal struct, tuple and atomic struct (TYPE-9) | `hgraph::NativeTSB<S>`, through `hgraph::native_bundle<S>`, its nominal schema and members, which `structs` writes beside the aggregate with `hglrt::type_named` of it and its delta; a `NominalTSB` of each field's own form where a field is optional; `UnNamedTSB<Field<"0", ...>, ...>`; `TS<S>` |
+| A read of one whole, a field read in a hook, `out.bid = value`, a field in a graph (TIME-1, TIME-7, EXPR-7) | `::hglrt::whole_value(quote)`, checked; the child's view `::hglrt::child<0>(quote)` read as its form reads; the child's publication; `::hglrt::field_port<0>(port)`, and for an atomic struct `::hglrt::atomic_field<0, S>(wiring_, port)` |
+| `all_valid`, a publication, `delta_value` of one (TIME-9, TYPE-16) | `::hglrt::fn_all_valid`, one level deep, an optional field aside; `::hglrt::publish(out_, value);` of a whole value or a delta; `::hglrt::fn_delta_value`, each field that published |
+| A temporal nullable scalar or enum (TYPE-14, TYPE-15) | `TS<Optional<T>>`; read `::hglrt::nullable_value(view)`, an optional, `::hglrt::nullable_payload` where a test has proved it holds a value; published `::hglrt::publish_nullable(out_, value);` |
+| Everything else | Reported: `the cpp target does not write ... yet`: a window of any but a scalar; a temporal list, set or dictionary, a generic or an abstract struct as one, an atomic struct that holds an optional field (hgraph issue 1874); a nullable put in the run's store (hgl_spec issue 165); `all_valid` of a list, a change of an input's activity in `stop`; a `for` over a connection of a set, in a branch or a loop's body the store (a child graph's wiring neither sees nor sets the root's store) or an ordinary value that may fail (hgraph builds every child as the graph around it is built, FN-9), a `return` under a branch selected at runtime in a loop unrolled while the graph is built, branches that assign two `var`s; a run's configuration that is no `RunConfig(...)` written in its eval or its run statement |
 
 Every C++ name an HGL name gives is made by one function,
 `emit::names::identifier`: a plain name (a letter first, a letter or
@@ -2271,7 +2275,8 @@ wherever it is.
 order and takes the first that answers: the spine's are, in order,
 `scalars`, `tests`, `sources`, `nodes`, `graphs` and `endpoints`, after
 `control`, which writes each run of a graph's statements, so that a
-branch selected at runtime sees what follows it. A lane
+branch selected at runtime sees what follows it, and the construct
+lanes' ahead of them: `nullables`, `structs`. A lane
 puts its own ahead of them, since `endpoints` answers for any read of an
 input, `graphs` reports any connection in a value's place, and the
 value code's writer, after all of them, writes or reports the rest: the
@@ -2291,6 +2296,12 @@ expression, nested ones among them, in hooks, sources, graphs, tests
 and value functions, and answers only for its own. Besides them,
 `types::cpp_type` writes core's capabilities as the library's types
 (`endpoints::capability_type`) and the delta of a scalar as the scalar.
+`composites::struct_declaration` writes what `structs` says of a struct
+beside its traits (`Emitter::bundle_traits`), and a family asks the form
+of a part of its own with `Emitter::temporal_schema_of`, which reports
+nothing. A source's payload is what its yields give, a delta where each
+is one (`sources`); an eval whose result's delta is no T keeps the value
+its result held, `hglrt::testing::keep_held` (`tests`).
 
 **What no family writes** is reported, never written wrongly: a type
 lookup reports "a temporal value of", "a read of a temporal value of",
@@ -2302,7 +2313,7 @@ expression no family claims falls to the value code's writer, which
 reports each form it does not write ("a hook", "a `yield`", "this
 expression"). Each reason is a key of `crates/hgl_cpp/ci/unsupported_cases.toml`.
 
-**Adding a family**, for example `T?` (the `structs` lane's):
+**Adding a family**, as `nullables` adds `T?`:
 
 1. `crates/hgl_cpp/src/emit/nullables.rs`: a module comment with the
    table of what it writes, and `pub(super) struct Nullables;` with
@@ -2422,20 +2433,22 @@ started it is gone.
 
 The crate's tests compare the C++ written for its fixture programs,
 `demo.calc`, `demo.values` (value code of every form written),
+`demo.composites` (structs, sets, dictionaries and deltas),
 `demo.temporal` (the temporal forms written), `demo.windows` (windows),
 `demo.references` (`ref` parameters and results), `demo.apps` (the
 store and applications), `demo.timing` (schedulers, alarms and
 sources with hooks), `demo.activity` (an input's activity and an
-enum's temporal form), `demo.lifting` (lifted calls and captures) and
-`demo.control` (control flow over connections) and `demo.composites`
-(structs, sets, dictionaries and deltas), with goldens under
+enum's temporal form), `demo.lifting` (lifted calls and captures),
+`demo.control` (control flow over connections), `demo.composites`
+(structs, sets, dictionaries and deltas) and `demo.structs` (temporal
+structs, tuples and nullables), with goldens under
 `crates/hgl_cpp/tests/goldens/` (`HGL_UPDATE_GOLDENS=1 cargo test -p
 hgl_cpp --test emit` writes them again; core's module is left out of
 them) and check what blocks what. `crates/hgl_cli/tests/cpp.rs` checks
 the driver: what is said with no SDK and with a compiler not of the
 platform's family, `emit` and `run`; and, given an
 SDK, the whole route, that a failed build runs no older executable,
-that `demo.values`, `demo.temporal`, `demo.windows`, `demo.references`, `demo.timing`, `demo.activity`, `demo.lifting`, `demo.control` and `demo.composites` pass, where a failure is
+that `demo.values`, `demo.composites`, `demo.temporal`, `demo.windows`, `demo.references`, `demo.timing`, `demo.activity`, `demo.lifting`, `demo.control` and `demo.structs` pass, where a failure is
 reported, applications run with their output, the store and a failure,
 and a run in real time stopped by an interrupt of `hgl` alone, with `cargo
 test -p hgl_cli --test cpp -- --ignored`, which the `cpp` job of the CI
@@ -2448,10 +2461,10 @@ later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
 which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists 68
+target's list, and `--write-list` writes from a run. Today it lists 49
 of core's 198 runtime cases, each with the form it needs that the
-target does not write: a temporal value of a collection, a struct or a
-nullable, and the rest the step-2 lanes take.
+target does not write: a temporal list, set or dictionary, and the rest
+the step-2 lanes take.
 
 ### The C++ runtime library
 
@@ -2483,6 +2496,8 @@ hgraph declares `try_except_`, until the front end has it
 | `tenors.h` | Core's natives of `tenor`, which is hgraph's `Tenor` (counts and form alone): its arithmetic, order and text, and the parts core's calendar candidates use, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-9 |
 | `lists.h` | `append`, `extend` | LIST-1 to LIST-3 |
 | `collections.h` | `set<K>`, `dict<K, V>`; a key's hash, alike for keys that are `==`; `entry_at`, `entry`, core's `get`; `set_delta`, `dict_delta`, a list's delta's properties as HGL's; `fields<S>`, `held_value`, `held_as`, `parents<S>`, `inherits`; `enum_member` | TYPE-3, TYPE-7, TYPE-14, TYPE-16, EXPR-3, ERR-6, OPS-2 |
+| `nullables.h` | A nullable scalar's temporal form, `TS<Optional<T>>`: its payload read checked, `nullable_value`, `nullable_payload`; `publish_nullable`; a `std::optional<T>` registered with hgraph as an atomic | TYPE-14, TYPE-15, TIME-1, TIME-7 |
+| `structs.h` | A struct's (`NativeTSB`, `NominalTSB`), a tuple's (`UnNamedTSB`) and an atomic struct's temporal forms: `child`, `field_port`, `whole_value`, `publish`, their `endpoint_read` (delta, `all_valid` one level deep with an optional child aside, the value held), `atomic_field`, what a whole cell publishes (`whole_publication`) and a struct's text (`value_text`); `atomic_trace<S>`, what a trace of an atomic struct is of, whose cell, the whole struct, is its delta, and its recording compared with a trace of the struct's whole values (`difference`) | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, TST-9 |
 | `endpoints.h` | Core's nine operations on an endpoint, each a template over the hgraph view it is given; `delta_value` plain and where a `result` is taken (`fn_delta_value_checked`); `endpoint_read`, through which a temporal form says how its delta is read, a scalar's and a nullable scalar's written | TIME-9, END-1 to END-10, ERR-14 |
 | `capabilities.h` | `Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`, each made from its hook's hgraph view, a member function for each property; `log`, `schedule` four ways, `un_schedule`, `reset`, the store's `get`, `has`, `put`; core's `LogLevel` | CAP-1 to CAP-6, TIME-8 |
 | `windows.h` | A window, hgraph's `TSW` and `TSWDuration`: `endpoint_read` of one (its delta the value that arrived, none at an exit alone; `all_valid` at its minimum); `window_push`; its value read checked, `window_value` and `window_value_checked`, which stand for the one read in which hgraph differs, reading the values held below the minimum (`tests/hgraph_window_read.cpp` shows it on hgraph alone); `fn_removed_value_checked` | TYPE-11, END-3, END-9, ERR-14 |

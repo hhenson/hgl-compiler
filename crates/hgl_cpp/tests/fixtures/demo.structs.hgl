@@ -1,0 +1,393 @@
+module demo.structs
+
+# The temporal forms of a struct, a tuple, an atomic struct and a nullable
+# scalar that the cpp target writes, and the evals of them. Its goldens are
+# under `tests/goldens/demo.structs`.
+
+# Structs: a delta and a whole value published, a field's connection,
+# an atomic struct's field, `valid` and `all_valid`, and trace cells.
+struct MarketQuote {
+    bid: i64
+    ask: i64
+}
+
+fn update_quote(is_bid: bool, price: i64) -> MarketQuote {
+    when {
+        if is_bid { return delta<MarketQuote>(bid: price) }
+        return delta<MarketQuote>(ask: price)
+    }
+}
+
+fn bid_ticks(is_bid: bool, price: i64) -> i64 => update_quote(is_bid, price).bid
+
+test changing_a_sibling_field_does_not_publish_a_bid {
+    assert eval(bid_ticks(
+        is_bid: [true, false, true],
+        price:  [  10,    13,   11],
+    )) ==       [  10,     _,   11]
+}
+
+fn whole_quote(bid: i64, ask: i64) -> atomic<MarketQuote> {
+    when { return MarketQuote(bid: bid, ask: ask) }
+}
+
+fn atomic_bid_ticks(bid: i64, ask: i64) -> i64 => whole_quote(bid, ask).bid
+
+test an_atomic_quote_wakes_its_bid_projection {
+    assert eval(atomic_bid_ticks(
+        bid: [10,  _, 11],
+        ask: [12, 13,  _],
+    )) ==    [10, 10, 11]
+}
+
+fn write_quote_fields(bid: i64, ask: i64) -> MarketQuote {
+    inject out
+    when {
+        out = delta<MarketQuote>(bid: 0)
+        out = delta<MarketQuote>(ask: ask)
+        out = delta<MarketQuote>(bid: bid)
+    }
+}
+
+test a_struct_delta_keeps_the_final_write_to_each_field {
+    assert eval(write_quote_fields(
+        bid: [10, _, 11],
+        ask: [12, _, 14],
+    )) == [
+        delta<MarketQuote>(bid: 10, ask: 12),
+        _,
+        delta<MarketQuote>(bid: 11, ask: 14),
+    ]
+}
+
+fn quote_valid(probe: bool, quote: MarketQuote) -> bool {
+    when modified(probe) && valid([]) { return valid(quote) }
+}
+
+fn quote_all_valid(probe: bool, quote: MarketQuote) -> bool {
+    when modified(probe) && valid([]) { return all_valid(quote) }
+}
+
+fn observe_quote_valid(probe: bool, is_bid: bool, price: i64) -> bool =>
+    quote_valid(probe, update_quote(is_bid, price))
+
+fn observe_quote_all_valid(probe: bool, is_bid: bool, price: i64) -> bool =>
+    quote_all_valid(probe, update_quote(is_bid, price))
+
+test a_struct_is_valid_once_one_field_is {
+    assert eval(observe_quote_valid(
+        probe:  [true, true, true,  true],
+        is_bid: [   _, true,    _, false],
+        price:  [   _,   10,    _,    12],
+    )) ==       [false, true, true, true]
+}
+
+test a_struct_is_all_valid_once_every_field_is {
+    assert eval(observe_quote_all_valid(
+        probe:  [true,  true,  true,  true],
+        is_bid: [   _,  true,     _, false],
+        price:  [   _,    10,     _,    12],
+    )) ==       [false, false, false, true]
+}
+
+fn relay_quote(quote: MarketQuote) -> MarketQuote {
+    when all_valid(quote) { return quote }
+}
+
+test a_whole_struct_is_a_trace_cell {
+    assert eval(relay_quote(quote: [
+        MarketQuote(bid: 10, ask: 12),
+        _,
+        delta<MarketQuote>(ask: 13),
+    ])) == [
+        MarketQuote(bid: 10, ask: 12),
+        _,
+        MarketQuote(bid: 10, ask: 13),
+    ]
+}
+
+# Tuples, an optional field, a struct that holds a struct, a field of `out`
+# written, and a struct's delta read.
+fn set_one_part(first: bool, value: i64) -> tuple<i64, i64> {
+    when {
+        let only_first: delta<tuple<i64, i64>> = (value, null)
+        let only_second: delta<tuple<i64, i64>> = (null, value)
+        if first { return only_first }
+        return only_second
+    }
+}
+
+fn part_validity(probe: bool, parts: tuple<i64, i64>) -> tuple<bool, bool> {
+    when modified(probe) && valid([]) { return (valid(parts), all_valid(parts)) }
+}
+
+fn observe_part_validity(probe: bool, first: bool, value: i64) -> tuple<bool, bool> =>
+    part_validity(probe, set_one_part(first, value))
+
+test a_tuple_is_valid_once_one_position_is_and_all_valid_once_both_are {
+    assert eval(observe_part_validity(
+        probe: [true, true, true, true],
+        first: [   _, true,    _, false],
+        value: [   _,    3,    _,     8],
+    )) == [(false, false), (true, false), (true, false), (true, true)]
+}
+
+struct NotedQuote {
+    bid: i64
+    note: str?
+}
+
+fn write_bid(bid: i64) -> NotedQuote {
+    when { return delta<NotedQuote>(bid: bid) }
+}
+
+const fn note_is_null(quote: NotedQuote) -> bool => quote.note == null
+
+fn read_noted_quote(probe: bool, quote: NotedQuote) -> tuple<bool, bool, bool> {
+    when modified(probe) && all_valid(quote) {
+        return (all_valid(quote), note_is_null(quote), valid(quote.note))
+    }
+}
+
+fn observe_noted_quote(probe: bool, bid: i64) -> tuple<bool, bool, bool> =>
+    read_noted_quote(probe, write_bid(bid))
+
+test a_struct_with_an_optional_field_is_all_valid_and_read_whole {
+    assert eval(observe_noted_quote(
+        probe: [true, true],
+        bid:   [   _,    5],
+    )) ==      [   _, (true, true, false)]
+}
+
+fn relay_pair(pair: tuple<i64, str>) -> tuple<i64, str> {
+    when all_valid(pair) { return pair }
+}
+
+test a_whole_tuple_is_a_trace_cell {
+    assert eval(relay_pair(pair: [(1, "a"), _, (2, "b")])) == [(1, "a"), _, (2, "b")]
+}
+
+struct Inner {
+    low: i64
+    high: i64
+}
+
+struct Outer {
+    inner: Inner
+    size: i64
+}
+
+fn make_outer(size: i64) -> Outer {
+    inject out
+    when {
+        if size == 1 { return Outer(inner: Inner(low: 1, high: 2), size: size) }
+        out.size = size
+        out.inner.high = size * 10
+    }
+}
+
+fn read_outer(outer: Outer) -> i64 {
+    when all_valid(outer) && all_valid(outer.inner) {
+        let whole = outer
+        if modified(outer.inner.high) { return whole.inner.high + outer.size }
+        return outer.inner.low
+    }
+}
+
+fn outer_ticks(size: i64) -> i64 => read_outer(make_outer(size))
+
+test a_nested_struct_field_is_written_and_read_by_its_parts {
+    assert eval(outer_ticks(size: [1, 3, _, 4])) == [3, 33, _, 44]
+}
+
+fn outer_deltas(size: i64) -> Outer {
+    when {
+        if size == 1 { return Outer(inner: Inner(low: 1, high: 2), size: size) }
+        return delta<Outer>(inner: delta<Inner>(high: size))
+    }
+}
+
+test a_nested_struct_delta_is_recorded {
+    assert eval(outer_deltas(size: [1, 5])) == [
+        delta<Outer>(inner: delta<Inner>(low: 1, high: 2), size: 1),
+        Outer(inner: Inner(low: 1, high: 5), size: 1),
+    ]
+}
+
+fn bid_delta(quote: NotedQuote) -> i64? {
+    when { return delta_value(quote).bid }
+}
+
+test a_struct_delta_reads_the_field_that_changed {
+    assert eval(bid_delta(quote: [
+        NotedQuote(bid: 1, note: "a"),
+        delta<NotedQuote>(note: "b"),
+        delta<NotedQuote>(bid: 3),
+    ])) == [1, null, 3]
+}
+
+# A nullable scalar: a published null, its delta, a test against null, and
+# `last_modified` as a `datetime?`.
+fn publish_nullable(command: i64) -> i64? {
+    when {
+        if command == 0 { return null }
+        return command
+    }
+}
+
+fn read_validity(probe: bool, watched: i64?) -> bool {
+    when modified(probe) && valid([]) { return valid(watched) }
+}
+
+fn observe_validity(command: i64, probe: bool) -> bool =>
+    read_validity(probe, publish_nullable(command))
+
+test publication_establishes_validity {
+    assert eval(observe_validity(
+                command: [_, 0, _, 7],
+                probe: [true, true, true, true])) == [false, true, true, true]
+}
+
+fn nullable_delta_payload(input: i64?) -> i64? {
+    when valid(input) && modified(input) {
+        return delta_value(input).value
+    }
+}
+
+test a_published_null_has_a_delta {
+    assert eval(nullable_delta_payload(input: [7, null, _, null, 0])) ==
+        [7, null, _, null, 0]
+}
+
+fn doubled(reading: i64?) -> i64 {
+    when {
+        if reading == null { return 0 }
+        return reading * 2
+    }
+}
+
+test a_narrowed_read {
+    assert eval(doubled(reading: [null, 2, _, 5])) == [0, 4, _, 10]
+}
+
+fn action(code: i64) -> i64? {
+    inject out
+    when {
+        if code == 2 { invalidate(out) }
+        else if code == 1 { return null }
+        else { return 7 }
+    }
+}
+
+fn sample_timestamp(sample: bool, watched: i64?) -> datetime? {
+    when modified(sample) && valid([]) { return last_modified(watched) }
+}
+
+fn scalar_timestamp(code: i64, sample: bool) -> datetime? =>
+    sample_timestamp(sample, action(code))
+
+test last_modified_follows_the_last_publication {
+    let t = earliest_start
+    assert eval(scalar_timestamp(
+        code: [_, 0, _, 0, 2, 1],
+        sample: [true, true, true, true, true, true])) ==
+        [null, t + 1us, t + 1us, t + 3us, null, t + 5us]
+}
+
+# An atomic struct's input read whole, and a tuple's position read in a
+# hook and taken from its connection in a graph.
+struct PlainQuote {
+    bid: i64
+    ask: i64
+}
+
+fn whole_plain(bid: i64) -> atomic<PlainQuote> {
+    when { return PlainQuote(bid: bid, ask: bid + 1) }
+}
+
+fn spread(quote: atomic<PlainQuote>) -> i64 {
+    when { return quote.ask - quote.bid + delta_value(quote).bid }
+}
+
+fn spread_of(bid: i64) -> i64 => spread(whole_plain(bid))
+
+test an_atomic_input_is_read_whole {
+    assert eval(spread_of(bid: [1, 5])) == [2, 6]
+}
+
+fn pair_sum(pair: tuple<i64, i64>) -> i64 {
+    when all_valid(pair) { return pair[0] + pair[1] }
+}
+
+fn first_of(pair: tuple<i64, str>) -> i64 => pair[0]
+
+test a_tuple_position_is_read_and_projected {
+    assert eval(pair_sum(pair: [(1, 2), _, (3, 4)])) == [3, _, 7]
+    assert eval(first_of(pair: [(1, "a"), (2, "b")])) == [1, 2]
+}
+
+# A struct that holds one with an optional field, as each field's own form.
+struct Wrapped {
+    noted: NotedQuote
+    count: i64
+}
+
+fn wrap(bid: i64) -> Wrapped {
+    when { return delta<Wrapped>(noted: delta<NotedQuote>(bid: bid), count: bid) }
+}
+
+fn wrapped_sum(wrapped: Wrapped) -> i64 {
+    when all_valid(wrapped) && all_valid(wrapped.noted) {
+        let whole = wrapped
+        return whole.noted.bid + whole.count
+    }
+}
+
+fn wrapped_of(bid: i64) -> i64 => wrapped_sum(wrap(bid))
+
+test a_struct_that_holds_one_with_an_optional_field_is_read_whole {
+    assert eval(wrapped_of(bid: [1, 2])) == [2, 4]
+}
+
+# An atomic struct's trace: each cell is a whole publication, which is its
+# delta too (TYPE-16: "`atomic<V>`: V: an atomic publishes whole").
+test an_atomic_struct_is_a_trace_cell {
+    assert eval(whole_quote(bid: [10, _, 11], ask: [12, 13, _])) == [
+        MarketQuote(bid: 10, ask: 12),
+        MarketQuote(bid: 10, ask: 13),
+        MarketQuote(bid: 11, ask: 13),
+    ]
+}
+
+fn atomic_bid(quote: atomic<MarketQuote>) -> i64 {
+    when { return quote.bid }
+}
+
+test an_atomic_struct_is_replayed_whole {
+    assert eval(atomic_bid(quote: [
+        MarketQuote(bid: 1, ask: 2),
+        _,
+        MarketQuote(bid: 3, ask: 4),
+    ])) == [1, _, 3]
+}
+
+test an_atomic_eval_kept_in_a_let_is_compared {
+    let seen = eval(whole_quote(bid: [10, 11], ask: [12, _]))
+    assert seen == [MarketQuote(bid: 10, ask: 12), MarketQuote(bid: 11, ask: 12)]
+}
+
+# Whole cells of tuples whose positions are a struct and a tuple, each
+# replayed as every part's delta.
+fn quoted_total(pair: tuple<MarketQuote, i64>) -> i64 {
+    when all_valid(pair) && all_valid(pair[0]) { return pair[0].bid + pair[1] }
+}
+
+fn nested_total(pair: tuple<tuple<i64, i64>, i64>) -> i64 {
+    when all_valid(pair) && all_valid(pair[0]) { return pair[0][0] + pair[0][1] + pair[1] }
+}
+
+test a_whole_tuple_of_composites_is_a_trace_cell {
+    assert eval(quoted_total(pair: [(MarketQuote(bid: 1, ask: 2), 3), _, (MarketQuote(bid: 4, ask: 5), 6)])) ==
+        [4, _, 10]
+    assert eval(nested_total(pair: [((1, 2), 3), ((4, 5), 6)])) == [6, 15]
+}
