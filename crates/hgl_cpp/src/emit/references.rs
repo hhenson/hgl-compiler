@@ -146,19 +146,10 @@ impl Family for References {
     }
 }
 
-/// What `handler`, of a node whose locals are `locals` and whose
-/// signature is `signature`, requires of its `ref` parameters. A `ref`
-/// parameter that holds no reference does not keep a handler from
-/// running where its header names no validity selector: returned, it
-/// gives the result the empty reference, which designates nothing (the
-/// owner's decision of 2026-11-21: "reference has an empty type
-/// describing no reference, this is expected to be returned"; FN-16:
-/// "Returning a whole `ref` parameter samples its current designation").
-/// A header that asks `valid(target)` requires it as it requires any
-/// input (TIME-3), and TIME-10's `valid` of it is still "whether a
-/// reference is present". The pinned TIME-3 has "Omitting the validity
-/// selector requires all temporal inputs to be valid", the `ref`
-/// parameter among them, until the specification gives the decision.
+/// Apply TIME-3 default admission to a node's reference parameters.
+/// A handler with no validity selector can return an empty reference, which
+/// withdraws the result's designation (FN-16, TIME-10). An explicit
+/// `valid(target)` still requires the reference to hold a designation.
 pub(super) fn admission(handler: &mut Handler, locals: &[Local], signature: &Signature) {
     if handler.asks_valid {
         return;

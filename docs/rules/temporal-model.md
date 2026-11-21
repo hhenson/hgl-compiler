@@ -47,6 +47,9 @@ analyser: partial
 
 transpiler: partial
 
+- C++ admits an empty `ref` parameter when a handler omits its validity selector. Returning that parameter withdraws the result's designation (FN-16, TIME-10). An explicit `valid(target)` still requires a designation.
+- The frozen Python target retains the previous sampled designation when default admission suppresses this handler.
+
 - hgraph: handlers run in source order
 - Omitting `modified` subscribes to every input and adds no publication condition
 - A window of a duration that a value leaves wakes its node and satisfies `modified` as a publication does: hgraph 0.9.8's `TSW` ticks for the exit
