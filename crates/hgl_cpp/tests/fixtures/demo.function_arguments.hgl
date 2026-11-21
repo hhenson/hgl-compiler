@@ -1,0 +1,160 @@
+module demo.function_arguments
+
+use demo.callback_library as lib
+
+const fn apply(f: const fn(i64) -> i64, input: i64 = 3) -> i64 => f(input)
+
+const fn increment(input: i64) -> i64 => input + 1
+
+const fn double<T>(input: T) -> T requires T in {i64, f64} => input + input
+
+operator triple<T>(input: T) -> T
+impl const fn triple(input: i64) -> i64 => input * 3
+
+const fn relay(f: const fn(i64) -> i64, input: i64) -> i64 => apply(f, input)
+
+const fn through_lambda(f: const fn(i64) -> i64, input: i64) -> i64 =>
+    apply(fn(n) => f(n), input)
+
+const fn via_capture(input: i64) -> i64 {
+    let increment_by = input + 1
+    return relay(fn(n) => n + increment_by, input)
+}
+
+const fn transitive_capture(input: i64) -> i64 {
+    let increment_by = input + 1
+    return through_lambda(fn(n) => n + increment_by, input)
+}
+
+fn hooked(input: i64) -> i64 {
+    when {
+        let increment_by = 2
+        return apply(fn(n) => n + increment_by, input)
+    }
+}
+
+fn guarded_hook(input: i64) -> i64 {
+    when valid([]) {
+        if valid(input) { return apply(fn(n) => n + input, 1) }
+    }
+}
+
+fn sample(f: const fn(i64) -> i64, const input: i64) -> i64 {
+    yield 1s: f(input)
+}
+
+fn map_graph(f: fn(i64) -> i64, input: i64) -> i64 => f(input)
+
+fn live_double(input: i64) -> i64 {
+    when { return input + input }
+}
+
+operator live_transform(input: i64) -> i64
+impl fn live_transform(input: i64) -> i64 {
+    when { return input + 5 }
+}
+
+fn live_lambda(input: i64) -> i64 => map_graph(fn(n) => live_double(n), input)
+
+fn live_capture(input: i64, offset: i64) -> i64 =>
+    map_graph(fn(n) => live_double(n) + offset, input)
+
+fn conditional_graph(f: fn(i64) -> i64, input: i64, choose: bool) -> i64 =>
+    if choose { f(input) } else { input }
+
+fn conditional_capture(input: i64, offset: i64, choose: bool) -> i64 =>
+    conditional_graph(fn(n) => n + offset, input, choose)
+
+fn lift_value(f: const fn(i64) -> i64, input: i64) -> i64 => f(input)
+
+fn lifted_lambda(input: i64) -> i64 {
+    let offset = 3
+    return lift_value(fn(n) => n + offset, input)
+}
+
+const fn apply_optional(f: const fn(i64?) -> i64) -> i64 => f()
+
+fn apply_lifted(f: const fn(i64, i64?) -> i64, input: i64) -> i64 => f(input)
+
+fn apply_lifted_input(f: const fn(i64, i64?) -> i64, input: i64, extra: i64?) -> i64 =>
+    f(input, extra)
+
+fn optional_callbacks(input: i64) -> i64 =>
+    apply_lifted(fn(n, extra) => if extra == null { n + 1 } else { n + extra }, input)
+
+fn nullable_inputs(input: i64, extra: i64?) -> i64 =>
+    apply_lifted_input(fn(n, bias) => if bias == null { n + 1 } else { n + bias }, input, extra)
+
+operator dispatch(f: const fn(i64) -> i64, x: i64) -> i64
+impl const fn dispatch(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)
+
+operator dispatch_generic<T, R>(f: const fn(T) -> R, x: T) -> R
+impl const fn dispatch_generic<T, R>(f: const fn(T) -> R, x: T) -> R => f(x)
+
+const fn shows_text(x: str) -> bool => x != ""
+
+const fn identity<T>(x: T) -> T => x
+
+const fn forward_to_operator(f: const fn(i64) -> i64, x: i64) -> i64 =>
+    dispatch(f, x)
+
+const fn capture_in_operator(x: i64) -> i64 {
+    let bump = x + 2
+    return dispatch(fn(y) => y + bump, x)
+}
+
+operator dispatch_live(f: fn(i64) -> i64, x: i64) -> i64
+impl fn dispatch_live(f: fn(i64) -> i64, x: i64) -> i64 => f(x)
+
+fn operator_graph(x: i64, offset: i64) -> i64 =>
+    dispatch_live(fn(y) => live_double(y) + offset, x)
+
+const fn generic_lambda<T>(x: T) -> T requires T in {i64, f64} =>
+    dispatch_generic(fn(n: T) => n + n, x)
+
+fn invoke_scalar(f: const fn(i64) -> i64) -> i64 {
+    let adjusted = f(1)
+    return adjusted
+}
+
+fn captured_scalar(input: i64) -> i64 => invoke_scalar(fn(n) => n + input)
+
+test ordinary_callbacks {
+    assert apply(increment) == 4
+    assert apply(double<i64>, 4) == 8
+    assert apply(double, 3) == 6
+    assert apply(lib::plus<2>, 3) == 5
+    assert apply(lib::with_default, 3) == 7
+    assert relay(triple, 4) == 12
+    assert through_lambda(increment, 4) == 5
+    assert through_lambda(triple, 4) == 12
+    assert via_capture(4) == 9
+    assert transitive_capture(4) == 9
+    assert apply_optional(fn(n) => if n == null { 7 } else { n }) == 7
+    assert dispatch(increment, 3) == 4
+    assert dispatch(x: 3, f: fn(y) => y * 2) == 6
+    assert capture_in_operator(4) == 10
+    assert forward_to_operator(increment, 4) == 5
+    assert dispatch_generic(shows_text, "yes")
+    assert dispatch_generic(identity, 7) == 7
+    assert generic_lambda(4) == 8
+    assert generic_lambda(1.5) == 3.0
+}
+
+test temporal_callbacks {
+    assert eval map_graph(live_double, input: [2, 3]) == [4, 6]
+    assert eval map_graph(live_transform, input: [2, 3]) == [7, 8]
+    assert eval map_graph(triple, input: [2, 3]) == [6, 9]
+    assert eval apply(increment, input: [2, 3]) == [3, 4]
+    assert eval hooked(input: [2, 3]) == [4, 5]
+    assert eval guarded_hook(input: [2, 3]) == [3, 4]
+    assert eval sample(increment, input: 10) == [1s: 11]
+    assert eval live_lambda(input: [2, 3]) == [4, 6]
+    assert eval live_capture(input: [2, 3], offset: [1, 2]) == [5, 8]
+    assert eval conditional_capture(input: [2, 3], offset: [1, 2], choose: [true, false]) == [3, 3]
+    assert eval lifted_lambda(input: [2, 3]) == [5, 6]
+    assert eval optional_callbacks(input: [2, 3]) == [3, 4]
+    assert eval nullable_inputs(input: [2, 3], extra: [_, 9]) == [3, 12]
+    assert eval operator_graph(x: [2, 3], offset: [1, 2]) == [5, 8]
+    assert eval captured_scalar(input: [2, 3]) == [3, 4]
+}

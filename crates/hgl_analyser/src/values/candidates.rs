@@ -13,6 +13,7 @@ use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::expressions::takes_its_type;
 use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, not_null, whole};
+use super::function_arguments::matches_template;
 use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
@@ -146,6 +147,14 @@ impl<'a> Typer<'a> {
             let Some(bound) = bound(signature, public, given) else {
                 continue;
             };
+            // FN-17: a static argument takes a declared function slot.
+            // Inference cannot turn an ordinary parameter into that slot.
+            if given.iter().zip(&bound).any(|(given, place)| {
+                matches!(given.ty(), Type::Function(_))
+                    && !matches!(place, Place::Parameter(index) if matches!(signature.parameters[*index].ty, Type::Function(_)))
+            }) {
+                continue;
+            }
             let clause = child(&candidate.syntax, SyntaxKind::RequiresClause);
             let payload_parameters = if matches!(
                 forms,
@@ -621,7 +630,11 @@ impl<'a> Typer<'a> {
                     _ => None,
                 };
                 let ty = parameter_type(signature, &type_packs, bound).unwrap_or(&Type::Unknown);
-                let value = self.argument_value(given, ty, &place);
+                let value = match given.value.kind {
+                    // FN-17: the template was checked at candidate admission.
+                    ExprKind::StaticCallable(_) => given.value,
+                    _ => self.argument_value(given, ty, &place),
+                };
                 // A `const` parameter given a connection is reported as
                 // one where the call is read (FN-3).
                 if lifted && !parameter.constant && named {
@@ -705,18 +718,23 @@ impl<'a> Typer<'a> {
             let Some(ty) = ty else {
                 return Admits::Misfit;
             };
-            let admitted = if given.by_place {
-                self.fits_place(&given.node, ty, widening)
-            } else {
-                self.admits(ty, given.ty())
-                    || converting
-                        && place.parameter().is_some()
-                        && given.explicit.is_none()
-                        && self.taken(ty, given.ty()).is_some()
-                    || widening
-                        && given.explicit.is_none()
-                        && is_integer_literal(&given.value)
-                        && accepts_float(ty)
+            let admitted = match (ty, given.ty()) {
+                (Type::Function(template), Type::Function(actual)) => {
+                    matches_template(template, actual)
+                }
+                (Type::Function(_), _) | (_, Type::Function(_)) => false,
+                _ if given.by_place => self.fits_place(&given.node, ty, widening),
+                _ => {
+                    self.admits(ty, given.ty())
+                        || converting
+                            && place.parameter().is_some()
+                            && given.explicit.is_none()
+                            && self.taken(ty, given.ty()).is_some()
+                        || widening
+                            && given.explicit.is_none()
+                            && is_integer_literal(&given.value)
+                            && accepts_float(ty)
+                }
             };
             if !admitted {
                 return Admits::Misfit;
@@ -1039,6 +1057,7 @@ impl<'a> Typer<'a> {
             among: wanted.among.clone(),
             written: wanted.written,
             graph: self.graph,
+            scope: None,
         };
         // The report where nothing the `requires` states settles it.
         let unsettled = |typer: &Self| {
@@ -1414,6 +1433,9 @@ pub(crate) struct Selecting {
     /// True in composition, where a call selects among the temporal
     /// candidates too (GEN-5).
     pub(crate) graph: bool,
+    /// The lexical locals used to check a call inside a static anonymous
+    /// body. Other calls use the declaration's own body.
+    pub(crate) scope: Option<std::sync::Arc<[hir::Local]>>,
 }
 
 /// `signature`, a generic declaration's, as one instance of it reads its
@@ -1770,6 +1792,13 @@ pub(super) struct Chosen<'s> {
     type_packs: Vec<hir::TypePackArgument>,
     /// Equally preferred choices of which operands to read (ERR-15).
     pub(super) ambiguous_reads: bool,
+}
+
+impl Chosen<'_> {
+    /// The resolved signature of this operator candidate.
+    pub(super) fn signature(&self) -> &Signature {
+        &self.taken
+    }
 }
 
 /// A candidate as a call takes it: itself where it has no generic

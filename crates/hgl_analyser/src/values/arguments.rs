@@ -458,15 +458,24 @@ impl<'a> Typer<'a> {
         }
         for (index, slot) in slots.iter().enumerate() {
             if slot.required && slot.pack.is_none() && !filled[index] && !unnamed_field {
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::ARGUMENT_MISSING,
-                    callee_at,
+                let missing = if slot.name.is_empty() {
+                    format!(
+                        "`{}` needs an argument at position {}",
+                        callee.text(),
+                        index + 1
+                    )
+                } else {
                     format!(
                         "`{}` is given no `{}`, a {what} with no default",
                         callee.text(),
                         slot.name
-                    ),
+                    )
+                };
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::ARGUMENT_MISSING,
+                    callee_at,
+                    missing,
                     "EXPR-2",
                 ));
             }
@@ -562,6 +571,13 @@ impl<'a> Typer<'a> {
         takes: Takes,
     ) -> hir::Argument {
         let value = match slot {
+            Some((
+                Slot {
+                    ty: Type::Function(template),
+                    ..
+                },
+                _,
+            )) => self.function_argument(node, template),
             Some((slot, traced)) => {
                 let value = self.expression(node, Some(&slot.ty));
                 let value = if slot.listed {

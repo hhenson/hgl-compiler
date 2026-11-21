@@ -1150,6 +1150,40 @@ fn pack_parameters_run_on_the_sdk() {
     );
 }
 
+/// FN-17: named, operator and anonymous targets specialize value and
+/// temporal calls. Captured values and connections reach their bodies
+/// through a node hook, a graph and another static function parameter.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn function_parameters_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("function_parameters");
+    let file = write(
+        &root,
+        "demo.function_arguments.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.function_arguments.hgl"),
+    );
+    let library = write(
+        &root,
+        "demo.callback_library.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.callback_library.hgl"),
+    );
+    let output = hgl_in(&["test", &file, &library, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code and
 /// temporal nodes, including result guards (ERR-3), SOURCE-2 yield times
 /// and an application failure.

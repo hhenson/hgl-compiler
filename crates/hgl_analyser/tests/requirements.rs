@@ -29,7 +29,9 @@ fn callees(checked: &Checked, name: &str) -> Vec<String> {
                     .clone(),
                 Callee::Candidate { .. } => "candidate".to_string(),
                 Callee::Function { .. } => "function".to_string(),
-                Callee::Unread => "none".to_string(),
+                Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {
+                    "none".to_string()
+                }
             });
         }
     }
@@ -620,7 +622,9 @@ fn answers(checked: &Checked, name: &str) -> Vec<String> {
             Callee::Required { requirement, .. } => {
                 found.push(format!("requirement {requirement}"))
             }
-            Callee::Unread => found.push("none".to_string()),
+            Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {
+                found.push("none".to_string())
+            }
         }
     });
     found

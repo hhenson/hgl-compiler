@@ -49,32 +49,32 @@ const PENDING: &[Pending] = &[
     Pending {
         file: FUNCTIONS,
         opening: "module examples.function_parameters",
-        reason: "FN-17 (#362), GEN-17 (#366)",
+        reason: "GEN-17 (#366)",
     },
     Pending {
         file: GENERICS,
         opening: "operator call_through<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R",
-        reason: "FN-17 (#362), GEN-17 and FN-8 (#366)",
+        reason: "GEN-17 and FN-8 (#366)",
     },
     Pending {
         file: GENERICS,
         opening: "operator keyed<K, R, ...Ps, ...As>(",
-        reason: "FN-17 (#362), GEN-17 and FN-8 (#366), GEN-10 and GEN-18 (#367)",
+        reason: "GEN-17 and FN-8 (#366), GEN-10 and GEN-18 (#367)",
     },
     Pending {
         file: GENERICS,
         opening: r#"operator each_wanted<K, R, ...Ps, ...As, const key: str = "key">{"#,
-        reason: "FN-17 (#362), GEN-17 and FN-8 (#366), FN-18 and EXPR-10 (#363)",
+        reason: "GEN-17 and FN-8 (#366), FN-18 and EXPR-10 (#363)",
     },
     Pending {
         file: GENERICS,
         opening: r#"operator each_slot<R, ...Ps, ...As, const key: str = "key", const index: str = "index">("#,
-        reason: "FN-17 (#362), GEN-17 and FN-8 (#366)",
+        reason: "GEN-17 and FN-8 (#366)",
     },
     Pending {
         file: MAPPING,
         opening: "export enum Join { inner, outer, left }",
-        reason: "FN-17 (#362), GEN-17 and FN-8 (#366), FN-18 (#363), GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368)",
+        reason: "GEN-17 and FN-8 (#366), FN-18 (#363), GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368)",
     },
     Pending {
         file: MAPPING,
