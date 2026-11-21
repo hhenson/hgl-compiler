@@ -738,6 +738,56 @@ fn operators_fit_each_argument_to_its_selected_parameter() {
     }
 }
 
+/// GEN-2, ERR-12 and ERR-15: a generic function sees the argument its
+/// parameter can take. An unconstrained parameter keeps the whole type.
+#[test]
+fn generic_functions_infer_from_the_accepted_argument_form() {
+    use hgl_analyser::Argument;
+    use hgl_analyser::hir::{Raise, walk_statements};
+
+    let checked = module(concat!(
+        "const fn count<T>(items: list<T>) -> i64 => 1\n",
+        "const fn accept<T>(item: T) -> i64 => 1\n",
+        "const fn from_result(items: result<list<i64>, error>) -> i64 => count(items)\n",
+        "const fn from_nullable(items: list<i64>?) -> i64 => count(items)\n",
+        "const fn from_whole(items: result<list<i64>, error>) -> i64 => accept(items)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for (name, expected, form) in [
+        ("from_result", "i64", "raised"),
+        ("from_nullable", "i64", "read"),
+        ("from_whole", "result<list<i64>, error>", "whole"),
+    ] {
+        let mut calls = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::Call {
+                callee, arguments, ..
+            } = &expr.kind
+            {
+                let [Argument::Type(ty)] = callee.generics() else {
+                    panic!("{name} has one resolved type argument");
+                };
+                assert_eq!(ty.to_string(), expected);
+                let given = match arguments[0].value.kind {
+                    ExprKind::Raised {
+                        raise: Raise::Execution,
+                        ..
+                    } => "raised",
+                    ExprKind::NullRead {
+                        raise: Raise::Execution,
+                        ..
+                    } => "read",
+                    ExprKind::Local(_) => "whole",
+                    ref kind => panic!("unexpected form in {name}: {kind:?}"),
+                };
+                assert_eq!(given, form);
+                calls += 1;
+            }
+        });
+        assert_eq!(calls, 1, "{name}");
+    }
+}
+
 /// ERR-12, ERR-15: indexing or iterating a fallible nullable collection
 /// first takes the success value, then reads the nullable collection.
 #[test]

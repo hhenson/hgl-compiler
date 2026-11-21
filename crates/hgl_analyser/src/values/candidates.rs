@@ -104,26 +104,12 @@ impl<'a> Typer<'a> {
                 let defaults =
                     |generic: &GenericParameter| self.default_constant(candidate, generic);
                 let constant = |node: &SyntaxNode, ty: Option<&Type>| self.given_constant(node, ty);
-                let payload = |expected: &Type, actual: &Type| {
-                    self.taken(expected, actual)?;
-                    match actual {
-                        Type::Result { value, .. } | Type::Nullable(value) => {
-                            Some((**value).clone())
-                        }
-                        _ => None,
-                    }
-                };
                 let Some((taken, generics, defaulted)) = instance(
                     signature,
                     public,
                     given,
                     wanted,
-                    (
-                        &widens,
-                        &defaults,
-                        &constant,
-                        converting.then_some(&payload),
-                    ),
+                    (&widens, &defaults, &constant, converting.then_some(self)),
                 ) else {
                     continue;
                 };
@@ -1569,19 +1555,19 @@ pub(super) struct Chosen<'s> {
 /// `defaults` gives the constant a generic value parameter's default
 /// comes to (GEN-2), and `constant` what a constant the call gives an
 /// option comes to as a value of the type given (`crate::constant`).
-/// `payload` supplies the type to infer from when a parameter takes an
-/// argument's value or nullable form instead of the argument whole.
+/// `converting` supplies the typer in the pass that tries the forms a
+/// parameter can take of an argument (ERR-12, ERR-15).
 #[allow(clippy::type_complexity)]
 fn instance<'s>(
     signature: &'s Signature,
     public: &Signature,
     given: &[Given],
     wanted: &Wanted,
-    (widens, defaults, constant, payload): (
+    (widens, defaults, constant, converting): (
         &dyn Fn(&Type, &Type) -> bool,
         &dyn Fn(&GenericParameter) -> Option<Constant>,
         &dyn Fn(&SyntaxNode, Option<&Type>) -> Result<ConstantValue, Fault>,
-        Option<&dyn Fn(&Type, &Type) -> Option<Type>>,
+        Option<&Typer<'_>>,
     ),
 ) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>, Vec<usize>)> {
     let generics = &signature.generics;
@@ -1624,12 +1610,6 @@ fn instance<'s>(
     // The generic parameters an argument decided: what the call writes,
     // or its place expects, is not widened (GEN-2).
     let mut by_argument = vec![false; generics.len()];
-    let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
-    let unknown_type = Argument::Type(Type::Unknown);
-    let unknown_constant = Argument::Constant(Constant {
-        text: String::new(),
-        value: ConstantValue::Unknown,
-    });
     for (index, parameter) in signature.parameters.iter().enumerate() {
         let argument = bound
             .iter()
@@ -1638,26 +1618,12 @@ fn instance<'s>(
             continue;
         };
         let actual = &given[position].value.ty;
-        // GEN-12: types already bound constrain later arguments. Leave
-        // unresolved parameters open when considering this place's form.
-        let formed = payload
-            .filter(|_| !given[position].by_place)
-            .and_then(|payload| {
-                let map: Vec<(Location, &Argument)> = generics
-                    .iter()
-                    .zip(&found)
-                    .map(|(generic, argument)| {
-                        let unknown = match generic.kind {
-                            GenericKind::Value(_) => &unknown_constant,
-                            _ => &unknown_type,
-                        };
-                        (generic.at, argument.as_ref().unwrap_or(unknown))
-                    })
-                    .collect();
-                let expected = substitute_within(&parameter.ty, &map);
-                payload(&expected, actual)
-            });
-        let actual = formed.as_ref().unwrap_or(actual);
+        let actual = match converting {
+            Some(typer) if !given[position].by_place => {
+                typer.inference_input(&parameter.ty, actual, generics, &found)
+            }
+            _ => actual,
+        };
         // GEN-2: "an abstract struct that the type decided inherits
         // from widens the parameter to that struct".
         if let Some(generic) = bare_parameter(&parameter.ty, generics)
@@ -1704,6 +1670,7 @@ fn instance<'s>(
         }
     }
     let resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
+    let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
     let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
     let mut taken = signature.clone();
     for parameter in &mut taken.parameters {
