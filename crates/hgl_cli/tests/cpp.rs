@@ -272,8 +272,8 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
         text(&output.stdout),
         format!(
             "not run  executable  demo.flags::holds\n    \
-             HGL_HGRAPH_SDK is not set: set it to the install prefix of hgraph's C++ SDK, \
-             the directory that holds `lib/cmake/hgraph`\n\
+             HGL_HGRAPH_SDK is not set and the executable has no bundled `../libexec/hgraph-sdk`: \
+             set it to the install prefix of hgraph's C++ SDK, the directory that holds `lib/cmake/hgraph`\n\
              not run  executable  demo.flags::evaluates\n    \
              {file}:14:29: the cpp target does not write a temporal value of `set<list<bool>>` yet\n\
              rejection cases: 0 passed, 0 failed\n\
@@ -445,8 +445,8 @@ fn run_with_no_sdk_named_says_so() {
     assert_eq!(text(&output.stdout), "");
     assert_eq!(
         text(&output.stderr),
-        "hgl: demo.ticks.backtest was not run: HGL_HGRAPH_SDK is not set: set it to the install \
-         prefix of hgraph's C++ SDK, the directory that holds `lib/cmake/hgraph`\n"
+        "hgl: demo.ticks.backtest was not run: HGL_HGRAPH_SDK is not set and the executable has no bundled \
+         `../libexec/hgraph-sdk`: set it to the install prefix of hgraph's C++ SDK, the directory that holds `lib/cmake/hgraph`\n"
     );
 }
 

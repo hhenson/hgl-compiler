@@ -29,6 +29,8 @@
 #                      is cloned from GitHub into a temporary directory.
 #   CXX                the C++ compiler (default: g++ on Linux, clang++ on
 #                      macOS).
+#   HGL_HGRAPH_INSTALL_RPATH  where SDK libraries look for dependencies.
+#                      Defaults to HGL_HGRAPH_DEPS/lib.
 #   HGL_BUILD_JOBS     how many jobs the build runs at once (default: every
 #                      processor).
 #   MAMBA_EXE          micromamba, where it is not `micromamba` on the path.
@@ -61,15 +63,17 @@
 
 set -euo pipefail
 
+source "$(dirname -- "${BASH_SOURCE[0]}")/hgraph-dependencies.sh"
+
 # The dependency prefix made where there is none: what hgraph's build
 # without Arrow finds as packages (fmt 11 or later, spdlog 1.15 or later,
 # simdjson 4.5 or later), and CMake and Ninja to build it, each at the
 # version the SDK was first built with. The date/tz library is not among
 # them: hgraph fetches its own.
 DEPENDENCIES=(
-    "fmt=12.1.0"
-    "spdlog=1.17.0"
-    "simdjson=4.6.4"
+    "fmt=$FMT_VERSION"
+    "spdlog=$SPDLOG_VERSION"
+    "simdjson=$SIMDJSON_VERSION"
     "cmake=4.2.3"
     "ninja=1.13.2"
 )
@@ -133,8 +137,10 @@ main() {
 
     # An SDK this script installed for the tag, configured as it configures
     # one, is kept; anything else in the way is not replaced.
+    local rpath_stamp="${HGL_HGRAPH_INSTALL_RPATH:+install-rpath=$HGL_HGRAPH_INSTALL_RPATH}"
     if [[ -f $stamp ]] && grep -qx "tag=$tag" "$stamp" && grep -qxF "$CONFIGURATION" "$stamp" &&
-        grep -qxF "dependencies=$deps" "$stamp"; then
+        grep -qxF "dependencies=$deps" "$stamp" &&
+        [[ $(sed -n '/^install-rpath=/p' "$stamp") == "$rpath_stamp" ]]; then
         say "$dir already holds hgraph $tag's SDK"
         return 0
     fi
@@ -210,7 +216,7 @@ main() {
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_PREFIX_PATH="$deps" \
         -DCMAKE_INSTALL_PREFIX="$dir" \
-        -DCMAKE_INSTALL_RPATH="$deps/lib" \
+        -DCMAKE_INSTALL_RPATH="${HGL_HGRAPH_INSTALL_RPATH:-$deps/lib}" \
         -DBUILD_TESTING=OFF \
         -DHGRAPH_BUILD_SHARED=ON \
         -DHGRAPH_WITH_ARROW=OFF \
@@ -225,8 +231,21 @@ main() {
     "$cmake" --build "$work/build" --parallel "$jobs"
     "$cmake" --install "$work/build"
 
+    # date/tz can be built into the shared runtime and is not installed
+    # separately. Keep its notice alongside hgraph's if it was fetched.
+    local licenses=$dir/share/licenses/hgraph
+    mkdir -p -- "$licenses"
+    cp -- "$source/LICENSE" "$licenses/LICENSE"
+    if [[ -f $work/build/_deps/date-src/LICENSE.txt ]]; then
+        cp -- "$work/build/_deps/date-src/LICENSE.txt" "$licenses/date-LICENSE.txt"
+    fi
+
     printf 'tag=%s\ncommit=%s\n%s\ncompiler=%s\ndependencies=%s\n' "$tag" "$commit" "$CONFIGURATION" "$compiler" \
         "$deps" >"$stamp"
+    if [[ -n ${HGL_HGRAPH_INSTALL_RPATH:-} ]]; then
+        printf 'install-rpath=%s
+' "$HGL_HGRAPH_INSTALL_RPATH" >>"$stamp"
+    fi
     say "installed hgraph $tag's SDK into $dir in $((SECONDS - started)) s"
 }
 

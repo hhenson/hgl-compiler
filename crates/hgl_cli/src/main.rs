@@ -68,7 +68,7 @@ const EXIT_FAILED: u8 = 2;
 #[derive(Parser)]
 #[command(
     name = "hgl",
-    version,
+    version = concat!(env!("CARGO_PKG_VERSION"), " (hgraph ", env!("HGL_HGRAPH_TAG"), ")"),
     about = "HGL compiler (experimental; makes no conformance claim)"
 )]
 struct Cli {
