@@ -955,6 +955,42 @@ fn graph_instances_fit_settled_types_at_destinations() {
     }
 }
 
+/// GEN-7 and EXPR-5: a field or entry of a previously typed aggregate
+/// still has to fit when its conditional value becomes known.
+#[test]
+fn graph_instances_fit_aggregate_members() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "struct Label<T> { value: T }\n",
+        "fn label<T>(const input: T) -> Label<str> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return Label<str>(value: chosen)\n",
+        "}\n",
+        "fn tuple_of<T>(const input: T) -> tuple<str, i64> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return (chosen, 0)\n",
+        "}\n",
+        "fn list_of<T>(const input: T) -> list<str> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return [chosen]\n",
+        "}\n",
+        "fn bad_field() -> Label<str> => label(1)\n",
+        "fn bad_tuple() -> tuple<str, i64> => tuple_of(1)\n",
+        "fn bad_list() -> list<str> => list_of(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:17:33 type/type.mismatch EXPR-5",
+            "m.hgl:18:38 type/type.mismatch EXPR-5",
+            "m.hgl:19:31 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

@@ -7,7 +7,8 @@ use std::collections::{HashMap, HashSet};
 use hgl_diagnostics::{Diagnostics, Location};
 
 use super::arguments::Takes;
-use super::inference::type_pack;
+use super::fit::whole;
+use super::inference::{fixed, type_pack};
 use super::lifting::{assignment_category, record};
 use super::statements::place_assignment_category;
 use super::{Tables, Typer};
@@ -128,6 +129,47 @@ impl GraphDestinations {
                 self.fit_arguments(typer, callee, arguments);
                 return;
             }
+            NodeMut::Expression(Expr {
+                kind:
+                    ExprKind::Construct {
+                        module,
+                        declaration,
+                        arguments,
+                    },
+                ty:
+                    Type::Named {
+                        arguments: generics,
+                        ..
+                    },
+                ..
+            }) => {
+                self.fit_fields(typer, (*module, *declaration), generics, arguments);
+                return;
+            }
+            // EXPR-5 and EXPR-9: use the types already established for
+            // these entries, without inferring a new container shape.
+            NodeMut::Expression(Expr {
+                kind: ExprKind::Tuple(entries),
+                ty: Type::Tuple(types),
+                ..
+            }) => {
+                for (entry, ty) in entries.iter_mut().zip(types) {
+                    if whole(ty) {
+                        self.fit(typer, entry, ty, "this element of the tuple", false);
+                    }
+                }
+                return;
+            }
+            NodeMut::Expression(Expr {
+                kind: ExprKind::Sequence(entries),
+                ty: Type::List { element, .. },
+                ..
+            }) if whole(element) => {
+                for entry in entries {
+                    self.fit(typer, entry, element, "an element", false);
+                }
+                return;
+            }
             _ => return,
         };
         self.fit(typer, value, &expected, place, input);
@@ -150,6 +192,41 @@ impl GraphDestinations {
     fn fit_condition(&self, typer: &mut Typer<'_>, value: &mut Expr) {
         if self.known(value) {
             *value = typer.fit_condition(value.clone());
+        }
+    }
+
+    /// TYPE-5: the selected struct type supplies each constructor field's type.
+    fn fit_fields(
+        &self,
+        typer: &mut Typer<'_>,
+        (module, declaration): (usize, usize),
+        generics: &[crate::types::Argument],
+        arguments: &mut [hir::Argument],
+    ) {
+        let Detail::Struct(structure) = &typer.program.modules[module].details[declaration] else {
+            return;
+        };
+        let map: Vec<_> = fixed(&structure.generics).zip(generics).collect();
+        for argument in arguments
+            .iter_mut()
+            .filter(|argument| self.known(&argument.value))
+        {
+            let Some(field) = argument
+                .parameter
+                .and_then(|slot| structure.members.get(slot))
+            else {
+                continue;
+            };
+            let ty = substitute_within(&field.ty, &map);
+            if whole(&ty) {
+                self.fit(
+                    typer,
+                    &mut argument.value,
+                    &ty,
+                    &format!("the field `{}`", field.name),
+                    false,
+                );
+            }
         }
     }
 
