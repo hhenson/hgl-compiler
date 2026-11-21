@@ -534,7 +534,15 @@ impl Emitter<'_> {
         // END-5: a result's form may hold what the evaluation publishes,
         // and publish it once the handlers have run.
         match &signature.result {
-            Some(result) => written.push_str(&self.evaluation(result, &handlers)),
+            Some(result) => {
+                let selected: Vec<(&Handler, Location)> =
+                    running.iter().zip(places.iter().copied()).collect();
+                let mut evaluated = String::new();
+                self.in_context(&mut context, |emitter| {
+                    evaluated = emitter.evaluation(result, &selected, &handlers);
+                });
+                written.push_str(&evaluated);
+            }
             None => written.push_str(&handlers),
         }
         text.push_str(&format!(

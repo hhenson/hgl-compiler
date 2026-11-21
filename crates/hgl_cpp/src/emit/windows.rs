@@ -20,11 +20,15 @@
 //! family's, which hgraph's views answer for a window as for any value.
 //! A window whose V is no scalar, or whose bounds are not known,
 //! `invalidate` of a window result (END-4), and a node's read of its own
-//! window result in a `when`, which would not see what the evaluation
-//! holds to publish, are not written yet, and are reported.
+//! window result in a `when`, or a handler whose header names it, which
+//! would not see what the evaluation holds to publish, are not written
+//! yet, and are reported.
 
-use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook};
+use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook, Stmt};
 use hgl_analyser::{ConstantValue, DeclarationKind, Scalar, Type};
+
+use hgl_diagnostics::Location;
+use hgl_lower::nodes::Handler;
 
 use super::Emitter;
 use super::forms::Family;
@@ -166,6 +170,31 @@ fn own_read(emitter: &Emitter, locals: &[hgl_analyser::hir::Local], value: &Expr
     }
 }
 
+/// True where the header of `handler` names `out`, the local of the
+/// node's result: it subscribes to it, requires it, or tests it.
+fn selects(handler: &Handler, out: usize) -> bool {
+    if handler.subscribed.contains(&out) || handler.required.contains(&out) {
+        return true;
+    }
+    let tested: Vec<Stmt> = handler
+        .conditions
+        .iter()
+        .map(|condition| Stmt::Expr((*condition).clone()))
+        .collect();
+    let mut found = false;
+    hgl_analyser::hir::walk_statements(&tested, &mut |value| {
+        found |= match &value.kind {
+            ExprKind::Local(local) | ExprKind::EndpointOf(local) => *local == out,
+            ExprKind::Endpoint {
+                inputs: Some(inputs),
+                ..
+            } => inputs.contains(&out),
+            _ => false,
+        };
+    });
+    found
+}
+
 /// The library's function `name`, qualified.
 fn library(name: &str) -> String {
     format!("::{}::{name}", runtime::NAMESPACE)
@@ -217,8 +246,29 @@ impl Family for Windows {
     // END-5, TYPE-11: the handlers of a node whose result is a window run
     // while the evaluation holds its one arrival, which is pushed when
     // they have run, a `return` among them.
-    fn evaluation(&self, emitter: &mut Emitter<'_>, ty: &Type, handlers: &str) -> Option<String> {
+    fn evaluation(
+        &self,
+        emitter: &mut Emitter<'_>,
+        ty: &Type,
+        selected: &[(&Handler<'_>, Location)],
+        handlers: &str,
+    ) -> Option<String> {
         window(emitter, ty)?;
+        // A handler whose header names the result is guarded where the
+        // node's own guards are written (`nodes`), which would test the
+        // result before what the evaluation holds of it arrives.
+        let out = emitter
+            .temporal
+            .as_ref()
+            .and_then(|context| context.roles.iter().position(|role| *role == Role::Out));
+        if let Some(out) = out {
+            for (handler, at) in selected {
+                if selects(handler, out) {
+                    emitter
+                        .unsupported(*at, "a handler that selects on a node's own window result");
+                }
+            }
+        }
         let indent = INDENT.repeat(2);
         let inner: String = handlers
             .lines()

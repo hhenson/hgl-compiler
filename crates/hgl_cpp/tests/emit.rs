@@ -981,6 +981,26 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
                 "test written_then_read {\n",
                 "    assert eval(looked(reading: [1])) == [2]\n",
                 "}\n",
+                "\n",
+                "fn selected(reading: i64) -> rolling_window<i64, 2> {\n",
+                "    inject out\n",
+                "    when { out = reading }\n",
+                "    when valid(out, reading) { out = reading + 10 }\n",
+                "}\n",
+                "\n",
+                "fn followed(reading: i64) -> rolling_window<i64, 2> {\n",
+                "    inject out\n",
+                "    when { out = reading }\n",
+                "    when modified(out) { out = reading + 10 }\n",
+                "}\n",
+                "\n",
+                "test selected_by_its_validity {\n",
+                "    assert eval(selected(reading: [1])) == [11]\n",
+                "}\n",
+                "\n",
+                "test selected_by_its_publication {\n",
+                "    assert eval(followed(reading: [1])) == [11]\n",
+                "}\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
@@ -1007,6 +1027,20 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
         emitted.blocked("written_then_read").as_deref(),
         Some(
             "m.hgl:23:12 the cpp target does not write a read of a node's own window result in its `when` yet"
+        )
+    );
+    // A handler's header that names the window result, whose guard is
+    // tested where the evaluation may hold a write of it.
+    assert_eq!(
+        emitted.blocked("selected_by_its_validity").as_deref(),
+        Some(
+            "m.hgl:42:5 the cpp target does not write a handler that selects on a node's own window result yet"
+        )
+    );
+    assert_eq!(
+        emitted.blocked("selected_by_its_publication").as_deref(),
+        Some(
+            "m.hgl:48:5 the cpp target does not write a handler that selects on a node's own window result yet"
         )
     );
 }

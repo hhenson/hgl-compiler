@@ -35,6 +35,7 @@
 use hgl_analyser::Type;
 use hgl_analyser::hir::{Expr, Stmt};
 use hgl_diagnostics::Location;
+use hgl_lower::nodes::Handler;
 
 use super::Emitter;
 use super::statements::Scope;
@@ -106,7 +107,9 @@ pub(super) trait Family: Sync {
     }
 
     /// The body of the `eval` of a node whose result is of `ty`, given
-    /// `handlers`, the C++ of its handlers in source order, where the
+    /// `selected`, each of its handlers as `hgl_lower` reads its header
+    /// with where it is written, and `handlers`, the C++ of them in
+    /// source order, where the
     /// result's form holds what the evaluation publishes and publishes it
     /// once the evaluation ends (END-5: "Further writes to the already
     /// modified endpoint in the same evaluation update its publication"):
@@ -116,6 +119,7 @@ pub(super) trait Family: Sync {
         &self,
         _emitter: &mut Emitter<'_>,
         _ty: &Type,
+        _selected: &[(&Handler<'_>, Location)],
         _handlers: &str,
     ) -> Option<String> {
         None
@@ -315,10 +319,15 @@ impl Emitter<'_> {
     /// The body of the `eval` of a node whose result is of `ty`, given
     /// the C++ of its handlers ([`Family::evaluation`]): the handlers as
     /// they are where no family holds what the evaluation publishes.
-    pub(super) fn evaluation(&mut self, ty: &Type, handlers: &str) -> String {
+    pub(super) fn evaluation(
+        &mut self,
+        ty: &Type,
+        selected: &[(&Handler<'_>, Location)],
+        handlers: &str,
+    ) -> String {
         match FAMILIES
             .iter()
-            .find_map(|family| family.evaluation(self, ty, handlers))
+            .find_map(|family| family.evaluation(self, ty, selected, handlers))
         {
             Some(body) => body,
             None => handlers.to_string(),
