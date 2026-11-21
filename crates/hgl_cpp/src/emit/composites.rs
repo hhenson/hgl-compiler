@@ -392,13 +392,13 @@ fn delta_type(program: &Program, of: &Type, generic: bool) -> Option<String> {
             runtime::NAMESPACE,
             cpp_type_in(program, element, generic)?
         ),
-        Type::Dict { key, value } => format!(
+        Type::Dict { key, value } if !changes_whole(value) => format!(
             "::{}::dict_delta<{}, {}>",
             runtime::NAMESPACE,
             cpp_type_in(program, key, generic)?,
             cpp_type_in(program, value, generic)?
         ),
-        Type::List { .. } => format!(
+        Type::List { element, .. } if !changes_whole(element) => format!(
             "::{}::list_delta<{}>",
             runtime::NAMESPACE,
             cpp_type_in(program, of, generic)?
@@ -425,6 +425,21 @@ fn delta_type(program: &Program, of: &Type, generic: bool) -> Option<String> {
         }
         _ => return None,
     })
+}
+
+/// True where `ty`, a dictionary's value or a list's element, is an
+/// atomic or holds one as a dictionary's value or a list's element, at
+/// any depth. An atomic's delta is the whole value (TYPE-16); the
+/// library's delta of a dictionary or a list takes `hglrt::delta_t` of
+/// its value's C++ type, which for the value an atomic holds is that
+/// value's delta. A struct's delta is the target's own, which keeps it.
+fn changes_whole(ty: &Type) -> bool {
+    match ty {
+        Type::Atomic(_) => true,
+        Type::List { element, .. } => changes_whole(element),
+        Type::Dict { value, .. } => changes_whole(value),
+        _ => false,
+    }
 }
 
 /// The type of the property of a struct's delta for a field of type

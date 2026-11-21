@@ -2130,6 +2130,11 @@ fn composite_forms_not_written_yet_are_reported() {
             "struct Tip : Mid<i64?> {}\n",
             "const fn unwrapped(box: Wrap<i64?>) -> i64? => box.inner.value\n",
             "const fn snapped(change: delta<Snapshot<list<i64>?>>) -> list<i64>? => change.value\n",
+            "const fn updates(change: delta<dict<str, atomic<list<i64>>>>) -> dict<str, list<i64>> => change.updated\n",
+            "const fn items(change: delta<list<atomic<list<i64>>>>) -> bool => true\n",
+            "struct Pages { lines: list<atomic<list<i64>>> }\n",
+            "struct Held { value: atomic<list<i64>> }\n",
+            "const fn kept(change: delta<dict<str, Held>>) -> bool => true\n",
             "test noded {\n",
             "    assert Node(value: 1).value == 1\n",
             "}\n",
@@ -2163,6 +2168,13 @@ fn composite_forms_not_written_yet_are_reported() {
             // A nullable given a parameter an atomic holds: its delta's
             // property is the nullable whole.
             "m.hgl:41:18 the cpp target does not write the type `delta<Snapshot<list<i64>?>>` yet",
+            // TYPE-16: the delta of a dictionary's value or a list's
+            // element that is an atomic is the whole value, where the library's, given the value the atomic
+            // holds, would be that value's delta. A struct's delta is the
+            // target's own.
+            "m.hgl:42:18 the cpp target does not write the type `delta<dict<str, atomic<list<i64>>>>` yet",
+            "m.hgl:43:16 the cpp target does not write the type `delta<list<atomic<list<i64>>>>` yet",
+            "m.hgl:44:16 the cpp target does not write the type `delta<list<atomic<list<i64>>>>` yet",
         ]
     );
     assert_eq!(emitted.blocked("noded").as_deref(), Some(holds_itself));
