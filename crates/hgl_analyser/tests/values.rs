@@ -4527,6 +4527,30 @@ fn explicit_operator_references_infer_types_from_candidate_options() {
     assert!(checked.findings.is_empty(), "{}", checked.report);
 }
 
+/// GEN-8 and GEN-13: a public option may name a type parameter inside
+/// a collection, even when the selected candidate has no option itself.
+#[test]
+fn explicit_operator_references_check_resolved_public_option_types() {
+    let checked = module(concat!(
+        "const fn use_it(f: const fn(i64) -> i64) -> i64 => f(1)\n",
+        "operator select<T, const modes: list<T>>(value: i64) -> i64\n",
+        "impl const fn select(value: i64) -> i64 => value\n",
+        "const fn accepted() -> i64 => use_it(select<str, [\"slow\"]>)\n",
+        "const fn rejected() -> i64 => use_it(select<str, [true]>)\n",
+        "const fn wrong_shape() -> i64 => use_it(select<str, true>)\n",
+    ));
+    let faults = checked.summary();
+    assert_eq!(faults.len(), 2, "{}", checked.report);
+    for (line, fault) in (6..=7).zip(faults) {
+        assert!(
+            fault.starts_with(&format!("m.hgl:{line}:")),
+            "{}",
+            checked.report
+        );
+        assert!(fault.contains("type/type.mismatch"), "{}", checked.report);
+    }
+}
+
 /// FN-17: a template checks role, written names and plain parameter
 /// modes, and does not take an ordinary runtime value.
 #[test]

@@ -8,16 +8,18 @@ use super::arguments::{Slot, Takes};
 use super::candidates::{CallbackOption, CallbackRequest, Given, Wanted, in_instance};
 use super::fit::whole;
 use super::inference::{ExplicitGenerics, infer};
-use crate::declared::{agree, substitute_within};
+use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{
     AnonymousFunction, Callee, Expr, ExprKind, Form, TypePackArgument, ValueCategory,
 };
 use crate::program::{Declaration, OperatorRef, Role};
 use crate::syntax::{child, name_token, ungrouped};
-use crate::types::{Argument, Detail, FunctionType, GenericKind, Signature, Type};
+use crate::types::{
+    Argument, CallArguments, ConstantValue, Detail, FunctionType, GenericKind, Signature, Type,
+};
 use crate::{codes, error, local_error};
 
-impl Typer<'_> {
+impl<'a> Typer<'a> {
     /// Read an argument the callee expects to be a function known at compile time.
     pub(super) fn function_argument(&mut self, node: &SyntaxNode, template: &FunctionType) -> Expr {
         let at = self.at(node);
@@ -202,9 +204,7 @@ impl Typer<'_> {
             && let Detail::Callable(public) =
                 &self.program.modules[operator.module].details[operator.declaration]
         {
-            let start = child(node, SyntaxKind::QualifiedName)
-                .map_or(name.span().start, |qualified| qualified.span().start);
-            let written = self.calls.get(&(self.file, start)).copied();
+            let written = self.reference_written(node, name);
             let map: Vec<_> = public
                 .generics
                 .iter()
@@ -350,11 +350,7 @@ impl Typer<'_> {
         (declared, signature): (&Declaration, &Signature),
         template: &FunctionType,
     ) -> Option<(Vec<Argument>, Option<TypePackArgument>)> {
-        // The read pass records explicit arguments at the start of
-        // the full name, including its module alias when present.
-        let start = child(node, SyntaxKind::QualifiedName)
-            .map_or(name.span().start, |qualified| qualified.span().start);
-        let written = self.calls.get(&(self.file, start)).copied();
+        let written = self.reference_written(node, name);
         let ExplicitGenerics {
             fixed: mut found,
             faulty,
@@ -376,12 +372,36 @@ impl Typer<'_> {
             .enumerate()
             .filter_map(|(index, value)| value.is_none().then_some(index))
             .collect();
+        // GEN-13: fit dependent public options once their type arguments
+        // are resolved. An option the read pass already rejected needs
+        // no further diagnostic (ERR-9).
+        let public_options: Vec<_> = written
+            .filter(|_| declared.kind == crate::program::DeclarationKind::Operator)
+            .into_iter()
+            .flat_map(|written| {
+                signature
+                    .generics
+                    .iter()
+                    .zip(&written.arguments)
+                    .enumerate()
+            })
+            .filter_map(|(index, (generic, (at, argument)))| {
+                let (GenericKind::Value(ty), Argument::Constant(value)) = (&generic.kind, argument)
+                else {
+                    return None;
+                };
+                if !names_parameter(ty) || matches!(value.value, ConstantValue::Unknown) {
+                    return None;
+                }
+                self.node_at(*at).map(|node| (index, node))
+            })
+            .collect();
         let reported = self.diagnostics.len();
         self.generic_values(
             name,
             declared,
             &signature.generics,
-            (&[], &defaulted),
+            (&public_options, &defaulted),
             &mut found,
         );
         if self.diagnostics.len() != reported {
@@ -392,6 +412,17 @@ impl Typer<'_> {
             return None;
         };
         Some((generics, pack))
+    }
+
+    fn reference_written(
+        &self,
+        node: &SyntaxNode,
+        name: &SyntaxToken,
+    ) -> Option<&'a CallArguments> {
+        // The read pass uses the full name's start, including its module alias.
+        let start = child(node, SyntaxKind::QualifiedName)
+            .map_or(name.span().start, |qualified| qualified.span().start);
+        self.calls.get(&(self.file, start)).copied()
     }
 
     /// Neither the reference nor its receiving template supplies every generic.
