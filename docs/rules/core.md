@@ -373,6 +373,7 @@ transpiler: partial
 
 - hgraph: `invalidate(out)` clears the output; one that holds an unsized list, a dictionary or a set, at any depth of a struct, a tuple and a fixed list, empties each first (`_core.invalidated`), since hgraph's `TSL` keeps its positions and its `TSD` and `TSS` their keys and members, which the next delta read would name removed and a delta that names no change would leave in what it makes valid (TIME-7: "it makes the value valid and empty")
 - `invalidate(out)` of a `ref` result (FN-16: `out` of one takes the endpoint operations) leaves it designating nothing: the invalidation, for which hgraph 0.9.8 unbinds an ordinary reader and wakes it with its input not valid, and a `ref` parameter given it is not valid; the last action of the evaluation decides (`_core.Designation`); invalidated again while it is not valid, it wakes no reader, as hgraph has it
+- Invalidating a direct window result discards its samples and their timestamps. The final action of the evaluation decides whether it stays invalid or starts a fresh window with the last arrival.
 - An active input's transition to invalid wakes the node
 - In a body or handler guard, `modified(input)` is false on invalidation, whether the input is active or passive
 - Repeated scalar invalidation is silent and a scalar producer's last action decides its final validity
@@ -438,7 +439,7 @@ transpiler: partial
 - hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own; in one of a duration a value leaves one smallest step after its age is the maximum, and the window ticks for the exit, modified with nothing published (END-2), as hgraph 0.9.8's `TSW` does; a minimum of zero is held by the first value, and an empty window is not all valid; one emptied by exits stays valid; proposed: `last_modified` is the exit's time
 - `delta_value(x)` of a window of ticks is the `TSW`'s, the value that arrived, read plain or where a `result` is taken
 - Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`), or gives that `err` where its place expects a `result<list<V>, error>` (`_core.window_result`); a lifted value function whose parameter has a default is not invoked where the window is valid and not all valid (FN-11); core's window cases pass but those of `removed_value` and of a window of a duration's delta read where a `result` is taken, listed in `crates/hgl_hgraph/ci/unsupported_cases.toml`
-- Left, reported: a window of a value that is no scalar or enum (TYPE-11), and invalidating one (END-4); `removed_value`, and `delta_value` of a window of a duration read where a `result` is taken, which hgraph's `TSW` gives as `None` at an exit alone
+- Left, reported: a window of a value that is no scalar or enum (TYPE-11), or invalidating a composite holding a window (END-4); `removed_value`, and `delta_value` of a window of a duration read where a `result` is taken, which hgraph's `TSW` gives as `None` at an exit alone
 
 ## END-10
 

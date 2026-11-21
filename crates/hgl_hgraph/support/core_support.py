@@ -1532,6 +1532,45 @@ def _bound(port):
 _UNCHANGED = object()
 
 
+def invalidate_window(port):
+    """END-4: discard an owned window's samples before withdrawing it."""
+    if port.valid:
+        # An earlier arrival may already have used this evaluation's write.
+        # Withdrawing it first permits the empty replacement on that cycle.
+        if port.modified:
+            port.invalidate()
+        port.replace_samples([], [])
+        port.invalidate()
+
+
+class WindowWrites:
+    """END-4/END-5: keep the final arrival across all handlers of this evaluation."""
+
+    __slots__ = ("port", "held")
+
+    def __init__(self, port):
+        self.port = port
+        self.held = _UNCHANGED
+
+    def __enter__(self):
+        return self
+
+    def hold(self, value):
+        self.held = value
+
+    def invalidate(self):
+        if self.held is not _UNCHANGED and not self.port.valid:
+            # A pending first arrival makes this a real withdrawal.
+            self.port.value = self.held
+        self.held = _UNCHANGED
+        invalidate_window(self.port)
+
+    def __exit__(self, exc_type, exc, traceback):
+        # ERR-8: preceding writes survive an error from a later handler.
+        if self.held is not _UNCHANGED:
+            self.port.value = self.held
+
+
 class Designation:
     """What a node's `ref` result, `output`, designates through one of
     its evaluations (the language's FN-16, TIME-10; core's END-10).
