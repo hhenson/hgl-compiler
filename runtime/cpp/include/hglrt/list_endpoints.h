@@ -603,12 +603,46 @@ void publish(const O& out, const V& value, std::source_location where = std::sou
 
 // ---- Wiring a child (TIME-1, TIME-9) ---------------------------------------
 
+/// The node that designates position `index` of a growing list, for a
+/// connection of it in a graph (`element_port`): its result is a reference
+/// to the position where the list holds it, and the empty reference where
+/// it does not, published again only where that changes. A reader of it
+/// observes the position as an ordinary reader does (TIME-1: "A child of a
+/// collection ... is an endpoint whether or not it is valid"), and is not
+/// valid while the list does not reach it. It is hgraph's own form of a
+/// position of a growing list (its standard library's
+/// `getitem_tsl_by_index`): the list active, so that a position bound again
+/// is designated again.
+template <class C>
+struct GrowingElement {
+    static constexpr auto name = "hgl.list_element";
+
+    static void eval(hgraph::In<"values", hgraph::TSL<C>, hgraph::InputValidity::Unchecked> values,
+                     hgraph::Scalar<"index", i64> index, hgraph::Out<hgraph::REF<C>> out) {
+        const auto position = static_cast<std::size_t>(index.value());
+        const hgraph::TSLInputView& list = values;
+        hgraph::TimeSeriesReference reference = hgraph::TimeSeriesReference::empty();
+        if (position < list.size()) {
+            reference = list.at(position).reference();
+        }
+        if (out.valid() && out.value().template checked_as<hgraph::TimeSeriesReference>() == reference) {
+            return;
+        }
+        out.set(reference);
+    }
+};
+
 /// The connection of the element `index` of the temporal list `values`, a
 /// connection of a graph: `pair[0]` (TIME-9: "a child of one, `parts[1]`").
-/// It is the projection hgraph's own `tsl_element` makes, of any source a
-/// port is, written here so that generated code needs no more of hgraph's
-/// wiring than `generated.h` gives. An index below zero, or past a fixed
-/// list's size, is outside the list (EXPR-3).
+/// Of a fixed list, and of a list made of connections, it is the projection
+/// hgraph's own `tsl_element` makes, of any source a port is, written here
+/// so that generated code needs no more of hgraph's wiring than
+/// `generated.h` gives. A growing list that a node publishes has no
+/// position when the graph is wired, which hgraph's edge into it refuses:
+/// its element is designated by a node of its own (`GrowingElement`), and a
+/// reader of it is bound through that reference, as hgraph binds a reader of
+/// a `REF`. An index below zero, or past a fixed list's size, is outside the
+/// list (EXPR-3).
 template <class C, auto N>
 hgraph::Port<C> element_port(const hgraph::Port<hgraph::TSL<C, N>>& values, i64 index,
                              std::source_location where = std::source_location::current()) {
@@ -620,6 +654,16 @@ hgraph::Port<C> element_port(const hgraph::Port<hgraph::TSL<C, N>>& values, i64 
     }
     const auto position = static_cast<std::size_t>(index);
     const hgraph::WiringPortRef list = values.erased();
+    if constexpr (Shape::growing) {
+        switch (list.source_kind()) {
+        case hgraph::WiringPortRef::SourceKind::Peered:
+        case hgraph::WiringPortRef::SourceKind::Boundary:
+        case hgraph::WiringPortRef::SourceKind::Delayed:
+            return hgraph::wire<GrowingElement<C>>(values.checked_wiring(), values, index).template as<C>();
+        default:
+            break;
+        }
+    }
     const hgraph::TSValueTypeMetaData* schema = hgraph::schema_descriptor<C>::ts_meta();
     const auto projected = [&](std::vector<std::size_t> path) {
         path.push_back(position);

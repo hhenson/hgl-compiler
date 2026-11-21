@@ -3,7 +3,9 @@
 #include "core.h"
 
 // Names this file writes, which no macro of a header above takes.
+#undef a_growing_list_child_is_wired
 #undef a_list_input_replays_its_cells
+#undef a_list_of_lists_is_replayed
 #undef at
 #undef change
 #undef changes
@@ -14,6 +16,7 @@
 #undef demo
 #undef first
 #undef first_of
+#undef first_reading
 #undef first_slot
 #undef fixed_list_children
 #undef get
@@ -48,7 +51,11 @@
 #undef readings
 #undef record
 #undef relay
+#undef relay_rows
 #undef replay
+#undef row
+#undef rows
+#undef rows_total
 #undef running
 #undef second_changed
 #undef second_delta
@@ -61,7 +68,9 @@
 #undef span_of
 #undef sum
 #undef sum_of_parts
+#undef third_relayed
 #undef total
+#undef total_rows
 #undef trigger
 #undef tuple_positions
 #undef value
@@ -892,6 +901,117 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_::first_reading
+{
+// first_reading(values: list<i64>) -> i64 (graph), module demo.lists, line 248
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values)
+    {
+        return ::hglrt::element_port(values, 0);
+    }
+};
+}  // namespace n_::first_reading
+namespace w_
+{
+// first_reading(values: list<i64>) -> i64 (graph), module demo.lists, line 248
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> first_reading(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values)
+{
+    return ::hgl::demo::lists::m_::n_::first_reading::impl_::compose(wiring_, values);
+}
+}  // namespace w_
+
+namespace n_::third_relayed
+{
+// third_relayed(values: list<i64>) -> i64 (graph), module demo.lists, line 250
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values)
+    {
+        return ::hglrt::element_port(::hgl::demo::lists::m_::w_::relay(wiring_, values), 2);
+    }
+};
+}  // namespace n_::third_relayed
+namespace w_
+{
+// third_relayed(values: list<i64>) -> i64 (graph), module demo.lists, line 250
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> third_relayed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values)
+{
+    return ::hgl::demo::lists::m_::n_::third_relayed::impl_::compose(wiring_, values);
+}
+}  // namespace w_
+
+namespace n_::relay_rows
+{
+// relay_rows(rows: list<list<i64>>) -> list<list<i64>> (node), module demo.lists, line 259
+struct impl_
+{
+    static constexpr auto name = "demo.lists::relay_rows";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"rows", ::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> out_)
+    {
+        // when, line 260 (TIME-3)
+        {
+            ::hglrt::publish(out_, ::hglrt::checked_whole(rows));
+            return;
+        }
+    }
+};
+}  // namespace n_::relay_rows
+namespace w_
+{
+// relay_rows(rows: list<list<i64>>) -> list<list<i64>> (node), module demo.lists, line 259
+::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> relay_rows(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows)
+{
+    return ::hgraph::wire<::hgl::demo::lists::m_::n_::relay_rows::impl_>(wiring_, rows);
+}
+}  // namespace w_
+
+// total_rows(rows: list<list<i64>>) -> i64 (`const fn`), module demo.lists, line 263
+::hgraph::Int total_rows([[maybe_unused]] const ::hglrt::list<::hglrt::list<::hgraph::Int>>& rows)
+{
+    [[maybe_unused]] ::hgraph::Int running = 0;
+    for (const ::hglrt::list<::hgraph::Int>& row : rows)
+    {
+        for (const ::hgraph::Int& value : row)
+        {
+            running = ::hglrt::add__i64_i64(running, value);
+        }
+    }
+    return running;
+}
+
+namespace n_::rows_total
+{
+// rows_total(rows: list<list<i64>>) -> i64 (graph), module demo.lists, line 271
+struct impl_
+{
+    // The call of `total_rows` on line 271, lifted (FN-6).
+    struct lifted_00_
+    {
+        static constexpr auto name = "demo.lists:total_rows";
+        static void eval([[maybe_unused]] ::hgraph::In<"rows", ::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+        {
+            out_.set(::hgl::demo::lists::m_::total_rows(::hglrt::checked_whole(rows)));
+            return;
+        }
+    };
+
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows)
+    {
+        return ::hgraph::wire<lifted_00_>(wiring_, rows);
+    }
+};
+}  // namespace n_::rows_total
+namespace w_
+{
+// rows_total(rows: list<list<i64>>) -> i64 (graph), module demo.lists, line 271
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> rows_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows)
+{
+    return ::hgl::demo::lists::m_::n_::rows_total::impl_::compose(wiring_, rows);
+}
+}  // namespace w_
+
 }  // namespace hgl::demo::lists::m_
 
 namespace hgl::demo::lists::m_::t_
@@ -1225,6 +1345,71 @@ void a_list_input_replays_its_cells()
     });
         const auto right_04_ = ::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2, 3}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, 5}}), ::hglrt::set<::hgraph::Int>{1, 2}, 1)}};
         ::hglrt::testing::expect_same(left_03_, right_04_);
+    }();
+}
+
+void a_growing_list_child_is_wired()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1list_1i64_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{2, 3}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{4}}}}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::lists::m_::w_::first_reading(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, ::std::nullopt, 4};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_1list_1i64_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2, 3}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{5, 6, 7}}}}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::lists::m_::w_::third_relayed(wiring_, input_03_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{3, ::std::nullopt, 7};
+        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+}
+
+void a_list_of_lists_is_replayed()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1list_1list_1i64_1_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}, ::hglrt::list<::hgraph::Int>{2, 3}}}}, ::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{4}}}}}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::lists::m_::w_::rows_total(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{6, 4};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_06_ = ::hglrt::testing::evaluate<::hglrt::list<::hglrt::list<::hgraph::Int>>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_1list_1list_1i64_1_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}, ::hglrt::list<::hgraph::Int>{2, 3}}}}, ::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hglrt::list<::hgraph::Int>>>(::hglrt::dict_of<::hgraph::Int, ::hglrt::list_delta<::hglrt::list<::hgraph::Int>>>({{1, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{2, 9}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt)}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt)}, ::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{4}}}}}, start_));
+        struct held_04_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::hglrt::list<::hglrt::list<::hgraph::Int>>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::checked_whole(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::hglrt::list<::hglrt::list<::hgraph::Int>>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_05_ = ::hgl::demo::lists::m_::w_::relay_rows(wiring_, input_03_);
+        ::hgraph::wire<held_04_>(wiring_, result_05_);
+        ::hgl::core::m_::w_::i_::record::of_1list_1list_1i64_1_1_(wiring_, result_05_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_07_ = ::hglrt::testing::Dense<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}, ::hglrt::list<::hgraph::Int>{2, 3}}}}, ::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}, ::hglrt::list<::hgraph::Int>{2, 3, 9}}}}, ::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hglrt::list<::hgraph::Int>>>(::hglrt::dict_of<::hgraph::Int, ::hglrt::list_delta<::hglrt::list<::hgraph::Int>>>({{0, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, 4}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt)}}), ::hglrt::set<::hgraph::Int>{1}, 1)}};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 

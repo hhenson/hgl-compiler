@@ -418,6 +418,39 @@ TEST_CASE("a child of a fixed list is wired as a connection of its own (TIME-9, 
           }) == "value.index_out_of_range");
 }
 
+/// What a reader of a growing list's position saw: each publication of it.
+std::vector<std::pair<datetime, i64>> positions_seen;
+
+struct PositionReader {
+    static constexpr auto name = "test::position_reader";
+    static void eval(hgraph::In<"position", hgraph::TS<i64>, hgraph::InputValidity::Unchecked> position,
+                     hgraph::DateTime now) {
+        if (hglrt::fn_modified(position)) {
+            positions_seen.emplace_back(now, hglrt::checked_value(position));
+        }
+    }
+};
+
+TEST_CASE("a position of a growing list is wired before the list holds it (TIME-1, TIME-9)") {
+    positions_seen.clear();
+    // [], [1, 2], [1], [1, 2], then position 3 updated: the reader of
+    // position 1 sees its publications, and nothing while the list does not
+    // reach it.
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        const hgraph::Port<Growing> values =
+            hgraph::wire<WriteReadings>(wiring, replayed(wiring, Dense<i64>{5, 1, 4, 1, 2}));
+        hgraph::wire<PositionReader>(wiring, hglrt::element_port(values, 1));
+    });
+    CHECK(positions_seen == std::vector<std::pair<datetime, i64>>{{start + 1us, 2}, {start + 3us, 2}});
+    CHECK(code_raised([] {
+              (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+                  const hgraph::Port<Growing> values =
+                      hgraph::wire<WriteReadings>(wiring, replayed(wiring, Dense<i64>{1}));
+                  (void)hglrt::element_port(values, -1);
+              });
+          }) == "value.index_out_of_range");
+}
+
 struct Yields {
     static constexpr auto name = "test::yields";
     static void eval(hgraph::In<"step", hgraph::TS<i64>> step, hgraph::Out<Growing> out_) {
@@ -460,6 +493,26 @@ TEST_CASE("a growing list of bool is published and read whole (TIME-7, TIME-1)")
         hgraph::wire<ReadFlags>(wiring, hgraph::wire<Flags>(wiring, replayed(wiring, Dense<i64>{0, 1})));
     });
     CHECK(flags_read == std::vector<list<bool>>{list<bool>{true, false}, list<bool>{true, true, false}});
+}
+
+TEST_CASE("a trace of a list of lists replays a whole cell from what each position held (TST-9)") {
+    using Rows = list<list<i64>>;
+    using Inner = list_delta<list<i64>>;
+    using Cell = hglrt::testing::Cell<Rows>;
+    const auto items = hglrt::testing::replay_items(
+        Dense<Rows>{Cell{hglrt::testing::Whole<Rows>{Rows{{1}, {2, 3}}}},
+                    Cell{list_delta<Rows>{.updated = {{1, Inner{.updated = {{2, 9}}}}}}},
+                    Cell{hglrt::testing::Whole<Rows>{Rows{{4}}}}},
+        start);
+    REQUIRE(items.size() == 3);
+    CHECK(std::get<1>(items[0]) ==
+          list_delta<Rows>{.updated = {{0, Inner{.updated = {{0, 1}}, .size_modified = 1}},
+                                       {1, Inner{.updated = {{0, 2}, {1, 3}}, .size_modified = 2}}},
+                           .size_modified = 2});
+    // The third cell is published from what each position then held: the
+    // first row keeps its size, and the second, which grew to three, goes.
+    CHECK(std::get<1>(items[2]) ==
+          list_delta<Rows>{.updated = {{0, Inner{.updated = {{0, 4}}}}}, .removed = {1}, .size_modified = 1});
 }
 
 TEST_CASE("a source's yield publishes a whole list or a delta of one (SOURCE-1, TIME-7)") {
