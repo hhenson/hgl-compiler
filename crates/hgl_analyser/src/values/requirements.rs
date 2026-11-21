@@ -1820,15 +1820,6 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 past_the_limit(&from, made.callee, program, diagnostics);
                 break;
             }
-            if configured.contains(&made.callee) {
-                let _ = super::operator_defaults::check_instance(
-                    program,
-                    made.callee,
-                    &made.generics,
-                    &made.answers,
-                    diagnostics,
-                );
-            }
             let inner = passed.get(&made.callee).map_or(&[][..], Vec::as_slice);
             let selecting = program.modules.get(made.callee.0).map_or(&[][..], |unit| {
                 unit.selecting
@@ -1837,11 +1828,21 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             });
             let graph = program.modules[made.callee.0].phases.get(made.callee.1)
                 == Some(&Some(Phase::Graph));
-            if graph
-                && !selecting.is_empty()
-                && let Some((_, body)) =
-                    program.instance(made.callee.0, made.callee.1, &made.generics, &made.answers)
-            {
+            let recheck_constants = graph && !selecting.is_empty();
+            let instance = if configured.contains(&made.callee) {
+                super::operator_defaults::check_instance(
+                    program,
+                    made.callee,
+                    &made.generics,
+                    &made.answers,
+                    diagnostics,
+                )
+            } else if recheck_constants {
+                program.instance(made.callee.0, made.callee.1, &made.generics, &made.answers)
+            } else {
+                None
+            };
+            if recheck_constants && let Some((_, body)) = instance {
                 super::lifting::check_instance_constants(program, &body, &from, diagnostics);
             }
             if inner.is_empty() && selecting.is_empty() {
