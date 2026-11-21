@@ -38,8 +38,8 @@ use hgl_diagnostics::{Diagnostics, Location};
 
 use crate::declared::substitute_within;
 use crate::hir::{
-    AnonymousFunction, Answer, Body, Callee, ConfigurationRead, Expr, ExprKind, ValueCategory,
-    walk_statements, walk_statements_mut,
+    AnonymousFunction, Answer, Body, Callee, ConfigurationRead, DefaultExpr, Expr, ExprKind,
+    ValueCategory, walk_statements, walk_statements_mut,
 };
 use crate::program::{LocalKind, Phase, Program, Role};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
@@ -61,7 +61,11 @@ struct InstanceArguments<'a> {
 impl Program {
     /// The operator's configuration default inherited by a candidate's parameter
     /// at `slot` (GEN-6). Candidate-only configuration has its own default.
-    pub fn inherited_configuration_default(&self, callee: &Callee, slot: usize) -> Option<&Expr> {
+    pub fn inherited_configuration_default(
+        &self,
+        callee: &Callee,
+        slot: usize,
+    ) -> Option<&DefaultExpr> {
         let Callee::Candidate {
             operator,
             module,
@@ -93,15 +97,14 @@ impl Program {
     /// The selected configuration parameter gives the default its type (UNIT-8).
     pub fn specialize_operator_default(
         &self,
-        default: &Expr,
+        default: &DefaultExpr,
         operator: (usize, usize),
         generics: &[Argument],
         parameter: &Parameter,
         diagnostics: &mut Diagnostics,
-    ) -> Expr {
-        let mut default = default.clone();
+    ) -> DefaultExpr {
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
-            return default;
+            return default.clone();
         };
         let types: Vec<_> = signature
             .generics
@@ -109,22 +112,24 @@ impl Program {
             .map(|generic| generic.at)
             .zip(generics)
             .collect();
-        let mut required = false;
-        default.walk(&mut |value| {
-            required |= matches!(
-                value.kind,
-                ExprKind::Call {
-                    callee: Callee::Required { .. },
-                    ..
-                }
-            );
+        let mut uses = Vec::new();
+        default.value.walk(&mut |value| match &value.kind {
+            ExprKind::Call { callee, .. } => required_uses(callee, value.at, &mut uses),
+            ExprKind::StaticCallable(callee) => required_uses(callee, value.at, &mut uses),
+            _ => {}
         });
-        let requirements = if required {
-            crate::values::operator_default_answers(self, operator, generics, diagnostics)
-        } else {
-            Vec::new()
-        };
         let reports = RefCell::new(Diagnostics::new());
+        let requirements = if uses.is_empty() {
+            Vec::new()
+        } else {
+            crate::values::operator_default_answers(
+                self,
+                operator,
+                generics,
+                &uses,
+                &mut reports.borrow_mut(),
+            )
+        };
         let instance = InstanceArguments {
             declaration: operator,
             generics,
@@ -132,8 +137,28 @@ impl Program {
             requirements: &requirements,
             diagnostics: &reports,
         };
-        default.walk_mut(&mut |expression| self.place(expression, &instance, &[]));
-        crate::values::fit_operator_default(self, operator, default, parameter, diagnostics)
+        // UNIT-7: a default has no formal parameters in scope. Run the
+        // same membership-based selection here as in a specialized body.
+        let mut body = default.clone().into_body();
+        self.place_body(&mut body, &instance, &[]);
+        crate::values::record(self, &mut body, false);
+        let mut default = DefaultExpr::from_body(body);
+        let reports = reports.into_inner();
+        for report in reports.as_slice() {
+            if !diagnostics.as_slice().contains(report) {
+                diagnostics.emit(report.clone());
+            }
+        }
+        if !reports.has_errors() {
+            default.value = crate::values::fit_operator_default(
+                self,
+                operator,
+                default.value,
+                parameter,
+                diagnostics,
+            );
+        }
+        default
     }
 
     /// The signature and the body of `declaration` of `module` as one
@@ -179,11 +204,13 @@ impl Program {
             requirements,
             functions,
             &RefCell::new(Diagnostics::new()),
+            &mut Diagnostics::new(),
         )
     }
 
     /// Instantiate a body and report any configuration that fails to fit
-    /// the concrete candidate selected for a requirement (FN-18, GEN-16).
+    /// the selected candidate (FN-18, GEN-16). Collect new graph reports
+    /// separately so the instance walk can point them at its caller (GEN-7).
     pub(crate) fn checked_instance(
         &self,
         (module, declaration): (usize, usize),
@@ -191,6 +218,7 @@ impl Program {
         requirements: &[Answer],
         functions: &[(usize, Callee)],
         diagnostics: &RefCell<Diagnostics>,
+        graph_diagnostics: &mut Diagnostics,
     ) -> Option<(Signature, Body)> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
@@ -229,12 +257,25 @@ impl Program {
             requirements,
             diagnostics,
         };
+        let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
+        let recheck =
+            graph && (!declared.selecting[declaration].is_empty() || !requirements.is_empty());
+        let destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
         self.place_body(&mut body, &arguments, &functions);
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
         // could not say of an operation it requires.
-        let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
-        crate::values::record(self, &mut body, graph);
+        if let Some(destinations) = destinations {
+            destinations.settle(
+                self,
+                (module, declaration),
+                &taken,
+                &mut body,
+                graph_diagnostics,
+            );
+        } else {
+            crate::values::record(self, &mut body, graph);
+        }
         Some((taken, body))
     }
 
@@ -625,6 +666,33 @@ fn hidden_captures(
         body.locals.splice(original..original, locals);
     }
     functions
+}
+
+/// What an expression calls by requiring it directly or passing evidence on.
+fn required_uses(callee: &Callee, at: Location, uses: &mut Vec<(usize, Location)>) {
+    fn forwarded(answers: &[Answer], at: Location, uses: &mut Vec<(usize, Location)>) {
+        for answer in answers {
+            match answer {
+                Answer::Stated(index) => uses.push((*index, at)),
+                Answer::Candidate { requirements, .. } => forwarded(requirements, at, uses),
+                Answer::Unread => {}
+            }
+        }
+    }
+    match callee {
+        Callee::Required { requirement, .. } => uses.push((*requirement, at)),
+        Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
+            forwarded(requirements, at, uses);
+        }
+        Callee::Anonymous(function) => {
+            walk_statements(&function.body.statements, &mut |value| match &value.kind {
+                ExprKind::Call { callee, .. } => required_uses(callee, value.at, uses),
+                ExprKind::StaticCallable(callee) => required_uses(callee, value.at, uses),
+                _ => {}
+            })
+        }
+        _ => {}
+    }
 }
 
 /// Puts what `map` gives in place in what a call calls. A call of an

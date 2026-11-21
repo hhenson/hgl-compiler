@@ -822,6 +822,439 @@ fn graph_instances_settle_no_else_types_after_selection() {
     }
 }
 
+/// GEN-7 and CTRL-14: the chosen candidate can change an assignment's
+/// category or select a branch at runtime. The first value of a `var`
+/// decides its category, even when that value was deferred.
+#[test]
+fn graph_instances_recheck_assignments() {
+    let checked = module(concat!(
+        "operator live<T>(value: T) -> i64\n",
+        "impl const fn live<T>(value: T) -> i64 => 5\n",
+        "impl fn live(value: i64) -> i64 { when { return value } }\n",
+        "fn assign<T>(const input: T) -> i64 {\n",
+        "    var output = 0\n",
+        "    output = live(input)\n",
+        "    return output\n",
+        "}\n",
+        "fn initialise<T>(const input: T) -> i64 {\n",
+        "    var output = live(input)\n",
+        "    output = 1\n",
+        "    return output\n",
+        "}\n",
+        "fn branch<T>(const input: T) -> i64 {\n",
+        "    var output = 0\n",
+        "    if live(input) > 0 { output = 1 }\n",
+        "    return output\n",
+        "}\n",
+        "fn inner<T>(const input: T) -> i64 {\n",
+        "    if live(input) > 0 {\n",
+        "        var local = 1\n",
+        "        local = 2\n",
+        "    }\n",
+        "    return 0\n",
+        "}\n",
+        "fn static_cases() -> i64 => assign(\"s\") + initialise(\"s\") + branch(\"s\")\n",
+        "fn connected_value() -> i64 => assign(3)\n",
+        "fn connected_initialiser() -> i64 => initialise(3)\n",
+        "fn connected_branch() -> i64 => branch(3)\n",
+        "fn connected_inner() -> i64 => inner(3)\n",
+        "fn by_index<T>(const input: T) -> i64 {\n",
+        "    var row = [0]\n",
+        "    row[live(input)] = 1\n",
+        "    return 0\n",
+        "}\n",
+        "fn by_switch<T>(const input: T) -> i64 {\n",
+        "    var output = 0\n",
+        "    switch live(input) {\n",
+        "        case 1: output = 1\n",
+        "    }\n",
+        "    return output\n",
+        "}\n",
+        "fn connected_index() -> i64 => by_index(1)\n",
+        "fn connected_switch() -> i64 => by_switch(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:28:32 type/binding.category CTRL-14",
+            "m.hgl:29:38 type/binding.category CTRL-14",
+            "m.hgl:30:33 type/binding.category CTRL-14",
+            "m.hgl:44:32 type/binding.category CTRL-14",
+            "m.hgl:45:33 type/binding.category CTRL-14",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7, CTRL-13 and EXPR-5: a deferred conditional's settled type
+/// must fit each destination, and an implicit nullable read is retained
+/// in instances where that is the fit (ERR-12).
+#[test]
+fn graph_instances_fit_settled_types_at_destinations() {
+    let checked = module(concat!(
+        "operator predicate<T>(value: T) -> bool\n",
+        "impl const fn predicate<T>(value: T) -> bool => true\n",
+        "impl fn predicate(value: i64) -> bool { when { return value > 0 } }\n",
+        "const fn takes_str(value: str) -> str => value\n",
+        "const fn takes_int(value: i64) -> i64 => value\n",
+        "fn wrong_return<T>(const input: T) -> str {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return chosen\n",
+        "}\n",
+        "fn wrong_local<T>(const input: T) -> str {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let annotated: str = chosen\n",
+        "    return annotated\n",
+        "}\n",
+        "fn wrong_assignment<T>(const input: T) -> str {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    var assigned: str = \"s\"\n",
+        "    assigned = chosen\n",
+        "    return assigned\n",
+        "}\n",
+        "fn wrong_argument<T>(const input: T) -> str {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return takes_str(chosen)\n",
+        "}\n",
+        "fn right_argument<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return takes_int(chosen)\n",
+        "}\n",
+        "fn bad_return() -> str => wrong_return(\"s\")\n",
+        "fn bad_local() -> str => wrong_local(\"s\")\n",
+        "fn bad_assignment() -> str => wrong_assignment(\"s\")\n",
+        "fn bad_argument() -> str => wrong_argument(\"s\")\n",
+        "fn ordinary_argument() -> i64 => right_argument(\"s\")\n",
+        "fn temporal_argument() -> i64 => right_argument(1)\n",
+        "fn wrong_condition<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return if chosen { 2 } else { 3 }\n",
+        "}\n",
+        "fn bad_condition() -> i64 => wrong_condition(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:30:27 type/type.mismatch EXPR-5",
+            "m.hgl:31:26 type/type.mismatch EXPR-5",
+            "m.hgl:32:31 type/type.mismatch EXPR-5",
+            "m.hgl:33:29 type/type.mismatch EXPR-5",
+            "m.hgl:40:30 type/type.mismatch CTRL-13",
+        ],
+        "{}",
+        checked.report
+    );
+    for (name, nullable_read) in [("ordinary_argument", true), ("temporal_argument", false)] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        let mut reads = false;
+        walk_statements(&instance.statements, &mut |expr| {
+            reads |= matches!(expr.kind, ExprKind::NullRead { .. });
+        });
+        assert_eq!(reads, nullable_read, "{name}");
+    }
+}
+
+/// GEN-7 and EXPR-5: a field or entry of a previously typed aggregate
+/// still has to fit when its conditional value becomes known.
+#[test]
+fn graph_instances_fit_aggregate_members() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "struct Label<T> { value: T }\n",
+        "fn label<T>(const input: T) -> Label<str> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return Label<str>(value: chosen)\n",
+        "}\n",
+        "fn tuple_of<T>(const input: T) -> tuple<str, i64> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return (chosen, 0)\n",
+        "}\n",
+        "fn list_of<T>(const input: T) -> list<str> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return [chosen]\n",
+        "}\n",
+        "fn bad_field() -> Label<str> => label(1)\n",
+        "fn bad_tuple() -> tuple<str, i64> => tuple_of(1)\n",
+        "fn bad_list() -> list<str> => list_of(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:17:33 type/type.mismatch EXPR-5",
+            "m.hgl:18:38 type/type.mismatch EXPR-5",
+            "m.hgl:19:31 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7 and CTRL-15: a specialized sequence decides each loop binding's
+/// category before FN-3 consumers are checked. A dictionary key is an
+/// ordinary value even when its corresponding value is a connection.
+#[test]
+fn graph_instances_settle_iteration_bindings() {
+    let checked = module(concat!(
+        "operator items<T>(input: T) -> list<i64>\n",
+        "impl const fn items<T>(input: T) -> list<i64> => [1]\n",
+        "impl fn items(input: i64) -> list<i64> { when { return [input] } }\n",
+        "operator entries<T>(input: T) -> dict<str, i64>\n",
+        "impl const fn entries<T>(input: T) -> dict<str, i64> => [\"key\": 1]\n",
+        "impl fn entries(input: i64) -> dict<str, i64> { when { return [\"key\": input] } }\n",
+        "const fn needs_const(const input: i64) -> i64 => input\n",
+        "const fn needs_key(const input: str) -> str => input\n",
+        "fn through_list<T>(const input: T) -> i64 {\n",
+        "    for item in items(input) { needs_const(item) }\n",
+        "    return 1\n",
+        "}\n",
+        "fn through_dict<T>(const input: T) -> i64 {\n",
+        "    for key, value in entries(input) {\n",
+        "        needs_key(key)\n",
+        "        needs_const(value)\n",
+        "    }\n",
+        "    return 1\n",
+        "}\n",
+        "fn ordinary() -> i64 => through_list(\"s\") + through_dict(\"s\")\n",
+        "fn temporal_list() -> i64 => through_list(1)\n",
+        "fn temporal_dict() -> i64 => through_dict(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:22:30 phase/connection.as_constant FN-3",
+            "m.hgl:23:30 phase/connection.as_constant FN-3",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7, EXPR-3 and CTRL-14: a value which takes several passes to
+/// settle still sets the category when it is the `var`'s first value.
+#[test]
+fn graph_instances_wait_for_the_first_value() {
+    let checked = module(concat!(
+        "operator helper<T>(input: T) -> i64\n",
+        "impl const fn helper<T>(input: T) -> i64 => 5\n",
+        "impl fn helper(input: i64) -> i64 { when { return input } }\n",
+        "fn initialised<T>(const input: T) -> i64 {\n",
+        "    var output = {\n",
+        "        let nested = helper(input)\n",
+        "        nested\n",
+        "    }\n",
+        "    output = 1\n",
+        "    return output\n",
+        "}\n",
+        "fn assigned<T>(const input: T) -> i64 {\n",
+        "    var output: i64\n",
+        "    output = {\n",
+        "        let nested = helper(input)\n",
+        "        nested\n",
+        "    }\n",
+        "    output = 1\n",
+        "    return output\n",
+        "}\n",
+        "fn ordinary() -> i64 => initialised(\"s\") + assigned(\"s\")\n",
+        "fn temporal_initialised() -> i64 => initialised(1)\n",
+        "fn temporal_assigned() -> i64 => assigned(1)\n",
+        "fn nested_first<T>(const input: T) -> i64 {\n",
+        "    var output: i64\n",
+        "    output = {\n",
+        "        output = 1\n",
+        "        helper(input)\n",
+        "    }\n",
+        "    return output\n",
+        "}\n",
+        "fn temporal_nested() -> i64 => nested_first(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:23:37 type/binding.category CTRL-14",
+            "m.hgl:24:34 type/binding.category CTRL-14",
+            "m.hgl:33:32 type/binding.category CTRL-14",
+        ],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked
+            .report
+            .contains("`output` holds an ordinary value, and this is a connection"),
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7, CTRL-13 and EXPR-5: settled tuple elements propagate through
+/// blocks and inferred local reads to the type their destination checks.
+#[test]
+fn graph_instances_propagate_inferred_tuple_types() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "fn good<T>(const input: T) -> tuple<tuple<i64?, i64>, i64> {\n",
+        "    let pair = ((if predicate(input) { 1 }, 0), 2)\n",
+        "    let alias = { pair }\n",
+        "    return alias\n",
+        "}\n",
+        "fn bad<T>(const input: T) -> tuple<str, i64> {\n",
+        "    let alias = {\n",
+        "        let pair = (if predicate(input) { 1 }, 0)\n",
+        "        pair\n",
+        "    }\n",
+        "    return alias\n",
+        "}\n",
+        "fn accepted() -> tuple<tuple<i64?, i64>, i64> => good(\"s\")\n",
+        "fn rejected() -> tuple<str, i64> => bad(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:17:37 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    for local in instance.locals.iter().filter(|local| local.name != "input") {
+        assert_eq!(local.ty.to_string(), "tuple<tuple<i64?, i64>, i64>");
+    }
+    let Some(Stmt::Return {
+        value: Some(returned),
+        ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns the tuple");
+    };
+    assert_eq!(returned.ty.to_string(), "tuple<tuple<i64?, i64>, i64>");
+}
+
+/// GEN-7, CTRL-14 and FN-15: passing an outer ordinary variable to a
+/// mutable parameter is an assignment in the selected branch.
+#[test]
+fn graph_instances_check_mutable_calls_under_temporal_selectors() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn bump(var output: i64) { output = 1 }\n",
+        "fn conditional<T>(const input: T) -> i64 {\n",
+        "    var output = 0\n",
+        "    if predicate(input) { bump(output) }\n",
+        "    return output\n",
+        "}\n",
+        "fn selected<T>(const input: T) -> i64 {\n",
+        "    var output = 0\n",
+        "    switch predicate(input) { case true: bump(output) }\n",
+        "    return output\n",
+        "}\n",
+        "fn local_to_branch<T>(const input: T) -> i64 {\n",
+        "    if predicate(input) {\n",
+        "        var output = 0\n",
+        "        bump(output)\n",
+        "    }\n",
+        "    return 0\n",
+        "}\n",
+        "fn ordinary() -> i64 => conditional(\"s\") + selected(\"s\")\n",
+        "fn bad_if() -> i64 => conditional(1)\n",
+        "fn bad_switch() -> i64 => selected(1)\n",
+        "fn valid_inner() -> i64 => local_to_branch(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:24:23 type/binding.category CTRL-14",
+            "m.hgl:25:27 type/binding.category CTRL-14",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7 and CTRL-15: once the sequence is temporal, the loop body is
+/// a child which cannot carry outer variables or return from the graph.
+#[test]
+fn graph_instances_recheck_child_loop_writes_and_returns() {
+    let checked = module(concat!(
+        "operator items<T>(input: T) -> list<i64>\n",
+        "impl const fn items<T>(input: T) -> list<i64> => [1]\n",
+        "impl fn items(input: i64) -> list<i64> { when { return [input] } }\n",
+        "const fn bump(var output: i64) { output = 1 }\n",
+        "fn writes<T>(const input: T) -> i64 {\n",
+        "    var output = 0\n",
+        "    var row = [0]\n",
+        "    for item in items(input) {\n",
+        "        output = 1\n",
+        "        row[0] = 2\n",
+        "        bump(output)\n",
+        "        var inside = 0\n",
+        "        bump(inside)\n",
+        "    }\n",
+        "    return output\n",
+        "}\n",
+        "fn early<T>(const input: T) -> i64 {\n",
+        "    for item in items(input) { return 1 }\n",
+        "    return 0\n",
+        "}\n",
+        "fn ordinary() -> i64 => writes(\"s\") + early(\"s\")\n",
+        "fn bad_write() -> i64 => writes(1)\n",
+        "fn bad_return() -> i64 => early(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:23:26 local:phase/loop.carried CTRL-15",
+            "m.hgl:23:26 local:phase/loop.carried CTRL-15",
+            "m.hgl:23:26 local:phase/loop.carried CTRL-15",
+            "m.hgl:24:27 local:phase/loop.carried CTRL-15",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7 and CTRL-13: the two branches of a consumed conditional
+/// agree after settlement. A dropped conditional still needs no type.
+#[test]
+fn graph_instances_join_deferred_branches_only_when_consumed() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "fn good<T>(const input: T) -> i64? {\n",
+        "    let chosen = if true { if predicate(input) { 1 } } else { 0 }\n",
+        "    return chosen\n",
+        "}\n",
+        "fn mismatch<T>(const input: T) -> i64? {\n",
+        "    let chosen = if true { if predicate(input) { 1 } } else { \"s\" }\n",
+        "    return chosen\n",
+        "}\n",
+        "fn dropped<T>(const input: T) -> i64 {\n",
+        "    if true { if predicate(input) { 1 } } else { \"s\" }\n",
+        "    return 0\n",
+        "}\n",
+        "fn accepted() -> i64? => good(1)\n",
+        "fn rejected() -> i64? => mismatch(1)\n",
+        "fn unused() -> i64 => dropped(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:17:26 type/type.mismatch CTRL-13"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    assert_eq!(instance.locals[1].ty.to_string(), "i64?");
+    let Some(Stmt::Return {
+        value: Some(returned),
+        ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns the conditional");
+    };
+    assert_eq!(returned.ty.to_string(), "i64?");
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

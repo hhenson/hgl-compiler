@@ -11,6 +11,7 @@ use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::HasSpan;
 
 use super::fit::{open, whole};
+use super::requirements::{Made, concrete_default_calls};
 use super::{Tables, Typer, lifting};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Body, Callee, ConfigurationRead, Expr, ExprKind, Value};
@@ -19,9 +20,10 @@ use crate::types::{Argument, Detail, Parameter, Signature, Type};
 use crate::{codes, error};
 
 /// Visit the selected calls once the declaration pass has read every default.
-pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) {
+pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) -> Vec<Made> {
+    let mut made = Vec::new();
     for module in &program.modules {
-        let mut visit = |value: &Expr| check_expression(program, value, diagnostics);
+        let mut visit = |value: &Expr| check_expression(program, value, &mut made, diagnostics);
         for body in module
             .bodies
             .iter()
@@ -41,39 +43,76 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) {
             let span = declaration.syntax.span();
             for default in defaults.iter().flatten() {
                 // Check inherited defaults at their original declarations.
-                if default.at.file == declaration.at.file
-                    && span.start <= default.at.span.start
-                    && default.at.span.end <= span.end
+                if default.value.at.file == declaration.at.file
+                    && span.start <= default.value.at.span.start
+                    && default.value.at.span.end <= span.end
                 {
-                    default.walk(&mut visit);
+                    default.value.walk(&mut visit);
                 }
             }
         }
     }
+    made
 }
 
-fn check_expression(program: &Program, value: &Expr, diagnostics: &mut Diagnostics) {
-    match &value.kind {
-        ExprKind::Call {
-            callee, arguments, ..
-        } => {
-            check_call(
-                program,
-                callee,
-                |slot| {
-                    arguments
-                        .iter()
-                        .any(|argument| argument.parameter == Some(slot))
-                },
-                diagnostics,
-            );
+/// Each used default is specialized once in its effective environment.
+/// An explicit worklist keeps cycles and long chains out of the Rust
+/// stack. Like body instances, the work is bounded by INSTANCES.
+#[derive(Default)]
+struct Defaults {
+    seen: Vec<DefaultUse>,
+    pending: Vec<Expr>,
+}
+
+#[derive(PartialEq)]
+struct DefaultUse {
+    at: Location,
+    operator: (usize, usize),
+    generics: Vec<Argument>,
+    expected: Type,
+}
+
+fn check_expression(
+    program: &Program,
+    value: &Expr,
+    made: &mut Vec<Made>,
+    diagnostics: &mut Diagnostics,
+) {
+    let mut defaults = Defaults::default();
+    defaults.visit(program, value, diagnostics);
+    while let Some(default) = defaults.pending.pop() {
+        concrete_default_calls(&default, made);
+        default.walk(&mut |value| defaults.visit(program, value, diagnostics));
+    }
+}
+
+impl Defaults {
+    fn visit(&mut self, program: &Program, value: &Expr, diagnostics: &mut Diagnostics) {
+        match &value.kind {
+            ExprKind::Call {
+                callee, arguments, ..
+            } => {
+                check_call(
+                    program,
+                    self,
+                    callee,
+                    |slot| {
+                        arguments
+                            .iter()
+                            .any(|argument| argument.parameter == Some(slot))
+                    },
+                    diagnostics,
+                );
+            }
+            ExprKind::StaticCallable(callee)
+                if let Callee::Anonymous(function) = callee.as_ref() =>
+            {
+                hir::walk_statements(&function.body.statements, &mut |value| {
+                    self.visit(program, value, diagnostics);
+                });
+            }
+            _ => {}
         }
-        ExprKind::StaticCallable(callee) if let Callee::Anonymous(function) = callee.as_ref() => {
-            hir::walk_statements(&function.body.statements, &mut |value| {
-                check_expression(program, value, diagnostics);
-            });
-        }
-        _ => {}
     }
 }
 
@@ -132,14 +171,22 @@ pub(super) fn check_instance(
     callee: (usize, usize),
     generics: &[Argument],
     requirements: &[hir::Answer],
+    made: &mut Vec<Made>,
     diagnostics: &mut Diagnostics,
+    graph_diagnostics: &mut Diagnostics,
 ) -> Option<(Signature, Body)> {
     let reports = RefCell::new(Diagnostics::new());
-    let (signature, body) =
-        program.checked_instance(callee, generics, requirements, &[], &reports)?;
+    let (signature, body) = program.checked_instance(
+        callee,
+        generics,
+        requirements,
+        &[],
+        &reports,
+        graph_diagnostics,
+    )?;
     let mut reports = reports.into_inner();
     hir::walk_statements(&body.statements, &mut |value| {
-        check_expression(program, value, &mut reports)
+        check_expression(program, value, made, &mut reports)
     });
     for report in reports.as_slice() {
         if !diagnostics.as_slice().contains(report) {
@@ -150,8 +197,9 @@ pub(super) fn check_instance(
 }
 
 /// UNIT-8: check only the inherited defaults that this selected call uses.
-pub(super) fn check_call(
+fn check_call(
     program: &Program,
+    checking: &mut Defaults,
     callee: &Callee,
     supplied: impl Fn(usize) -> bool,
     diagnostics: &mut Diagnostics,
@@ -205,13 +253,34 @@ pub(super) fn check_call(
             ty,
             ..parameter.clone()
         };
-        program.specialize_operator_default(
+        let use_key = DefaultUse {
+            at: default.value.at,
+            operator: *operator,
+            generics: operator_generics.clone(),
+            expected: concrete.ty.clone(),
+        };
+        if checking.seen.len() >= crate::INSTANCES || checking.seen.contains(&use_key) {
+            continue;
+        }
+        checking.seen.push(use_key);
+        let mut reports = Diagnostics::new();
+        let specialized = program.specialize_operator_default(
             default,
             *operator,
             operator_generics,
             &concrete,
-            diagnostics,
+            &mut reports,
         );
+        for report in reports.as_slice() {
+            if !diagnostics.as_slice().contains(report) {
+                diagnostics.emit(report.clone());
+            }
+        }
+        if !reports.has_errors() {
+            // GEN-16: the specialized expression can call a candidate
+            // that was not known when its source declaration was read.
+            checking.pending.push(specialized.value);
+        }
     }
 }
 
@@ -226,10 +295,11 @@ pub(crate) fn operator_default_answers(
     program: &Program,
     operator: (usize, usize),
     generics: &[Argument],
+    uses: &[(usize, Location)],
     diagnostics: &mut Diagnostics,
 ) -> Vec<hir::Answer> {
     with_configuration_typer(program, operator, diagnostics, |typer| {
-        typer.answers(operator.0, operator.1, generics)
+        typer.answers_for_default(operator.0, operator.1, generics, uses)
     })
 }
 

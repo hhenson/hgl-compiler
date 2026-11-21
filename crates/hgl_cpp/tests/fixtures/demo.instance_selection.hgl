@@ -93,12 +93,51 @@ fn connection_if<T>(const value: T) -> i64 {
     return chosen
 }
 
+# ERR-12: if selection settles the condition as an ordinary value,
+# the graph's result reads the nullable value left by the conditional.
+fn required_choice<T>(const value: T) -> i64 {
+    let chosen = if positive(value) { 2 }
+    return chosen
+}
+
+# CTRL-13 and EXPR-5: both the inferred tuple and the local that reads
+# it carry the settled nullable type to the parameter of a value helper.
+const fn pair_score(value: tuple<i64?, i64>) -> i64 =>
+    chosen_or_skip(value[0]) + value[1]
+
+fn inferred_pair<T>(const value: T) -> i64 {
+    let pair = (if positive(value) { 2 }, 10)
+    let saved = { pair }
+    return pair_score(saved)
+}
+
+# CTRL-13 and ERR-12: the inferred branch join preserves the nullable
+# type. A branch with a contextual i64 result reads the same nullable.
+fn joined_choice<T>(const value: T) -> i64 {
+    let maybe = if positive(value) { 2 }
+    let chosen = if true { maybe } else { 3 }
+    return chosen_or_skip(chosen)
+}
+
+fn contextual_choice<T>(const value: T) -> i64 {
+    let maybe = if positive(value) { 2 }
+    return if true { maybe } else { 3 }
+}
+
 test an_instance_settles_its_graph_conditions {
     assert eval loop_scalar(value: "s") == [5]
     assert eval wiring_if(value: 3) == [1]
     assert eval wiring_if(value: "s") == [-1]
     assert eval connection_if(value: 3) == [1]
     assert eval connection_if(value: 0) == []
+    assert eval required_choice(value: 3) == [2]
+    assert raises("value.null") { eval required_choice(value: "s") }
+    assert eval inferred_pair(value: 3) == [12]
+    assert eval inferred_pair(value: "s") == [9]
+    assert eval joined_choice(value: 3) == [2]
+    assert eval joined_choice(value: "s") == [-1]
+    assert eval contextual_choice(value: 3) == [2]
+    assert raises("value.null") { eval contextual_choice(value: "s") }
 }
 
 struct Counter { count: i64 }

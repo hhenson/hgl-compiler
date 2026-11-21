@@ -133,10 +133,6 @@ impl Emitter<'_> {
         // out", as an eval's (`tests`): where more than one of them may
         // fail, or one runs statements, each argument and each default is
         // held first, in that order, as its HGL type.
-        let none = Body {
-            locals: Vec::new(),
-            statements: Vec::new(),
-        };
         let entry_arguments = Body {
             locals: run.locals.clone(),
             statements: Vec::new(),
@@ -195,17 +191,9 @@ impl Emitter<'_> {
                 given.push((position, name));
             }
             for (index, default) in &left {
-                if changes(default) {
-                    self.unsupported(default.at, "a default that runs statements");
+                let Some(written) = self.write_default(default) else {
                     return;
-                }
-                // A default is read with no local in scope (UNIT-7).
-                let mut cold = Scope::cold(program, &none);
-                let written = self.expression(&mut cold, default);
-                if !cold.before.is_empty() {
-                    self.unsupported(default.at, "a default that propagates a failure");
-                    return;
-                }
+                };
                 let Some(ty) = self.written_type(&default.ty, default.at) else {
                     return;
                 };

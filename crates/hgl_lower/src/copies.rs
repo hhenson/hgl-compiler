@@ -577,6 +577,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
             condition,
             then,
             otherwise,
+            ..
         } => {
             into.push(condition);
             into.push(then);

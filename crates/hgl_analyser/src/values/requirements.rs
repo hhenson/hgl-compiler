@@ -3,6 +3,7 @@
 //! body may call because its requirements name them (GEN-3, GEN-7,
 //! GEN-15, GEN-16). Part of the typing pass ([`super`]).
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Code, Diagnostics, Location};
@@ -12,7 +13,7 @@ use hgl_source::FileId;
 use super::candidates::{AtInstance, Given, Wanted};
 use super::fit::{open, whole};
 use super::inference::{fixed, mentions, placed, unsaid};
-use super::operators::{Requested, from_place, unreadable};
+use super::operators::{Requested, from_place, has_generic_configuration_default, unreadable};
 use super::{REQUIRING, Typer};
 use crate::declared::{names_parameter, same_type, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
@@ -791,6 +792,18 @@ impl<'a> Typer<'a> {
         declaration: usize,
         generics: &[Argument],
     ) -> Vec<hir::Answer> {
+        self.answers_for_default(module, declaration, generics, &[])
+    }
+
+    /// Also report a requirement known to fail where an inherited default
+    /// actually uses it. A symbolic application can leave an answer unread.
+    pub(super) fn answers_for_default(
+        &mut self,
+        module: usize,
+        declaration: usize,
+        generics: &[Argument],
+        uses: &[(usize, Location)],
+    ) -> Vec<hir::Answer> {
         let program = self.program;
         let declared_in = &program.modules[module];
         let declared = &declared_in.declarations[declaration];
@@ -800,10 +813,11 @@ impl<'a> Typer<'a> {
         let Some(clause) = child(&declared.syntax, SyntaxKind::RequiresClause) else {
             return Vec::new();
         };
+        let Some(condition) = clause.children().next() else {
+            return Vec::new();
+        };
         let mut calls = Vec::new();
-        if let Some(condition) = clause.children().next() {
-            required_calls(&condition, &mut calls);
-        }
+        required_calls(&condition, &mut calls);
         if calls.is_empty() {
             return Vec::new();
         }
@@ -813,8 +827,12 @@ impl<'a> Typer<'a> {
         let file = declared_in.files[declared.file].file;
         let read =
             self.requirements_read(declared, &signature.generics, (module, generics), &calls);
+        let report_unmet = !uses.is_empty()
+            && generics.len() == signature.generics.len()
+            && generics.iter().all(resolved_default_argument);
         read.into_iter()
-            .map(|read| {
+            .enumerate()
+            .map(|(index, read)| {
                 let Some((operator, operands, result)) = read else {
                     return hir::Answer::Unread;
                 };
@@ -835,6 +853,19 @@ impl<'a> Typer<'a> {
                             generics,
                             requirements,
                         }
+                    }
+                    Some(Answered::Unmet) if report_unmet => {
+                        for &(_, at) in uses.iter().filter(|(used, _)| *used == index) {
+                            if !self.unmet_reported(at) {
+                                self.diagnostics.emit(unmet(
+                                    program,
+                                    (module, declaration),
+                                    at,
+                                    &condition,
+                                ));
+                            }
+                        }
+                        hir::Answer::Unread
                     }
                     Some(Answered::Unmet) | None => hir::Answer::Unread,
                 }
@@ -1315,7 +1346,7 @@ impl<'a> Typer<'a> {
         required: Required,
         given: Vec<Given>,
         mut operator_generics: Vec<Argument>,
-        form: Form,
+        (form, at): (Form, Location),
     ) -> (ExprKind, Type) {
         let Required {
             index,
@@ -1327,17 +1358,30 @@ impl<'a> Typer<'a> {
             Detail::Callable(public) => public,
             _ => unreachable!("a requirement names an operator signature"),
         };
-        if !operator_generics.is_empty() {
+        let implicit_configuration =
+            operator_generics.is_empty() && has_generic_configuration_default(public);
+        if implicit_configuration || !operator_generics.is_empty() {
             // The requirement supplies the ordinary operand types. A
             // brace entry is checked against those types (FN-18), so it
             // cannot redefine the generic type of an ordinary operand.
             let mut inferred = vec![None; public.generics.len()];
             from_place(public, result.as_ref(), &mut inferred);
             let supplied = requirement_inputs(public, &operands);
-            self.infer_operator_inputs(public, &mut inferred, &supplied);
-            for (argument, found) in operator_generics.iter_mut().zip(inferred) {
-                if let Some(found) = found {
-                    *argument = found;
+            if implicit_configuration {
+                // A symbol has no written generic arguments. Resolve defaults
+                // in the public signature with the requirement's operand types.
+                let requested = self.output_requested(operator, public, inferred, &supplied, false);
+                if let Some(unfit) = requested.unfit {
+                    self.diagnostics.emit(unfit.diagnostic(public, at));
+                    return (self.unselected(given, form), Type::Unknown);
+                }
+                operator_generics = requested.generics;
+            } else {
+                self.infer_operator_inputs(public, &mut inferred, &supplied);
+                for (argument, found) in operator_generics.iter_mut().zip(inferred) {
+                    if let Some(found) = found {
+                        *argument = found;
+                    }
                 }
             }
         }
@@ -1552,7 +1596,7 @@ fn result_sets(node: &SyntaxNode, name: &str, sets: &mut Vec<SyntaxNode>) {
 /// A call, in a typed body, of a function or a struct with generic
 /// parameters: what it calls, what it gives those parameters, and where
 /// it is written.
-struct Made {
+pub(super) struct Made {
     callee: (usize, usize),
     generics: Vec<Argument>,
     /// What answers each requirement the callee states at this call
@@ -1643,7 +1687,11 @@ fn nesting<'t>(ty: &'t Type) -> usize {
 /// argument, through calls at any depth, and is reported at that call.
 /// Not told is never taken to hold: one still not told for a constant
 /// this compiler does not work out is reported too.
-pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
+pub(super) fn instances_hold(
+    program: &Program,
+    mut given: Vec<Made>,
+    diagnostics: &mut Diagnostics,
+) {
     // The generic parameters of `(module, declaration)`, by where each
     // is declared.
     let own = |(module, declaration): (usize, usize)| -> Vec<Location> {
@@ -1657,7 +1705,6 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     // declaration it is the body of; and what every body makes that
     // gives every argument.
     let mut passed: HashMap<(usize, usize), Vec<Made>> = HashMap::new();
-    let mut given: Vec<Made> = Vec::new();
     // The declarations whose body gives a callee a generic argument it
     // works out from its own generic parameters.
     let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
@@ -1675,7 +1722,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 .flatten()
                 .flatten()
             {
-                made_by(default, &mut made);
+                made_by(&default.value, &mut made);
             }
             // A struct a type written in it applies, a field's or a
             // parameter's (GEN-3: "an application of a struct whose
@@ -1829,24 +1876,41 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             });
             let graph = program.modules[made.callee.0].phases.get(made.callee.1)
                 == Some(&Some(Phase::Graph));
-            let recheck_constants = graph && !selecting.is_empty();
+            let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
+            let mut graph_reports = Diagnostics::new();
+            let mut defaults = Vec::new();
             let instance = if configured.contains(&made.callee) {
                 super::operator_defaults::check_instance(
                     program,
                     made.callee,
                     &made.generics,
                     &made.answers,
+                    &mut defaults,
                     diagnostics,
+                    &mut graph_reports,
                 )
-            } else if recheck_constants {
-                program.instance(made.callee.0, made.callee.1, &made.generics, &made.answers)
+            } else if recheck_graph {
+                program.checked_instance(
+                    made.callee,
+                    &made.generics,
+                    &made.answers,
+                    &[],
+                    &RefCell::new(Diagnostics::new()),
+                    &mut graph_reports,
+                )
             } else {
                 None
             };
-            if recheck_constants && let Some((_, body)) = instance {
+            if recheck_graph && let Some((_, body)) = instance {
                 super::lifting::check_instance_constants(program, &body, &from, diagnostics);
+                super::lifting::report_instance_checks(
+                    &graph_reports,
+                    &from,
+                    diagnostics,
+                    "this destination in the generic graph is checked for this instance",
+                );
             }
-            if inner.is_empty() && selecting.is_empty() {
+            if inner.is_empty() && selecting.is_empty() && defaults.is_empty() {
                 continue;
             }
             let declared = own(made.callee);
@@ -1855,7 +1919,15 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             // What each call of the instance calls, with what it gives
             // the callee's generic parameters and what answers the
             // callee's requirements there, and where it is written.
-            let mut calls: Vec<Resolved> = Vec::new();
+            let mut calls: Vec<Resolved> = defaults
+                .into_iter()
+                .map(|call| Resolved {
+                    callee: call.callee,
+                    generics: call.generics,
+                    answers: call.answers,
+                    at: call.at,
+                })
+                .collect();
             for call in inner {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
@@ -2448,6 +2520,31 @@ fn made_by(expression: &Expr, made: &mut Vec<Made>) {
     expression.walk(&mut |expression| made_at(expression, made));
 }
 
+/// The calls an omitted, specialized default makes with resolved arguments
+/// and evidence. Follow these as ordinary instances, including helper bodies
+/// that can themselves omit an inherited default (GEN-16, UNIT-8).
+pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
+    fn concrete(answer: &hir::Answer) -> bool {
+        match answer {
+            hir::Answer::Candidate {
+                generics,
+                requirements,
+                ..
+            } => {
+                generics.iter().all(resolved_default_argument) && requirements.iter().all(concrete)
+            }
+            hir::Answer::Stated(_) | hir::Answer::Unread => false,
+        }
+    }
+    let mut calls = Vec::new();
+    made_by(expression, &mut calls);
+    made.extend(calls.into_iter().filter(|call| {
+        call.required.is_none()
+            && call.generics.iter().all(resolved_default_argument)
+            && call.answers.iter().all(concrete)
+    }));
+}
+
 /// The call `expression` is, where it is one of a function, an
 /// operator's candidate or a struct it gives generic arguments.
 fn made_at(expression: &Expr, made: &mut Vec<Made>) {
@@ -2576,6 +2673,32 @@ pub(super) struct Condition<'c> {
     /// name, or one not worked out. Such a constant is not taken as
     /// known, so a `requires` not told for it is not taken to hold.
     pub(super) unvalued: &'c std::cell::Cell<bool>,
+}
+
+/// A concrete application names no type or value parameter and uses
+/// only known constant values, including those nested inside its types.
+fn resolved_default_argument(argument: &Argument) -> bool {
+    fn known(value: &ConstantValue) -> bool {
+        match value {
+            ConstantValue::Member(member) => member.of.is_some(),
+            ConstantValue::List(values) | ConstantValue::Tuple(values) => values.iter().all(known),
+            ConstantValue::Parameter { .. }
+            | ConstantValue::Named { .. }
+            | ConstantValue::Constructed { .. }
+            | ConstantValue::Unary(..)
+            | ConstantValue::Binary(..)
+            | ConstantValue::Unevaluated
+            | ConstantValue::Unknown => false,
+            _ => true,
+        }
+    }
+    match argument {
+        Argument::Type(ty) => !ty.any_part(
+            &|part| matches!(part, Type::Parameter { .. } | Type::Unknown),
+            &|constant| !known(&constant.value),
+        ),
+        Argument::Constant(constant) => known(&constant.value),
+    }
 }
 
 /// True where `value` is, or holds, a constant this compiler does not

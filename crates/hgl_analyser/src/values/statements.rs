@@ -3,7 +3,7 @@
 //! Part of the typing pass ([`super`]); `if`, the loops and `switch` are
 //! read in [`super::control`].
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Typer;
@@ -290,15 +290,7 @@ impl<'a> Typer<'a> {
                 // Preserve the existing check on a return from a dynamic
                 // graph loop until CTRL-15's sequence check lands (#373).
                 if self.dynamic.is_some() {
-                    self.diagnostics.emit(local_error(
-                        Category::Phase,
-                        codes::local::LOOP_CARRIED,
-                        at,
-                        "this loop makes one child for each member, and a child does not \
-                         return from the graph"
-                            .to_string(),
-                        "CTRL-15",
-                    ));
+                    self.diagnostics.emit(child_loop_return(at));
                 }
                 // CTRL-5: "Return targets the enclosing HGL function."
                 self.returned = true;
@@ -536,20 +528,8 @@ impl<'a> Typer<'a> {
         // Keep the existing checks for dynamic graph loops until the
         // compiler can reject their sequence under CTRL-15 (#373).
         if self.dynamic.is_some_and(|outside| local < outside) {
-            self.diagnostics.emit(
-                local_error(
-                    Category::Phase,
-                    codes::local::LOOP_CARRIED,
-                    self.at(&place),
-                    format!(
-                        "`{}` is declared outside this loop, which makes one child for each \
-                         member: nothing is carried from one child to the next",
-                        self.locals[local].name
-                    ),
-                    "CTRL-15",
-                )
-                .with_related(self.locals[local].at, "declared here"),
-            );
+            self.diagnostics
+                .emit(child_loop_write(&self.locals[local], self.at(&place)));
         } else if self.graph {
             let given = (self.category(&value), value.at);
             self.assigned_category(local, given, false);
@@ -753,40 +733,13 @@ impl<'a> Typer<'a> {
         // The dynamic-loop check is retained until the compiler checks
         // the sequence as CTRL-15 requires (#373).
         if self.graph && self.dynamic.is_some_and(|outside| local < outside) {
-            self.diagnostics.emit(
-                local_error(
-                    Category::Phase,
-                    codes::local::LOOP_CARRIED,
-                    self.at(place),
-                    format!(
-                        "`{}` is declared outside this loop, which makes one child for each \
-                         member: nothing is carried from one child to the next",
-                        self.locals[local].name
-                    ),
-                    "CTRL-15",
-                )
-                .with_related(self.locals[local].at, "declared here"),
-            );
+            self.diagnostics
+                .emit(child_loop_write(&self.locals[local], self.at(place)));
         } else if self.graph {
             // What the `var` becomes turns on the value and on every
             // index of the place: `row[index] = 3.0` with `index` a
             // connection selects the element as the graph runs.
-            let mut parts = vec![&value];
-            place_indices(&target, &mut parts);
-            let categories: Vec<(ValueCategory, Location)> = parts
-                .iter()
-                .map(|part| (self.category(part), part.at))
-                .collect();
-            let given = categories
-                .iter()
-                .find(|(category, _)| *category == ValueCategory::Connection)
-                .or_else(|| {
-                    categories
-                        .iter()
-                        .find(|(category, _)| *category == ValueCategory::Unsettled)
-                })
-                .copied()
-                .unwrap_or((ValueCategory::Value, value.at));
+            let given = place_assignment_category(&target, &value, |part| self.category(part));
             self.assigned_category(local, given, true);
         }
         Stmt::AssignPlace {
@@ -884,6 +837,34 @@ impl<'a> Typer<'a> {
     }
 }
 
+/// The existing CTRL-15 restriction on writing an outer binding from a child.
+pub(super) fn child_loop_write(binding: &Local, at: Location) -> Diagnostic {
+    local_error(
+        Category::Phase,
+        codes::local::LOOP_CARRIED,
+        at,
+        format!(
+            "`{}` is declared outside this loop, which makes one child for each member: \
+             nothing is carried from one child to the next",
+            binding.name
+        ),
+        "CTRL-15",
+    )
+    .with_related(binding.at, "declared here")
+}
+
+/// The existing CTRL-15 restriction on returning from a child loop.
+pub(super) fn child_loop_return(at: Location) -> Diagnostic {
+    local_error(
+        Category::Phase,
+        codes::local::LOOP_CARRIED,
+        at,
+        "this loop makes one child for each member, and a child does not return from the graph"
+            .to_string(),
+        "CTRL-15",
+    )
+}
+
 /// The place `place` with its root, a local, of the type the local is
 /// declared with, and not of the type a hook reads it as: an atomic's
 /// V (TYPE-9), or the type under a `?` that marks omission (TYPE-14).
@@ -895,6 +876,26 @@ fn root_as_declared(place: &mut Expr, locals: &[Local]) {
     if let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &mut place.kind {
         root_as_declared(base, locals);
     }
+}
+
+/// The value and all indices can turn a place assignment into a connection.
+pub(super) fn place_assignment_category(
+    place: &Expr,
+    value: &Expr,
+    category: impl Fn(&Expr) -> ValueCategory,
+) -> (ValueCategory, Location) {
+    use ValueCategory::{Connection, Unsettled, Value};
+    let mut parts = vec![value];
+    place_indices(place, &mut parts);
+    let mut given = (Value, value.at);
+    for part in parts {
+        match category(part) {
+            Connection => return (Connection, part.at),
+            Unsettled if given.0 == Value => given = (Unsettled, part.at),
+            _ => {}
+        }
+    }
+    given
 }
 
 /// Adds to `indices` each index of the place `place`, from the
