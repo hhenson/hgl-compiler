@@ -331,6 +331,29 @@ impl Emitter<'_> {
 /// after what a test writes ahead of itself (`tests`).
 pub(crate) const RESTORE: &str = "// The lines of this file again, from here (#line).";
 
+/// `text`, the code written for one HGL statement, with `directive`, the
+/// statement's `#line` ([`Emitter::line_directive`]), before each of its
+/// lines that does not follow a directive already. C++ numbers the line
+/// after `#line N` as N and each line after it one more, so every line the
+/// statement writes is given the statement's line: what it needs run
+/// before it (`Scope::before`), the statement itself, and the lines of a
+/// block around the statements inside it. Each statement inside it has
+/// given its own lines its own line first, and keeps it.
+pub(crate) fn stamped(directive: &str, text: &str) -> String {
+    let mut out = String::with_capacity(text.len() * 2);
+    let mut after_directive = false;
+    for line in text.lines() {
+        let is_directive = line.trim_start().starts_with("#line ");
+        if !is_directive && !after_directive {
+            out.push_str(directive);
+        }
+        out.push_str(line);
+        out.push('\n');
+        after_directive = is_directive;
+    }
+    out
+}
+
 /// Writes [`RESTORE`] on a line of its own at the end of `text`, where
 /// `written`, the code just put there, sets an HGL line: a directive on a
 /// line of its own, at any indent, as a window result's handlers are

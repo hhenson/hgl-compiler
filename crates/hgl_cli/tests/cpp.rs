@@ -1854,6 +1854,108 @@ fn store_values_and_failure_places_on_the_sdk() {
     }
 }
 
+/// A failure names the HGL line of the statement it is raised in, though
+/// the target writes more than one line of C++ for it: `xs[i] = ys[j]`
+/// holds its index and checks its place first (EXPR-2), and its value
+/// fails; and a block's last statement, after such a statement, fails in
+/// turn. Each is raised in a value function an application's store
+/// statement calls (UNIT-14).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn failure_places_of_statements_written_on_several_lines_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("failure_places");
+    write(
+        &root,
+        "demo.places.hgl",
+        concat!(
+            "module demo.places\n",
+            "\n",
+            "export fn ticks(const values: list<i64>) -> i64 {\n",
+            "    for value in values {\n",
+            "        yield 1s: value\n",
+            "    }\n",
+            "}\n",
+        ),
+    );
+    let preludes = write(
+        &root,
+        "demo.places.preludes.hgl",
+        concat!(
+            "application demo.places.preludes\n",
+            "\n",
+            "use demo.places::{ticks}\n",
+            "\n",
+            "const fn moved(i: i64, j: i64) -> i64 {\n",
+            "    var xs = [1, 2]\n",
+            "    let ys = [3, 4]\n",
+            "    xs[i] = ys[j]\n",
+            "    return xs[0]\n",
+            "}\n",
+            "\n",
+            "inject global_state\n",
+            "put(global_state, \"moved\", moved(0, 5))\n",
+            "\n",
+            "eval(ticks(values: [1]))\n",
+        ),
+    );
+    let block = write(
+        &root,
+        "demo.places.block.hgl",
+        concat!(
+            "application demo.places.block\n",
+            "\n",
+            "use demo.places::{ticks}\n",
+            "\n",
+            "const fn read_after(i: i64, j: i64) -> i64 {\n",
+            "    var xs = [1, 2]\n",
+            "    let ys = [3, 4]\n",
+            "    if i >= 0 {\n",
+            "        xs[i] = ys[j - 5]\n",
+            "        return xs[j]\n",
+            "    }\n",
+            "    return 0\n",
+            "}\n",
+            "\n",
+            "inject global_state\n",
+            "put(global_state, \"read\", read_after(0, 5))\n",
+            "\n",
+            "eval(ticks(values: [1]))\n",
+        ),
+    );
+    let kept = root.join("build");
+    // The assignment is on line 8 of its file; the block's last statement
+    // on line 10 of its.
+    for (application, file, line) in [
+        ("demo.places.preludes", &preludes, 8),
+        ("demo.places.block", &block, 10),
+    ] {
+        let output = hgl_in(
+            &[
+                "run",
+                &argument(&root),
+                "--target",
+                "cpp",
+                "--application",
+                application,
+                "--keep",
+                &argument(&kept),
+            ],
+            &[],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+        let stderr = text(&output.stderr);
+        let said = format!(
+            "hgl: {application} failed: value.index_out_of_range: the index 5 is outside a list \
+             of 2, raised at {file}:{line}"
+        );
+        assert_eq!(stderr.lines().last(), Some(said.as_str()), "{stderr}");
+    }
+}
+
 /// A test's failing statement is still named in HGL after a node the test
 /// writes ahead of itself, whose statements set their own HGL lines: an
 /// eval's lifted call of a value function (TST-8).

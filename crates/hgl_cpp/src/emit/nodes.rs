@@ -780,20 +780,20 @@ impl Emitter<'_> {
         }
         let line = self.line_of(at);
         text.push_str(&format!("{indent}// when, line {line} (TIME-3)\n"));
-        // The HGL file and line of the handler, which a failure of its
-        // condition names.
-        if !guards.is_empty()
-            && let Some(directive) = self.line_directive(at)
-        {
-            text.push_str(&directive);
-        }
         if guards.is_empty() {
             text.push_str(&format!("{indent}{{\n{written}{indent}}}\n"));
         } else {
-            text.push_str(&format!(
+            let guarded = format!(
                 "{indent}if ({})\n{indent}{{\n{written}{indent}}}\n",
                 guards.join(" && ")
-            ));
+            );
+            // The HGL file and line of the handler, which a failure of its
+            // condition names, on each line of it that no statement of its
+            // body numbers (`stamped`).
+            match self.line_directive(at) {
+                Some(directive) => text.push_str(&super::stamped(&directive, &guarded)),
+                None => text.push_str(&guarded),
+            }
         }
         true
     }

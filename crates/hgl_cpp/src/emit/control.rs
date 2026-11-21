@@ -155,7 +155,16 @@ impl Family for Control {
         }
         for (index, statement) in statements.iter().enumerate() {
             let rest = &statements[index + 1..];
-            match emitter.branched(scope, statement, rest, depth, text) {
+            // A statement written as branches has each of its lines given
+            // its HGL line, as `Emitter::statement` gives a statement's.
+            let mut branched = String::new();
+            let written = emitter.branched(scope, statement, rest, depth, &mut branched);
+            if matches!(written, Branched::No) {
+                text.push_str(&branched);
+            } else {
+                emitter.push_stamped(scope, statement, &branched, text);
+            }
+            match written {
                 Branched::Ended => break,
                 Branched::Written => {}
                 Branched::No => emitter.plain_statement(scope, statement, depth, text),

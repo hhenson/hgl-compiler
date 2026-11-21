@@ -132,10 +132,11 @@ impl Emitter<'_> {
     }
 
     /// Writes `statement` into `text`, `depth` levels in, after what it
-    /// needs run before it (`Scope::before`). Outside a test, the HGL file
-    /// and line of the statement are set first, so that a failure raised
-    /// in it names them (`Emitter::line_directive`); a test's statements
-    /// tell the test host their own lines instead (`tests`).
+    /// needs run before it (`Scope::before`). Outside a test, each line it
+    /// writes, what runs before it among them, is given the HGL file and
+    /// line of the statement, so that a failure raised in it names them
+    /// (`stamped`); a test's statements tell the test host their own lines
+    /// instead (`tests`).
     pub(super) fn statement(
         &mut self,
         scope: &mut Scope,
@@ -143,13 +144,8 @@ impl Emitter<'_> {
         depth: usize,
         text: &mut String,
     ) {
-        if !scope.testing
-            && let Some(directive) =
-                self.line_directive(statement_at(statement, &scope.body.locals))
-        {
-            text.push_str(&directive);
-        }
         let indent = INDENT.repeat(depth);
+        let mut whole = String::new();
         let mut written = String::new();
         let outer_before = std::mem::take(&mut scope.before);
         let outer_acted = std::mem::replace(&mut scope.acted, false);
@@ -157,12 +153,34 @@ impl Emitter<'_> {
         self.statement_text(scope, statement, depth, &mut written);
         for written in std::mem::replace(&mut scope.before, outer_before) {
             for line in written.lines() {
-                text.push_str(&format!("{indent}{line}\n"));
+                whole.push_str(&format!("{indent}{line}\n"));
             }
         }
         scope.acted = outer_acted;
         scope.read = outer_read;
-        text.push_str(&written);
+        whole.push_str(&written);
+        self.push_stamped(scope, statement, &whole, text);
+    }
+
+    /// Pushes `written`, the code of `statement`, onto `text`, each of its
+    /// lines given the statement's HGL file and line outside a test
+    /// (`stamped`).
+    pub(super) fn push_stamped(
+        &mut self,
+        scope: &Scope,
+        statement: &Stmt,
+        written: &str,
+        text: &mut String,
+    ) {
+        let directive = if scope.testing {
+            None
+        } else {
+            self.line_directive(statement_at(statement, &scope.body.locals))
+        };
+        match directive {
+            Some(directive) => text.push_str(&super::stamped(&directive, written)),
+            None => text.push_str(written),
+        }
     }
 
     /// The text of `statement`, `depth` levels in, without what it needs

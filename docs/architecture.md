@@ -2189,7 +2189,12 @@ Where the driver gives the program's files' names (`hgl_cpp::transpile`,
 its `file_name`), each statement written outside a test, a constant's
 value, a handler's condition and each part of an application's run
 statement is preceded by `#line N "file.hgl"`, its HGL file and line, so
-that a failure raised there names them; after each piece, and after
+that a failure raised there names them. Where one is written on more
+than one line of C++, what it needs run before it and the lines of a
+block around the statements inside it among them, each of its lines
+that no statement inside it numbers is preceded by the directive again
+(`emit::stamped`): C++ counts a line on from the directive before it,
+and each line is the statement's own. After each piece, and after
 the nodes a test writes ahead of itself, the unit numbers its lines as
 its own again (`assemble`, `emit::RESTORE`), since a test's
 statements are told to the test host by their lines in the unit, and
