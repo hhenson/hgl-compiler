@@ -19,6 +19,15 @@
 //! that takes the value alone is named by the type it is given, and is
 //! a template whose first argument is the type it gives,
 //! `convert_i64<::hgraph::Float>`, as the library names them.
+//! The same binding serves a named, symbolic or lifted call (OPS-1,
+//! NUM-8). The provider keeps zero policies (NUM-3, NUM-9, NUM-12),
+//! tolerance (NUM-4, NUM-5, NUM-11), and full comparison (NUM-6).
+//! The declared result type preserves ordinary checked-division data
+//! and IEEE values (NUM-10, ERR-11). The conversion's result and
+//! template arguments keep its selected policy (OPS-7, OPS-8).
+//! Duration arithmetic (OPS-10) and tenor arithmetic, comparison,
+//! movement primitives and text (TEN-1, TEN-2, TEN-3, TEN-4, TEN-9)
+//! use the selected binding in the same way.
 //!
 //! EXPR-2: the arguments are evaluated in the order written, and then
 //! the defaults of those left out. C++ evaluates a call's arguments in
@@ -156,6 +165,8 @@ impl Emitter<'_> {
         };
         // FN-15: a call that assigns places is written with what it
         // assigns where it stands, which only a statement has room for.
+        // This also supplies the list place to core's `append` and
+        // `extend` (LIST-1, LIST-2, LIST-3).
         let assigns = signature.parameters.iter().any(|parameter| parameter.var);
         if assigns && !statement {
             return self.missing(at, "a call that assigns a place, inside an expression");

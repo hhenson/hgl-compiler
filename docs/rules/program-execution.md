@@ -14,7 +14,12 @@ analyser: done
 - It gives no configuration (RUN-6)
 - The typed statement is `Module::run_body`
 
-transpiler: planned
+transpiler: partial
+
+- Emits an application entry calling its temporal target, binding ordinary arguments and
+  recording its result.
+- Left: An unrepresentable run target or unavailable native body is reported, along with
+  unsupported omitted defaults (UNIT-8).
 
 ## RUN-2
 
@@ -32,11 +37,18 @@ analyser: done
 - `run` is written in an application and in an integration test: in a test that is none it is `run.position`
 - A run statement in a module is UNIT-14's
 
-transpiler: planned
+transpiler: done
+
+- Chooses simulation or real-time execution as written, records the result and supports
+  stopping a real-time application through its host.
 
 ## RUN-4
 
-transpiler: planned
+transpiler: partial
+
+- Applications and evals start a fresh run and use its own store and lifecycle. Failures
+  retain runtime provenance and trigger cleanup.
+- Left: Construction and stop failures have the provenance limits under CRUN-6.
 
 ## RUN-5
 
@@ -46,7 +58,7 @@ optimiser: planned
 
 transpiler: planned
 
-- The generated program gives the same observations
+- Comparison with another execution strategy awaits a second target.
 
 ## RUN-6
 
@@ -70,4 +82,5 @@ driver: done
 
 transpiler: done
 
-- C++ makes the supplied configuration available to application store statements and entry arguments, and makes an integration test's configuration available to its test block. An omitted start stays null when read through `run_config`.
+- Emits supplied and inherited `run_config` fields for evals, integration tests and
+  applications in source order. Unknown configuration fields have a defensive report.

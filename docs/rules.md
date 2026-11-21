@@ -5,7 +5,7 @@ it, and whether that stage does so yet, in one file for each chapter: see
 [Chapters](#chapters). A rule shared between stages has one entry for each.
 `crates/hgl_cli/tests/rule_table.rs` checks the chapters against the pinned
 documents: every rule has an entry, no entry names an unknown rule, and a
-`done` entry's rule is cited in its stage's code.
+`done` or `partial` entry's rule is cited in its stage's code.
 
 | State | Meaning |
 | --- | --- |
@@ -33,12 +33,12 @@ specification says which is which.
 | diagnostics | `hgl_diagnostics` | The diagnostic model every stage reports through |
 | docs | none | Documentation extraction |
 
-The `transpiler` entries are the cpp target's (`hgl_cpp`), and none is
-marked `done` or `partial`: its progress is counted in cases, as
-`docs/cpp-target.md` has it. Each of core's runtime cases it does not
-run is listed with its reason in `crates/hgl_cpp/ci/unsupported_cases.toml`,
-and `crates/hgl_cpp/ci/check_core.py` fails where a listed case runs or
-a case not listed is not run ([architecture](architecture.md#cpp)).
+The chapter entries cover C++ lowering, emission and runtime support.
+They identify the language forms the emitter reports as unsupported.
+Core cases skipped on that target are listed with their reasons in
+`crates/hgl_cpp/ci/unsupported_cases.toml`, which
+`crates/hgl_cpp/ci/check_core.py` checks against the actual run
+([architecture](architecture.md#cpp)).
 
 Not listed: `TEST-1` to `TEST-4` and `WRITE-1` to `WRITE-12` of the
 specification. They say who owns what and how the documents are written;
@@ -85,7 +85,7 @@ rule, made apart, then merge as long as they change different lines.
 ## The C++ target's emitter
 
 What `hgl_cpp` writes of value code, value functions and the tests of
-them, and the rules it follows doing so; core's cases it runs are listed
+them, and the rules it follows doing so. Core cases it skips are listed
 in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cpp)).
 
 | What it writes | Rules |
@@ -138,30 +138,11 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | A temporal nullable scalar or enum: a published null, its delta, a test against null of an input, a trace cell | TYPE-14, TYPE-15, END-1, END-3, END-6, ERR-12 |
 | A temporal set and dictionary: published whole and as a delta, read whole, `delta_value`, `all_valid` of a dictionary, an entry of a dictionary read in a hook and given to an endpoint operation, `invalidate(out)`, their trace cells whole and as deltas | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, END-3, END-4, TST-5, TST-9 |
 
-Not written yet, and reported: a `?` after anything its statement reads
-or runs before it (ERR-5), a `switch` case's binding read after the
-`switch` (UNIT-12), an element of a `list<bool>` given to a `var`
-parameter (a bit, no `bool&`), a struct that holds itself (TYPE-6), a
-field's default that runs statements, a field of an abstract struct
-assigned, a dictionary written with keys that may be one, a dictionary's
-entry given to a `var` parameter, an application of a generic struct its
-C++ template is not, a window of any but a scalar, and of temporal code: a
-generic or an abstract struct as a temporal value, a struct or a tuple
-with a part of a form the library does not read whole, a list with a part
-that is no scalar, enum, nullable, list, struct or tuple, a child of a list
-of structs or tuples named in a hook, a dictionary whose value is no
-scalar, set, dictionary or tuple of such, a set's element or a
-dictionary's key of any but a scalar, a constant connection of a set or a dictionary, an
-entry of a dictionary's entry, a nullable put in the run's store (hgl_spec issue 165), a
-designation of a child that is no position of a fixed list input (FN-16), `all_valid` of a set, a
-change of an input's activity in `stop` (END-5), a `for` over a connection of a set (CTRL-15), in a branch or a
-loop's body the store or an ordinary value that may fail (FN-9: hgraph
-builds each child as the graph around it is built), a `return` under a
-branch selected at runtime in a loop unrolled where the graph is built,
-branches that assign two `var`s (CTRL-14), and a lifted call that leaves
-out a `T?` whose default may fail (FN-6). A call
-of a function with a pack, core's `all_` and `any_`, has no callee the
-analyser reads.
+The [chapter entries](#chapters) list remaining emitter work under its
+rules. Some target reports are defensive checks on HIR the analyser
+normally rejects. For example, the emitter can report a source with
+no result, an unmapped argument or an unresolved expression. An
+unsupported case blocks only the pieces that depend on it.
 
 ## Pinned changes still to implement
 
@@ -186,10 +167,10 @@ analyser reads.
 
 ## The C++ target's runtime library
 
-No rule is `done` or `partial` for the C++ target: its progress is
-counted in cases ([cpp-target.md](cpp-target.md#progress-and-acceptance)).
-What its runtime library, `libhglrt` (`runtime/cpp`), implements and its
-unit tests check is this.
+The runtime library `libhglrt` (`runtime/cpp`) supplies the following
+operations. See the [chapter entries](#chapters) for each rule's status
+and [progress and acceptance](cpp-target.md#progress-and-acceptance) for
+the runtime case counts.
 
 | What | Rules or core declarations | Header | Tests |
 | --- | --- | --- | --- |

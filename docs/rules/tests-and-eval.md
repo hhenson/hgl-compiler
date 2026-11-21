@@ -18,9 +18,12 @@ analyser: done
 
 - Production names no test-only declaration; a test-only declaration takes no name of its module; duplicate test names rejected
 
-transpiler: planned
+transpiler: partial
 
-- Artifacts omit test-only declarations
+- Application entry units link reachable production pieces. Named tests have separate
+  entry units and their own runnable dependency set.
+- Left: Production module units can still contain test pieces. The emitter reports a
+  missing test block or a return in a test defensively.
 
 ## TST-3
 
@@ -38,7 +41,10 @@ analyser: partial
 - An `assert` takes a `bool` (`type.mismatch`) that is no connection (`connection.as_constant`)
 - `==` and `!=` with a trace are the harness's own comparison, a `bool`, selected through no operator; the other side is a trace of the same cells
 
-transpiler: planned
+transpiler: done
+
+- Writes wiring-time assertions and intrinsic trace comparisons, reporting the first
+  differing presence, value or position.
 
 runner: planned
 
@@ -61,11 +67,21 @@ analyser: partial
 - Its configuration, `eval{length: 4s} target(...)`, is read before the call, each entry a field of core's `RunConfig` (RUN-6)
 - Left: a generic target given structural cells other than a tuple's
 
-transpiler: planned
+transpiler: partial
+
+- Runs resolved value and temporal functions with replayed literal traces and ordinary
+  configuration. Applies ordinary value helper lifting and expands supported packed
+  inputs.
+- Left: An unresolved eval target, an unsupported trace cell or target input, or replay
+  of a trace held in a local or produced by a prior eval is reported. Missing native
+  replay or recording support is reported under CEVAL-1.
 
 ## TST-6
 
-transpiler: planned
+transpiler: done
+
+- Maps dense entries to run-relative microsteps and ignores silent cells as scheduled
+  events. Renders dense recorded comparisons with their gaps.
 
 runner: planned
 
@@ -82,7 +98,10 @@ runner: planned
 
 - Sparse expectations match the actual ticks and times
 
-transpiler: planned
+transpiler: done
+
+- Emits timed replay from duration offsets or absolute times and compares a timed
+  expectation at its recorded timestamps.
 
 ## TST-8
 
@@ -96,7 +115,12 @@ runner: planned
 
 ## TST-9
 
-transpiler: planned
+transpiler: partial
+
+- Replays scalar false, zero and empty values as present and dispatches whole and delta
+  cells through their publication forms.
+- Left: Trace cells for types outside TYPE-9's supported families, and trace literals or
+  comparisons without an appropriate harness context, are reported.
 
 runner: planned
 
@@ -108,7 +132,10 @@ analyser: done
 
 - `assert raises` takes one string literal whose value is an execution code of the catalogue (`test.raises_code`), `value.index_out_of_range` among them
 
-transpiler: planned
+transpiler: done
+
+- Emits an assertion and its `raises` block. A matching escaping failure passes after
+  successful teardown. Assertion statements outside the harness have defensive reports.
 
 runner: planned
 
@@ -116,7 +143,10 @@ runner: planned
 
 ## TST-11
 
-transpiler: planned
+transpiler: done
+
+- The runtime keeps nested assertion failures and cleanup-only failures distinct from an
+  escaping execution failure.
 
 runner: planned
 
@@ -148,7 +178,12 @@ runner: done
 
 - Invalid metadata and surviving-source errors stop the run, and nothing is then executed; selectors; counts of rejection cases and of tests passed, failed and not run
 
-transpiler: planned
+transpiler: partial
+
+- The target excludes a case whose reachable code cannot be emitted and retains
+  independent supported cases, with the first source-located reason.
+- Left: Rejection-case selection and metadata checks belong to the runner. Unsupported
+  C++ cases are tracked by the core suite checker.
 
 ## TST-15
 
@@ -157,7 +192,10 @@ runner: done
 - When a run succeeds; identity, kind and outcome of each case
 - A test is run by the executor the run is given, and is not run with none
 
-transpiler: planned
+transpiler: done
+
+- Registers executable cases by module and name and reports their execution status to
+  the runner.
 
 ## TST-16
 
@@ -167,7 +205,12 @@ analyser: partial
 - A sequence written as a `const fn`'s argument is the list it is written as
 - Left: a value that holds a trace, `[seen]`, which is given as it is and not held to the parameter's type
 
-transpiler: planned
+transpiler: partial
+
+- Exposes a recorded trace to a value helper as a list of timestamp and delta pairs.
+  Structural traces retain each supported form's delta.
+- Left: A trace whose form has no value representation, or an unsupported trace read in
+  ordinary code, is reported (TYPE-16, TST-9).
 
 runner: planned
 
@@ -186,7 +229,10 @@ analyser: done
 - Its `run call` is read as an eval is, in real time; in a test that is none it is `run.position`
 - It may inject `run_config` before its other statements, and read it in its value code (RUN-6)
 
-transpiler: planned
+transpiler: done
+
+- Emits integration test runs in both modes and passes inherited run configuration and
+  timeouts to the host.
 
 runner: done
 
