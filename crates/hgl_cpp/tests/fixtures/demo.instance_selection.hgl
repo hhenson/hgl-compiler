@@ -400,9 +400,27 @@ fn deferred_result_projection<T>(const value: T, const passed: bool) -> i64 {
     return 0
 }
 
+# ERR-15: an ordinary result takes its nullable form when compared to
+# null, on either side, even if its type settles only in the instance.
+fn deferred_result_is_null<T>(const value: T, const passed: bool) -> bool {
+    let samples = if live_helper(value) > 0 { [projection_sample(passed)] }
+    let chosen = samples[0]
+    return chosen == null
+}
+
+fn deferred_result_is_present<T>(const value: T, const passed: bool) -> bool {
+    let samples = if live_helper(value) > 0 { [projection_sample(passed)] }
+    let chosen = samples[0]
+    return (null) != chosen
+}
+
 test deferred_result_variants {
     assert eval deferred_result_projection(value: "s", passed: true) == [7]
     assert eval deferred_result_projection(value: "s", passed: false) == [8]
+    assert eval deferred_result_is_null(value: "s", passed: true) == [false]
+    assert eval deferred_result_is_null(value: "s", passed: false) == [true]
+    assert eval deferred_result_is_present(value: "s", passed: true) == [true]
+    assert eval deferred_result_is_present(value: "s", passed: false) == [false]
 }
 
 # ERR-12 and ERR-3: the null branch refines the same ordinary binding

@@ -2192,3 +2192,52 @@ fn graph_instances_check_enum_constructors_after_their_operands_settle() {
             if name == "Side" && owner == module && declared == declaration
     ));
 }
+
+/// GEN-7 and ERR-15: a result that settles in a graph instance takes
+/// its nullable form beside a literal null, in either operand order.
+#[test]
+fn graph_instances_read_results_for_null_comparisons() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn sample() -> result<i64, error> => err(error(message: \"failed\"))\n",
+        "fn missing<T>(const input: T) -> bool {\n",
+        "    let samples = if predicate(input) { [sample()] }\n",
+        "    let chosen = samples[0]\n",
+        "    return chosen == null\n",
+        "}\n",
+        "fn present<T>(const input: T) -> bool {\n",
+        "    let samples = if predicate(input) { [sample()] }\n",
+        "    let chosen = samples[0]\n",
+        "    return (null) != chosen\n",
+        "}\n",
+        "fn equal() -> bool => missing(\"s\")\n",
+        "fn unequal() -> bool => present(\"s\")\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for (name, null_first) in [("equal", false), ("unequal", true)] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        let Some(Stmt::Return {
+            value: Some(returned),
+            ..
+        }) = instance.statements.last()
+        else {
+            panic!("the instance returns its comparison");
+        };
+        let ExprKind::Binary { left, right, .. } = &returned.kind else {
+            panic!("the null comparison stays intrinsic");
+        };
+        let (null, result_read) = if null_first {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        assert!(matches!(
+            null.kind,
+            ExprKind::Literal(hgl_analyser::hir::Value::Null)
+        ));
+        assert!(matches!(result_read.kind, ExprKind::OrNull { .. }));
+        assert_eq!(result_read.ty.to_string(), "i64?");
+    }
+}

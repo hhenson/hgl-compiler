@@ -216,6 +216,27 @@ impl GraphDestinations {
                 return;
             }
             NodeMut::Expression(Expr {
+                kind:
+                    ExprKind::Binary {
+                        operator: BinaryOperator::Equal | BinaryOperator::NotEqual,
+                        left,
+                        right,
+                    },
+                ..
+            }) => {
+                // ERR-15: keep the intrinsic comparison in source order
+                // and take the settled result's form beside `null`.
+                let (operand, null) = match (&left.kind, &right.kind) {
+                    (_, ExprKind::Literal(Value::Null)) => (left, right),
+                    (ExprKind::Literal(Value::Null), _) => (right, left),
+                    _ => return,
+                };
+                if self.known(operand) && matches!(operand.ty, Type::Result { .. }) {
+                    **operand = typer.operand_form((**operand).clone(), &null.ty, true);
+                }
+                return;
+            }
+            NodeMut::Expression(Expr {
                 kind: ExprKind::Tagged { success, payload },
                 ty: Type::Result { value, error },
                 ..

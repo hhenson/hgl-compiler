@@ -529,7 +529,7 @@ impl<'a> Typer<'a> {
     /// ("An operand of an operator expects the T where the operator's
     /// candidates take one"); beside a result, itself, as `==` of two
     /// results takes them whole (ERR-2).
-    fn operand_form(&mut self, value: Expr, other: &Type, null_beside: bool) -> Expr {
+    pub(super) fn operand_form(&mut self, value: Expr, other: &Type, null_beside: bool) -> Expr {
         if !matches!(value.ty, Type::Result { .. }) {
             return value;
         }
