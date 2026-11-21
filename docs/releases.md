@@ -19,8 +19,10 @@ the archive. When `HGL_SELF_HOSTED_MACOS` is true, the release runner
 builds the bundle and tests its C++ target from a different unpack path
 with an empty build cache. A GitHub-hosted macOS runner independently
 runs `hgl --version` and `hgl check`. The rehearsal uploads an artifact.
-Push a matching version tag such as `v0.1.0` to publish the archive and
-its SHA-256 file to GitHub Releases after those checks pass.
+Push a tag that is the workspace version, bare, such as `0.1.0`, to
+publish the archive and its SHA-256 file to GitHub Releases after those
+checks pass. A tag of any other form starts nothing, and one that is not
+the workspace version fails the build.
 
 ## Build an archive locally
 

@@ -175,7 +175,7 @@ analyser reads.
 | FN-18, EXPR-10 | Configuration parameters and configuration after a callable name. [#363](https://github.com/hhenson/hgl-compiler/issues/363) |
 | GEN-3, GEN-6, GEN-10, GEN-18 | Read `any`, law predicates and bare Boolean constraints. [#367](https://github.com/hhenson/hgl-compiler/issues/367) |
 | LEX-29, EXPR-16, EXPR-17, FN-19, CTRL-16 | Ranges, loops that make lists and packs, and constant branches in unrolled passes. [#368](https://github.com/hhenson/hgl-compiler/issues/368) |
-| UNIT-3, GEN-4 | Read `export operator` and enforce operator visibility. Operators retain current visibility. [#364](https://github.com/hhenson/hgl-compiler/issues/364) |
+| UNIT-3, GEN-4 | The parser and analyser read `export operator`. Operators remain public pending the core export update and visibility checks. [#364](https://github.com/hhenson/hgl-compiler/issues/364) |
 | MAP-1 to MAP-10, RED-1 to RED-7, SET-1 and SET-2 | Core mapping, reduction and key sets. [#367](https://github.com/hhenson/hgl-compiler/issues/367), [#369](https://github.com/hhenson/hgl-compiler/issues/369), [#370](https://github.com/hhenson/hgl-compiler/issues/370) |
 | TYPE-1 | Reject `f64` and types containing it as keys or set members (`key.unstable`). |
 | EXPR-9 | Reject duplicate constant dictionary keys (`dict.duplicate_key`). |

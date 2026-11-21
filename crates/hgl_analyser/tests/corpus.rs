@@ -83,13 +83,8 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
     ),
     (
         "hgl_spec/spec/language/generics-and-operators.md",
-        "examples.shapes",
-        "UNIT-3 and GEN-4 (#364)",
-    ),
-    (
-        "hgl_spec/spec/language/generics-and-operators.md",
         "examples.rooms",
-        "TYPE-3 (hgl_spec#196), UNIT-3 and GEN-4 (#364)",
+        "TYPE-3: comma between struct fields (hgl_spec#196)",
     ),
 ];
 
