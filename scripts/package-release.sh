@@ -63,6 +63,9 @@ sdk=$bundle/libexec/hgraph-sdk
 jobs=${HGL_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}
 mkdir -p -- "$bundle/bin" "$bundle/licenses"
 native_cache=${HGL_RELEASE_NATIVE_CACHE:-}
+if [[ -n $native_cache && $native_cache != /* ]]; then
+    native_cache=$root/$native_cache
+fi
 
 build_dependency() {
     local name=$1 repository=$2 tag=$3
