@@ -127,6 +127,49 @@ fn pack_parameters_are_accepted_in_their_forms() {
     assert_eq!(checked.summary(), NONE);
 }
 
+/// FN-8: the second pack of either kind is reported at its name. A
+/// declaration may have one positional and one named pack together.
+#[test]
+fn a_declaration_accepts_one_pack_of_each_kind() {
+    let checked = module(concat!(
+        "const fn either(a: ...i64{0:1}, b: ...i64{0:1}) -> i64 => 0\n",
+        "const fn named_twice<...Fs, ...Gs>(a: ...{Fs}, b: ...{Gs}) -> i64 => 0\n",
+        "const fn both<...Fields>(items: ...i64, named: ...{Fields}) -> i64 => 0\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:33 type/pack.duplicate FN-8",
+            "m.hgl:3:48 type/pack.duplicate FN-8",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: a fixed parameter cannot replace a pack. A pack with
+/// cardinality one is legal, including in a candidate with configuration.
+#[test]
+fn a_candidate_keeps_the_operator_pack_slot() {
+    let checked = module(concat!(
+        "operator first_of<T>(values: ...T{1:*}) -> T\n",
+        "impl const fn first_of(values: i64) -> i64 => values\n",
+        "impl const fn first_of(values: ...i64{1}) -> i64 => 0\n",
+        "operator configured{offset: i64 = 1}(items: ...i64) -> i64\n",
+        "impl const fn configured{extra: i64 = 2, offset: i64}(item: i64) -> i64 => item\n",
+        "impl const fn configured{extra: i64 = 2, offset: i64}(items: ...i64{1}) -> i64 => offset\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:24 operator/impl.pack GEN-6",
+            "m.hgl:6:55 operator/impl.pack GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// FN-8 and GEN-10: capture in written order, keeping the pack slot,
 /// positional indexes or named keys, and the resolved argument types.
 #[test]
