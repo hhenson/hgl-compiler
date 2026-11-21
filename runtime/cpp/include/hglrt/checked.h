@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstddef>
+#include <expected>
 #include <source_location>
 #include <string>
 #include <type_traits>
@@ -37,18 +38,10 @@ auto checked_value(const Input& input, std::source_location where = std::source_
     return input.value();
 }
 
-/// The same read where its place takes `result<T, error>` (ERR-14): "it gives
-/// `ok` of the child's value, or, for a child that is not valid, `err` of an
-/// `error` whose code is `value.unset_read`".
-template <class Input>
-auto checked_result(const Input& input) -> result<std::remove_cvref_t<decltype(input.value())>> {
-    if (!input.valid()) {
-        return std::unexpected(make_error("the child read is not valid", std::string{codes::unset_read}));
-    }
-    return input.value();
-}
-
 namespace detail {
+/// The error of an unset read in a place that takes a result (ERR-14).
+std::unexpected<error> unset_result(std::string message);
+
 /// Fails unless `index` is a position of an ordinary list of `size`
 /// elements, unsized or fixed (EXPR-3: "An index outside a list, below zero
 /// or at or past its size, fails where it is evaluated, with code

@@ -203,7 +203,6 @@ template <class V, class E>
 struct hgraph::scalar_descriptor<std::expected<V, E>> {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta() {
-        static const std::string name = "hgl." + hglrt::type_name<std::expected<V, E>>();
-        return TypeRegistry::instance().register_scalar<std::expected<V, E>>(name);
+        return hglrt::detail::named_scalar_meta<std::expected<V, E>>();
     }
 };

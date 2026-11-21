@@ -29,6 +29,7 @@
 #include <hgraph/types/temporal.h>
 #include <hgraph/util/date_time.h>
 
+#include <algorithm>
 #include <array>
 #include <concepts>
 #include <cstddef>
@@ -174,6 +175,30 @@ struct list_delta {
 
     friend bool operator==(const list_delta&, const list_delta&) = default;
 };
+
+namespace detail {
+
+/// The size of a growing list after publishing `delta` (TYPE-16). An
+/// explicit size takes precedence over updates, and a negative size drops
+/// up to the number held. The caller checks whether the update is allowed.
+template <class L>
+std::size_t list_size_after(std::size_t size, const list_delta<L>& delta) {
+    if (delta.size_modified.has_value()) {
+        const i64 written = *delta.size_modified;
+        if (written < 0) {
+            const auto dropped = static_cast<std::uint64_t>(-(written + 1)) + 1;
+            return dropped >= size ? 0 : size - static_cast<std::size_t>(dropped);
+        }
+        return static_cast<std::size_t>(written);
+    }
+    // A position below zero belongs to no list (EXPR-3) and moves no size.
+    if (delta.updated.empty() || delta.updated.rbegin()->first < 0) {
+        return size;
+    }
+    return std::max(size, static_cast<std::size_t>(delta.updated.rbegin()->first) + 1);
+}
+
+} // namespace detail
 
 /// `delta<T?>` (TYPE-16): "A nullable's ... delta is a type of its own ...
 /// Such a delta is no T", and "A nullable's delta is an optional: it holds
@@ -408,6 +433,16 @@ std::string member_text(E value) {
     }
     return std::string{type} + "(" + std::to_string(static_cast<std::underlying_type_t<E>>(value)) + ")";
 }
+
+/// Registers the scalar described by `T`. Its descriptor supplies a name
+/// once, normally the HGL type name under `hgl.`.
+template <class T>
+const hgraph::ValueTypeMetaData* named_scalar_meta(
+    std::string (*name_of)() = [] { return "hgl." + type_name<T>(); }) {
+    static const std::string name = name_of();
+    return hgraph::TypeRegistry::instance().register_scalar<T>(name);
+}
+
 } // namespace hglrt::detail
 
 template <class T>
@@ -421,8 +456,7 @@ template <class T>
 struct hgraph::scalar_descriptor<hglrt::list<T>> {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta() {
-        static const std::string name = "hgl." + hglrt::type_name<hglrt::list<T>>();
-        return TypeRegistry::instance().register_scalar<hglrt::list<T>>(name);
+        return hglrt::detail::named_scalar_meta<hglrt::list<T>>();
     }
 };
 
@@ -433,8 +467,7 @@ template <hglrt::named_enum E>
 struct hgraph::scalar_descriptor<E> {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta() {
-        static const std::string name = "hgl." + hglrt::type_name<E>();
-        return TypeRegistry::instance().register_scalar<E>(name);
+        return hglrt::detail::named_scalar_meta<E>();
     }
 };
 
@@ -452,7 +485,7 @@ template <class T>
 struct hgraph::scalar_descriptor<hglrt::configured<T>> {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta() {
-        static const std::string name = std::string{"hgl.config."} + typeid(T).name();
-        return TypeRegistry::instance().register_scalar<hglrt::configured<T>>(name);
+        return hglrt::detail::named_scalar_meta<hglrt::configured<T>>(
+            [] { return std::string{"hgl.config."} + typeid(T).name(); });
     }
 };

@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -32,12 +33,9 @@ using namespace std::chrono_literals;
 using Growing = hgraph::TSL<hgraph::TS<i64>>;
 using Pair = hgraph::TSL<hgraph::TS<i64>, 2>;
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
-/// The connection core's `replay` makes of `trace`.
-hgraph::Port<hgraph::TS<i64>> replayed(hgraph::Wiring& wiring, const Dense<i64>& trace) {
-    return hgraph::wire<hglrt_test::Replay>(wiring, hglrt::testing::replay_items(trace, start));
-}
+using hglrt_test::replayed;
 
 /// The code of the HGL failure `call` raises, as `assert raises` reads it
 /// (`""` for one with none), or nothing where it raises none.
@@ -402,6 +400,8 @@ struct Span {
 };
 
 TEST_CASE("a child of a fixed list is wired as a connection of its own (TIME-9, FN-11)") {
+    // ERR-1: an unbound port is an internal fault, even at a valid index.
+    CHECK_THROWS_AS((void)hglrt::element_port(hgraph::Port<Pair>{}, 0), std::logic_error);
     spans.clear();
     (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
         const hgraph::Port<Pair> pair =

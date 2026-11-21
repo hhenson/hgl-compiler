@@ -1,6 +1,7 @@
 // The host of an application's executable (application_host.h) and the text
 // of a run's output (application.h).
 #include "host_state.h"
+#include "instant_text.h"
 
 #include <hglrt/application.h>
 #include <hglrt/application_host.h>
@@ -13,7 +14,6 @@
 #include <exception>
 #include <format>
 #include <iostream>
-#include <istream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -21,15 +21,7 @@
 namespace hglrt::application {
 
 std::string detail::instant_text(datetime at) {
-    const auto day = std::chrono::floor<std::chrono::days>(at);
-    const std::chrono::year_month_day calendar{day};
-    const std::chrono::hh_mm_ss<duration> clock{at - day};
-    std::string text = std::format("{:%F}T{:02}:{:02}:{:02}", calendar, clock.hours().count(),
-                                   clock.minutes().count(), clock.seconds().count());
-    if (const auto fraction = clock.subseconds().count(); fraction != 0) {
-        text += std::format(".{:06}", fraction);
-    }
-    return text + "Z";
+    return hglrt::detail::instant_text(at, hglrt::detail::InstantFormat::publication) + "Z";
 }
 
 testing::Entry detail::seeded(Store& store, const testing::Entry& entry) {
@@ -72,8 +64,7 @@ struct Host {
     /// was recorded is there however the process ends. Called with `mutex`
     /// held.
     void say(const std::string& line) {
-        written = std::fwrite(line.data(), 1, line.size(), results) == line.size() &&
-                  std::fputc('\n', results) != EOF && std::fflush(results) == 0 && written;
+        written = testing::detail::write_results_line(results, line) && written;
     }
 };
 
@@ -125,10 +116,10 @@ void stop_asked(bool interrupt) {
     testing::detail::stop_runs();
 }
 
-/// Reads the host's requests from `requests` until it ends: each line
+/// Reads the host's requests from standard input until it ends: each line
 /// `stop` is one, and so is its end, what started the run being gone.
-void read_requests(std::istream* requests) {
-    for (std::string line; std::getline(*requests, line);) {
+void read_requests() {
+    for (std::string line; std::getline(std::cin, line);) {
         if (line == "stop" || line == "stop\r") {
             stop_asked(false);
         }
@@ -147,10 +138,8 @@ void watch_interrupts() {
     }
 }
 
-} // namespace
-
-int detail::main_with(int argc, char** argv, bool real_time, Body body, std::istream* requests,
-                      bool signals) {
+/// Runs the application and returns its process status.
+int run_application(int argc, char** argv, bool real_time, Body body) {
     if (argc != 2) {
         std::fprintf(stderr, "usage: %s RESULTS\n", argc > 0 ? argv[0] : "application");
         return 2;
@@ -175,18 +164,13 @@ int detail::main_with(int argc, char** argv, bool real_time, Body body, std::ist
     if (real_time) {
         testing::detail::runs_watched(true);
     }
-    std::thread interrupts_watched;
-    if (signals) {
-        std::signal(SIGINT, on_interrupt);
-        std::signal(SIGTERM, on_interrupt);
-        watching = true;
-        interrupts_watched = std::thread(watch_interrupts);
-    }
-    if (requests != nullptr) {
-        // It cannot be joined: it may wait on standard input for as long
-        // as the process lives.
-        std::thread(read_requests, requests).detach();
-    }
+    std::signal(SIGINT, on_interrupt);
+    std::signal(SIGTERM, on_interrupt);
+    watching = true;
+    std::thread interrupts_watched(watch_interrupts);
+    // It cannot be joined: it may wait on standard input for as long
+    // as the process lives.
+    std::thread(read_requests).detach();
     Output output;
     std::exception_ptr failure;
     try {
@@ -216,10 +200,8 @@ int detail::main_with(int argc, char** argv, bool real_time, Body body, std::ist
         }
         kept.results = nullptr;
     }
-    if (interrupts_watched.joinable()) {
-        watching = false;
-        interrupts_watched.join();
-    }
+    watching = false;
+    interrupts_watched.join();
     if (real_time) {
         testing::detail::runs_watched(false);
         testing::detail::stops_withdrawn();
@@ -227,8 +209,10 @@ int detail::main_with(int argc, char** argv, bool real_time, Body body, std::ist
     return status;
 }
 
+} // namespace
+
 void main(int argc, char** argv, bool real_time, Body body) {
-    end_process(detail::main_with(argc, argv, real_time, body, &std::cin, true));
+    end_process(run_application(argc, argv, real_time, body));
 }
 
 } // namespace hglrt::application

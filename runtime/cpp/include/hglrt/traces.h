@@ -485,26 +485,6 @@ template <class T>
 struct whole_publication;
 
 namespace detail {
-/// How many positions a list of `size` holds once `delta` is published to it
-/// (TYPE-16): the size it gives, a negative one taken from the size, or,
-/// with none, enough to hold each position it updates.
-template <class L>
-std::size_t size_after(std::size_t size, const list_delta<L>& delta) {
-    if (delta.size_modified.has_value()) {
-        const i64 written = *delta.size_modified;
-        if (written < 0) {
-            const auto dropped = static_cast<std::size_t>(-(written + 1)) + 1;
-            return dropped >= size ? 0 : size - dropped;
-        }
-        return static_cast<std::size_t>(written);
-    }
-    // A position below zero is in no list (EXPR-3), and moves no size.
-    if (delta.updated.empty() || delta.updated.rbegin()->first < 0) {
-        return size;
-    }
-    return std::max(size, static_cast<std::size_t>(delta.updated.rbegin()->first) + 1);
-}
-
 template <class T>
 delta_t<T> whole_delta(const T& value, std::size_t size);
 
@@ -582,7 +562,7 @@ class Publisher<list<V>> {
     list_delta<list<V>> operator()(const Cell<list<V>>& cell) {
         if (cell.index() == 0) {
             const list_delta<list<V>>& delta = std::get<0>(cell);
-            const std::size_t size = size_after(positions_.size(), delta);
+            const std::size_t size = hglrt::detail::list_size_after(positions_.size(), delta);
             positions_.resize(size);
             for (const i64 position : delta.removed) {
                 if (position >= 0 && static_cast<std::size_t>(position) < size) {
