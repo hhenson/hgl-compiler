@@ -171,7 +171,7 @@ analyser reads.
 | SOURCE-1 | Require a source result (`source.result` proposed). The analyser still accepts sources without a result. [#337](https://github.com/hhenson/hgl-compiler/issues/337) |
 | FN-8, GEN-6 | Check duplicate pack declarations (`pack.duplicate`) and a fixed candidate parameter in place of an operator pack (`impl.pack` proposed). Existing declarations keep their behavior. |
 | ERR-6 | Implement the exact-type `get` fallback, including a nullable fallback value. |
-| FN-17, GEN-17, FN-8 | Function parameters, parameter reflection and packs declared for a function, with `function.argument` and `pack.name`. [#362](https://github.com/hhenson/hgl-compiler/issues/362), [#366](https://github.com/hhenson/hgl-compiler/issues/366) |
+| FN-17, GEN-17, FN-8 | Parameter reflection and packs declared for a function, including `pack.name`. [#366](https://github.com/hhenson/hgl-compiler/issues/366) |
 | FN-18, EXPR-10 | Configuration parameters and configuration after a callable name. [#363](https://github.com/hhenson/hgl-compiler/issues/363) |
 | GEN-3, GEN-6, GEN-10, GEN-18 | Read `any`, law predicates and bare Boolean constraints. [#367](https://github.com/hhenson/hgl-compiler/issues/367) |
 | LEX-29, EXPR-16, EXPR-17, FN-19, CTRL-16 | Ranges, loops that make lists and packs, and constant branches in unrolled passes. [#368](https://github.com/hhenson/hgl-compiler/issues/368) |

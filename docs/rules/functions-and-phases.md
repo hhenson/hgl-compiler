@@ -175,15 +175,21 @@ transpiler: planned
 
 ## FN-17
 
-parser: planned
+parser: partial
 
-- #362 tracks function types in parameters and standalone references to generic functions. Named packs in function types await #366.
+- Function types in parameter positions take fixed positional or named inputs, a result type and the optional `const fn` phase. Explicit generic function references are read as arguments.
+- Named packs inside the template await #366.
 
-analyser: planned
+analyser: partial
 
-- Callable argument checking, specialization and `function.argument` await #362.
+- Check the fixed template's phase, input names and input and result types. A value target may lift in a temporal template. An anonymous body's phase comes from the accepting template (FN-7).
+- Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on declared functions. Static parameters may be called or passed onward. They hold no runtime value.
+- The proposed restriction to plain fixed parameters is enforced. Parameter reflection and packs declared for a function await #366.
 
-transpiler: planned
+transpiler: partial
+
+- A static target specializes the called body. The C++ target emits ordinary value helpers and composed graph calls; anonymous functions carry their permitted lexical captures as inputs.
+- Function templates with reflected packs await #366.
 
 ## FN-18
 

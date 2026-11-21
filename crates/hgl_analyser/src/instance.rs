@@ -35,7 +35,10 @@
 use hgl_diagnostics::Location;
 
 use crate::declared::substitute_within;
-use crate::hir::{Answer, Body, Callee, Expr, ExprKind, ValueCategory, walk_statements_mut};
+use crate::hir::{
+    AnonymousFunction, Answer, Body, Callee, Expr, ExprKind, ValueCategory, walk_statements,
+    walk_statements_mut,
+};
 use crate::program::{LocalKind, Phase, Program, Role};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
 
@@ -173,6 +176,7 @@ impl Program {
         functions: &[(usize, Callee)],
     ) {
         if let Callee::Anonymous(function) = callee {
+            let functions = inherited_functions(function, functions);
             let template = Type::Function(Box::new(function.template.clone()));
             if let Type::Function(template) = substitute_within(&template, map) {
                 function.template = *template;
@@ -184,7 +188,7 @@ impl Program {
                 local.ty = substitute_within(&local.ty, map);
             }
             walk_statements_mut(&mut function.body.statements, &mut |inner| {
-                self.place(inner, map, answers, functions);
+                self.place(inner, map, answers, &functions);
             });
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {
@@ -281,6 +285,75 @@ impl Program {
             value => value.literal().map(ExprKind::Literal),
         }
     }
+}
+
+/// FN-17: a nested function that uses a static parameter also needs the
+/// ordinary values its target captures. Relay only the captures used by
+/// this scope or its descendants.
+fn inherited_functions(
+    function: &mut AnonymousFunction,
+    enclosing: &[(usize, Callee)],
+) -> Vec<(usize, Callee)> {
+    if enclosing.is_empty() {
+        return Vec::new();
+    }
+    let mut used = Vec::new();
+    used_function_parameters(&function.body, &mut used);
+    let mut functions: Vec<_> = enclosing
+        .iter()
+        .filter(|(slot, _)| used.contains(slot))
+        .cloned()
+        .collect();
+    let inputs = function.template.parameters.len();
+    let first_local = inputs + function.captures.len();
+    let mut added = Vec::new();
+    for (_, target) in &mut functions {
+        let Callee::Anonymous(target) = target else {
+            continue;
+        };
+        let target_inputs = target.template.parameters.len();
+        for (index, captured) in target.captures.iter_mut().enumerate() {
+            let position = function.captures.iter().position(|outer| outer == captured);
+            let offset = position.unwrap_or_else(|| {
+                let offset = function.captures.len();
+                function.captures.push(*captured);
+                added.push(target.body.locals[target_inputs + index].clone());
+                offset
+            });
+            *captured = inputs + offset;
+        }
+    }
+    if !added.is_empty() {
+        let remapped: Vec<_> = (0..function.body.locals.len())
+            .map(|local| {
+                if local < first_local {
+                    local
+                } else {
+                    local + added.len()
+                }
+            })
+            .collect();
+        crate::values::remap_locals(&mut function.body, &remapped);
+        function.body.locals.splice(first_local..first_local, added);
+    }
+    functions
+}
+
+/// Record the declaration slots used by this anonymous body, including
+/// the slots referenced in a nested anonymous argument.
+fn used_function_parameters(body: &Body, used: &mut Vec<usize>) {
+    walk_statements(&body.statements, &mut |expression| {
+        let target = match &expression.kind {
+            ExprKind::Call { callee, .. } => callee,
+            ExprKind::StaticCallable(callee) => callee,
+            _ => return,
+        };
+        match target {
+            Callee::Parameter { parameter, .. } => used.push(*parameter),
+            Callee::Anonymous(nested) => used_function_parameters(&nested.body, used),
+            _ => {}
+        }
+    });
 }
 
 /// Carry an anonymous function's immutable environment as ordinary
