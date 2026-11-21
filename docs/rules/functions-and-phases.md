@@ -181,6 +181,7 @@ parser: planned
 analyser: planned
 
 - Callable argument checking, specialization and `function.argument` await #362.
+- An anonymous function takes its kind from the accepting function type. Checking its body as a graph or as value code awaits #362.
 
 transpiler: planned
 
