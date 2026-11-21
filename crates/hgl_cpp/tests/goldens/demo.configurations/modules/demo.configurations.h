@@ -21,22 +21,31 @@
 #undef differ
 #undef fallback
 #undef first
+#undef fixed
 #undef flag
 #undef from_book
 #undef from_members
+#undef fs
 #undef h
+#undef held_first
+#undef held_or
 #undef holders
+#undef hs
 #undef key
 #undef looked
 #undef member_of
 #undef members
 #undef noted_bid
 #undef nudged
+#undef pair_or
+#undef paired
 #undef probe
 #undef q
 #undef shifted
 #undef signs
 #undef summed
+#undef t
+#undef ts
 #undef values
 #undef x
 
@@ -81,67 +90,97 @@ namespace w_
 
 namespace w_
 {
-// both(x: i64) -> i64 (graph), module demo.configurations, line 57
+// held_or(x: i64, const h: Holder?) -> i64 (node), module demo.configurations, line 58
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> held_or(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, const std::optional<::hgl::demo::configurations::m_::Holder>& h);
+}  // namespace w_
+
+namespace w_
+{
+// pair_or(x: i64, const t: tuple<i64, i64>?) -> i64 (node), module demo.configurations, line 65
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> pair_or(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, const std::optional<std::tuple<::hgraph::Int, ::hgraph::Int>>& t);
+}  // namespace w_
+
+namespace w_
+{
+// held_first(x: i64, const hs: list<Holder>) -> i64 (node), module demo.configurations, line 72
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> held_first(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, const ::hglrt::list<::hgl::demo::configurations::m_::Holder>& hs);
+}  // namespace w_
+
+namespace w_
+{
+// paired(x: i64, const ts: list<tuple<i64, i64>>) -> i64 (node), module demo.configurations, line 76
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> paired(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, const ::hglrt::list<std::tuple<::hgraph::Int, ::hgraph::Int>>& ts);
+}  // namespace w_
+
+namespace w_
+{
+// fixed(x: i64, const fs: list<i64, 2>) -> i64 (node), module demo.configurations, line 80
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> fixed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, const std::array<::hgraph::Int, 2>& fs);
+}  // namespace w_
+
+namespace w_
+{
+// both(x: i64) -> i64 (graph), module demo.configurations, line 85
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> both(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x);
 }  // namespace w_
 
 namespace w_
 {
-// holders(probe: bool) -> i64 (graph), module demo.configurations, line 61
+// holders(probe: bool) -> i64 (graph), module demo.configurations, line 89
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> holders(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> probe);
 }  // namespace w_
 
 namespace w_
 {
-// above(x: f64, const by: tuple<f64, f64>) -> bool (node), module demo.configurations, line 67
+// above(x: f64, const by: tuple<f64, f64>) -> bool (node), module demo.configurations, line 95
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> above(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x, const std::tuple<::hgraph::Float, ::hgraph::Float>& by);
 }  // namespace w_
 
 namespace w_
 {
-// differ(a: bool, b: bool) -> bool (node), module demo.configurations, line 71
+// differ(a: bool, b: bool) -> bool (node), module demo.configurations, line 99
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> differ(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> a, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> b);
 }  // namespace w_
 
 namespace w_
 {
-// signs(x: f64) -> bool (graph), module demo.configurations, line 75
+// signs(x: f64) -> bool (graph), module demo.configurations, line 103
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> signs(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x);
 }  // namespace w_
 
-// member_of(x: i64, members: set<i64>) -> bool (`const fn`), module demo.configurations, line 78
+// member_of(x: i64, members: set<i64>) -> bool (`const fn`), module demo.configurations, line 106
 ::hgraph::Bool member_of(::hgraph::Int x, const ::hglrt::set<::hgraph::Int>& members);
 
 namespace w_
 {
-// checked(x: i64) -> bool (graph), module demo.configurations, line 85
+// checked(x: i64) -> bool (graph), module demo.configurations, line 113
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> checked(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x);
 }  // namespace w_
 
-// looked(x: str, book: dict<str, i64>) -> i64 (`const fn`), module demo.configurations, line 87
+// looked(x: str, book: dict<str, i64>) -> i64 (`const fn`), module demo.configurations, line 115
 ::hgraph::Int looked(const ::hgraph::Str& x, const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book);
 
 namespace w_
 {
-// booked(x: str) -> i64 (graph), module demo.configurations, line 93
+// booked(x: str) -> i64 (graph), module demo.configurations, line 121
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> booked(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> x);
 }  // namespace w_
 
 namespace w_
 {
-// summed(key: str, const members: set<i64>) -> i64 (node), module demo.configurations, line 96
+// summed(key: str, const members: set<i64>) -> i64 (node), module demo.configurations, line 124
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> summed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key, const ::hglrt::set<::hgraph::Int>& members);
 }  // namespace w_
 
 namespace w_
 {
-// fallback(key: str, const values: list<i64>) -> i64 (node), module demo.configurations, line 104
+// fallback(key: str, const values: list<i64>) -> i64 (node), module demo.configurations, line 132
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> fallback(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key, const ::hglrt::list<::hgraph::Int>& values);
 }  // namespace w_
 
 namespace w_
 {
-// branch(flag: bool, key: str, const members: set<i64>) -> i64 (graph), module demo.configurations, line 108
+// branch(flag: bool, key: str, const members: set<i64>) -> i64 (graph), module demo.configurations, line 136
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> branch(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key, const ::hglrt::set<::hgraph::Int>& members);
 }  // namespace w_
 

@@ -316,8 +316,8 @@ fn a_form_not_written_yet_blocks_what_reaches_it() {
 /// built. In composition that is any ordinary value." A value hgraph has
 /// no scalar of its own type for, a tuple, a set, a dictionary, a struct,
 /// is held as `::hglrt::configured<T>`, given so where the node is wired
-/// and read as `held` in a hook; one it has, a scalar, a list, a nullable
-/// whose payload has a hash, as it is. A nullable one is tested against
+/// and read as `held` in a hook; one it has, a scalar, an enum, a list or
+/// a nullable of a value the library names, as it is. A nullable one is tested against
 /// null, and read narrowed, as the optional its `hgraph::Scalar` holds
 /// (ERR-12). Everything is written, and each test can be run.
 #[test]
@@ -348,6 +348,9 @@ fn configurations_are_written() {
         "(!by.value().has_value())",
         "(*by.value())",
         "std::get<0>(by.value().held)",
+        "::hgraph::Scalar<\"h\", ::hglrt::configured<std::optional<::hgl::demo::configurations::m_::Holder>>> h",
+        "::hgraph::Scalar<\"hs\", ::hglrt::configured<::hglrt::list<::hgl::demo::configurations::m_::Holder>>> hs",
+        "::hgraph::Scalar<\"ts\", ::hglrt::list<std::tuple<::hgraph::Int, ::hgraph::Int>>> ts",
     ] {
         assert!(unit.contains(written), "{written} in\n{unit}");
     }

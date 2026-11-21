@@ -7,12 +7,13 @@
 //! node's configuration as `hgraph::Scalar<"name", T>`, and needs a scalar
 //! of its type registry for T, with `std::hash` and `==`, which its
 //! interning of identical nodes asks of it. It has one for its own
-//! scalars, and the runtime library registers an enum, a list and a
-//! nullable whose payload has a hash. Every other value, a tuple, a
-//! fixed list, a set, a dictionary, a struct, a nullable of a tuple, is
-//! held as `::hglrt::configured<T>` (`values.h`): the value whole, an
-//! atomic of hgraph's under the HGL name of its type, with the hash and
-//! the equality of the value. So two nodes whose configurations differ
+//! scalars, and the runtime library registers an enum, and a list and a
+//! nullable of a value it names (`direct`). Every other value, a tuple,
+//! a fixed list, a set, a dictionary, a struct, a list of a struct hgraph
+//! does not hold as a bundle, a nullable of a tuple, is held as
+//! `::hglrt::configured<T>` (`values.h`): the value whole, an atomic of
+//! hgraph's under the name of its C++ type, with the hash and the
+//! equality of the value. So two nodes whose configurations differ
 //! stay two, and two whose configurations are equal are one, as for any
 //! other configuration; one that holds an `f64` is a node of its own
 //! (hgraph issue 1866, `nodes::unique`).
@@ -22,19 +23,46 @@
 //! | as it is | `T` | `value` | `name.value()` |
 //! | wrapped | `::hglrt::configured<T>` | `::hglrt::configured<T>{value}` | `name.value().held` |
 
-use hgl_analyser::{DeclarationKind, Program, Type};
+use hgl_analyser::{DeclarationKind, Program, Scalar, Type};
 
 use crate::runtime;
 
 /// True where hgraph holds a value of `ty` as configuration as the value
 /// itself, a scalar of its own or one the runtime library registers: a
-/// scalar, an enum, an unsized list, and a nullable whose payload
-/// `std::hash` hashes (`hashed`).
+/// scalar, an enum, an unsized list of a value the library names
+/// (`named`), and a nullable of one that `std::hash` also hashes
+/// (`hashed`). The library registers a list and a nullable under the HGL
+/// name of its type (`hglrt::type_name`, values.h).
 pub(super) fn direct(program: &Program, ty: &Type) -> bool {
     match ty {
-        Type::Scalar(_) | Type::List { size: None, .. } => true,
+        Type::Scalar(_) => true,
         Type::Named { .. } => is_enum(program, ty),
-        Type::Nullable(payload) => hashed(payload),
+        Type::List {
+            element,
+            size: None,
+        } => named(program, element),
+        Type::Nullable(payload) => hashed(payload) && named(program, payload),
+        _ => false,
+    }
+}
+
+/// True where the runtime library names a value of `ty` with the HGL name
+/// of its type (`hglrt::type_name`): a scalar but `any`, `timezone` and
+/// `zoned_time`, an enum, a struct hgraph holds as a nominal bundle (the
+/// compiler names it, `structs::bundled`), and a list, a tuple, a set, a
+/// dictionary or a nullable of those.
+fn named(program: &Program, ty: &Type) -> bool {
+    match ty {
+        Type::Scalar(Scalar::Any | Scalar::Timezone | Scalar::ZonedTime) => false,
+        Type::Scalar(_) => true,
+        Type::Named { .. } => {
+            is_enum(program, ty) || super::structs::bundled(program, ty).is_some()
+        }
+        Type::List { element, .. } | Type::Set(element) | Type::Nullable(element) => {
+            named(program, element)
+        }
+        Type::Tuple(elements) => elements.iter().all(|element| named(program, element)),
+        Type::Dict { key, value } => named(program, key) && named(program, value),
         _ => false,
     }
 }

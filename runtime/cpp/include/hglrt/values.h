@@ -324,7 +324,8 @@ std::string type_name() {
 /// `const` parameter takes what is fixed when the graph is built. In
 /// composition that is any ordinary value"), where hgraph has no scalar of
 /// the value's own type to hold it as: a tuple, a fixed list, a set, a
-/// dictionary, a struct, a nullable of a tuple. hgraph holds a node's
+/// dictionary, a struct, a list or a nullable of a struct hgraph does not
+/// hold as a bundle, a nullable of a tuple. hgraph holds a node's
 /// configuration as `hgraph::Scalar<"name", T>`, and asks of T a scalar of
 /// its type registry, with `std::hash` and `==`, for its interning of
 /// identical nodes; this holds the value whole, and is registered as an

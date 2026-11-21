@@ -53,6 +53,34 @@ fn nudged(x: i64, const by: i64?) -> i64 {
     }
 }
 
+# Nullables of a struct hgraph does not hold as a bundle and of a tuple,
+# a list of such a struct, a list of tuples and a fixed list.
+fn held_or(x: i64, const h: Holder?) -> i64 {
+    when {
+        if h != null { return x + h.n }
+        return x
+    }
+}
+
+fn pair_or(x: i64, const t: tuple<i64, i64>?) -> i64 {
+    when {
+        if t == null { return x }
+        return x + t[0]
+    }
+}
+
+fn held_first(x: i64, const hs: list<Holder>) -> i64 {
+    when { return x + hs[0].n }
+}
+
+fn paired(x: i64, const ts: list<tuple<i64, i64>>) -> i64 {
+    when { return x + ts[0][1] }
+}
+
+fn fixed(x: i64, const fs: list<i64, 2>) -> i64 {
+    when { return x + fs[1] }
+}
+
 # Two nodes of one input whose configurations differ, which stay two.
 fn both(x: i64) -> i64 {
     return shifted(x, (1, 2)) + shifted(x, (10, 20))
@@ -121,6 +149,13 @@ test nodes_are_given_any_value {
     assert eval(noted_bid(x: [1], q: Noted(bid: 10))) == [11]
     assert eval(nudged(x: [1], by: null)) == [1]
     assert eval(nudged(x: [1], by: 5)) == [6]
+    assert eval(held_or(x: [1], h: Holder(xs: [5], n: 2))) == [3]
+    assert eval(held_or(x: [1], h: null)) == [1]
+    assert eval(pair_or(x: [1], t: (5, 6))) == [6]
+    assert eval(pair_or(x: [1], t: null)) == [1]
+    assert eval(held_first(x: [1], hs: [Holder(xs: [], n: 4)])) == [5]
+    assert eval(paired(x: [1], ts: [(5, 6)])) == [7]
+    assert eval(fixed(x: [1], fs: [5, 6])) == [7]
 }
 
 test configurations_that_differ_are_two_nodes {
