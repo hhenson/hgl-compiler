@@ -61,7 +61,7 @@ jobs:
     steps:
       - name: Report the macOS toolchain
         run: &report-toolchain |
-          for path in "$HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "${TMPDIR:-}"; do
+          for path in "$HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "${TMPDIR:-}" "${RUNNER_TOOL_CACHE:-}"; do
             if [[ -d $path ]]; then
               printf '::add-mask::%s\n' "$path" "$(cd -- "$path" && pwd -P)"
             fi
