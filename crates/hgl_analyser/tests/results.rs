@@ -750,12 +750,14 @@ fn generic_functions_infer_from_the_accepted_argument_form() {
         "const fn accept<T>(item: T) -> i64 => 1\n",
         "const fn from_result(items: result<list<i64>, error>) -> i64 => count(items)\n",
         "const fn from_nullable(items: list<i64>?) -> i64 => count(items)\n",
+        "const fn from_both(items: result<list<i64>?, error>) -> i64 => count(items)\n",
         "const fn from_whole(items: result<list<i64>, error>) -> i64 => accept(items)\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
     for (name, expected, form) in [
         ("from_result", "i64", "raised"),
         ("from_nullable", "i64", "read"),
+        ("from_both", "i64", "raised and read"),
         ("from_whole", "result<list<i64>, error>", "whole"),
     ] {
         let mut calls = 0;
@@ -768,17 +770,24 @@ fn generic_functions_infer_from_the_accepted_argument_form() {
                     panic!("{name} has one resolved type argument");
                 };
                 assert_eq!(ty.to_string(), expected);
-                let given = match arguments[0].value.kind {
+                let given = match &arguments[0].value.kind {
                     ExprKind::Raised {
                         raise: Raise::Execution,
                         ..
                     } => "raised",
                     ExprKind::NullRead {
+                        value,
                         raise: Raise::Execution,
                         ..
-                    } => "read",
+                    } => match &value.kind {
+                        ExprKind::Raised {
+                            raise: Raise::Execution,
+                            ..
+                        } => "raised and read",
+                        _ => "read",
+                    },
                     ExprKind::Local(_) => "whole",
-                    ref kind => panic!("unexpected form in {name}: {kind:?}"),
+                    kind => panic!("unexpected form in {name}: {kind:?}"),
                 };
                 assert_eq!(given, form);
                 calls += 1;
@@ -824,10 +833,11 @@ fn indexing_and_iteration_read_nullable_success_payloads() {
     }
 }
 
-/// CTRL-10 and CTRL-13 read a nullable condition. ERR-15 gives that
-/// condition the success value of a result, raising its failure first.
+/// ERR-15 with ERR-12 (hhenson/hgl-compiler#345): a non-nullable place
+/// takes a result's success value, then reads it. CTRL-10 and CTRL-13
+/// require the same two reads for a fallible nullable condition.
 #[test]
-fn conditions_read_nullable_success_payloads() {
+fn typed_places_and_conditions_read_nullable_success_payloads() {
     use hgl_analyser::hir::{NULL_READ_CODE, Raise, walk_statements};
 
     let checked = module(concat!(
@@ -836,16 +846,26 @@ fn conditions_read_nullable_success_payloads() {
         "    return 0\n",
         "}\n",
         "fn choose(flag: result<bool?, error>) -> i64 => if flag { 1 } else { 0 }\n",
+        "const fn read_value(outcome: result<i64?, error>) -> i64 => outcome\n",
+        "const fn checked(value: i64) -> result<i64?, error> => ok(value)\n",
+        "fn read_connection(value: i64) -> i64 => checked(value)\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
-    for (name, phase) in [("required", Raise::Execution), ("choose", Raise::Reader)] {
+    for (name, ty, read_phase, result_phase) in [
+        ("required", "bool", Raise::Execution, Raise::Execution),
+        ("choose", "bool", Raise::Reader, Raise::Reader),
+        ("read_value", "i64", Raise::Execution, Raise::Execution),
+        ("read_connection", "i64", Raise::Reader, Raise::CallNode),
+    ] {
         let mut reads = 0;
         walk_statements(&body(&checked, name).statements, &mut |expr| {
             if let ExprKind::NullRead { value, raise, code } = &expr.kind {
                 assert_eq!(*code, NULL_READ_CODE);
-                assert_eq!(*raise, phase);
-                assert!(matches!(value.kind, ExprKind::Raised { raise, .. } if raise == phase));
-                assert_eq!(expr.ty.to_string(), "bool");
+                assert_eq!(*raise, read_phase);
+                assert!(
+                    matches!(value.kind, ExprKind::Raised { raise, .. } if raise == result_phase)
+                );
+                assert_eq!(expr.ty.to_string(), ty);
                 reads += 1;
             }
         });

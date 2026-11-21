@@ -13,6 +13,7 @@ use super::constants::{constant_text, generic_default};
 use super::evals::{holds_trace, publications};
 use super::expressions::{holds_block, takes_its_type};
 use super::fit::{not_null, whole};
+use super::forms::Taken;
 use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
 use crate::hir::{self, Expr};
@@ -56,10 +57,13 @@ impl<'a> Typer<'a> {
             })
             .collect();
         let expected = substitute_within(pattern, &map);
-        if self.taken(&expected, actual).is_some() {
-            payload
-        } else {
-            actual
+        match self.taken(&expected, actual) {
+            Some(Taken::ValueRead) => match payload.as_ref() {
+                Type::Nullable(inner) => inner,
+                _ => unreachable!("ValueRead requires a nullable success"),
+            },
+            Some(_) => payload,
+            None => actual,
         }
     }
 

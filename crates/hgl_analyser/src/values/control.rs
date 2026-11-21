@@ -216,13 +216,6 @@ impl<'a> Typer<'a> {
     /// condition takes the `bool?` and then reads it.
     pub(super) fn condition(&mut self, node: &SyntaxNode) -> Expr {
         let value = self.expression(node, Some(&BOOL));
-        let value = if matches!(&value.ty, Type::Result { value, .. }
-            if matches!(value.as_ref(), Type::Nullable(payload) if **payload == BOOL))
-        {
-            self.received(value, |payload| *payload == BOOL)
-        } else {
-            value
-        };
         if let Some(taken) = self.taken(&BOOL, &value.ty) {
             return self.take(value, taken);
         }

@@ -32,6 +32,9 @@ use crate::{codes, error};
 pub(super) enum Taken {
     /// A result's T: a success's value, a failure raised.
     Value,
+    /// A result's nullable success read as its value, raising the result's
+    /// error or `value.null` where applicable.
+    ValueRead,
     /// A result's `T?`: a success's value, or null for a failure.
     Nullable,
     /// A `T?`'s T: its value, a null failing the read.
@@ -55,7 +58,9 @@ impl<'a> Typer<'a> {
     /// expected rejects there (`result.propagation_type`), and is taken
     /// as the T form for [`Typer::take`] to say so. A result of an E
     /// that is not `error` has no `T?` form. ERR-12: a `T?` where its T
-    /// is expected is read.
+    /// is expected is read. The owner confirmed in hhenson/hgl-compiler#345
+    /// that a `result<U?, error>` given where a U is taken first takes the
+    /// result's value and then reads the nullable success.
     pub(super) fn taken(&self, expected: &Type, ty: &Type) -> Option<Taken> {
         if self.admits(expected, ty) || open(expected) || !whole(ty) {
             return None;
@@ -69,6 +74,10 @@ impl<'a> Typer<'a> {
                     Some(Taken::Nullable)
                 } else if self.admits(expected, value) {
                     Some(Taken::Value)
+                } else if **error == Type::Error
+                    && matches!(value.as_ref(), Type::Nullable(payload) if self.admits(expected, payload))
+                {
+                    Some(Taken::ValueRead)
                 } else {
                     None
                 }
@@ -83,6 +92,10 @@ impl<'a> Typer<'a> {
     /// (`result.propagation_type`), and is taken all the same, so that
     /// nothing more is reported of it (ERR-9).
     pub(super) fn take(&mut self, value: Expr, taken: Taken) -> Expr {
+        if taken == Taken::ValueRead {
+            let success = self.take(value, Taken::Value);
+            return self.take(success, Taken::Read);
+        }
         let at = value.at;
         let (kind, ty) = match (taken, value.ty.clone()) {
             (Taken::Value, Type::Result { value: success, .. }) => {

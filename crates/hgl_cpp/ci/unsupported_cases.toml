@@ -8,6 +8,10 @@
 
 "a `T?` read where its T is expected" = [
     "conformance::a_null_read_fails_with_value_null",
+    "conformance::a_value_place_reads_a_fallible_nullable_success",
+]
+"a `T?` connection read where a T is taken" = [
+    "conformance::a_connection_reads_a_fallible_nullable_success",
 ]
 "a call's result connection taken as its T" = [
     "conformance::a_composed_call_can_raise_at_its_node",
