@@ -13,7 +13,10 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 destination=${1:-$root/target/release-bundles}
 version_tag=${2:-}
 cd -- "$root"
-[[ -z $(git status --porcelain) ]] || fail "requires a clean checkout"
+# The submodules are judged after they are updated, below: a checkout kept
+# from an earlier build holds them at the commits that build pinned, which
+# is no change of this tree's.
+[[ -z $(git status --porcelain --ignore-submodules=all) ]] || fail "requires a clean checkout"
 
 version=$(python3 scripts/release-bundle.py version)
 [[ -z $version_tag || $version_tag == "$version" ]] ||
@@ -55,6 +58,7 @@ These settings must name one macOS toolchain."
 
 probe_toolchain
 git submodule update --init --recursive
+[[ -z $(git status --porcelain) ]] || fail "requires clean submodules"
 
 # The SDK and libraries use relative install names from the start.
 bundle=$work/$name
