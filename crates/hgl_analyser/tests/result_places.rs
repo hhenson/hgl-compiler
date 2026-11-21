@@ -100,6 +100,56 @@ const fn keep_failed(read: i64?) -> i64 => take(checked(-1), read)
     assert_eq!(calls, 1);
 }
 
+/// ERR-12 and ERR-15: each generic parameter takes the form its
+/// constraint admits from the same fallible nullable argument type.
+#[test]
+fn constrained_generic_arguments_take_independent_result_forms() {
+    let checked = module(
+        r#"
+operator choose<X, Y, Z>(held: X, maybe: Y, value: Z) -> i64
+impl const fn choose<T, U, V>(held: T, maybe: U, value: V) -> i64
+    requires T in {result<i64?, error>} && U in {i64?} && V in {i64} => 0
+const fn mixed(input: result<i64?, error>) -> i64 => choose(input, input, input)
+"#,
+    );
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+    let mut calls = 0;
+    walk_statements(&body(&checked, "mixed").statements, &mut |expr| {
+        if let ExprKind::Call {
+            callee: Callee::Candidate { .. },
+            arguments,
+            ..
+        } = &expr.kind
+        {
+            let [held, maybe, value] = arguments.as_slice() else {
+                panic!("expected three arguments");
+            };
+            assert_eq!(held.value.ty.to_string(), "result<i64?, error>");
+            assert_eq!(maybe.value.ty.to_string(), "i64?");
+            assert!(matches!(
+                maybe.value.kind,
+                ExprKind::Raised {
+                    raise: Raise::Execution,
+                    ..
+                }
+            ));
+            assert_eq!(value.value.ty, Type::Scalar(Scalar::I64));
+            let ExprKind::NullRead { value: read, .. } = &value.value.kind else {
+                panic!("expected a read of the nullable success");
+            };
+            assert!(matches!(
+                read.kind,
+                ExprKind::Raised {
+                    raise: Raise::Execution,
+                    ..
+                }
+            ));
+            calls += 1;
+        }
+    });
+    assert_eq!(calls, 1);
+}
+
 /// GEN-5: a candidate that takes the integer literal without widening
 /// outranks one that widens it, even when another operand takes its value.
 #[test]

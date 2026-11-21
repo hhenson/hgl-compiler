@@ -2094,11 +2094,10 @@ The target's progress is counted in cases: core's runtime cases, and
 later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml).
-Today it lists 1 of core's 198 runtime cases, with the form it needs
-that the target does not write: a nullable put in the run's store
-(hgl_spec issue 165). `check_core.py`, beside it, builds `hgl` first
-and then runs every test in the pinned core's `tests/conformance` and
-`tests/implementation`, integration tests among them, on the target:
+The list covers nullable store puts and the result and nullable forms
+that the target does not write yet. Build `hgl` and run
+`check_core.py`, which runs the pinned core's `tests/conformance`
+and `tests/implementation` on the target, including integration tests:
 
 ```sh
 cargo build --locked --bin hgl

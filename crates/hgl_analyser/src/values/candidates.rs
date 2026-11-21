@@ -129,7 +129,9 @@ impl<'a> Typer<'a> {
         let converting = forms != ArgumentForms::Whole;
         let mut fits = false;
         for &(module, declaration, signature) in candidates {
-            let candidate = &program.modules[module].declarations[declaration];
+            let declared_in = &program.modules[module];
+            let candidate = &declared_in.declarations[declaration];
+            let clause = child(&candidate.syntax, SyntaxKind::RequiresClause);
             let payload_parameters = if matches!(
                 forms,
                 ArgumentForms::Payload | ArgumentForms::RequiredPayload
@@ -138,27 +140,26 @@ impl<'a> Typer<'a> {
                 // condition can make an open binding need another form.
                 // A parameter such as `keep: T` with neither keeps its
                 // result whole when another parameter needs a payload.
-                let uses: std::collections::HashSet<Location> =
-                    child(&candidate.syntax, SyntaxKind::RequiresClause)
-                        .into_iter()
-                        .flat_map(|clause| {
-                            let span = clause.span();
-                            program.modules[module].uses.iter().filter_map(move |used| {
-                                match used.binding {
-                                    Binding::Local {
-                                        at,
-                                        kind: LocalKind::GenericParameter,
-                                    } if used.at.file == candidate.at.file
-                                        && span.start <= used.at.span.start
-                                        && used.at.span.end <= span.end =>
-                                    {
-                                        Some(at)
-                                    }
-                                    _ => None,
+                let uses: std::collections::HashSet<Location> = clause
+                    .iter()
+                    .flat_map(|clause| {
+                        let span = clause.span();
+                        program.modules[module].uses.iter().filter_map(move |used| {
+                            match used.binding {
+                                Binding::Local {
+                                    at,
+                                    kind: LocalKind::GenericParameter,
+                                } if used.at.file == candidate.at.file
+                                    && span.start <= used.at.span.start
+                                    && used.at.span.end <= span.end =>
+                                {
+                                    Some(at)
                                 }
-                            })
+                                _ => None,
+                            }
                         })
-                        .collect();
+                    })
+                    .collect();
                 signature
                     .generics
                     .iter()
@@ -180,6 +181,27 @@ impl<'a> Typer<'a> {
             let widens = |decided: &Type, later: &Type| self.widens(decided, later);
             let defaults = |generic: &GenericParameter| self.default_constant(candidate, generic);
             let constant = |node: &SyntaxNode, ty: Option<&Type>| self.given_constant(node, ty);
+            let condition = clause.and_then(|clause| clause.children().next());
+            let rejects_form = |generic: &GenericParameter, ty: &Type| {
+                let Some(condition) = &condition else {
+                    return false;
+                };
+                let partial = Condition {
+                    value_of: &|_| None,
+                    constant: &|_, _| None,
+                    type_of: &|name| (name == generic.name).then(|| ty.clone()),
+                    written: &|node| {
+                        let read = declared_in.written.iter().find(|written| {
+                            written.at.file == candidate.at.file
+                                && written.at.span.start == node.span().start
+                        })?;
+                        (whole(&read.ty) && !names_parameter(&read.ty)).then(|| read.ty.clone())
+                    },
+                    callable: &|_| None,
+                    unvalued: &std::cell::Cell::new(false),
+                };
+                holds(condition, &partial) == Some(false)
+            };
             let Some((taken, generics, defaulted)) = instance(
                 signature,
                 public,
@@ -189,7 +211,7 @@ impl<'a> Typer<'a> {
                     &widens,
                     &defaults,
                     &constant,
-                    converting.then_some((self, forms, &payload_parameters)),
+                    converting.then_some((self, forms, &payload_parameters, &rejects_form)),
                 ),
             ) else {
                 continue;
@@ -1638,7 +1660,12 @@ fn instance<'s>(
         &dyn Fn(&Type, &Type) -> bool,
         &dyn Fn(&GenericParameter) -> Option<Constant>,
         &dyn Fn(&SyntaxNode, Option<&Type>) -> Result<ConstantValue, Fault>,
-        Option<(&Typer<'_>, ArgumentForms, &[bool])>,
+        Option<(
+            &Typer<'_>,
+            ArgumentForms,
+            &[bool],
+            &dyn Fn(&GenericParameter, &Type) -> bool,
+        )>,
     ),
 ) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>, Vec<usize>)> {
     let generics = &signature.generics;
@@ -1695,24 +1722,16 @@ fn instance<'s>(
         };
         let actual = &given[position].value.ty;
         let actual = match converting {
-            Some((typer, forms, payload_parameters)) if !given[position].by_place => {
+            Some((typer, forms, payload_parameters, rejects_form)) if !given[position].by_place => {
                 // A bare parameter follows its first argument (GEN-2).
                 // After whole and contextual matching fail, its candidate
                 // can still bind from a payload that satisfies its condition.
-                if bare_parameter(&parameter.ty, generics).is_some_and(|index| {
-                    found[index].is_none() && payload_parameters.get(index) == Some(&true)
-                }) && whole(actual)
+                if whole(actual)
+                    && let Some(index) = bare_parameter(&parameter.ty, generics)
+                    && found[index].is_none()
+                    && payload_parameters.get(index) == Some(&true)
                 {
-                    match actual {
-                        Type::Result { value, .. } if forms == ArgumentForms::RequiredPayload => {
-                            match value.as_ref() {
-                                Type::Nullable(payload) => payload,
-                                _ => value,
-                            }
-                        }
-                        Type::Result { value, .. } | Type::Nullable(value) => value,
-                        _ => actual,
-                    }
+                    infer_payload(actual, forms, |ty| rejects_form(&generics[index], ty))
                 } else {
                     typer.inference_input(&parameter.ty, actual, generics, &found)
                 }
@@ -1786,6 +1805,30 @@ fn instance<'s>(
         .as_ref()
         .map(|result| placed(substitute_within(result, &map), &own));
     Some((std::borrow::Cow::Owned(taken), resolved, defaulted))
+}
+
+/// ERR-12 and ERR-15: a result of a nullable value can supply the
+/// success or its required value. A candidate's condition can rule
+/// out one form for this binding independently of its other bindings.
+fn infer_payload(actual: &Type, forms: ArgumentForms, rejects: impl Fn(&Type) -> bool) -> &Type {
+    let (payload, required) = match actual {
+        Type::Result { value, .. } => match value.as_ref() {
+            Type::Nullable(required) => (value.as_ref(), Some(required.as_ref())),
+            payload => (payload, None),
+        },
+        Type::Nullable(value) => (value.as_ref(), None),
+        _ => return actual,
+    };
+    let attempts = if forms == ArgumentForms::RequiredPayload {
+        [required, Some(payload)]
+    } else {
+        [Some(payload), required]
+    };
+    attempts
+        .into_iter()
+        .flatten()
+        .find(|ty| !rejects(ty))
+        .unwrap_or(actual)
 }
 
 /// How specific one type of a candidate's signature is beside another's
