@@ -66,7 +66,7 @@ impl<'a> Typer<'a> {
                 let operator = UnaryOperator::Negate;
                 let identity = self.symbol_operator(operator.identity(), at);
                 // EXPR-13: "Unary configuration precedes its operand."
-                let (mut given, faulty) = match (&config, identity) {
+                let (given, faulty) = match (&config, identity) {
                     (Some(config), Some(identity)) => {
                         self.configuration(operator.symbol(), config, identity)
                     }
@@ -76,55 +76,90 @@ impl<'a> Typer<'a> {
                     (None, _) => (Vec::new(), false),
                 };
                 let value = self.expression(&operand, None);
-                let symbol = Symbol {
-                    form: Form::Unary(operator),
-                    text: operator.symbol(),
+                self.negation(
+                    identity,
                     at,
-                    rule: "OPS-1",
-                    unjudged: Type::Unknown,
-                    place: expected.filter(|place| !open(place)).cloned(),
-                };
-                let only = Given::read(0, operand, value);
-                // GEN-7: `-value` under `requires neg_(T) -> T`.
-                if config.is_none()
-                    && let Some(operator) = identity
-                    && let Some(result) = self.required(operator, &[&only], (None, expected), None)
-                {
-                    return self.call_required(
-                        operator,
-                        result,
-                        vec![only],
-                        Vec::new(),
-                        (symbol.form, symbol.at),
-                    );
-                }
-                // An operand whose operators are not judged here: see
-                // `unjudged_operand`.
-                // A nullable operand is an operand as another is: no
-                // candidate takes one, and the minus is then rejected
-                // (ERR-12).
-                let identity = identity.filter(|_| {
-                    matches!(only.value.ty, Type::Nullable(_)) || !unjudged_operand(&only.value.ty)
-                });
-                let Some(identity) = identity else {
-                    if config.is_none() {
-                        let kind = ExprKind::Unary {
-                            operator,
-                            operand: Box::new(only.value),
-                        };
-                        return (kind, Type::Unknown);
-                    }
-                    given.push(only);
-                    return (self.unselected(given, symbol.form), Type::Unknown);
-                };
-                given.push(only);
-                if faulty {
-                    return (self.unselected(given, symbol.form), symbol.unjudged);
-                }
-                self.call_symbol(symbol, identity, given)
+                    Given::read(0, operand, value),
+                    (given, faulty, config.is_some()),
+                    expected,
+                )
             }
             _ => (ExprKind::Unread, Type::Unknown),
         }
+    }
+
+    /// Select unary minus after reading its operand and any configuration.
+    fn negation(
+        &mut self,
+        identity: Option<OperatorRef>,
+        at: Location,
+        only: Given,
+        (mut given, faulty, configured): (Vec<Given>, bool, bool),
+        expected: Option<&Type>,
+    ) -> (ExprKind, Type) {
+        let operator = UnaryOperator::Negate;
+        let symbol = Symbol {
+            form: Form::Unary(operator),
+            text: operator.symbol(),
+            at,
+            rule: "OPS-1",
+            unjudged: Type::Unknown,
+            place: expected.filter(|place| !open(place)).cloned(),
+        };
+        // GEN-7: `-value` under `requires neg_(T) -> T`.
+        if !configured
+            && let Some(operator) = identity
+            && let Some(result) = self.required(operator, &[&only], (None, expected), None)
+        {
+            return self.call_required(
+                operator,
+                result,
+                vec![only],
+                Vec::new(),
+                (symbol.form, symbol.at),
+            );
+        }
+        // A graph operand can gain its type from an instance selection.
+        // Remember what the minus asks of its candidate until then (GEN-7).
+        if self.graph
+            && !configured
+            && let Some(identity) = identity
+            && matches!(only.value.ty, Type::Unknown)
+        {
+            return (
+                ExprKind::DeferredNegation {
+                    identity,
+                    at,
+                    expected: symbol.place.map(Box::new),
+                    operand_at: self.at(&only.node),
+                    operand: Box::new(only.value),
+                },
+                Type::Unknown,
+            );
+        }
+        // A nullable operand is an operand as another is: no candidate
+        // takes one unless the usual read supplies it (ERR-12).
+        let identity = identity.filter(|_| {
+            matches!(only.value.ty, Type::Nullable(_)) || !unjudged_operand(&only.value.ty)
+        });
+        let Some(identity) = identity else {
+            if !configured {
+                return (
+                    ExprKind::Unary {
+                        operator,
+                        operand: Box::new(only.value),
+                    },
+                    Type::Unknown,
+                );
+            }
+            given.push(only);
+            return (self.unselected(given, symbol.form), Type::Unknown);
+        };
+        given.push(only);
+        if faulty {
+            return (self.unselected(given, symbol.form), symbol.unjudged);
+        }
+        self.call_symbol(symbol, identity, given)
     }
 
     /// `left + right`, and each other operator with two operands.
@@ -446,31 +481,45 @@ impl<'a> Typer<'a> {
 
     /// Select a graph symbol once its operands have settled (GEN-5, GEN-7).
     /// Keep the operand HIR in written order and reuse the source selection.
-    pub(super) fn settle_binary(&mut self, kind: &ExprKind) -> Option<(ExprKind, Type)> {
-        let ExprKind::DeferredBinary {
-            operator,
-            identity,
-            at,
-            expected,
-            operands,
-            left,
-            right,
-        } = kind
-        else {
-            return None;
-        };
-        if !whole(&left.ty) || !whole(&right.ty) {
-            return None;
+    pub(super) fn settle_symbol(&mut self, kind: &ExprKind) -> Option<(ExprKind, Type)> {
+        match kind {
+            ExprKind::DeferredNegation {
+                identity,
+                at,
+                expected,
+                operand_at,
+                operand,
+            } if whole(&operand.ty) => {
+                let only = Given::read(0, self.node_at(*operand_at)?, (**operand).clone());
+                Some(self.negation(
+                    Some(*identity),
+                    *at,
+                    only,
+                    (Vec::new(), false, false),
+                    expected.as_deref(),
+                ))
+            }
+            ExprKind::DeferredBinary {
+                operator,
+                identity,
+                at,
+                expected,
+                operands,
+                left,
+                right,
+            } if whole(&left.ty) && whole(&right.ty) => {
+                let left = Given::read(0, self.node_at(operands[0])?, (**left).clone());
+                let right = Given::read(1, self.node_at(operands[1])?, (**right).clone());
+                Some(self.symbol(
+                    (*operator, *at),
+                    Some(*identity),
+                    (left, right),
+                    (Vec::new(), false, false),
+                    expected.as_deref(),
+                ))
+            }
+            _ => None,
         }
-        let left = Given::read(0, self.node_at(operands[0])?, (**left).clone());
-        let right = Given::read(1, self.node_at(operands[1])?, (**right).clone());
-        Some(self.symbol(
-            (*operator, *at),
-            Some(*identity),
-            (left, right),
-            (Vec::new(), false, false),
-            expected.as_deref(),
-        ))
     }
 
     /// An operand `value` of `==` or another symbol recorded as it is

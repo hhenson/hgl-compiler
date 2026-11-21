@@ -354,6 +354,10 @@ impl Program {
             ExprKind::DeferredBinary {
                 expected: Some(expected),
                 ..
+            }
+            | ExprKind::DeferredNegation {
+                expected: Some(expected),
+                ..
             } => {
                 **expected = substitute_within(expected, instance.types);
             }

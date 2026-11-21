@@ -195,6 +195,18 @@ fn deferred_member<T>(const value: T) -> i64 {
     return held.value
 }
 
+# GEN-5 and NUM-1: unary minus selects once the temporal operand has a type.
+fn deferred_negation<T>(const value: T) -> i64 {
+    let x = if live_helper(value) > 0 { 1 }
+    let y = -x
+    return y
+}
+
+test an_instance_selects_unary_minus {
+    assert eval deferred_negation(value: 3) == [-1]
+    assert eval deferred_negation(value: 0) == []
+}
+
 # CTRL-15: a deferred selector and its label settle to i64.
 fn selected_case<T>(const value: T) -> i64 {
     let key = if live_helper(value) > 0 { 1 }

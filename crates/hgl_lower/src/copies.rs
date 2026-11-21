@@ -585,6 +585,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
             into.extend(otherwise.iter().map(|other| &**other));
         }
         ExprKind::Unary { operand: inner, .. }
+        | ExprKind::DeferredNegation { operand: inner, .. }
         | ExprKind::Widen(inner)
         | ExprKind::ParentList(inner)
         | ExprKind::EnumFrom { value: inner, .. }

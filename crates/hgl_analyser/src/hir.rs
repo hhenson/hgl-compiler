@@ -602,6 +602,19 @@ pub enum ExprKind {
         /// The operand.
         operand: Box<Expr>,
     },
+    /// An unconfigured unary minus awaiting its operand's type in a graph.
+    DeferredNegation {
+        /// The operator this symbol binds.
+        identity: OperatorRef,
+        /// The source location of the minus itself.
+        at: Location,
+        /// What the original place expects of the operator's result.
+        expected: Option<Box<Type>>,
+        /// Where the operand was written.
+        operand_at: Location,
+        /// The operand, already read.
+        operand: Box<Expr>,
+    },
     /// `left && right`, `left || right`, and each other symbol with
     /// two operands that is not read as a call: see [`Form`].
     Binary {
@@ -1402,6 +1415,7 @@ impl Expr {
                 }
             }
             ExprKind::Unary { operand: inner, .. }
+            | ExprKind::DeferredNegation { operand: inner, .. }
             | ExprKind::Widen(inner)
             | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
@@ -1515,6 +1529,7 @@ impl Expr {
                 }
             }
             ExprKind::Unary { operand: inner, .. }
+            | ExprKind::DeferredNegation { operand: inner, .. }
             | ExprKind::Widen(inner)
             | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }

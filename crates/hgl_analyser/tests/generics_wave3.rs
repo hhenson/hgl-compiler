@@ -1624,6 +1624,36 @@ fn graph_instances_select_symbols_with_deferred_iteration_operands() {
     assert!(called(&checked, &instance).contains(&"add_(i64, i64)".to_string()));
 }
 
+/// GEN-5 and NUM-1: the selected operand type determines unary minus.
+/// An incompatible operand still gets the ordinary OPS-1 diagnostic.
+#[test]
+fn graph_instances_select_unary_minus_after_types_settle() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn negative<T>(const input: T) -> i64 {\n",
+        "    let x = if predicate(input) { 1 }\n",
+        "    let y = -x\n",
+        "    return y\n",
+        "}\n",
+        "fn incompatible<T>(const input: T) -> i64 {\n",
+        "    let x = if predicate(input) { true }\n",
+        "    return -x\n",
+        "}\n",
+        "fn accepted() -> i64 => negative(1)\n",
+        "fn rejected() -> i64 => incompatible(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:15:25 operator/operator.no_candidate OPS-1"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    assert!(called(&checked, &instance).contains(&"neg_(i64)".to_string()));
+}
+
 /// GEN-7 and EXPR-7: a member name and base survive the source pass
 /// until selection can check the field and choose its read form.
 #[test]

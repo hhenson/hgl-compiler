@@ -371,6 +371,7 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
             all(&mut arguments.iter().map(|argument| &argument.value))
         }
         ExprKind::Unary { operand, .. } => category(operand),
+        ExprKind::DeferredNegation { operand, .. } => join(category(operand), Unsettled),
         ExprKind::Binary { left, right, .. } => join(category(left), category(right)),
         ExprKind::DeferredBinary { left, right, .. } => {
             join(join(category(left), category(right)), Unsettled)
@@ -529,13 +530,17 @@ pub(super) fn record_with(
                     return;
                 }
                 NodeMut::Expression(value)
-                    if composition && matches!(value.kind, ExprKind::DeferredBinary { .. }) =>
+                    if composition
+                        && matches!(
+                            value.kind,
+                            ExprKind::DeferredBinary { .. } | ExprKind::DeferredNegation { .. }
+                        ) =>
                 {
                     if let Some(typer) = typer.as_deref_mut() {
                         // The normal call checks read the concrete local
                         // scope, including iteration bindings settled here.
                         std::mem::swap(&mut typer.locals, locals);
-                        let selected = typer.settle_binary(&value.kind);
+                        let selected = typer.settle_symbol(&value.kind);
                         std::mem::swap(&mut typer.locals, locals);
                         if let Some((kind, ty)) = selected {
                             value.kind = kind;
