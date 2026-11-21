@@ -498,10 +498,13 @@ pub enum ExprKind {
         child: Box<Expr>,
     },
     /// The endpoint of a child of a temporal input, given to an
-    /// `endpoint<T>` parameter (TIME-9: "a child of one, `parts[1]`,
-    /// `quote.bid` or `parts[i]`"), named as in
-    /// [`ExprKind::ChildEndpoint`].
+    /// `endpoint<T>` parameter or retained by an inferred `let`
+    /// (TIME-9, ERR-14). It is named as in [`ExprKind::ChildEndpoint`].
     ChildEndpointOf(Box<Expr>),
+    /// The child endpoint held by an inferred `let` (ERR-14). This
+    /// names the endpoint selected when the binding was evaluated,
+    /// with its payload type. An endpoint operation uses it directly.
+    BoundChild(LocalId),
     /// A read of a collection's child that is checked when it runs
     /// (TIME-1, ERR-14): `parts[i]` in a hook, whose child is known only
     /// then. A child that is not valid fails the read with
@@ -511,7 +514,7 @@ pub enum ExprKind {
     /// result; otherwise it is of the child's T.
     CheckedChild {
         /// The read: an [`ExprKind::Index`] or [`ExprKind::Field`]
-        /// rooted at a temporal input.
+        /// rooted at a temporal input, or a [`ExprKind::BoundChild`].
         read: Box<Expr>,
         /// True where the place expects `result<T, error>`.
         result: bool,
@@ -525,6 +528,10 @@ pub enum ExprKind {
     /// an index known only when it runs is a
     /// [`ExprKind::CheckedChild`]. The expression is of the result.
     CheckedWindow(Box<Expr>),
+    /// An admitted read of a whole dictionary or unsized list into a
+    /// `result<T, error>` place (TIME-1, ERR-14). An incomplete valid
+    /// entry or a gap without a value gives `err(value.unset_read)`.
+    CheckedWhole(Box<Expr>),
     /// A read of what an endpoint published in the cycle, its
     /// `delta_value`, or of what a window lost in it, its
     /// `removed_value`, where its place expects `result<T, error>`, T
@@ -1291,6 +1298,7 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::BoundChild(_)
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
             | ExprKind::EnumMember { .. }
@@ -1331,6 +1339,7 @@ impl Expr {
             | ExprKind::ChildEndpointOf(inner)
             | ExprKind::CheckedChild { read: inner, .. }
             | ExprKind::CheckedWindow(inner)
+            | ExprKind::CheckedWhole(inner)
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes(visit),
             ExprKind::Binary { left, right, .. }
@@ -1401,6 +1410,7 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::BoundChild(_)
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
             | ExprKind::EnumMember { .. }
@@ -1441,6 +1451,7 @@ impl Expr {
             | ExprKind::ChildEndpointOf(inner)
             | ExprKind::CheckedChild { read: inner, .. }
             | ExprKind::CheckedWindow(inner)
+            | ExprKind::CheckedWhole(inner)
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes_mut(visit),
             ExprKind::Binary { left, right, .. }

@@ -1682,9 +1682,8 @@ fn nested_forms_are_written() {
 
 /// A form made of others that the library does not read or publish as a
 /// part yet is reported by name, and nothing is miswritten: a list of
-/// sets, a dictionary of lists, a dictionary of structs, a tuple of a set,
-/// and a child of a list of tuples named in a hook, whose library `Child`
-/// is no view a tuple's own reads take.
+/// sets, a dictionary of lists, a dictionary of structs and a tuple of
+/// a set. A tuple child of a list is now read in a hook (TIME-1).
 #[test]
 fn nested_forms_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -1718,9 +1717,6 @@ fn nested_forms_not_written_yet_are_reported() {
             "m.hgl:8:10 the cpp target does not write a temporal value of `dict<str, list<i64>>` yet",
             "m.hgl:11:11 the cpp target does not write a temporal value of `dict<str, Quote>` yet",
             "m.hgl:14:11 the cpp target does not write a temporal value of `tuple<set<i64>, i64>` yet",
-            "m.hgl:18:16 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
-            "m.hgl:18:39 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
-            "m.hgl:18:58 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
         ]
     );
 }

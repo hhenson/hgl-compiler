@@ -52,7 +52,7 @@ struct window_read {
     /// that value.
     template <class E>
     static V delta(const E& window) {
-        return window.delta_value().template checked_as<V>();
+        return viewed(window).delta_value().template checked_as<V>();
     }
 
     /// END-9: "In a cycle in which a value only leaves a window of a
@@ -60,7 +60,7 @@ struct window_read {
     /// window holds nothing there.
     template <class E>
     static bool has_delta(const E& window) {
-        return window.delta_value().has_value();
+        return viewed(window).delta_value().has_value();
     }
 
     /// END-9: "`all_valid(x)` where it holds at least its minimum: of a
@@ -69,7 +69,7 @@ struct window_read {
     /// first value, and an empty window is not all valid": hgraph's own.
     template <class E>
     static bool all_valid(const E& window) {
-        return window.all_valid();
+        return present(window) && viewed(window).all_valid();
     }
 };
 
@@ -86,7 +86,7 @@ struct is_window<hgraph::TSWDuration<V, Max, Min>> : std::true_type {};
 template <class E>
 list<typename schema_of<E>::value_type> held(const E& window) {
     using V = typename schema_of<E>::value_type;
-    const hgraph::TSWDataView data = window.data_view();
+    const hgraph::TSWDataView data = viewed(window).data_view();
     list<V> values;
     values.reserve(data.size());
     for (std::size_t index = 0; index < data.size(); ++index) {
@@ -107,6 +107,25 @@ struct endpoint_read<hgraph::TSWDuration<V, Max, Min>> : detail::window_read<V> 
 /// An hgraph view of a window: an input, an output, or a child of either.
 template <class E>
 concept window_view = detail::is_window<schema_of<E>>::value;
+
+/// The whole read of a window when used as a child's payload, or no
+/// value before it is all valid (TYPE-11).
+template <class S>
+    requires detail::is_window<S>::value
+struct schema_value<S> {
+    using type = list<typename S::value_type>;
+};
+template <class S>
+    requires detail::is_window<S>::value
+struct whole<S> {
+    template <class E>
+    static std::optional<schema_value_t<S>> read(const E& window) {
+        if (!fn_all_valid(window)) {
+            return std::nullopt;
+        }
+        return detail::held(window);
+    }
+};
 
 /// The V of the window view `E`.
 template <window_view E>
@@ -238,8 +257,12 @@ result<list<window_value_t<E>>> window_value_checked(const E& window) {
 /// cycle.
 template <window_view E>
 result<window_value_t<E>> fn_removed_value_checked(const E& window) {
-    const hgraph::TSWDataView data = window.data_view();
-    const hgraph::DateTime now = window.evaluation_time();
+    if (!detail::present(window)) {
+        return detail::unset_result("no value left the window in the cycle");
+    }
+    const auto& view = detail::viewed(window);
+    const hgraph::TSWDataView data = view.data_view();
+    const hgraph::DateTime now = view.evaluation_time();
     if (!data.has_removed_value(now)) {
         return detail::unset_result("no value left the window in the cycle");
     }

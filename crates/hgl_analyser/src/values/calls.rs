@@ -486,7 +486,12 @@ impl<'a> Typer<'a> {
             && let ExprKind::Call { arguments, .. } = &kind
             && let [argument] = arguments.as_slice()
             && let ExprKind::ChildEndpointOf(child) = &argument.value.kind
-            && let ExprKind::Local(input) = child.place_root().kind
+            && let Some(input) = self
+                .input_of(child)
+                .or_else(|| match child.place_root().kind {
+                    ExprKind::Local(local) => Some(local),
+                    _ => None,
+                })
             && self.designates(input)
         {
             // The child as it is written.

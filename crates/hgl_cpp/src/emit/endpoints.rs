@@ -21,13 +21,13 @@
 //! `windows` family's. Any other `all_valid`, and `modified([])` read as a
 //! value elsewhere, are not written yet, and are reported.
 
-use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Local, Stmt};
-use hgl_analyser::{DeclarationKind, Detail, Program, Type};
+use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Local, Stmt, Value};
+use hgl_analyser::{DeclarationKind, Detail, NamedKind, Program, Type};
 use hgl_lower::calls::runtime_arguments;
 
 use super::Emitter;
 use super::forms::Family;
-use super::names::identifier;
+use super::names::{identifier, temporary};
 use super::nodes::{Kind, Role};
 use super::statements::Scope;
 use super::values::INDENT;
@@ -73,6 +73,95 @@ pub(super) fn capability_type(
 /// The endpoints' family.
 pub(super) struct Endpoints;
 
+impl Emitter<'_> {
+    /// The view chosen by an ERR-14 read or metadata operation. At a
+    /// bound endpoint the arguments have already been captured.
+    pub(super) fn read_endpoint_view(
+        &mut self,
+        scope: &mut Scope,
+        endpoint: &Expr,
+    ) -> Option<String> {
+        let at = self.source_location(endpoint.at);
+        self.endpoint_view(scope, endpoint, &mut None, &at)
+    }
+
+    /// Walk an endpoint path. At a binding every variable position or
+    /// key is evaluated immediately and captured by value. The view is
+    /// resolved at use with that use's location for a bounds failure.
+    fn endpoint_view(
+        &mut self,
+        scope: &mut Scope,
+        endpoint: &Expr,
+        captures: &mut Option<Vec<String>>,
+        where_: &str,
+    ) -> Option<String> {
+        let lib = runtime::NAMESPACE;
+        match &endpoint.kind {
+            ExprKind::Local(local) => self.view(&scope.body.locals, *local),
+            ExprKind::BoundChild(local) => {
+                let name = identifier(&scope.body.locals[*local].name);
+                Some(format!("{name}({where_})"))
+            }
+            ExprKind::Field { base, member }
+                if matches!(
+                    base.ty,
+                    Type::Named {
+                        kind: NamedKind::Struct,
+                        ..
+                    }
+                ) =>
+            {
+                let parent = self.endpoint_view(scope, base, captures, where_)?;
+                Some(format!("::{lib}::child<{member}>({parent})"))
+            }
+            ExprKind::Index { base, index } => {
+                let parent = self.endpoint_view(scope, base, captures, where_)?;
+                if matches!(base.ty, Type::Tuple(_)) {
+                    let ExprKind::Literal(Value::Int(position)) = index.kind else {
+                        return None;
+                    };
+                    return Some(format!("::{lib}::child<{position}>({parent})"));
+                }
+                let index_code = match base.ty {
+                    Type::List { .. } | Type::Dict { .. } => self.expression(scope, index),
+                    _ => return None,
+                };
+                let path = |parent: &str, position: &str| match base.ty {
+                    Type::List { .. } => format!("::{lib}::child({parent}, {position}, {where_})"),
+                    Type::Dict { .. } => format!("::{lib}::keyed_child({parent}, {position})"),
+                    _ => unreachable!("an index into a list or dictionary"),
+                };
+                if let Some(captures) = captures {
+                    let held = temporary("selector", self.temporary());
+                    scope
+                        .before
+                        .push(format!("const auto {held} = {index_code};"));
+                    captures.push(held.clone());
+                    return Some(path(&parent, &held));
+                }
+                // EXPR-2: choose the parent before the next index when
+                // evaluation order is observable.
+                if self.held_read(base, index) {
+                    let held = temporary("parent", self.temporary());
+                    let selected = temporary("selector", self.temporary());
+                    let view = path(&held, &selected);
+                    return Some(format!(
+                        "[&]() {{ const auto& {held} = {parent}; const auto {selected} = {index_code}; return {view}; }}()"
+                    ));
+                }
+                Some(path(&parent, &index_code))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// True where a child is a previously bound endpoint, or derives from
+/// one through another projection. Existing direct reads use their families.
+fn bound_child(value: &Expr) -> bool {
+    matches!(value.place_root().kind, ExprKind::BoundChild(_))
+}
+
 impl Family for Endpoints {
     fn expression(
         &self,
@@ -81,7 +170,64 @@ impl Family for Endpoints {
         value: &Expr,
     ) -> Option<String> {
         let locals = &scope.body.locals;
+        let lib = runtime::NAMESPACE;
         match &value.kind {
+            ExprKind::BoundChild(_) | ExprKind::Field { .. } | ExprKind::Index { .. }
+                if bound_child(value) =>
+            {
+                let view = emitter.read_endpoint_view(scope, value)?;
+                let at = emitter.source_location(value.at);
+                scope.read = true;
+                scope.acted = true;
+                Some(format!(
+                    "::{lib}::read_bound_child(::{lib}::checked_whole_result({view}), {at})"
+                ))
+            }
+            ExprKind::ChildEndpointOf(child) if bound_child(child) => {
+                let view = emitter.read_endpoint_view(scope, child)?;
+                scope.acted = true;
+                Some(view)
+            }
+            ExprKind::ChildEndpoint { operation, child } => {
+                let view = emitter.read_endpoint_view(scope, child)?;
+                scope.acted = true;
+                let native = operation.name();
+                if *operation == EndpointOperation::DeltaValue {
+                    let at = emitter.source_location(value.at);
+                    if bound_child(child) {
+                        Some(format!(
+                            "::{lib}::read_bound_child(::{lib}::fn_delta_value_checked({view}), {at})"
+                        ))
+                    } else {
+                        Some(format!("::{lib}::fn_delta_value({view}, {at})"))
+                    }
+                } else {
+                    Some(format!("::{lib}::fn_{native}({view})"))
+                }
+            }
+            ExprKind::CheckedChild { read, result } => {
+                let view = emitter.read_endpoint_view(scope, read)?;
+                scope.read = true;
+                scope.acted = true;
+                if *result {
+                    Some(format!("::{lib}::checked_whole_result({view})"))
+                } else {
+                    let at = emitter.source_location(value.at);
+                    if bound_child(read) {
+                        Some(format!(
+                            "::{lib}::read_bound_child(::{lib}::checked_whole_result({view}), {at})"
+                        ))
+                    } else {
+                        Some(format!("::{lib}::checked_whole({view}, {at})"))
+                    }
+                }
+            }
+            ExprKind::CheckedWhole(read) => {
+                let view = emitter.read_endpoint_view(scope, read)?;
+                scope.read = true;
+                scope.acted = true;
+                Some(format!("::{lib}::checked_whole_result({view})"))
+            }
             ExprKind::Local(local) => match emitter.role(*local) {
                 // TIME-1: a payload read, as the input's temporal form
                 // reads it.
@@ -130,6 +276,11 @@ impl Family for Endpoints {
             // ERR-14: the analyser records where the place of a
             // `delta_value` takes a `result`.
             ExprKind::CheckedDelta(read) => match &read.kind {
+                ExprKind::ChildEndpoint { child, .. } => {
+                    let view = emitter.read_endpoint_view(scope, child)?;
+                    scope.acted = true;
+                    Some(format!("::{lib}::fn_delta_value_checked({view})"))
+                }
                 ExprKind::Endpoint {
                     operation: EndpointOperation::DeltaValue,
                     inputs: Some(inputs),
@@ -233,6 +384,35 @@ impl Family for Endpoints {
         depth: usize,
         text: &mut String,
     ) -> bool {
+        if let Stmt::Declare {
+            local,
+            value:
+                Some(Expr {
+                    kind: ExprKind::ChildEndpointOf(child),
+                    ..
+                }),
+        } = statement
+            && matches!(scope.body.locals[*local].ty, Type::Endpoint(_))
+        {
+            let name = identifier(&scope.body.locals[*local].name);
+            let mut captures = Some(Vec::new());
+            let at = temporary("read_at", emitter.temporary());
+            if let Some(view) = emitter.endpoint_view(scope, child, &mut captures, &at) {
+                let captured = captures.expect("a binding records its selectors");
+                let captures = if captured.is_empty() {
+                    "&".to_string()
+                } else {
+                    format!("&, {}", captured.join(", "))
+                };
+                let indent = INDENT.repeat(depth);
+                text.push_str(&format!(
+                    "{indent}const auto {name} = [{captures}]([[maybe_unused]] ::std::source_location {at}) {{ return {view}; }};\n"
+                ));
+            } else {
+                emitter.unsupported(child.at, "this child endpoint binding");
+            }
+            return true;
+        }
         let Stmt::Expr(
             value @ Expr {
                 kind:

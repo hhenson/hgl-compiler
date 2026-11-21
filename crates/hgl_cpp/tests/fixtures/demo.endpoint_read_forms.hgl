@@ -1,0 +1,86 @@
+module demo.endpoint_read_forms
+
+fn keyed_read(book: dict<str, i64>, key: str) -> tuple<bool, i64?> {
+    when {
+        var selector = key
+        let entry = book[selector]
+        selector = "other"
+        let observed: i64? = entry
+        return (valid(entry), observed)
+    }
+}
+
+test a_child_binding_captures_the_dictionary_key {
+    assert eval keyed_read(
+        book: [["bid": 3, "other": 8], _, _],
+        key: ["bid", "absent", "other"],
+    ) == [(true, 3), (false, null), (true, 8)]
+}
+
+fn unused_child(parts: list<i64, 2>, position: i64) -> i64 {
+    when {
+        let unused = parts[position]
+        return 1
+    }
+}
+
+test a_child_binding_does_not_read_or_check_its_position {
+    assert eval unused_child(parts: [[3, 4]], position: [2]) == [1]
+}
+
+fn partial_pairs(step: i64) -> list<tuple<i64, i64>, 2> {
+    when {
+        let change: delta<tuple<i64, i64>> = if step == 0 { (3, null) } else { (null, 4) }
+        return delta<list<tuple<i64, i64>, 2>>(updated: [0: change])
+    }
+}
+
+fn pair_forms(pairs: list<tuple<i64, i64>, 2>, position: i64) -> tuple<bool, bool> {
+    when {
+        let child = pairs[position]
+        let optional: tuple<i64, i64>? = child
+        let outcome: result<tuple<i64, i64>, error> = child
+        return (optional != null, is_ok(outcome))
+    }
+}
+
+fn observe_pair_forms(step: i64, position: i64) -> tuple<bool, bool> =>
+    pair_forms(partial_pairs(step), position)
+
+test a_runtime_tuple_child_takes_result_and_nullable_forms {
+    assert eval observe_pair_forms(step: [0, 1], position: [0, _]) == [(false, false), (true, true)]
+}
+
+fn read_pair(pairs: list<tuple<i64, i64>, 2>, position: i64) -> tuple<i64, i64> {
+    when {
+        let child = pairs[position]
+        return child # consuming read
+    }
+}
+
+fn plain_pair(step: i64, position: i64) -> tuple<i64, i64> =>
+    read_pair(partial_pairs(step), position)
+
+test a_plain_child_failure_points_to_the_read {
+    assert eval plain_pair(step: [0], position: [0]) == [(3, 4)]
+}
+
+fn gaps(step: i64) -> list<i64> {
+    when {
+        if step == 0 { return [1] }
+        return delta<list<i64>>(updated: [2: 4])
+    }
+}
+
+fn whole_result(values: list<i64>) -> bool {
+    when {
+        let outcome: result<list<i64>, error> = values
+        return is_ok(outcome)
+    }
+}
+
+fn observe_list_result(step: i64) -> bool => whole_result(gaps(step))
+
+test a_growing_list_with_a_gap_has_a_result_form {
+    assert eval observe_list_result(step: [0, 1]) == [true, false]
+}

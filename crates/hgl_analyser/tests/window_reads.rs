@@ -133,10 +133,9 @@ fn delta_value_takes_its_form_from_its_place() {
     );
 }
 
-/// TYPE-11: "A read of the delta of a window of a duration whose place is
-/// not a `result` rejects (`payload.unguarded`): an arrival may be
-/// missing at its tick. One of a window of a tick count is not rejected:
-/// it ticks only at an arrival." Of an input, of a child and of `out`,
+/// TYPE-11: A duration window's delta takes a result or nullable place.
+/// A plain place rejects because an arrival may be missing at its tick.
+/// A tick-count window ticks only at an arrival. Of an input, of a child and of `out`,
 /// returned and bound; a window that may be left out is the window
 /// under its `?` (TYPE-14). A window's VALUE read is a checked read,
 /// where a `result` is taken, as before (`CheckedWindow`).
@@ -183,6 +182,39 @@ fn a_plain_read_of_the_delta_of_a_window_of_a_duration_rejects() {
         returned(&checked, "values").kind,
         ExprKind::CheckedWindow(_)
     ));
+}
+
+/// TYPE-11 and ERR-14: a duration window's delta in a nullable place
+/// gives null where the window ticks with no arrival.
+#[test]
+fn a_duration_window_delta_has_a_nullable_form() {
+    let checked = module(
+        "struct Book { prices: rolling_window<i64, 3s, 1s> }
+fn timed(readings: rolling_window<i64, 3s, 1s>) -> i64? {
+    when modified(readings) { return delta_value(readings) }
+}
+fn child(book: Book) -> i64? {
+    when {
+        let prices = book.prices
+        if !valid(prices) { return null }
+        return delta_value(prices)
+    }
+}",
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    assert!(matches!(
+        &returned(&checked, "timed").kind,
+        ExprKind::OrNull { result, .. } if matches!(result.kind, ExprKind::CheckedDelta(_))
+    ));
+    let mut nullable_child = false;
+    walk_statement_nodes(&body(&checked, "child").statements, &mut |node| {
+        if let Node::Expression(value) = node
+            && let ExprKind::OrNull { result, .. } = &value.kind
+        {
+            nullable_child |= matches!(result.kind, ExprKind::CheckedDelta(_));
+        }
+    });
+    assert!(nullable_child);
 }
 
 /// TIME-9: "The operations on an endpoint are core's native value

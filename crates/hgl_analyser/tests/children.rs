@@ -8,7 +8,7 @@
 mod common;
 
 use common::{Checked, body, check};
-use hgl_analyser::hir::{Expr, ExprKind, Stmt};
+use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Stmt};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -148,6 +148,120 @@ fn a_child_known_when_it_runs_is_checked_then() {
         "{checked_at:?}"
     );
     assert_eq!(checked_at.ty.to_string(), "result<i64, error>");
+}
+
+/// ERR-14: an inferred `let` takes the endpoint and its uses are read
+/// separately. The index in the initializer is evaluated once. Even
+/// when it is reassigned, every use names the local's selected child.
+#[test]
+fn an_inferred_let_holds_a_child_until_its_use() {
+    let checked = module(
+        "fn probe(parts: list<i64, 2>, slot: i64) -> i64? {
+    when {
+        var index = slot
+        let entry = (parts[index])
+        index = 0
+        let seen = valid(entry)
+        let plain: i64 = entry
+        let checked: result<i64, error> = entry
+        return entry
+    }
+}",
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let Some(Stmt::Hook { body: hook, .. }) = body(&checked, "probe")
+        .statements
+        .iter()
+        .find(|statement| matches!(statement, Stmt::Hook { .. }))
+    else {
+        panic!("the node has a hook");
+    };
+    let [
+        Stmt::Declare { local: index, .. },
+        Stmt::Declare {
+            local: entry,
+            value: Some(binding),
+        },
+        Stmt::Assign { local: changed, .. },
+        Stmt::Declare {
+            value: Some(seen), ..
+        },
+        Stmt::Declare {
+            value: Some(plain), ..
+        },
+        Stmt::Declare {
+            value: Some(fallible),
+            ..
+        },
+        Stmt::Return {
+            value: Some(optional),
+            ..
+        },
+    ] = hook.as_slice()
+    else {
+        panic!("the hook declares and uses its endpoint local: {hook:?}");
+    };
+    assert_eq!(changed, index);
+    let ExprKind::ChildEndpointOf(child) = &binding.kind else {
+        panic!("the initializer holds an endpoint");
+    };
+    assert!(matches!(&child.kind, ExprKind::Index { index: read, .. }
+        if read.kind == ExprKind::Local(*index)));
+    assert!(
+        matches!(&seen.kind, ExprKind::ChildEndpoint { operation: EndpointOperation::Valid, child }
+        if child.kind == ExprKind::BoundChild(*entry))
+    );
+    let ExprKind::OrNull {
+        result: nullable, ..
+    } = &optional.kind
+    else {
+        panic!("the nullable use discards the error");
+    };
+    for (use_, result) in [(plain, false), (fallible, true), (nullable.as_ref(), true)] {
+        assert!(
+            matches!(&use_.kind, ExprKind::CheckedChild { read, result: checked }
+            if read.kind == ExprKind::BoundChild(*entry) && *checked == result)
+        );
+        assert!(use_.at.span.start > binding.at.span.end);
+    }
+}
+
+/// TIME-1, TIME-4, ERR-14: reading a bound static child needs its
+/// guard at the use, and a guard of that same child can name the alias.
+/// An inferred `var` still needs the value at its initializer.
+#[test]
+fn a_child_alias_keeps_its_static_admission_rule() {
+    let checked = module(
+        "fn admitted(parts: list<i64, 2>) -> i64 {
+    when {
+        let entry = parts[0]
+        let alias = entry
+        if valid(alias) { return entry }
+        return 0
+    }
+}
+fn unguarded(parts: list<i64, 2>) -> i64 {
+    when {
+        let entry = parts[1]
+        return entry
+    }
+}
+fn mutable(parts: list<i64, 2>) -> i64 {
+    when {
+        var entry = parts[1]
+        return entry
+    }
+}",
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:16 phase/payload.unguarded TIME-1",
+            "m.hgl:18:21 phase/payload.unguarded TIME-1",
+        ],
+        "{}",
+        checked.report,
+    );
 }
 
 /// TIME-1: "A child of a collection (TIME-9), an element, a field or an

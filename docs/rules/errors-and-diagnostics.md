@@ -164,15 +164,17 @@ analyser: done
 
 analyser: done
 
-- A child read checked when it runs (`CheckedChild`) where the place expects `result<T, error>`, T the child's type, is of that result (EXPR-5); elsewhere it is the T
-- So is a read of a window's value, of an input, `out` or a child named when compiled (`CheckedWindow`), where the place expects `result<list<V>, error>`, "T being the `list<V>` it reads as (TYPE-11)"
-- So is `delta_value` of any endpoint, an input, `out` or a child, where the place expects `result<delta<T>, error>`, and core's `removed_value` of a window where it expects `result<V, error>` (`CheckedDelta`), the place saying what V is; where the place takes no `result` a window of a duration's delta and any `removed_value` are `payload.unguarded` (TYPE-11)
+- An inferred `let` given a child holds the endpoint. Endpoint operations name it and a value use reads it under TIME-1 admission. An inferred `var` still reads the value at initialization, as ruled pending the owner's reading in #440.
+- A runtime-checked child read, or an admitted whole read of a dictionary, an unsized list or a window, gives T, `result<T, error>`, or `T?` according to its place. The nullable form discards the error as ERR-15 does.
+- `delta_value` takes the same forms. TYPE-11 restricts a duration-window delta to a result or nullable place, and `removed_value` to a result place for every window.
 
 transpiler: partial
 
-- Writes checked child and window reads, preserving the analysed result or value form
-  for unset or out-of-range reads. A dictionary's tuple entry that is valid
-  but cannot be read whole gives `err` with `value.unset_read` in the result form.
+- Holds the position or key of an inferred child binding and reads its payload at the
+  use. A failed plain read reports the use's HGL location.
+- Writes checked child, dictionary, unsized-list and window reads in the analysed
+  value, result or nullable form. A dictionary omits wholly unset entries and a
+  partial valid entry fails its whole read.
 - Left: Deltas or window reads outside the supported endpoint forms are reported. List
   children and nested dictionary entries have the EXPR-7 limits, and reading a node's
   own window result during its `when` is reported (END-9).

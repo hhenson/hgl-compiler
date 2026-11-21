@@ -224,7 +224,9 @@ fn close(mut body: Body, first: LocalId, parameters: usize) -> (Body, Vec<LocalI
             return;
         };
         match &expression.kind {
-            ExprKind::Local(local) | ExprKind::EndpointOf(local) => captured(*local),
+            ExprKind::Local(local) | ExprKind::EndpointOf(local) | ExprKind::BoundChild(local) => {
+                captured(*local)
+            }
             ExprKind::Endpoint {
                 inputs: Some(locals),
                 ..
@@ -285,7 +287,9 @@ pub(crate) fn remap_locals(body: &mut Body, slots: &[LocalId]) {
             _ => {}
         },
         NodeMut::Expression(expression) => match &mut expression.kind {
-            ExprKind::Local(local) | ExprKind::EndpointOf(local) => change(local),
+            ExprKind::Local(local) | ExprKind::EndpointOf(local) | ExprKind::BoundChild(local) => {
+                change(local)
+            }
             ExprKind::Endpoint {
                 inputs: Some(locals),
                 ..

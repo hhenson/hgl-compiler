@@ -607,21 +607,23 @@ impl<'a> Typer<'a> {
 }
 
 impl Typer<'_> {
-    /// Reports each read of what an endpoint published or lost in the
-    /// cycle, among a node's `statements`, whose place does not take a
-    /// `result` (ERR-14, TYPE-11). A window of a duration has no delta at
-    /// a tick where a value only leaves it, so `delta_value` of one is
-    /// read where a `result` is taken, `ok` of the delta or an `err`
-    /// coded `value.unset_read` (`ExprKind::CheckedDelta`): "A read of
-    /// the delta of a window of a duration whose place is not a `result`
-    /// rejects (`payload.unguarded`) ... One of a window of a tick count
-    /// is not rejected". Core's `removed_value` "rejects for every window
-    /// (`payload.unguarded`), since in most cycles no value leaves".
+    /// TYPE-11: a duration window's delta takes a result or nullable
+    /// place, because a tick where a value only leaves has no delta.
+    /// `removed_value` of any window takes only a result.
     pub(super) fn plain_cycle_reads(&mut self, statements: &[Stmt]) {
-        // The reads a `result` takes, by their address: the walk visits
-        // the `CheckedDelta` before the read it holds.
+        // The checked reads are identified by address. The walk visits
+        // the CheckedDelta of either admitted form before its read.
         let mut taken: Vec<*const Expr> = Vec::new();
-        let mut plain: Vec<(Location, String)> = Vec::new();
+        let mut reports = Vec::new();
+        let rejected = |at, message| {
+            error(
+                Category::Phase,
+                codes::PAYLOAD_UNGUARDED,
+                at,
+                message,
+                "TYPE-11",
+            )
+        };
         let program = self.program;
         walk_statement_nodes(statements, &mut |node| {
             let Node::Expression(value) = node else {
@@ -638,46 +640,39 @@ impl Typer<'_> {
                 ExprKind::Endpoint {
                     inputs: Some(inputs),
                     ..
-                } => inputs.first().map(|&input| self.locals[input].ty.clone()),
-                ExprKind::ChildEndpoint { child, .. } => Some(child.ty.clone()),
+                } => inputs.first().map(|&input| &self.locals[input].ty),
+                ExprKind::ChildEndpoint { child, .. } => Some(&child.ty),
                 // `removed_value`, of any window.
                 _ => {
-                    plain.push((
-                        value.at,
-                        "this is `removed_value`, which has no value in a cycle in which nothing \
-                         leaves the window, and its place takes no `result`"
-                            .to_string(),
-                    ));
+                    reports.push(
+                        rejected(
+                            value.at,
+                            "this is `removed_value`, which has no value in a cycle in which nothing \
+                             leaves the window, and its place takes no `result`"
+                                .to_string(),
+                        )
+                        .with_note("read it where a `result<V, error>` is taken (ERR-14)"),
+                    );
                     None
                 }
             };
             if let Some(of) = delta
                 && duration_window(of.omission_removed())
             {
-                plain.push((
-                    value.at,
-                    format!(
-                        "this is the `delta_value` of a `{of}`, a window of a duration, which \
-                         has no delta where a value only leaves it, and its place takes no \
-                         `result`"
-                    ),
-                ));
+                reports.push(
+                    rejected(
+                        value.at,
+                        format!(
+                            "this is the `delta_value` of a `{of}`, a window of a duration, which \
+                             has no delta where a value only leaves it"
+                        ),
+                    )
+                    .with_note("give it a nullable place or a `result<V, error>` place (ERR-14)"),
+                );
             }
         });
-        for (at, message) in plain {
-            self.diagnostics.emit(
-                error(
-                    Category::Phase,
-                    codes::PAYLOAD_UNGUARDED,
-                    at,
-                    message,
-                    "TYPE-11",
-                )
-                .with_note(
-                    "read it where a `result<V, error>` is taken: `ok` of the value, or an \
-                     `err` coded `value.unset_read` where there is none (ERR-14)",
-                ),
-            );
+        for report in reports {
+            self.diagnostics.emit(report);
         }
     }
 }

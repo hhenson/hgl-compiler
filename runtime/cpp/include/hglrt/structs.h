@@ -79,7 +79,7 @@ inline constexpr auto& delta_members_of = fields<delta_t<T>>::members;
 /// asked"): whether it is valid, or true for an optional one.
 template <class E>
 bool asked_valid(const E& view) {
-    return nullable_schema<schema_of<E>>::value || view.valid();
+    return nullable_schema<schema_of<E>>::value || fn_valid(view);
 }
 
 /// Whether the child endpoint `view` can be read whole: a struct or a tuple
@@ -118,7 +118,16 @@ template <std::size_t I, class E>
 auto child(const E& view) {
     using S = schema_of<E>;
     static_assert(detail::bundle<S>, "hglrt::child: a field of a struct or a position of a tuple");
-    return view.template field<detail::field_of<I, S>::name_sv>();
+    constexpr auto name = detail::field_of<I, S>::name_sv;
+    if constexpr (detail::is_child<E>::value) {
+        using V = decltype(view.view().template field<name>());
+        if (!view.present()) {
+            return Child<V>{};
+        }
+        return Child<V>{view.view().template field<name>()};
+    } else {
+        return view.template field<name>();
+    }
 }
 
 /// The connection of the `I`-th field of `port`, a connection of a struct or
@@ -145,12 +154,21 @@ struct endpoint_read<hgraph::NominalTSB<T, F...>> {
     using value_type = T;
     using delta_type = delta_t<T>;
 
+    /// END-7: a collection with no valid children has no value. hgraph
+    /// may have allocated its bundle for a delta with no fields.
+    template <class E>
+    static bool valid(const E& view) {
+        return view.valid() && [&]<std::size_t... I>(std::index_sequence<I...>) {
+            return (fn_valid(child<I>(view)) || ...);
+        }(std::index_sequence_for<F...>{});
+    }
+
     /// TIME-9: "`all_valid` is true where every one is, by its own `valid`,
     /// one level deep ... It is true of a valid empty collection.
     /// `all_valid` of a collection that is not valid is false."
     template <class E>
     static bool all_valid(const E& view) {
-        return view.valid() && [&]<std::size_t... I>(std::index_sequence<I...>) {
+        return valid(view) && [&]<std::size_t... I>(std::index_sequence<I...>) {
             return (detail::asked_valid(child<I>(view)) && ...);
         }(std::index_sequence_for<F...>{});
     }
@@ -160,7 +178,7 @@ struct endpoint_read<hgraph::NominalTSB<T, F...>> {
     /// not valid), and any other's by its `valid`.
     template <class E>
     static bool complete(const E& view) {
-        return view.valid() && [&]<std::size_t... I>(std::index_sequence<I...>) {
+        return valid(view) && [&]<std::size_t... I>(std::index_sequence<I...>) {
             return (detail::readable(child<I>(view)) && ...);
         }(std::index_sequence_for<F...>{});
     }
@@ -214,10 +232,18 @@ struct endpoint_read<hgraph::UnNamedTSB<F...>> {
     using value_type = schema_value_t<schema>;
     using delta_type = delta_t<value_type>;
 
+    /// END-7: a tuple with no valid position has no value.
+    template <class E>
+    static bool valid(const E& view) {
+        return view.valid() && [&]<std::size_t... I>(std::index_sequence<I...>) {
+            return (fn_valid(child<I>(view)) || ...);
+        }(std::index_sequence_for<F...>{});
+    }
+
     /// TIME-9, as a struct's: every position valid by its own `valid`.
     template <class E>
     static bool all_valid(const E& view) {
-        return view.valid() && [&]<std::size_t... I>(std::index_sequence<I...>) {
+        return valid(view) && [&]<std::size_t... I>(std::index_sequence<I...>) {
             return (detail::asked_valid(child<I>(view)) && ...);
         }(std::index_sequence_for<F...>{});
     }
@@ -225,7 +251,7 @@ struct endpoint_read<hgraph::UnNamedTSB<F...>> {
     /// Whether the tuple can be read whole: every position can.
     template <class E>
     static bool complete(const E& view) {
-        return view.valid() && [&]<std::size_t... I>(std::index_sequence<I...>) {
+        return valid(view) && [&]<std::size_t... I>(std::index_sequence<I...>) {
             return (detail::readable(child<I>(view)) && ...);
         }(std::index_sequence_for<F...>{});
     }

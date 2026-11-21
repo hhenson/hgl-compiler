@@ -34,6 +34,7 @@ struct Pending {
 const FUNCTIONS: &str = "hgl_spec/spec/language/functions-and-phases.md";
 const GENERICS: &str = "hgl_spec/spec/language/generics-and-operators.md";
 const MAPPING: &str = "hgl_core/spec/mapping.md";
+const DIAGNOSTICS: &str = "hgl_core/spec/diagnostics.md";
 
 const PENDING: &[Pending] = &[
     Pending {
@@ -79,6 +80,16 @@ const PENDING: &[Pending] = &[
     Pending {
         file: MAPPING,
         opening: "module examples.mapping",
+        reason: "EXPR-10 (#363)",
+    },
+    Pending {
+        file: DIAGNOSTICS,
+        opening: "export operator debug_print<...As, ...Ks>(",
+        reason: "FN-18 (#363)",
+    },
+    Pending {
+        file: DIAGNOSTICS,
+        opening: "module examples.diagnostics",
         reason: "EXPR-10 (#363)",
     },
 ];
