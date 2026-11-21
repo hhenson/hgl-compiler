@@ -8,7 +8,10 @@ diagnostics: done
 
 - Every diagnostic has a category and a code; a warning has its code alone, is listed apart from the source codes, and does not reject
 
-transpiler: planned
+transpiler: done
+
+- Reports escaping failures with their code and HGL statement location. Test assertions,
+  unsupported target forms and ordinary result data have separate outcomes.
 
 ## ERR-2
 
@@ -18,11 +21,17 @@ analyser: partial
 - The payload is read as its side's type
 - Left: a result expected through a generic parameter still being inferred; equality
 
-transpiler: planned
+transpiler: done
+
+- Emits tagged successes and errors with one evaluated payload. A temporal result is one
+  publication of that tagged value.
 
 ## ERR-3
 
-transpiler: planned
+transpiler: done
+
+- Emits the result tag test and the corresponding success or error payload read after
+  the analyser proves the tag.
 
 analyser: partial
 
@@ -39,7 +48,12 @@ analyser: done
 - `error(message: text, code: optional_code)`: each by its name, `message` a `str` and required, `code` a `str?`; `.message` is a `str` and `.code` a `str?`
 - `.context` is an `error context?`, a type of this compiler's, whose `.node` and `.phase` are a `str` and `.evaluation_time` a `datetime`, read under ERR-12 and never assigned (`binding.immutable`)
 
-transpiler: planned
+transpiler: partial
+
+- Emits error construction, message and code reads, equality and nullable provenance.
+  The runtime retains the first failure location on propagation.
+- Left: An error property outside the supported HIR forms is reported. Construction
+  provenance is tracked separately under CRUN-6.
 
 ## ERR-5
 
@@ -47,9 +61,14 @@ analyser: partial
 
 - A place that needs the value of a result records where a failure goes. A value function returning a result requires the same error type. In other phases only `error` can be raised (`result.propagation_type`).
 
-transpiler: done
+transpiler: partial
 
-- C++ returns the original error from a fallible value function. In a `when`, `start`, `stop` or source body, at graph build, and in test or application statements, it raises the error at the HGL read.
+- C++ returns the original error from a fallible value function. In a `when`, `start`,
+  `stop` or source body, at graph build, and in test or application statements, it
+  raises the error at the HGL read.
+- Left: A propagation that needs statements in a loop condition, default or value-only
+  expression is reported. Ordinary fallible computation inside a wiring-time branch body
+  is also reported (CTRL-2). Unsupported placements identify the recorded raise phase.
 
 ## ERR-6
 
@@ -60,8 +79,10 @@ analyser: partial
 
 transpiler: partial
 
-- C++ brackets perform a strict read. Two-argument `get` returns the whole result to the recorded ERR-15 form. A temporal dictionary child is an endpoint read (ERR-14).
-- Evaluation of the fallback on a key hit and preservation of a nullable fallback value are pending.
+- C++ brackets perform a strict read. Two-argument `get` returns the whole result to the
+  recorded ERR-15 form. A temporal dictionary child is an endpoint read (ERR-14).
+- Left: Evaluation of the fallback on a key hit and preservation of a nullable fallback
+  value are pending.
 
 ## ERR-7
 
@@ -71,11 +92,21 @@ analyser: partial
 - Bound with `let`, `.value` is the call's output and `.error` an `error`, both connections; `.value` of an outputless call is `capture.output_field`
 - Left: a capture used other than through a `let` and its two connections is not judged
 
-transpiler: planned
+transpiler: partial
+
+- Wires an error boundary around a resolved graph call or lifted helper and exposes its
+  normal value and error results.
+- Left: A target with no supported call or recording form, an unavailable packed
+  instance and other capture reads are reported.
 
 ## ERR-8
 
-transpiler: planned
+transpiler: partial
+
+- The capture emits the original failure event and keeps the child live for later work.
+  Start and stop failures escape; re-raising preserves the first provenance.
+- Left: Capture support follows the callable and publication forms listed under ERR-7
+  and TYPE-9.
 
 ## ERR-9
 
@@ -103,7 +134,10 @@ analyser: partial
 
 ## ERR-11
 
-transpiler: planned
+transpiler: done
+
+- Uses native numeric outcomes for infinities, NaNs, unordered comparisons and checked
+  result data. Only an escaping failure fails execution (NUM-3, NUM-6, NUM-10).
 
 ## ERR-12
 
@@ -134,7 +168,13 @@ analyser: done
 - So is a read of a window's value, of an input, `out` or a child named when compiled (`CheckedWindow`), where the place expects `result<list<V>, error>`, "T being the `list<V>` it reads as (TYPE-11)"
 - So is `delta_value` of any endpoint, an input, `out` or a child, where the place expects `result<delta<T>, error>`, and core's `removed_value` of a window where it expects `result<V, error>` (`CheckedDelta`), the place saying what V is; where the place takes no `result` a window of a duration's delta and any `removed_value` are `payload.unguarded` (TYPE-11)
 
-transpiler: planned
+transpiler: partial
+
+- Writes checked child and window reads, preserving the analysed result or value form
+  for unset or out-of-range reads.
+- Left: Deltas or window reads outside the supported endpoint forms are reported. List
+  children and nested dictionary entries have the EXPR-7 limits, and reading a node's
+  own window result during its `when` is reported (END-9).
 
 ## ERR-15
 

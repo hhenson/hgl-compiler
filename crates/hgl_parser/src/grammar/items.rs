@@ -565,7 +565,8 @@ impl Parser<'_> {
     /// parameter = [ "ref" ], IDENTIFIER, ":", type, [ "=", const_expression ]
     ///           | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ]
     ///           | "var", IDENTIFIER, ":", value_type
-    ///           | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
+    ///           | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ]
+    ///           | IDENTIFIER, ":", function_type ;
     /// pack = "...", type, [ cardinality ]
     ///      | "...", "{", type, "}", [ cardinality ] ;
     /// ```
@@ -586,6 +587,7 @@ impl Parser<'_> {
     fn parameter(&mut self) {
         let var = self.at(KwVar);
         let reference = self.at(KwRef);
+        let constant = self.at_word("const") && self.nth(1) == Ident;
         if !self.at(Ident) && !var && !reference {
             return;
         }
@@ -597,13 +599,22 @@ impl Parser<'_> {
                 self.finish();
                 return;
             }
-        } else if self.at_word("const") && self.nth(1) == Ident {
+        } else if constant {
             // FN-5, LEX-9: `const` is a modifier only before the
             // parameter's name. In `const: i64` it is the name.
             self.bump();
         }
         self.bump();
         if self.eat(Colon) {
+            if !var
+                && !reference
+                && !constant
+                && (self.at(KwFn) || self.at_word("const") && self.nth(1) == KwFn)
+            {
+                self.function_type();
+                self.finish();
+                return;
+            }
             if !var && !reference && self.eat(Ellipsis) {
                 // FN-8: a pack takes any number of arguments. `...T` is a
                 // positional pack; `...{T}` a named one.
@@ -631,6 +642,44 @@ impl Parser<'_> {
         if !var && self.at_assign() {
             self.eat_assign();
             self.expression();
+        }
+        self.finish();
+    }
+
+    /// FN-17: `[ "const" ], "fn", "(", [ function_type_parameters ],
+    /// ")", [ "->", [ "ref" ], type ]`. Fixed inputs may name a position.
+    /// Named packs in this template await GEN-17.
+    fn function_type(&mut self) {
+        self.start(FunctionType);
+        if self.at_word("const") {
+            self.bump();
+        }
+        self.expect(KwFn);
+        if self.at(LParen) {
+            self.attached(Bracket::Parameters);
+            self.start(ParamList);
+            self.bump();
+            self.nested(Context::LIST, |parser| {
+                parser.list(RParen, "a function type parameter", true, |parser| {
+                    parser.start(FunctionTypeParam);
+                    if parser.at(Ident) && parser.nth(1) == Colon {
+                        parser.bump();
+                        parser.bump();
+                    }
+                    parser.type_();
+                    parser.finish();
+                });
+            });
+            self.finish();
+        } else {
+            self.expected("`(`");
+        }
+        if self.at(Arrow) && !self.nl() {
+            self.start(ReturnType);
+            self.bump();
+            self.eat(KwRef);
+            self.type_();
+            self.finish();
         }
         self.finish();
     }

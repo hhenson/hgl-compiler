@@ -19,6 +19,15 @@
 //! that takes the value alone is named by the type it is given, and is
 //! a template whose first argument is the type it gives,
 //! `convert_i64<::hgraph::Float>`, as the library names them.
+//! The same binding serves a named, symbolic or lifted call (OPS-1,
+//! NUM-8). The provider keeps zero policies (NUM-3, NUM-9, NUM-12),
+//! tolerance (NUM-4, NUM-5, NUM-11), and full comparison (NUM-6).
+//! The declared result type preserves ordinary checked-division data
+//! and IEEE values (NUM-10, ERR-11). The conversion's result and
+//! template arguments keep its selected policy (OPS-7, OPS-8).
+//! Duration arithmetic (OPS-10) and tenor arithmetic, comparison,
+//! movement primitives and text (TEN-1, TEN-2, TEN-3, TEN-4, TEN-9)
+//! use the selected binding in the same way.
 //!
 //! EXPR-2: the arguments are evaluated in the order written, and then
 //! the defaults of those left out. C++ evaluates a call's arguments in
@@ -32,15 +41,25 @@ use hgl_analyser::{
     Role, Signature, Type,
 };
 use hgl_diagnostics::Location;
-use hgl_lower::calls::{LeftOut, left_out};
+use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 use hgl_lower::copies::place_of;
 
 use super::Emitter;
+use super::anonymous::{anonymous_arguments, anonymous_signature};
 use super::expressions::integer_literal;
 use super::names::{self, identifier};
 use super::statements::Scope;
 use super::types::enum_name;
 use hgl_analyser::hir::Body;
+
+/// The concrete signature and C++ name at a value call site.
+struct ValueTarget<'a> {
+    name: String,
+    signature: &'a Signature,
+    instance: Option<&'a hgl_lower::instances::Instance>,
+    /// The declaration that owns any defaults (UNIT-8).
+    declaration: Option<(usize, usize)>,
+}
 
 impl Emitter<'_> {
     /// Respect expression order when an apparent local read is a
@@ -74,6 +93,33 @@ impl Emitter<'_> {
         let at = whole.at;
         // True for the call that is the whole of a statement.
         let statement = std::mem::take(&mut scope.statement_call);
+        if let Callee::Anonymous(function) = callee {
+            if !function.template.value {
+                return self.missing(at, "a call of a temporal function");
+            }
+            let signature = anonymous_signature(function);
+            let Some(name) = self.anonymous_helper(function, &signature) else {
+                return "0".to_string();
+            };
+            let Some(arguments) = anonymous_arguments(scope, function, arguments) else {
+                return self.missing(
+                    function.at,
+                    "an anonymous function with no enclosing capture",
+                );
+            };
+            return self.value_call(
+                scope,
+                &arguments,
+                whole,
+                statement,
+                ValueTarget {
+                    name,
+                    signature: &signature,
+                    instance: None,
+                    declaration: None,
+                },
+            );
+        }
         let program = self.program;
         let (module, declaration, generics) = match callee {
             Callee::Function {
@@ -91,7 +137,8 @@ impl Emitter<'_> {
             Callee::Required { .. } => {
                 return self.missing(at, "an operation a generic declaration requires");
             }
-            Callee::Unread => return self.missing(at, "this call"),
+            Callee::Parameter { .. } => return self.missing(at, "an unresolved function argument"),
+            Callee::Anonymous(_) | Callee::Unread => return self.missing(at, "this call"),
         };
         let declared = &program.modules[module].declarations[declaration];
         let Some(Detail::Callable(declared_signature)) =
@@ -154,23 +201,60 @@ impl Emitter<'_> {
             }
             _ => return self.missing(at, "a call of a temporal function"),
         };
+        self.value_call(
+            scope,
+            arguments,
+            whole,
+            statement,
+            ValueTarget {
+                name: called,
+                signature,
+                instance: concrete,
+                declaration: Some((module, declaration)),
+            },
+        )
+    }
+
+    /// Writes ordinary argument passing once for named and anonymous
+    /// targets, in the written evaluation order (EXPR-2).
+    fn value_call(
+        &mut self,
+        scope: &mut Scope,
+        arguments: &[Argument],
+        whole: &Expr,
+        statement: bool,
+        ValueTarget {
+            name: called,
+            signature,
+            instance: concrete,
+            declaration,
+        }: ValueTarget<'_>,
+    ) -> String {
+        let at = whole.at;
+        let program = self.program;
         // FN-15: a call that assigns places is written with what it
         // assigns where it stands, which only a statement has room for.
+        // This also supplies the list place to core's `append` and
+        // `extend` (LIST-1, LIST-2, LIST-3).
         let assigns = signature.parameters.iter().any(|parameter| parameter.var);
         if assigns && !statement {
             return self.missing(at, "a call that assigns a place, inside an expression");
         }
         // The places the call gives its `var` parameters: an argument
         // read from one of them is a copy.
-        let given_places: Vec<usize> = arguments
-            .iter()
-            .filter(|argument| {
-                argument
-                    .parameter
+        let parameter_for = |argument: &Argument| {
+            concrete.map_or_else(
+                || argument.parameter.filter(|_| argument.pack.is_none()),
+                |instance| instance.parameter(argument),
+            )
+        };
+        let given_places: Vec<usize> = runtime_arguments(arguments)
+            .filter(|(_, argument)| {
+                parameter_for(argument)
                     .and_then(|index| signature.parameters.get(index))
                     .is_some_and(|parameter| parameter.var)
             })
-            .filter_map(|argument| place_of(&scope.body.locals, &argument.value))
+            .filter_map(|(_, argument)| place_of(&scope.body.locals, &argument.value))
             .collect();
         // FN-15: "a call with several gives each place its value in the
         // order of the parameters"; one place given to two of them would
@@ -192,12 +276,10 @@ impl Emitter<'_> {
         // position, what is written for it, whether it may fail, and how
         // it is held where it is evaluated before the call.
         let mut written: Vec<(usize, String, bool, Held)> = Vec::new();
-        for argument in arguments {
-            let index = concrete.map_or_else(
-                || argument.parameter.filter(|_| argument.pack.is_none()),
-                |instance| instance.parameter(argument),
-            );
-            let Some(index) = index.filter(|&index| index < signature.parameters.len()) else {
+        for (_, argument) in runtime_arguments(arguments) {
+            let Some(index) =
+                parameter_for(argument).filter(|&index| index < signature.parameters.len())
+            else {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let parameter = &signature.parameters[index];
@@ -267,18 +349,23 @@ impl Emitter<'_> {
         }
         let mut defaulted: Vec<(usize, String, bool, Held)> = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
-            if written.iter().any(|(given, ..)| *given == index) {
+            if matches!(parameter.ty, Type::Function(_))
+                || written.iter().any(|(given, ..)| *given == index)
+            {
                 continue;
             }
             if parameter.pack.is_some() {
                 return self.missing(at, "a call of a function with a pack");
             }
-            match left_out(program, (module, declaration), index, parameter) {
+            let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
+            let default = left_out(program, declaration, declared, parameter);
+            match default {
                 Some(LeftOut::Default(default)) => {
                     // A default that calls its own function with that
                     // same argument left out would be written inside
                     // itself without end.
-                    let key = (module, declaration, index);
+                    let (module, declaration) = declaration.expect("a named default");
+                    let key = (module, declaration, declared);
                     if self.expanding.contains(&key) {
                         return self.missing(default.at, "a default that leaves itself out");
                     }
@@ -327,13 +414,22 @@ impl Emitter<'_> {
         // order, before the call; a lambda called where the call is
         // gives them a block to be in.
         let mut given: Vec<String> = vec![String::new(); signature.parameters.len()];
+        let joined = |given: Vec<String>| {
+            given
+                .into_iter()
+                .zip(&signature.parameters)
+                .filter(|(_, parameter)| !matches!(parameter.ty, Type::Function(_)))
+                .map(|(argument, _)| argument)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let ordered: Vec<(usize, String, bool, Held)> =
             written.into_iter().chain(defaulted).collect();
         if !changing && ordered.iter().filter(|(_, _, fails, _)| *fails).count() <= 1 {
             for (index, value, _, _) in ordered {
                 given[index] = value;
             }
-            return format!("{called}({})", given.join(", "));
+            return format!("{called}({})", joined(given));
         }
         // A place is held by a reference to it, and what something else
         // holds by a `const` reference; any other value as it is, so that
@@ -360,7 +456,7 @@ impl Emitter<'_> {
             steps.push_str(&format!("{declared} {name} = {value}; "));
             given[index] = name;
         }
-        format!("[&] {{ {steps}return {called}({}); }}()", given.join(", "))
+        format!("[&] {{ {steps}return {called}({}); }}()", joined(given))
     }
 
     /// The runtime library's function for the native candidate

@@ -146,7 +146,8 @@ const BACKTEST: &str = concat!(
     "eval doubled(values: rounds)\n",
 );
 
-/// UNIT-14: an application that sets the run's store before its run.
+/// UNIT-14: an application that sets the run's store before its run,
+/// calling a specialization of a named operator requirement (GEN-16).
 const STORED: &str = concat!(
     "application demo.ticks.stored\n",
     "\n",
@@ -734,7 +735,8 @@ fn list_code_runs_on_the_sdk() {
 /// replayed, each part through its own form (TYPE-9); a child of a list of
 /// tuples and a key's child of a dictionary of tuples as connections of a
 /// graph (TIME-9, EXPR-7); a struct with a list field, and a list of them,
-/// as a node's configuration (FN-1), and one in the run's store (CAP-6).
+/// as a node's configuration (FN-1), traversed by a hook (CTRL-8),
+/// and one in the run's store (CAP-6).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn nested_forms_run_on_the_sdk() {
@@ -1120,8 +1122,43 @@ fn pack_parameters_run_on_the_sdk() {
     );
 }
 
+/// FN-17: named, operator and anonymous targets specialize value and
+/// temporal calls. Captured values and connections reach their bodies
+/// through a node hook, a graph and another static function parameter.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn function_parameters_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("function_parameters");
+    let file = write(
+        &root,
+        "demo.function_arguments.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.function_arguments.hgl"),
+    );
+    let library = write(
+        &root,
+        "demo.callback_library.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.callback_library.hgl"),
+    );
+    let output = hgl_in(&["test", &file, &library, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code and
-/// temporal nodes, including SOURCE-2 yield times and an application failure.
+/// temporal nodes, including result guards (ERR-3), SOURCE-2 yield times
+/// and an application failure.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn contextual_result_reads_run_on_the_sdk() {

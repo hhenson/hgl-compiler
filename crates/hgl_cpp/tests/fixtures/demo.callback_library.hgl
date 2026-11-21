@@ -1,0 +1,5 @@
+module demo.callback_library
+
+export const fn plus<const N: i64>(input: i64) -> i64 => input + N
+
+export const fn with_default<const N: i64 = 4>(input: i64) -> i64 => input + N

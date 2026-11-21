@@ -29,7 +29,8 @@
 //! ([`Instances::typed`]): which candidate answers a requirement it
 //! states (GEN-16) or a call a membership it states authorises (GEN-3,
 //! GEN-7), and what a generic value parameter is (GEN-13), each instance
-//! says.
+//! says. For tenor date movement the instances call the selected
+//! calendar and rolling operations (TEN-5, TEN-6, TEN-7, TEN-8).
 //!
 //! An eval asks for instances too: its run is wired with core's
 //! `replay` for each input it gives a trace and core's `record` for
@@ -52,11 +53,12 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::Location;
 
+use crate::calls::runtime_arguments;
 use crate::canonical::{canonical, canonical_argument};
 use crate::packs::{Captures, Slot};
 
-/// A generic temporal declaration as one set of generic arguments takes
-/// it.
+/// A declaration specialized for one set of generic and function
+/// arguments (GEN-2, FN-17).
 pub struct Instance {
     /// Each generic argument as text no other is written as
     /// (`canonical_argument`): what tells one instance from another.
@@ -71,8 +73,9 @@ pub struct Instance {
     /// Its body, with them in place, and each operation the declaration
     /// requires as the call of the candidate that answers it (GEN-16).
     pub body: Body,
-    /// The original slot and key of each expanded parameter.
-    slots: Vec<Slot>,
+    /// The original slot and key of each runtime parameter, when
+    /// lowering changed the parameter list.
+    slots: Option<Vec<Slot>>,
     /// Where an expression still needs a pack as a whole.
     pub pack_use: Option<Location>,
 }
@@ -80,11 +83,21 @@ pub struct Instance {
 impl Instance {
     /// The concrete parameter an analysed argument supplies.
     pub fn parameter(&self, argument: &Argument) -> Option<usize> {
-        if self.slots.is_empty() {
-            argument.parameter.filter(|_| argument.pack.is_none())
-        } else {
-            self.slots.iter().position(|slot| slot.takes(argument))
+        if matches!(argument.value.kind, ExprKind::StaticCallable(_)) {
+            return None;
         }
+        match &self.slots {
+            Some(slots) => slots.iter().position(|slot| slot.takes(argument)),
+            None => argument.parameter.filter(|_| argument.pack.is_none()),
+        }
+    }
+
+    /// Maps a runtime parameter index back to the declaration's
+    /// parameter, which owns its default (UNIT-8).
+    pub fn original_parameter(&self, index: usize) -> usize {
+        self.slots
+            .as_ref()
+            .map_or(index, |slots| slots[index].parameter)
     }
 }
 
@@ -114,6 +127,8 @@ struct Asked {
     captures: Captures,
     /// What answers each requirement it states there.
     requirements: Vec<Answer>,
+    /// Its static callable targets, by the argument's original slot.
+    functions: Vec<(usize, Callee)>,
 }
 
 /// What an eval's run is wired with (core's CEVAL-1: "core's `replay`
@@ -190,7 +205,13 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
     let instance = if generics.is_empty() {
         None
     } else {
-        program.instance(*module, *declaration, generics, requirements)
+        program.instance_with_functions(
+            *module,
+            *declaration,
+            generics,
+            requirements,
+            &functions_of(arguments),
+        )
     };
     // Where the target's own types are known, its inputs and result are
     // of them; otherwise they are read back from the traces.
@@ -199,9 +220,7 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
         .as_ref()
         .map_or(&signature.parameters, |(taken, _)| &taken.parameters);
     let captures = Captures::of(program, callee, signature, arguments);
-    let inputs = arguments
-        .iter()
-        .enumerate()
+    let inputs = runtime_arguments(arguments)
         .filter_map(|(position, argument)| {
             let parameter = parameters.get(argument.parameter?)?;
             // Only an argument that is a trace is replayed.
@@ -292,9 +311,108 @@ fn generic(program: &Program, module: usize, declaration: usize) -> bool {
     };
     let generic = matches!(
         declared.details.get(declaration),
-        Some(Detail::Callable(signature)) if !signature.generics.is_empty() || signature.parameters.iter().any(|parameter| parameter.pack.is_some())
+        Some(Detail::Callable(signature)) if !signature.generics.is_empty() || signature.parameters.iter().any(|parameter| parameter.pack.is_some() || matches!(parameter.ty, Type::Function(_)))
     );
     generic && matches!(declared.bodies.get(declaration), Some(Some(_)))
+}
+
+/// Bind the static callable arguments by the original parameter index.
+fn functions_of(arguments: &[Argument]) -> Vec<(usize, Callee)> {
+    let mut functions: Vec<_> = arguments
+        .iter()
+        .filter_map(|argument| {
+            let ExprKind::StaticCallable(target) = &argument.value.kind else {
+                return None;
+            };
+            Some((argument.parameter?, (**target).clone()))
+        })
+        .collect();
+    functions.sort_by_key(|(slot, _)| *slot);
+    functions
+}
+
+/// Identify the candidate that answers a callable's requirement, with
+/// constants keyed by their value (GEN-13, GEN-16).
+fn answer_key(program: &Program, answer: &Answer) -> Option<String> {
+    let Answer::Candidate {
+        operator,
+        module,
+        declaration,
+        generics,
+        requirements,
+    } = answer
+    else {
+        return matches!(answer, Answer::Unread).then(|| "unread".to_string());
+    };
+    let generics = generics
+        .iter()
+        .map(|argument| canonical_argument(program, argument))
+        .collect::<Option<Vec<_>>>()?;
+    let requirements = requirements
+        .iter()
+        .map(|answer| answer_key(program, answer))
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!(
+        "{operator:?}:{module}:{declaration}:{generics:?}:{requirements:?}"
+    ))
+}
+
+/// Identify a concrete function or operator candidate, including what
+/// its generics and requirements stand for (GEN-13, GEN-16, FN-17).
+fn function_key(program: &Program, target: &Callee) -> Option<String> {
+    if let Callee::Anonymous(function) = target {
+        let types = function
+            .body
+            .locals
+            .iter()
+            .take(function.template.parameters.len() + function.captures.len())
+            .map(|local| Some((canonical(program, &local.ty)?, local.category)))
+            .collect::<Option<Vec<_>>>()?;
+        let result = match &function.template.result {
+            Some(result) => Some(canonical(program, result)?),
+            None => None,
+        };
+        let specialization = function
+            .specialization
+            .iter()
+            .map(|argument| canonical_argument(program, argument))
+            .collect::<Option<Vec<_>>>()?;
+        // The same source lambda may close over different static
+        // functions when its enclosing function is specialized.
+        let mut targets = Vec::new();
+        walk_statements(&function.body.statements, &mut |expression| {
+            let target = match &expression.kind {
+                ExprKind::Call { callee, .. } => callee,
+                ExprKind::StaticCallable(callee) => callee.as_ref(),
+                _ => return,
+            };
+            if !matches!(target, Callee::Unread) {
+                targets.push(function_key(program, target));
+            }
+        });
+        let targets = targets.into_iter().collect::<Option<Vec<_>>>()?;
+        return Some(format!(
+            "anonymous:{}:{}:{}:{types:?}:{result:?}:{specialization:?}:{targets:?}",
+            function.at.file.index(),
+            function.at.span.start,
+            function.template.value,
+        ));
+    }
+    let declared = target.declaration()?;
+    let Detail::Callable(signature) = &program.modules[declared.0].details[declared.1] else {
+        return None;
+    };
+    let arguments = generic_key(program, signature, target.generics(), target.type_packs())?;
+    let requirements = match target {
+        Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
+            requirements
+                .iter()
+                .map(|answer| answer_key(program, answer))
+                .collect::<Option<Vec<_>>>()?
+        }
+        _ => return None,
+    };
+    Some(format!("{declared:?}:{arguments:?}:{requirements:?}"))
 }
 
 /// The generic arguments of a call of `declaration` of `module` as an
@@ -307,11 +425,41 @@ fn key(
     generics: &[GenericArgument],
     type_packs: &[TypePackArgument],
     captures: &Captures,
+    functions: &[(usize, Callee)],
 ) -> Option<Vec<String>> {
     let Some(Detail::Callable(signature)) = program.modules.get(module)?.details.get(declaration)
     else {
         return None;
     };
+    let mut key = generic_key(program, signature, generics, type_packs)?;
+    if signature
+        .parameters
+        .iter()
+        .any(|parameter| parameter.pack.is_some())
+    {
+        key.push("arguments".to_string());
+        key.extend(captures.key(program)?);
+    }
+    for (slot, parameter) in signature.parameters.iter().enumerate() {
+        if !matches!(parameter.ty, Type::Function(_)) {
+            continue;
+        }
+        let (_, target) = functions.iter().find(|(index, _)| *index == slot)?;
+        key.push(format!(
+            "function[{slot}]:{}",
+            function_key(program, target)?
+        ));
+    }
+    Some(key)
+}
+
+/// The canonical identity of the type, pack and constant arguments.
+fn generic_key(
+    program: &Program,
+    signature: &Signature,
+    generics: &[GenericArgument],
+    type_packs: &[TypePackArgument],
+) -> Option<Vec<String>> {
     if generics.len() != signature.generics.len() {
         return None;
     }
@@ -328,14 +476,6 @@ fn key(
         } else {
             key.push(canonical_argument(program, argument)?);
         }
-    }
-    if signature
-        .parameters
-        .iter()
-        .any(|parameter| parameter.pack.is_some())
-    {
-        key.push("arguments".to_string());
-        key.extend(captures.key(program)?);
     }
     Some(key)
 }
@@ -399,6 +539,7 @@ impl Instances {
                         type_packs: Vec::new(),
                         captures: Captures::default(),
                         requirements: Vec::new(),
+                        functions: Vec::new(),
                     });
                 }
             }
@@ -431,6 +572,7 @@ impl Instances {
                 &next.generics,
                 &next.type_packs,
                 &next.captures,
+                &next.functions,
             ) else {
                 continue;
             };
@@ -448,11 +590,12 @@ impl Instances {
                 continue;
             }
             *count += 1;
-            let Some((mut signature, mut body)) = program.instance(
+            let Some((mut signature, mut body)) = program.instance_with_functions(
                 next.module,
                 next.declaration,
                 &next.generics,
                 &next.requirements,
+                &next.functions,
             ) else {
                 continue;
             };
@@ -517,6 +660,7 @@ impl Instances {
                     type_packs: Vec::new(),
                     captures: Captures::default(),
                     requirements: Vec::new(),
+                    functions: Vec::new(),
                 })
             };
             let replay = core_function(program, "replay");
@@ -534,6 +678,9 @@ impl Instances {
         else {
             return Vec::new();
         };
+        if let Callee::Anonymous(function) = callee {
+            return self.asked(program, &function.body.statements);
+        }
         let (Callee::Function {
             module,
             declaration,
@@ -565,6 +712,7 @@ impl Instances {
             type_packs: callee.type_packs().to_vec(),
             captures: Captures::of(program, callee, signature, arguments),
             requirements: requirements.clone(),
+            functions: functions_of(arguments),
         }]
     }
 
@@ -616,6 +764,7 @@ impl Instances {
             generics,
             &[],
             &Captures::default(),
+            &[],
         )?;
         self.declared(module, declaration)
             .iter()
@@ -641,6 +790,7 @@ impl Instances {
             callee.generics(),
             callee.type_packs(),
             &captures,
+            &functions_of(arguments),
         )?;
         self.declared(module, declaration)
             .iter()

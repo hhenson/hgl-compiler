@@ -79,7 +79,10 @@ lexer: done
 
 - Zone name source form
 
-transpiler: planned
+transpiler: done
+
+- Emits a literal's exact zone name for provider lookup. A zoned datetime with a written
+  offset checks it against the zone at that instant.
 
 ## LEX-13
 

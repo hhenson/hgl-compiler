@@ -37,9 +37,9 @@ use crate::program::{
 };
 use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{
-    Argument, CallArguments, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter,
-    Member, NamedKind, NativeType, Pack, Parameter, Scalar, Signature, StructType, Type,
-    WrittenType,
+    Argument, CallArguments, Constant, ConstantValue, Detail, Field, FunctionType, GenericKind,
+    GenericParameter, Member, NamedKind, NativeType, Pack, Parameter, Scalar, Signature,
+    StructType, Type, WrittenType,
 };
 use crate::{codes, error};
 
@@ -742,8 +742,11 @@ impl Reader<'_> {
                 None
             };
             // `...{T}` holds its type inside the braces.
-            let ty = type_child(named_pack.as_ref().unwrap_or(&parameter))
-                .map_or(Type::Unknown, |written| self.outermost(&written));
+            let ty = match child(&parameter, SyntaxKind::FunctionType) {
+                Some(template) => self.function_type(&template),
+                None => type_child(named_pack.as_ref().unwrap_or(&parameter))
+                    .map_or(Type::Unknown, |written| self.outermost(&written)),
+            };
             let constant = is_const(&parameter);
             let has_default = has_token(&parameter, SyntaxKind::Eq);
             if let Some(default) = default_of(&parameter) {
@@ -775,6 +778,50 @@ impl Reader<'_> {
             // FN-16: "and its result, `-> ref f64`".
             reference: written.is_some_and(|written| has_token(&written, SyntaxKind::KwRef)),
         }
+    }
+
+    /// The input and result types a callable argument must have (FN-17).
+    fn function_type(&mut self, template: &SyntaxNode) -> Type {
+        let value = tokens(template)
+            .next()
+            .is_some_and(|token| token.text() == "const");
+        let position = if value {
+            Position::value("an input of a value function type", "FN-1")
+        } else {
+            Position::INPUT
+        };
+        let parameters = child(template, SyntaxKind::ParamList)
+            .into_iter()
+            .flat_map(|list| list.children())
+            .filter(|input| input.kind() == SyntaxKind::FunctionTypeParam)
+            .map(|input| {
+                let name = names_before_colon(&input)
+                    .pop()
+                    .map(|name| name.text().to_string());
+                let ty = type_child(&input).map_or(Type::Unknown, |written| {
+                    let ty = self.type_(&written, position);
+                    self.record(written.span(), ty)
+                });
+                (name, ty)
+            })
+            .collect();
+        let annotation = child(template, SyntaxKind::ReturnType);
+        let result = annotation.as_ref().and_then(type_child).map(|written| {
+            let position = if value {
+                Position::value("the result of a value function type", "FN-1")
+            } else {
+                Position::PLAIN
+            };
+            let ty = self.type_(&written, position);
+            self.record(written.span(), ty)
+        });
+        let reference = annotation.is_some_and(|written| has_token(&written, SyntaxKind::KwRef));
+        Type::Function(Box::new(FunctionType {
+            value,
+            parameters,
+            result,
+            reference,
+        }))
     }
 
     /// The parents and members of a struct.
@@ -850,7 +897,9 @@ impl Reader<'_> {
                         self.outermost(&node);
                     }
                 }
-                SyntaxKind::TypedConstructor => self.constructor(&node),
+                SyntaxKind::TypedConstructor | SyntaxKind::FunctionReference => {
+                    self.constructor(&node);
+                }
                 SyntaxKind::UndecidedConstructor => {
                     // GEN-14: the resolver decided what the node is.
                     if self.constructors.contains(&(self.file, node.span().start)) {

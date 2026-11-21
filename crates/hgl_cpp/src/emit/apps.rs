@@ -20,7 +20,7 @@
 //! (`hglrt/application_host.h`) writes it for the driver (`hgl_cli`).
 
 use hgl_analyser::hir::{Body, ExprKind, Stmt};
-use hgl_lower::calls::{LeftOut, left_out};
+use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 use hgl_lower::instances::run_result;
 
 use super::Emitter;
@@ -83,6 +83,8 @@ impl Emitter<'_> {
         let testing = testing.trim_end_matches("::");
         let inner = INDENT.repeat(2);
 
+        // RUN-4, CRUN-1, CRUN-6: the entry hands fresh state and its
+        // pre-run store to the application host for execution and cleanup.
         // UNIT-14: the run's configuration and the store, set first, in
         // the order written, by value code "read as a constant's is ...
         // with no parameter in scope".
@@ -173,7 +175,7 @@ impl Emitter<'_> {
         let mut given: Vec<(usize, String)> = Vec::new();
         let mut defaults: Vec<(usize, String)> = Vec::new();
         if held {
-            for (position, argument) in arguments.iter().enumerate() {
+            for (position, argument) in runtime_arguments(arguments) {
                 let written = self.expression(&mut scope, &argument.value);
                 // As its HGL type, so that a later part does not change it
                 // through a proxy (`graphs::temporal_call`).
@@ -309,7 +311,7 @@ fn left_defaults<'p>(
                     .any(|argument| argument.parameter == Some(*index))
         })
         .filter_map(
-            |(index, parameter)| match left_out(program, callee, index, parameter) {
+            |(index, parameter)| match left_out(program, Some(callee), index, parameter) {
                 Some(LeftOut::Default(default)) => Some((index, default)),
                 _ => None,
             },

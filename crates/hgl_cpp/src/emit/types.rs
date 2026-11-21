@@ -120,7 +120,8 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
     })
 }
 
-/// The C++ type of a scalar, or `None` for one not written yet.
+/// The distinct C++ value types of HGL scalars (TYPE-1), or `None`
+/// for one not written yet.
 fn scalar_type(scalar: Scalar) -> Option<&'static str> {
     Some(match scalar {
         Scalar::I64 => "::hgraph::Int",

@@ -3,8 +3,18 @@
 //! default. Part of lowering: a transpiler writes each call with these
 //! (UNIT-7, UNIT-8).
 
-use hgl_analyser::hir::Expr;
+use hgl_analyser::hir::{Argument, Expr, ExprKind};
 use hgl_analyser::{FieldRef, Parameter, Program, Type};
+
+/// The evaluated arguments of a call in written order, keeping their
+/// positions in the analysed argument list (EXPR-2). A function
+/// argument is a compile-time binding and has no runtime value (FN-17).
+pub fn runtime_arguments(arguments: &[Argument]) -> impl Iterator<Item = (usize, &Argument)> {
+    arguments
+        .iter()
+        .enumerate()
+        .filter(|(_, argument)| !matches!(argument.value.kind, ExprKind::StaticCallable(_)))
+}
 
 /// What a call that leaves a parameter out gives it (UNIT-8).
 pub enum LeftOut<'p> {
@@ -15,21 +25,23 @@ pub enum LeftOut<'p> {
     Null,
 }
 
-/// What parameter `index` of the function `callee`, a module and a
-/// declaration of it, is given when a call leaves it out: its default,
-/// or `null` for one written `T?` with none (UNIT-8). `None` for a
-/// parameter that cannot be left out.
+/// What a call gives parameter `index` when it leaves it out (UNIT-8).
+/// A named `callee` may declare a default. A `T?` parameter without a
+/// declared default is given `null`, including in an anonymous function.
 pub fn left_out<'p>(
     program: &'p Program,
-    callee: (usize, usize),
+    callee: Option<(usize, usize)>,
     index: usize,
     parameter: &Parameter,
 ) -> Option<LeftOut<'p>> {
-    let defaults = program.modules[callee.0]
-        .defaults
-        .get(callee.1)
-        .map_or(&[][..], Vec::as_slice);
-    if let Some(Some(default)) = defaults.get(index) {
+    let default = callee.and_then(|(module, declaration)| {
+        program.modules[module]
+            .defaults
+            .get(declaration)
+            .and_then(|defaults| defaults.get(index))
+            .and_then(Option::as_ref)
+    });
+    if let Some(default) = default {
         Some(LeftOut::Default(default))
     } else if matches!(parameter.ty, Type::Nullable(_)) {
         Some(LeftOut::Null)

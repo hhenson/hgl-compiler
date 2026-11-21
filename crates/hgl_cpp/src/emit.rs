@@ -45,6 +45,7 @@ use hgl_lower::pieces::Reach;
 use crate::codes;
 
 mod activity;
+mod anonymous;
 mod apps;
 mod calls;
 mod composites;
@@ -158,6 +159,7 @@ pub(crate) fn module(
         piece: Piece::default(),
         expanding: Vec::new(),
         temporaries: 0,
+        anonymous_number: 0,
         instanced: Vec::new(),
         temporal: None,
         ahead: Vec::new(),
@@ -220,6 +222,8 @@ struct Emitter<'a> {
     /// what it holds while a statement runs: each is told apart by its
     /// number (`names::temporary`).
     temporaries: usize,
+    /// The module-wide sequence for private anonymous helpers (FN-17).
+    anonymous_number: usize,
     /// The pieces written for the instances of the module's generic
     /// declarations so far: see [`Written::instances`].
     instanced: Vec<(usize, String, Piece)>,
@@ -324,7 +328,16 @@ impl Emitter<'_> {
     /// Ends the piece being written, and gives it.
     fn close(&mut self) -> Piece {
         self.temporaries = 0;
-        self.ahead.clear();
+        if !self.ahead.is_empty() {
+            let helpers = std::mem::take(&mut self.ahead).join("\n") + "\n";
+            let mut prefix = helpers.clone();
+            restore_after(&mut prefix, &helpers);
+            let moved = prefix.matches('\n').count();
+            for (line, _) in &mut self.piece.statements {
+                *line += moved;
+            }
+            self.piece.text = prefix + &self.piece.text;
+        }
         std::mem::take(&mut self.piece)
     }
 }

@@ -54,6 +54,7 @@ pub(crate) use lifting::record;
 
 // The bodies of anonymous functions and their direct calls (FN-7, FN-14).
 mod anonymous;
+pub(crate) use anonymous::remap_locals;
 // Arguments given to parameters or fields, and a struct's construction (EXPR-2, TYPE-5).
 mod arguments;
 // What every call is held to once it is built (FN-1, FN-9, FN-15, TIME-8).
@@ -82,6 +83,7 @@ mod expressions;
 mod fit;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
+mod function_arguments;
 // What a call's generic parameters stand for (GEN-2, GEN-8, GEN-12).
 mod inference;
 // What a value is in a graph: a connection or an ordinary value (FN-3, FN-6).

@@ -644,6 +644,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::EndpointOf(_)
         | ExprKind::GenericValue { .. }
         | ExprKind::EnumMember { .. }
+        | ExprKind::StaticCallable(_)
         | ExprKind::Unread => {}
     }
 }

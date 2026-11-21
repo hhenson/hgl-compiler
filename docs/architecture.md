@@ -1599,7 +1599,8 @@ and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
 the limit is the compiler's, not the language's. The analyser's codes
 are catalogued (`hgl_analyser::codes`), one of them a warning. Its local
-codes are `loop.carried` (CTRL-15) and `reading.limit` (EXPR-5).
+codes are `loop.carried` (CTRL-15), `reading.limit` (EXPR-5), and
+`function.value` and `function.reference_unread` (FN-17).
 An expression that takes its type from its place is read again as
 each candidate's parameter it is tried as, and those readings nest.
 Each statement read where no expression is, each
