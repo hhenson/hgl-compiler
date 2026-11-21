@@ -38,5 +38,6 @@ pub mod copies;
 pub mod graphs;
 pub mod instances;
 pub mod nodes;
+mod packs;
 pub mod pieces;
 pub mod types;

@@ -95,10 +95,32 @@ impl Emitter<'_> {
         let Some((module, declaration)) = callee.declaration() else {
             return self.missing(value.at, "this lifted call");
         };
-        let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
+        let Some(Detail::Callable(declared)) = program.modules[module].details.get(declaration)
         else {
             return self.missing(value.at, "this lifted call");
         };
+        let concrete = if declared
+            .parameters
+            .iter()
+            .any(|parameter| parameter.pack.is_some())
+        {
+            let Some(instance) = self.instances.find_call(program, callee, arguments) else {
+                return self.missing(
+                    value.at,
+                    "a lifted call of a packed instance that is not written",
+                );
+            };
+            Some(instance)
+        } else {
+            None
+        };
+        let parameter_for = |argument: &Argument| {
+            concrete.map_or_else(
+                || argument.parameter.filter(|_| argument.pack.is_none()),
+                |instance| instance.parameter(argument),
+            )
+        };
+        let signature = concrete.map_or(declared, |instance| &instance.signature);
         let mut locals: Vec<Local> = Vec::new();
         let mut roles: Vec<Role> = Vec::new();
         let mut parameters: Vec<String> = Vec::new();
@@ -113,9 +135,8 @@ impl Emitter<'_> {
         let indent = INDENT.repeat(2);
         let mut unique = false;
         for (position, argument) in arguments.iter().enumerate() {
-            let Some(index) = argument
-                .parameter
-                .filter(|&index| index < signature.parameters.len())
+            let Some(index) =
+                parameter_for(argument).filter(|&index| index < signature.parameters.len())
             else {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
@@ -300,7 +321,7 @@ impl Emitter<'_> {
         for (index, parameter) in signature.parameters.iter().enumerate() {
             if arguments
                 .iter()
-                .any(|argument| argument.parameter == Some(index))
+                .any(|argument| parameter_for(argument) == Some(index))
             {
                 continue;
             }
@@ -517,10 +538,26 @@ impl Emitter<'_> {
         let Some((module, declaration)) = callee.declaration() else {
             return self.missing(value.at, "a `capture` of this");
         };
-        let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
+        let Some(Detail::Callable(declared)) = program.modules[module].details.get(declaration)
         else {
             return self.missing(value.at, "a `capture` of this");
         };
+        let concrete = if declared
+            .parameters
+            .iter()
+            .any(|parameter| parameter.pack.is_some())
+        {
+            let Some(instance) = self.instances.find_call(program, callee, arguments) else {
+                return self.missing(
+                    value.at,
+                    "a `capture` of a packed instance that is not written",
+                );
+            };
+            Some(instance)
+        } else {
+            None
+        };
+        let signature = concrete.map_or(declared, |instance| &instance.signature);
         let lifted = call.is_lifted();
         let temporal = matches!(
             program.modules[module].declarations[declaration].kind,
@@ -535,10 +572,11 @@ impl Emitter<'_> {
         let mut outer: Vec<String> = vec![WIRING.to_string()];
         let mut given: Vec<Given> = Vec::new();
         for (position, argument) in arguments.iter().enumerate() {
-            let Some(index) = argument
-                .parameter
-                .filter(|&index| index < signature.parameters.len())
-            else {
+            let index = concrete.map_or_else(
+                || argument.parameter.filter(|_| argument.pack.is_none()),
+                |instance| instance.parameter(argument),
+            );
+            let Some(index) = index.filter(|&index| index < signature.parameters.len()) else {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let parameter = &signature.parameters[index];

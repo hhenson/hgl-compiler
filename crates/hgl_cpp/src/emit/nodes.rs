@@ -175,16 +175,20 @@ impl Emitter<'_> {
             self.unsupported(at, "a temporal function with no body");
             return;
         };
-        if !signature.generics.is_empty() {
+        if self.instances.instanced(program, self.module, index) {
             let instances = self.instances;
             for instance in instances.declared(self.module, index) {
-                self.temporal_piece(
-                    index,
-                    phase,
-                    Some(&instance.suffix),
-                    &instance.signature,
-                    &instance.body,
-                );
+                if let Some(at) = instance.pack_use {
+                    self.unsupported(at, "a read of a pack as a whole");
+                } else {
+                    self.temporal_piece(
+                        index,
+                        phase,
+                        Some(&instance.suffix),
+                        &instance.signature,
+                        &instance.body,
+                    );
+                }
                 let piece = self.close();
                 self.instanced.push((index, instance.suffix.clone(), piece));
             }
@@ -208,14 +212,6 @@ impl Emitter<'_> {
         // FN-16: a `ref` parameter or result, which `references` writes,
         // or reports where it does not.
         if !self.references_written(signature, phase, module.is_source(index), at) {
-            return;
-        }
-        if let Some(parameter) = signature
-            .parameters
-            .iter()
-            .find(|parameter| parameter.pack.is_some())
-        {
-            self.unsupported(parameter.at, "a pack");
             return;
         }
         // The body's locals start with its parameters, in order.

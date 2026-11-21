@@ -234,14 +234,7 @@ impl Emitter<'_> {
                 }
                 continue;
             }
-            let parameter = argument.parameter.and_then(|index| {
-                callee_parameter(program, callee, index).map(|parameter| parameter.name.clone())
-            });
-            let Some((_, ty)) = wiring
-                .inputs
-                .iter()
-                .find(|(name, _)| Some(name) == parameter.as_ref())
-            else {
+            let Some((_, ty)) = wiring.inputs.iter().find(|(given, _)| *given == position) else {
                 return self.missing(argument.value.at, "a trace given to this");
             };
             let ty = ty.clone();

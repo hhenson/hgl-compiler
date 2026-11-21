@@ -83,6 +83,11 @@ analyser: partial
 - Function and operator calls bind leftover positional and named arguments to their corresponding packs and check the known element type. The HIR keeps each argument's pack slot and position or source name.
 - Duplicate pack declarations await the pinned `pack.duplicate` diagnostic. [Compiler issue #336](https://github.com/hhenson/hgl-compiler/issues/336)
 
+transpiler: partial
+
+- C++ writes a concrete parameter for each captured argument in value functions, nodes, graphs, and lifted calls.
+- Left: uses of a pack as a whole, including reflection (GEN-10).
+
 ## FN-9
 
 analyser: partial

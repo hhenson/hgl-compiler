@@ -1,0 +1,88 @@
+module demo.packs
+
+# FN-8, GEN-10: homogeneous positional, heterogeneous positional,
+# and named packs, with omitted, exact, open and bounded cardinalities.
+const fn value_homogeneous(items: ...i64) -> i64 => 11
+const fn value_different<...Items{2}>(items: ...Items) -> i64 => 12
+const fn value_named<...Fields>(fields: ...{Fields}{1:3}) -> i64 => 13
+const fn value_mixed<T, ...Fields>(fixed: T, items: ...T, fields: ...{Fields}) -> T =>
+    fixed
+
+operator packed_choice(items: ...i64{1:*}) -> i64
+impl const fn packed_choice(items: ...i64{1:*}) -> i64 => 14
+
+fn node_homogeneous(items: ...i64{1:*}) -> i64 { when { return 21 } }
+fn node_different<...Items{2}>(items: ...Items) -> i64 { when { return 22 } }
+fn node_named<...Fields>(fields: ...{Fields}{1:3}) -> i64 { when { return 23 } }
+
+fn node_empty(items: ...i64{0}) -> i64 {
+    inject scheduler
+    start { schedule(scheduler, 0s) }
+    when scheduled() { return 24 }
+}
+
+fn node_stateful(const initial: i64, items: ...i64{1:*}) -> i64 {
+    state value: i64 = initial
+    when {
+        value += 1
+        return value
+    }
+}
+
+fn via_state(first: i64, second: i64) -> i64 => node_stateful(30, first, second)
+
+fn graph_homogeneous(const fixed: i64, items: ...i64{2}) -> i64 =>
+    node_homogeneous(fixed, 9)
+fn graph_different<...Items>(items: ...Items{1:3}) -> i64 {
+    let connection = node_different(4, false)
+    return connection
+}
+fn graph_named<...Fields>(fields: ...{Fields}) -> i64 =>
+    node_named(right: true, left: 5)
+
+fn via_nodes(first: i64, second: i64, flag: bool) -> i64 {
+    let hom = node_homogeneous(first, second)
+    let het = node_different<i64, bool>(first, flag)
+    let named = node_named(x: second, y: flag)
+    return hom + het + named
+}
+
+fn via_graphs(first: i64, second: i64, flag: bool) -> i64 {
+    let hom = graph_homogeneous(2, first, second)
+    let het = graph_different(first, flag)
+    let named = graph_named(right: second, left: flag)
+    return hom + het + named
+}
+
+fn via_lifting(first: i64, second: i64, flag: bool) -> i64 {
+    let hom = value_homogeneous(first, second)
+    let het = value_different(first, flag)
+    let named = value_named(right: second, left: flag)
+    return hom + het + named
+}
+
+test value_packs {
+    assert value_homogeneous() == 11
+    assert value_homogeneous(1, 2, 3) == 11
+    assert value_different(true, 1) == 12
+    assert value_named(second: 2, flag: false) == 13
+    assert value_named(other: 2, flag: false) == 13
+    assert value_mixed(3, 7, enabled: true) == 3
+    assert value_mixed(5) == 5
+    assert packed_choice(4, 8) == 14
+}
+
+test node_packs {
+    assert eval via_nodes(first: [1, 8], second: [_, 5], flag: [true, false]) == [_, 66]
+    assert eval node_empty() == [24]
+    assert eval via_state(first: [1, 2, 3], second: [_, 4, _]) == [_, 31, 32]
+}
+
+test graph_packs {
+    assert eval via_graphs(first: [1], second: [2], flag: [true]) == [66]
+    assert eval graph_named() == [23]
+}
+
+test lifted_packs {
+    assert eval via_lifting(first: [1, 8], second: [_, 5], flag: [true, false]) == [_, 36]
+}
