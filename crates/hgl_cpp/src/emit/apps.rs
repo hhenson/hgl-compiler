@@ -309,7 +309,7 @@ fn left_defaults<'p>(
                     .any(|argument| argument.parameter == Some(*index))
         })
         .filter_map(
-            |(index, parameter)| match left_out(program, callee, index, parameter) {
+            |(index, parameter)| match left_out(program, Some(callee), index, parameter) {
                 Some(LeftOut::Default(default)) => Some((index, default)),
                 _ => None,
             },

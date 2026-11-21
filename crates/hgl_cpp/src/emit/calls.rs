@@ -347,8 +347,7 @@ impl Emitter<'_> {
                 return self.missing(at, "a call of a function with a pack");
             }
             let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
-            let default =
-                declaration.and_then(|callee| left_out(program, callee, declared, parameter));
+            let default = left_out(program, declaration, declared, parameter);
             match default {
                 Some(LeftOut::Default(default)) => {
                     // A default that calls its own function with that

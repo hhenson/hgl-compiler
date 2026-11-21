@@ -128,7 +128,12 @@ impl Emitter<'_> {
                                         .any(|argument| argument.parameter == Some(*index))
                             })
                             .filter_map(|(index, parameter)| {
-                                match left_out(program, (module, declaration), index, parameter) {
+                                match left_out(
+                                    program,
+                                    Some((module, declaration)),
+                                    index,
+                                    parameter,
+                                ) {
                                     Some(LeftOut::Default(default)) => Some(default),
                                     _ => None,
                                 }
@@ -267,7 +272,7 @@ impl Emitter<'_> {
                     continue;
                 }
                 let Some(LeftOut::Default(default)) =
-                    left_out(program, (module, declaration), index, parameter)
+                    left_out(program, Some((module, declaration)), index, parameter)
                 else {
                     continue;
                 };

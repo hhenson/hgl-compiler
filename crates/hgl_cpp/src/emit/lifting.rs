@@ -321,7 +321,7 @@ impl Emitter<'_> {
                     let mut local = ty.clone();
                     let declared =
                         concrete.map_or(index, |instance| instance.original_parameter(index));
-                    match origin.and_then(|callee| left_out(program, callee, declared, parameter)) {
+                    match left_out(program, origin, declared, parameter) {
                         // FN-11: "Every other input must satisfy ordinary
                         // `valid(input)`": hgraph evaluates the node only
                         // once it is.
@@ -505,9 +505,7 @@ impl Emitter<'_> {
                 return self.missing(value.at, "a lifted call that leaves out a pack");
             }
             let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
-            let (configured, ty) = match origin
-                .and_then(|callee| left_out(program, callee, declared, parameter))
-            {
+            let (configured, ty) = match left_out(program, origin, declared, parameter) {
                 Some(LeftOut::Null) => continue,
                 Some(LeftOut::Default(default)) if matches!(default.ty, Type::Nullable(_)) => {
                     if may_fail(default) {

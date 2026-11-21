@@ -25,21 +25,23 @@ pub enum LeftOut<'p> {
     Null,
 }
 
-/// What parameter `index` of the function `callee`, a module and a
-/// declaration of it, is given when a call leaves it out: its default,
-/// or `null` for one written `T?` with none (UNIT-8). `None` for a
-/// parameter that cannot be left out.
+/// What a call gives parameter `index` when it leaves it out (UNIT-8).
+/// A named `callee` may declare a default. A `T?` parameter without a
+/// declared default is given `null`, including in an anonymous function.
 pub fn left_out<'p>(
     program: &'p Program,
-    callee: (usize, usize),
+    callee: Option<(usize, usize)>,
     index: usize,
     parameter: &Parameter,
 ) -> Option<LeftOut<'p>> {
-    let defaults = program.modules[callee.0]
-        .defaults
-        .get(callee.1)
-        .map_or(&[][..], Vec::as_slice);
-    if let Some(Some(default)) = defaults.get(index) {
+    let default = callee.and_then(|(module, declaration)| {
+        program.modules[module]
+            .defaults
+            .get(declaration)
+            .and_then(|defaults| defaults.get(index))
+            .and_then(Option::as_ref)
+    });
+    if let Some(default) = default {
         Some(LeftOut::Default(default))
     } else if matches!(parameter.ty, Type::Nullable(_)) {
         Some(LeftOut::Null)
