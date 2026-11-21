@@ -207,6 +207,16 @@ test an_instance_selects_unary_minus {
     assert eval deferred_negation(value: 0) == []
 }
 
+# TYPE-7: an ordinary instance settles and narrows the operand of a
+# constructor whose enum was already known in the generic body.
+enum GraphSide { left, right }
+
+fn deferred_enum_constructor<T>(const value: T) -> GraphSide {
+    let chosen = if live_helper(value) > 0 { 0 }
+    if chosen == null { return GraphSide.right }
+    return GraphSide(chosen)
+}
+
 # CTRL-15: a deferred selector and its label settle to i64.
 fn selected_case<T>(const value: T) -> i64 {
     let key = if live_helper(value) > 0 { 1 }
@@ -241,6 +251,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval sum_inferred_iteration(value: "s") == [5]
     assert eval deferred_member(value: "s") == [2]
     assert eval deferred_member(value: 3) == [3]
+    assert eval deferred_enum_constructor(value: "s") == [GraphSide.left]
     assert eval selected_case(value: 3) == [4]
     assert eval value_phase_choice(value: 3) == [1]
     assert eval value_phase_choice(value: "s") == [-1]

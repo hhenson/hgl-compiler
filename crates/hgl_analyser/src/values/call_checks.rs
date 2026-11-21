@@ -572,7 +572,9 @@ impl<'a> Typer<'a> {
             }
             ExprKind::NullRead { value, .. } => self.is_fixed(value),
             // `Side(N)`, of what is fixed: the member is fixed too.
-            ExprKind::EnumFrom { value, .. } => self.is_fixed(value),
+            ExprKind::EnumFrom { value, .. } | ExprKind::DeferredEnumFrom(value) => {
+                self.is_fixed(value)
+            }
             ExprKind::Unary { operand, .. } | ExprKind::DeferredNegation { operand, .. } => {
                 self.is_fixed(operand)
             }

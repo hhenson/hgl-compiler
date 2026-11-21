@@ -2141,3 +2141,54 @@ fn a_call_of_another_generic_function_is_judged_by_what_the_body_states() {
         );
     }
 }
+
+/// GEN-7 and TYPE-7: a graph instance checks the enum operand once it
+/// knows the type, and keeps the declared enum on the resulting expression.
+#[test]
+fn graph_instances_check_enum_constructors_after_their_operands_settle() {
+    let checked = module(concat!(
+        "enum Side { buy, sell }\n",
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn side<T>(const input: T) -> Side {\n",
+        "    let chosen = if predicate(input) { 0 }\n",
+        "    return Side(chosen)\n",
+        "}\n",
+        "fn incompatible<T>(const input: T) -> Side {\n",
+        "    let chosen = if predicate(input) { true }\n",
+        "    return Side(chosen)\n",
+        "}\n",
+        "fn accepted() -> Side => side(3)\n",
+        "fn rejected() -> Side => incompatible(3)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:15:26 type/type.mismatch TYPE-7"],
+        "{}",
+        checked.report
+    );
+
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    let Some(Stmt::Return {
+        value: Some(returned),
+        ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns its constructed enum");
+    };
+    let ExprKind::EnumFrom {
+        module,
+        declaration,
+        value,
+    } = &returned.kind
+    else {
+        panic!("expected a checked enum constructor");
+    };
+    assert_eq!(value.ty.to_string(), "i64");
+    assert!(matches!(
+        &returned.ty,
+        hgl_analyser::Type::Named { name, module: owner, declaration: declared, .. }
+            if name == "Side" && owner == module && declared == declaration
+    ));
+}

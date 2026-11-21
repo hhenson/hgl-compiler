@@ -719,6 +719,9 @@ pub enum ExprKind {
         /// The number, an `i64`, or the name, a `str`.
         value: Box<Expr>,
     },
+    /// An enum construction whose argument type awaits graph settlement.
+    /// The expression's type is already the enum it constructs (TYPE-7).
+    DeferredEnumFrom(Box<Expr>),
     /// A field of a struct value, `quote.bid`; a property of a native
     /// value, `clock.now`; or a property of a delta that is a type of
     /// its own, `change.added` (TYPE-16).
@@ -1435,6 +1438,7 @@ impl Expr {
             | ExprKind::Widen(inner)
             | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
+            | ExprKind::DeferredEnumFrom(inner)
             | ExprKind::Field { base: inner, .. }
             | ExprKind::DeferredMember { base: inner, .. }
             | ExprKind::Tagged { payload: inner, .. }
@@ -1550,6 +1554,7 @@ impl Expr {
             | ExprKind::Widen(inner)
             | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
+            | ExprKind::DeferredEnumFrom(inner)
             | ExprKind::Field { base: inner, .. }
             | ExprKind::DeferredMember { base: inner, .. }
             | ExprKind::Tagged { payload: inner, .. }

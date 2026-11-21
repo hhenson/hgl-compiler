@@ -335,9 +335,45 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, ty);
         };
         let value = self.expression(&argument, None);
-        let number = value.ty == Type::Scalar(Scalar::I64);
-        let text = value.ty == Type::Scalar(Scalar::Str);
-        if !number && !text {
+        let kind = if self.graph
+            && matches!(value.ty, Type::Unknown)
+            && !matches!(value.kind, ExprKind::Unread)
+        {
+            ExprKind::DeferredEnumFrom(Box::new(value))
+        } else {
+            self.enum_from_value(&ty, value, Some(&argument))
+        };
+        (kind, ty)
+    }
+
+    /// TYPE-7: a deferred constructor already names its enum. Complete
+    /// the ordinary constructor check once its operand has a type.
+    pub(super) fn settle_enum_from(&mut self, ty: &Type, value: &hir::Expr) -> Option<ExprKind> {
+        if !whole(&value.ty) {
+            return None;
+        }
+        let argument = self.syntax_of(value);
+        Some(self.enum_from_value(ty, value.clone(), argument.as_ref()))
+    }
+
+    fn enum_from_value(
+        &mut self,
+        ty: &Type,
+        value: hir::Expr,
+        argument: Option<&SyntaxNode>,
+    ) -> ExprKind {
+        let Type::Named {
+            name,
+            module,
+            declaration,
+            kind: NamedKind::Enum,
+            ..
+        } = ty
+        else {
+            return ExprKind::Unread;
+        };
+        let (module, declaration) = (*module, *declaration);
+        if !matches!(value.ty, Type::Scalar(Scalar::I64 | Scalar::Str)) {
             // What is not known has been reported (ERR-9).
             if !open(&value.ty) {
                 self.diagnostics.emit(error(
@@ -347,15 +383,14 @@ impl<'a> Typer<'a> {
                     format!(
                         "`{}` is constructed from a member's number, an `i64`, or its name, \
                          a `str`, and this is `{}`",
-                        name.text(),
-                        value.ty
+                        name, value.ty
                     ),
                     "TYPE-7",
                 ));
             }
-            return (ExprKind::Unread, ty);
+            return ExprKind::Unread;
         }
-        let kind = match self.member_constructed(module, declaration, &argument) {
+        match argument.and_then(|argument| self.member_constructed(module, declaration, argument)) {
             // A constant that names a member is that member: `Side(0)`
             // is `Side.buy`, wherever a member is looked for, a `switch`
             // label and a `const` argument among them.
@@ -370,7 +405,7 @@ impl<'a> Typer<'a> {
                         Category::Name,
                         codes::MEMBER_UNKNOWN,
                         value.at,
-                        format!("`{}` has {missing}", name.text()),
+                        format!("`{name}` has {missing}"),
                         "TYPE-7",
                     )
                     .with_note("a member's name is matched exactly"),
@@ -382,8 +417,7 @@ impl<'a> Typer<'a> {
                 declaration,
                 value: Box::new(value),
             },
-        };
-        (kind, ty)
+        }
     }
 
     /// The arguments of the call `list` is the list of. For the call a

@@ -589,6 +589,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::Widen(inner)
         | ExprKind::ParentList(inner)
         | ExprKind::EnumFrom { value: inner, .. }
+        | ExprKind::DeferredEnumFrom(inner)
         | ExprKind::Field { base: inner, .. }
         | ExprKind::DeferredMember { base: inner, .. }
         | ExprKind::Tagged { payload: inner, .. }

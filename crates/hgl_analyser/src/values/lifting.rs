@@ -384,7 +384,7 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
         ExprKind::ParentList(inner) => category(inner),
         ExprKind::Field { base, .. } | ExprKind::DeferredMember { base, .. } => category(base),
         // An enum constructed from a connection is lifted (FN-6).
-        ExprKind::EnumFrom { value, .. } => category(value),
+        ExprKind::EnumFrom { value, .. } | ExprKind::DeferredEnumFrom(value) => category(value),
         // A result form over a connection is lifted, as a value
         // function's call is (FN-6, ERR-3): what it gives is what it
         // is given.
@@ -549,6 +549,18 @@ pub(super) fn record_with(
                             value.ty = ty;
                             settling = true;
                         }
+                    }
+                    return;
+                }
+                NodeMut::Expression(Expr { kind, ty, .. })
+                    if composition && matches!(kind, ExprKind::DeferredEnumFrom(_)) =>
+                {
+                    if let ExprKind::DeferredEnumFrom(value) = kind
+                        && let Some(typer) = typer.as_deref_mut()
+                        && let Some(constructor) = typer.settle_enum_from(ty, value)
+                    {
+                        *kind = constructor;
+                        settling = true;
                     }
                     return;
                 }
