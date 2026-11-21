@@ -45,12 +45,17 @@ analyser: partial
 
 ## GEN-4
 
+parser: partial
+
+- An operator declaration can begin with `export` (UNIT-3). A candidate takes no `export`.
+- Left: configuration parameters on the declaration (FN-18, #363).
+
 analyser: partial
 
 - An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and one that names no operator is `impl.unknown_operator`; a value candidate's body is read as a value function's
 - An operator's requirement `O in {...}` on its bare result parameter limits its candidates' results
 - Operator identity in selection and other requirements of an operator are pending.
-- Operators still have public visibility. Reading and enforcing `export operator` await #364.
+- An operator's `export` mark is recorded. Operators remain public until the core export update and visibility checks (#364).
 
 transpiler: planned
 

@@ -414,6 +414,11 @@ impl OperatorDecl {
     pub fn name(&self) -> Option<SyntaxToken> {
         name_after(&self.syntax, SyntaxKind::KwOperator)
     }
+
+    /// The `export` before the operator, when it has one (UNIT-3).
+    pub fn export(&self) -> Option<SyntaxToken> {
+        tokens(&self.syntax).find(|token| token.kind() == SyntaxKind::KwExport)
+    }
 }
 
 impl NativeTypeDecl {

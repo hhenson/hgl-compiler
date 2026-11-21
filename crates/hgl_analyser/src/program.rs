@@ -528,8 +528,7 @@ pub struct Declaration {
     pub at: Location,
     /// What it is.
     pub kind: DeclarationKind,
-    /// True when it is marked `export`. An operator is public without
-    /// the mark (UNIT-3); see [`Declaration::is_public`].
+    /// True when the declaration is marked `export` (UNIT-3).
     pub exported: bool,
     /// True when it is declared in an unnamed test context: a helper or
     /// type of the module's test scope (TST-1).
@@ -541,8 +540,8 @@ pub struct Declaration {
 }
 
 impl Declaration {
-    /// True when another module may import the declaration: it is
-    /// exported, or it is an operator (UNIT-3).
+    /// True when another module may import the declaration. Operators
+    /// remain public until UNIT-3 visibility is enforced in #364.
     pub fn is_public(&self) -> bool {
         self.exported || self.kind == DeclarationKind::Operator
     }

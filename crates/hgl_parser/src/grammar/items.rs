@@ -273,7 +273,9 @@ impl Parser<'_> {
     fn no_export(&mut self) {
         if self.at(KwExport) {
             self.bump();
-            self.expected("`fn`, `const fn`, `const`, `struct`, `enum` or `native type`");
+            self.expected(
+                "`fn`, `const fn`, `const`, `struct`, `enum`, `operator` or `native type`",
+            );
         }
     }
 
@@ -804,12 +806,13 @@ impl Parser<'_> {
     // ---- Operators ----
 
     /// ```text
-    /// operator_decl = "operator", callable_name, [ generic_parameters ],
+    /// operator_decl = [ "export" ], "operator", callable_name, [ generic_parameters ],
     ///     function_signature, [ requires_clause ], { operator_properties } ;
     /// ```
     fn operator_decl(&mut self) {
         self.start(OperatorDecl);
-        self.no_export();
+        // UNIT-3 and GEN-4: `export` belongs to the operator declaration.
+        self.eat(KwExport);
         self.expect(KwOperator);
         self.expect_name("an operator name");
         self.callable_header();
