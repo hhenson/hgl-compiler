@@ -692,6 +692,20 @@ fn node_body(
     // A source is a node of another shape, with statements and `yield`
     // (SOURCE-1).
     if is_source(declaration) {
+        // SOURCE-1: "A source declares a result, which is what it exists
+        // to publish: one with no result arrow rejects."
+        if child(&declaration.syntax, SyntaxKind::ReturnType).is_none() {
+            diagnostics.emit(error(
+                Category::Phase,
+                codes::SOURCE_RESULT,
+                declaration.at,
+                format!(
+                    "`{}` is a source and must declare a result",
+                    declaration.name
+                ),
+                "SOURCE-1",
+            ));
+        }
         source_body(declaration, file, diagnostics);
         return;
     }
