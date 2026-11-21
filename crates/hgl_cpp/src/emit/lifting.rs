@@ -1101,6 +1101,7 @@ fn result_node(emitter: &Emitter, value: &Expr) -> bool {
     };
     let unit = &emitter.program.modules[module];
     unit.phases.get(declaration).copied().flatten() == Some(BodyPhase::Node)
+        && matches!(unit.details.get(declaration), Some(Detail::Callable(signature)) if !signature.reference)
 }
 
 /// Apply a read recorded by the analyser to the value the node

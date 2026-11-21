@@ -10,12 +10,33 @@ fn checked(input: i64) -> result<i64, error> {
 fn require_output(input: i64) -> i64 => checked(input)
 fn nullable_output(input: i64) -> i64? => checked(input)
 
+fn relay<T>(take: bool, ref target: T) -> ref T {
+    when modified(take) { return target }
+}
+
+fn relay_whole(take: bool, input: i64) -> result<i64, error> => relay(take, checked(input))
+fn relay_value(take: bool, input: i64) -> i64 => relay(take, checked(input))
+
+fn designate_value(take: bool, value: i64) -> ref i64 {
+    when modified(take) { return value }
+}
+
+fn designate_held(take: bool, input: i64) -> i64 {
+    let held = checked(input)
+    return designate_value(take, held)
+}
+
 test forms {
     assert eval checked(input: [1, -1]) ==
         [ok(1), err(error(message: "invalid input", code: "convert.invalid"))]
     assert eval require_output(input: [1, 2]) == [1, 2]
     assert raises("convert.invalid") { eval require_output(input: [1, -1]) }
     assert eval nullable_output(input: [1, -1, 2]) == [1, null, 2]
+    assert eval relay_whole(take: [true, _], input: [1, -1]) ==
+        [ok(1), err(error(message: "invalid input", code: "convert.invalid"))]
+    assert eval relay_value(take: [true, _], input: [1, 2]) == [1, 2]
+    assert raises("convert.invalid") { eval relay_value(take: [true, _], input: [1, -1]) }
+    assert eval designate_held(take: [true, _], input: [1, 2]) == [1, 2]
 }
 
 fn consuming(value: i64, enabled: bool) -> i64 {

@@ -125,6 +125,10 @@ fn node<'a>(
     let Detail::Callable(signature) = unit.details.get(declaration)? else {
         return None;
     };
+    // FN-16: a designation must point at the projected endpoint itself.
+    if signature.reference {
+        return None;
+    }
     if signature.generics.is_empty() {
         Some(((module, declaration, None), signature))
     } else {

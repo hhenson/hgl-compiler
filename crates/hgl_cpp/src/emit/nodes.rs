@@ -447,10 +447,16 @@ impl Emitter<'_> {
         let placed_at = program.modules[self.module].declarations[index].at;
         let mut context = Context::new(Kind::Hook(Hook::When), body.locals.len());
         context.result = signature.result.clone();
-        let forms = signature
-            .result
-            .as_ref()
-            .and_then(|ty| ResultForms::of(self, ty));
+        // FN-16: a reference result publishes a designation. Its
+        // contextual result form is read from the designated endpoint.
+        let forms = if signature.reference {
+            None
+        } else {
+            signature
+                .result
+                .as_ref()
+                .and_then(|ty| ResultForms::of(self, ty))
+        };
         context.result_forms = forms.clone();
         context.signature = Some(signature.clone());
         let mut physical = signature.clone();
