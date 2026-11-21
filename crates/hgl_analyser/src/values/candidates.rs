@@ -17,7 +17,7 @@ use super::requirements::{Condition, holds};
 use crate::constant::Fault;
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
-use crate::program::{Declaration, OperatorRef, Role};
+use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Signature, Type,
@@ -130,6 +130,51 @@ impl<'a> Typer<'a> {
         let mut fits = false;
         for &(module, declaration, signature) in candidates {
             let candidate = &program.modules[module].declarations[declaration];
+            let payload_parameters = if matches!(
+                forms,
+                ArgumentForms::Payload | ArgumentForms::RequiredPayload
+            ) {
+                // Only an occurrence elsewhere in the signature or a
+                // condition can make an open binding need another form.
+                // A parameter such as `keep: T` with neither keeps its
+                // result whole when another parameter needs a payload.
+                let uses: std::collections::HashSet<Location> =
+                    child(&candidate.syntax, SyntaxKind::RequiresClause)
+                        .into_iter()
+                        .flat_map(|clause| {
+                            let span = clause.span();
+                            program.modules[module].uses.iter().filter_map(move |used| {
+                                match used.binding {
+                                    Binding::Local {
+                                        at,
+                                        kind: LocalKind::GenericParameter,
+                                    } if used.at.file == candidate.at.file
+                                        && span.start <= used.at.span.start
+                                        && used.at.span.end <= span.end =>
+                                    {
+                                        Some(at)
+                                    }
+                                    _ => None,
+                                }
+                            })
+                        })
+                        .collect();
+                signature
+                    .generics
+                    .iter()
+                    .map(|generic| {
+                        uses.contains(&generic.at)
+                            || signature
+                                .parameters
+                                .iter()
+                                .filter(|parameter| mentions(&parameter.ty, &[generic.at]))
+                                .nth(1)
+                                .is_some()
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             // The candidate as this call takes it: its generic
             // parameters resolved (GEN-2).
             let widens = |decided: &Type, later: &Type| self.widens(decided, later);
@@ -144,7 +189,7 @@ impl<'a> Typer<'a> {
                     &widens,
                     &defaults,
                     &constant,
-                    converting.then_some((self, forms)),
+                    converting.then_some((self, forms, &payload_parameters)),
                 ),
             ) else {
                 continue;
@@ -1593,7 +1638,7 @@ fn instance<'s>(
         &dyn Fn(&Type, &Type) -> bool,
         &dyn Fn(&GenericParameter) -> Option<Constant>,
         &dyn Fn(&SyntaxNode, Option<&Type>) -> Result<ConstantValue, Fault>,
-        Option<(&Typer<'_>, ArgumentForms)>,
+        Option<(&Typer<'_>, ArgumentForms, &[bool])>,
     ),
 ) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>, Vec<usize>)> {
     let generics = &signature.generics;
@@ -1650,16 +1695,13 @@ fn instance<'s>(
         };
         let actual = &given[position].value.ty;
         let actual = match converting {
-            Some((typer, forms)) if !given[position].by_place => {
+            Some((typer, forms, payload_parameters)) if !given[position].by_place => {
                 // A bare parameter follows its first argument (GEN-2).
                 // After whole and contextual matching fail, its candidate
                 // can still bind from a payload that satisfies its condition.
-                if matches!(
-                    forms,
-                    ArgumentForms::Payload | ArgumentForms::RequiredPayload
-                ) && bare_parameter(&parameter.ty, generics)
-                    .is_some_and(|index| found[index].is_none())
-                    && whole(actual)
+                if bare_parameter(&parameter.ty, generics).is_some_and(|index| {
+                    found[index].is_none() && payload_parameters.get(index) == Some(&true)
+                }) && whole(actual)
                 {
                     match actual {
                         Type::Result { value, .. } if forms == ArgumentForms::RequiredPayload => {

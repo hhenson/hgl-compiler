@@ -63,6 +63,43 @@ const fn custom(x: i64, y: i64) -> bool => ordered_before(checked(x), checked(y)
     }
 }
 
+/// ERR-15 keeps an argument whole when its parameter accepts the
+/// result. Only the other generic binding needs the nullable read.
+#[test]
+fn another_arguments_payload_does_not_unwrap_a_whole_generic_argument() {
+    let checked = with_checked(
+        r#"
+operator take<X, Y>(keep: X, read: Y) -> i64
+impl const fn take<T, U>(keep: T, read: U) -> i64
+    requires U in {i64} => 0
+const fn keep_failed(read: i64?) -> i64 => take(checked(-1), read)
+"#,
+    );
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+    let mut calls = 0;
+    walk_statements(&body(&checked, "keep_failed").statements, &mut |expr| {
+        if let ExprKind::Call {
+            callee: Callee::Candidate { .. },
+            arguments,
+            ..
+        } = &expr.kind
+            && arguments.len() == 2
+        {
+            assert_eq!(arguments[0].value.ty.to_string(), "result<i64, error>");
+            assert!(matches!(arguments[0].value.kind, ExprKind::Call { .. }));
+            assert!(matches!(
+                arguments[1].value.kind,
+                ExprKind::NullRead {
+                    raise: Raise::Execution,
+                    ..
+                }
+            ));
+            calls += 1;
+        }
+    });
+    assert_eq!(calls, 1);
+}
+
 /// GEN-5: a candidate that takes the integer literal without widening
 /// outranks one that widens it, even when another operand takes its value.
 #[test]
