@@ -30,7 +30,7 @@ struct hglrt::delta_of<::hgl::demo::nested::m_::Basket>
 namespace hgl::demo::nested::m_
 {
 
-// struct Basket (TYPE-3), module demo.nested, line 127
+// struct Basket (TYPE-3), module demo.nested, line 128
 struct Basket
 {
     ::hgraph::Str name;

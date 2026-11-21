@@ -12,6 +12,7 @@
 #undef a_list_of_tuples_is_published_by_a_delta
 #undef a_list_of_tuples_is_relayed_whole
 #undef a_list_of_tuples_replays_its_deltas
+#undef a_struct_with_a_list_field_is_a_configuration
 #undef a_struct_with_a_list_field_is_published_by_a_delta
 #undef a_struct_with_a_list_field_is_relayed_whole
 #undef a_struct_with_a_list_field_replays_its_cells
@@ -39,6 +40,7 @@ void a_struct_with_a_list_field_is_published_by_a_delta();
 void a_struct_with_a_list_field_replays_its_cells();
 void a_child_of_a_list_of_tuples_is_wired();
 void a_key_child_of_a_dictionary_of_tuples_is_wired();
+void a_struct_with_a_list_field_is_a_configuration();
 }  // namespace hgl::demo::nested::m_::t_
 
 namespace
@@ -60,6 +62,7 @@ const ::hglrt::testing::Registration test_12{"demo.nested::a_struct_with_a_list_
 const ::hglrt::testing::Registration test_13{"demo.nested::a_struct_with_a_list_field_replays_its_cells", &::hgl::demo::nested::m_::t_::a_struct_with_a_list_field_replays_its_cells};
 const ::hglrt::testing::Registration test_14{"demo.nested::a_child_of_a_list_of_tuples_is_wired", &::hgl::demo::nested::m_::t_::a_child_of_a_list_of_tuples_is_wired};
 const ::hglrt::testing::Registration test_15{"demo.nested::a_key_child_of_a_dictionary_of_tuples_is_wired", &::hgl::demo::nested::m_::t_::a_key_child_of_a_dictionary_of_tuples_is_wired};
+const ::hglrt::testing::Registration test_16{"demo.nested::a_struct_with_a_list_field_is_a_configuration", &::hgl::demo::nested::m_::t_::a_struct_with_a_list_field_is_a_configuration};
 }  // namespace
 
 int main(int argc, char **argv)

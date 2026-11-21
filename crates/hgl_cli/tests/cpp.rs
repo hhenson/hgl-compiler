@@ -663,7 +663,8 @@ fn list_code_runs_on_the_sdk() {
 /// and a struct with a list field, each relayed, published by a delta and
 /// replayed, each part through its own form (TYPE-9); a child of a list of
 /// tuples and a key's child of a dictionary of tuples as connections of a
-/// graph (TIME-9, EXPR-7).
+/// graph (TIME-9, EXPR-7); a struct with a list field, and a list of them,
+/// as a node's configuration (FN-1).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn nested_forms_run_on_the_sdk() {
@@ -685,7 +686,7 @@ fn nested_forms_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 16 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -716,6 +717,39 @@ fn temporal_code_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// `const` parameters of every kind of ordinary value on the SDK
+/// (`demo.configurations`, FN-1): a set, a dictionary, a tuple, a struct
+/// that holds a list, one that holds a set, one with an optional field,
+/// nullables and lists of them, and a nullable tested
+/// against null (ERR-12), given to sources, nodes, lifted calls and a
+/// branch; and two nodes of one input whose configurations differ, by a
+/// value or by the sign of a zero (hgraph issue 1866), which stay two.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn configurations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("configurations");
+    let file = write(
+        &root,
+        "src/demo.configurations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.configurations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

@@ -137,11 +137,13 @@ impl Emitter<'_> {
                 return;
             };
             taken.push(format!("[[maybe_unused]] {ty} {name}"));
+            // FN-1: as hgraph holds a configuration (`configuration`).
+            let held = super::configuration::held(program, &parameter.ty, &ty);
             views.push(format!(
-                "::hgraph::Scalar<{}, {ty}> {name}",
+                "::hgraph::Scalar<{}, {held}> {name}",
                 names::string(&parameter.name)
             ));
-            given.push(format!("{name}.value()"));
+            given.push(super::configuration::read(program, &parameter.ty, &name));
         }
         let mut context = Context::new(Kind::Source, body.locals.len());
         context.result = Some(result.clone());

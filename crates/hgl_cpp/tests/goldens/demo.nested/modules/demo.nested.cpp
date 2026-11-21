@@ -14,6 +14,7 @@
 #undef a_list_of_tuples_is_published_by_a_delta
 #undef a_list_of_tuples_is_relayed_whole
 #undef a_list_of_tuples_replays_its_deltas
+#undef a_struct_with_a_list_field_is_a_configuration
 #undef a_struct_with_a_list_field_is_published_by_a_delta
 #undef a_struct_with_a_list_field_is_relayed_whole
 #undef a_struct_with_a_list_field_replays_its_cells
@@ -21,9 +22,12 @@
 #undef a_tuple_of_a_list_is_relayed_whole
 #undef a_tuple_of_a_list_replays_its_cells
 #undef basket
+#undef baskets
 #undef book
 #undef core
 #undef count
+#undef counted
+#undef counted_all
 #undef counts
 #undef demo
 #undef edit_book
@@ -53,6 +57,7 @@
 #undef sum
 #undef summed
 #undef tagged
+#undef tick
 #undef total
 #undef value
 
@@ -61,14 +66,14 @@ namespace hgl::demo::nested::m_
 
 namespace n_::relay_pairs
 {
-// relay_pairs(pairs: list<tuple<i64, str>>) -> list<tuple<i64, str>> (node), module demo.nested, line 10
+// relay_pairs(pairs: list<tuple<i64, str>>) -> list<tuple<i64, str>> (node), module demo.nested, line 11
 struct impl_
 {
     static constexpr auto name = "demo.nested::relay_pairs";
 
     static void eval([[maybe_unused]] ::hgraph::In<"pairs", ::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> pairs, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> out_)
     {
-        // when, line 11 (TIME-3)
+        // when, line 12 (TIME-3)
         {
             ::hglrt::publish(out_, ::hglrt::checked_whole(pairs));
             return;
@@ -78,7 +83,7 @@ struct impl_
 }  // namespace n_::relay_pairs
 namespace w_
 {
-// relay_pairs(pairs: list<tuple<i64, str>>) -> list<tuple<i64, str>> (node), module demo.nested, line 10
+// relay_pairs(pairs: list<tuple<i64, str>>) -> list<tuple<i64, str>> (node), module demo.nested, line 11
 ::hgraph::Port<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> relay_pairs(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> pairs)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::relay_pairs::impl_>(wiring_, pairs);
@@ -87,14 +92,14 @@ namespace w_
 
 namespace n_::grow_pairs
 {
-// grow_pairs(step: i64) -> list<tuple<i64, str>> (node), module demo.nested, line 14
+// grow_pairs(step: i64) -> list<tuple<i64, str>> (node), module demo.nested, line 15
 struct impl_
 {
     static constexpr auto name = "demo.nested::grow_pairs";
 
     static void eval([[maybe_unused]] ::hgraph::In<"step", ::hgraph::TS<::hgraph::Int>> step, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> out_)
     {
-        // when, line 15 (TIME-3)
+        // when, line 16 (TIME-3)
         {
             if (::hglrt::eq__i64_i64_f64_f64(::hglrt::checked_value(step), 0, 0.0, 0.0))
             {
@@ -115,7 +120,7 @@ struct impl_
 }  // namespace n_::grow_pairs
 namespace w_
 {
-// grow_pairs(step: i64) -> list<tuple<i64, str>> (node), module demo.nested, line 14
+// grow_pairs(step: i64) -> list<tuple<i64, str>> (node), module demo.nested, line 15
 ::hgraph::Port<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> grow_pairs(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::grow_pairs::impl_>(wiring_, step);
@@ -124,14 +129,14 @@ namespace w_
 
 namespace n_::relay_fixed_pairs
 {
-// relay_fixed_pairs(pairs: list<tuple<i64, str>, 2>) -> list<tuple<i64, str>, 2> (node), module demo.nested, line 46
+// relay_fixed_pairs(pairs: list<tuple<i64, str>, 2>) -> list<tuple<i64, str>, 2> (node), module demo.nested, line 47
 struct impl_
 {
     static constexpr auto name = "demo.nested::relay_fixed_pairs";
 
     static void eval([[maybe_unused]] ::hgraph::In<"pairs", ::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>, 2>> pairs, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>, 2>> out_)
     {
-        // when, line 47 (TIME-3)
+        // when, line 48 (TIME-3)
         if (::hglrt::fn_all_valid(pairs))
         {
             ::hglrt::publish(out_, ::hglrt::checked_whole(pairs));
@@ -142,7 +147,7 @@ struct impl_
 }  // namespace n_::relay_fixed_pairs
 namespace w_
 {
-// relay_fixed_pairs(pairs: list<tuple<i64, str>, 2>) -> list<tuple<i64, str>, 2> (node), module demo.nested, line 46
+// relay_fixed_pairs(pairs: list<tuple<i64, str>, 2>) -> list<tuple<i64, str>, 2> (node), module demo.nested, line 47
 ::hgraph::Port<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>, 2>> relay_fixed_pairs(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>, 2>> pairs)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::relay_fixed_pairs::impl_>(wiring_, pairs);
@@ -151,14 +156,14 @@ namespace w_
 
 namespace n_::set_fixed_pair
 {
-// set_fixed_pair(slot: i64, value: i64) -> list<tuple<i64, str>, 2> (node), module demo.nested, line 50
+// set_fixed_pair(slot: i64, value: i64) -> list<tuple<i64, str>, 2> (node), module demo.nested, line 51
 struct impl_
 {
     static constexpr auto name = "demo.nested::set_fixed_pair";
 
     static void eval([[maybe_unused]] ::hgraph::In<"slot", ::hgraph::TS<::hgraph::Int>> slot, [[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>, 2>> out_)
     {
-        // when, line 51 (TIME-3)
+        // when, line 52 (TIME-3)
         {
             ::hglrt::publish(out_, ::hglrt::list_delta_of<::std::array<::std::tuple<::hgraph::Int, ::hgraph::Str>, 2>>(::hglrt::dict_of<::hgraph::Int, ::std::tuple<::std::optional<::hgraph::Int>, ::std::optional<::hgraph::Str>>>({{::hglrt::checked_value(slot), ::std::tuple<::std::optional<::hgraph::Int>, ::std::optional<::hgraph::Str>>{::hglrt::checked_value(value), ::hgraph::Str{"x"}}}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt));
             return;
@@ -168,7 +173,7 @@ struct impl_
 }  // namespace n_::set_fixed_pair
 namespace w_
 {
-// set_fixed_pair(slot: i64, value: i64) -> list<tuple<i64, str>, 2> (node), module demo.nested, line 50
+// set_fixed_pair(slot: i64, value: i64) -> list<tuple<i64, str>, 2> (node), module demo.nested, line 51
 ::hgraph::Port<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>, 2>> set_fixed_pair(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::set_fixed_pair::impl_>(wiring_, slot, value);
@@ -177,14 +182,14 @@ namespace w_
 
 namespace n_::relay_tagged
 {
-// relay_tagged(tagged: tuple<list<i64>, bool>) -> tuple<list<i64>, bool> (node), module demo.nested, line 65
+// relay_tagged(tagged: tuple<list<i64>, bool>) -> tuple<list<i64>, bool> (node), module demo.nested, line 66
 struct impl_
 {
     static constexpr auto name = "demo.nested::relay_tagged";
 
     static void eval([[maybe_unused]] ::hgraph::In<"tagged", ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>>> tagged, [[maybe_unused]] ::hgraph::Out<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>>> out_)
     {
-        // when, line 66 (TIME-3)
+        // when, line 67 (TIME-3)
         if (::hglrt::fn_all_valid(tagged))
         {
             ::hglrt::publish(out_, ::hglrt::whole_value(tagged));
@@ -195,7 +200,7 @@ struct impl_
 }  // namespace n_::relay_tagged
 namespace w_
 {
-// relay_tagged(tagged: tuple<list<i64>, bool>) -> tuple<list<i64>, bool> (node), module demo.nested, line 65
+// relay_tagged(tagged: tuple<list<i64>, bool>) -> tuple<list<i64>, bool> (node), module demo.nested, line 66
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>>> relay_tagged(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>>> tagged)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::relay_tagged::impl_>(wiring_, tagged);
@@ -204,14 +209,14 @@ namespace w_
 
 namespace n_::retag
 {
-// retag(step: i64) -> tuple<list<i64>, bool> (node), module demo.nested, line 69
+// retag(step: i64) -> tuple<list<i64>, bool> (node), module demo.nested, line 70
 struct impl_
 {
     static constexpr auto name = "demo.nested::retag";
 
     static void eval([[maybe_unused]] ::hgraph::In<"step", ::hgraph::TS<::hgraph::Int>> step, [[maybe_unused]] ::hgraph::Out<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>>> out_)
     {
-        // when, line 70 (TIME-3)
+        // when, line 71 (TIME-3)
         {
             if (::hglrt::eq__i64_i64_f64_f64(::hglrt::checked_value(step), 0, 0.0, 0.0))
             {
@@ -232,7 +237,7 @@ struct impl_
 }  // namespace n_::retag
 namespace w_
 {
-// retag(step: i64) -> tuple<list<i64>, bool> (node), module demo.nested, line 69
+// retag(step: i64) -> tuple<list<i64>, bool> (node), module demo.nested, line 70
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Bool>>>> retag(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::retag::impl_>(wiring_, step);
@@ -241,14 +246,14 @@ namespace w_
 
 namespace n_::relay_book
 {
-// relay_book(book: dict<str, tuple<i64, str>>) -> dict<str, tuple<i64, str>> (node), module demo.nested, line 92
+// relay_book(book: dict<str, tuple<i64, str>>) -> dict<str, tuple<i64, str>> (node), module demo.nested, line 93
 struct impl_
 {
     static constexpr auto name = "demo.nested::relay_book";
 
     static void eval([[maybe_unused]] ::hgraph::In<"book", ::hgraph::TSD<::hgraph::Str, ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> book, [[maybe_unused]] ::hgraph::Out<::hgraph::TSD<::hgraph::Str, ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> out_)
     {
-        // when, line 93 (TIME-3)
+        // when, line 94 (TIME-3)
         {
             ::hglrt::keyed_publish(out_, ::hglrt::keyed_value(book));
             return;
@@ -258,7 +263,7 @@ struct impl_
 }  // namespace n_::relay_book
 namespace w_
 {
-// relay_book(book: dict<str, tuple<i64, str>>) -> dict<str, tuple<i64, str>> (node), module demo.nested, line 92
+// relay_book(book: dict<str, tuple<i64, str>>) -> dict<str, tuple<i64, str>> (node), module demo.nested, line 93
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> relay_book(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> book)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::relay_book::impl_>(wiring_, book);
@@ -267,14 +272,14 @@ namespace w_
 
 namespace n_::edit_book
 {
-// edit_book(step: i64) -> dict<str, tuple<i64, str>> (node), module demo.nested, line 96
+// edit_book(step: i64) -> dict<str, tuple<i64, str>> (node), module demo.nested, line 97
 struct impl_
 {
     static constexpr auto name = "demo.nested::edit_book";
 
     static void eval([[maybe_unused]] ::hgraph::In<"step", ::hgraph::TS<::hgraph::Int>> step, [[maybe_unused]] ::hgraph::Out<::hgraph::TSD<::hgraph::Str, ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> out_)
     {
-        // when, line 97 (TIME-3)
+        // when, line 98 (TIME-3)
         {
             if (::hglrt::eq__i64_i64_f64_f64(::hglrt::checked_value(step), 0, 0.0, 0.0))
             {
@@ -295,7 +300,7 @@ struct impl_
 }  // namespace n_::edit_book
 namespace w_
 {
-// edit_book(step: i64) -> dict<str, tuple<i64, str>> (node), module demo.nested, line 96
+// edit_book(step: i64) -> dict<str, tuple<i64, str>> (node), module demo.nested, line 97
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> edit_book(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::edit_book::impl_>(wiring_, step);
@@ -304,14 +309,14 @@ namespace w_
 
 namespace n_::relay_basket
 {
-// relay_basket(basket: Basket) -> Basket (node), module demo.nested, line 132
+// relay_basket(basket: Basket) -> Basket (node), module demo.nested, line 133
 struct impl_
 {
     static constexpr auto name = "demo.nested::relay_basket";
 
     static void eval([[maybe_unused]] ::hgraph::In<"basket", ::hgraph::NominalTSB<::hgl::demo::nested::m_::Basket, ::hgraph::Field<"name", ::hgraph::TS<::hgraph::Str>>, ::hgraph::Field<"counts", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>>> basket, [[maybe_unused]] ::hgraph::Out<::hgraph::NominalTSB<::hgl::demo::nested::m_::Basket, ::hgraph::Field<"name", ::hgraph::TS<::hgraph::Str>>, ::hgraph::Field<"counts", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>>> out_)
     {
-        // when, line 133 (TIME-3)
+        // when, line 134 (TIME-3)
         if (::hglrt::fn_all_valid(basket))
         {
             ::hglrt::publish(out_, ::hglrt::whole_value(basket));
@@ -322,7 +327,7 @@ struct impl_
 }  // namespace n_::relay_basket
 namespace w_
 {
-// relay_basket(basket: Basket) -> Basket (node), module demo.nested, line 132
+// relay_basket(basket: Basket) -> Basket (node), module demo.nested, line 133
 ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::nested::m_::Basket, ::hgraph::Field<"name", ::hgraph::TS<::hgraph::Str>>, ::hgraph::Field<"counts", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>>> relay_basket(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::nested::m_::Basket, ::hgraph::Field<"name", ::hgraph::TS<::hgraph::Str>>, ::hgraph::Field<"counts", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>>> basket)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::relay_basket::impl_>(wiring_, basket);
@@ -331,14 +336,14 @@ namespace w_
 
 namespace n_::fill
 {
-// fill(step: i64) -> Basket (node), module demo.nested, line 136
+// fill(step: i64) -> Basket (node), module demo.nested, line 137
 struct impl_
 {
     static constexpr auto name = "demo.nested::fill";
 
     static void eval([[maybe_unused]] ::hgraph::In<"step", ::hgraph::TS<::hgraph::Int>> step, [[maybe_unused]] ::hgraph::Out<::hgraph::NominalTSB<::hgl::demo::nested::m_::Basket, ::hgraph::Field<"name", ::hgraph::TS<::hgraph::Str>>, ::hgraph::Field<"counts", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>>> out_)
     {
-        // when, line 137 (TIME-3)
+        // when, line 138 (TIME-3)
         {
             if (::hglrt::eq__i64_i64_f64_f64(::hglrt::checked_value(step), 0, 0.0, 0.0))
             {
@@ -358,14 +363,14 @@ struct impl_
 }  // namespace n_::fill
 namespace w_
 {
-// fill(step: i64) -> Basket (node), module demo.nested, line 136
+// fill(step: i64) -> Basket (node), module demo.nested, line 137
 ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::nested::m_::Basket, ::hgraph::Field<"name", ::hgraph::TS<::hgraph::Str>>, ::hgraph::Field<"counts", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>>> fill(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> step)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::fill::impl_>(wiring_, step);
 }
 }  // namespace w_
 
-// total(basket: Basket) -> i64 (`const fn`), module demo.nested, line 144
+// total(basket: Basket) -> i64 (`const fn`), module demo.nested, line 145
 ::hgraph::Int total([[maybe_unused]] const ::hgl::demo::nested::m_::Basket& basket)
 {
     [[maybe_unused]] ::hgraph::Int sum = 0;
@@ -378,14 +383,14 @@ namespace w_
 
 namespace n_::summed
 {
-// summed(basket: Basket) -> i64 (node), module demo.nested, line 152
+// summed(basket: Basket) -> i64 (node), module demo.nested, line 153
 struct impl_
 {
     static constexpr auto name = "demo.nested::summed";
 
     static void eval([[maybe_unused]] ::hgraph::In<"basket", ::hgraph::NominalTSB<::hgl::demo::nested::m_::Basket, ::hgraph::Field<"name", ::hgraph::TS<::hgraph::Str>>, ::hgraph::Field<"counts", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>>> basket, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 153 (TIME-3)
+        // when, line 154 (TIME-3)
         if (::hglrt::fn_all_valid(basket))
         {
             out_.set(::hgl::demo::nested::m_::total(::hglrt::whole_value(basket)));
@@ -396,7 +401,7 @@ struct impl_
 }  // namespace n_::summed
 namespace w_
 {
-// summed(basket: Basket) -> i64 (node), module demo.nested, line 152
+// summed(basket: Basket) -> i64 (node), module demo.nested, line 153
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> summed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::nested::m_::Basket, ::hgraph::Field<"name", ::hgraph::TS<::hgraph::Str>>, ::hgraph::Field<"counts", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>>> basket)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::summed::impl_>(wiring_, basket);
@@ -405,7 +410,7 @@ namespace w_
 
 namespace n_::first_pair
 {
-// first_pair(pairs: list<tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 180
+// first_pair(pairs: list<tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 181
 struct impl_
 {
     static ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> pairs)
@@ -416,7 +421,7 @@ struct impl_
 }  // namespace n_::first_pair
 namespace w_
 {
-// first_pair(pairs: list<tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 180
+// first_pair(pairs: list<tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 181
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>> first_pair(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> pairs)
 {
     return ::hgl::demo::nested::m_::n_::first_pair::impl_::compose(wiring_, pairs);
@@ -425,7 +430,7 @@ namespace w_
 
 namespace n_::second_relayed
 {
-// second_relayed(pairs: list<tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 182
+// second_relayed(pairs: list<tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 183
 struct impl_
 {
     static ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> pairs)
@@ -436,7 +441,7 @@ struct impl_
 }  // namespace n_::second_relayed
 namespace w_
 {
-// second_relayed(pairs: list<tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 182
+// second_relayed(pairs: list<tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 183
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>> second_relayed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> pairs)
 {
     return ::hgl::demo::nested::m_::n_::second_relayed::impl_::compose(wiring_, pairs);
@@ -445,10 +450,10 @@ namespace w_
 
 namespace n_::entry_x
 {
-// entry_x(book: dict<str, tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 191
+// entry_x(book: dict<str, tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 192
 struct impl_
 {
-    // The entry of a dictionary its key selects, on line 191: a
+    // The entry of a dictionary its key selects, on line 192: a
     // designation of it (EXPR-7, TIME-10).
     struct selected_00_
     {
@@ -468,10 +473,67 @@ struct impl_
 }  // namespace n_::entry_x
 namespace w_
 {
-// entry_x(book: dict<str, tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 191
+// entry_x(book: dict<str, tuple<i64, str>>) -> tuple<i64, str> (graph), module demo.nested, line 192
 ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>> entry_x(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Str>>>>> book)
 {
     return ::hgl::demo::nested::m_::n_::entry_x::impl_::compose(wiring_, book);
+}
+}  // namespace w_
+
+namespace n_::counted
+{
+// counted(const basket: Basket, tick: i64) -> i64 (node), module demo.nested, line 200
+struct impl_
+{
+    static constexpr auto name = "demo.nested::counted";
+
+    static void eval([[maybe_unused]] ::hgraph::Scalar<"basket", ::hglrt::configured<::hgl::demo::nested::m_::Basket>> basket, [[maybe_unused]] ::hgraph::In<"tick", ::hgraph::TS<::hgraph::Int>> tick, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        // when, line 201 (TIME-3)
+        {
+            out_.set(::hglrt::add__i64_i64(::hglrt::checked_value(tick), ::hgl::demo::nested::m_::total(basket.value().held)));
+            return;
+        }
+    }
+};
+}  // namespace n_::counted
+namespace w_
+{
+// counted(const basket: Basket, tick: i64) -> i64 (node), module demo.nested, line 200
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> counted(::hgraph::Wiring& wiring_, const ::hgl::demo::nested::m_::Basket& basket, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> tick)
+{
+    return ::hgraph::wire<::hgl::demo::nested::m_::n_::counted::impl_>(wiring_, ::hglrt::configured<::hgl::demo::nested::m_::Basket>{basket}, tick);
+}
+}  // namespace w_
+
+namespace n_::counted_all
+{
+// counted_all(const baskets: list<Basket>, tick: i64) -> i64 (node), module demo.nested, line 204
+struct impl_
+{
+    static constexpr auto name = "demo.nested::counted_all";
+
+    static void eval([[maybe_unused]] ::hgraph::Scalar<"baskets", ::hglrt::list<::hgl::demo::nested::m_::Basket>> baskets, [[maybe_unused]] ::hgraph::In<"tick", ::hgraph::TS<::hgraph::Int>> tick, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        // when, line 205 (TIME-3)
+        {
+            [[maybe_unused]] ::hgraph::Int sum = ::hglrt::checked_value(tick);
+            for (const ::hgl::demo::nested::m_::Basket& basket : baskets.value())
+            {
+                sum = ::hglrt::add__i64_i64(sum, ::hgl::demo::nested::m_::total(basket));
+            }
+            out_.set(sum);
+            return;
+        }
+    }
+};
+}  // namespace n_::counted_all
+namespace w_
+{
+// counted_all(const baskets: list<Basket>, tick: i64) -> i64 (node), module demo.nested, line 204
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> counted_all(::hgraph::Wiring& wiring_, const ::hglrt::list<::hgl::demo::nested::m_::Basket>& baskets, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> tick)
+{
+    return ::hgraph::wire<::hgl::demo::nested::m_::n_::counted_all::impl_>(wiring_, baskets, tick);
 }
 }  // namespace w_
 
@@ -1045,6 +1107,36 @@ void a_key_child_of_a_dictionary_of_tuples_is_wired()
     });
         const auto right_04_ = ::hglrt::testing::Dense<::std::tuple<::hgraph::Int, ::hgraph::Str>>{::hglrt::testing::Cell<::std::tuple<::hgraph::Int, ::hgraph::Str>>{::hglrt::testing::Whole<::std::tuple<::hgraph::Int, ::hgraph::Str>>{::std::tuple<::hgraph::Int, ::hgraph::Str>{1, ::hgraph::Str{"a"}}}}, ::std::nullopt, ::hglrt::testing::Cell<::std::tuple<::hgraph::Int, ::hgraph::Str>>{::hglrt::testing::Whole<::std::tuple<::hgraph::Int, ::hgraph::Str>>{::std::tuple<::hgraph::Int, ::hgraph::Str>{3, ::hgraph::Str{"c"}}}}};
         ::hglrt::testing::expect_same(left_03_, right_04_);
+    }();
+}
+
+void a_struct_with_a_list_field_is_a_configuration()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_05_ = [&]() {
+        const ::hgl::demo::nested::m_::Basket argument_00_ = ::hgl::demo::nested::m_::Basket{::hgraph::Str{"b"}, ::hglrt::list<::hgraph::Int>{1, 2, 3}};
+        const auto trace_01_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_02_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_01_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const ::hgl::demo::nested::m_::Basket argument_03_ = argument_00_; const auto argument_04_ = input_02_; return ::hgl::demo::nested::m_::w_::counted(wiring_, argument_03_, argument_04_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_06_ = ::hglrt::testing::Dense<::hgraph::Int>{7, 8};
+        ::hglrt::testing::expect_same(left_05_, right_06_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_012_ = [&]() {
+        const ::hglrt::list<::hgl::demo::nested::m_::Basket> argument_07_ = ::hglrt::list<::hgl::demo::nested::m_::Basket>{::hgl::demo::nested::m_::Basket{::hgraph::Str{"b"}, ::hglrt::list<::hgraph::Int>{1}}, ::hgl::demo::nested::m_::Basket{::hgraph::Str{"c"}, ::hglrt::list<::hgraph::Int>{4}}};
+        const auto trace_08_ = ::hglrt::testing::Dense<::hgraph::Int>{1};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_08_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const ::hglrt::list<::hgl::demo::nested::m_::Basket> argument_010_ = argument_07_; const auto argument_011_ = input_09_; return ::hgl::demo::nested::m_::w_::counted_all(wiring_, argument_010_, argument_011_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_013_ = ::hglrt::testing::Dense<::hgraph::Int>{6};
+        ::hglrt::testing::expect_same(left_012_, right_013_);
     }();
 }
 

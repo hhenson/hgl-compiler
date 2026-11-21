@@ -239,7 +239,10 @@ impl Emitter<'_> {
                     let Some(cpp) = self.written_type(&ty, at) else {
                         return "0".to_string();
                     };
-                    parameters.push(format!("::hgraph::Scalar<{label}, {cpp}> {name}"));
+                    // FN-1: as hgraph holds a configuration
+                    // (`configuration`).
+                    let held = super::configuration::held(program, &ty, &cpp);
+                    parameters.push(format!("::hgraph::Scalar<{label}, {held}> {name}"));
                     roles.push(Role::Config);
                     // The configuration is given as the type its scalar
                     // is, a literal among it.
@@ -248,7 +251,12 @@ impl Emitter<'_> {
                         None => self.expression(scope, &argument.value),
                     };
                     unique |= super::nodes::holds_f64(program, &ty, 0);
-                    wired.push(format!("static_cast<{cpp}>({configured})"));
+                    wired.push(super::configuration::given(
+                        program,
+                        &ty,
+                        &cpp,
+                        &format!("static_cast<{cpp}>({configured})"),
+                    ));
                     labels.push(Some(parameter.name.clone()));
                     (ty.clone(), ty)
                 }
@@ -336,10 +344,16 @@ impl Emitter<'_> {
             };
             let label = names::string(&parameter.name);
             let name = identifier(&parameter.name);
-            parameters.push(format!("::hgraph::Scalar<{label}, {cpp}> {name}"));
+            let held = super::configuration::held(program, &ty, &cpp);
+            parameters.push(format!("::hgraph::Scalar<{label}, {held}> {name}"));
             roles.push(Role::Config);
             unique |= super::nodes::holds_f64(program, &ty, 0);
-            wired.push(format!("static_cast<{cpp}>({configured})"));
+            wired.push(super::configuration::given(
+                program,
+                &ty,
+                &cpp,
+                &format!("static_cast<{cpp}>({configured})"),
+            ));
             labels.push(Some(parameter.name.clone()));
             synthetic.push(Argument {
                 parameter: Some(index),
@@ -563,14 +577,21 @@ impl Emitter<'_> {
                     return "0".to_string();
                 };
                 let label = names::string(&parameter.name);
+                // FN-1: as hgraph holds a configuration (`configuration`).
+                let held = super::configuration::held(program, &ty, &cpp);
                 parameters.push(format!(
-                    "[[maybe_unused]] ::hgraph::Scalar<{label}, {cpp}> {name}"
+                    "[[maybe_unused]] ::hgraph::Scalar<{label}, {held}> {name}"
                 ));
                 let configured = self.expression(scope, &argument.value);
-                outer.push(format!("static_cast<{cpp}>({configured})"));
+                outer.push(super::configuration::given(
+                    program,
+                    &ty,
+                    &cpp,
+                    &format!("static_cast<{cpp}>({configured})"),
+                ));
                 given.push(Given {
                     position,
-                    written: format!("{name}.value()"),
+                    written: super::configuration::read(program, &ty, &name),
                     input: None,
                 });
             }

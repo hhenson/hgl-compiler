@@ -54,7 +54,7 @@ pub(super) struct Structs;
 /// The struct `(module, declaration)` that `ty` names, where it is one
 /// hgraph holds as a nominal bundle: concrete, not generic, with a field,
 /// and each field of a type the bundle can hold ([`bundle_field`]).
-fn bundled(program: &Program, ty: &Type) -> Option<(usize, usize)> {
+pub(super) fn bundled(program: &Program, ty: &Type) -> Option<(usize, usize)> {
     let Type::Named {
         module,
         declaration,

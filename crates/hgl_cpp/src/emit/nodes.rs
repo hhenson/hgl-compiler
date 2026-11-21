@@ -622,7 +622,9 @@ impl Emitter<'_> {
             let label = names::string(&parameter.name);
             if parameter.constant {
                 let ty = self.written_type(&parameter.ty, parameter.at)?;
-                written.push(format!("::hgraph::Scalar<{label}, {ty}> {name}"));
+                // FN-1: as hgraph holds a configuration (`configuration`).
+                let held = super::configuration::held(self.program, &parameter.ty, &ty);
+                written.push(format!("::hgraph::Scalar<{label}, {held}> {name}"));
                 continue;
             }
             let schema = self.endpoint_schema(&parameter.ty, parameter.reference, parameter.at)?;
@@ -832,19 +834,30 @@ impl Emitter<'_> {
         let mut parameters = vec![format!("::hgraph::Wiring& {}", super::graphs::WIRING)];
         let mut given = vec![super::graphs::WIRING.to_string()];
         let mut wired_arguments: Vec<(Option<String>, String)> = Vec::new();
+        // A node's `const` parameters are its `hgraph::Scalar`s; a graph's
+        // `compose` takes each as a value function takes it.
+        let node = wired.starts_with("::hgraph::wire<");
         for (local, parameter) in signature.parameters.iter().enumerate() {
             let name = identifier(&body.locals[local].name);
             if parameter.constant {
                 let ty = self.written_type(&parameter.ty, parameter.at)?;
                 let taken = super::values::parameter_type(program, &parameter.ty, false, &ty);
                 parameters.push(format!("{taken} {name}"));
-                wired_arguments.push((Some(parameter.name.clone()), name.clone()));
+                // FN-1: the value as the node's `hgraph::Scalar` holds it
+                // (`configuration`).
+                let configured = if node {
+                    super::configuration::given(program, &parameter.ty, &ty, &name)
+                } else {
+                    name.clone()
+                };
+                wired_arguments.push((Some(parameter.name.clone()), configured.clone()));
+                given.push(configured);
             } else {
                 let schema = self.temporal_schema(&parameter.ty, parameter.at)?;
                 parameters.push(format!("::hgraph::Port<{schema}> {name}"));
                 wired_arguments.push((None, name.clone()));
+                given.push(name);
             }
-            given.push(name);
         }
         // FN-16: each input a `ref` result designates is given again, to
         // the input the node follows its re-binding through.

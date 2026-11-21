@@ -48,6 +48,7 @@ mod activity;
 mod apps;
 mod calls;
 mod composites;
+mod configuration;
 mod control;
 mod endpoints;
 mod expressions;

@@ -41,6 +41,7 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -361,6 +362,27 @@ std::string type_name() {
     }
 }
 
+/// The configuration of a node, a `const` parameter's value (FN-1: "a
+/// `const` parameter takes what is fixed when the graph is built. In
+/// composition that is any ordinary value"), where hgraph has no scalar of
+/// the value's own type to hold it as: a tuple, a fixed list, a set, a
+/// dictionary, a struct, a list or a nullable of a struct hgraph does not
+/// hold as a bundle, a nullable of a tuple. hgraph holds a node's
+/// configuration as `hgraph::Scalar<"name", T>`, and asks of T a scalar of
+/// its type registry, with `std::hash` and `==`, for its interning of
+/// identical nodes; this holds the value whole, and is registered as an
+/// atomic under `hgl.config.` and the name of the value's C++ type (below),
+/// with the value's hash (`hash_of`) and equality. Two nodes whose
+/// configurations differ are two; the compiler wires one whose
+/// configuration holds an `f64` as a node of its own, since `0.0 == -0.0`
+/// (hgraph issue 1866). A hook reads the value as `held`.
+template <class T>
+struct configured {
+    T held;
+
+    friend bool operator==(const configured&, const configured&) = default;
+};
+
 } // namespace hglrt
 
 namespace hglrt::detail {
@@ -406,5 +428,24 @@ struct hgraph::scalar_descriptor<E> {
     [[nodiscard]] static const ValueTypeMetaData* value_meta() {
         static const std::string name = "hgl." + hglrt::type_name<E>();
         return TypeRegistry::instance().register_scalar<E>(name);
+    }
+};
+
+template <class T>
+struct std::hash<hglrt::configured<T>> {
+    std::size_t operator()(const hglrt::configured<T>& value) const { return hglrt::hash_of(value.held); }
+};
+
+/// A configuration that hgraph has no scalar of its value's own type for is
+/// registered with hgraph as an atomic, the first time hgraph asks for its
+/// schema, under `hgl.config.` and the C++ type's own name, which tells
+/// every type apart: not every value type the compiler writes has an HGL
+/// name the library can give (a struct hgraph does not hold as a bundle).
+template <class T>
+struct hgraph::scalar_descriptor<hglrt::configured<T>> {
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta() {
+        static const std::string name = std::string{"hgl.config."} + typeid(T).name();
+        return TypeRegistry::instance().register_scalar<hglrt::configured<T>>(name);
     }
 };

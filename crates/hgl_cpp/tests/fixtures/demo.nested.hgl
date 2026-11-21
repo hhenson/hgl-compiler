@@ -5,7 +5,8 @@ module demo.nested
 # a list and a bool; a dictionary of tuples; a struct with a list field.
 # Each as a node's input and its result, and as a trace's cells, whole and
 # as deltas; a child of a list of tuples and a key's child of a dictionary of
-# tuples as connections of a graph.
+# tuples as connections of a graph; a struct with a list field as a node's
+# configuration.
 
 fn relay_pairs(pairs: list<tuple<i64, str>>) -> list<tuple<i64, str>> {
     when { return pairs }
@@ -192,4 +193,25 @@ fn entry_x(book: dict<str, tuple<i64, str>>) -> tuple<i64, str> => relay_book(bo
 
 test a_key_child_of_a_dictionary_of_tuples_is_wired {
     assert eval(entry_x(book: [["x": (1, "a")], ["y": (2, "b")], ["x": (3, "c")]])) == [(1, "a"), _, (3, "c")]
+}
+
+# FN-1: a struct with a list field, and a list of them, as a node's
+# configuration.
+fn counted(const basket: Basket, tick: i64) -> i64 {
+    when { return tick + total(basket) }
+}
+
+fn counted_all(const baskets: list<Basket>, tick: i64) -> i64 {
+    when {
+        var sum = tick
+        for basket in baskets {
+            sum = sum + total(basket)
+        }
+        return sum
+    }
+}
+
+test a_struct_with_a_list_field_is_a_configuration {
+    assert eval(counted(basket: Basket(name: "b", counts: [1, 2, 3]), tick: [1, 2])) == [7, 8]
+    assert eval(counted_all(baskets: [Basket(name: "b", counts: [1]), Basket(name: "c", counts: [4])], tick: [1])) == [6]
 }
