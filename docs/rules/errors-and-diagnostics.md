@@ -171,7 +171,8 @@ analyser: done
 transpiler: partial
 
 - Writes checked child and window reads, preserving the analysed result or value form
-  for unset or out-of-range reads.
+  for unset or out-of-range reads. A dictionary's tuple entry that is valid
+  but cannot be read whole gives `err` with `value.unset_read` in the result form.
 - Left: Deltas or window reads outside the supported endpoint forms are reported. List
   children and nested dictionary entries have the EXPR-7 limits, and reading a node's
   own window result during its `when` is reported (END-9).

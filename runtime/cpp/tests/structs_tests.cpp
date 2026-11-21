@@ -6,16 +6,19 @@
 // `hgraph::native_bundle` of it.
 #include "core_nodes.h"
 
+#include <hglrt/list_endpoints.h>
 #include <hglrt/nullables.h>
 #include <hglrt/structs.h>
 
 #include <doctest/doctest.h>
 #include <hgraph/types/generated.h>
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <source_location>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -77,6 +80,17 @@ struct Envelope {
     std::optional<i64> size;
 
     friend bool operator==(const Envelope&, const Envelope&) = default;
+};
+} // namespace d_
+
+/// `struct FixedCounts { counts: list<i64, 2> }`.
+struct FixedCounts {
+    std::array<i64, 2> counts;
+};
+
+namespace d_ {
+struct FixedCounts {
+    std::optional<hglrt::delta_t<std::array<i64, 2>>> counts;
 };
 } // namespace d_
 
@@ -154,6 +168,25 @@ struct hglrt::type_named<t::Quote> {
 template <>
 struct hglrt::type_named<t::d_::Quote> {
     static constexpr std::string_view name = "delta<test.structs::Quote>";
+};
+
+template <>
+struct hglrt::delta_of<t::FixedCounts> {
+    using type = t::d_::FixedCounts;
+};
+template <>
+struct hglrt::fields<t::FixedCounts> {
+    static constexpr auto members = std::tuple{&t::FixedCounts::counts};
+};
+template <>
+struct hglrt::fields<t::d_::FixedCounts> {
+    static constexpr auto members = std::tuple{&t::d_::FixedCounts::counts};
+};
+template <>
+struct hgraph::native_bundle<t::FixedCounts> {
+    using schema = NominalBundle<"test.structs", "FixedCounts", false, BundleParents<>, BundleArguments<>,
+                                 Field<"counts", hglrt::list_value<Int, 2>>>;
+    static constexpr auto members = ::hglrt::fields<t::FixedCounts>::members;
 };
 
 namespace {
@@ -433,6 +466,82 @@ TEST_CASE("a nullable's published null is a value, read as an optional that hold
     CHECK(nullables_seen == std::vector<std::optional<i64>>{std::nullopt, 7, std::nullopt});
     CHECK(hglrt::type_name<std::optional<i64>>() == "i64?");
     CHECK(hglrt::type_name<t::d_::Quote>() == "delta<test.structs::Quote>");
+}
+
+using FixedCountsSchema =
+    hgraph::NominalTSB<t::FixedCounts, hgraph::Field<"counts", hgraph::TSL<hgraph::TS<i64>, 2>>>;
+using FixedCountsOutput = hgraph::Out<FixedCountsSchema>;
+using ListedTuple = std::tuple<hglrt::list<i64>>;
+using ListedTupleSchema = hgraph::UnNamedTSB<hgraph::Field<"0", hgraph::TSL<hgraph::TS<i64>>>>;
+using ListedTupleOutput = hgraph::Out<ListedTupleSchema>;
+
+void publish_bad_counts_at_hgl_source(const FixedCountsOutput& out);
+void publish_bad_tuple_at_hgl_source(const ListedTupleOutput& out);
+
+unsigned refused_publications = 0;
+
+struct WriteBadCounts {
+    static constexpr auto name = "test::write_bad_counts";
+
+    static void eval(hgraph::In<"tick", hgraph::TS<i64>>, FixedCountsOutput out) {
+        try {
+            publish_bad_counts_at_hgl_source(out);
+            FAIL("expected the fixed list to refuse the index");
+        } catch (const hglrt::Failure& failure) {
+            ++refused_publications;
+            CHECK(failure.error().code == "value.index_out_of_range");
+            CHECK(std::string_view{failure.where().file_name()} == "demo/list_publications.hgl");
+            CHECK(failure.where().line() == 16);
+        }
+    }
+};
+
+struct WriteBadTuple {
+    static constexpr auto name = "test::write_bad_tuple";
+
+    static void eval(hgraph::In<"tick", hgraph::TS<i64>>, ListedTupleOutput out) {
+        try {
+            publish_bad_tuple_at_hgl_source(out);
+            FAIL("expected the growing list to refuse the contradictory delta");
+        } catch (const hglrt::Failure& failure) {
+            ++refused_publications;
+            CHECK_FALSE(failure.error().code.has_value());
+            CHECK(std::string_view{failure.where().file_name()} == "demo/list_publications.hgl");
+            CHECK(failure.where().line() == 24);
+        }
+    }
+};
+
+struct ObserveBadPublications {
+    static constexpr auto name = "test::observe_bad_publications";
+
+    static void eval(hgraph::In<"counts", FixedCountsSchema, hgraph::InputValidity::Unchecked>,
+                     hgraph::In<"tuple", ListedTupleSchema, hgraph::InputValidity::Unchecked>) {}
+};
+
+TEST_CASE("a refused list publication in a struct or tuple reports the HGL write (TYPE-16, EXPR-3)") {
+    refused_publications = 0;
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        const auto tick = replayed(wiring, Dense<i64>{1});
+        hgraph::wire<ObserveBadPublications>(wiring, hgraph::wire<WriteBadCounts>(wiring, tick),
+                                             hgraph::wire<WriteBadTuple>(wiring, tick));
+    });
+    CHECK(refused_publications == 2);
+}
+
+// The generated code sets the HGL file and line at each publication.
+// A composite child such as this tuple receives that place through its publisher.
+void publish_bad_counts_at_hgl_source(const FixedCountsOutput& out) {
+    using Delta = hglrt::delta_t<std::array<i64, 2>>;
+#line 16 "demo/list_publications.hgl"
+    hglrt::publish(out, t::d_::FixedCounts{Delta{.updated = {{2, 8}}}});
+}
+
+void publish_bad_tuple_at_hgl_source(const ListedTupleOutput& out) {
+    using Delta = hglrt::delta_t<hglrt::list<i64>>;
+    const hglrt::delta_t<ListedTuple> delta{Delta{.updated = {{2, 8}}, .size_modified = 1}};
+#line 24 "demo/list_publications.hgl"
+    hglrt::publish_as_form(out, delta, std::source_location::current());
 }
 
 } // namespace

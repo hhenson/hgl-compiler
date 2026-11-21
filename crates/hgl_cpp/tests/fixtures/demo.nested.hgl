@@ -125,6 +125,30 @@ test a_dictionary_of_tuples_replays_its_deltas {
     ]) == [["x": (1, "a"), "y": (2, "b")], ["x": (1, "c")]]
 }
 
+# ERR-14, TIME-1: reading a tuple entry into a result gives err when only
+# one of its positions is valid. Once both positions arrive the entry reads ok.
+fn read_tuple_entry(book: dict<str, tuple<i64, str>>, key: str) -> str {
+    when {
+        let entry: result<tuple<i64, str>, error> = book[key]
+        if is_ok(entry) { return entry.value[1] }
+        if is_err(entry) && entry.error.code == "value.unset_read" { return "unset" }
+        return "wrong error"
+    }
+}
+
+test a_partial_dictionary_tuple_entry_reads_as_err {
+    let bid: delta<tuple<i64, str>> = (1, null)
+    let ask: delta<tuple<i64, str>> = (null, "complete")
+    assert eval read_tuple_entry(
+        book: [
+            delta<dict<str, tuple<i64, str>>>(updated: ["x": bid]),
+            delta<dict<str, tuple<i64, str>>>(updated: ["x": ask]),
+            ["x": (1, "complete")],
+        ],
+        key: ["x", "x", "absent"],
+    ) == ["unset", "complete", "unset"]
+}
+
 struct Basket {
     name: str
     counts: list<i64>
