@@ -115,14 +115,49 @@ struct Watch {
     }
 };
 
-/// Runs `reading` into a window `W` that `Watch` reads.
+/// `fn twice(reading: i64) -> rolling_window<i64, ...> { inject out  when {
+/// out = reading  out = reading + 10 } }`: two writes of its window in one
+/// evaluation, held and made once, as the compiler writes them.
 template <class W>
+struct Twice {
+    static constexpr auto name = "test::twice";
+
+    static void eval(hgraph::In<"reading", hgraph::TS<i64>> reading, hgraph::Out<W> out) {
+        hglrt::WindowArrival<hgraph::Out<W>> arrival{out};
+        arrival.run([&] {
+            arrival.hold(hglrt::checked_value(reading));
+            arrival.hold(hglrt::add__i64_i64(hglrt::checked_value(reading), 10));
+        });
+    }
+};
+
+/// A node that writes its window and then fails, and takes the failure
+/// itself, as a `capture` around it takes it (ERR-8).
+template <class W>
+struct WrittenThenFailed {
+    static constexpr auto name = "test::written_then_failed";
+
+    static void eval(hgraph::In<"reading", hgraph::TS<i64>> reading, hgraph::Out<W> out) {
+        hglrt::WindowArrival<hgraph::Out<W>> arrival{out};
+        try {
+            arrival.run([&] {
+                arrival.hold(hglrt::checked_value(reading));
+                hglrt::fail_uncoded("a failure after the write");
+            });
+        } catch (const hglrt::Failure&) {
+        }
+    }
+};
+
+/// Runs `reading` into a window `W` that the node `Writer` writes and
+/// `Watch` reads.
+template <class W, template <class> class Writer = Collect>
 void watched(const Dense<i64>& reading) {
     window_seen.clear();
     (void)hglrt::testing::run([reading](hgraph::Wiring& wiring, datetime) {
         auto replayed =
             hgraph::wire<hglrt_test::Replay>(wiring, hglrt::testing::replay_items(reading, start));
-        hgraph::wire<Watch<W>>(wiring, hgraph::wire<Collect<W>>(wiring, replayed));
+        hgraph::wire<Watch<W>>(wiring, hgraph::wire<Writer<W>>(wiring, replayed));
     });
 }
 
@@ -168,6 +203,29 @@ TEST_CASE("a window of a duration with a minimum of zero (END-9)") {
                              {start + 1us, true, true, true, 2, std::nullopt, list<i64>{1, 2}, start + 1us},
                              {start + 4us, true, true, true, std::nullopt, 1, list<i64>{2}, start + 4us},
                              {start + 5us, true, true, false, std::nullopt, 2, std::nullopt, start + 5us},
+                         });
+}
+
+TEST_CASE("two writes of a window in one evaluation are its one arrival (END-5, TYPE-11)") {
+    watched<hgraph::TSW<i64, 2, 2>, Twice>(Dense<i64>{1, 2, 3});
+    // END-5: "Further writes to the already modified endpoint in the same
+    // evaluation update its publication without notifying again"; TYPE-11:
+    // "A window takes at most one value a cycle": each cycle's arrival is the
+    // last value written, and the third pushes out one value, the oldest.
+    CHECK(window_seen ==
+          std::vector<Seen>{
+              {start, true, true, false, 11, std::nullopt, std::nullopt, start},
+              {start + 1us, true, true, true, 12, std::nullopt, list<i64>{11, 12}, start + 1us},
+              {start + 2us, true, true, true, 13, 11, list<i64>{12, 13}, start + 2us},
+          });
+}
+
+TEST_CASE("a window written before a failure holds the arrival (ERR-8)") {
+    watched<hgraph::TSW<i64, 2, 1>, WrittenThenFailed>(Dense<i64>{1, 2});
+    // ERR-8: "Earlier writes remain visible".
+    CHECK(window_seen == std::vector<Seen>{
+                             {start, true, true, true, 1, std::nullopt, list<i64>{1}, start},
+                             {start + 1us, true, true, true, 2, std::nullopt, list<i64>{1, 2}, start + 1us},
                          });
 }
 

@@ -10,6 +10,8 @@
 #undef a_window_is_recorded_and_replayed
 #undef a_window_of_a_duration_falls_back_and_stays_valid
 #undef demo
+#undef the_last_write_of_a_cycle_arrives
+#undef two_handlers_write_one_arrival
 #undef valid_before_all_valid
 #undef windows
 
@@ -23,6 +25,8 @@ void a_full_window_of_ticks_pushes_out_its_oldest();
 void a_value_leaves_a_window_of_a_duration();
 void a_window_of_a_duration_falls_back_and_stays_valid();
 void a_window_is_recorded_and_replayed();
+void the_last_write_of_a_cycle_arrives();
+void two_handlers_write_one_arrival();
 }  // namespace hgl::demo::windows::m_::t_
 
 namespace
@@ -36,6 +40,8 @@ const ::hglrt::testing::Registration test_4{"demo.windows::a_full_window_of_tick
 const ::hglrt::testing::Registration test_5{"demo.windows::a_value_leaves_a_window_of_a_duration", &::hgl::demo::windows::m_::t_::a_value_leaves_a_window_of_a_duration};
 const ::hglrt::testing::Registration test_6{"demo.windows::a_window_of_a_duration_falls_back_and_stays_valid", &::hgl::demo::windows::m_::t_::a_window_of_a_duration_falls_back_and_stays_valid};
 const ::hglrt::testing::Registration test_7{"demo.windows::a_window_is_recorded_and_replayed", &::hgl::demo::windows::m_::t_::a_window_is_recorded_and_replayed};
+const ::hglrt::testing::Registration test_8{"demo.windows::the_last_write_of_a_cycle_arrives", &::hgl::demo::windows::m_::t_::the_last_write_of_a_cycle_arrives};
+const ::hglrt::testing::Registration test_9{"demo.windows::two_handlers_write_one_arrival", &::hgl::demo::windows::m_::t_::two_handlers_write_one_arrival};
 }  // namespace
 
 int main(int argc, char **argv)

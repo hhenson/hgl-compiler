@@ -786,7 +786,7 @@ fn windows_are_written() {
     for written in [
         "::hgraph::Out<::hgraph::TSW<::hgraph::Int, 3, 2>> out_",
         "::hgraph::Out<::hgraph::TSWDuration<::hgraph::Int, 3, 1>> out_",
-        "::hglrt::window_push(out_, ::hglrt::checked_value(reading));",
+        "arrival_.hold(::hglrt::checked_value(reading));",
         "::hglrt::window_value_checked(readings)",
         "::hglrt::fn_removed_value_checked(readings)",
         "::hglrt::fn_delta_value_checked(readings)",
@@ -926,6 +926,88 @@ fn a_window_not_written_yet_is_reported() {
     assert_eq!(
         emitted.blocked("an_invalidated_window").as_deref(),
         Some("m.hgl:17:12 the cpp target does not write `invalidate` of a window yet")
+    );
+}
+
+/// What a node's `when` writes of its window result is held until its
+/// evaluation ends, and arrives once (END-5: "Further writes to the
+/// already modified endpoint in the same evaluation update its
+/// publication"; TYPE-11: "A window takes at most one value a cycle"): its
+/// handlers run inside `::hglrt::WindowArrival::run`, and each write holds
+/// its value. A write then `invalidate(out)` (END-4: "publish then
+/// invalidate leaves the endpoint invalid") is reported, as `invalidate`
+/// of a window is; and so is a read of the result in that `when`, which
+/// would not see what the evaluation holds.
+#[test]
+fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn twice(reading: i64) -> rolling_window<i64, 2> {\n",
+                "    inject out\n",
+                "    when {\n",
+                "        out = reading\n",
+                "        out = reading + 10\n",
+                "    }\n",
+                "}\n",
+                "\n",
+                "fn dropped(reading: i64) -> rolling_window<i64, 2> {\n",
+                "    inject out\n",
+                "    when {\n",
+                "        out = reading\n",
+                "        invalidate(out)\n",
+                "    }\n",
+                "}\n",
+                "\n",
+                "fn looked(reading: i64) -> rolling_window<i64, 2> {\n",
+                "    inject out\n",
+                "    when {\n",
+                "        out = reading\n",
+                "        if valid(out) { out = reading + 1 }\n",
+                "    }\n",
+                "}\n",
+                "\n",
+                "test written_twice {\n",
+                "    assert eval(twice(reading: [1, 2])) == [11, 12]\n",
+                "}\n",
+                "\n",
+                "test written_then_invalidated {\n",
+                "    assert eval(dropped(reading: [1])) == []\n",
+                "}\n",
+                "\n",
+                "test written_then_read {\n",
+                "    assert eval(looked(reading: [1])) == [2]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("written_twice"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    for written in [
+        "::hglrt::WindowArrival<decltype(out_)> arrival_{out_};\n        arrival_.run([&] {\n",
+        "arrival_.hold(::hglrt::checked_value(reading));\n                arrival_.hold(::hglrt::add__i64_i64(::hglrt::checked_value(reading), 10));\n",
+    ] {
+        assert!(unit.contains(written), "{written} in\n{unit}");
+    }
+    assert_eq!(
+        emitted.blocked("written_then_invalidated").as_deref(),
+        Some("m.hgl:15:9 the cpp target does not write `invalidate` of a window yet")
+    );
+    assert_eq!(
+        emitted.blocked("written_then_read").as_deref(),
+        Some(
+            "m.hgl:23:12 the cpp target does not write a read of a node's own window result in its `when` yet"
+        )
     );
 }
 

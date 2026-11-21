@@ -5,14 +5,19 @@
 
 // Names this file writes, which no macro of a header above takes.
 #undef arrival
+#undef arrived_twice
 #undef checked_total
 #undef collect
 #undef collect_any
 #undef collect_recent
 #undef collect_spanned
 #undef demo
+#undef departed_by_two
+#undef departed_twice
 #undef departure
 #undef early_total
+#undef held_by_two
+#undef held_twice
 #undef lifted_total
 #undef observe_arrival
 #undef observe_checked
@@ -26,6 +31,9 @@
 #undef observe_total
 #undef observe_validity
 #undef outcome
+#undef pair_arrival
+#undef pair_departure
+#undef pair_held
 #undef probe
 #undef read_or_code
 #undef readiness
@@ -44,6 +52,8 @@
 #undef validity
 #undef value_or_code
 #undef windows
+#undef written_by_two
+#undef written_twice
 
 namespace hgl::demo::windows::m_
 {
@@ -241,6 +251,66 @@ namespace w_
 {
 // observe_total(reading: i64) -> i64 (graph), module demo.windows, line 196
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> observe_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
+}  // namespace w_
+
+namespace w_
+{
+// written_twice(reading: i64) -> rolling_window<i64, 2> (node), module demo.windows, line 210
+::hgraph::Port<::hgraph::TSW<::hgraph::Int, 2, 2>> written_twice(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
+}  // namespace w_
+
+namespace w_
+{
+// written_by_two(reading: i64) -> rolling_window<i64, 2> (node), module demo.windows, line 219
+::hgraph::Port<::hgraph::TSW<::hgraph::Int, 2, 2>> written_by_two(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
+}  // namespace w_
+
+namespace w_
+{
+// pair_held(readings: rolling_window<i64, 2>) -> list<i64> (node), module demo.windows, line 225
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> pair_held(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSW<::hgraph::Int, 2, 2>> readings);
+}  // namespace w_
+
+namespace w_
+{
+// pair_arrival(readings: rolling_window<i64, 2>) -> i64 (node), module demo.windows, line 229
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> pair_arrival(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSW<::hgraph::Int, 2, 2>> readings);
+}  // namespace w_
+
+namespace w_
+{
+// pair_departure(readings: rolling_window<i64, 2>) -> str (node), module demo.windows, line 233
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> pair_departure(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSW<::hgraph::Int, 2, 2>> readings);
+}  // namespace w_
+
+namespace w_
+{
+// held_twice(reading: i64) -> list<i64> (graph), module demo.windows, line 237
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> held_twice(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
+}  // namespace w_
+
+namespace w_
+{
+// arrived_twice(reading: i64) -> i64 (graph), module demo.windows, line 239
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> arrived_twice(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
+}  // namespace w_
+
+namespace w_
+{
+// departed_twice(reading: i64) -> str (graph), module demo.windows, line 241
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> departed_twice(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
+}  // namespace w_
+
+namespace w_
+{
+// held_by_two(reading: i64) -> list<i64> (graph), module demo.windows, line 243
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> held_by_two(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
+}  // namespace w_
+
+namespace w_
+{
+// departed_by_two(reading: i64) -> str (graph), module demo.windows, line 245
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> departed_by_two(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
 }  // namespace w_
 
 }  // namespace hgl::demo::windows::m_

@@ -690,7 +690,8 @@ fn temporal_code_runs_on_the_sdk() {
 
 /// Windows on the SDK (`demo.windows`): of a tick count and of a
 /// duration, values leaving one by age, their reads checked when they
-/// run, a lifted helper given one, and a window recorded and replayed
+/// run, a lifted helper given one, a window recorded and replayed, and two
+/// writes of a window result in one evaluation, the last of which arrives
 /// (TYPE-11; core's END-9).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -713,7 +714,7 @@ fn windows_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

@@ -31,9 +31,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace hglrt {
 
@@ -119,6 +121,57 @@ template <window_view E>
 void window_push(const E& window, const window_value_t<E>& value) {
     window.push(value);
 }
+
+/// The arrival that a node's evaluation makes at its window result, held
+/// while the node's handlers run and made once they have run. END-5:
+/// "Further writes to the already modified endpoint in the same evaluation
+/// update its publication without notifying again"; TYPE-11: "A window takes
+/// at most one value a cycle". So each `return value` and `out = value` of
+/// the evaluation holds its value in place of the one written before it, and
+/// the last arrives, once: one arrival, which pushes out the oldest value of
+/// a full window of a tick count once. (hgraph takes one arrival at a window
+/// in an evaluation: a second push fails inside it.)
+///
+/// It refers to the evaluation's view of the result, and lives in that
+/// evaluation alone.
+template <window_view E>
+class WindowArrival {
+  public:
+    explicit WindowArrival(const E& window) : window_(window) {}
+    WindowArrival(const WindowArrival&) = delete;
+    WindowArrival& operator=(const WindowArrival&) = delete;
+
+    /// `return value` or `out = value`: `value` is the cycle's arrival, in
+    /// place of any written before it in the evaluation.
+    void hold(const window_value_t<E>& value) { held_ = value; }
+
+    /// Runs `handlers`, the node's handlers, then makes the arrival held, where
+    /// one was written. Where the handlers fail, the arrival held is made
+    /// before the failure goes on (ERR-8: "Earlier writes remain visible").
+    template <class Handlers>
+    void run(Handlers&& handlers) {
+        try {
+            std::forward<Handlers>(handlers)();
+        } catch (...) {
+            arrive();
+            throw;
+        }
+        arrive();
+    }
+
+  private:
+    /// Pushes the value held, where there is one.
+    void arrive() {
+        if (held_.has_value()) {
+            const window_value_t<E> value = std::move(*held_);
+            held_.reset();
+            window_push(window_, value);
+        }
+    }
+
+    const E& window_;
+    std::optional<window_value_t<E>> held_{};
+};
 
 /// A read of a window's value in a hook or for a lifted helper (TYPE-11,
 /// END-9): "a `list<V>` of the values held, oldest first. Before the window

@@ -7,7 +7,8 @@
 //! | HGL | C++ |
 //! | --- | --- |
 //! | `rolling_window<i64, 3, 2>`; `rolling_window<i64, 3us, 1us>` | `::hgraph::TSW<::hgraph::Int, 3, 2>`; `::hgraph::TSWDuration<::hgraph::Int, 3, 1>`, its bounds in microseconds |
-//! | `return value`, `out = value` to a window result, a source's `yield` (TIME-7) | `::hglrt::window_push(view, value);`: the V arrives |
+//! | `return value`, `out = value` to a window result in a node's `when` (TIME-7, END-5) | `arrival_.hold(value);`: the node's `eval` runs its handlers in `::hglrt::WindowArrival::run`, which holds the last value written in the evaluation and then pushes it, the cycle's one arrival (TYPE-11) |
+//! | A source's `yield` to a window (TIME-7) | `::hglrt::window_push(view, value);`: the V arrives |
 //! | A read of a window's value in a hook or a lifted call's node (TYPE-11) | `::hglrt::window_value(view)`, a `list<V>` oldest first, which fails with `value.unset_read` before the window is all valid; where its place takes a `result` ([`ExprKind::CheckedWindow`]), `::hglrt::window_value_checked(view)` |
 //! | `all_valid(window)` (END-9) | `::hglrt::fn_all_valid(view)` |
 //! | `delta_value(window)` (END-3, END-9, ERR-14) | `::hglrt::fn_delta_value(view)`, or `fn_delta_value_checked` where its place takes a `result`: the value that arrived |
@@ -17,19 +18,25 @@
 //!
 //! `valid`, `modified` and `last_modified` of a window are the endpoints'
 //! family's, which hgraph's views answer for a window as for any value.
-//! A window whose V is no scalar, or whose bounds are not known, and
-//! `invalidate` of a window result (END-4), are not written yet, and are
-//! reported.
+//! A window whose V is no scalar, or whose bounds are not known,
+//! `invalidate` of a window result (END-4), and a node's read of its own
+//! window result in a `when`, which would not see what the evaluation
+//! holds to publish, are not written yet, and are reported.
 
-use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind};
+use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook};
 use hgl_analyser::{ConstantValue, DeclarationKind, Scalar, Type};
 
 use super::Emitter;
 use super::forms::Family;
-use super::nodes::{Kind, Role};
+use super::nodes::{Kind, OUT, Role};
 use super::statements::Scope;
 use super::types::cpp_type;
+use super::values::INDENT;
 use crate::runtime;
+
+/// The name of what a node's `eval` holds of the arrival it makes at its
+/// window result (`::hglrt::WindowArrival`).
+const ARRIVAL: &str = "arrival_";
 
 /// The windows' family.
 pub(super) struct Windows;
@@ -114,6 +121,51 @@ fn reads_endpoints(kind: Option<Kind>) -> bool {
     matches!(kind, Some(Kind::Hook(_) | Kind::Lifted))
 }
 
+/// True where what is written is a node's `when`, whose writes to its
+/// window result `out` are held until its evaluation ends (END-5).
+fn holding(emitter: &Emitter, view: &str) -> bool {
+    emitter.kind() == Some(Kind::Hook(Hook::When)) && view == OUT
+}
+
+/// True where `local` of `locals` is the window result of the node whose
+/// `when` is being written: what a read of it gives would not hold what
+/// the evaluation has written of it yet.
+fn own_window(emitter: &Emitter, locals: &[hgl_analyser::hir::Local], local: usize) -> bool {
+    emitter.role(local) == Role::Out
+        && emitter.kind() == Some(Kind::Hook(Hook::When))
+        && window_type(emitter, locals, local).is_some()
+}
+
+/// True where `value` reads the window result of the node whose `when`
+/// is being written: an endpoint operation on it but `invalidate`, which
+/// is reported of its own, its `delta_value` or `removed_value` into a
+/// `result`, or its value into a `result`. (A plain read of `out` is the
+/// endpoints' family's to report.)
+fn own_read(emitter: &Emitter, locals: &[hgl_analyser::hir::Local], value: &Expr) -> bool {
+    let own = |local: usize| own_window(emitter, locals, local);
+    match &value.kind {
+        ExprKind::Endpoint {
+            operation,
+            inputs: Some(inputs),
+        } => *operation != EndpointOperation::Invalidate && inputs.iter().any(|&local| own(local)),
+        ExprKind::CheckedWindow(read) => matches!(read.kind, ExprKind::Local(local) if own(local)),
+        ExprKind::CheckedDelta(read) => match &read.kind {
+            ExprKind::Endpoint {
+                inputs: Some(inputs),
+                ..
+            } => inputs.iter().any(|&local| own(local)),
+            ExprKind::Call { arguments, .. } => arguments.iter().any(
+                |argument| matches!(argument.value.kind, ExprKind::EndpointOf(local) if own(local)),
+            ),
+            _ => false,
+        },
+        ExprKind::Call { arguments, .. } => arguments.iter().any(
+            |argument| matches!(argument.value.kind, ExprKind::EndpointOf(local) if own(local)),
+        ),
+        _ => false,
+    }
+}
+
 /// The library's function `name`, qualified.
 fn library(name: &str) -> String {
     format!("::{}::{name}", runtime::NAMESPACE)
@@ -152,7 +204,40 @@ impl Family for Windows {
         value: &str,
     ) -> Option<String> {
         window(emitter, ty)?;
+        // END-5: "Further writes to the already modified endpoint in the
+        // same evaluation update its publication"; TYPE-11: "A window
+        // takes at most one value a cycle". A node's `when` holds the
+        // value, which arrives once its evaluation ends.
+        if holding(emitter, view) {
+            return Some(format!("{ARRIVAL}.hold({value});"));
+        }
         Some(format!("{}({view}, {value});", library("window_push")))
+    }
+
+    // END-5, TYPE-11: the handlers of a node whose result is a window run
+    // while the evaluation holds its one arrival, which is pushed when
+    // they have run, a `return` among them.
+    fn evaluation(&self, emitter: &mut Emitter<'_>, ty: &Type, handlers: &str) -> Option<String> {
+        window(emitter, ty)?;
+        let indent = INDENT.repeat(2);
+        let inner: String = handlers
+            .lines()
+            .map(|line| {
+                if line.is_empty() {
+                    "\n".to_string()
+                } else {
+                    format!("{INDENT}{line}\n")
+                }
+            })
+            .collect();
+        Some(format!(
+            "{indent}// The cycle's one arrival at the window (TYPE-11, END-5): each write holds\n\
+             {indent}// its value in place of the one before, and the last arrives when the\n\
+             {indent}// handlers have run.\n\
+             {indent}::{}::WindowArrival<decltype({OUT})> {ARRIVAL}{{{OUT}}};\n\
+             {indent}{ARRIVAL}.run([&] {{\n{inner}{indent}}});\n",
+            runtime::NAMESPACE
+        ))
     }
 
     // END-9: "`delta_value(x)` of a window is the value that arrived in
@@ -219,6 +304,15 @@ impl Family for Windows {
         value: &Expr,
     ) -> Option<String> {
         let locals = &scope.body.locals;
+        // END-5: what a node's `when` writes of its window result is held
+        // until its evaluation ends, so a read of that result there would
+        // not see it.
+        if own_read(emitter, locals, value) {
+            return Some(emitter.missing(
+                value.at,
+                "a read of a node's own window result in its `when`",
+            ));
+        }
         match &value.kind {
             // TYPE-11: a read of a window input's value in a hook, as its
             // temporal form reads it. The read is typed as the `list<V>`
