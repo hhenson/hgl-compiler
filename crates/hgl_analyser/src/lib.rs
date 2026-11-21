@@ -340,10 +340,6 @@ pub mod codes {
     /// A connection assigned to a `var` that holds an ordinary value,
     /// or the reverse (EXPR-4, CTRL-14).
     pub const BINDING_CATEGORY: &str = "binding.category";
-    /// An assignment to a `var` declared outside a composition loop
-    /// that makes one child for each member, or a `return` in one
-    /// (CTRL-8, CTRL-15).
-    pub const LOOP_CARRIED: &str = "loop.carried";
     /// A state initializer reads a temporal input (TIME-5).
     pub const STATE_INPUT_READ: &str = "state.input_read";
     /// A window's size is neither a tick count nor a duration, or its
@@ -563,8 +559,13 @@ pub mod codes {
         /// sets no limit.
         pub const READING_LIMIT: &str = "reading.limit";
 
+        /// A return or an assignment to an outer `var` in a graph
+        /// loop that still makes a child per member. The pinned CTRL-15
+        /// rejects the dynamic sequence instead. See issue #373.
+        pub const LOOP_CARRIED: &str = "loop.carried";
+
         /// Every local code of this stage.
-        pub const ALL: [&str; 8] = [
+        pub const ALL: [&str; 9] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
@@ -573,6 +574,7 @@ pub mod codes {
             CONSTANT_FAILURE,
             SCHEDULED_OUTSIDE_NODE,
             READING_LIMIT,
+            LOOP_CARRIED,
         ];
     }
 }

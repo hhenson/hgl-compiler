@@ -22,8 +22,8 @@ analyser: done
 
 analyser: partial
 
-- Private unless exported, a native function and a native type among them; operators public; `impl fn` reached through its operator; import cycles rejected
-- Left: export closure
+- Private unless exported, a native function and a native type among them; operators still public; `impl fn` reached through its operator; import cycles rejected
+- Left: export closure and private operators (#364).
 
 ## UNIT-4
 
@@ -48,7 +48,7 @@ analyser: done
 analyser: partial
 
 - A default reads no parameter of its declaration and no field of its struct
-- Left: the closure an imported default keeps
+- Left: the closure an imported default keeps; defaults that read a function's laws (#367).
 
 ## UNIT-8
 
@@ -57,6 +57,7 @@ analyser: partial
 - Any parameter but a pack may have a default; a pack's is rejected under FN-8
 - A parameter that may be omitted follows every one that may not, and a value function's call may omit one written `T?`
 - A default is read as a value of its parameter's type (`type.mismatch`) and kept for the stages after, `Module::defaults`
+- Configuration parameter ordering awaits #363, and law predicates in defaults await #367.
 - Left: that a default is a required constant; the default of a window, an atomic or a reference, which is held to no type; a default whose parameter's type names a generic parameter
 
 transpiler: planned
