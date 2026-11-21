@@ -2100,8 +2100,8 @@ fn temporal_structs_and_nullables_are_written() {
 /// field has a form the library does not read whole (a list), a generic
 /// struct, an abstract one, a nullable put in the run's store (a `get`
 /// through a nullable place has the payload's type: hgl_spec issue 165),
-/// and an atomic struct that holds an optional field (hgraph issue
-/// 1874).
+/// an atomic struct that holds an optional field (hgraph issue 1874), and
+/// a tuple with an atomic position.
 #[test]
 fn temporal_structs_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -2133,6 +2133,12 @@ fn temporal_structs_not_written_yet_are_reported() {
             "fn noted(value: atomic<Noted>) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
+            "struct Plain {\n",
+            "    value: i64\n",
+            "}\n",
+            "fn paired(value: tuple<atomic<Plain>, i64>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
         ),
     )]);
     assert_eq!(
@@ -2142,6 +2148,7 @@ fn temporal_structs_not_written_yet_are_reported() {
             "m.hgl:11:10 the cpp target does not write a temporal value of `Box<i64>` yet",
             "m.hgl:17:9 the cpp target does not write a nullable value put in the run's store (hgl_spec issue 165) yet",
             "m.hgl:24:10 the cpp target does not write an atomic struct that holds an optional field (hgraph issue 1874) yet",
+            "m.hgl:30:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
         ]
     );
 }

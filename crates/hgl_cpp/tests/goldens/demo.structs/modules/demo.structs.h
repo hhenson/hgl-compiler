@@ -26,6 +26,7 @@
 #undef input
 #undef is_bid
 #undef make_outer
+#undef nested_total
 #undef note_is_null
 #undef nullable_delta_payload
 #undef observe_noted_quote
@@ -46,6 +47,7 @@
 #undef quote
 #undef quote_all_valid
 #undef quote_valid
+#undef quoted_total
 #undef read_noted_quote
 #undef read_outer
 #undef read_validity
@@ -310,6 +312,18 @@ namespace w_
 {
 // atomic_bid(quote: atomic<MarketQuote>) -> i64 (node), module demo.structs, line 362
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> atomic_bid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::MarketQuote>> quote);
+}  // namespace w_
+
+namespace w_
+{
+// quoted_total(pair: tuple<MarketQuote, i64>) -> i64 (node), module demo.structs, line 381
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> quoted_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> pair);
+}  // namespace w_
+
+namespace w_
+{
+// nested_total(pair: tuple<tuple<i64, i64>, i64>) -> i64 (node), module demo.structs, line 385
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> nested_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> pair);
 }  // namespace w_
 
 }  // namespace hgl::demo::structs::m_

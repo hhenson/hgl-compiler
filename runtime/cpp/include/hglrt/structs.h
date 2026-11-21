@@ -502,10 +502,26 @@ std::optional<std::string> difference(const Left& left, const Recording<atomic_t
     return difference(left, as_struct_recording(right));
 }
 
+namespace detail {
+/// The delta of type `D` that publishing the part `part` whole records:
+/// the part itself where `D` is its own type, a part that publishes whole,
+/// and otherwise its whole value's delta (`whole_delta`).
+template <class D, class P>
+D whole_part(const P& part) {
+    if constexpr (std::is_same_v<D, P>) {
+        return part;
+    } else {
+        return whole_delta(part, 0);
+    }
+}
+} // namespace detail
+
 /// What publishing a whole struct records (TST-9: "a T whole, which
 /// replaces what the input held"; TST-16: "A T published whole is held as
 /// its delta too"): its delta with every field, each as its whole value
-/// records it: a field that publishes whole as its value.
+/// records it. Which that is is the delta's property's to say: an atomic
+/// field, whose C++ value is its payload's, publishes whole, and its
+/// property holds the payload (TYPE-16: "`atomic<V>`: V").
 template <class T>
     requires requires { hgraph::native_bundle<T>::members; }
 struct whole_publication<T> {
@@ -515,17 +531,27 @@ struct whole_publication<T> {
         [&]<std::size_t... I>(std::index_sequence<I...>) {
             (
                 [&] {
-                    const auto& field = value.*std::get<I>(hglrt::detail::members_of<T>);
-                    using Field = std::remove_cvref_t<decltype(field)>;
-                    if constexpr (publishes_whole<Field>) {
-                        change.*std::get<I>(hglrt::detail::delta_members_of<T>) = field;
-                    } else {
-                        change.*std::get<I>(hglrt::detail::delta_members_of<T>) = detail::whole_delta(field, 0);
-                    }
+                    auto& property = change.*std::get<I>(hglrt::detail::delta_members_of<T>);
+                    property = detail::whole_part<typename std::remove_cvref_t<decltype(property)>::value_type>(
+                        value.*std::get<I>(hglrt::detail::members_of<T>));
                 }(),
                 ...);
         }(std::make_index_sequence<count>{});
         return change;
+    }
+};
+
+/// What publishing a whole tuple whose positions do not all publish whole
+/// records (TST-9): each position's delta, a struct's and a tuple's as its
+/// own whole value records it (TYPE-16: "each position's delta").
+template <class... P>
+    requires(!(publishes_whole<P> && ...))
+struct whole_publication<std::tuple<P...>> {
+    static delta_t<std::tuple<P...>> delta(const std::tuple<P...>& value) {
+        using Delta = delta_t<std::tuple<P...>>;
+        return [&]<std::size_t... I>(std::index_sequence<I...>) {
+            return Delta{detail::whole_part<typename std::tuple_element_t<I, Delta>::value_type>(std::get<I>(value))...};
+        }(std::index_sequence_for<P...>{});
     }
 };
 

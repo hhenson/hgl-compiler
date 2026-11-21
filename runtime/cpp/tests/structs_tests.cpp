@@ -61,9 +61,41 @@ struct Book {
 };
 } // namespace d_
 
+/// `struct Envelope { quote: atomic<Quote>, size: i64 }`: an atomic field
+/// holds its payload, and its delta's property holds the payload too.
+struct Envelope {
+    Quote quote;
+    i64 size;
+
+    friend bool operator==(const Envelope&, const Envelope&) = default;
+};
+
+namespace d_ {
+/// `delta<Envelope>`.
+struct Envelope {
+    std::optional<hglrt_structs_test::Quote> quote;
+    std::optional<i64> size;
+
+    friend bool operator==(const Envelope&, const Envelope&) = default;
+};
+} // namespace d_
+
 } // namespace hglrt_structs_test
 
 namespace t = hglrt_structs_test;
+
+template <>
+struct hglrt::delta_of<t::Envelope> {
+    using type = t::d_::Envelope;
+};
+template <>
+struct hglrt::fields<t::Envelope> {
+    static constexpr auto members = std::tuple{&t::Envelope::quote, &t::Envelope::size};
+};
+template <>
+struct hglrt::fields<t::d_::Envelope> {
+    static constexpr auto members = std::tuple{&t::d_::Envelope::quote, &t::d_::Envelope::size};
+};
 
 template <>
 struct hglrt::delta_of<t::Quote> {
@@ -108,6 +140,12 @@ struct hgraph::native_bundle<t::Book> {
     using schema = NominalBundle<"test.structs", "Book", false, BundleParents<>, BundleArguments<>,
                                  Field<"top", native_bundle<t::Quote>::schema>, Field<"size", Int>>;
     static constexpr auto members = ::hglrt::fields<t::Book>::members;
+};
+template <>
+struct hgraph::native_bundle<t::Envelope> {
+    using schema = NominalBundle<"test.structs", "Envelope", false, BundleParents<>, BundleArguments<>,
+                                 Field<"quote", native_bundle<t::Quote>::schema>, Field<"size", Int>>;
+    static constexpr auto members = ::hglrt::fields<t::Envelope>::members;
 };
 template <>
 struct hglrt::type_named<t::Quote> {
@@ -313,9 +351,16 @@ TEST_CASE("a struct that holds a struct publishes and reads it field by field (T
               {t::d_::Book{t::d_::Quote{1, 2}, 1}, t::Book{t::Quote{1, 2}, 1}},
               {t::d_::Book{t::d_::Quote{std::nullopt, 5}, 5}, t::Book{t::Quote{1, 5}, 5}},
           });
-    // TST-9: a whole cell is published as the delta of every field.
+    // TST-9: a whole cell is published as the delta of every field: a
+    // struct's field as its own delta, an atomic field as its payload, and
+    // a tuple's struct and tuple positions as their deltas.
     CHECK(hglrt::testing::whole_publication<t::Book>::delta(t::Book{t::Quote{1, 2}, 3}) ==
           t::d_::Book{t::d_::Quote{1, 2}, 3});
+    CHECK(hglrt::testing::whole_publication<t::Envelope>::delta(t::Envelope{t::Quote{1, 2}, 3}) ==
+          t::d_::Envelope{t::Quote{1, 2}, 3});
+    using Nested = std::tuple<t::Quote, std::tuple<i64, i64>>;
+    CHECK(hglrt::testing::detail::whole_delta(Nested{t::Quote{1, 2}, {3, 4}}, 0) ==
+          hglrt::delta_t<Nested>{t::d_::Quote{1, 2}, std::tuple<std::optional<i64>, std::optional<i64>>{3, 4}});
 }
 
 /// `fn set_one_part(first: i64, value: i64) -> tuple<i64, i64>`, which

@@ -375,3 +375,19 @@ test an_atomic_eval_kept_in_a_let_is_compared {
     let seen = eval(whole_quote(bid: [10, 11], ask: [12, _]))
     assert seen == [MarketQuote(bid: 10, ask: 12), MarketQuote(bid: 11, ask: 12)]
 }
+
+# Whole cells of tuples whose positions are a struct and a tuple, each
+# replayed as every part's delta.
+fn quoted_total(pair: tuple<MarketQuote, i64>) -> i64 {
+    when all_valid(pair) && all_valid(pair[0]) { return pair[0].bid + pair[1] }
+}
+
+fn nested_total(pair: tuple<tuple<i64, i64>, i64>) -> i64 {
+    when all_valid(pair) && all_valid(pair[0]) { return pair[0][0] + pair[0][1] + pair[1] }
+}
+
+test a_whole_tuple_of_composites_is_a_trace_cell {
+    assert eval(quoted_total(pair: [(MarketQuote(bid: 1, ask: 2), 3), _, (MarketQuote(bid: 4, ask: 5), 6)])) ==
+        [4, _, 10]
+    assert eval(nested_total(pair: [((1, 2), 3), ((4, 5), 6)])) == [6, 15]
+}

@@ -24,7 +24,8 @@
 //! | A cell of a trace of one (TST-5) | a `hglrt::testing::Cell<T>`: its delta, or its whole value (`Whole<T>`); a trace of an atomic struct one of `hglrt::atomic_trace<S>`, whose cell, the whole struct, is its delta |
 //!
 //! Not this family's, and reported: a generic struct and an abstract
-//! one as a temporal value, a struct with no field, a struct or a tuple
+//! one as a temporal value, a struct with no field, a tuple with an
+//! atomic position, a struct or a tuple
 //! with a part whose form is not a scalar's, an enum's, a nullable's or
 //! another of this family's (a list, a set, a dictionary, a window), an
 //! atomic struct that holds an optional field (hgraph's own conversion of
@@ -282,6 +283,12 @@ impl Family for Structs {
                 let Type::Tuple(positions) = ty else {
                     return None;
                 };
+                // An atomic position's C++ value is its payload's, whose
+                // delta the library's tuple delta would take for the
+                // position's, which is the payload itself (TYPE-16).
+                if positions.iter().any(|part| matches!(part, Type::Atomic(_))) {
+                    return None;
+                }
                 let mut parts = Vec::new();
                 for (position, part) in positions.iter().enumerate() {
                     let schema = part_schema(emitter, part)?;
