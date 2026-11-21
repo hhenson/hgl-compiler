@@ -28,18 +28,33 @@ impl<'a> Typer<'a> {
     /// already resolved parts of the parameter's type (GEN-12), but
     /// leave its other parts open. For `list<T>` given a
     /// `result<list<i64>, error>`, ERR-15 gives the list, whose elements
-    /// decide `T`. A bare unresolved `T` takes the whole result.
+    /// decide `T`. A bare unresolved `T` takes the whole result unless
+    /// the requested output requires that parameter's payload (GEN-2).
     pub(super) fn inference_input<'t>(
         &self,
         pattern: &Type,
         actual: &'t Type,
         generics: &[GenericParameter],
         found: &[Option<Argument>],
+        result_fallback: Option<(&Type, &'t Type)>,
     ) -> &'t Type {
         let payload = match actual {
             Type::Result { value, .. } | Type::Nullable(value) => value,
             _ => return actual,
         };
+        if let Some((result, requested)) = result_fallback
+            && pattern == result
+            && !matches!(requested, Type::Nullable(_))
+            && matches!(actual, Type::Result { .. })
+            && let Some(index) = bare_parameter(pattern, generics)
+            && found[index].is_none()
+            && self.taken(requested, actual).is_some()
+        {
+            // `wrap<T>(value: T) -> result<T, error>` at an `i64`
+            // place takes the value of a `result<i64, error>`. Binding
+            // T to the whole input would produce a nested result.
+            return requested;
+        }
         let unknown_type = Argument::Type(Type::Unknown);
         let unknown_constant = Argument::Constant(Constant {
             text: String::new(),
@@ -483,7 +498,8 @@ impl<'a> Typer<'a> {
             // What the argument's type says: a parameter not yet found,
             // or a wider one for a parameter an argument decided.
             let mut learn = |this: &Self, actual: &Type, found: &mut Vec<Option<Argument>>| {
-                let actual = this.inference_input(pattern, actual, generics, found);
+                let actual =
+                    this.inference_input(pattern, actual, generics, found, *result_fallback);
                 if let Some(generic) = widenable {
                     if let Some(Argument::Type(decided)) = &found[generic]
                         && this.widens(decided, actual)
@@ -582,7 +598,12 @@ impl<'a> Typer<'a> {
             self.take_back(mark, false);
         }
         if let Some((result, requested)) = result_fallback {
-            infer(result, requested, generics, &mut found);
+            infer(
+                result,
+                not_null(Some(requested)).unwrap_or(requested),
+                generics,
+                &mut found,
+            );
         }
         // GEN-8: "A generic value parameter the call does not give takes
         // its default, when it has one." Nothing has said what it is,
@@ -714,7 +735,8 @@ pub(super) struct Places<'s> {
     /// What the call gives those: each with the position of its
     /// parameter among `generics`.
     pub(super) values: &'s [(usize, SyntaxNode)],
-    /// A requested result type used only if the inputs leave a generic open.
+    /// A requested result kept until the inputs determine whether they can
+    /// supply its payload or leave it open.
     pub(super) result_fallback: Option<(&'s Type, &'s Type)>,
     /// The default of each generic value parameter that has one (GEN-2):
     /// an entry for each of `generics`, or none at all.
@@ -906,7 +928,7 @@ pub(super) fn infer(
 /// fallible result can also be read from a nullable success (ERR-12,
 /// ERR-15). In that case a bare success parameter can be decided by
 /// the inputs first, such as a dictionary's value type in `get`.
-/// The returned pair supplies that output if the inputs say nothing.
+/// The returned pair supplies the output constraint during inference.
 pub(super) fn infer_from_place<'r, 'p>(
     result: &'r Type,
     requested: &'p Type,
@@ -924,7 +946,7 @@ pub(super) fn infer_from_place<'r, 'p>(
     if !written && matches!(result, Type::Parameter { .. }) {
         if fallible {
             // A store read's inputs say nothing of V (core CAP-6).
-            return Some((result, not_null(Some(requested)).unwrap_or(requested)));
+            return Some((result, requested));
         }
         if matches!(requested, Type::Nullable(_)) {
             return None;

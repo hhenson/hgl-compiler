@@ -271,6 +271,42 @@ const fn head(xs: list<i64?>) -> i64? => first(xs)
     }
 }
 
+/// GEN-2 and ERR-15: the requested plain output can require a bare
+/// input to supply the success of a result where the whole value would
+/// make the callee return a nested result.
+#[test]
+fn a_plain_result_place_can_infer_a_fallible_arguments_payload() {
+    let checked = module(
+        r#"
+const fn wrap<T>(value: T) -> result<T, error> => ok(value)
+operator pack_result<T>(value: T) -> result<T, error>
+impl const fn pack_result<T>(value: T) -> result<T, error> => ok(value)
+const fn read(value: result<i64, error>) -> i64 => wrap(value)
+const fn read_candidate(value: result<i64, error>) -> i64 => pack_result(value)
+"#,
+    );
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+    for name in ["read", "read_candidate"] {
+        let mut reads = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if matches!(expr.kind, ExprKind::Raised { .. }) {
+                reads += 1;
+            }
+            if let ExprKind::Call {
+                callee, arguments, ..
+            } = &expr.kind
+            {
+                assert_eq!(
+                    callee.generics(),
+                    [Argument::Type(Type::Scalar(Scalar::I64))]
+                );
+                assert_eq!(arguments[0].value.ty, Type::Scalar(Scalar::I64));
+            }
+        });
+        assert_eq!(reads, 2, "{name}");
+    }
+}
+
 /// ERR-6 and ERR-15: the dictionary supplies its nullable value type.
 /// A plain place raises a failed lookup and reads a successful null.
 #[test]

@@ -10,7 +10,7 @@ use super::Typer;
 use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::expressions::takes_its_type;
-use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, whole};
+use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, not_null, whole};
 use super::inference::{bare_parameter, infer, infer_from_place, mentions, placed};
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
@@ -1739,7 +1739,7 @@ fn instance<'s>(
                 {
                     infer_payload(actual, forms, |ty| rejects_form(&generics[index], ty))
                 } else {
-                    typer.inference_input(&parameter.ty, actual, generics, &found)
+                    typer.inference_input(&parameter.ty, actual, generics, &found, result_fallback)
                 }
             }
             _ => actual,
@@ -1780,7 +1780,12 @@ fn instance<'s>(
     // candidate whose option has none is admitted only when the call
     // gives it."
     if let Some((result, requested)) = result_fallback {
-        infer(result, requested, generics, &mut found);
+        infer(
+            result,
+            not_null(Some(requested)).unwrap_or(requested),
+            generics,
+            &mut found,
+        );
     }
     let mut defaulted = Vec::new();
     for (index, generic) in generics.iter().enumerate() {
