@@ -1,4 +1,5 @@
 // Core's native scalar operators of the temporal types (temporal.h).
+#include "instant_text.h"
 #include "numbers.h"
 
 #include <hglrt/temporal.h>
@@ -6,7 +7,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
-#include <cstdio>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -50,19 +50,10 @@ i64 moved(i64 at, i64 by, bool back, std::source_location where) {
     return *out;
 }
 
-/// `computed`, a count of microseconds made with checked arithmetic, as a
-/// duration where it is one, and otherwise a failure at `where`.
-duration in_range(std::optional<i64> computed, std::source_location where) {
-    if (!computed.has_value()) {
-        duration_out_of_range(where);
-    }
-    return duration{*computed};
-}
-
 /// The duration from the microsecond `rhs` to the microsecond `lhs`,
 /// checked.
 duration between(i64 lhs, i64 rhs, std::source_location where) {
-    return in_range(detail::checked_sub(lhs, rhs), where);
+    return duration{detail::in_range(detail::checked_sub(lhs, rhs), duration_out_of_range, where)};
 }
 
 /// The microsecond the date `day` starts at, on its own clock.
@@ -113,28 +104,6 @@ hgraph::ZoneId catalogued(std::string_view name, std::source_location where) {
     return zone;
 }
 
-/// The local clock `micros`, counted from the epoch, as a date and a time
-/// with the seconds, and the microseconds where there are any: the text a
-/// failure gives the literal.
-std::string local_text(i64 micros) {
-    const std::chrono::sys_time<duration> at{duration{micros}};
-    const sys_days day = std::chrono::floor<std::chrono::days>(at);
-    const std::chrono::year_month_day civil{day};
-    const std::chrono::hh_mm_ss<duration> clock{at - day};
-    char text[40];
-    std::snprintf(text, sizeof text, "%04d-%02u-%02uT%02lld:%02lld:%02lld", static_cast<int>(civil.year()),
-                  static_cast<unsigned>(civil.month()), static_cast<unsigned>(civil.day()),
-                  static_cast<long long>(clock.hours().count()),
-                  static_cast<long long>(clock.minutes().count()),
-                  static_cast<long long>(clock.seconds().count()));
-    std::string written{text};
-    if (const auto fraction = clock.subseconds().count(); fraction != 0) {
-        std::snprintf(text, sizeof text, ".%06lld", static_cast<long long>(fraction));
-        written += text;
-    }
-    return written;
-}
-
 } // namespace
 
 // ---- Zones -------------------------------------------------------------------
@@ -158,8 +127,8 @@ zoned_datetime zoned_datetime_literal(datetime at, std::int32_t offset_seconds, 
     } catch (const std::overflow_error&) {
     }
     if (offset != offset_seconds) {
-        fail_uncoded("the offset of `" +
-                         local_text(at.time_since_epoch().count() + i64{offset_seconds} * 1'000'000) +
+        const datetime local = at + std::chrono::seconds{offset_seconds};
+        fail_uncoded("the offset of `" + detail::instant_text(local, detail::InstantFormat::local) +
                          "` is not the offset of the zone `" + std::string{name} + "` at that time",
                      where);
     }
@@ -169,11 +138,12 @@ zoned_datetime zoned_datetime_literal(datetime at, std::int32_t offset_seconds, 
 // ---- Durations -------------------------------------------------------------
 
 duration neg__duration(duration value, std::source_location where) {
-    return in_range(detail::checked_neg(value.count()), where);
+    return duration{detail::in_range(detail::checked_neg(value.count()), duration_out_of_range, where)};
 }
 
 duration add__duration_duration(duration lhs, duration rhs, std::source_location where) {
-    return in_range(detail::checked_add(lhs.count(), rhs.count()), where);
+    return duration{
+        detail::in_range(detail::checked_add(lhs.count(), rhs.count()), duration_out_of_range, where)};
 }
 
 duration sub__duration_duration(duration lhs, duration rhs, std::source_location where) {
@@ -181,7 +151,7 @@ duration sub__duration_duration(duration lhs, duration rhs, std::source_location
 }
 
 duration mul__duration_i64(duration lhs, i64 rhs, std::source_location where) {
-    return in_range(detail::checked_mul(lhs.count(), rhs), where);
+    return duration{detail::in_range(detail::checked_mul(lhs.count(), rhs), duration_out_of_range, where)};
 }
 
 duration mul__duration_f64(duration lhs, f64 rhs, std::source_location where) {

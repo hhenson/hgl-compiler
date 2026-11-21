@@ -1,4 +1,5 @@
-// Unit tests of traces (traces.h) of nullables, tuples and lists of scalars:
+// Unit tests of dense and timed traces (traces.h), including traces of
+// nullables, tuples and lists of scalars:
 // their cells written whole and as deltas, their comparison with an eval's
 // recording, where two first differ, what one written out replays and gives
 // a `const fn`, and the text of a value; and enums, core's and a program's,
@@ -28,9 +29,10 @@ using hglrt::testing::Recorded;
 using hglrt::testing::Recording;
 using hglrt::testing::Timed;
 using hglrt::testing::Whole;
+using hglrt_test::code_raised;
 using namespace std::chrono_literals;
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
 using Maybe = std::optional<i64>;
 using Pair = std::tuple<i64, i64>;
@@ -58,6 +60,51 @@ constexpr hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept {
     return {"demo.trade::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}};
 }
 } // namespace demo_trade
+
+TEST_CASE("a dense trace's cells are publications a smallest step apart (TST-4, TST-6)") {
+    const Recording<i64> recorded{start, {{start, 7}, {start + 2us, 9}}};
+    CHECK(hglrt::testing::same(recorded, Dense<i64>{7, std::nullopt, 9}));
+    // "Trailing placeholders have no effect".
+    CHECK(hglrt::testing::same(recorded, Dense<i64>{7, std::nullopt, 9, std::nullopt}));
+    CHECK_FALSE(hglrt::testing::same(recorded, Dense<i64>{7, 9}));
+    CHECK_FALSE(hglrt::testing::same(recorded, Dense<i64>{7, std::nullopt, 8}));
+    CHECK_FALSE(hglrt::testing::same(recorded, Dense<i64>{7}));
+    CHECK(hglrt::testing::same(Recording<i64>{start, {}}, Dense<i64>{}));
+    CHECK(hglrt::testing::same(Recording<i64>{start, {}}, Dense<i64>{std::nullopt}));
+    // Equal by the language's equality: a NaN is equal to nothing.
+    const hglrt::f64 not_a_number = std::numeric_limits<hglrt::f64>::quiet_NaN();
+    CHECK_FALSE(hglrt::testing::same(Recording<hglrt::f64>{start, {{start, not_a_number}}},
+                                     Dense<hglrt::f64>{not_a_number}));
+    // A published null is a cell, `_` is none.
+    using Maybe = std::optional<i64>;
+    const Recording<Maybe> nulls{start, {{start, hglrt::delta_t<Maybe>{}}, {start + 1us, 3}}};
+    CHECK(hglrt::testing::same(nulls, Dense<Maybe>{Maybe{}, Maybe{3}}));
+    CHECK_FALSE(hglrt::testing::same(nulls, Dense<Maybe>{std::nullopt, Maybe{3}}));
+}
+
+TEST_CASE("a timed trace's keys are durations from the start or instants (TST-7)") {
+    const Recording<i64> recorded{start, {{start, 7}, {start + 2s, 9}}};
+    CHECK(hglrt::testing::same(recorded, Timed<i64>{{{0s, 7}, {2s, 9}}}));
+    CHECK(hglrt::testing::same(recorded, Timed<i64>{{{start, 7}, {start + 2s, 9}}}));
+    CHECK(hglrt::testing::same(Timed<i64>{{{0s, 7}, {2s, 9}}}, recorded));
+    CHECK_FALSE(hglrt::testing::same(recorded, Timed<i64>{{{0s, 7}, {3s, 9}}}));
+    CHECK(hglrt::testing::same(Timed<i64>{{{0us, 7}, {2us, 9}}}, Dense<i64>{7, std::nullopt, 9}));
+    // TST-7: keys strictly increase; one known only as the program runs
+    // fails with no code.
+    CHECK(code_raised([&] { (void)hglrt::testing::same(recorded, Timed<i64>{{{2s, 7}, {2s, 9}}}); }) ==
+          "(no code)");
+}
+
+TEST_CASE("a trace replayed to an input is its publications' instants (CEVAL-2)") {
+    CHECK(hglrt::testing::replay_items(Dense<i64>{7, std::nullopt, 7}, start) ==
+          Recorded<i64>{{start, 7}, {start + 2us, 7}});
+    CHECK(hglrt::testing::replay_items(Dense<i64>{std::nullopt, std::nullopt}, start).empty());
+    CHECK(hglrt::testing::replay_items(Timed<i64>{{{0s, 1}, {start + 1s, 2}}}, start) ==
+          Recorded<i64>{{start, 1}, {start + 1s, 2}});
+    // "an input replay cannot publish before its run starts".
+    CHECK(code_raised([&] { (void)hglrt::testing::replay_items(Timed<i64>{{{start - 1us, 1}}}, start); }) ==
+          "(no code)");
+}
 
 TEST_CASE("a delta is T for a scalar, and a value of its own for a nullable and a list (TYPE-16)") {
     using MaybeDelta = hglrt::nullable_delta<i64>;
@@ -172,11 +219,11 @@ TEST_CASE("a list's cells are its delta or a whole value, which replaces what it
     CHECK(std::get<1>(items[3]) == ValuesDelta{.removed = {0, 1, 2}, .size_modified = 0});
     CHECK(std::get<1>(items[4]) == ValuesDelta{});
     // A negative size taken from the size, never below none.
-    CHECK(hglrt::testing::detail::size_after(3, ValuesDelta{.size_modified = -1}) == 2);
-    CHECK(hglrt::testing::detail::size_after(3, ValuesDelta{.size_modified = -5}) == 0);
-    CHECK(hglrt::testing::detail::size_after(2, ValuesDelta{.updated = {{4, 1}}}) == 5);
-    CHECK(hglrt::testing::detail::size_after(2, ValuesDelta{.updated = {{-1, 1}}}) == 2);
-    CHECK(hglrt::testing::detail::size_after(
+    CHECK(hglrt::detail::list_size_after(3, ValuesDelta{.size_modified = -1}) == 2);
+    CHECK(hglrt::detail::list_size_after(3, ValuesDelta{.size_modified = -5}) == 0);
+    CHECK(hglrt::detail::list_size_after(2, ValuesDelta{.updated = {{4, 1}}}) == 5);
+    CHECK(hglrt::detail::list_size_after(2, ValuesDelta{.updated = {{-1, 1}}}) == 2);
+    CHECK(hglrt::detail::list_size_after(
               2, ValuesDelta{.size_modified = std::numeric_limits<i64>::min()}) == 0);
 }
 

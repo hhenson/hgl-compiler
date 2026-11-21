@@ -1,5 +1,7 @@
 // Unit tests of the coroutine type of a source's body (generator.h), and of
 // a body written with it driven by `resume` (sources.h).
+#include "core_nodes.h"
+
 #include <hglrt/failure.h>
 #include <hglrt/generator.h>
 #include <hglrt/sources.h>
@@ -246,7 +248,7 @@ generator<Yielded<i64>> ticks(i64 n) {
 }
 
 TEST_CASE("a source's body as a generator, driven by resume (SOURCE-3)") {
-    const datetime start = hglrt::testing::earliest_start();
+    using hglrt_test::start;
     Wakes wakes;
     hglrt::Source<i64> source;
     Stepped<i64> body{ticks(3)};

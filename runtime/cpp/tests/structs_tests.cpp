@@ -166,12 +166,9 @@ using QuoteTS = hgraph::NativeTSB<t::Quote>;
 using BookTS = hgraph::NativeTSB<t::Book>;
 using PairTS = hgraph::UnNamedTSB<hgraph::Field<"0", hgraph::TS<i64>>, hgraph::Field<"1", hgraph::TS<i64>>>;
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
-/// The connection core's `replay` makes of `trace`.
-hgraph::Port<hgraph::TS<i64>> replayed(hgraph::Wiring& wiring, const Dense<i64>& trace) {
-    return hgraph::wire<hglrt_test::Replay>(wiring, hglrt::testing::replay_items(trace, start));
-}
+using hglrt_test::replayed;
 
 /// `fn update_quote(is_bid: i64, price: i64) -> Quote { when { if is_bid ==
 /// 1 { return delta<Quote>(bid: price) } ... } }`: 1 sets the bid, 2 the

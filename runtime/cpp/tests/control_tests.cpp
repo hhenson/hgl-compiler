@@ -21,7 +21,7 @@ using hgraph::Port;
 using hgraph::TS;
 using namespace std::chrono_literals;
 
-const hglrt::datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
 /// The branch of `if selected { counted(value) }` while it is selected.
 struct Counting {

@@ -23,6 +23,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <tuple>
 
@@ -31,6 +32,20 @@ namespace hglrt_test {
 using hglrt::i64;
 using hglrt::list;
 using hglrt::testing::Recorded;
+
+/// The earliest cycle of the test simulations.
+inline const hglrt::datetime start = hglrt::testing::earliest_start();
+
+/// The code of the HGL failure `call` raises, or none.
+template <class Call>
+std::optional<std::string> code_raised(Call&& call) {
+    try {
+        call();
+    } catch (const hglrt::Failure& failure) {
+        return failure.error().code.value_or("(no code)");
+    }
+    return std::nullopt;
+}
 
 /// The state of `replay` at `i64`: where its `for` is, and its source.
 struct ReplayState {
@@ -167,3 +182,13 @@ struct hgraph::scalar_descriptor<hglrt_test::RecordState> {
             hglrt_test::RecordState::hgl_name);
     }
 };
+
+namespace hglrt_test {
+
+/// The connection core's `replay` makes of the dense trace at `start`.
+inline hgraph::Port<hgraph::TS<i64>> replayed(hgraph::Wiring& wiring,
+                                           const hglrt::testing::Dense<i64>& trace) {
+    return hgraph::wire<Replay>(wiring, hglrt::testing::replay_items(trace, start));
+}
+
+} // namespace hglrt_test

@@ -25,7 +25,7 @@ using hglrt::i64;
 using hglrt::testing::Dense;
 using namespace std::chrono_literals;
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 /// The same, named where a node's own `start` hides it.
 const datetime run_start = start;
 
