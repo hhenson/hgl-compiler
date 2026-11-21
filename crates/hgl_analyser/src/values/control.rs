@@ -728,6 +728,31 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// CTRL-12 and CTRL-15: the selector chooses the type of every label.
+    pub(super) fn switch_type(&mut self, selector: &Expr) -> (Type, Option<usize>) {
+        let members = self.enum_members(&selector.ty);
+        if open(&selector.ty)
+            || members.is_some()
+            || matches!(
+                selector.ty,
+                Type::Scalar(Scalar::Bool | Scalar::I64 | Scalar::Str)
+            )
+        {
+            return (selector.ty.clone(), members);
+        }
+        self.diagnostics.emit(error(
+            Category::Type,
+            codes::TYPE_MISMATCH,
+            selector.at,
+            format!(
+                "this is `{}`, and a `switch` selects on a `bool`, `i64`, `str` or enum value",
+                selector.ty
+            ),
+            self.loop_rule(),
+        ));
+        (Type::Unknown, None)
+    }
+
     /// CTRL-12: "A `switch` there selects on a `bool`, `i64`, `str`, or
     /// enum value. Each label is a constant of the selector's type."
     /// CTRL-6: "Duplicate values reject, including differently spelled
@@ -755,32 +780,7 @@ impl<'a> Typer<'a> {
         if self.graph && self.category(&selector) == ValueCategory::Connection {
             self.temporal = Some(self.locals.len());
         }
-        let members = self.enum_members(&selector.ty);
-        let selects = open(&selector.ty)
-            || members.is_some()
-            || matches!(
-                selector.ty,
-                Type::Scalar(Scalar::Bool | Scalar::I64 | Scalar::Str)
-            );
-        if !selects {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::TYPE_MISMATCH,
-                selector.at,
-                format!(
-                    "this is `{}`, and a `switch` selects on a `bool`, `i64`, `str` or enum \
-                     value",
-                    selector.ty
-                ),
-                self.loop_rule(),
-            ));
-        }
-        // What a label is expected to be.
-        let of = if selects {
-            selector.ty.clone()
-        } else {
-            Type::Unknown
-        };
+        let (of, members) = self.switch_type(&selector);
         let before = self.assigned.clone();
         let before_returned = self.returned;
         // What is assigned at the end of each case, and whether it has
@@ -839,9 +839,10 @@ impl<'a> Typer<'a> {
                         ));
                     }
                     let constant = read.ok();
+                    let case_type = if of == Type::Unknown { &label.ty } else { &of };
                     let value = constant
                         .as_ref()
-                        .and_then(|constant| self::label(self.program, constant, &of));
+                        .and_then(|constant| self::label(self.program, constant, case_type));
                     if let Some(constant) = constant {
                         match seen
                             .iter()

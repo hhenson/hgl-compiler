@@ -797,7 +797,7 @@ impl<'a> Typer<'a> {
         // give no type: `[]`, `[null]`." Where what the place expects
         // is not known, neither is the sequence, and nothing is
         // reported.
-        let Some(&first) = known.first() else {
+        let Some(of) = sequence_element(&known, items.iter().any(branch_is_null)) else {
             if unexpected {
                 self.diagnostics.emit(error(
                     Category::Type,
@@ -812,21 +812,6 @@ impl<'a> Typer<'a> {
                 .map(|item| self.expression(item, Some(&Type::Unknown)))
                 .collect();
             return (ExprKind::Sequence(elements), unjudged);
-        };
-        let numbers = |ty: &Type| matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64));
-        let of = if known.iter().all(|ty| numbers(ty))
-            && known.iter().any(|ty| **ty == Type::Scalar(Scalar::F64))
-        {
-            Type::Scalar(Scalar::F64)
-        } else {
-            first.clone()
-        };
-        // "`[1, null]` [is] a `list<i64?>`": a `null` among the values
-        // makes their type nullable.
-        let of = if items.iter().any(branch_is_null) && !matches!(of, Type::Nullable(_)) {
-            Type::Nullable(Box::new(of))
-        } else {
-            of
         };
         // Where what the place expects is not known, it may be what
         // gives entries of two types their one type: a `list<Base>` for
@@ -864,6 +849,25 @@ impl<'a> Typer<'a> {
         };
         (ExprKind::Sequence(elements), ty)
     }
+}
+
+/// EXPR-9: the first entry that supplies a type fixes the element type,
+/// with numeric widening and the nullable form for a literal null.
+pub(super) fn sequence_element(known: &[&Type], has_null: bool) -> Option<Type> {
+    let first = *known.first()?;
+    let numbers = |ty: &Type| matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64));
+    let ty = if known.iter().all(|ty| numbers(ty))
+        && known.iter().any(|ty| **ty == Type::Scalar(Scalar::F64))
+    {
+        Type::Scalar(Scalar::F64)
+    } else {
+        first.clone()
+    };
+    Some(if has_null && !matches!(ty, Type::Nullable(_)) {
+        Type::Nullable(Box::new(ty))
+    } else {
+        ty
+    })
 }
 
 /// What [`null_tests`] asks of the function a condition is read in.

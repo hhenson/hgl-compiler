@@ -124,6 +124,21 @@ fn contextual_choice<T>(const value: T) -> i64 {
     return if true { maybe } else { 3 }
 }
 
+# EXPR-9 and GEN-7: the inferred list holds the settled nullable type.
+const fn list_score(values: list<i64?>) -> i64 => chosen_or_skip(values[0])
+
+fn inferred_list<T>(const value: T) -> i64 {
+    let values = [if positive(value) { 2 }]
+    return list_score(values)
+}
+
+# CTRL-15: a deferred selector and its label settle to i64.
+fn selected_case<T>(const value: T) -> i64 {
+    let key = if live_helper(value) > 0 { 1 }
+    switch key { case 1: return 4 }
+    return 5
+}
+
 test an_instance_settles_its_graph_conditions {
     assert eval loop_scalar(value: "s") == [5]
     assert eval wiring_if(value: 3) == [1]
@@ -138,6 +153,9 @@ test an_instance_settles_its_graph_conditions {
     assert eval joined_choice(value: "s") == [-1]
     assert eval contextual_choice(value: 3) == [2]
     assert raises("value.null") { eval contextual_choice(value: "s") }
+    assert eval inferred_list(value: 3) == [2]
+    assert eval inferred_list(value: "s") == [-1]
+    assert eval selected_case(value: 3) == [4]
 }
 
 struct Counter { count: i64 }

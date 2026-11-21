@@ -9,14 +9,14 @@ use hgl_source::Span;
 
 use super::arguments::Takes;
 use super::control::bound_by_loop;
-use super::fit::whole;
+use super::fit::{open, whole};
 use super::inference::{fixed, type_pack};
 use super::lifting::{assignment_category, record, record_with};
 use super::statements::{child_loop_return, child_loop_write, place_assignment_category};
 use super::{Selected, Tables, Typer};
 use crate::declared::substitute_within;
 use crate::hir::{
-    self, Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Stmt, ValueCategory,
+    self, Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Stmt, Value, ValueCategory,
 };
 use crate::program::{Program, Role};
 use crate::types::{Detail, Signature, Type};
@@ -125,6 +125,12 @@ impl GraphDestinations {
                 self.fit_condition(typer, condition);
                 return;
             }
+            NodeMut::Statement(Stmt::Switch {
+                selector, cases, ..
+            }) => {
+                self.fit_switch(typer, selector, cases);
+                return;
+            }
             NodeMut::Expression(Expr {
                 kind:
                     ExprKind::If {
@@ -188,10 +194,24 @@ impl GraphDestinations {
             NodeMut::Expression(Expr {
                 kind: ExprKind::Sequence(entries),
                 ty: Type::List { element, .. },
+                at,
                 ..
             }) if whole(element) => {
                 for entry in entries {
-                    self.fit(typer, entry, element, "an element", false);
+                    if self.0.contains(at) {
+                        // A newly inferred type constrains earlier known
+                        // entries as well as the one that just settled.
+                        if matches!(entry.kind, ExprKind::Literal(Value::Null))
+                            && matches!(**element, Type::Nullable(_))
+                        {
+                            entry.ty = (**element).clone();
+                        } else if whole(&entry.ty) && entry.ty != **element {
+                            *entry =
+                                typer.fit(entry.clone(), element, "an element, as the first is,");
+                        }
+                    } else {
+                        self.fit(typer, entry, element, "an element", false);
+                    }
                 }
                 return;
             }
@@ -217,6 +237,29 @@ impl GraphDestinations {
     fn fit_condition(&self, typer: &mut Typer<'_>, value: &mut Expr) {
         if self.known(value) {
             *value = typer.fit_condition(value.clone());
+        }
+    }
+
+    /// A deferred selector or label is checked at its concrete CTRL-15 switch.
+    fn fit_switch(&self, typer: &mut Typer<'_>, selector: &Expr, cases: &mut [hir::Case]) {
+        let selector_settled = self.known(selector);
+        if !selector_settled && !cases.iter().any(|case| self.known(&case.label)) {
+            return;
+        }
+        let (ty, _) = typer.switch_type(selector);
+        if open(&ty) {
+            return;
+        }
+        for case in cases {
+            if whole(&case.label.ty) && (selector_settled || self.known(&case.label)) {
+                case.label = typer.fit(case.label.clone(), &ty, "the selector");
+                if case.value.is_none()
+                    && case.label.ty == ty
+                    && let ExprKind::EnumMember { member, .. } = case.label.kind
+                {
+                    case.value = Some(hir::LabelValue::Member(member));
+                }
+            }
         }
     }
 

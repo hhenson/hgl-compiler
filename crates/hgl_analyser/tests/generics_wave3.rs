@@ -1255,6 +1255,83 @@ fn graph_instances_join_deferred_branches_only_when_consumed() {
     assert_eq!(returned.ty.to_string(), "i64?");
 }
 
+/// GEN-7, EXPR-5 and EXPR-9: inferred list element types survive nested
+/// lists and local reads, and constrain both entries and destinations.
+#[test]
+fn graph_instances_propagate_inferred_list_types() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "fn good<T>(const input: T) -> list<list<i64?>> {\n",
+        "    let values = [[if predicate(input) { 1 }, null]]\n",
+        "    let alias = { values }\n",
+        "    return alias\n",
+        "}\n",
+        "fn bad_entry<T>(const input: T) -> list<i64?> {\n",
+        "    let values = [if predicate(input) { 1 }, \"s\"]\n",
+        "    return values\n",
+        "}\n",
+        "fn bad_result<T>(const input: T) -> list<str> {\n",
+        "    let values = [if predicate(input) { 1 }]\n",
+        "    return values\n",
+        "}\n",
+        "fn accepted() -> list<list<i64?>> => good(1)\n",
+        "fn wrong_entry() -> list<i64?> => bad_entry(1)\n",
+        "fn wrong_result() -> list<str> => bad_result(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:18:35 type/type.mismatch EXPR-5",
+            "m.hgl:19:35 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    for local in &instance.locals[1..] {
+        assert_eq!(local.ty.to_string(), "list<list<i64?>>");
+    }
+    walk_statements(&instance.statements, &mut |expr| {
+        if matches!(expr.kind, ExprKind::Literal(hgl_analyser::hir::Value::Null)) {
+            assert_eq!(expr.ty.to_string(), "i64?");
+        }
+    });
+}
+
+/// GEN-7, CTRL-12 and CTRL-15: the selected input determines what a
+/// deferred switch accepts as its selector and label types.
+#[test]
+fn graph_instances_check_settled_switch_selectors_and_labels() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn wrong_label<T>(const input: T) -> i64 {\n",
+        "    let key = if predicate(input) { 1 }\n",
+        "    switch key { case \"s\": return 1 }\n",
+        "    return 0\n",
+        "}\n",
+        "fn right_label<T>(const input: T) -> i64 {\n",
+        "    let key = if predicate(input) { 1 }\n",
+        "    switch key { case 1: return 1 }\n",
+        "    return 0\n",
+        "}\n",
+        "fn wrong() -> i64 => wrong_label(1)\n",
+        "fn nullable() -> i64 => right_label(\"s\")\n",
+        "fn temporal() -> i64 => right_label(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:15:22 type/type.mismatch EXPR-5",
+            "m.hgl:16:25 type/type.mismatch CTRL-15",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

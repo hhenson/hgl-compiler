@@ -6,9 +6,10 @@ use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 
 use super::Typer;
 use super::control::{bound_by_loop, no_else_type, while_connection};
+use super::expressions::sequence_element;
 use super::fit::{open, whole};
 use crate::hir::{
-    Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Run, Stmt, ValueCategory,
+    Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Run, Stmt, Value, ValueCategory,
     walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
@@ -565,6 +566,16 @@ fn fill_type(current: &mut Type, inferred: Type) -> bool {
             true
         }
         (Type::Nullable(current), Type::Nullable(inferred)) => fill_type(current, *inferred),
+        (
+            Type::List {
+                element: current,
+                size,
+            },
+            Type::List {
+                element: inferred,
+                size: inferred_size,
+            },
+        ) if *size == inferred_size => fill_type(current, *inferred),
         (Type::Tuple(current), Type::Tuple(inferred)) if current.len() == inferred.len() => {
             let mut changed = false;
             for (current, inferred) in current.iter_mut().zip(inferred) {
@@ -608,6 +619,26 @@ fn settled_type(
         // Tuple entries each have their own position and type (EXPR-9).
         ExprKind::Tuple(entries) => {
             Type::Tuple(entries.iter().map(|entry| entry.ty.clone()).collect())
+        }
+        ExprKind::Sequence(entries) => {
+            let Type::List { element, size } = &value.ty else {
+                return None;
+            };
+            let typed: Vec<&Type> = entries
+                .iter()
+                .filter(|entry| !matches!(entry.kind, ExprKind::Literal(Value::Null)))
+                .map(|entry| &entry.ty)
+                .collect();
+            // Another unsettled entry could change even the first known
+            // element's type (for instance by numeric widening).
+            if !typed.iter().all(|ty| whole(ty)) {
+                return None;
+            }
+            let inferred = sequence_element(&typed, matches!(**element, Type::Nullable(_)))?;
+            Type::List {
+                element: Box::new(inferred),
+                size: size.clone(),
+            }
         }
         ExprKind::Local(local) => locals.get(*local)?.ty.clone(),
         _ => return None,
