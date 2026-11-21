@@ -4363,6 +4363,53 @@ fn function_arguments_select_static_targets() {
         "fn lifted_callback(x: i64) -> i64 => graph_callback(inc_callback, x)\n",
     ));
     assert!(checked.summary().is_empty(), "{}", checked.report);
+    let outer = body(&checked, "lambda_callback");
+    let Stmt::Return {
+        value: Some(call), ..
+    } = outer.statements.last().unwrap()
+    else {
+        panic!("the caller returns the result of applying the anonymous argument");
+    };
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = &call.kind
+    else {
+        panic!("expected a call taking a static function");
+    };
+    let ExprKind::StaticCallable(target) = &arguments[0].value.kind else {
+        panic!("the first argument carries a compile-time target");
+    };
+    assert_eq!(
+        arguments[1].parameter,
+        Some(2),
+        "the captured value has its own slot"
+    );
+    assert!(matches!(arguments[1].value.kind, ExprKind::Local(1)));
+    let (module, declaration) = callee.declaration().unwrap();
+    let (_, invoked) = checked
+        .program
+        .instance_with_functions(
+            module,
+            declaration,
+            &[],
+            &[],
+            &[(0, target.as_ref().clone())],
+        )
+        .unwrap();
+    let [
+        Stmt::Return {
+            value: Some(inlined),
+            ..
+        },
+    ] = invoked.statements.as_slice()
+    else {
+        panic!("the specialized body returns the invocation");
+    };
+    assert!(
+        matches!(&inlined.kind, ExprKind::Call { callee: Callee::Anonymous(definition), .. }
+        if definition.captures == [2]),
+        "the invocation reads its specialized capture"
+    );
 }
 
 /// FN-17: a template checks role, written names and plain parameter
