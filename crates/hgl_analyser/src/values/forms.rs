@@ -21,7 +21,7 @@ use hgl_diagnostics::Category;
 
 use super::Typer;
 use super::fit::{open, whole};
-use crate::hir::{Expr, ExprKind, Hook, NULL_READ_CODE, Raise, ValueCategory};
+use crate::hir::{ConfigurationRead, Expr, ExprKind, Hook, NULL_READ_CODE, Raise, ValueCategory};
 use crate::program::Role;
 use crate::types::Type;
 use crate::{codes, error};
@@ -94,15 +94,26 @@ impl<'a> Typer<'a> {
     /// (`result.propagation_type`), and is taken all the same, so that
     /// nothing more is reported of it (ERR-9).
     pub(super) fn take(&mut self, value: Expr, taken: Taken) -> Expr {
+        self.take_with(value, taken, None)
+    }
+
+    /// Takes a value's form either in the current scope or in the
+    /// scope where a required operator's configuration was written.
+    pub(super) fn take_with(
+        &mut self,
+        value: Expr,
+        taken: Taken,
+        context: Option<&ConfigurationRead>,
+    ) -> Expr {
         if taken == Taken::ValueRead {
-            let success = self.take(value, Taken::Value);
-            return self.take(success, Taken::Read);
+            let success = self.take_with(value, Taken::Value, context);
+            return self.take_with(success, Taken::Read, context);
         }
         let at = value.at;
         let (kind, ty) = match (taken, value.ty.clone()) {
             (Taken::Value, Type::Result { value: success, .. }) => {
-                let raise = self.raise_here();
-                self.raisable(&value, raise);
+                let raise = context.map_or_else(|| self.raise_here(), |context| context.raise);
+                self.raisable(&value, raise, context);
                 let kind = ExprKind::Raised {
                     result: Box::new(value),
                     raise,
@@ -117,7 +128,16 @@ impl<'a> Typer<'a> {
                 (kind, Type::Nullable(success))
             }
             (Taken::Read, Type::Nullable(payload)) => {
-                let raise = self.null_raise_here();
+                let raise = context.map_or_else(|| self.raise_here(), |context| context.raise);
+                let result = self.result_in(context);
+                // An execution failure of a function with another E
+                // is not returned as its failure (ERR-5, ERR-12).
+                let raise = match (raise, result) {
+                    (Raise::Return, Some(Type::Result { error, .. })) if **error != Type::Error => {
+                        Raise::Execution
+                    }
+                    _ => raise,
+                };
                 let kind = ExprKind::NullRead {
                     value: Box::new(value),
                     raise,
@@ -222,18 +242,9 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// [`Typer::raise_here`], for the failure of a null read (ERR-12: "an
-    /// execution failure raised as a result's failure is (ERR-5)"): out of
-    /// a value function that gives a `result<U, error>`, and as an
-    /// execution failure of one whose failure is of another type, which
-    /// a null's `error` is not.
-    fn null_raise_here(&self) -> Raise {
-        match (self.raise_here(), self.result_type()) {
-            (Raise::Return, Some(Type::Result { error, .. })) if **error != Type::Error => {
-                Raise::Execution
-            }
-            (raise, _) => raise,
-        }
+    /// The function's result at the payload read.
+    fn result_in<'r>(&'r self, context: Option<&'r ConfigurationRead>) -> Option<&'r Type> {
+        context.map_or_else(|| self.result_type(), |context| context.result.as_ref())
     }
 
     /// Reports `result`, given where its T is expected and raised as
@@ -244,17 +255,18 @@ impl<'a> Typer<'a> {
     /// (`result.propagation_type`): in a function that gives a
     /// `result<U,E>`, one of another E, and elsewhere one whose E is not
     /// `error`."
-    fn raisable(&mut self, result: &Expr, raise: Raise) {
+    fn raisable(&mut self, result: &Expr, raise: Raise, context: Option<&ConfigurationRead>) {
         let Type::Result { error: failure, .. } = &result.ty else {
             return;
         };
-        let (allowed, place) = match (raise, self.result_type()) {
-            (_, Some(result)) if self.anonymous.is_some() && open(result) => return,
+        let anonymous = context.map_or(self.anonymous.is_some(), |context| context.anonymous);
+        let (allowed, place) = match (raise, self.result_in(context)) {
+            (_, Some(result)) if anonymous && open(result) => return,
             (Raise::Return, Some(result @ Type::Result { error: own, .. })) => {
                 if !whole(own) || open(own) {
                     return;
                 }
-                let who = if self.anonymous.is_some() {
+                let who = if anonymous {
                     "the anonymous function".to_string()
                 } else {
                     format!("`{}`", self.declaration.name)

@@ -14,7 +14,8 @@ use super::arguments::Takes;
 use super::calls::removes;
 use crate::declared::{agree, names_one_of, substitute_within};
 use crate::hir::{
-    BinaryOperator, Callee, EndpointOperation, Expr, ExprKind, UnaryOperator, Value, ValueCategory,
+    BinaryOperator, Callee, ConfigurationRead, EndpointOperation, Expr, ExprKind, UnaryOperator,
+    Value, ValueCategory,
 };
 use crate::program::{DeclarationKind, Program};
 use crate::syntax::has_token;
@@ -30,6 +31,18 @@ impl<'a> Typer<'a> {
     /// follows the admitted destination relationship"), and reported
     /// otherwise. `what` names the place: `the function's result`.
     pub(super) fn fit(&mut self, value: Expr, expected: &Type, what: &str) -> Expr {
+        self.fit_with(value, expected, what, None)
+    }
+
+    /// Fits a value with an optional read context from a required call
+    /// that the analyser is now specializing (GEN-16, EXPR-5).
+    pub(super) fn fit_with(
+        &mut self,
+        value: Expr,
+        expected: &Type,
+        what: &str,
+        context: Option<&ConfigurationRead>,
+    ) -> Expr {
         // ERR-14: "A read of a collection's child that is checked when
         // it runs (TIME-1), `parts[i]`, takes its form from its place
         // (EXPR-5). Where the place expects `result<T, error>`, T the
@@ -109,7 +122,7 @@ impl<'a> Typer<'a> {
         // its form from the place (ERR-15) ... and a `T?` where a T is
         // expected is read (ERR-12)."
         if let Some(taken) = self.taken(expected, &value.ty) {
-            return self.take(value, taken);
+            return self.take_with(value, taken, context);
         }
         self.conforms(&value.ty, expected, value.at, what);
         value

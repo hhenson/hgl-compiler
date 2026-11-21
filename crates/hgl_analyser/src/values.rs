@@ -94,7 +94,7 @@ mod members;
 mod node;
 // Omitted configuration defaults in selected operator calls (GEN-6, UNIT-8).
 mod operator_defaults;
-pub(crate) use operator_defaults::fit_operator_default;
+pub(crate) use operator_defaults::{fit_operator_default, fit_required_configuration};
 // A call of an operator: its requested output, arguments and candidates (GEN-5, GEN-6).
 mod operators;
 // `requires`, and what a generic body may call by it (GEN-3, GEN-7, GEN-16).

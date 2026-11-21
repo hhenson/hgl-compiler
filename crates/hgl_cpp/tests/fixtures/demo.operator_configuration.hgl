@@ -47,11 +47,18 @@ const fn required_named_pick<T>(value: T) -> T requires pick(T) -> T => pick<T>(
 const fn required_configured_pick<T>(value: T) -> T requires pick(T) -> T =>
     pick{flag: true}(value)
 
+# EXPR-5: the instance gives the selected candidate an f64 literal.
+operator wide_config<T>{offset: i64 = 0}(value: T) -> f64
+impl const fn wide_config{offset: f64}(value: bool) -> f64 => offset
+const fn required_wide_config<T>(value: T) -> f64 requires wide_config(T) -> f64 =>
+    wide_config{offset: 3}(value)
+
 test a_required_operator_keeps_ordinary_argument_slots {
     assert required_pick(7) == 107
     assert required_named_pick(true)
     assert required_configured_pick(7) == 0
     assert required_configured_pick(true) == false
+    assert required_wide_config(true) == 3.0
 }
 
 struct Digit { value: i64 }
