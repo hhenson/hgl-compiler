@@ -19,6 +19,11 @@ const fn via_capture(input: i64) -> i64 {
     return relay(fn(n) => n + increment_by, input)
 }
 
+const fn transitive_capture(input: i64) -> i64 {
+    let increment_by = input + 1
+    return through_lambda(fn(n) => n + increment_by, input)
+}
+
 fn hooked(input: i64) -> i64 {
     when {
         let increment_by = 2
@@ -58,6 +63,7 @@ test ordinary_callbacks {
     assert through_lambda(increment, 4) == 5
     assert through_lambda(triple, 4) == 12
     assert via_capture(4) == 9
+    assert transitive_capture(4) == 9
 }
 
 test temporal_callbacks {
