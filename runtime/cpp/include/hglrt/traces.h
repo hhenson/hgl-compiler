@@ -476,10 +476,11 @@ bool same(const Left& left, const Right& right) {
 
 // ---- What a trace written out publishes (CEVAL-2, TST-9, TST-16) ---------
 
-/// The delta that publishing a whole value of `T` records, where `T`'s
-/// temporal form says it beside its other code: a static `delta(value)`.
-/// A struct's is structs.h's; a tuple's and a list's are their
-/// `Publisher`'s, below.
+/// The delta that publishing a whole value of `T` records where it needs
+/// nothing of what was held before, and `T`'s temporal form says it beside
+/// its other code: a static `delta(value)` (structs.h: an atomic struct's).
+/// A struct's, a tuple's and a list's are their `Publisher`'s, which keep
+/// what each part held.
 template <class T>
 struct whole_publication;
 
@@ -513,11 +514,12 @@ delta_t<T> whole_delta(const T& value, std::size_t size);
 /// its delta too"). A T that publishes whole is its own delta, a nullable's
 /// the `nullable_delta` that holds the same; a nullable whose payload does
 /// not publish whole records a published null, or what it holds as its
-/// payload published whole records it; a struct's whole value records what
+/// payload published whole records it; any other whole value records what
 /// `whole_publication` says. A list, a fixed list and a tuple keep what
-/// each of their positions holds, below, and a header of this library that
-/// declares a value type whose whole cell needs more of what the earlier
-/// cells left specializes it for that type (keyed.h: a set, a dictionary).
+/// each of their positions holds, below, at any depth, and a header of
+/// this library that declares a value type whose whole cell needs more of
+/// what the earlier cells left specializes it for that type (structs.h: a
+/// struct, each field; keyed.h: a set, a dictionary).
 template <class T>
 class Publisher {
   public:

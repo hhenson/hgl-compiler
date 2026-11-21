@@ -16,9 +16,11 @@
 //! | `pair[0]`, a child of a connection of a graph (TIME-9) | `::hglrt::element_port(port, 0)` |
 //! | A cell of a trace of one (TST-5) | `::hglrt::testing::Cell<T>`, of a `Whole<T>` or of a delta |
 //!
-//! A part the library does not read and publish yet (`list_endpoints.h`),
-//! a struct, a tuple, a set, a dictionary, a window, is not this family's,
-//! and is reported. FN-11 gives a lifted helper a fixed list only where it
+//! A part is read and published through its own form (TYPE-9): a scalar,
+//! a nullable, a list, and a struct or a tuple, the `structs` family's. A
+//! part the library does not read and publish as a part yet, a set, a
+//! dictionary, a window, an atomic struct, is not this family's, and is
+//! reported; so is a child of a list of structs or tuples named in a hook. FN-11 gives a lifted helper a fixed list only where it
 //! is `all_valid`, which the lifted call's node asks first (`lifting`).
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind};
@@ -64,10 +66,12 @@ fn shape(ty: &Type) -> Option<Shape<'_>> {
 }
 
 /// True where the library reads and publishes a part of type `ty` of a
-/// list (`list_endpoints.h`): a scalar or an enum, which publishes whole,
-/// a nullable one, and a list of such parts.
-/// Its form is still the dispatch point's to give.
-fn supported(ty: &Type) -> bool {
+/// list through the part's own form (TYPE-9; endpoints.h, `whole` and
+/// `publisher`): a scalar or an enum, which publishes whole, a nullable
+/// one, a list of such parts, and a struct or a tuple whose form the
+/// `structs` family writes, a bundle (structs.h). The part's form is the
+/// dispatch point's to give, asked of its own family.
+fn supported(emitter: &mut Emitter, ty: &Type) -> bool {
     match ty {
         Type::Scalar(_)
         | Type::Named {
@@ -82,11 +86,42 @@ fn supported(ty: &Type) -> bool {
                     ..
                 }
         ),
+        Type::Tuple(_)
+        | Type::Named {
+            kind: NamedKind::Struct,
+            ..
+        } => emitter
+            .temporal_schema_of(ty)
+            .is_some_and(|schema| bundle(&schema)),
         _ => match shape(ty) {
-            Some(Shape::Growing(element) | Shape::Fixed(element, _)) => supported(element),
+            Some(Shape::Growing(element) | Shape::Fixed(element, _)) => supported(emitter, element),
             None => false,
         },
     }
+}
+
+/// True where `schema` is hgraph's bundle, a struct's or a tuple's form
+/// (`structs`): `NativeTSB`, `NominalTSB` or `UnNamedTSB`.
+fn bundle(schema: &str) -> bool {
+    [
+        "::hgraph::NativeTSB<",
+        "::hgraph::NominalTSB<",
+        "::hgraph::UnNamedTSB<",
+    ]
+    .iter()
+    .any(|form| schema.starts_with(form))
+}
+
+/// True where `ty`, the type of a list's element, is a struct or a tuple.
+fn bundled(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Tuple(_)
+            | Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            }
+    )
 }
 
 /// The library's function of the operation `operation` on an endpoint,
@@ -121,7 +156,17 @@ impl Emitter<'_> {
             _ => return None,
         };
         let namespace = runtime::NAMESPACE;
-        match shape(&base.ty)? {
+        let shape = shape(&base.ty)?;
+        // A child of a list of structs or tuples named in a hook: the
+        // library's `Child` of one is no view a struct's or a tuple's own
+        // reads take (structs.h).
+        if bundled(&child.ty) {
+            return Some(self.missing(
+                child.at,
+                "a child of a list of structs or tuples, named in a hook",
+            ));
+        }
+        match shape {
             // EXPR-2: the parent is chosen before the next index is
             // evaluated, as C++ evaluates a call's arguments in no order it
             // promises: where either runs statements, or both may fail, as
@@ -171,7 +216,10 @@ impl Family for Lists {
     // hgraph's `TSL` of a child for each position, each of a form of its
     // own; a tuple's bundle is the `structs` family's.
     fn schema(&self, emitter: &mut Emitter<'_>, ty: &Type) -> Option<String> {
-        if !supported(ty) {
+        // A list's form alone: a part's is asked of the dispatch point,
+        // which asks this family again of no other type (`supported`).
+        shape(ty)?;
+        if !supported(emitter, ty) {
             return None;
         }
         match shape(ty)? {
@@ -190,8 +238,11 @@ impl Family for Lists {
     // requires `all_valid` of it ... A dictionary and an unsized list hold
     // what they hold: a read of one whole requires its `valid` and no
     // more", checked when it runs.
-    fn read(&self, _emitter: &mut Emitter<'_>, ty: &Type, view: &str) -> Option<String> {
-        if !supported(ty) {
+    fn read(&self, emitter: &mut Emitter<'_>, ty: &Type, view: &str) -> Option<String> {
+        // A list's form alone: a part's is asked of the dispatch point,
+        // which asks this family again of no other type (`supported`).
+        shape(ty)?;
+        if !supported(emitter, ty) {
             return None;
         }
         shape(ty)?;
@@ -204,12 +255,15 @@ impl Family for Lists {
     // types.
     fn publish(
         &self,
-        _emitter: &mut Emitter<'_>,
+        emitter: &mut Emitter<'_>,
         ty: &Type,
         view: &str,
         value: &str,
     ) -> Option<String> {
-        if !supported(ty) {
+        // A list's form alone: a part's is asked of the dispatch point,
+        // which asks this family again of no other type (`supported`).
+        shape(ty)?;
+        if !supported(emitter, ty) {
             return None;
         }
         shape(ty)?;
@@ -223,12 +277,15 @@ impl Family for Lists {
     // cycle"; its form taken from its place (ERR-14).
     fn delta(
         &self,
-        _emitter: &mut Emitter<'_>,
+        emitter: &mut Emitter<'_>,
         ty: &Type,
         view: &str,
         checked: bool,
     ) -> Option<String> {
-        if !supported(ty) {
+        // A list's form alone: a part's is asked of the dispatch point,
+        // which asks this family again of no other type (`supported`).
+        shape(ty)?;
+        if !supported(emitter, ty) {
             return None;
         }
         shape(ty)?;
@@ -251,7 +308,10 @@ impl Family for Lists {
         ty: &Type,
         value: &Expr,
     ) -> Option<String> {
-        if !supported(ty) {
+        // A list's form alone: a part's is asked of the dispatch point,
+        // which asks this family again of no other type (`supported`).
+        shape(ty)?;
+        if !supported(emitter, ty) {
             return None;
         }
         shape(ty)?;
@@ -363,7 +423,7 @@ impl Family for Lists {
         let ExprKind::Index { base, index } = &value.kind else {
             return None;
         };
-        if !base.is_connection() || !supported(&base.ty) {
+        if !base.is_connection() || shape(&base.ty).is_none() || !supported(emitter, &base.ty) {
             return None;
         }
         if !matches!(shape(&base.ty)?, Shape::Growing(_) | Shape::Fixed(..)) {

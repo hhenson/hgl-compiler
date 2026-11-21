@@ -52,19 +52,15 @@ auto nullable_payload(const E& input, std::source_location where = std::source_l
 /// `return value` and `out = value` of a nullable result (TIME-7): "`return
 /// null` for an `i64?` result a null, as `return delta<i64?>()` does". The
 /// value, a T, the nullable or its delta (`nullable_delta`), ticks the
-/// output: a held T as that T, and one that holds nothing as hgraph's
-/// published null.
+/// output as a nullable publishes (`publisher`, endpoints.h): a held T as
+/// that T, and one that holds nothing as hgraph's published null.
 template <class E, class V>
-void publish_nullable(const E& out, const V& value) {
+void publish_nullable(const E& out, const V& value, std::source_location where = std::source_location::current()) {
+    using S = schema_of<E>;
     if constexpr (detail::is_nullable_delta<V>::value) {
-        publish_nullable(out, value.value);
+        publisher<S>::change(out, value, where);
     } else {
-        const std::optional<typename endpoint_delta_t<E>::payload_type> held(value);
-        if (held.has_value()) {
-            out.set(*held);
-        } else {
-            out.set(hgraph::Null);
-        }
+        publisher<S>::whole(out, schema_value_t<S>(value), where);
     }
 }
 

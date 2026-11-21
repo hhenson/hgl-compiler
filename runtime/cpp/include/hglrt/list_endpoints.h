@@ -18,11 +18,12 @@
 // them), and the new size where it moved (hgraph issues 1822 and 1827, fixed
 // in 0.9.12 and 0.9.13).
 //
-// What a temporal form holds whole is `schema_value<S>`: a scalar's value, a
-// list's `hglrt::list` or `std::array`. A form says how it is read whole
-// through `whole<S>` and how it is published through `publisher<S>`, and its
-// delta through `endpoint_read<S>` (endpoints.h): each is written here for a
-// scalar, a nullable scalar and a list, a list's elements among them.
+// A list's value is `schema_value<S>`, an `hglrt::list` or a `std::array`;
+// it is read whole through `whole<S>`, published through `publisher<S>`, and
+// read as its delta through `endpoint_read<S>` (endpoints.h), and each of its
+// elements through the element's own form's (TYPE-9): a scalar's or a
+// nullable's (endpoints.h), a list's (here), a struct's or a tuple's
+// (structs.h).
 #pragma once
 
 #include <hglrt/checked.h>
@@ -65,37 +66,10 @@ struct list_schema<hgraph::TSL<C, N>> : std::true_type {
     static constexpr std::size_t size = growing ? 0 : static_cast<std::size_t>(N);
 };
 
-/// Whether `S` is the schema of a nullable scalar, whose child is not asked
-/// by `all_valid` (TIME-9: "an optional child aside: one whose type is `T?`
-/// ... is not asked") and reads null where it is not valid (TYPE-15).
-template <class S>
-struct is_nullable_schema : std::false_type {};
-template <class T>
-struct is_nullable_schema<hgraph::TS<hgraph::Optional<T>>> : std::true_type {};
-
 } // namespace detail
 
-/// The HGL value a temporal value of the hgraph schema `S` holds whole: T for
-/// a scalar `TS<T>`, `std::optional<T>` for a nullable one, `hglrt::list<V>`
-/// for a growing list, and `std::array<V, N>` for a fixed one. A form this
-/// library does not read has none.
-template <class S>
-struct schema_value;
-
-/// `schema_value`'s type.
-template <class S>
-using schema_value_t = typename schema_value<S>::type;
-
-template <class T>
-struct schema_value<hgraph::TS<T>> {
-    using type = T;
-};
-
-template <class T>
-struct schema_value<hgraph::TS<hgraph::Optional<T>>> {
-    using type = std::optional<T>;
-};
-
+/// A growing list's value is an `hglrt::list` of its element's, and a fixed
+/// one's a `std::array` (TYPE-10).
 template <class C, auto N>
 struct schema_value<hgraph::TSL<C, N>> {
     using type =
@@ -207,49 +181,6 @@ auto child(const E& values, i64 index, std::source_location where = std::source_
 
 // ---- Reading whole (TIME-1, FN-12) -----------------------------------------
 
-/// How a temporal value of the schema `S` is read whole: `read(endpoint)`
-/// gives its value, a `schema_value_t<S>`, or nothing where it may not be
-/// read whole. TIME-1: a scalar's needs it valid; "A read of a struct, a
-/// tuple or a fixed list whole ... requires `all_valid` of it ... In the
-/// value it reads, an optional child ... that is not valid is null"; "A
-/// dictionary and an unsized list hold what they hold: a read of one whole
-/// requires its `valid` and no more. A position of an unsized list that holds
-/// no value ... reads in the whole value as ... that type's value for 'not
-/// set' where it has one": NaN for an `f64`, null for a `V?`, and none for any
-/// other, whose read fails.
-template <class S>
-struct whole;
-
-template <class T>
-struct whole<hgraph::TS<T>> {
-    template <class E>
-    static std::optional<T> read(const E& endpoint) {
-        if (!endpoint.valid()) {
-            return std::nullopt;
-        }
-        if constexpr (std::is_same_v<std::remove_cvref_t<decltype(endpoint.value())>, T>) {
-            return endpoint.value();
-        } else {
-            return endpoint.value().template checked_as<T>();
-        }
-    }
-};
-
-template <class T>
-struct whole<hgraph::TS<hgraph::Optional<T>>> {
-    template <class E>
-    static std::optional<std::optional<T>> read(const E& endpoint) {
-        if (!endpoint.valid()) {
-            return std::nullopt;
-        }
-        const hgraph::OptionalView held = endpoint.value();
-        if (!held.has_value()) {
-            return std::optional<T>{};
-        }
-        return std::optional<T>{held.value().template checked_as<T>()};
-    }
-};
-
 namespace detail {
 
 /// What a position of a growing list of `V` that holds no value reads as in
@@ -271,7 +202,7 @@ std::optional<V> hole() {
 /// own whole read.
 template <class C, class V>
 std::optional<schema_value_t<C>> part(const V& child) {
-    if constexpr (is_nullable_schema<C>::value) {
+    if constexpr (nullable_schema<C>::value) {
         if (!child.valid()) {
             return schema_value_t<C>{};
         }
@@ -368,7 +299,7 @@ struct endpoint_read<hgraph::TSL<C, N>> {
         if (!endpoint.valid()) {
             return false;
         }
-        if constexpr (detail::is_nullable_schema<C>::value) {
+        if constexpr (detail::nullable_schema<C>::value) {
             return true;
         } else {
             const auto& view = detail::viewed(endpoint);
@@ -409,42 +340,6 @@ struct endpoint_read<hgraph::TSL<C, N>> {
 };
 
 // ---- Publishing (TIME-7, TYPE-16) ------------------------------------------
-
-/// How a value is published to an output of the schema `S` (TIME-7): `whole`
-/// publishes a complete value, a `schema_value_t<S>`, and `change` a delta of
-/// it, a `delta_t<schema_value_t<S>>`.
-template <class S>
-struct publisher;
-
-template <class T>
-struct publisher<hgraph::TS<T>> {
-    template <class O>
-    static void whole(const O& out, const T& value, std::source_location) {
-        out.set(value);
-    }
-    template <class O>
-    static void change(const O& out, const T& value, std::source_location where) {
-        whole(out, value, where);
-    }
-};
-
-/// A nullable scalar publishes whole: a value, or a null (TYPE-15); its
-/// delta (`nullable_delta`) holds the same.
-template <class T>
-struct publisher<hgraph::TS<hgraph::Optional<T>>> {
-    template <class O>
-    static void whole(const O& out, const std::optional<T>& value, std::source_location) {
-        if (value.has_value()) {
-            out.set(*value);
-        } else {
-            out.set(hgraph::Null);
-        }
-    }
-    template <class O>
-    static void change(const O& out, const delta_t<std::optional<T>>& delta, std::source_location where) {
-        whole(out, delta.value, where);
-    }
-};
 
 namespace detail {
 
@@ -587,18 +482,7 @@ struct publisher<hgraph::TSL<C, N>> {
 template <class O, class V>
     requires detail::list_schema<schema_of<O>>::value
 void publish(const O& out, const V& value, std::source_location where = std::source_location::current()) {
-    using S = schema_of<O>;
-    using T = schema_value_t<S>;
-    using Given = std::remove_cvref_t<V>;
-    if constexpr (std::is_same_v<Given, T>) {
-        publisher<S>::whole(out, value, where);
-    } else if constexpr (std::is_same_v<Given, delta_t<T>>) {
-        publisher<S>::change(out, value, where);
-    } else if constexpr (std::is_convertible_v<Given, T>) {
-        publisher<S>::whole(out, T(value), where);
-    } else {
-        static_assert(false, "hglrt::publish: neither a value of the output's type nor its delta");
-    }
+    publish_as_form(out, value, where);
 }
 
 // ---- Wiring a child (TIME-1, TIME-9) ---------------------------------------

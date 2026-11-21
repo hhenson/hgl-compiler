@@ -1097,6 +1097,27 @@ struct std::hash<::hgl::demo::composites::m_::d_::Flags>
 {
     ::std::size_t operator()(const ::hgl::demo::composites::m_::d_::Flags& value) const { return ::hglrt::key_hash_of(value); }
 };
+// TYPE-9: `Flags` as hgraph's nominal bundle, its fields as `fields` names them.
+template <>
+struct hgraph::native_bundle<::hgl::demo::composites::m_::Flags>
+{
+    using schema = ::hgraph::NominalBundle<"demo.composites", "Flags", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<>, ::hgraph::Field<"on", ::hglrt::list_value<::hgraph::Bool>>, ::hgraph::Field<"first", ::hgraph::Bool>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::composites::m_::Flags>::members;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::Flags>
+{
+    static constexpr ::std::string_view name = "demo.composites::Flags";
+    static constexpr ::std::array<::std::string_view, 2> fields{"on", "first"};
+    static constexpr bool delta = false;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::d_::Flags>
+{
+    static constexpr ::std::string_view name = "delta<demo.composites::Flags>";
+    static constexpr ::std::array<::std::string_view, 2> fields{"on", "first"};
+    static constexpr bool delta = true;
+};
 template <>
 struct hglrt::fields<::hgl::demo::composites::m_::d_::Base>
 {
@@ -1293,6 +1314,27 @@ template <>
 struct std::hash<::hgl::demo::composites::m_::d_::Pair>
 {
     ::std::size_t operator()(const ::hgl::demo::composites::m_::d_::Pair& value) const { return ::hglrt::key_hash_of(value); }
+};
+// TYPE-9: `Pair` as hgraph's nominal bundle, its fields as `fields` names them.
+template <>
+struct hgraph::native_bundle<::hgl::demo::composites::m_::Pair>
+{
+    using schema = ::hgraph::NominalBundle<"demo.composites", "Pair", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<>, ::hgraph::Field<"value", ::hglrt::list_value<::hgraph::Int, 2>>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::composites::m_::Pair>::members;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::Pair>
+{
+    static constexpr ::std::string_view name = "demo.composites::Pair";
+    static constexpr ::std::array<::std::string_view, 1> fields{"value"};
+    static constexpr bool delta = false;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::composites::m_::d_::Pair>
+{
+    static constexpr ::std::string_view name = "delta<demo.composites::Pair>";
+    static constexpr ::std::array<::std::string_view, 1> fields{"value"};
+    static constexpr bool delta = true;
 };
 template <>
 struct hglrt::fields<::hgl::demo::composites::m_::std>
