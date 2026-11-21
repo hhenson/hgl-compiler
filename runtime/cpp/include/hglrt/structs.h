@@ -428,6 +428,43 @@ hgraph::Port<Field> atomic_field(hgraph::Wiring& wiring, const hgraph::Port<hgra
 
 namespace hglrt::testing {
 
+} // namespace hglrt::testing
+
+namespace hglrt {
+
+/// What a trace of an atomic struct `S`, `atomic<S>`, is a trace of (TST-5,
+/// TST-16): its value is the whole struct, and so is its delta (TYPE-16:
+/// "`atomic<V>`: V: an atomic publishes whole"), which the struct's own
+/// delta, field by field, is not. A trace's cell of it is `S`, what core's
+/// `record` of `atomic<S>` keeps and its `replay` is given.
+template <class S>
+struct atomic_trace {
+    S value;
+
+    friend bool operator==(const atomic_trace&, const atomic_trace&) = default;
+};
+
+template <class S>
+struct delta_of<atomic_trace<S>> {
+    using type = S;
+};
+
+} // namespace hglrt
+
+namespace hglrt::testing {
+
+/// A whole value of an atomic struct publishes the struct (TST-9).
+template <class S>
+struct whole_publication<atomic_trace<S>> {
+    static S delta(const atomic_trace<S>& value) { return value.value; }
+};
+
+/// The text of a value of an atomic struct is the struct's.
+template <class S>
+struct value_text<atomic_trace<S>> {
+    static std::string of(const atomic_trace<S>& value) { return text_of(value.value); }
+};
+
 /// What publishing a whole struct records (TST-9: "a T whole, which
 /// replaces what the input held"; TST-16: "A T published whole is held as
 /// its delta too"): its delta with every field, each as its whole value

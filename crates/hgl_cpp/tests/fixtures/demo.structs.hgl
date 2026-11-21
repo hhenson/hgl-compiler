@@ -348,3 +348,25 @@ fn wrapped_of(bid: i64) -> i64 => wrapped_sum(wrap(bid))
 test a_struct_that_holds_one_with_an_optional_field_is_read_whole {
     assert eval(wrapped_of(bid: [1, 2])) == [2, 4]
 }
+
+# An atomic struct's trace: each cell is a whole publication, which is its
+# delta too (TYPE-16: "`atomic<V>`: V: an atomic publishes whole").
+test an_atomic_struct_is_a_trace_cell {
+    assert eval(whole_quote(bid: [10, _, 11], ask: [12, 13, _])) == [
+        MarketQuote(bid: 10, ask: 12),
+        MarketQuote(bid: 10, ask: 13),
+        MarketQuote(bid: 11, ask: 13),
+    ]
+}
+
+fn atomic_bid(quote: atomic<MarketQuote>) -> i64 {
+    when { return quote.bid }
+}
+
+test an_atomic_struct_is_replayed_whole {
+    assert eval(atomic_bid(quote: [
+        MarketQuote(bid: 1, ask: 2),
+        _,
+        MarketQuote(bid: 3, ask: 4),
+    ])) == [1, _, 3]
+}

@@ -18,6 +18,8 @@
 #undef a_whole_tuple_is_a_trace_cell
 #undef an_atomic_input_is_read_whole
 #undef an_atomic_quote_wakes_its_bid_projection
+#undef an_atomic_struct_is_a_trace_cell
+#undef an_atomic_struct_is_replayed_whole
 #undef changing_a_sibling_field_does_not_publish_a_bid
 #undef demo
 #undef last_modified_follows_the_last_publication
@@ -45,6 +47,8 @@ void last_modified_follows_the_last_publication();
 void an_atomic_input_is_read_whole();
 void a_tuple_position_is_read_and_projected();
 void a_struct_that_holds_one_with_an_optional_field_is_read_whole();
+void an_atomic_struct_is_a_trace_cell();
+void an_atomic_struct_is_replayed_whole();
 }  // namespace hgl::demo::structs::m_::t_
 
 namespace
@@ -69,6 +73,8 @@ const ::hglrt::testing::Registration test_15{"demo.structs::last_modified_follow
 const ::hglrt::testing::Registration test_16{"demo.structs::an_atomic_input_is_read_whole", &::hgl::demo::structs::m_::t_::an_atomic_input_is_read_whole};
 const ::hglrt::testing::Registration test_17{"demo.structs::a_tuple_position_is_read_and_projected", &::hgl::demo::structs::m_::t_::a_tuple_position_is_read_and_projected};
 const ::hglrt::testing::Registration test_18{"demo.structs::a_struct_that_holds_one_with_an_optional_field_is_read_whole", &::hgl::demo::structs::m_::t_::a_struct_that_holds_one_with_an_optional_field_is_read_whole};
+const ::hglrt::testing::Registration test_19{"demo.structs::an_atomic_struct_is_a_trace_cell", &::hgl::demo::structs::m_::t_::an_atomic_struct_is_a_trace_cell};
+const ::hglrt::testing::Registration test_20{"demo.structs::an_atomic_struct_is_replayed_whole", &::hgl::demo::structs::m_::t_::an_atomic_struct_is_replayed_whole};
 }  // namespace
 
 int main(int argc, char **argv)

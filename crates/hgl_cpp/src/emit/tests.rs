@@ -441,10 +441,30 @@ impl Emitter<'_> {
     /// One side of a comparison of traces (TST-4): an eval, or a trace
     /// written out, of its own type.
     fn compared(&mut self, scope: &mut Scope, side: &Expr) -> String {
+        self.compared_with(scope, side, None)
+    }
+
+    /// [`Emitter::compared`] of `side`, compared with `other`: a trace
+    /// written out of the whole values of an atomic struct, beside the
+    /// trace of an `atomic<S>`, is written as one of `atomic<S>`, whose
+    /// cells are its deltas (TYPE-16: "`atomic<V>`: V").
+    fn compared_with(&mut self, scope: &mut Scope, side: &Expr, other: Option<&Expr>) -> String {
         match &side.kind {
             ExprKind::Eval { .. } => self.eval(scope, side),
             ExprKind::Trace(_) => match trace_payload(&side.ty) {
-                Some(ty) => self.trace(scope, side, &ty),
+                Some(ty) => {
+                    let program = self.program;
+                    // The result of the eval it is compared with, where
+                    // that is an `atomic<S>` of the trace's own S.
+                    let atomic = other
+                        .and_then(|other| match &other.kind {
+                            ExprKind::Eval { call, .. } => run_wiring(program, call, &other.ty),
+                            _ => None,
+                        })
+                        .and_then(|wiring| wiring.result)
+                        .filter(|of| matches!(of, Type::Atomic(payload) if **payload == ty));
+                    self.trace(scope, side, atomic.as_ref().unwrap_or(&ty))
+                }
                 None => self.missing(side.at, "this trace"),
             },
             // A `let` that holds a trace, read as it is.
@@ -490,8 +510,9 @@ impl Family for Tests {
                 negated,
             } => {
                 scope.acted = true;
-                let left = emitter.compared(scope, left);
-                let right = emitter.compared(scope, right);
+                let left_written = emitter.compared_with(scope, left, Some(right));
+                let right_written = emitter.compared_with(scope, right, Some(left));
+                let (left, right) = (left_written, right_written);
                 let held_left = names::temporary("left", emitter.temporary());
                 let held_right = names::temporary("right", emitter.temporary());
                 let not = if *negated { "!" } else { "" };
@@ -564,8 +585,9 @@ impl Family for Tests {
         }
         let indent = INDENT.repeat(depth);
         let inner = INDENT.repeat(depth + 1);
-        let left = emitter.compared(scope, left);
-        let right = emitter.compared(scope, right);
+        let left_written = emitter.compared_with(scope, left, Some(right));
+        let right_written = emitter.compared_with(scope, right, Some(left));
+        let (left, right) = (left_written, right_written);
         let held_left = names::temporary("left", emitter.temporary());
         let held_right = names::temporary("right", emitter.temporary());
         let expect = if *negated {

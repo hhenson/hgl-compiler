@@ -12,6 +12,7 @@
 #undef Wrapped
 #undef action
 #undef ask
+#undef atomic_bid
 #undef atomic_bid_ticks
 #undef bid
 #undef bid_delta
@@ -303,6 +304,12 @@ namespace w_
 {
 // wrapped_of(bid: i64) -> i64 (graph), module demo.structs, line 346
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wrapped_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid);
+}  // namespace w_
+
+namespace w_
+{
+// atomic_bid(quote: atomic<MarketQuote>) -> i64 (node), module demo.structs, line 362
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> atomic_bid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::MarketQuote>> quote);
 }  // namespace w_
 
 }  // namespace hgl::demo::structs::m_

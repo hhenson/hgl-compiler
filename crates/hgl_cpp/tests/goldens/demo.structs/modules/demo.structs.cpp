@@ -26,7 +26,10 @@
 #undef action
 #undef an_atomic_input_is_read_whole
 #undef an_atomic_quote_wakes_its_bid_projection
+#undef an_atomic_struct_is_a_trace_cell
+#undef an_atomic_struct_is_replayed_whole
 #undef ask
+#undef atomic_bid
 #undef atomic_bid_ticks
 #undef bid
 #undef bid_delta
@@ -1091,6 +1094,32 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_::atomic_bid
+{
+// atomic_bid(quote: atomic<MarketQuote>) -> i64 (node), module demo.structs, line 362
+struct impl_
+{
+    static constexpr auto name = "demo.structs::atomic_bid";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"quote", ::hgraph::TS<::hgl::demo::structs::m_::MarketQuote>> quote, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        // when, line 363 (TIME-3)
+        {
+            out_.set((::hglrt::checked_value(quote)).bid);
+            return;
+        }
+    }
+};
+}  // namespace n_::atomic_bid
+namespace w_
+{
+// atomic_bid(quote: atomic<MarketQuote>) -> i64 (node), module demo.structs, line 362
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> atomic_bid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::MarketQuote>> quote)
+{
+    return ::hgraph::wire<::hgl::demo::structs::m_::n_::atomic_bid::impl_>(wiring_, quote);
+}
+}  // namespace w_
+
 }  // namespace hgl::demo::structs::m_
 
 namespace hgl::demo::structs::m_::t_
@@ -1419,6 +1448,39 @@ void a_struct_that_holds_one_with_an_optional_field_is_read_whole()
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::structs::m_::w_::wrapped_of(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
         const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{2, 4};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+}
+
+void an_atomic_struct_is_a_trace_cell()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_06_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 11};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{12, 13, std::nullopt};
+        return ::hglrt::testing::evaluate<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const auto held_ = [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::structs::m_::w_::whole_quote(wiring_, argument_04_, argument_05_); }();
+        ::hglrt::testing::keep_held<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>(wiring_, held_);
+        ::hgl::core::m_::w_::i_::record::of_1atomic_1demo_1structs_1_1MarketQuote_1_(wiring_, held_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_07_ = ::hglrt::testing::Dense<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hgl::demo::structs::m_::MarketQuote{10, 12}}, ::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hgl::demo::structs::m_::MarketQuote{10, 13}}, ::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hgl::demo::structs::m_::MarketQuote{11, 13}}};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
+    }();
+}
+
+void an_atomic_struct_is_replayed_whole()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::MarketQuote>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1atomic_1demo_1structs_1_1MarketQuote_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hgl::demo::structs::m_::MarketQuote{1, 2}}, std::nullopt, ::hglrt::testing::Cell<::hglrt::atomic_trace<::hgl::demo::structs::m_::MarketQuote>>{::hgl::demo::structs::m_::MarketQuote{3, 4}}}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::structs::m_::w_::atomic_bid(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 3};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }

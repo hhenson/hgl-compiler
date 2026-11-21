@@ -107,6 +107,8 @@ impl Emitter<'_> {
         let delta = Type::delta(result.clone());
         let given = match yielded.as_slice() {
             [only] if *only == delta => &delta,
+            // "A result of `atomic<V>` takes a V", which is its delta.
+            _ if matches!(result, Type::Atomic(_)) => &delta,
             _ => result,
         };
         if delta != *result && yielded.contains(&delta) && yielded.len() > 1 {

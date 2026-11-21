@@ -21,7 +21,7 @@
 //! | `delta_value(quote)` (END-3, TYPE-16) | `::hglrt::fn_delta_value(quote)`: each field that published in the cycle, with its delta |
 //! | `update(quote).bid` in a graph (EXPR-7) | `::hglrt::field_port<0>(port)`, the child's own connection |
 //! | `whole(quote).bid` of an atomic struct in a graph | `::hglrt::atomic_field<0, S>(wiring_, port)`, a node that publishes the field at each whole publication |
-//! | A cell of a trace of one (TST-5) | a `hglrt::testing::Cell<T>`: its delta, or its whole value (`Whole<T>`) |
+//! | A cell of a trace of one (TST-5) | a `hglrt::testing::Cell<T>`: its delta, or its whole value (`Whole<T>`); a trace of an atomic struct one of `hglrt::atomic_trace<S>`, whose cell, the whole struct, is its delta |
 //!
 //! Not this family's, and reported: a generic struct and an abstract
 //! one as a temporal value, a struct with no field, a struct or a tuple
@@ -295,6 +295,19 @@ impl Family for Structs {
         }
     }
 
+    // TST-5, TST-16: a trace of an atomic struct holds whole structs, each
+    // its publication's delta (TYPE-16: "`atomic<V>`: V"), which the
+    // struct's own C++ type, whose delta is field by field, does not say:
+    // the trace is one of `hglrt::atomic_trace<S>`.
+    fn payload(&self, emitter: &mut Emitter<'_>, ty: &Type) -> Option<String> {
+        match form(emitter, ty)? {
+            Form::Atomic(written) => {
+                Some(format!("::{}::atomic_trace<{written}>", runtime::NAMESPACE))
+            }
+            Form::Struct(_) | Form::Tuple(_) => None,
+        }
+    }
+
     // TIME-1: "A read of a struct, a tuple or a fixed list whole, `return
     // quote`, requires `all_valid` of it", checked again when it runs.
     fn read(&self, emitter: &mut Emitter<'_>, ty: &Type, view: &str) -> Option<String> {
@@ -352,12 +365,19 @@ impl Family for Structs {
         ty: &Type,
         value: &Expr,
     ) -> Option<String> {
-        let written = match form(emitter, ty)? {
-            Form::Struct(written) | Form::Tuple(written) => written,
-            Form::Atomic(_) => return Some(emitter.expression(scope, value)),
-        };
         let testing = names::testing("");
         let testing = testing.trim_end_matches("::");
+        let written = match form(emitter, ty)? {
+            Form::Struct(written) | Form::Tuple(written) => written,
+            // An atomic struct's cell is the whole struct, its delta.
+            Form::Atomic(written) => {
+                let made = emitter.expression(scope, value);
+                return Some(format!(
+                    "{testing}::Cell<::{}::atomic_trace<{written}>>{{{made}}}",
+                    runtime::NAMESPACE
+                ));
+            }
+        };
         let made = emitter.expression(scope, value);
         if value.ty == *ty {
             Some(format!(
