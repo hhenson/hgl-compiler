@@ -1395,6 +1395,13 @@ impl<'a> Typer<'a> {
             }
         }
         let map: Vec<_> = fixed(&public.generics).zip(&operator_generics).collect();
+        let configuration = places.iter().any(|place| place.operand.is_none()).then(|| {
+            Box::new(hir::ConfigurationRead {
+                raise: self.raise_here(),
+                result: self.result_type().cloned(),
+                anonymous: self.anonymous.is_some(),
+            })
+        });
         let arguments = given
             .into_iter()
             .zip(places)
@@ -1409,11 +1416,15 @@ impl<'a> Typer<'a> {
                     None => {
                         let configuration = &public.parameters[place.parameter];
                         let ty = substitute_within(&configuration.ty, &map);
-                        self.argument_value(
-                            given,
+                        // Check the public place now. The candidate's
+                        // place chooses its own form once it is known.
+                        let value = self.argument_read(given, &ty);
+                        self.fit(
+                            value.clone(),
                             &ty,
                             &format!("configuration parameter `{}`", configuration.name),
-                        )
+                        );
+                        value
                     }
                 };
                 hir::Argument {
@@ -1428,6 +1439,7 @@ impl<'a> Typer<'a> {
                 operator: (operator.module, operator.declaration),
                 requirement: index,
                 operator_generics,
+                configuration,
             },
             arguments,
             form,
@@ -1863,7 +1875,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 break;
             }
             if configured.contains(&made.callee) {
-                super::operator_defaults::check_instance(
+                let _ = super::operator_defaults::check_instance(
                     program,
                     made.callee,
                     &made.generics,

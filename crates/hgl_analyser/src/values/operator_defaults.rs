@@ -1,4 +1,4 @@
-//! Checks omitted inherited configuration defaults after candidate selection.
+//! Checks configuration after candidate selection.
 //!
 //! The operator owns the default (GEN-6). The declaration pass binds and
 //! checks the expression in its defining scope (UNIT-7). With generic
@@ -13,9 +13,9 @@ use hgl_parser::HasSpan;
 use super::fit::{open, whole};
 use super::{Tables, Typer, lifting};
 use crate::declared::{names_parameter, substitute_within};
-use crate::hir::{self, Body, Callee, Expr, ExprKind, Value};
+use crate::hir::{self, Body, Callee, ConfigurationRead, Expr, ExprKind, Value};
 use crate::program::{Module, Program};
-use crate::types::{Argument, Detail, Parameter, Type};
+use crate::types::{Argument, Detail, Parameter, Signature, Type};
 use crate::{codes, error};
 
 /// Visit the selected calls once the declaration pass has read every default.
@@ -77,7 +77,8 @@ fn check_expression(program: &Program, value: &Expr, diagnostics: &mut Diagnosti
     }
 }
 
-/// True where an instance can resolve the selected type of an inherited default.
+/// True where an instance can resolve the selected type of an inherited
+/// default or supplied configuration for a required call.
 pub(super) fn selects_configuration(program: &Program, unit: &Module, declaration: usize) -> bool {
     let has_default = |operator: (usize, usize)| {
         matches!(program.modules[operator.0].details.get(operator.1),
@@ -100,6 +101,14 @@ pub(super) fn selects_configuration(program: &Program, unit: &Module, declaratio
                 return;
             }
             match &value.kind {
+                ExprKind::Call {
+                    callee:
+                        Callee::Required {
+                            configuration: Some(_),
+                            ..
+                        },
+                    ..
+                } => found = true,
                 ExprKind::Call {
                     callee: Callee::Required { operator, .. } | Callee::Candidate { operator, .. },
                     ..
@@ -124,11 +133,11 @@ pub(super) fn check_instance(
     generics: &[Argument],
     requirements: &[hir::Answer],
     diagnostics: &mut Diagnostics,
-) {
-    let Some((_, body)) = program.instance(callee.0, callee.1, generics, requirements) else {
-        return;
-    };
-    let mut reports = Diagnostics::new();
+) -> Option<(Signature, Body)> {
+    let reports = RefCell::new(Diagnostics::new());
+    let (signature, body) =
+        program.checked_instance(callee, generics, requirements, &[], &reports)?;
+    let mut reports = reports.into_inner();
     hir::walk_statements(&body.statements, &mut |value| {
         check_expression(program, value, &mut reports)
     });
@@ -137,6 +146,7 @@ pub(super) fn check_instance(
             diagnostics.emit(report.clone());
         }
     }
+    Some((signature, body))
 }
 
 /// UNIT-8: check only the inherited defaults that this selected call uses.
@@ -244,8 +254,71 @@ pub(crate) fn fit_operator_default(
         }
         return value;
     }
-    let owner = &program.modules[operator.0];
-    let Detail::Callable(signature) = &owner.details[operator.1] else {
+    let mut value = fit_configuration(
+        program,
+        operator,
+        value,
+        expected,
+        &parameter.name,
+        None,
+        diagnostics,
+    );
+    lifting::record_value(program, &mut value);
+    value
+}
+
+/// Fits supplied configuration as a value of the selected candidate's
+/// parameter (FN-18). The original call still checks its public type.
+pub(crate) fn fit_required_configuration(
+    program: &Program,
+    caller: (usize, usize),
+    mut value: Expr,
+    expected: &Type,
+    name: &str,
+    context: &ConfigurationRead,
+    diagnostics: &mut Diagnostics,
+) -> Expr {
+    if names_parameter(expected) || !whole(expected) || names_parameter(&value.ty) {
+        return value;
+    }
+    if matches!(value.kind, ExprKind::Literal(Value::Null)) {
+        if matches!(expected, Type::Nullable(_)) {
+            value.ty = expected.clone();
+        } else if !open(expected) && *expected != Type::Signal {
+            diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                value.at,
+                format!(
+                    "`null` cannot be given to the configuration parameter `{name}`, which takes `{expected}`"
+                ),
+                "TYPE-14",
+            ));
+        }
+        return value;
+    }
+    fit_configuration(
+        program,
+        caller,
+        value,
+        expected,
+        name,
+        Some(context),
+        diagnostics,
+    )
+}
+
+fn fit_configuration(
+    program: &Program,
+    declaration: (usize, usize),
+    value: Expr,
+    expected: &Type,
+    name: &str,
+    context: Option<&ConfigurationRead>,
+    diagnostics: &mut Diagnostics,
+) -> Expr {
+    let owner = &program.modules[declaration.0];
+    let Detail::Callable(signature) = &owner.details[declaration.1] else {
         return value;
     };
     let (bindings, written, calls) = (HashMap::new(), HashMap::new(), HashMap::new());
@@ -253,7 +326,7 @@ pub(crate) fn fit_operator_default(
     let mut typer = Typer::bare(
         program,
         owner,
-        &owner.declarations[operator.1],
+        &owner.declarations[declaration.1],
         signature,
         Tables {
             bindings: &bindings,
@@ -263,11 +336,10 @@ pub(crate) fn fit_operator_default(
         },
         diagnostics,
     );
-    let mut value = typer.fit(
+    typer.fit_with(
         value,
         expected,
-        &format!("the configuration parameter `{}`", parameter.name),
-    );
-    lifting::record_value(program, &mut value);
-    value
+        &format!("the configuration parameter `{name}`"),
+        context,
+    )
 }
