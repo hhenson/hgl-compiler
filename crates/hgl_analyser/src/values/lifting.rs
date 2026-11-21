@@ -2,7 +2,7 @@
 //! while the graph is built, and the places that take no connection
 //! (FN-3, FN-6, CTRL-14, EXPR-14). Part of the typing pass ([`super`]).
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostics, Location};
 
 use super::Typer;
 use crate::hir::{
@@ -86,59 +86,7 @@ impl<'a> Typer<'a> {
     /// while the graph is built. TIME-2: "Composition describes a typed
     /// graph without reading live payloads."
     pub(super) fn constants_of(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            // An operation the body requires: the operator's own
-            // signature says which of its parameters is `const`
-            // (GEN-4).
-            Callee::Required {
-                operator: (module, declaration),
-                ..
-            } => (*module, *declaration),
-            Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => return,
-        };
-        let Some(Detail::Callable(signature)) =
-            self.program.modules[module].details.get(declaration)
-        else {
-            return;
-        };
-        for argument in arguments {
-            let parameter = argument
-                .parameter
-                .and_then(|index| signature.parameters.get(index));
-            let Some(parameter) = parameter else {
-                continue;
-            };
-            // What is not settled is not judged: it may be a value.
-            if parameter.constant && self.category(&argument.value) == ValueCategory::Connection {
-                self.diagnostics.emit(error(
-                    Category::Phase,
-                    codes::CONNECTION_AS_CONSTANT,
-                    argument.value.at,
-                    format!(
-                        "`{}` is a `const` parameter, and this is a connection: it has no \
-                         value while the graph is built",
-                        parameter.name
-                    ),
-                    "FN-3",
-                ));
-            }
-        }
+        check_const_arguments(self.program, &self.locals, kind, self.diagnostics);
     }
 
     /// An entry of the configuration of the symbol written `form` in a
@@ -182,6 +130,96 @@ impl<'a> Typer<'a> {
             && !self.testing
             && self.hook.is_none()
             && self.category(value) == ValueCategory::Connection
+    }
+}
+
+/// FN-3: checks the const inputs of a call using its current graph categories.
+fn check_const_arguments(
+    program: &Program,
+    locals: &[Local],
+    kind: &ExprKind,
+    diagnostics: &mut Diagnostics,
+) {
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = kind
+    else {
+        return;
+    };
+    let (module, declaration) = match callee {
+        Callee::Function {
+            module,
+            declaration,
+            ..
+        }
+        | Callee::Candidate {
+            module,
+            declaration,
+            ..
+        } => (*module, *declaration),
+        // An operation the body requires: the operator's own
+        // signature says which of its parameters is `const`
+        // (GEN-4).
+        Callee::Required {
+            operator: (module, declaration),
+            ..
+        } => (*module, *declaration),
+        Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => return,
+    };
+    let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration) else {
+        return;
+    };
+    for argument in arguments {
+        let parameter = argument
+            .parameter
+            .and_then(|index| signature.parameters.get(index));
+        let Some(parameter) = parameter else {
+            continue;
+        };
+        // What is not settled is not judged: it may be a value.
+        if parameter.constant
+            && category(program, locals, &argument.value) == ValueCategory::Connection
+        {
+            diagnostics.emit(error(
+                Category::Phase,
+                codes::CONNECTION_AS_CONSTANT,
+                argument.value.at,
+                format!(
+                    "`{}` is a `const` parameter, and this is a connection: it has no \
+                     value while the graph is built",
+                    parameter.name
+                ),
+                "FN-3",
+            ));
+        }
+    }
+}
+
+/// GEN-7: a selected temporal candidate can make a formerly unsettled
+/// argument a connection. Check its consumers after recording the instance.
+pub(super) fn check_instance_constants(
+    program: &Program,
+    body: &Body,
+    from: &[Location],
+    diagnostics: &mut Diagnostics,
+) {
+    let mut reports = Diagnostics::new();
+    crate::hir::walk_statements(&body.statements, &mut |value| {
+        check_const_arguments(program, &body.locals, &value.kind, &mut reports);
+    });
+    for report in reports.as_slice() {
+        if diagnostics.as_slice().contains(report) {
+            continue;
+        }
+        for &root in from {
+            let mut here = report
+                .clone()
+                .with_related(report.primary, "the const argument in the generic body");
+            here.primary = root;
+            if !diagnostics.as_slice().contains(&here) {
+                diagnostics.emit(here);
+            }
+        }
     }
 }
 

@@ -16,7 +16,7 @@ use super::operators::{Requested, from_place, unreadable};
 use super::{REQUIRING, Typer};
 use crate::declared::{names_parameter, same_type, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
-use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Program, Role};
+use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Phase, Program, Role};
 use crate::read::is_type;
 use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{
@@ -1752,6 +1752,15 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     .get(made.callee.1)
                     .map_or(&[][..], Vec::as_slice)
             });
+            let graph = program.modules[made.callee.0].phases.get(made.callee.1)
+                == Some(&Some(Phase::Graph));
+            if graph
+                && !selecting.is_empty()
+                && let Some((_, body)) =
+                    program.instance(made.callee.0, made.callee.1, &made.generics, &made.answers)
+            {
+                super::lifting::check_instance_constants(program, &body, &from, diagnostics);
+            }
             if inner.is_empty() && selecting.is_empty() {
                 continue;
             }
@@ -1957,9 +1966,6 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                                 Vec::new(),
                                 (call.form, call.name),
                             );
-                            if call.graph {
-                                typer.constants_of(&kind);
-                            }
                             if let Some(result) = &call.result {
                                 let expected = placed(substitute_within(result, &map), &declared);
                                 if expected != ty {

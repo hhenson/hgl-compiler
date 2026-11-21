@@ -728,6 +728,35 @@ fn a_deferred_operator_call_checks_const_arguments() {
     );
 }
 
+/// FN-3 and GEN-7: a call selected in an instance can change a value
+/// to a connection, including when a later call reads it through a local.
+#[test]
+fn graph_instances_check_consumers_of_deferred_calls() {
+    let checked = module(concat!(
+        "operator observe<T>(value: T) -> i64\n",
+        "impl const fn observe<T>(value: T) -> i64 => 5\n",
+        "impl fn observe(value: i64) -> i64 { when { return value } }\n",
+        "fn needs_const(const value: i64) -> i64 => value\n",
+        "fn nested<T>(const value: T) -> i64 => needs_const(observe(value))\n",
+        "fn via_binding<T>(const value: T) -> i64 {\n",
+        "    let observed = observe(value)\n",
+        "    return needs_const(observed)\n",
+        "}\n",
+        "fn value_instance() -> i64 => nested(\"a\")\n",
+        "fn rejected_nested() -> i64 => nested(3)\n",
+        "fn rejected_binding() -> i64 => via_binding(3)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:32 phase/connection.as_constant FN-3",
+            "m.hgl:13:33 phase/connection.as_constant FN-3",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another
