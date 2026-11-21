@@ -1,4 +1,4 @@
-//! Omitted configuration defaults of a selected operator candidate (GEN-6, UNIT-8).
+//! Configuration of a selected operator candidate (GEN-6, FN-18, UNIT-8).
 
 mod common;
 
@@ -52,6 +52,59 @@ const fn invalid() -> bool => forward(false)",
         "{}",
         checked.report
     );
+}
+
+#[test]
+fn required_configuration_is_held_to_the_selected_parameter() {
+    // FN-18, GEN-16: the public bool and a selected candidate's
+    // parameter are both checked when configuration is supplied.
+    let checked = module(
+        "operator pick<T>{fallback: bool = false}(value: T) -> i64
+impl const fn pick{fallback: i64}(value: bool) -> i64 => fallback
+impl const fn pick{fallback: bool}(value: i64) -> i64 => if fallback { 1 } else { value }
+const fn forward<T>(value: T) -> i64 requires pick(T) -> i64 => pick{fallback: true}(value)
+const fn accepted() -> i64 => forward(5)
+const fn rejected() -> i64 => forward(false)",
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:80 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+}
+
+#[test]
+fn a_required_configuration_literal_can_widen_but_a_binding_cannot() {
+    // FN-18, EXPR-5: the integer literal fits a float place, but an
+    // integer binding is never implicitly converted to a float.
+    let checked = module(
+        "operator choose<T>{fallback: i64 = 0}(value: T) -> f64
+impl const fn choose{fallback: f64}(value: bool) -> f64 => fallback
+const fn literal<T>(value: T) -> f64 requires choose(T) -> f64 => choose{fallback: 3}(value)
+const fn binding<T>(value: T, fallback: i64) -> f64 requires choose(T) -> f64 => choose{fallback: fallback}(value)
+const fn accepted() -> f64 => literal(false)
+const fn rejected() -> f64 => binding(false, 3)",
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:99 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+}
+
+#[test]
+fn public_literal_widening_does_not_preempt_the_selected_parameter() {
+    // EXPR-5: the same written literal fits the public float place and
+    // the selected candidate's integer place.
+    let checked = module(
+        "operator pick<T>{fallback: f64 = 0}(value: T) -> i64
+impl const fn pick{fallback: i64}(value: bool) -> i64 => fallback
+const fn forward<T>(value: T) -> i64 requires pick(T) -> i64 => pick{fallback: 3}(value)
+const fn accepted() -> i64 => forward(false)",
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
 }
 
 #[test]
