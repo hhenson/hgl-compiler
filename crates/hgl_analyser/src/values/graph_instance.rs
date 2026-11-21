@@ -257,6 +257,27 @@ impl GraphDestinations {
                 self.fit_fields(typer, ty, arguments, *infer_types, *at);
                 return;
             }
+            // TYPE-16: the constructor already bound each named
+            // property to a slot. Reuse its property types and fit.
+            NodeMut::Expression(Expr {
+                kind: ExprKind::Delta { arguments },
+                ty: Type::Delta(of),
+                ..
+            }) => {
+                let Some(properties) = typer.delta_properties(of) else {
+                    return;
+                };
+                for argument in arguments {
+                    if let Some((name, expected)) =
+                        argument.parameter.and_then(|slot| properties.get(slot))
+                        && whole(expected)
+                    {
+                        let place = format!("the property `{name}`");
+                        self.fit(typer, &mut argument.value, expected, &place, false);
+                    }
+                }
+                return;
+            }
             // EXPR-5 and EXPR-9: use the types already established for
             // these entries, without inferring a new container shape.
             NodeMut::Expression(Expr {

@@ -958,6 +958,53 @@ fn graph_instances_fit_settled_types_at_destinations() {
     }
 }
 
+/// GEN-7, TYPE-16 and EXPR-5: a delta's named property keeps its
+/// destination type when the given value becomes known.
+#[test]
+fn graph_instances_fit_settled_delta_properties() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "struct DeltaText {\n",
+        "    count: i64\n",
+        "    text: str\n",
+        "}\n",
+        "fn wrong_delta<T>(const input: T) -> delta<DeltaText> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return delta<DeltaText>(text: chosen, count: 2)\n",
+        "}\n",
+        "fn right_delta<T>(const input: T) -> delta<DeltaText> {\n",
+        "    let chosen = if predicate(input) { \"ready\" }\n",
+        "    return delta<DeltaText>(text: chosen, count: 2)\n",
+        "}\n",
+        "fn bad_delta() -> delta<DeltaText> => wrong_delta(1)\n",
+        "fn plain_delta() -> delta<DeltaText> => right_delta(1)\n",
+        "fn nullable_delta() -> delta<DeltaText> => right_delta(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:17:39 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+    for (caller, expected) in [("plain_delta", "str"), ("nullable_delta", "str?")] {
+        let instance = instance_called_by(&checked, body(&checked, caller));
+        let Some(Stmt::Return {
+            value: Some(value), ..
+        }) = instance.statements.last()
+        else {
+            panic!("the instance returns its delta");
+        };
+        let ExprKind::Delta { arguments } = &value.kind else {
+            panic!("the return expression constructs a delta");
+        };
+        assert_eq!(arguments[0].parameter, Some(1));
+        assert_eq!(arguments[0].value.ty.to_string(), expected);
+        assert_eq!(arguments[1].parameter, Some(0));
+    }
+}
+
 /// GEN-7 and EXPR-5: a field or entry of a previously typed aggregate
 /// still has to fit when its conditional value becomes known.
 #[test]

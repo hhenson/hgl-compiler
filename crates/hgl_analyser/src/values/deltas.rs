@@ -28,7 +28,7 @@ impl<'a> Typer<'a> {
     /// struct: ... a property for each field `name: F`, of the same
     /// name and of type `delta<F>?`: null where the field did not
     /// change".
-    fn delta_properties(&self, of: &Type) -> Option<Vec<(String, Type)>> {
+    pub(super) fn delta_properties(&self, of: &Type) -> Option<Vec<(String, Type)>> {
         match of {
             Type::Set(_) => Some(vec![
                 ("added".to_string(), of.clone()),

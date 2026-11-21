@@ -409,3 +409,25 @@ test deferred_nullable_variants {
     assert eval deferred_nullable_projection(value: "s", ready: true, passed: false) == [8]
     assert eval deferred_nullable_projection(value: "s", ready: false, passed: true) == [0]
 }
+
+# TYPE-16: a named delta property can take a string or an optional
+# string whose type became known only in the instance.
+struct DeltaText {
+    count: i64
+    text: str
+}
+
+fn deferred_delta_properties<T>(const value: T, const ready: bool) -> str {
+    let texts = if live_helper(value) > 0 { ["known"] }
+    let plain = delta<DeltaText>(text: texts[0])
+    let chosen = if live_helper(value) > 0 && ready { "ready" }
+    let change = delta<DeltaText>(text: chosen, count: 2)
+    if plain.text != "known" || change.count != 2 { return "wrong slots" }
+    if change.text == null { return "absent" }
+    return change.text
+}
+
+test deferred_delta_properties_fit {
+    assert eval deferred_delta_properties(value: "s", ready: true) == ["ready"]
+    assert eval deferred_delta_properties(value: "s", ready: false) == ["absent"]
+}
