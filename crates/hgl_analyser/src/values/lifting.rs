@@ -110,7 +110,7 @@ impl<'a> Typer<'a> {
                 operator: (module, declaration),
                 ..
             } => (*module, *declaration),
-            Callee::Unread => return,
+            Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => return,
         };
         let Some(Detail::Callable(signature)) =
             self.program.modules[module].details.get(declaration)
@@ -233,6 +233,14 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
         // A default and a constant are read with no local in scope
         // (UNIT-7, UNIT-13).
         ExprKind::Local(local) => locals.get(*local).map_or(Value, |local| local.category),
+        ExprKind::StaticCallable(callee) => match &**callee {
+            Callee::Anonymous(function) => function
+                .captures
+                .iter()
+                .map(|&local| locals[local].category)
+                .fold(Value, join),
+            _ => Value,
+        },
         ExprKind::Call {
             callee, arguments, ..
         } => {
@@ -263,7 +271,16 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
                 {
                     Connection
                 }
-                Callee::Required { .. } => join(given, Unsettled),
+                Callee::Anonymous(function) if !function.template.value => Connection,
+                Callee::Anonymous(function) => function
+                    .captures
+                    .iter()
+                    .map(|&local| locals[local].category)
+                    .fold(given, join),
+                Callee::Parameter { temporal: true, .. } => Connection,
+                // A value callback may capture a connection. Its
+                // specialized body determines whether FN-6 lifts it.
+                Callee::Parameter { .. } | Callee::Required { .. } => join(given, Unsettled),
                 _ => given,
             }
         }
@@ -333,6 +350,9 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
 /// (GEN-7), and a temporal function or candidate is the node or the
 /// graph itself.
 fn lifts(program: &Program, callee: &Callee) -> bool {
+    if let Callee::Anonymous(function) = callee {
+        return function.template.value;
+    }
     let Some((module, declaration)) = callee.declaration() else {
         return false;
     };
@@ -397,22 +417,81 @@ pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
 /// Records what `value` is and, for a call, whether it is lifted, as
 /// [`record`] does for one expression of a body with `locals`.
 fn recorded(program: &Program, locals: &[Local], composition: bool, value: &mut Expr) {
+    if let ExprKind::Call {
+        callee, arguments, ..
+    } = &mut value.kind
+        && let Some((module, declaration)) = callee.declaration()
+        && let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
+    {
+        function_capture_arguments(locals, arguments, signature.parameters.len());
+    }
     value.category = category(program, locals, value);
     if composition {
         formed_in_composition(program, locals, value);
     }
-    if let ExprKind::Call {
-        callee,
-        arguments,
-        lifted,
-        ..
-    } = &mut value.kind
-    {
-        *lifted = composition
-            && lifts(program, callee)
-            && arguments.iter().any(|argument| {
-                category(program, locals, &argument.value) == ValueCategory::Connection
+    if let ExprKind::Call { callee, lifted, .. } = &mut value.kind {
+        *lifted =
+            composition && lifts(program, callee) && value.category == ValueCategory::Connection;
+    }
+}
+
+/// A static anonymous argument contributes runtime parameters only for
+/// its captures. Reserve their slots in declaration order and pass their
+/// values alongside the static argument in source order.
+fn function_capture_arguments(
+    locals: &[Local],
+    arguments: &mut Vec<crate::hir::Argument>,
+    original: usize,
+) {
+    let captures = |argument: &crate::hir::Argument| -> Option<(usize, Vec<LocalId>)> {
+        let ExprKind::StaticCallable(callee) = &argument.value.kind else {
+            return None;
+        };
+        let Callee::Anonymous(function) = &**callee else {
+            return None;
+        };
+        Some((argument.parameter?, function.captures.clone()))
+    };
+    let mut captured: Vec<_> = arguments.iter().filter_map(captures).collect();
+    if captured.iter().all(|(_, captures)| captures.is_empty()) {
+        return;
+    }
+    captured.sort_by_key(|(parameter, _)| *parameter);
+    let mut next = original;
+    let mut ranges = vec![None; original];
+    for (parameter, captures) in captured {
+        ranges[parameter] = Some(next);
+        next += captures.len();
+    }
+    // An instance may already carry captures from its uninstantiated
+    // body. Rebuild them from the now concrete arguments.
+    let written = std::mem::take(arguments);
+    for argument in written {
+        if argument
+            .parameter
+            .is_some_and(|parameter| parameter >= original)
+        {
+            continue;
+        }
+        let holds = captures(&argument);
+        arguments.push(argument);
+        let Some((parameter, captured)) = holds else {
+            continue;
+        };
+        let start = ranges[parameter].expect("capture slots were reserved");
+        for (offset, local) in captured.into_iter().enumerate() {
+            let binding = &locals[local];
+            arguments.push(crate::hir::Argument {
+                parameter: Some(start + offset),
+                pack: None,
+                value: Expr {
+                    kind: ExprKind::Local(local),
+                    ty: binding.ty.clone(),
+                    at: binding.at,
+                    category: binding.category,
+                },
             });
+        }
     }
 }
 

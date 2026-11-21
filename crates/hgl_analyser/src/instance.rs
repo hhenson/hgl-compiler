@@ -35,13 +35,25 @@
 use hgl_diagnostics::Location;
 
 use crate::declared::substitute_within;
-use crate::hir::{Answer, Body, Callee, Expr, ExprKind, ValueCategory, walk_statements_mut};
-use crate::program::{Phase, Program};
+use crate::hir::{
+    AnonymousFunction, Answer, Body, Callee, Expr, ExprKind, ValueCategory, walk_statements,
+    walk_statements_mut,
+};
+use crate::program::{LocalKind, Phase, Program, Role};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
 
 /// Where each generic parameter of a declaration is declared, with what
 /// it stands for at one call.
 type Map<'a> = [(Location, &'a Argument)];
+
+/// The enclosing declaration and the arguments common to its body and
+/// any anonymous bodies written inside it.
+struct InstanceArguments<'a> {
+    declaration: (usize, usize),
+    generics: &'a [Argument],
+    types: &'a Map<'a>,
+    requirements: &'a [Answer],
+}
 
 impl Program {
     /// The signature and the body of `declaration` of `module` as one
@@ -68,6 +80,19 @@ impl Program {
         generics: &[Argument],
         requirements: &[Answer],
     ) -> Option<(Signature, Body)> {
+        self.instance_with_functions(module, declaration, generics, requirements, &[])
+    }
+
+    /// Instantiate a declaration with the compile-time functions supplied
+    /// at their original parameter slots (FN-17).
+    pub fn instance_with_functions(
+        &self,
+        module: usize,
+        declaration: usize,
+        generics: &[Argument],
+        requirements: &[Answer],
+        functions: &[(usize, Callee)],
+    ) -> Option<(Signature, Body)> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
             return None;
@@ -79,7 +104,7 @@ impl Program {
             .map(|generic| generic.at)
             .zip(generics)
             .collect();
-        let taken = Signature {
+        let mut taken = Signature {
             generics: Vec::new(),
             parameters: signature
                 .parameters
@@ -96,22 +121,15 @@ impl Program {
             reference: signature.reference,
         };
         let mut body = body.clone();
-        for local in &mut body.locals {
-            local.ty = substitute_within(&local.ty, &map);
-        }
-        walk_statements_mut(&mut body.statements, &mut |expression| {
-            self.place(expression, &map, requirements);
-        });
-        // GEN-5: a call a membership authorises is the call of the
-        // candidate it selects with these arguments in place, which is
-        // read here.
-        crate::values::select_in_instance(
-            self,
-            (module, declaration),
+        let temporal = declared.declarations[declaration].kind.role() == Some(Role::Temporal);
+        let functions = hidden_captures(functions, &mut taken, &mut body, temporal);
+        let arguments = InstanceArguments {
+            declaration: (module, declaration),
             generics,
-            &mut body,
-            &|call| call.walk_mut(&mut |inner| self.place(inner, &map, requirements)),
-        );
+            types: &map,
+            requirements,
+        };
+        self.place_body(&mut body, &arguments, &functions);
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
         // could not say of an operation it requires.
@@ -120,26 +138,81 @@ impl Program {
         Some((taken, body))
     }
 
-    /// Puts what `map` gives in place in one expression: in its type,
+    /// Specialize one lexical body using its own local table. A call
+    /// a membership authorizes is selected with the instance's types
+    /// in place (GEN-5 and GEN-7), including in an anonymous body.
+    fn place_body(
+        &self,
+        body: &mut Body,
+        instance: &InstanceArguments<'_>,
+        functions: &[(usize, Callee)],
+    ) {
+        for local in &mut body.locals {
+            local.ty = substitute_within(&local.ty, instance.types);
+        }
+        walk_statements_mut(&mut body.statements, &mut |expression| {
+            self.place(expression, instance, functions);
+        });
+        crate::values::select_in_instance(
+            self,
+            instance.declaration,
+            instance.generics,
+            body,
+            &|call| call.walk_mut(&mut |inner| self.place(inner, instance, functions)),
+        );
+    }
+
+    /// Puts the instance's arguments in place in an expression's type,
     /// in what it calls, and where it reads a generic value parameter.
-    fn place(&self, expression: &mut Expr, map: &Map, answers: &[Answer]) {
-        expression.ty = substitute_within(&expression.ty, map);
+    fn place(
+        &self,
+        expression: &mut Expr,
+        instance: &InstanceArguments<'_>,
+        functions: &[(usize, Callee)],
+    ) {
+        expression.ty = substitute_within(&expression.ty, instance.types);
         match &mut expression.kind {
             // GEN-13: a generic value parameter read as a value is the
             // constant the call gives it.
             ExprKind::GenericValue { at, .. } => {
-                let given = map.iter().find_map(|(declared, argument)| match argument {
-                    Argument::Constant(given) if declared == at => Some(given),
-                    _ => None,
-                });
+                let given = instance
+                    .types
+                    .iter()
+                    .find_map(|(declared, argument)| match argument {
+                        Argument::Constant(given) if declared == at => Some(given),
+                        _ => None,
+                    });
                 let read = given
                     .and_then(|given| self.constant(&given.value, &expression.ty, expression.at));
                 if let Some(kind) = read {
                     expression.kind = kind;
                 }
             }
-            ExprKind::Call { callee, .. } => place_callee(callee, map, answers),
+            ExprKind::Call { callee, .. } => self.place_target(callee, instance, functions),
+            ExprKind::StaticCallable(callee) => self.place_target(callee, instance, functions),
             _ => {}
+        }
+    }
+
+    fn place_target(
+        &self,
+        callee: &mut Callee,
+        instance: &InstanceArguments<'_>,
+        functions: &[(usize, Callee)],
+    ) {
+        if let Callee::Anonymous(function) = callee {
+            let functions = inherited_functions(function, functions);
+            let template = Type::Function(Box::new(function.template.clone()));
+            if let Type::Function(template) = substitute_within(&template, instance.types) {
+                function.template = *template;
+            }
+            function
+                .specialization
+                .extend(instance.types.iter().map(|(_, value)| (*value).clone()));
+            self.place_body(&mut function.body, instance, &functions);
+            crate::values::record(self, &mut function.body, !function.template.value);
+        } else {
+            place_callee(callee, instance.types, instance.requirements, functions);
         }
     }
 
@@ -234,11 +307,145 @@ impl Program {
     }
 }
 
+/// FN-17: a nested function that uses a static parameter also needs the
+/// ordinary values its target captures. Relay only the captures used by
+/// this scope or its descendants.
+fn inherited_functions(
+    function: &mut AnonymousFunction,
+    enclosing: &[(usize, Callee)],
+) -> Vec<(usize, Callee)> {
+    if enclosing.is_empty() {
+        return Vec::new();
+    }
+    let mut used = Vec::new();
+    used_function_parameters(&function.body, &mut used);
+    let mut functions: Vec<_> = enclosing
+        .iter()
+        .filter(|(slot, _)| used.contains(slot))
+        .cloned()
+        .collect();
+    let inputs = function.template.parameters.len();
+    let first_local = inputs + function.captures.len();
+    let mut added = Vec::new();
+    for (_, target) in &mut functions {
+        let Callee::Anonymous(target) = target else {
+            continue;
+        };
+        let target_inputs = target.template.parameters.len();
+        for (index, captured) in target.captures.iter_mut().enumerate() {
+            let position = function.captures.iter().position(|outer| outer == captured);
+            let offset = position.unwrap_or_else(|| {
+                let offset = function.captures.len();
+                function.captures.push(*captured);
+                added.push(target.body.locals[target_inputs + index].clone());
+                offset
+            });
+            *captured = inputs + offset;
+        }
+    }
+    if !added.is_empty() {
+        let remapped: Vec<_> = (0..function.body.locals.len())
+            .map(|local| {
+                if local < first_local {
+                    local
+                } else {
+                    local + added.len()
+                }
+            })
+            .collect();
+        crate::values::remap_locals(&mut function.body, &remapped);
+        function.body.locals.splice(first_local..first_local, added);
+    }
+    functions
+}
+
+/// Record the declaration slots used by this anonymous body, including
+/// the slots referenced in a nested anonymous argument.
+fn used_function_parameters(body: &Body, used: &mut Vec<usize>) {
+    walk_statements(&body.statements, &mut |expression| {
+        let target = match &expression.kind {
+            ExprKind::Call { callee, .. } => callee,
+            ExprKind::StaticCallable(callee) => callee,
+            _ => return,
+        };
+        match target {
+            Callee::Parameter { parameter, .. } => used.push(*parameter),
+            Callee::Anonymous(nested) => used_function_parameters(&nested.body, used),
+            _ => {}
+        }
+    });
+}
+
+/// Carry an anonymous function's immutable environment as ordinary
+/// parameters of the specialized function. Its compile-time identity is
+/// kept separately from the captures supplied by each invocation.
+fn hidden_captures(
+    functions: &[(usize, Callee)],
+    signature: &mut Signature,
+    body: &mut Body,
+    temporal: bool,
+) -> Vec<(usize, Callee)> {
+    let mut functions = functions.to_vec();
+    functions.sort_by_key(|(parameter, _)| *parameter);
+    let original = signature.parameters.len();
+    let mut locals = Vec::new();
+    for (slot, callee) in &mut functions {
+        let Callee::Anonymous(function) = callee else {
+            continue;
+        };
+        let start = function.template.parameters.len();
+        for (index, capture) in function.captures.iter_mut().enumerate() {
+            let mut local = function.body.locals[start + index].clone();
+            let mut name = format!("fn_capture_{slot}_{index}");
+            while body.locals.iter().any(|other| other.name == name) {
+                name.push('_');
+            }
+            local.name = name.clone();
+            local.kind = LocalKind::Parameter;
+            *capture = signature.parameters.len();
+            signature.parameters.push(Parameter {
+                name,
+                at: local.at,
+                constant: temporal && local.category == ValueCategory::Value,
+                var: false,
+                reference: false,
+                ty: local.ty.clone(),
+                pack: None,
+                pack_bounds: (0, None),
+                has_default: false,
+            });
+            locals.push(local);
+        }
+    }
+    if !locals.is_empty() {
+        let added = locals.len();
+        let remapped = (0..body.locals.len())
+            .map(|index| {
+                if index < original {
+                    index
+                } else {
+                    index + added
+                }
+            })
+            .collect::<Vec<_>>();
+        crate::values::remap_locals(body, &remapped);
+        body.locals.splice(original..original, locals);
+    }
+    functions
+}
+
 /// Puts what `map` gives in place in what a call calls. A call of an
 /// operation the declaration requires becomes the call of the candidate
 /// that answers the requirement (GEN-16); one nothing answers is left
 /// as it is.
-fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer]) {
+fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &[(usize, Callee)]) {
+    if let Callee::Parameter { parameter, .. } = callee
+        && let Some((_, target)) = functions.iter().find(|(index, _)| index == parameter)
+    {
+        *callee = target.clone();
+        // The argument belongs to the caller's context, which was already placed.
+        return;
+    }
     if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } = callee {
         for pack in type_packs {
             for ty in &mut pack.types {
@@ -283,7 +490,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer]) {
                 };
             }
         }
-        Callee::Unread => {}
+        Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {}
     }
 }
 

@@ -23,6 +23,7 @@
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Local, Stmt};
 use hgl_analyser::{DeclarationKind, Detail, Program, Type};
+use hgl_lower::calls::runtime_arguments;
 
 use super::Emitter;
 use super::forms::Family;
@@ -196,13 +197,19 @@ impl Family for Endpoints {
                     ));
                 }
                 let mut given = vec![String::new(); signature.parameters.len()];
-                for argument in arguments {
+                for (_, argument) in runtime_arguments(arguments) {
                     let Some(index) = argument.parameter.filter(|&index| index < given.len())
                     else {
                         return Some(emitter.missing(argument.value.at, "this argument"));
                     };
                     given[index] = emitter.expression(scope, &argument.value);
                 }
+                let given: Vec<_> = given
+                    .into_iter()
+                    .zip(&signature.parameters)
+                    .filter(|(_, parameter)| !matches!(parameter.ty, Type::Function(_)))
+                    .map(|(argument, _)| argument)
+                    .collect();
                 if given.iter().any(String::is_empty) {
                     return Some(emitter.missing(value.at, "a call that leaves out an endpoint"));
                 }

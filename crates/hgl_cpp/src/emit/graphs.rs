@@ -23,9 +23,10 @@
 
 use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Stmt, ValueCategory};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Signature, Type};
-use hgl_lower::calls::{LeftOut, left_out};
+use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 
 use super::Emitter;
+use super::anonymous::{anonymous_arguments, anonymous_signature};
 use super::calls::{changes, may_fail};
 use super::forms::Family;
 use super::names::{self, identifier};
@@ -49,6 +50,15 @@ pub(super) struct HeldInputs<'a> {
     pub(super) raw_ports: &'a [usize],
 }
 
+/// What a graph call wires, including any physical reader variant.
+struct GraphTarget<'a> {
+    name: String,
+    signature: &'a Signature,
+    instance: Option<&'a hgl_lower::instances::Instance>,
+    declaration: Option<(usize, usize)>,
+    reads: Option<&'a [super::readers::Reading]>,
+}
+
 impl Emitter<'_> {
     /// Writes the graph `index`, or its instance `instance`, of
     /// `signature` and `body`, which `shown` describes.
@@ -60,6 +70,38 @@ impl Emitter<'_> {
         body: &Body,
         shown: &str,
     ) {
+        let program = self.program;
+        let at = program.modules[self.module].declarations[index].at;
+        let Some(text) = self.graph_definition(IMPLEMENTATION, signature, body, at) else {
+            return;
+        };
+        let text = format!("// {shown}\n{text}");
+        let placed = Placed::of(program, self.module, index, instance);
+        let qualified = placed.qualified(program, self.module);
+        let mut whole = nested(&placed.structs, &text);
+        let Some((prototype, wiring)) = self.wiring_function(
+            signature,
+            &placed,
+            shown,
+            &format!("{qualified}::compose"),
+            body,
+        ) else {
+            return;
+        };
+        whole.push_str(&wiring);
+        self.piece.declaration = prototype;
+        self.piece.text = whole;
+    }
+
+    /// The composition function and the graph-local types it wires.
+    /// A temporal anonymous function uses the same graph form (FN-17).
+    pub(super) fn graph_definition(
+        &mut self,
+        name: &str,
+        signature: &Signature,
+        body: &Body,
+        at: hgl_diagnostics::Location,
+    ) -> Option<String> {
         let program = self.program;
         let mut context = Context::new(Kind::Graph, body.locals.len());
         for (local, declared) in body.locals.iter().enumerate() {
@@ -76,24 +118,19 @@ impl Emitter<'_> {
         for (local, parameter) in signature.parameters.iter().enumerate() {
             let name = identifier(&body.locals[local].name);
             if parameter.constant {
-                let Some(ty) = self.written_type(&parameter.ty, parameter.at) else {
-                    return;
-                };
+                let ty = self.written_type(&parameter.ty, parameter.at)?;
                 let taken = super::values::parameter_type(program, &parameter.ty, false, &ty);
                 parameters.push(format!("[[maybe_unused]] {taken} {name}"));
             } else {
-                let Some(schema) = self.temporal_schema(&parameter.ty, parameter.at) else {
-                    return;
-                };
+                let schema = self.temporal_schema(&parameter.ty, parameter.at)?;
                 parameters.push(format!("[[maybe_unused]] ::hgraph::Port<{schema}> {name}"));
             }
         }
-        let at = program.modules[self.module].declarations[index].at;
         let result = match &signature.result {
-            Some(result) => match self.temporal_schema(result, at) {
-                Some(schema) => format!("::hgraph::Port<{schema}>"),
-                None => return,
-            },
+            Some(result) => {
+                let schema = self.temporal_schema(result, at)?;
+                format!("::hgraph::Port<{schema}>")
+            }
             None => "void".to_string(),
         };
         let mut scope = Scope::cold(program, body);
@@ -101,9 +138,7 @@ impl Emitter<'_> {
         self.in_context(&mut context, |emitter| {
             emitter.statements(&mut scope, &body.statements, 2, &mut statements);
         });
-        let placed = Placed::of(program, self.module, index, instance);
-        let qualified = placed.qualified(program, self.module);
-        let mut text = format!("// {shown}\nstruct {IMPLEMENTATION}\n{{\n");
+        let mut text = format!("struct {name}\n{{\n");
         for lifted in &context.lifted {
             for line in lifted.lines() {
                 text.push_str(&format!("{INDENT}{line}\n"));
@@ -114,19 +149,7 @@ impl Emitter<'_> {
             "{INDENT}static {result} compose({})\n{INDENT}{{\n{statements}{INDENT}}}\n}};\n",
             parameters.join(", ")
         ));
-        let mut whole = nested(&placed.structs, &text);
-        let Some((prototype, wiring)) = self.wiring_function(
-            signature,
-            &placed,
-            shown,
-            &format!("{qualified}::compose"),
-            body,
-        ) else {
-            return;
-        };
-        whole.push_str(&wiring);
-        self.piece.declaration = prototype;
-        self.piece.text = whole;
+        Some(text)
     }
 
     /// `value` where a connection of `ty` is expected: the port of a
@@ -202,13 +225,43 @@ impl Emitter<'_> {
         &mut self,
         scope: &mut Scope,
         value: &Expr,
-        HeldInputs {
-            given,
-            defaults,
-            raw_ports,
-        }: HeldInputs<'_>,
+        held: HeldInputs<'_>,
         result_form: ResultForm,
     ) -> String {
+        if let ExprKind::Call {
+            callee: Callee::Anonymous(function),
+            arguments,
+            ..
+        } = &value.kind
+            && !function.template.value
+        {
+            let signature = anonymous_signature(function);
+            let Some(name) = self.anonymous_helper(function, &signature) else {
+                return "0".to_string();
+            };
+            let Some(arguments) = anonymous_arguments(scope, function, arguments) else {
+                return self.missing(
+                    function.at,
+                    "an anonymous function with no enclosing capture",
+                );
+            };
+            return self.graph_call(
+                scope,
+                value,
+                &arguments,
+                held,
+                GraphTarget {
+                    name,
+                    signature: &signature,
+                    instance: None,
+                    declaration: None,
+                    reads: None,
+                },
+            );
+        }
+        let HeldInputs {
+            given, raw_ports, ..
+        } = held;
         let ExprKind::Call {
             callee:
                 callee @ (Callee::Function {
@@ -270,13 +323,57 @@ impl Emitter<'_> {
         if let Some((number, _)) = reader {
             placed.add_input_variant(number);
         }
+        let name = format!(
+            "{}{}",
+            placed.wiring_qualified(program, module),
+            result_form.suffix()
+        );
+        self.graph_call(
+            scope,
+            value,
+            arguments,
+            held,
+            GraphTarget {
+                name,
+                signature,
+                instance: concrete,
+                declaration: Some((module, declaration)),
+                reads: reader.map(|(_, reads)| reads),
+            },
+        )
+    }
+
+    /// Wires the runtime arguments of a named or anonymous graph call.
+    fn graph_call(
+        &mut self,
+        scope: &mut Scope,
+        value: &Expr,
+        arguments: &[Argument],
+        HeldInputs {
+            given, defaults, ..
+        }: HeldInputs<'_>,
+        GraphTarget {
+            name: called,
+            signature,
+            instance: concrete,
+            declaration,
+            reads,
+        }: GraphTarget<'_>,
+    ) -> String {
+        let program = self.program;
+        let parameter_for = |argument: &Argument| {
+            concrete.map_or_else(
+                || argument.parameter.filter(|_| argument.pack.is_none()),
+                |instance| instance.parameter(argument),
+            )
+        };
         let mut written: Vec<Option<String>> = vec![None; signature.parameters.len()];
         // The parameters in the order their arguments are written, and
         // what may fail or run statements among those (EXPR-2).
         let mut order: Vec<usize> = Vec::new();
         let mut failing = 0;
         let mut changing = false;
-        for (position, argument) in arguments.iter().enumerate() {
+        for (position, argument) in runtime_arguments(arguments) {
             let Some(index) =
                 parameter_for(argument).filter(|&index| index < signature.parameters.len())
             else {
@@ -290,8 +387,8 @@ impl Emitter<'_> {
             written[index] = Some(match port {
                 Some(port) => port,
                 None if parameter.constant => self.expression(scope, &argument.value),
-                None if reader
-                    .is_some_and(|(_, reads)| reads.iter().any(|read| read.parameter == index)) =>
+                None if reads
+                    .is_some_and(|reads| reads.iter().any(|read| read.parameter == index)) =>
                 {
                     self.wiring_form(scope, super::lifting::reader_operand(&argument.value))
                 }
@@ -302,64 +399,58 @@ impl Emitter<'_> {
             changing |= changes(&argument.value);
         }
         for (index, parameter) in signature.parameters.iter().enumerate() {
-            if written[index].is_some() {
+            if matches!(parameter.ty, Type::Function(_)) || written[index].is_some() {
                 continue;
             }
             if !parameter.constant {
                 // UNIT-8: "an omitted temporal input is never valid".
                 return self.missing(value.at, "a call that leaves out a temporal input");
             }
-            if let Some((_, held)) = defaults.iter().find(|(at, _)| *at == index) {
+            let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
+            if let Some((_, held)) = defaults.iter().find(|(at, _)| *at == declared) {
                 written[index] = Some(held.clone());
                 continue;
             }
-            written[index] = Some(
-                match left_out(program, (module, declaration), index, parameter) {
-                    Some(LeftOut::Default(default)) => {
-                        // The analyser keeps a default as a value with no
-                        // locals of its own, so a block in it that runs
-                        // statements cannot be written, as a value call's
-                        // cannot (`calls`).
-                        if changes(default) {
-                            return self.missing(default.at, "a default that runs statements");
-                        }
-                        let cold = Body {
-                            locals: Vec::new(),
-                            statements: Vec::new(),
-                        };
-                        let mut defaults = Scope::cold(program, &cold);
-                        let written = self.expression(&mut defaults, default);
-                        if !defaults.before.is_empty() {
-                            return self.missing(default.at, "a default that propagates a failure");
-                        }
-                        // EXPR-2: a default is evaluated after the
-                        // arguments written, in the order of the
-                        // parameters, and counts in what is held.
-                        failing += usize::from(may_fail(default));
-                        written
+            written[index] = Some(match left_out(program, declaration, declared, parameter) {
+                Some(LeftOut::Default(default)) => {
+                    // The analyser keeps a default as a value with no
+                    // locals of its own, so a block in it that runs
+                    // statements cannot be written, as a value call's
+                    // cannot (`calls`).
+                    if changes(default) {
+                        return self.missing(default.at, "a default that runs statements");
                     }
-                    Some(LeftOut::Null) => "::std::nullopt".to_string(),
-                    None => {
-                        return self.missing(
-                            value.at,
-                            &format!("a call that leaves out `{}`", parameter.name),
-                        );
+                    let cold = Body {
+                        locals: Vec::new(),
+                        statements: Vec::new(),
+                    };
+                    let mut defaults = Scope::cold(program, &cold);
+                    let written = self.expression(&mut defaults, default);
+                    if !defaults.before.is_empty() {
+                        return self.missing(default.at, "a default that propagates a failure");
                     }
-                },
-            );
+                    // EXPR-2: a default is evaluated after the
+                    // arguments written, in the order of the
+                    // parameters, and counts in what is held.
+                    failing += usize::from(may_fail(default));
+                    written
+                }
+                Some(LeftOut::Null) => "::std::nullopt".to_string(),
+                None => {
+                    return self.missing(
+                        value.at,
+                        &format!("a call that leaves out `{}`", parameter.name),
+                    );
+                }
+            });
         }
-        let called = format!(
-            "{}{}",
-            placed.wiring_qualified(program, module),
-            result_form.suffix()
-        );
         // EXPR-2: the arguments in the order written, then the defaults of
         // those left out. C++ evaluates a call's arguments in no order it
         // promises, so where more than one may fail, or one runs
         // statements, each is held first, in that order.
         if failing > 1 || changing {
             let rest: Vec<usize> = (0..written.len())
-                .filter(|index| !order.contains(index))
+                .filter(|index| written[*index].is_some() && !order.contains(index))
                 .collect();
             order.extend(rest);
             let mut steps = String::new();
@@ -501,6 +592,10 @@ impl Family for Graphs {
             ExprKind::Local(local) if emitter.role(*local) == Role::Connection => {
                 Some(identifier(&scope.body.locals[*local].name))
             }
+            ExprKind::Call {
+                callee: Callee::Anonymous(function),
+                ..
+            } if !function.template.value => Some(emitter.temporal_call(scope, value, &[])),
             ExprKind::Call { callee, .. } => {
                 let (module, declaration) = callee.declaration()?;
                 let declared = &emitter.program.modules[module].declarations[declaration];
@@ -528,6 +623,7 @@ fn wires(emitter: &Emitter, value: &Expr) -> bool {
         return false;
     };
     value.is_lifted()
+        || matches!(callee, Callee::Anonymous(function) if !function.template.value)
         || callee.declaration().is_some_and(|(module, declaration)| {
             emitter.program.modules[module].declarations[declaration]
                 .kind
@@ -542,10 +638,14 @@ fn gives_port(emitter: &Emitter, value: &Expr) -> bool {
     let ExprKind::Call { callee, .. } = &value.kind else {
         return false;
     };
-    callee.declaration().is_some_and(|(module, declaration)| {
-        matches!(
-            emitter.program.modules[module].details.get(declaration),
-            Some(Detail::Callable(signature)) if signature.result.is_some()
-        )
-    })
+    if let Callee::Anonymous(function) = callee {
+        function.template.result.is_some()
+    } else {
+        callee.declaration().is_some_and(|(module, declaration)| {
+            matches!(
+                emitter.program.modules[module].details.get(declaration),
+                Some(Detail::Callable(signature)) if signature.result.is_some()
+            )
+        })
+    }
 }
