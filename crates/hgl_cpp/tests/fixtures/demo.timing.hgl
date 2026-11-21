@@ -140,6 +140,12 @@ fn absolute_yields(const first: datetime, const second: datetime) -> i64 {
     yield second: 20
 }
 
+# A run's configuration made by a function (RUN-1, CRUN-2).
+const fn opening_at(at: datetime) -> RunConfig => RunConfig(start: at)
+
+# Whether a configuration names its start.
+const fn valid_start(config: RunConfig) -> bool => config.start != null
+
 # A source keeps its locals until it returns (SOURCE-4).
 fn finish_or_resume(const finish_early: bool) -> i64 {
     inject clock
@@ -242,4 +248,18 @@ test a_source_keeps_its_cache_and_state {
     assert eval(counter(limit: 3)) == [_, 1, 2, 3]
     assert eval(counting_from(first: 10)) == [_, 10, 11, 12]
     assert eval(repeated(value: 5, times: 2)) == [_, 5, 5]
+}
+
+# A run's configuration is an ordinary value of `RunConfig`, however it
+# is made: held in a `let`, given by a function, chosen by an `if`
+# (RUN-1, CRUN-2).
+test a_run_configuration_is_a_value {
+    let opening = @2026-01-05T09:30:00Z
+    let times = RunConfig(start: opening)
+    assert eval(absolute_yields(first: opening - 2us, second: opening), times) == [20]
+    assert eval(absolute_yields(first: opening, second: opening + 2us), opening_at(opening)) ==
+        [10, _, 20]
+    let short = RunConfig(start: opening, length: 3us)
+    assert eval(time_before_each_delay(), if valid_start(short) { short } else { times }) ==
+        [_, _, opening]
 }

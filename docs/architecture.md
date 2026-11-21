@@ -911,8 +911,8 @@ It is the module `values` (`crates/hgl_analyser/src/values.rs`): its
 `values/`: `statements`, `expressions`, `symbols`, `calls`,
 `arguments`, `inference`, `operators`, `candidates`, `requirements`,
 `call_checks`, `constants`, `lifting`, `control`, `members`, `deltas`,
-`fit`, `results`, `evals`, `node`, `endpoints`, `children` and
-`capabilities`.
+`fit`, `results`, `evals`, `node`, `endpoints`, `children`,
+`capabilities` and `sizes`.
 
 The pass is built form by form. So far it reads:
 
@@ -2155,7 +2155,7 @@ test --target cpp` runs over any program to its end.
 | An `if` over an ordinary value whose value is a connection (CTRL-1, CTRL-13) | C++'s `if` where the graph is built, in a lambda called where it stands; a branch of no value `::hglrt::never` |
 | A node whose configuration holds an `f64` | Wired with `Wiring::add_unique_node` and not `hgraph::wire`: hgraph interns two nodes whose configurations are `==`, as `0.0` and `-0.0` are ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)), until it tells them apart |
 | `eval(target(value: [1, _, 3]))` (TST-5 to TST-8, CEVAL-1) | `::hglrt::testing::evaluate<T>` of an entry that wires core's `replay` instance of each trace written to its input, the target's wiring function, and core's `record` of the result under `"run.output"`; `run(...)` in real time; for a result whose delta is no T, a node of the entry's own, `held_00_`, which keeps the result read whole at each publication (`::hglrt::testing::hold`, none where the read fails), so that a cell written whole is compared with it (TST-5); a target with no result `::hglrt::testing::run`. A value function's is its lifted node, given the replays as its inputs and each default the call leaves out as configuration: a struct `lifted_0F_O_` (the file and the offset of the call) of the test's namespace, ahead of the test |
-| `eval(call, RunConfig(start: s, length: l))` (RUN-1, CRUN-2) | The run given `::hglrt::testing::Bounds{.start = s, .length = l}`, each field the configuration writes (`lifecycle`); the call's arguments and the configuration held first, in the order written, where more than one may fail (EXPR-2) |
+| `eval(call, RunConfig(start: s, length: l))` (RUN-1, CRUN-2) | The run given `::hglrt::testing::Bounds{.start = s, .length = l}`, each field the configuration writes (`lifecycle`); the call's arguments and the configuration held first, in the order written, where more than one may fail (EXPR-2). A configuration that is a value of `RunConfig` made otherwise, held in a `let` or given by a function, is held once, and each of its fields is that bound |
 | `let seen = eval(...)` | `const auto seen = ...;`, the recording, read where a trace is |
 | Application `demo.app` (UNIT-14) | In its module's unit, `::hglrt::application::Output application_()`, which runs its run statement once; `applications/demo.app.cpp`, an entry unit whose `main` is the library's host of that run, `::hglrt::application::main` (`apps`, `assemble`) |
 | Its `inject global_state` and `put`s before its run statement (UNIT-14) | The function's first statements, in the order written, on a store of its own, `::hglrt::application::Store store_`, which the run gives its graph before the entry is wired |
@@ -2179,7 +2179,7 @@ test --target cpp` runs over any program to its end.
 | `values[i]`, a child named in a hook (TIME-1, TIME-9, END-8, ERR-14) | `::hglrt::child(view, i)`: an endpoint whether or not it is valid, past a growing list's end one that is not, and outside a fixed list `value.index_out_of_range`; given to the operations on an endpoint, and read with `checked_whole` or `checked_whole_result` |
 | `pair[0]`, a child of a connection in a graph (TIME-9) | `::hglrt::element_port(pair, 0)`, the port of the element |
 | A cell of a trace of one (TST-5, TST-9) | `::hglrt::testing::Cell<T>`, of a `Whole<T>` or of the delta |
-| Everything else | Reported: `the cpp target does not write ... yet`: a window of any but a scalar; a generic or an abstract struct as one, a list with a part that is no scalar, enum, nullable or list, an atomic struct that holds an optional field (hgraph issue 1874); a set's element or a dictionary's key of any but a scalar, a constant connection of a set or a dictionary, an entry of a dictionary's entry, a key's child as a connection of a graph (EXPR-7); a nullable put in the run's store (hgl_spec issue 165); `all_valid` of a set, a change of an input's activity in `stop`; a `for` over a connection of a set, in a branch or a loop's body the store (a child graph's wiring neither sees nor sets the root's store) or an ordinary value that may fail (hgraph builds every child as the graph around it is built, FN-9), a `return` under a branch selected at runtime in a loop unrolled while the graph is built, branches that assign two `var`s; a run's configuration that is no `RunConfig(...)` written in its eval or its run statement |
+| Everything else | Reported: `the cpp target does not write ... yet`: a window of any but a scalar; a generic or an abstract struct as one, a list with a part that is no scalar, enum, nullable or list, an atomic struct that holds an optional field (hgraph issue 1874); a set's element or a dictionary's key of any but a scalar, a constant connection of a set or a dictionary, an entry of a dictionary's entry, a key's child as a connection of a graph (EXPR-7); a nullable put in the run's store (hgl_spec issue 165); `all_valid` of a set, a change of an input's activity in `stop`; a `for` over a connection of a set, in a branch or a loop's body the store (a child graph's wiring neither sees nor sets the root's store) or an ordinary value that may fail (hgraph builds every child as the graph around it is built, FN-9), a `return` under a branch selected at runtime in a loop unrolled while the graph is built, branches that assign two `var`s |
 
 Every C++ name an HGL name gives is made by one function,
 `emit::names::identifier`: a plain name (a letter first, a letter or
@@ -2479,12 +2479,11 @@ later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml),
 which `check_core.py --target cpp` checks as it checks the hgraph
-target's list, and `--write-list` writes from a run. Today it lists 5
+target's list, and `--write-list` writes from a run. Today it lists 3
 of core's 198 runtime cases, each with the form it needs that the
 target does not write: a key's child as a connection of a graph, a
-designation of a position of a list, a nullable put in the run's store
-(hgl_spec issue 165), and a run's configuration that is no
-`RunConfig(...)` written in its eval.
+designation of a position of a list, and a nullable put in the run's
+store (hgl_spec issue 165).
 
 ### The C++ runtime library
 

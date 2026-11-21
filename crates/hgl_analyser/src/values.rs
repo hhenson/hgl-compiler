@@ -91,6 +91,8 @@ mod operators;
 mod requirements;
 // The result forms, the parts of a result and of an error, and `value?` (ERR-2 to ERR-7).
 mod results;
+// The sizes a struct application or a call gives a list or a window (TYPE-10, TYPE-11).
+mod sizes;
 // A function's body and its statements: `let`, `var`, assignment, `return` (FN-7, EXPR-3).
 mod statements;
 // `-`, `!` and the operators with two operands, as calls of core's (NUM-1, EXPR-6).
@@ -302,6 +304,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
     requirements::instances_hold(program, diagnostics);
+    // TYPE-10, TYPE-11: the sizes each struct application written in a
+    // type gives the struct's lists and windows.
+    sizes::applied_sizes(program, diagnostics);
 }
 
 /// What the earlier passes found of `module`, by where each is written:

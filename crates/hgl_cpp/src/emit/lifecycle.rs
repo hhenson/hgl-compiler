@@ -6,13 +6,10 @@
 //! | HGL | C++ |
 //! | --- | --- |
 //! | `eval(call, RunConfig(start: s, length: l))` (RUN-1; core's CRUN-2) | the run given `::hglrt::testing::Bounds{.start = s, .length = l}`: each field the configuration writes, the others null, which the library resolves and checks before the run's graph is built (`run.end_and_length`) |
-//!
-//! A configuration that is no `RunConfig(...)` written in the eval, a
-//! value of `RunConfig` held elsewhere, is the structs' work, and is
-//! reported.
+//! | `eval(call, config)`, where `config` is a value of `RunConfig` made otherwise: held in a `let`, given by a function | the value held once, `const RunConfig config_ = ...;`, and the run given `Bounds{.start = config_.start, .end = config_.end, .length = config_.length}` |
 
 use hgl_analyser::hir::{Expr, ExprKind};
-use hgl_analyser::{DeclarationKind, Detail};
+use hgl_analyser::{DeclarationKind, Detail, NamedKind, Type};
 
 use super::Emitter;
 use super::calls::{changes, may_fail};
@@ -39,10 +36,7 @@ impl Emitter<'_> {
             arguments,
         } = &config.kind
         else {
-            return self.missing(
-                config.at,
-                "a run's configuration that is no `RunConfig(...)`",
-            );
+            return self.run_bounds_of_value(scope, config);
         };
         let declared = &program.modules[*module].declarations[*declaration];
         let core = Some(*module) == program.core();
@@ -91,5 +85,52 @@ impl Emitter<'_> {
         } else {
             format!("[&] {{ {steps}return {bounds}; }}()")
         }
+    }
+
+    /// The bounds of a run whose configuration `config` is a value of
+    /// core's `RunConfig` made some other way than written in the eval:
+    /// held in a `let`, given by a function, chosen by an `if` (RUN-1:
+    /// "an optional `RunConfig`"; it is an ordinary value). The value is
+    /// held once, where the eval's entry is built, and each of its fields
+    /// is that bound of the run, null where it is null.
+    fn run_bounds_of_value(&mut self, scope: &mut Scope, config: &Expr) -> String {
+        let program = self.program;
+        let Type::Named {
+            module,
+            declaration,
+            kind: NamedKind::Struct,
+            ..
+        } = &config.ty
+        else {
+            return self.missing(config.at, "this configuration of a run");
+        };
+        let declared = &program.modules[*module].declarations[*declaration];
+        let core = Some(*module) == program.core();
+        let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
+            return self.missing(config.at, "this configuration of a run");
+        };
+        if !core || declared.name != "RunConfig" || declared.kind != DeclarationKind::Struct {
+            return self.missing(config.at, "this configuration of a run");
+        }
+        let Some(ty) = self.written_type(&config.ty, config.at) else {
+            return "{}".to_string();
+        };
+        let written = self.expression(scope, config);
+        let held = names::temporary("config", self.temporary());
+        let mut given = Vec::new();
+        for field in BOUNDS {
+            let Some(member) = read.members.iter().position(|member| member.name == field) else {
+                return self.missing(config.at, "this configuration of a run");
+            };
+            let Some(place) = self.field_place(&config.ty, held.clone(), member) else {
+                return self.missing(config.at, "this configuration of a run");
+            };
+            given.push(format!(".{field} = {place}"));
+        }
+        format!(
+            "[&] {{ const {ty} {held} = {written}; return {}{{{}}}; }}()",
+            names::testing("Bounds"),
+            given.join(", ")
+        )
     }
 }

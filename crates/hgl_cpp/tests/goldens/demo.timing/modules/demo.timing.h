@@ -2,13 +2,18 @@
 #pragma once
 
 #include <hglrt/hglrt.h>
+#include "core.types.h"
 
 // Names this file writes, which no macro of a header above takes.
+#undef RunConfig
 #undef absolute_yields
 #undef alarm_or_input
 #undef alarmed
+#undef at
 #undef cancel_next
 #undef cause_of_wake
+#undef config
+#undef core
 #undef counter
 #undef counting_from
 #undef delay
@@ -20,6 +25,7 @@
 #undef finish_or_resume
 #undef first
 #undef limit
+#undef opening_at
 #undef pending
 #undef repeated
 #undef scheduled_on_input
@@ -28,6 +34,7 @@
 #undef time_before_each_delay
 #undef times
 #undef timing
+#undef valid_start
 #undef value
 #undef wake_after
 #undef wake_in_the_past
@@ -113,27 +120,33 @@ namespace w_
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> absolute_yields(::hgraph::Wiring& wiring_, ::hgraph::DateTime first, ::hgraph::DateTime second);
 }  // namespace w_
 
+// opening_at(at: datetime) -> RunConfig (`const fn`), module demo.timing, line 144
+::hgl::core::m_::RunConfig opening_at(::hgraph::DateTime at);
+
+// valid_start(config: RunConfig) -> bool (`const fn`), module demo.timing, line 147
+::hgraph::Bool valid_start(const ::hgl::core::m_::RunConfig& config);
+
 namespace w_
 {
-// finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 144
+// finish_or_resume(const finish_early: bool) -> i64 (source), module demo.timing, line 150
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> finish_or_resume(::hgraph::Wiring& wiring_, ::hgraph::Bool finish_early);
 }  // namespace w_
 
 namespace w_
 {
-// counter(const limit: i64) -> i64 (source), module demo.timing, line 155
+// counter(const limit: i64) -> i64 (source), module demo.timing, line 161
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counter(::hgraph::Wiring& wiring_, ::hgraph::Int limit);
 }  // namespace w_
 
 namespace w_
 {
-// counting_from(const first: i64) -> i64 (source), module demo.timing, line 166
+// counting_from(const first: i64) -> i64 (source), module demo.timing, line 172
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counting_from(::hgraph::Wiring& wiring_, ::hgraph::Int first);
 }  // namespace w_
 
 namespace w_::i_::repeated
 {
-// repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 176
+// repeated(const value: i64, const times: i64) -> i64 (source), the instance `i64`, module demo.timing, line 182
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> of_i64(::hgraph::Wiring& wiring_, ::hgraph::Int value, ::hgraph::Int times);
 }  // namespace w_::i_::repeated
 

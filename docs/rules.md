@@ -156,9 +156,8 @@ loop's body the store or an ordinary value that may fail (FN-9: hgraph
 builds each child as the graph around it is built), a `return` under a
 branch selected at runtime in a loop unrolled where the graph is built,
 branches that assign two `var`s (CTRL-14), a `capture` given an `f64`
-configuration (ERR-7, hgraph issue 1866), a lifted call that leaves out a
-`T?` whose default may fail (FN-6), and an eval's or an application's
-configuration that is no `RunConfig(...)` written in it (RUN-1). A call
+configuration (ERR-7, hgraph issue 1866), and a lifted call that leaves out a
+`T?` whose default may fail (FN-6). A call
 of a function with a pack, core's `all_` and `any_`, has no callee the
 analyser reads.
 

@@ -13,6 +13,7 @@ use super::arguments::{Slot, Takes};
 use super::fit::{not_null, open};
 use super::inference::{Inferred, Places, asked_of_result, infer, mentions, placed};
 use super::node::RefRead;
+use super::sizes;
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Callee, EndpointOperation, ExprKind, Form, Hook};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
@@ -832,10 +833,20 @@ impl<'a> Typer<'a> {
         let ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
             placed(substitute_within(result, &map), &own)
         });
+        let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
+        // TYPE-10, TYPE-11: the sizes the callee's parameters and result
+        // have with what was resolved, `sized<-1>(xs)` giving a
+        // `list<i64, N>` a size of -1.
+        sizes::call_sizes(
+            program,
+            (at, name.text()),
+            signature,
+            (&own, &resolved),
+            self.diagnostics,
+        );
         // GEN-3: the callee's `requires` holds with what was resolved.
         // Not where something else was reported of the call (ERR-9).
         if judged && unresolved.is_empty() {
-            let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
             self.requires_met(at, (module, declaration), &resolved);
         }
         let requirements = self.answers(module, declaration, &resolved);
