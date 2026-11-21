@@ -156,7 +156,9 @@ impl<'a> Typer<'a> {
 
     /// SOURCE-2: "A duration is relative to current evaluation time; a
     /// datetime is absolute." Either type is taken, reading a result
-    /// or nullable's payload as that type (ERR-12, ERR-15).
+    /// or nullable's payload as that type (ERR-12, ERR-15). A generic
+    /// time keeps its type for the instance where its requirement
+    /// admits only those types (GEN-7).
     fn yield_time(&mut self, node: &SyntaxNode) -> Expr {
         let time = self.expression(node, None);
         if let Some(taken) = [Scalar::Duration, Scalar::Datetime]
@@ -164,6 +166,15 @@ impl<'a> Typer<'a> {
             .find_map(|scalar| self.taken(&Type::Scalar(scalar), &time.ty))
         {
             return self.take(time, taken);
+        }
+        if let Type::Parameter { at, .. } = &time.ty
+            && let Some(types) = self.yield_time_types(*at)
+            && !types.is_empty()
+            && types
+                .iter()
+                .all(|ty| matches!(ty, Type::Scalar(Scalar::Duration | Scalar::Datetime)))
+        {
+            return time;
         }
         if whole(&time.ty)
             && !open(&time.ty)

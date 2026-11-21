@@ -211,11 +211,13 @@ transpiler: partial
 analyser: done
 
 - A `yield` time is a `duration` or `datetime` (`yield.time_type` for other types). A nullable or fallible time is read as its payload (ERR-12, ERR-15). Any failure is raised in the source (ERR-5).
+- Agreed. A time of a generic type is admitted when its declared type bounds prove it can only be `duration` or `datetime`, for example `T == duration` or `T in {duration, datetime}` (GEN-7). Positive conjunctions intersect known bounds. In a disjunction, every branch must provide a bound. The typed body retains the time's generic type for each instance.
 
 transpiler: done
 
 - Evaluates each yield's time and payload once in order, then resolves relative or
-  absolute time and validates it.
+  absolute time and validates it. Each generic instance uses the relative or
+  absolute form selected by its actual time type.
 
 ## SOURCE-3
 
