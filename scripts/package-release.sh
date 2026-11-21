@@ -68,7 +68,7 @@ build_dependency simdjson https://github.com/simdjson/simdjson.git "v$SIMDJSON_V
     -DSIMDJSON_DEVELOPER_MODE=OFF
 # Keep only headers, dylibs and CMake packages from the native dependencies.
 rm -rf -- "$deps/lib/pkgconfig" "$deps/share"
-HGL_HGRAPH_DEPS=$deps HGL_HGRAPH_INSTALL_RPATH=@loader_path/../../hgraph-deps/lib \
+TMPDIR=$work HGL_HGRAPH_DEPS=$deps HGL_HGRAPH_INSTALL_RPATH=@loader_path/../../hgraph-deps/lib \
     HGL_BUILD_JOBS=$jobs scripts/provision-hgraph-sdk.sh "$hgraph_tag" "$sdk"
 sed 's|^dependencies=.*|dependencies=../hgraph-deps|' "$sdk/hgl-sdk.txt" >"$work/sdk-stamp"
 mv -- "$work/sdk-stamp" "$sdk/hgl-sdk.txt"

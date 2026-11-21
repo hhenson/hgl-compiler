@@ -1,0 +1,116 @@
+name: macOS release bundle
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MACOSX_DEPLOYMENT_TARGET: '26.0'
+  CXX: /usr/bin/clang++
+
+jobs:
+  bundle:
+    runs-on: ${{ fromJSON(vars.HGL_SELF_HOSTED_MACOS == 'true' && '["self-hosted","macOS","ARM64","hgl-release"]' || '["macos-26"]') }}
+    steps:
+      - name: Mask local paths
+        run: &mask-paths |
+          for path in "$HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "${TMPDIR:-}"; do
+            if [[ -d $path ]]; then
+              printf '::add-mask::%s\n' "$path" "$(cd -- "$path" && pwd -P)"
+            fi
+          done
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          CARGO_HOME: ${{ github.workspace }}/target/release-cargo
+          RUSTUP_HOME: ${{ runner.tool_cache }}/hgl-release-rustup
+        run: scripts/package-release.sh target/release-bundles "$RELEASE_TAG"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hgl-macos-arm64
+          path: target/release-bundles/*
+          if-no-files-found: error
+          overwrite: true
+
+  verify:
+    needs: bundle
+    runs-on: ${{ fromJSON(vars.HGL_SELF_HOSTED_MACOS == 'true' && '["self-hosted","macOS","ARM64","hgl-release"]' || '["macos-26"]') }}
+    steps:
+      - name: Mask local paths
+        run: *mask-paths
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: hgl-macos-arm64
+          path: ${{ runner.temp }}/artifact
+      - shell: bash
+        run: |
+          version=$(python3 scripts/release-bundle.py version)
+          name=hgl-$version-macos-arm64
+          scratch=$(mktemp -d "$RUNNER_TEMP/hgl-verify.XXXXXX")
+          trap 'rm -rf -- "$scratch"' EXIT
+          extracted="$scratch/unpacked release"
+          mkdir -p "$extracted"
+          (
+            cd "$RUNNER_TEMP/artifact"
+            shasum -a 256 -c "$name.tar.gz.sha256"
+            tar -xzf "$name.tar.gz" -C "$extracted"
+          )
+          bundle="$extracted/$name"
+          python3 scripts/release-bundle.py verify "$bundle"
+          ln -s "$bundle/bin/hgl" "$extracted/hgl"
+          unset HGL_HGRAPH_SDK HGL_HGRAPH_DEPS HGL_CPP_FLAGS DYLD_LIBRARY_PATH
+          export HGL_NATIVE_CACHE="$scratch/native"
+          hgl="$extracted/hgl"
+          test "$("$hgl" --version)" = "hgl $version (hgraph $(cat HGRAPH_TAG))"
+          fixtures=crates/hgl_cpp/tests/fixtures
+          "$hgl" check "$fixtures/demo.apps.hgl"
+          tests=$("$hgl" test "$fixtures/demo.apps.hgl" --target cpp)
+          printf '%s\n' "$tests"
+          grep -x 'executable cases: 1 passed, 0 failed, 0 not run' <<<"$tests"
+          app=$("$hgl" run "$fixtures/demo.apps.hgl" "$fixtures/demo.apps.backtest.hgl")
+          printf '%s\n' "$app"
+          grep -x 'ran demo.apps.backtest on cpp: 2 publications' <<<"$app"
+
+  hosted-check:
+    needs: bundle
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: hgl-macos-arm64
+      - shell: bash
+        run: |
+          version=$(python3 scripts/release-bundle.py version)
+          name=hgl-$version-macos-arm64
+          shasum -a 256 -c "$name.tar.gz.sha256"
+          tar -xzf "$name.tar.gz"
+          hgl="$name/bin/hgl"
+          test "$("$hgl" --version)" = "hgl $version (hgraph $(cat HGRAPH_TAG))"
+          "$hgl" check crates/hgl_cpp/tests/fixtures/demo.apps.hgl
+
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [verify, hosted-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: hgl-macos-arm64
+          path: ${{ runner.temp }}/artifact
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          assets="$RUNNER_TEMP/artifact"
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+            "$assets"/*.tar.gz "$assets"/*.tar.gz.sha256

@@ -11,6 +11,7 @@ from urllib.request import urlopen
 
 TARGET = "aarch64-apple-darwin"
 NOTICE = re.compile(r"^(?:copying|license|notice|unlicense)", re.IGNORECASE)
+SYSTEM_LIBRARIES = ("/usr/lib/", "/System/Library/")
 
 
 def command(*args):
@@ -86,15 +87,22 @@ def verify(bundle, forbidden):
     for prefix in ("libhgraph_runtime", "libhgraph_wiring", "libfmt", "libspdlog", "libsimdjson"):
         if not any(name.startswith(prefix) for name in names):
             raise ValueError(f"missing {prefix} dylib")
-    if any(not lib.name.startswith(("libfmt.", "libspdlog.", "libsimdjson."))
-           for lib in deps.glob("lib/*.dylib")):
-        raise ValueError("unexpected dependency dylib")
     if sorted(p.name for p in deps.iterdir()) != ["include", "lib"]:
         raise ValueError("unexpected dependency prefix contents")
+    for file in (deps / "lib").iterdir():
+        if file.name != "cmake" and not re.fullmatch(
+            r"lib(?:fmt|spdlog|simdjson)(?:\.[0-9]+)*\.dylib", file.name,
+        ):
+            raise ValueError(f"unexpected dependency library: {file.name}")
 
-    prefixes = {str(candidate).encode() for path in forbidden for candidate in (path, path.resolve())
-                if str(candidate) not in ("", "/")}
+    prefixes = {
+        str(candidate).encode()
+        for path in forbidden
+        for candidate in (path, path.resolve())
+        if str(candidate) not in ("", "/")
+    }
     scratch_path = re.compile(rb"(?:/private)?/var/folders/[^\s\x00]+|/Users/[^\s\x00]+")
+    cmake_path = re.compile(rb'(?<=[="; \t\n])(/[a-zA-Z0-9_][^"\s;)]*/[^"\s;)]*)')
     for path in bundle.rglob("*"):
         if path.is_symlink():
             if path.readlink().is_absolute() or not path.resolve(strict=True).is_relative_to(bundle):
@@ -104,6 +112,10 @@ def verify(bundle, forbidden):
             data = path.read_bytes()
             if any(prefix in data for prefix in prefixes) or scratch_path.search(data):
                 raise ValueError(f"build path in {path.relative_to(bundle)}")
+            if path.suffix == ".cmake":
+                for absolute in cmake_path.findall(data):
+                    if not absolute.decode().startswith(SYSTEM_LIBRARIES):
+                        raise ValueError(f"external path in {path.relative_to(bundle)}")
 
     for binary in {bin_file, *(lib.resolve(strict=True) for lib in libraries)}:
         if command("lipo", "-archs", binary).strip() != "arm64":
@@ -115,12 +127,16 @@ def verify(bundle, forbidden):
 def verify_load_paths(bundle, binary, names):
     """Each Mach-O name or run path must resolve within the bundle or macOS."""
     load_paths = command("otool", "-l", binary)
+    for minimum in re.findall(r"^\s+minos ([0-9.]+)$", load_paths, re.MULTILINE):
+        major, minor, *_ = (int(part) for part in minimum.split("."))
+        if (major, minor) > (26, 0):
+            raise ValueError(f"{binary.relative_to(bundle)} requires macOS {minimum}")
     for path in re.findall(r"^\s+(?:name|path) (.+) \(offset \d+\)$", load_paths, re.MULTILINE):
-        if path.startswith(("/usr/lib/", "/System/Library/")):
+        if path.startswith(SYSTEM_LIBRARIES):
             continue
         if path.startswith("@rpath/") and path.removeprefix("@rpath/") in names:
             continue
-        parent, slash, relative = path.partition("/")
+        parent, _, relative = path.partition("/")
         if parent in ("@loader_path", "@executable_path"):
             base = binary.parent if parent == "@loader_path" else bundle / "bin"
             if (base / relative).resolve().is_relative_to(bundle):

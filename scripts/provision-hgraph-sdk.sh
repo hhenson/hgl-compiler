@@ -243,8 +243,7 @@ main() {
     printf 'tag=%s\ncommit=%s\n%s\ncompiler=%s\ndependencies=%s\n' "$tag" "$commit" "$CONFIGURATION" "$compiler" \
         "$deps" >"$stamp"
     if [[ -n ${HGL_HGRAPH_INSTALL_RPATH:-} ]]; then
-        printf 'install-rpath=%s
-' "$HGL_HGRAPH_INSTALL_RPATH" >>"$stamp"
+        printf 'install-rpath=%s\n' "$HGL_HGRAPH_INSTALL_RPATH" >>"$stamp"
     fi
     say "installed hgraph $tag's SDK into $dir in $((SECONDS - started)) s"
 }

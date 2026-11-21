@@ -299,6 +299,48 @@ fn with_no_sdk_named_the_tests_are_not_run_and_it_is_said() {
     );
 }
 
+/// A bundled SDK and its dependencies are found through a symlink to
+/// the binary. An explicit prefix overrides the matching bundle path.
+#[cfg(unix)]
+#[test]
+fn release_prefixes_follow_the_real_executable() {
+    let root = scratch("release_prefixes");
+    let file = write(&root, "flags.hgl", FLAGS);
+    let bundle = root.join("bundle");
+    let hgl = bundle.join("bin/hgl");
+    fs::create_dir_all(hgl.parent().unwrap()).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_hgl"), &hgl).unwrap();
+    let linked = root.join("hgl");
+    std::os::unix::fs::symlink(&hgl, &linked).unwrap();
+    let sdk = bundle.join("libexec/hgraph-sdk/lib/cmake/hgraph");
+    fs::create_dir_all(&sdk).unwrap();
+    fs::write(sdk.join("hgraphConfig.cmake"), "").unwrap();
+    let deps = bundle.join("libexec/hgraph-deps");
+    fs::create_dir_all(deps.join("include")).unwrap();
+    fs::create_dir_all(deps.join("lib")).unwrap();
+
+    let from_bundle = |sdk_override: Option<&Path>| {
+        let mut hgl = Command::new(&linked);
+        hgl.args(["test", &file, "--target", "cpp", "--test", "holds"])
+            .env("CXX", "true")
+            .env_remove("HGL_HGRAPH_SDK")
+            .env_remove("HGL_HGRAPH_DEPS");
+        if let Some(sdk_override) = sdk_override {
+            hgl.env("HGL_HGRAPH_SDK", sdk_override);
+        }
+        hgl.output().expect("the linked hgl runs")
+    };
+    let found_both = text(&from_bundle(None).stdout);
+    assert!(
+        found_both.contains("neither GCC nor Apple clang"),
+        "{found_both}"
+    );
+    let explicit = text(&from_bundle(Some(&root)).stdout);
+    assert!(explicit.contains("HGL_HGRAPH_SDK names"), "{explicit}");
+    let empty = text(&from_bundle(Some(Path::new(""))).stdout);
+    assert!(empty.contains("HGL_HGRAPH_SDK is empty"), "{empty}");
+}
+
 /// A compiler is known by the macros it defines, not by its name, and
 /// must be of the platform's family: one that is not says what was
 /// found and what is needed, GCC on Linux and Apple clang on macOS. The
