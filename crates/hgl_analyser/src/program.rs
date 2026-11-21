@@ -540,10 +540,9 @@ pub struct Declaration {
 }
 
 impl Declaration {
-    /// True when another module may import the declaration. Operators
-    /// remain public until UNIT-3 visibility is enforced in #364.
+    /// True when another module may import the declaration (UNIT-3).
     pub fn is_public(&self) -> bool {
-        self.exported || self.kind == DeclarationKind::Operator
+        self.exported
     }
 
     /// A temporal function named `name` that stands in for what is no

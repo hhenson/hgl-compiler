@@ -21,7 +21,7 @@ const FILES: [(&str, &str); 3] = [
             "export struct Quote<T> { bid: T }\n",
             "export enum Side { buy, sell }\n",
             "export native type Handle\n",
-            "operator add<T>(left: T, right: T) -> T\n",
+            "export operator add<T>(left: T, right: T) -> T\n",
             "impl fn add(left: i64, right: i64) -> i64 => left\n",
             "instantiate add<i64>\n",
             "native fn tick() -> i64\n",

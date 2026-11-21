@@ -39,7 +39,7 @@ fn a_program_is_found_under_its_roots_and_listed() {
         concat!(
             "module lib\n",
             "export fn shared() {}\n",
-            "operator add(left: i64, right: i64) -> i64\n",
+            "export operator add(left: i64, right: i64) -> i64\n",
         ),
     );
     // Not source: another extension, and a directory named like a file.
@@ -65,7 +65,7 @@ fn a_program_is_found_under_its_roots_and_listed() {
             "module lib\n",
             "  file {lib}\n",
             "  export temporal function shared()\n",
-            "  operator add(left: i64, right: i64) -> i64\n",
+            "  export operator add(left: i64, right: i64) -> i64\n",
             "checked 3 files in 2 modules: no errors\n",
             "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; no test is run\n",
         ),
