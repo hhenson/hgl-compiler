@@ -262,7 +262,7 @@ impl Emitter<'_> {
                         failing += usize::from(may_fail(default));
                         written
                     }
-                    Some(LeftOut::Null) => "std::nullopt".to_string(),
+                    Some(LeftOut::Null) => "::std::nullopt".to_string(),
                     None => {
                         return self.missing(
                             value.at,

@@ -37,7 +37,7 @@ namespace hgl::demo::natives::m_
 // whole(value: f64) -> i64 (`const fn`), module demo.natives, line 12
 ::hgraph::Int whole([[maybe_unused]] ::hgraph::Float value)
 {
-    return ::hglrt::convert_f64_Rounding_i64_<::hglrt::InvalidPolicy::fail>(value, ::hglrt::Rounding::half_even, std::nullopt);
+    return ::hglrt::convert_f64_Rounding_i64_<::hglrt::InvalidPolicy::fail>(value, ::hglrt::Rounding::half_even, ::std::nullopt);
 }
 
 // same(a: str, b: str) -> bool (`const fn`), module demo.natives, line 14

@@ -108,8 +108,11 @@ TEST_CASE("a scalar's publication, silence and equal publication (END-1, END-2, 
                           });
 }
 
-std::vector<Seen<std::optional<i64>>> nullable_seen;
-std::vector<std::optional<i64>> nullable_published;
+/// `delta<i64?>`: what an `i64?` endpoint published, a null among them.
+using NullableDelta = hglrt::delta_t<std::optional<i64>>;
+
+std::vector<Seen<NullableDelta>> nullable_seen;
+std::vector<NullableDelta> nullable_published;
 
 /// `fn publish_nullable(command: i64) -> i64? { when { if command == 0 {
 /// return null }; return command } }`, which reads its own result's delta
@@ -144,12 +147,12 @@ TEST_CASE("a nullable scalar's published null is its delta, and no absent one (E
         hgraph::wire<ReadNullable>(
             wiring, hgraph::wire<PublishNullable>(wiring, replayed(wiring, Dense<i64>{0, 7, 0})));
     });
-    const std::optional<i64> null;
-    CHECK(nullable_published == std::vector<std::optional<i64>>{null, 7, null});
+    const NullableDelta null{};
+    CHECK(nullable_published == std::vector<NullableDelta>{null, 7, null});
     // "a published null is `delta<i64?>()` for an `i64?` endpoint, and is no
     // absent delta"; END-6: "A publication with a null payload has a
     // timestamp".
-    CHECK(nullable_seen == std::vector<Seen<std::optional<i64>>>{
+    CHECK(nullable_seen == std::vector<Seen<NullableDelta>>{
                                {start, true, true, null, start},
                                {start + 1us, true, true, 7, start + 1us},
                                {start + 2us, true, true, null, start + 2us},

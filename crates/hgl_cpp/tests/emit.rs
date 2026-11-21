@@ -808,7 +808,7 @@ fn windows_are_written() {
         .unwrap()
         .text;
     for written in [
-        "using yielded_type_ = ::hglrt::Yielded<::hgraph::Int>;\n    using body_type_ = ::hglrt::generator<yielded_type_>;\n\n    // The body (SOURCE-1), given its configuration by value.\n    static body_type_ body_([[maybe_unused]] ::hglrt::list<std::tuple<::hgraph::DateTime, ::hgraph::Int>> items)",
+        "using yielded_type_ = ::hglrt::Yielded<::hgraph::Int>;\n    using body_type_ = ::hglrt::generator<yielded_type_>;\n\n    // The body (SOURCE-1), given its configuration by value.\n    static body_type_ body_([[maybe_unused]] ::hglrt::list<::std::tuple<::hgraph::DateTime, ::hgraph::Int>> items)",
         "[&out_](::hgraph::Int value_) { ::hglrt::window_push(out_, value_); }",
         "::hgraph::In<\"input\", ::hgraph::TSWDuration<::hgraph::Int, 3, 0>> input",
     ] {
@@ -1590,7 +1590,7 @@ fn a_lifted_calls_omitted_defaults_are_configuration() {
         "{twice}"
     );
     assert!(
-        twice.contains("::hgl::m::m_::summed(::hglrt::checked_value(a), b.value(), c.value(), std::nullopt, e.value())"),
+        twice.contains("::hgl::m::m_::summed(::hglrt::checked_value(a), b.value(), c.value(), ::std::nullopt, e.value())"),
         "{twice}"
     );
     // Each default may fail: each is held, `b` before `c`, after the
@@ -2154,9 +2154,6 @@ fn composite_forms_not_written_yet_are_reported() {
             // TYPE-14: `T?` of an `i64?` is an `i64?`, where the template's
             // field would be an optional of one.
             "m.hgl:32:15 the cpp target does not write the type `Maybe<i64?>` yet",
-            // TYPE-3: `Mark<delta<i64?>>` is no `Mark<i64?>`, which would be
-            // one C++ struct.
-            "m.hgl:33:10 the cpp target does not write the type `Mark<delta<i64?>>` yet",
             // TYPE-16: an atomic's delta is the whole value, which the
             // template, given the value the atomic holds, would not have.
             "m.hgl:34:16 the cpp target does not write the type `delta<Maybe<atomic<list<i64>>>>` yet",

@@ -474,7 +474,7 @@ impl Emitter<'_> {
                     // The labels name every value the selector can hold,
                     // so no other is reached: C++ is told so.
                     text.push_str(&format!("{inner}else\n{inner}{{\n"));
-                    text.push_str(&format!("{inner}{INDENT}std::unreachable();\n"));
+                    text.push_str(&format!("{inner}{INDENT}::std::unreachable();\n"));
                     text.push_str(&format!("{inner}}}\n"));
                 } else {
                     // CTRL-6: "An unmatched selector uses default or
@@ -598,7 +598,7 @@ impl Emitter<'_> {
                         return None;
                     };
                     let base = self.place_held(scope, base, holds)?;
-                    Some(format!("std::get<{position}>({base})"))
+                    Some(format!("::std::get<{position}>({base})"))
                 }
                 // EXPR-2: the list, then the index. Where the indices are
                 // held before the statement, the list's own place is

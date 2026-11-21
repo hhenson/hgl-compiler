@@ -15,7 +15,7 @@
 //! | `[1, 2]` as a set, `["a": 1]` | `::hglrt::set<K>{1, 2}`, `::hglrt::dict_of<K, V>({{"a", 1}})` |
 //! | `book[key]`, `book[key] = value`, `book[key] += value` | `::hglrt::entry_at(book, key)`, which fails with `value.missing_key` (ERR-6); `::hglrt::entry(book, key) = value`, which adds the key (EXPR-3); `::hglrt::entry_at(book, key) = ...` |
 //! | `for x in members`, `for k, v in book` | `for (const K& x : members)`, `for (const auto& [k, v] : book)` |
-//! | `delta<set<i64>>(added: [1])`, of a dictionary, a list, a nullable, a struct | `::hglrt::set_delta<::hgraph::Int>{...}`, `::hglrt::dict_delta`, `::hglrt::list_delta_of<L>(...)`, `std::optional`, `d_::Point{...}` |
+//! | `delta<set<i64>>(added: [1])`, of a dictionary, a list, a nullable, a struct | `::hglrt::set_delta<::hgraph::Int>{...}`, `::hglrt::dict_delta`, `::hglrt::list_delta_of<L>(...)`, `::hglrt::nullable_delta<T, D>{...}`, `d_::Point{...}` |
 //! | `Side(1)`, `Side("buy")` | `::hglrt::enum_member<Side, ::hgraph::Int>(1, {{0, Side::buy}, ...})` |
 //! | `maybe == 1` of an `i64?` | `(maybe == 1)`: an optional and a value are equal where the optional holds that value |
 //!
@@ -149,12 +149,11 @@ fn template_arguments(
 /// types of `arguments`, is the struct HGL's application is. Two cases
 /// are not, and such an application is not written yet:
 ///
-/// * An argument that holds a nullable's delta, `delta<i64?>`, which is
-///   an optional in C++ as `i64?` is, or an atomic, `atomic<list<i64>>`,
-///   which is the value it holds in C++: the two applications would be
-///   one C++ struct, though TYPE-3 tells them apart by their arguments,
-///   and an atomic's delta is the whole value (TYPE-16), which the
-///   template's would not be.
+/// * An argument that holds an atomic, `atomic<list<i64>>`, which is
+///   the value it holds in C++: the two applications would be one C++
+///   struct, though TYPE-3 tells them apart by their arguments, and an
+///   atomic's delta is the whole value (TYPE-16), which the template's
+///   would not be.
 /// * A field written `T?`, or one that holds `T` under an `atomic<...>`,
 ///   whose `T` is given a nullable, `i64?`: HGL keeps one nullable, the
 ///   field's `i64?` (TYPE-14: the suffix makes no nullable of a
@@ -184,7 +183,7 @@ fn template_keeps(
     fn erased_in_cpp(ty: &Type) -> bool {
         match ty {
             Type::Atomic(_) => true,
-            Type::Delta(of) => matches!(**of, Type::Nullable(_)) || erased_in_cpp(of),
+            Type::Delta(of) => erased_in_cpp(of),
             Type::Named { arguments, .. } => arguments.iter().any(
                 |argument| matches!(argument, GenericArgument::Type(inner) if erased_in_cpp(inner)),
             ),
@@ -349,7 +348,7 @@ fn constant_argument(program: &Program, value: &ConstantValue, generic: bool) ->
                 identifier(&member.name)
             ))
         }
-        ConstantValue::Parameter { name, .. } if generic => Some(identifier(name)),
+        ConstantValue::Parameter { name, .. } if generic => Some(names::template_parameter(name)),
         _ => None,
     }
 }
@@ -381,8 +380,8 @@ pub(super) fn composite_type(program: &Program, ty: &Type, generic: bool) -> Opt
 }
 
 /// The C++ type of `delta<of>` where it is a type of its own (TYPE-16):
-/// a set's, a dictionary's and a list's of the library, a nullable's an
-/// optional of its payload's delta, a struct's the struct's delta.
+/// a set's, a dictionary's, a list's and a nullable's of the library, a
+/// struct's the struct's delta.
 /// "In a generic declaration it stays as written until T is known": in a
 /// generic struct, `hglrt::delta_t` of the parameter.
 fn delta_type(program: &Program, of: &Type, generic: bool) -> Option<String> {
@@ -404,9 +403,12 @@ fn delta_type(program: &Program, of: &Type, generic: bool) -> Option<String> {
             cpp_type_in(program, of, generic)?
         ),
         // "A nullable's delta is an optional: it holds what was
-        // published, a null among them".
+        // published, a null among them", and a type of its own, which is
+        // no nullable: the library's, of the payload and its delta.
         Type::Nullable(payload) => format!(
-            "std::optional<{}>",
+            "::{}::nullable_delta<{}, {}>",
+            runtime::NAMESPACE,
+            cpp_type_in(program, payload, generic)?,
             cpp_type_in(program, &Type::delta((**payload).clone()), generic)?
         ),
         Type::Named {
@@ -416,15 +418,26 @@ fn delta_type(program: &Program, of: &Type, generic: bool) -> Option<String> {
             kind: NamedKind::Struct,
             ..
         } => struct_delta_type(program, (*module, *declaration), arguments, generic)?,
-        Type::Parameter { name, .. } if generic => {
-            format!("::{}::delta_t<{}>", runtime::NAMESPACE, identifier(name))
-        }
+        Type::Parameter { name, .. } if generic => format!(
+            "::{}::delta_t<{}>",
+            runtime::NAMESPACE,
+            names::template_parameter(name)
+        ),
         // A delta that is no type of its own is the type it is.
         other if Type::delta(other.clone()) != Type::Delta(Box::new(other.clone())) => {
             cpp_type_in(program, &Type::delta(other.clone()), generic)?
         }
         _ => return None,
     })
+}
+
+/// The collection an empty `[]` is where `ty` is expected: `ty`, or the
+/// collection a nullable or an atomic of it holds.
+fn collection_of(ty: &Type) -> &Type {
+    match ty {
+        Type::Nullable(inner) | Type::Atomic(inner) => collection_of(inner),
+        other => other,
+    }
 }
 
 /// True where `ty`, a dictionary's value or a list's element, is an
@@ -659,7 +672,7 @@ fn template_head(
     let mut parameters = Vec::new();
     let mut named = Vec::new();
     for generic in generics {
-        let name = identifier(&generic.name);
+        let name = names::template_parameter(&generic.name);
         let parameter = match &generic.kind {
             GenericKind::Plain | GenericKind::Type => format!("class {name}"),
             // A value written with no type is a size, or has its kind once
@@ -845,7 +858,7 @@ impl Emitter<'_> {
             definition.push_str(&aggregate(&template, &name, &members, |(_, ty, _)| ty));
             if !parents.is_empty() {
                 layout.parents += &format!(
-                    "{specialized}struct {}::parents<{qualified}>\n{{\n{INDENT}using type = std::tuple<{}>;\n}};\n",
+                    "{specialized}struct {}::parents<{qualified}>\n{{\n{INDENT}using type = ::std::tuple<{}>;\n}};\n",
                     runtime::NAMESPACE,
                     parents.join(", ")
                 );
@@ -863,14 +876,16 @@ impl Emitter<'_> {
                 .map(|(member, _, _)| format!("&{of}::{member}"))
                 .collect();
             format!(
-                "{specialized}struct {}::fields<{of}>\n{{\n{INDENT}static constexpr auto members = std::tuple{{{}}};\n}};\n",
+                "{specialized}struct {}::fields<{of}>\n{{\n{INDENT}static constexpr auto members = ::std::tuple{{{}}};\n}};\n",
                 runtime::NAMESPACE,
                 pointers.join(", ")
             )
         };
+        // Written in the global namespace, where `std` is the standard
+        // library's, and a specialization's name takes no leading `::`.
         let hash_of = |of: &str| -> String {
             format!(
-                "{specialized}struct std::hash<{of}>\n{{\n{INDENT}std::size_t operator()(const {of}& value) const {{ return ::{}::key_hash_of(value); }}\n}};\n",
+                "{specialized}struct std::hash<{of}>\n{{\n{INDENT}::std::size_t operator()(const {of}& value) const {{ return ::{}::key_hash_of(value); }}\n}};\n",
                 runtime::NAMESPACE
             )
         };
@@ -967,7 +982,7 @@ impl Emitter<'_> {
                 {
                     Given {
                         slot,
-                        text: "std::nullopt".to_string(),
+                        text: "::std::nullopt".to_string(),
                         fails: false,
                         changes: false,
                         refers: false,
@@ -1017,11 +1032,14 @@ impl Emitter<'_> {
         let empty = matches!(&default.kind, ExprKind::Sequence(entries) if entries.is_empty())
             || matches!(&default.kind, ExprKind::Pairs(entries) if entries.is_empty());
         if empty {
-            let ty = self.written_type(field_type, default.at)?;
+            // TYPE-4: "optional fields may have non-null defaults": the
+            // empty collection, which an optional field then holds, made
+            // as the collection and not as the optional.
+            let ty = self.written_type(collection_of(field_type), default.at)?;
             return Some(format!("{ty}{{}}"));
         }
         if matches!(default.kind, ExprKind::Literal(Value::Null)) {
-            return Some("std::nullopt".to_string());
+            return Some("::std::nullopt".to_string());
         }
         if !concrete && default.ty != *field_type {
             self.unsupported(default.at, "a default of a generic struct's field");
@@ -1148,8 +1166,8 @@ impl Emitter<'_> {
                     (Type::List { .. }, 1) => format!("::{ns}::removed_of({written})"),
                     (Type::List { .. }, 2) => format!("({written}).size_modified"),
                     // "the property `value`, a `delta<V>?`": the optional
-                    // the delta is.
-                    (Type::Nullable(_), 0) => format!("({written})"),
+                    // the delta holds.
+                    (Type::Nullable(_), 0) => format!("({written}).value"),
                     _ => match field {
                         Some(field) => format!("({written}).{field}"),
                         None => self.missing(value.at, "this property of a delta"),
@@ -1220,8 +1238,8 @@ impl Emitter<'_> {
                     (updated.clone(), format!("{updated}{{}}")),
                     (removed.clone(), format!("{removed}{{}}")),
                     (
-                        "std::optional<::hgraph::Int>".to_string(),
-                        "std::nullopt".to_string(),
+                        "::std::optional<::hgraph::Int>".to_string(),
+                        "::std::nullopt".to_string(),
                     ),
                 ]
             }
@@ -1238,7 +1256,7 @@ impl Emitter<'_> {
                     let Some(property) = self.written_type(&property_type(field), value.at) else {
                         return "0".to_string();
                     };
-                    properties.push((property, "std::nullopt".to_string()));
+                    properties.push((property, "::std::nullopt".to_string()));
                 }
                 properties
             }
@@ -1694,7 +1712,7 @@ impl Emitter<'_> {
                         return None;
                     };
                     let (steps, written) = self.held_place(scope, base)?;
-                    Some((steps, format!("std::get<{position}>({written})")))
+                    Some((steps, format!("::std::get<{position}>({written})")))
                 }
                 Type::List { .. } => {
                     let (mut steps, written) = self.held_place(scope, base)?;
@@ -1775,8 +1793,11 @@ where
     if !members.is_empty() {
         text.push('\n');
     }
+    // The struct named as a class, which a field of its name does not
+    // hide (UNIT-12: "A member name is not a binding and may match any
+    // name").
     text.push_str(&format!(
-        "{INDENT}friend bool operator==(const {name}&, const {name}&) = default;\n}};\n"
+        "{INDENT}friend bool operator==(const struct {name}&, const struct {name}&) = default;\n}};\n"
     ));
     text
 }
@@ -1829,10 +1850,10 @@ fn abstract_class(
          {INDENT}{INDENT}using ::{ns}::held_as<of_, S>::held_as;\n{answered}{INDENT}}};\n\n\
          {INDENT}{name}() = default;\n\
          {INDENT}template <class S>\n{INDENT}{INDENT}requires ::{ns}::inherits<S, {name}>\n\
-         {INDENT}{name}(S value) : held_{{std::make_shared<const as_<S>>(std::move(value))}}\n{INDENT}{{\n{INDENT}}}\n\n\
+         {INDENT}{name}(S value) : held_{{::std::make_shared<const as_<S>>(::std::move(value))}}\n{INDENT}{{\n{INDENT}}}\n\n\
          {read}\
          {INDENT}friend bool operator==(const {name}& lhs, const {name}& rhs) {{ return lhs.held_->equal_(*rhs.held_); }}\n\n\
-         {INDENT}std::shared_ptr<const of_> held_;\n}};\n"
+         {INDENT}::std::shared_ptr<const of_> held_;\n}};\n"
     )
 }
 

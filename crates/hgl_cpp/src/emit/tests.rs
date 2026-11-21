@@ -406,7 +406,7 @@ impl Emitter<'_> {
             for Cell { value: cell, .. } in cells {
                 written_cells.push(match cell {
                     Some(cell) => self.trace_cell(scope, ty, cell),
-                    None => "std::nullopt".to_string(),
+                    None => "::std::nullopt".to_string(),
                 });
             }
             return format!(

@@ -94,18 +94,18 @@ struct endpoint_read<hgraph::TS<T>> {
 /// type gives it, which holds the value published or the null: a published
 /// null is `delta<i64?>()` for an `i64?` endpoint, and is no absent
 /// delta"): hgraph's `TS<Optional<T>>`, whose published null is a value
-/// that holds nothing.
+/// that holds nothing. Its delta is the nullable's (`nullable_delta`).
 template <class T>
 struct endpoint_read<hgraph::TS<hgraph::Optional<T>>> {
-    using delta_type = std::optional<T>;
+    using delta_type = delta_t<std::optional<T>>;
 
     template <class E>
-    static std::optional<T> delta(const E& endpoint) {
+    static delta_type delta(const E& endpoint) {
         const hgraph::OptionalView held = endpoint.value().as_optional();
         if (!held.has_value()) {
-            return std::nullopt;
+            return delta_type{};
         }
-        return held.value().template checked_as<T>();
+        return delta_type{held.value().template checked_as<T>()};
     }
 };
 

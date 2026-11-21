@@ -376,7 +376,7 @@ impl Emitter<'_> {
         );
         let kept = format!(
             "{two}// What the body reaches, where it does not move.\n\
-             {two}std::unique_ptr<slot_type_> {SLOT}{{}};\n"
+             {two}::std::unique_ptr<slot_type_> {SLOT}{{}};\n"
         );
         // `start` (TIME-5, TIME-6): the slot, the first value of each
         // `state` and `cache`, then the body, which runs nothing until it
@@ -406,7 +406,7 @@ impl Emitter<'_> {
             &mut start_parameters,
         )?;
         let mut start_before =
-            format!("{two}kept_.{SLOT} = std::make_unique<slot_type_>();\n{kept_bound}{made}");
+            format!("{two}kept_.{SLOT} = ::std::make_unique<slot_type_>();\n{kept_bound}{made}");
         let mut start_after = String::new();
         let mut context = Context::new(Kind::Hook(Hook::Start), body.locals.len());
         for role in context.roles.iter_mut().take(signature.parameters.len()) {

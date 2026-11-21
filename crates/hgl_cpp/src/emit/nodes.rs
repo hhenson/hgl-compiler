@@ -945,12 +945,12 @@ pub(super) fn unique(
         .map(|(_, port)| format!("{port}.erased()"))
         .collect();
     text.push_str(&format!(
-        "{INDENT}{INDENT}const std::array<::hgraph::WiringPortRef, {}> inputs_{{{}}};\n",
+        "{INDENT}{INDENT}const ::std::array<::hgraph::WiringPortRef, {}> inputs_{{{}}};\n",
         ports.len(),
         ports.join(", ")
     ));
     let added = format!(
-        "{wiring}.add_unique_node(typeid({node}), std::move(builder_), std::span<const ::hgraph::WiringPortRef>{{inputs_}}, std::move(scalars_))"
+        "{wiring}.add_unique_node(typeid({node}), ::std::move(builder_), ::std::span<const ::hgraph::WiringPortRef>{{inputs_}}, ::std::move(scalars_))"
     );
     match schema {
         Some(schema) => text.push_str(&format!(

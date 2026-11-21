@@ -207,7 +207,7 @@ const ::hgraph::TimeDelta& step()
 }
 
 // scaled(value: i64, factor: i64 = ..., offset: i64? = ...) -> i64 (`const fn`), module demo.values, line 66
-::hgraph::Int scaled([[maybe_unused]] ::hgraph::Int value, [[maybe_unused]] ::hgraph::Int factor, [[maybe_unused]] std::optional<::hgraph::Int> offset)
+::hgraph::Int scaled([[maybe_unused]] ::hgraph::Int value, [[maybe_unused]] ::hgraph::Int factor, [[maybe_unused]] ::std::optional<::hgraph::Int> offset)
 {
     if ((!offset.has_value()))
     {
@@ -217,9 +217,9 @@ const ::hgraph::TimeDelta& step()
 }
 
 // swapped(pair: tuple<i64, str>) -> tuple<str, i64> (`const fn`), module demo.values, line 77
-std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tuple<::hgraph::Int, ::hgraph::Str>& pair)
+::std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const ::std::tuple<::hgraph::Int, ::hgraph::Str>& pair)
 {
-    return std::tuple<::hgraph::Str, ::hgraph::Int>{std::get<1>(pair), std::get<0>(pair)};
+    return ::std::tuple<::hgraph::Str, ::hgraph::Int>{::std::get<1>(pair), ::std::get<0>(pair)};
 }
 
 // checked(value: i64) -> result<i64, error> (`const fn`), module demo.values, line 80
@@ -227,7 +227,7 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tup
 {
     if (::hglrt::gt__T_T<::hgraph::Int>(value, ::hgl::demo::values::m_::limit()))
     {
-        return ::hglrt::result<::hgraph::Int>{std::unexpect, ::hglrt::make_error(::hgraph::Str{"too large"}, ::hgraph::Str{"demo.too_large"})};
+        return ::hglrt::result<::hgraph::Int>{::std::unexpect, ::hglrt::make_error(::hgraph::Str{"too large"}, ::hgraph::Str{"demo.too_large"})};
     }
     return ::hglrt::result<::hgraph::Int>{value};
 }
@@ -238,7 +238,7 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tup
     const auto propagated_00_ = ::hgl::demo::values::m_::checked(value);
     if (!propagated_00_.has_value())
     {
-        return std::unexpected(propagated_00_.error());
+        return ::std::unexpected(propagated_00_.error());
     }
     [[maybe_unused]] const ::hgraph::Int checked_value = (*propagated_00_);
     return ::hglrt::result<::hgraph::Int>{::hglrt::mul__i64_i64(checked_value, 2)};
@@ -343,7 +343,7 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tup
 }
 
 // present(a: i64?) -> bool (`const fn`), module demo.values, line 170
-::hgraph::Bool present([[maybe_unused]] std::optional<::hgraph::Int> a)
+::hgraph::Bool present([[maybe_unused]] ::std::optional<::hgraph::Int> a)
 {
     if ((!a.has_value()))
     {
@@ -379,7 +379,7 @@ std::tuple<::hgraph::Str, ::hgraph::Int> swapped([[maybe_unused]] const std::tup
 }
 
 // index_once() -> tuple<list<i64>, i64> (`const fn`), module demo.values, line 193
-std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once()
+::std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once()
 {
     [[maybe_unused]] ::hglrt::list<::hgraph::Int> items = ::hglrt::list<::hgraph::Int>{10, 20, 30};
     [[maybe_unused]] ::hgraph::Int at = 0;
@@ -389,7 +389,7 @@ std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once()
     }();
     static_cast<void>(::hglrt::item(items, index_00_));
     ::hglrt::item(items, index_00_) = [&] { const ::hgraph::Int argument_01_ = ::hglrt::item(items, index_00_); const ::hgraph::Int argument_02_ = 5; return ::hglrt::add__i64_i64(argument_01_, argument_02_); }();
-    return std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int>{items, at};
+    return ::std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int>{items, at};
 }
 
 // held_text() -> str (`const fn`), module demo.values, line 205
@@ -404,23 +404,23 @@ std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int> index_once()
 }
 
 // tuple_first() -> tuple<i64, i64> (`const fn`), module demo.values, line 216
-std::tuple<::hgraph::Int, ::hgraph::Int> tuple_first()
+::std::tuple<::hgraph::Int, ::hgraph::Int> tuple_first()
 {
     [[maybe_unused]] ::hgraph::Int x = 1;
-    return [&]() -> std::tuple<::hgraph::Int, ::hgraph::Int> { const ::hgraph::Int entry_00_ = x; const ::hgraph::Int entry_01_ = [&]() -> ::hgraph::Int {
+    return [&]() -> ::std::tuple<::hgraph::Int, ::hgraph::Int> { const ::hgraph::Int entry_00_ = x; const ::hgraph::Int entry_01_ = [&]() -> ::hgraph::Int {
     x = 2;
     return 0;
-}(); return std::tuple<::hgraph::Int, ::hgraph::Int>{entry_00_, entry_01_}; }();
+}(); return ::std::tuple<::hgraph::Int, ::hgraph::Int>{entry_00_, entry_01_}; }();
 }
 
 // text_first() -> tuple<str, i64> (`const fn`), module demo.values, line 224
-std::tuple<::hgraph::Str, ::hgraph::Int> text_first()
+::std::tuple<::hgraph::Str, ::hgraph::Int> text_first()
 {
     [[maybe_unused]] ::hglrt::list<::hgraph::Str> words = ::hglrt::list<::hgraph::Str>{::hgraph::Str{"before"}};
-    return [&]() -> std::tuple<::hgraph::Str, ::hgraph::Int> { const ::hgraph::Str entry_00_ = ::hglrt::item(words, 0); const ::hgraph::Int entry_01_ = [&]() -> ::hgraph::Int {
+    return [&]() -> ::std::tuple<::hgraph::Str, ::hgraph::Int> { const ::hgraph::Str entry_00_ = ::hglrt::item(words, 0); const ::hgraph::Int entry_01_ = [&]() -> ::hgraph::Int {
     words = ::hglrt::list<::hgraph::Str>{::hgraph::Str{"after"}, ::hgraph::Str{"more"}};
     return 0;
-}(); return std::tuple<::hgraph::Str, ::hgraph::Int>{entry_00_, entry_01_}; }();
+}(); return ::std::tuple<::hgraph::Str, ::hgraph::Int>{entry_00_, entry_01_}; }();
 }
 
 // from_a_made_row(one: i64) -> i64 (`const fn`), module demo.values, line 234
@@ -604,9 +604,9 @@ void loops_run()
 void defaults_and_nulls()
 {
     ::hglrt::testing::statement();
-    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::scaled(3, 2, std::nullopt), 6, 0.0, 0.0));
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::scaled(3, 2, ::std::nullopt), 6, 0.0, 0.0));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::scaled(3, 3, std::nullopt), 9, 0.0, 0.0));
+    ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::scaled(3, 3, ::std::nullopt), 9, 0.0, 0.0));
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::scaled(3, 2, 1), 7, 0.0, 0.0));
 }
@@ -622,7 +622,7 @@ void generics_by_instance()
 void tuples_and_constants()
 {
     ::hglrt::testing::statement();
-    ::hglrt::testing::check(::hglrt::eq__T_T<std::tuple<::hgraph::Str, ::hgraph::Int>>(::hgl::demo::values::m_::swapped(std::tuple<::hgraph::Int, ::hgraph::Str>{1, ::hgraph::Str{"one"}}), std::tuple<::hgraph::Str, ::hgraph::Int>{::hgraph::Str{"one"}, 1}));
+    ::hglrt::testing::check(::hglrt::eq__T_T<::std::tuple<::hgraph::Str, ::hgraph::Int>>(::hgl::demo::values::m_::swapped(::std::tuple<::hgraph::Int, ::hgraph::Str>{1, ::hgraph::Str{"one"}}), ::std::tuple<::hgraph::Str, ::hgraph::Int>{::hgraph::Str{"one"}, 1}));
     ::hglrt::testing::statement();
     ::hglrt::testing::check((::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::limit(), 10, 0.0, 0.0) && ::hglrt::eq__T_T<::hgraph::TimeDelta>(::hgl::demo::values::m_::step(), ::hgraph::TimeDelta{5000000})));
 }
@@ -630,7 +630,7 @@ void tuples_and_constants()
 void null_tests_of_any_value()
 {
     ::hglrt::testing::statement();
-    ::hglrt::testing::check((::hgl::demo::values::m_::present(3) && (!::hgl::demo::values::m_::present(std::nullopt))));
+    ::hglrt::testing::check((::hgl::demo::values::m_::present(3) && (!::hgl::demo::values::m_::present(::std::nullopt))));
     ::hglrt::testing::statement();
     ::hglrt::testing::check((!::hgl::demo::values::m_::never_null(1)));
     ::hglrt::testing::statement();
@@ -672,13 +672,13 @@ void evaluation_follows_the_order_written()
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::list<::hglrt::list<::hgraph::Int>>>(::hgl::demo::values::m_::indices_in_order(), ::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{5, 2}, ::hglrt::list<::hgraph::Int>{3, 4}}));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check(::hglrt::eq__T_T<std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int>>(::hgl::demo::values::m_::index_once(), std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int>{::hglrt::list<::hgraph::Int>{10, 25, 30}, 1}));
+    ::hglrt::testing::check(::hglrt::eq__T_T<::std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int>>(::hgl::demo::values::m_::index_once(), ::std::tuple<::hglrt::list<::hgraph::Int>, ::hgraph::Int>{::hglrt::list<::hgraph::Int>{10, 25, 30}, 1}));
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hgraph::Str>(::hgl::demo::values::m_::held_text(), ::hgraph::Str{"text"}));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check(::hglrt::eq__T_T<std::tuple<::hgraph::Int, ::hgraph::Int>>(::hgl::demo::values::m_::tuple_first(), std::tuple<::hgraph::Int, ::hgraph::Int>{1, 0}));
+    ::hglrt::testing::check(::hglrt::eq__T_T<::std::tuple<::hgraph::Int, ::hgraph::Int>>(::hgl::demo::values::m_::tuple_first(), ::std::tuple<::hgraph::Int, ::hgraph::Int>{1, 0}));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check(::hglrt::eq__T_T<std::tuple<::hgraph::Str, ::hgraph::Int>>(::hgl::demo::values::m_::text_first(), std::tuple<::hgraph::Str, ::hgraph::Int>{::hgraph::Str{"before"}, 0}));
+    ::hglrt::testing::check(::hglrt::eq__T_T<::std::tuple<::hgraph::Str, ::hgraph::Int>>(::hgl::demo::values::m_::text_first(), ::std::tuple<::hgraph::Str, ::hgraph::Int>{::hgraph::Str{"before"}, 0}));
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::values::m_::from_a_made_row(1), 7, 0.0, 0.0));
     ::hglrt::testing::statement();

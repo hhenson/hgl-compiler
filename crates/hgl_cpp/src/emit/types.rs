@@ -61,14 +61,14 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
         // its delta is itself.
         Type::Delta(inner) if matches!(**inner, Type::Scalar(_)) => cpp_type(program, inner)?,
         Type::Nullable(inner) => {
-            format!("std::optional<{}>", cpp_type_in(program, inner, generic)?)
+            format!("::std::optional<{}>", cpp_type_in(program, inner, generic)?)
         }
         Type::Tuple(positions) => {
             let positions: Option<Vec<String>> = positions
                 .iter()
                 .map(|position| cpp_type_in(program, position, generic))
                 .collect();
-            format!("std::tuple<{}>", positions?.join(", "))
+            format!("::std::tuple<{}>", positions?.join(", "))
         }
         Type::List {
             element,
@@ -85,15 +85,15 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
         } => match &size.value {
             ConstantValue::Int(count) if *count > 0 => {
                 format!(
-                    "std::array<{}, {count}>",
+                    "::std::array<{}, {count}>",
                     cpp_type_in(program, element, generic)?
                 )
             }
             // The size of a generic struct's own (GEN-13).
             ConstantValue::Parameter { name, .. } if generic => format!(
-                "std::array<{}, {}>",
+                "::std::array<{}, {}>",
                 cpp_type_in(program, element, generic)?,
-                identifier(name)
+                names::template_parameter(name)
             ),
             _ => return None,
         },
@@ -108,14 +108,14 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
             cpp_type_in(program, value, generic)?
         ),
         Type::Result { value, error } => format!(
-            "std::expected<{}, {}>",
+            "::std::expected<{}, {}>",
             cpp_type_in(program, value, generic)?,
             cpp_type_in(program, error, generic)?
         ),
         Type::Set(_) | Type::Dict { .. } | Type::Delta(_) | Type::Atomic(_) => {
             composites::composite_type(program, ty, generic)?
         }
-        Type::Parameter { name, .. } if generic => identifier(name),
+        Type::Parameter { name, .. } if generic => names::template_parameter(name),
         _ => return None,
     })
 }
