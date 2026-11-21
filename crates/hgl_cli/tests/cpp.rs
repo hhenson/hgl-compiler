@@ -750,10 +750,11 @@ fn references_run_on_the_sdk() {
 
 /// The timing of nodes and sources on the SDK (`demo.timing`): nodes woken
 /// by a scheduler or an alarm, alone or with an input's tick, `scheduled()`
-/// and `modified([])` read as values, a wake dropped and one that fails
-/// (CAP-4, CAP-5, TIME-3, TIME-8, TIME-9), and sources that read their
-/// clock, keep a `cache` or a `state` and have `start` and `stop`
-/// (SOURCE-1 to SOURCE-4), and runs whose configuration is a `RunConfig`
+/// and `modified([])` read as values, a wake dropped and one that fails,
+/// an alarm's wake kept through an input's tick before it and the earliest
+/// asked for kept (CAP-4, CAP-5, TIME-3, TIME-8, TIME-9), and sources that
+/// read their clock, keep a `cache` or a `state` and have `start` and
+/// `stop` (SOURCE-1 to SOURCE-4), and runs whose configuration is a `RunConfig`
 /// value held or made elsewhere (RUN-1). Every test of it passes.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -776,7 +777,7 @@ fn timing_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 13 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

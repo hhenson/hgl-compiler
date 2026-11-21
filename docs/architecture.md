@@ -2138,7 +2138,7 @@ test --target cpp` runs over any program to its end.
 | `inject clock`, `logger`, `global_state`; a property of one (TIME-8, CAP-1) | The hook's hgraph view, a parameter of each hook that uses it, and the library's `::hglrt::Clock` made from it at the top of the hook; `clock.evaluation_time()` |
 | `get`, `has`, `put` on the store (CAP-6) | The library's natives, `::hglrt::put_GlobalState_str_V<T>(global_state, key, value)` |
 | `inject global_state` in a graph; a call on it (FN-9) | `const ::hglrt::GlobalState global_state{wiring_.global_state()};` in `compose`, the store of the wiring the graph is built on, which hgraph carries onto the graph it builds: each call runs once as the graph is built, in the order written, before any node starts (`apps`) |
-| `inject scheduler`, `inject alarm`; `schedule`, `un_schedule`, `reset` (TIME-8, CAP-4, CAP-5) | The hook's `::hgraph::NodeScheduler` or `::hgraph::SingleShotScheduler`, and the library's `::hglrt::Scheduler` or `::hglrt::Alarm` made from it with the hook it is made in, `::hglrt::Hook::evaluation`, in every `eval`; the library's natives (`emit/scheduling.rs`) |
+| `inject scheduler`, `inject alarm`; `schedule`, `un_schedule`, `reset` (TIME-8, CAP-4, CAP-5) | The hook's `::hgraph::NodeScheduler`, and the library's `::hglrt::Scheduler` or `::hglrt::Alarm` made from it with the hook it is made in, `::hglrt::Hook::evaluation`, in every `eval`; the library's natives (`emit/scheduling.rs`) |
 | What woke a node with a scheduler or an alarm (TIME-3, TIME-9) | Read as `eval` is entered: `timer_woke_`, the scheduler's `is_scheduled_now()` or, for an alarm, that no input ticked (`::hglrt::ticked`), and `input_woke_`. A handler that `scheduled()` selects or that subscribes to no input is guarded by the first, another with no `modified` selector by the second; `scheduled()` read as a `bool` is `timer_woke_`, and `modified([])` is `true` in the handler that selects it and elsewhere that no input published |
 | A source (SOURCE-1 to SOURCE-4) | A node whose static `body_` is an `::hglrt::generator` of `::hglrt::Yielded<T>`, or of `Yielded<delta<T>>` where every `yield` gives a delta that is a type of its own (TIME-7), core's `replay` of a set among them, given its `const` parameters by value; `yield t: v` is `co_yield yielded_type_{t, v};`, a bare `return` `co_return;`. `start` makes the body, held in the node's state with where it is, `eval` steps it with `::hglrt::resume`, `stop` destroys it |
 | A source's `state`, `cache`, `inject`, `start` and `stop` (SOURCE-1) | Each `state` and `cache`, and each capability the body reads, a member of a `slot_type_` that the node's state keeps on the heap and the body is given by reference; `start` makes the slot, gives each its first value, makes the body and runs its statements; `eval` lends the body each capability for the resumption (`::hglrt::Lending`); `stop` destroys the body, then runs its statements (`emit/scheduling.rs`) |
@@ -2562,7 +2562,10 @@ is pending is what is still to come and `is_scheduled_now` stays true
 after `un_schedule` or `reset` (CAP-4); a tag goes to hgraph after a mark,
 since hgraph keeps no wake under the empty tag. An evaluation with no wake
 due and no input modified is no wake: hgraph evaluates the node at a
-wake that was cancelled. The alarm is hgraph's `SingleShotScheduler`.
+wake that was cancelled. The alarm keeps its one wake, the earliest asked
+for (CAP-5), under a tag of its own in the same `NodeScheduler`, which
+arms the node for it again after an evaluation at an input's tick before
+it is due; the alarm made in an evaluation takes the wake due then.
 
 An enum is named by `hgl_enum`, found by argument-dependent lookup, which
 each of core's enums the library declares has, and which the compiler

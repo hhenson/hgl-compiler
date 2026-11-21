@@ -145,9 +145,12 @@ it counts as pending, `un_schedule()` cancels it, and `is_scheduled_now`
 is false after `reset`; and it keeps no wake under the empty tag. The
 wall-clock option is hgraph's own, as CAP-4 has it since the owner's
 ruling: in real time a wake of it already due comes in the next cycle, and
-in simulation the option changes nothing. hgraph's alarm, which the
-target's is, drops a wake still to come where an input's tick evaluates
-the node first, which CAP-5's "best effort" admits.
+in simulation the option changes nothing. The alarm keeps its one wake
+under a tag of its own in the same `NodeScheduler`, the earliest asked
+for (CAP-5: "asking again keeps the earliest"): hgraph's
+`SingleShotScheduler` only marks the node, and an evaluation at an
+input's tick before the wake takes the mark away, where the node's
+scheduler arms the node again.
 
 ## Progress and acceptance
 

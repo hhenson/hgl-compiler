@@ -8,7 +8,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | `inject scheduler`, `inject alarm` (TIME-8) | the hook's `::hgraph::NodeScheduler` or `::hgraph::SingleShotScheduler`, and the library's `::hglrt::Scheduler` or `::hglrt::Alarm` made from it at the top of the hook with the hook it is made in, `::hglrt::Hook::evaluation`; in `eval` always, whether or not the handlers name it |
+//! | `inject scheduler`, `inject alarm` (TIME-8) | the hook's `::hgraph::NodeScheduler`, and the library's `::hglrt::Scheduler` or `::hglrt::Alarm` made from it at the top of the hook with the hook it is made in, `::hglrt::Hook::evaluation`; in `eval` always, whether or not the handlers name it |
 //! | What woke the node (TIME-9) | read once, as `eval` is entered: `timer_woke_`, the scheduler's `is_scheduled_now()`, or, for an alarm, that no input ticked (`::hglrt::ticked`); `input_woke_`, that an input ticked, and is active where the node passivates one |
 //! | A handler a wake by the timer runs: `scheduled()` in its header, or no input it subscribes to (TIME-3) | guarded by `timer_woke_` |
 //! | Another handler with no `modified` selector, in a node with a timer | guarded by `input_woke_`: "Such a wake alone runs no other handler" |
@@ -22,9 +22,10 @@
 //!
 //! hgraph evaluates a node with a scheduler at a wake that was cancelled:
 //! no wake is due in that evaluation and, but where an input ticks then
-//! too, none ticked, so it runs no handler. Its alarm, which drops a wake
-//! still to come where an input's tick evaluates the node first, is best
-//! effort as CAP-5 has it (`capabilities.h`).
+//! too, none ticked, so it runs no handler. An alarm keeps its one wake in
+//! the node's scheduler too (`capabilities.h`), so that an evaluation at an
+//! input's tick before it is due takes nothing from it (CAP-5: "asking
+//! again keeps the earliest").
 
 use hgl_analyser::hir::{Body, EndpointOperation, Expr, ExprKind, Hook, Stmt};
 use hgl_analyser::{LocalKind, Signature};
@@ -126,7 +127,7 @@ impl Family for Scheduling {
 pub(super) fn capability(name: &str) -> Option<(&'static str, &'static str)> {
     Some(match Timer::of(name)? {
         Timer::Scheduler => ("::hgraph::NodeScheduler", "::hglrt::Scheduler"),
-        Timer::Alarm => ("::hgraph::SingleShotScheduler", "::hglrt::Alarm"),
+        Timer::Alarm => ("::hgraph::NodeScheduler", "::hglrt::Alarm"),
     })
 }
 
