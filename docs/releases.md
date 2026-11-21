@@ -1,36 +1,46 @@
-# macOS releases
+# Release bundles
 
-The Apple silicon bundle installs on macOS 26.0 or later. It contains
-`hgl`, the pinned hgraph C++ SDK without Arrow, fmt, spdlog, simdjson and
-their licenses. Run `bin/hgl` from the unpacked bundle or link to it from
-a directory on `PATH`. `hgl --version` prints the workspace version and
-hgraph tag.
+Each release contains `hgl`, the pinned hgraph C++ SDK without Arrow,
+fmt, spdlog, simdjson and their licenses. Run `bin/hgl` from the unpacked
+bundle or link to it from a directory on `PATH`. `hgl --version` prints
+the workspace version and hgraph tag.
 
-Building and running HGL programs with the C++ target still needs
-[Apple clang 21 or later](cpp-target.md), CMake and Ninja. The bundle
-provides the SDK and its libraries. Set `HGL_HGRAPH_SDK` or
-`HGL_HGRAPH_DEPS` to override the corresponding bundled prefix.
+| Archive suffix | Supported system | C++ compiler |
+| --- | --- | --- |
+| `macos-arm64` | Apple silicon macOS 26.0 or later | Apple clang 21 or later |
+| `linux-x86_64` | x86-64 Ubuntu 26.04 LTS, glibc 2.43 | Ubuntu's GCC 15 |
+
+Building and running HGL programs with the [C++ target](cpp-target.md)
+also requires CMake and Ninja. Set `HGL_HGRAPH_SDK` or `HGL_HGRAPH_DEPS`
+to override the corresponding bundled prefix. The Linux bundle and
+generated programs use Ubuntu's system glibc and libstdc++. Ubuntu 24.04
+ships GCC 13 and glibc 2.39, and Ubuntu 22.04 ships GCC 11 and glibc 2.35.
+Those releases are outside the Linux archive and tap support floor.
 
 ## Cut a release
 
 Set the workspace version in `Cargo.toml` and update `Cargo.lock`. A push to
-`main` builds and verifies the bundle and keeps its archive and SHA-256
-file as a workflow artifact for 30 days. When `HGL_SELF_HOSTED_MACOS` is
-true, the release runner executes the C++ target from a different
-unpack path with an empty build cache. A GitHub-hosted macOS runner
-independently runs `hgl --version` and `hgl check`. Run the **macOS release
-bundle** workflow by hand to rehearse these steps without publishing.
+`main` builds and verifies both bundles and keeps each archive and SHA-256
+file as a workflow artifact for 30 days. A fresh Ubuntu 26.04 runner
+checks the ELF files' glibc requirements against 2.43. Each platform runs
+the C++ target from a different unpack path with an empty build cache.
+When `HGL_SELF_HOSTED_MACOS` is true, the C++ verification on macOS uses
+the release runner. A GitHub-hosted macOS runner independently runs
+`hgl --version` and `hgl check`. Run **Release bundles** by hand to
+rehearse these steps without publishing.
 
 Push the bare workspace version as a tag, such as `0.1.0`. The tag run
-checks the version and publishes the original archive and checksum
-from the successful `main` run for that commit. If the main run is
-missing or its artifact has expired, the tag run builds and verifies a
-fresh bundle before publishing.
+checks the version and publishes both original archives and checksums
+from the successful `main` run for that commit. If there is no run with
+both verified artifacts available, the tag run builds and verifies both
+bundles before publishing.
 
 ## Update the Homebrew tap
 
 1. Once the compiler release is published, prepare a tap branch with the
-   formula's new version, published archive URL and archive SHA-256. Remove
+   formula's new version and each platform's published archive URL and
+   SHA-256. The Linux formula uses Ubuntu 26.04's GCC 15 and C++ runtime.
+   Remove
    the previous version's bottle stanza. Have that commit reviewed in
    [the tap PR](https://github.com/hhenson/homebrew-hgraph/pulls) and keep
    the PR open for the bottle update.
@@ -65,14 +75,17 @@ contains the SDK and its libraries.
 
 ## Build an archive locally
 
-From a clean checkout on Apple silicon with the pinned Rust toolchain,
-Apple clang 21 or later, CMake, Ninja, Git and Python 3.11 or later:
+Build from a clean checkout with the pinned Rust toolchain, CMake, Ninja,
+Git and Python 3.11 or later. On Apple silicon use Apple clang 21 or
+later. On x86-64 Ubuntu 26.04 use `gcc-15`, `g++-15` and `readelf` (from
+binutils).
 
 ```sh
 scripts/package-release.sh
 ```
 
-Before fetching sources, the script compiles and runs a C++23 probe with the configured macOS toolchain.
+Before fetching sources, the script compiles and runs a C++23 probe with
+the configured toolchain.
 
 It fetches the pinned sources, builds the SDK and `hgl`, and prints the
 path and SHA-256 of the archive in `target/release-bundles`. Pass an
@@ -83,4 +96,5 @@ version. Set `HGL_BUILD_JOBS` to limit parallel builds.
 For repeated local builds, set `HGL_RELEASE_NATIVE_CACHE` to a directory
 to keep the verified SDK, dependency prefix and native license notices.
 An unpacked release bundle can also supply that prebuilt tree. The
-workflow keeps its native and Rust caches in the runner's tool cache.
+macOS workflow job keeps its native and Rust caches in the runner's tool
+cache. Use distinct local cache directories for each build platform.
