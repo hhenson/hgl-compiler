@@ -355,3 +355,21 @@ test deferred_boolean_and_result_forms {
     assert raises("value.null") { eval deferred_payload(value: "s", success: true, ready: false) }
     assert raises("value.null") { eval deferred_payload(value: "s", success: false, ready: false) }
 }
+
+# ERR-3 and ERR-4: the tag test sees the constructed result. The error
+# needs a present message even though the code may be absent.
+fn deferred_error<T>(const value: T, const ready: bool, const coded: bool) -> i64 {
+    let message = if live_helper(value) > 0 && ready { "problem" }
+    let code = if live_helper(value) > 0 && coded { "custom" }
+    let failure = error(message: message, code: code)
+    let outcome: result<i64, error> = err(failure)
+    if is_ok(outcome) || failure.message != "problem" { return 0 }
+    if failure.code == null { return 1 }
+    return 2
+}
+
+test deferred_error_fields {
+    assert eval deferred_error(value: "s", ready: true, coded: false) == [1]
+    assert eval deferred_error(value: "s", ready: true, coded: true) == [2]
+    assert raises("value.null") { eval deferred_error(value: "s", ready: false, coded: true) }
+}

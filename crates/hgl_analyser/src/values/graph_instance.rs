@@ -13,7 +13,7 @@ use super::fit::{open, whole};
 use super::inference::type_pack;
 use super::lifting::{assignment_category, record, record_with};
 use super::members::{index_collection, index_operand, indexed_payload};
-use super::results::tagged_side;
+use super::results::{error_fields, tagged_side};
 use super::statements::{child_loop_return, child_loop_write, place_assignment_category};
 use super::{BOOL, Selected, Tables, Typer};
 use crate::declared::substitute_within;
@@ -201,6 +201,26 @@ impl GraphDestinations {
             }) => {
                 let (side, place) = tagged_side(*success, value, error);
                 (payload.as_mut(), side.clone(), place, false)
+            }
+            NodeMut::Expression(Expr {
+                kind: ExprKind::Error { message, code },
+                ..
+            }) => {
+                let [(text, message_place), (optional, code_place)] = error_fields();
+                self.fit(typer, message, &text, message_place, false);
+                if let Some(code) = code {
+                    self.fit(typer, code, &optional, code_place, false);
+                }
+                return;
+            }
+            NodeMut::Expression(Expr {
+                kind: ExprKind::TagTest { success, value },
+                ..
+            }) => {
+                if self.known(value) {
+                    typer.check_tag_test(*success, value);
+                }
+                return;
             }
             NodeMut::Expression(Expr {
                 kind:

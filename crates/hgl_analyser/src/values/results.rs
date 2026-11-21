@@ -14,6 +14,14 @@ use crate::syntax::{child, name_token, tokens};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error};
 
+/// ERR-4: the required message and the optional code of a new error.
+pub(super) fn error_fields() -> [(Type, &'static str); 2] {
+    [
+        (Type::Scalar(Scalar::Str), "the message of an error"),
+        (nullable(Type::Scalar(Scalar::Str)), "the code of an error"),
+    ]
+}
+
 /// ERR-2: `ok` fits its value to the success type and `err` to the failure type.
 pub(super) fn tagged_side<'a>(
     success: bool,
@@ -173,24 +181,29 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, BOOL);
         };
         let value = self.expression(&argument, None);
-        if !matches!(value.ty, Type::Result { .. }) && whole(&value.ty) && !open(&value.ty) {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::TYPE_MISMATCH,
-                value.at,
-                format!(
-                    "`{}` tests a `result<T, E>`, and this is `{}`",
-                    name.text(),
-                    value.ty
-                ),
-                "ERR-3",
-            ));
-        }
+        self.check_tag_test(success, &value);
         let kind = ExprKind::TagTest {
             success,
             value: Box::new(value),
         };
         (kind, BOOL)
+    }
+
+    /// ERR-3: a tag test takes a result itself, before any implicit read.
+    pub(super) fn check_tag_test(&mut self, success: bool, value: &Expr) {
+        if !matches!(value.ty, Type::Result { .. }) && whole(&value.ty) && !open(&value.ty) {
+            let name = if success { "is_ok" } else { "is_err" };
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                value.at,
+                format!(
+                    "`{name}` tests a `result<T, E>`, and this is `{}`",
+                    value.ty
+                ),
+                "ERR-3",
+            ));
+        }
     }
 
     /// `binding.value` or `binding.error` (ERR-3): "`binding.value` is
@@ -343,8 +356,7 @@ impl<'a> Typer<'a> {
         if word.kind() != SyntaxKind::KwError {
             return self.unread_call(&list);
         }
-        let text = Type::Scalar(Scalar::Str);
-        let optional = nullable(Type::Scalar(Scalar::Str));
+        let [(text, message_place), (optional, code_place)] = error_fields();
         let mut message: Option<Expr> = None;
         let mut code: Option<Expr> = None;
         for (label, value) in arguments_of(&list) {
@@ -361,8 +373,8 @@ impl<'a> Typer<'a> {
                 continue;
             };
             let (slot, ty, what) = match label.text() {
-                "message" => (&mut message, &text, "the message of an error"),
-                "code" => (&mut code, &optional, "the code of an error"),
+                "message" => (&mut message, &text, message_place),
+                "code" => (&mut code, &optional, code_place),
                 other => {
                     self.diagnostics.emit(error(
                         Category::Name,

@@ -1819,6 +1819,102 @@ fn graph_instances_fit_settled_result_payloads() {
     }
 }
 
+/// GEN-7 and ERR-4: the constructor reads a required message and keeps
+/// an optional code. Both inputs must fit after instance selection.
+#[test]
+fn graph_instances_fit_settled_error_fields() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn text<T>(const input: T) -> error {\n",
+        "    let message = if predicate(input) { \"message\" }\n",
+        "    let code = if predicate(input) { \"code\" }\n",
+        "    return error(message: message, code: code)\n",
+        "}\n",
+        "fn number<T>(const input: T) -> error {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return error(message: chosen, code: chosen)\n",
+        "}\n",
+        "fn accepted() -> error => text(\"s\")\n",
+        "fn rejected() -> error => number(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:15:27 type/type.mismatch EXPR-5"; 2],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns an error");
+    };
+    let ExprKind::Error {
+        message,
+        code: Some(code),
+    } = &value.kind
+    else {
+        panic!("the error has both fields");
+    };
+    assert_eq!(message.ty.to_string(), "str");
+    assert!(matches!(message.kind, ExprKind::NullRead { .. }));
+    assert_eq!(code.ty.to_string(), "str?");
+    assert!(matches!(code.kind, ExprKind::Local(_)));
+}
+
+/// GEN-7 and ERR-3: a tag test takes a result in the concrete graph,
+/// including when its operand's type was unknown at declaration time.
+#[test]
+fn graph_instances_check_settled_tag_tests() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn sample() -> result<i64, error> => ok(1)\n",
+        "fn invalid<T>(const input: T) -> bool {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return is_ok(chosen)\n",
+        "}\n",
+        "fn result_tag<T>(const input: T) -> bool {\n",
+        "    let chosen = if predicate(input) { sample() }\n",
+        "    return is_err(chosen)\n",
+        "}\n",
+        "fn ordinary() -> bool => invalid(\"s\")\n",
+        "fn temporal() -> bool => invalid(1)\n",
+        "fn nullable_result() -> bool => result_tag(\"s\")\n",
+        "fn connected_result() -> bool => result_tag(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:26 type/type.mismatch ERR-3",
+            "m.hgl:15:26 type/type.mismatch ERR-3",
+            "m.hgl:16:33 type/type.mismatch ERR-3",
+        ],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "connected_result"));
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns a boolean");
+    };
+    let ExprKind::TagTest {
+        success: false,
+        value,
+    } = &value.kind
+    else {
+        panic!("the expression tests the result's failure tag");
+    };
+    assert_eq!(value.ty.to_string(), "result<i64, error>");
+    assert_eq!(value.category, ValueCategory::Connection);
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

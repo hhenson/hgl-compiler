@@ -35,7 +35,7 @@ transpiler: done
 
 analyser: partial
 
-- `is_ok` and `is_err` take one result by position and give a `bool`
+- `is_ok` and `is_err` take one result by position and give a `bool`. A graph instance checks the argument when its type first settles (GEN-7).
 - A direct guard on an immutable result binding proves its tag: in the branch it holds for, across `!` and the Boolean connectives, and after a branch that returns
 - `binding.value` and `binding.error` need the matching fact (`result.required_variant`), and have the T and the E
 - In a graph a test of a connection gives no fact
@@ -46,6 +46,7 @@ analyser: partial
 analyser: done
 
 - `error(message: text, code: optional_code)`: each by its name, `message` a `str` and required, `code` a `str?`; `.message` is a `str` and `.code` a `str?`
+- A graph instance refits newly known `message` and `code` values, including any required read of the message (GEN-7, ERR-12).
 - `.context` is an `error context?`, a type of this compiler's, whose `.node` and `.phase` are a `str` and `.evaluation_time` a `datetime`, read under ERR-12 and never assigned (`binding.immutable`)
 
 transpiler: partial
