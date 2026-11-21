@@ -6,113 +6,18 @@
 # until it is taken off. `check_core.py --target cpp --write-list` writes
 # the list from a run; read the difference before it is committed.
 
-"a field of a connection" = [
-    "conformance::an_atomic_quote_wakes_its_bid_projection",
-    "conformance::changing_a_sibling_field_does_not_publish_a_bid",
+"a child of a connection" = [
+    "conformance::switching_keys_follows_the_new_child",
+]
+"a designation of a position of a list" = [
+    "conformance::a_ref_result_follows_the_element_it_designates",
+]
+"a nullable value put in the run's store (hgl_spec issue 165)" = [
+    "conformance::a_stored_null_is_distinct_from_an_absent_key",
 ]
 "a run's configuration that is no `RunConfig(...)`" = [
     "conformance::absolute_targets_before_at_and_after_start",
     "conformance::skipped_targets_still_establish_source_order",
-]
-"a temporal value of `MarketQuote`" = [
-    "conformance::a_struct_is_all_valid_once_every_field_is",
-    "conformance::a_struct_is_valid_once_one_field_is",
-    "conformance::a_whole_struct_is_a_trace_cell",
-]
-"a temporal value of `dict<str, i64>`" = [
-    "conformance::a_whole_dictionary_is_a_trace_cell",
-    "conformance::an_empty_dictionary_given_to_an_empty_dictionary_is_no_tick",
-    "conformance::removing_only_an_absent_key_is_no_tick",
-]
-"a temporal value of `i64?`" = [
-    "conformance::a_published_null_has_a_delta",
-    "conformance::a_removed_key_is_absent_until_added_again",
-    "conformance::a_retained_list_is_independent_of_later_input_changes",
-    "conformance::a_stored_null_is_distinct_from_an_absent_key",
-    "conformance::lifted_nullable_binds_null_on_a_trigger",
-    "conformance::lifting_observes_the_complete_list_including_empty",
-    "conformance::publication_establishes_validity",
-    "conformance::published_null_takes_precedence_over_a_default",
-    "conformance::removing_an_absent_key_is_ignored",
-    "conformance::switching_keys_follows_the_new_child",
-    "core_implementation::a_null_publication_has_a_tuple_in_the_recording",
-    "core_implementation::identity_arithmetic_invalidates_and_recovers",
-    "core_implementation::identity_arithmetic_publications",
-    "core_implementation::repeated_invalidation_is_silent",
-    "core_implementation::unconfigured_arithmetic_uses_lifting",
-]
-"a temporal value of `list<f64>`" = [
-    "conformance::a_whole_f64_list_reads_nan_in_a_gap",
-]
-"a temporal value of `list<i64, 2>`" = [
-    "conformance::a_fixed_list_is_all_valid_once_every_position_is",
-    "conformance::a_fixed_list_is_valid_once_one_position_is",
-    "conformance::a_result_accepts_the_read_of_an_invalid_child",
-    "conformance::an_entry_past_a_fixed_lists_end_fails",
-    "conformance::fixed_list_children_become_readable_independently",
-    "conformance::reading_an_invalid_child_at_a_runtime_index_fails",
-]
-"a temporal value of `list<i64, 3>`" = [
-    "conformance::a_ref_result_follows_the_element_it_designates",
-]
-"a temporal value of `list<i64>`" = [
-    "conformance::a_negative_size_reduces_the_list_by_that_count",
-    "conformance::a_size_only_delta_shrinks_the_list",
-    "conformance::a_whole_i64_list_with_a_gap_fails",
-    "conformance::an_empty_list_delta_ticks_only_where_it_makes_the_list_valid",
-    "conformance::an_empty_list_given_to_an_empty_list_is_no_tick",
-    "conformance::an_entry_after_the_last_position_extends_the_list",
-    "conformance::an_entry_at_or_past_the_size_written_with_it_fails",
-    "conformance::reducing_a_list_past_its_length_leaves_it_empty",
-    "conformance::removing_only_a_position_that_holds_no_value_is_no_tick",
-]
-"a temporal value of `set<i64>`" = [
-    "conformance::a_set_delta_changes_only_the_named_members",
-    "conformance::a_set_given_the_members_it_holds_is_no_tick",
-    "conformance::a_whole_set_replaces_the_previous_members",
-    "conformance::an_empty_set_delta_ticks_only_where_it_makes_the_set_valid",
-    "conformance::mixed_replay",
-    "conformance::removing_only_an_absent_member_is_no_tick",
-    "core_implementation::record_can_be_empty",
-]
-"a trace of `MarketQuote`" = [
-    "conformance::a_struct_delta_keeps_the_final_write_to_each_field",
-]
-"a trace of `datetime?`" = [
-    "conformance::last_modified_follows_the_last_publication",
-    "conformance::propagating_a_retained_error_preserves_its_origin",
-]
-"a trace of `i64?`" = [
-    "conformance::an_empty_dictionary_delta_ticks_only_where_it_makes_the_dictionary_valid",
-    "conformance::an_ordered_reader_sees_the_latest_store_write",
-]
-"a trace of `list<bool, 2>`" = [
-    "conformance::a_tuple_is_valid_once_one_position_is_and_all_valid_once_both_are",
-    "conformance::a_window_emptied_by_exits_stays_valid",
-    "conformance::a_window_is_valid_before_its_minimum_and_all_valid_at_it",
-    "conformance::a_window_of_a_duration_falls_back_under_its_minimum",
-    "conformance::an_empty_selection_is_true_in_its_handler_when_an_input_ticks",
-]
-"a trace of `list<bool, 3>`" = [
-    "conformance::a_struct_with_an_optional_field_is_all_valid_and_read_whole",
-    "conformance::an_entry_past_a_gap_leaves_the_positions_between_not_valid",
-    "conformance::removing_a_position_that_never_held_a_value_is_ignored",
-]
-"a trace of `list<i64, 2>`" = [
-    "conformance::a_fixed_list_delta_reports_the_position_in_updated",
-]
-"a trace of `list<i64>`" = [
-    "conformance::a_recording_of_a_window_holds_its_arrivals_and_replays_the_same_window",
-]
-"a trace of `list<str, 2>`" = [
-    "conformance::a_window_of_a_duration_has_no_delta_where_a_value_only_leaves",
-]
-"a trace of `set<i64>`" = [
-    "conformance::set_writes_coalesce",
-    "core_implementation::record_retains_each_delta",
-]
-"a trace of `tuple<i64, str>`" = [
-    "conformance::an_arrival_at_a_full_window_of_ticks_pushes_out_its_oldest_value",
 ]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph

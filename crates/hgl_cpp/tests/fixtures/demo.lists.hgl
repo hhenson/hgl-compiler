@@ -1,0 +1,243 @@
+module demo.lists
+
+# The temporal forms of a list and of a tuple the cpp target writes:
+# published whole and by delta, read whole and by child, wired by child,
+# replayed and recorded. Its goldens are under `tests/goldens/demo.lists`.
+
+# A growing list published whole, or by a delta of its size (TIME-7,
+# TYPE-16): 0 the empty list, a count below zero drops that many, any
+# other count a list of that many.
+fn readings(count: i64) -> list<i64> {
+    when {
+        if count == 0 { return [] }
+        if count < 0 { return delta<list<i64>>(size_modified: count) }
+        var made: list<i64> = []
+        var next: i64 = 0
+        while next < count {
+            append(made, next + 1)
+            next += 1
+        }
+        return made
+    }
+}
+
+const fn sum(values: list<i64>) -> i64 {
+    var running: i64 = 0
+    for value in values { running += value }
+    return running
+}
+
+# A lifted helper given the list whole (FN-12).
+fn total(count: i64) -> i64 => sum(readings(count))
+
+# What a list published in its cycle (END-3).
+fn changes(values: list<i64>) -> list<i64> {
+    when { return delta_value(values) }
+}
+
+fn changes_of(count: i64) -> list<i64> => changes(readings(count))
+
+# A fixed list set a position at a time (TYPE-16).
+fn set_slot(slot: i64, reading: i64) -> list<i64, 2> {
+    when { return delta<list<i64, 2>>(updated: [slot: reading]) }
+}
+
+# `valid`, `all_valid`, and a child's `valid` and read (TIME-1, TIME-9).
+fn probe_pair(probe: bool, pair: list<i64, 2>, slot: i64) -> list<bool, 3> {
+    when modified(probe) && valid(slot) {
+        return [valid(pair), all_valid(pair), valid(pair[slot])]
+    }
+}
+
+fn observe(probe: bool, slot: i64, reading: i64, at: i64) -> list<bool, 3> =>
+    probe_pair(probe, set_slot(slot, reading), at)
+
+# A child read where it is checked when it runs (ERR-14).
+fn read_slot(pair: list<i64, 2>, slot: i64) -> i64 {
+    when { return pair[slot] }
+}
+
+fn slot_of(slot: i64, reading: i64, at: i64) -> i64 => read_slot(set_slot(slot, reading), at)
+
+const fn span(low: i64, high: i64) -> i64 => high - low
+
+# Two children of a fixed list wired as connections of their own.
+fn span_of(slot: i64, reading: i64) -> i64 {
+    let pair = set_slot(slot, reading)
+    return span(pair[0], pair[1])
+}
+
+# A tuple set a position at a time, and its validity (TIME-9).
+fn set_part(first: bool, value: i64) -> tuple<i64, i64> {
+    when {
+        let only_first: delta<tuple<i64, i64>> = (value, null)
+        let only_second: delta<tuple<i64, i64>> = (null, value)
+        if first { return only_first }
+        return only_second
+    }
+}
+
+fn part_validity(probe: bool, parts: tuple<i64, i64>) -> list<bool, 2> {
+    when modified(probe) && valid([]) { return [valid(parts), all_valid(parts)] }
+}
+
+fn observe_parts(probe: bool, first: bool, value: i64) -> list<bool, 2> =>
+    part_validity(probe, set_part(first, value))
+
+# A child read at a constant index, admitted by its own `valid` (TIME-1).
+fn first_of(pair: list<i64, 2>) -> i64 {
+    when valid(pair[0]) { return pair[0] }
+}
+
+fn first_slot(slot: i64, reading: i64) -> i64 => first_of(set_slot(slot, reading))
+
+# A child's delta read into a `result` (ERR-14), and its `last_modified`.
+fn second_delta(pair: list<i64, 2>) -> bool {
+    when valid(pair[1]) {
+        let change: result<i64, error> = delta_value(pair[1])
+        return is_ok(change) && last_modified(pair[1]) != null
+    }
+}
+
+fn second_changed(slot: i64, reading: i64) -> bool => second_delta(set_slot(slot, reading))
+
+# A tuple published whole, or by a delta; its position read, and the tuple
+# read whole.
+fn whole_or_part(head: bool, value: i64) -> tuple<i64, i64> {
+    when {
+        if head { return (value, 0) }
+        let only_second: delta<tuple<i64, i64>> = (null, value)
+        return only_second
+    }
+}
+
+fn part_sum(parts: tuple<i64, i64>) -> i64 {
+    when all_valid(parts) {
+        let whole = parts
+        return parts[1] + whole[0]
+    }
+}
+
+fn sum_of_parts(head: bool, value: i64) -> i64 => part_sum(whole_or_part(head, value))
+
+# A growing list of growing lists, a child of a child among them.
+fn nested(count: i64) -> list<list<i64>> {
+    when {
+        if count == 0 { return [[1], []] }
+        return delta<list<list<i64>>>(updated: [1: delta<list<i64>>(updated: [0: count])])
+    }
+}
+
+fn nested_valid(values: list<list<i64>>) -> list<bool, 3> {
+    when { return [valid(values[1]), all_valid(values), valid(values[1][0])] }
+}
+
+fn nested_of(count: i64) -> list<bool, 3> => nested_valid(nested(count))
+
+# EXPR-2: a child of a child, its indices evaluated in the order written:
+# the row is chosen before the next index changes `at`.
+fn ordered_child(values: list<list<i64>>) -> bool {
+    when {
+        var at: i64 = 0
+        return valid(values[at][{
+            at = 1
+            0
+        }])
+    }
+}
+
+fn ordered_of(count: i64) -> bool => ordered_child(nested(count))
+
+# EXPR-2: the row, whose index changes `at`, before the column that reads it.
+fn ordered_row(values: list<list<i64>>) -> bool {
+    when {
+        var at: i64 = 0
+        return valid(values[{
+            at = 1
+            0
+        }][at])
+    }
+}
+
+fn ordered_row_of(count: i64) -> bool => ordered_row(nested(count))
+
+# EXPR-2: a child of a connection, the connection wired before its index
+# changes `at`, which configures it.
+fn shifted_pair(trigger: i64, const first: i64) -> list<i64, 2> {
+    when { return [first, first + 10] }
+}
+
+fn ordered_port(trigger: i64) -> i64 {
+    var at: i64 = 0
+    return shifted_pair(trigger, at)[{
+        at = 1
+        0
+    }]
+}
+
+# EXPR-2: the connection, whose configuration changes `at`, before the
+# index that reads it.
+fn ordered_connection(trigger: i64) -> i64 {
+    var at: i64 = 0
+    return shifted_pair(trigger, {
+        at = 1
+        at
+    })[at]
+}
+
+# A list input replayed from a trace, its cells whole and a delta (TST-9).
+fn relay(values: list<i64>) -> list<i64> {
+    when { return values }
+}
+
+test published_whole_and_by_delta {
+    assert eval(total(count: [0, 0, 3, -1, -5])) == [0, _, 6, 3, 0]
+    assert eval(changes_of(count: [2, 1])) == [
+        delta<list<i64>>(updated: [0: 1, 1: 2], size_modified: 2),
+        delta<list<i64>>(updated: [0: 1], removed: [1], size_modified: 1),
+    ]
+}
+
+test fixed_list_children {
+    assert eval(observe(
+        probe:   [true, true, true],
+        slot:    [   _,    0,    1],
+        reading: [   _,    3,    8],
+        at:      [   1,    1,    1],
+    )) == [[false, false, false], [true, false, false], [true, true, true]]
+    assert eval(span_of(slot: [0, 1, _, 0], reading: [3, 8, _, 4])) == [_, 5, _, 4]
+    assert eval(slot_of(slot: [0], reading: [3], at: [0])) == [3]
+    assert raises("value.unset_read") {
+        eval(slot_of(slot: [0, _], reading: [3, _], at: [0, 1]))
+    }
+    assert raises("value.index_out_of_range") {
+        eval(slot_of(slot: [0], reading: [3], at: [2]))
+    }
+}
+
+test children_named_in_a_hook {
+    assert eval(first_slot(slot: [1, 0], reading: [5, 3])) == [_, 3]
+    assert eval(second_changed(slot: [0, 1, 0], reading: [3, 8, 4])) == [_, true, false]
+    assert eval(sum_of_parts(head: [true, false], value: [3, 8])) == [3, 11]
+    assert eval(nested_of(count: [0, 7])) == [[true, true, false], [true, true, true]]
+    assert eval(ordered_of(count: [0])) == [true]
+    assert eval(ordered_port(trigger: [5])) == [0]
+    assert eval(ordered_row_of(count: [0])) == [false]
+    assert eval(ordered_connection(trigger: [5])) == [11]
+}
+
+test tuple_positions {
+    assert eval(observe_parts(
+        probe: [true, true, true],
+        first: [   _, true, false],
+        value: [   _,    3,     8],
+    )) == [[false, false], [true, false], [true, true]]
+}
+
+test a_list_input_replays_its_cells {
+    assert eval(relay(values: [[1, 2], delta<list<i64>>(updated: [2: 3]), [5]])) == [
+        [1, 2],
+        [1, 2, 3],
+        delta<list<i64>>(updated: [0: 5], removed: [1, 2], size_modified: 1),
+    ]
+}

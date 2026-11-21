@@ -881,6 +881,9 @@ impl Emitter<'_> {
         traits.push_str(&members_of(&delta));
         traits.push_str(&hash_of(&qualified));
         traits.push_str(&hash_of(&delta));
+        // TYPE-9: what hgraph needs to hold it as a temporal value
+        // (`structs`).
+        traits.push_str(&self.bundle_traits(index, &qualified, &delta));
         layout.traits = traits;
         self.piece.is_type = true;
         self.piece.layout = Some(Box::new(layout));

@@ -173,6 +173,9 @@ pub(super) trait Family: Sync {
 /// Every family, in the order each lookup asks them. A construct lane
 /// puts its own ahead of the spine's.
 static FAMILIES: &[&dyn Family] = &[
+    &super::nullables::Nullables,
+    &super::structs::Structs,
+    &super::keyed::Keyed,
     &super::windows::Windows,
     &super::references::References,
     &super::apps::Apps,
@@ -180,6 +183,7 @@ static FAMILIES: &[&dyn Family] = &[
     &super::activity::Activity,
     &super::lifting::Lifting,
     &super::control::Control,
+    &super::lists::Lists,
     &super::scalars::Scalars,
     &super::tests::Tests,
     &super::sources::Sources,
@@ -192,11 +196,21 @@ impl Emitter<'_> {
     /// hgraph's schema of a temporal value of `ty` ([`Family::schema`]);
     /// one no family writes is reported at `at`.
     pub(super) fn temporal_schema(&mut self, ty: &Type, at: Location) -> Option<String> {
-        let found = FAMILIES.iter().find_map(|family| family.schema(self, ty));
+        let found = self.temporal_schema_of(ty);
         if found.is_none() {
-            self.unsupported(at, &format!("a temporal value of `{ty}`"));
+            let what = super::structs::unwritten(self.program, ty)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("a temporal value of `{ty}`"));
+            self.unsupported(at, &what);
         }
         found
+    }
+
+    /// hgraph's schema of a temporal value of `ty` ([`Family::schema`]),
+    /// or `None`, reported nowhere, where no family writes one: for a
+    /// family that asks what the form of a part of its own is.
+    pub(super) fn temporal_schema_of(&mut self, ty: &Type) -> Option<String> {
+        FAMILIES.iter().find_map(|family| family.schema(self, ty))
     }
 
     /// The read of the payload of `view`, of `ty`, in a hook

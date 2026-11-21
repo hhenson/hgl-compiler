@@ -975,8 +975,8 @@ fn references_are_written() {
 }
 
 /// FN-16: a designation of a position of a list is reported, after the
-/// list's own temporal form where that is not written yet, so that a case
-/// is listed for the first form it reaches.
+/// list's own temporal form (`lists`), so that a case is listed for the
+/// first form it reaches.
 #[test]
 fn a_designation_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -994,7 +994,7 @@ fn a_designation_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.reported,
-        ["m.hgl:4:33 the cpp target does not write a temporal value of `list<i64, 3>` yet"]
+        ["m.hgl:4:33 the cpp target does not write a designation of a position of a list yet"]
     );
 }
 
@@ -1122,7 +1122,7 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
     // its result.
     assert_eq!(
         blocked.message,
-        "the cpp target does not write a temporal value of `list<i64>` yet"
+        "the cpp target does not write a constant connection of `list<i64>` yet"
     );
     assert_eq!(application.source, None);
     assert!(
@@ -1206,10 +1206,36 @@ fn a_capture_given_an_f64_configuration_is_reported() {
     );
 }
 
-/// A temporal form the target does not write yet is reported through the
-/// dispatch point, where it is written, and blocks what reaches it: a
-/// temporal value of a type no family writes, and a capability no family
-/// makes. A test that reaches neither is run.
+/// The temporal forms of a list and of a tuple (`lists`): published whole
+/// and by delta, read whole and by child, a child wired, a list replayed
+/// and recorded, and the value an eval's result holds kept for a cell
+/// written whole (TST-5).
+#[test]
+fn list_code_is_written() {
+    let emitted = emit_with(
+        &[("demo.lists.hgl", include_str!("fixtures/demo.lists.hgl"))],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.lists", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    // TIME-7: core's `replay` of a list yields the delta of each cell,
+    // which the list's form publishes as that change (`sources`).
+    assert!(
+        core.contains("::hglrt::Yielded<::hglrt::list_delta<::hglrt::list<::hgraph::Int>>>"),
+        "{core}"
+    );
+}
+
 /// The timing the target writes (`emit/scheduling.rs`): nodes woken by a
 /// scheduler or an alarm, and sources with declarations and hooks, each
 /// as the goldens under `tests/goldens/demo.timing` have it. Each test of
@@ -1241,6 +1267,105 @@ fn timing_is_written() {
     assert!(unit.contains("::hglrt::Lending<::hglrt::Clock>"));
 }
 
+/// The temporal form of a set and of a dictionary (TYPE-9): each
+/// published whole and as a delta (TIME-7), read whole and by its delta
+/// (TIME-1, END-3), `all_valid` of a dictionary (TIME-9), invalidation
+/// (END-4), a lifted call given one whole, and their traces, a cell
+/// written whole among them (TST-5, TST-9). Everything is written, and
+/// each test can be run.
+#[test]
+fn keyed_temporal_code_is_written() {
+    let emitted = emit_with(
+        &[("demo.keyed.hgl", include_str!("fixtures/demo.keyed.hgl"))],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.keyed", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    // CEVAL-1: core's `replay` of a set is a source whose body yields the
+    // set's delta, which the set's form publishes as that change (TIME-7).
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    assert!(
+        core.contains("using yielded_type_ = ::hglrt::Yielded<::hglrt::set_delta<::hgraph::Int>>;"),
+        "{core}"
+    );
+}
+
+/// A dictionary's key of a type the family does not write, a constant
+/// connection of a set, an entry of a dictionary's entry in a hook, and a
+/// key's child as a connection of a graph are reported, and block what
+/// reaches them.
+#[test]
+fn a_keyed_form_not_written_yet_is_reported() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "enum Side { buy, sell }\n",
+                "\n",
+                "fn sides(values: dict<Side, i64>) -> i64 {\n",
+                "    when { return 1 }\n",
+                "}\n",
+                "\n",
+                "fn constant_members() -> set<i64> => [1, 2]\n",
+                "\n",
+                "fn entry_a(book: dict<str, dict<str, i64>>) -> i64 {\n",
+                "    when { if valid(book[\"A\"][\"B\"]) { return book[\"A\"][\"B\"] } }\n",
+                "}\n",
+                "\n",
+                "fn child_a(book: dict<str, i64>) -> i64 => book[\"A\"]\n",
+                "\n",
+                "test enum_keys {\n",
+                "    assert eval(sides(values: [[Side.buy: 1]])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_constant_set {\n",
+                "    assert eval(constant_members()) == [[1, 2]]\n",
+                "}\n",
+                "\n",
+                "test an_entry_of_an_entry {\n",
+                "    assert eval(entry_a(book: [[\"A\": [\"B\": 1]]])) == [1]\n",
+                "}\n",
+                "\n",
+                "test a_child_in_a_graph {\n",
+                "    assert eval(child_a(book: [[\"A\": 1]])) == [1]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(
+        emitted.blocked("enum_keys").as_deref(),
+        Some("m.hgl:18:31 the cpp target does not write a temporal value of `dict<Side, i64>` yet")
+    );
+    assert_eq!(
+        emitted.blocked("a_constant_set").as_deref(),
+        Some("m.hgl:9:38 the cpp target does not write a constant connection of `set<i64>` yet")
+    );
+    assert_eq!(
+        emitted.blocked("an_entry_of_an_entry").as_deref(),
+        Some("m.hgl:12:21 the cpp target does not write an entry of a dictionary's entry yet")
+    );
+    assert_eq!(
+        emitted.blocked("a_child_in_a_graph").as_deref(),
+        Some("m.hgl:15:44 the cpp target does not write a child of a connection yet")
+    );
+}
+
+/// A temporal form the target does not write yet is reported through the
+/// dispatch point, where it is written, and blocks what reaches it: a
+/// temporal value of a type no family writes. A test that reaches none is
+/// run.
 #[test]
 fn a_temporal_form_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -1249,7 +1374,7 @@ fn a_temporal_form_not_written_yet_is_reported() {
             concat!(
                 "module m\n",
                 "\n",
-                "fn first(values: list<i64>) -> i64 {\n",
+                "fn first(values: set<list<i64>>) -> i64 {\n",
                 "    when { return 1 }\n",
                 "}\n",
                 "\n",
@@ -1264,7 +1389,7 @@ fn a_temporal_form_not_written_yet_is_reported() {
                 "}\n",
                 "\n",
                 "test a_list {\n",
-                "    assert eval(first(values: [[1, 2]])) == [1]\n",
+                "    assert eval(first(values: [[[1, 2]]])) == [1]\n",
                 "}\n",
                 "\n",
                 "test a_scheduler {\n",
@@ -1280,7 +1405,7 @@ fn a_temporal_form_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.blocked("a_list").as_deref(),
-        Some("m.hgl:18:31 the cpp target does not write a temporal value of `list<i64>` yet")
+        Some("m.hgl:18:31 the cpp target does not write a temporal value of `set<list<i64>>` yet")
     );
     // CAP-4: the scheduler is written (`scheduling`).
     assert_eq!(emitted.blocked("a_scheduler"), None);
@@ -1790,47 +1915,6 @@ fn natives_are_called_with_their_templates() {
     assert_eq!(emitted.blocked("natives_are_called"), None);
 }
 
-/// FN-15, EXPR-2: a place held for a `var` parameter could be one that a
-/// later argument, running statements of its own, replaces or grows: the
-/// place's index is held in turn, and the place is taken where the call
-/// is made.
-#[test]
-fn a_place_beside_an_argument_that_runs_statements_is_taken_at_the_call() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "const fn bump(var count: i64, by: i64) {\n",
-            "    count = by\n",
-            "}\n",
-            "const fn grown() -> i64 {\n",
-            "    var items = [10]\n",
-            "    bump(items[0], {\n",
-            "        items = [20, 30]\n",
-            "        1\n",
-            "    })\n",
-            "    return 0\n",
-            "}\n",
-        ),
-    )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let unit = &emitted
-        .output
-        .files
-        .iter()
-        .find(|file| file.path == "modules/m.cpp")
-        .unwrap()
-        .text;
-    assert!(
-        unit.contains(
-            "[&] { const ::hgraph::Int index_00_ = 0; const ::hgraph::Int argument_01_ = "
-        ) && unit.contains(
-            "return ::hgl::m::m_::bump(::hglrt::item(items, index_00_), argument_01_); }();"
-        ),
-        "{unit}"
-    );
-}
-
 /// ERR-5, EXPR-2: a `?` is run before its statement, so one after a read
 /// in its statement would run before the read, and could change what it
 /// reads; it is reported, and not written.
@@ -2039,6 +2123,157 @@ fn a_bit_given_to_a_var_parameter_is_reported() {
         emitted.reported,
         [
             "m.hgl:7:14 the cpp target does not write an element of a `list<bool>` given to a `var` parameter yet"
+        ]
+    );
+}
+
+/// FN-15, EXPR-2: a place held for a `var` parameter could be one that a
+/// later argument, running statements of its own, replaces or grows: the
+/// place's index is held in turn, and the place is taken where the call
+/// is made.
+#[test]
+fn a_place_beside_an_argument_that_runs_statements_is_taken_at_the_call() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn bump(var count: i64, by: i64) {\n",
+            "    count = by\n",
+            "}\n",
+            "const fn grown() -> i64 {\n",
+            "    var items = [10]\n",
+            "    bump(items[0], {\n",
+            "        items = [20, 30]\n",
+            "        1\n",
+            "    })\n",
+            "    return 0\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    assert!(
+        unit.contains(
+            "[&] { const ::hgraph::Int index_00_ = 0; const ::hgraph::Int argument_01_ = "
+        ) && unit.contains(
+            "return ::hgl::m::m_::bump(::hglrt::item(items, index_00_), argument_01_); }();"
+        ),
+        "{unit}"
+    );
+}
+
+/// The temporal forms of a struct, a tuple, an atomic struct and a
+/// nullable scalar, as the target writes them (TYPE-9, TYPE-15, TYPE-16,
+/// TIME-1, TIME-7, TIME-9, EXPR-7): a struct is hgraph's nominal bundle,
+/// whose whole value is the aggregate the value code writes; a field is a
+/// child of its own, in a hook and in a graph; a nullable is hgraph's
+/// `TS<Optional<T>>`. Everything is written, and each test can be run.
+#[test]
+fn temporal_structs_and_nullables_are_written() {
+    let emitted = emit_with(
+        &[(
+            "demo.structs.hgl",
+            include_str!("fixtures/demo.structs.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.structs", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let file = |path: &str| {
+        emitted
+            .output
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap()
+            .text
+            .clone()
+    };
+    // TYPE-9: beside the aggregate, its nominal schema; a struct with an
+    // optional field has each field's own form.
+    let types = file("modules/demo.structs.types.h");
+    assert!(
+        types.contains("struct hgraph::native_bundle<::hgl::demo::structs::m_::MarketQuote>"),
+        "{types}"
+    );
+    let unit = file("modules/demo.structs.cpp");
+    assert!(
+        unit.contains(
+            "::hgraph::Out<::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>> out_"
+        ),
+        "{unit}"
+    );
+    assert!(
+        unit.contains("::hgraph::Field<\"note\", ::hgraph::TS<::hgraph::Optional<::hgraph::Str>>>"),
+        "{unit}"
+    );
+    // EXPR-7: a field of a struct's connection is the child's own.
+    assert!(unit.contains("::hglrt::field_port<0>("), "{unit}");
+}
+
+/// What the target does not write of temporal structs, tuples and
+/// nullables yet is reported, and nothing is miswritten: a struct whose
+/// field has a form the library does not read whole (a list), a generic
+/// struct, an abstract one, a nullable put in the run's store (a `get`
+/// through a nullable place has the payload's type: hgl_spec issue 165),
+/// an atomic struct that holds an optional field (hgraph issue 1874), and
+/// a tuple with an atomic position.
+#[test]
+fn temporal_structs_not_written_yet_are_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Listed {\n",
+            "    values: list<i64>\n",
+            "}\n",
+            "struct Box<T> {\n",
+            "    value: T\n",
+            "}\n",
+            "fn listed(value: Listed) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn boxed(value: Box<i64>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn stored(value: i64?) -> bool {\n",
+            "    inject global_state\n",
+            "    when {\n",
+            "        put(global_state, \"kept\", value)\n",
+            "        return true\n",
+            "    }\n",
+            "}\n",
+            "struct Noted {\n",
+            "    note: str?\n",
+            "}\n",
+            "fn noted(value: atomic<Noted>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "struct Plain {\n",
+            "    value: i64\n",
+            "}\n",
+            "fn paired(value: tuple<atomic<Plain>, i64>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:8:11 the cpp target does not write a temporal value of `Listed` yet",
+            "m.hgl:11:10 the cpp target does not write a temporal value of `Box<i64>` yet",
+            "m.hgl:17:9 the cpp target does not write a nullable value put in the run's store (hgl_spec issue 165) yet",
+            "m.hgl:24:10 the cpp target does not write an atomic struct that holds an optional field (hgraph issue 1874) yet",
+            "m.hgl:30:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
         ]
     );
 }
