@@ -373,18 +373,17 @@ impl<'a> Typer<'a> {
         // GEN-5: "Select exactly one most-specific admitted candidate.
         // Concrete types outrank variables; structurally constrained
         // variables outrank unconstrained ones."
-        most_specific(&mut selected, public.parameters.len());
+        most_specific(&mut selected, public);
         // GEN-5: "Select exactly one most-specific admitted candidate.
         // Concrete types outrank variables". A candidate not told to admit
         // the call that one admitted candidate outranks is selected by
         // nothing whatever its condition comes to; any other leaves which
         // is selected not told. GEN-7: so a candidate that takes every
         // generic argument is known where nothing else can outrank it.
-        let own = public.parameters.len();
         untold |= not_told.iter().any(|unknown| {
             !selected
                 .iter()
-                .any(|admitted| outranks(admitted, unknown, own))
+                .any(|admitted| outranks(admitted, unknown, public))
         });
         if widening && selected.len() > 1 {
             Self::prefer_widened(&mut selected, public, given);
@@ -599,13 +598,19 @@ impl<'a> Typer<'a> {
         // built. The entries given by name to a symbol are its
         // configuration (EXPR-10); its operands are given in position.
         let lifted = self.graph
-            && !matches!(form, Form::Named)
             && matches!(
                 program.modules[module].declarations[declaration]
                     .kind
                     .candidate(),
                 Some((Role::Value, _))
             );
+        let operator_name = match form {
+            Form::Named => program.modules[operator.module].declarations[operator.declaration]
+                .name
+                .as_str(),
+            Form::Binary(operator) => operator.symbol(),
+            Form::Unary(operator) => operator.symbol(),
+        };
         let arguments = given
             .into_iter()
             .enumerate()
@@ -621,11 +626,14 @@ impl<'a> Typer<'a> {
                 let index = bound.parameter()?;
                 let parameter = &signature.parameters[index];
                 let place = format!("the parameter `{}`", parameter.name);
-                let named = matches!(given.key, Key::Name(_));
+                let braced = given.key.braced();
                 let pack = match bound {
                     Place::Pack(_, position) => Some(match &given.key {
                         Key::Position(_) => hir::PackKey::Position(position),
-                        Key::Name(name) => hir::PackKey::Name(name.clone()),
+                        Key::Name(name)
+                        | Key::Brace(name)
+                        | Key::Configuration(name)
+                        | Key::Generic(name) => hir::PackKey::Name(name.clone()),
                     }),
                     _ => None,
                 };
@@ -637,8 +645,8 @@ impl<'a> Typer<'a> {
                 };
                 // A `const` parameter given a connection is reported as
                 // one where the call is read (FN-3).
-                if lifted && !parameter.constant && named {
-                    self.configuration_input(form, &parameter.name, &value);
+                if lifted && !parameter.constant && braced {
+                    self.configuration_input(operator_name, &parameter.name, &value);
                 }
                 Some(hir::Argument {
                     parameter: Some(index),
@@ -705,10 +713,20 @@ impl<'a> Typer<'a> {
         if !result_fits || !among {
             return Admits::Misfit;
         }
-        let own = public.parameters.len();
+        let mut declared = vec![None; signature.parameters.len()];
+        for (parameter, index) in public
+            .parameters
+            .iter()
+            .zip(public.candidate_parameters(signature))
+        {
+            if let Some(index) = index {
+                declared[index] = Some(parameter);
+            }
+        }
         // Match each supplied argument, including every entry a pack captures.
         for (given, &place) in given.iter().zip(bound) {
             let ty = match place {
+                Place::OperatorGeneric => continue,
                 Place::Generic(index) => match &signature.generics[index].kind {
                     GenericKind::Value(ty) => Some(ty),
                     _ => None,
@@ -753,7 +771,7 @@ impl<'a> Typer<'a> {
                 // a default or a nullable type.
                 count != 0
                     || parameter.has_default
-                    || (index < own && public.parameters[index].has_default)
+                    || declared[index].is_some_and(|parameter| parameter.has_default)
                     || matches!(parameter.ty, Type::Nullable(_))
             };
             if !admitted {
@@ -835,9 +853,7 @@ impl<'a> Typer<'a> {
             let default = default_at(&candidate.syntax, &signature.parameters[index])
                 .map(|default| (candidate.at.file, default))
                 .or_else(|| {
-                    public
-                        .parameters
-                        .get(index)
+                    declared[index]
                         .and_then(|parameter| default_at(&operator.syntax, parameter))
                         .map(|default| (operator.at.file, default))
                 });
@@ -1129,10 +1145,9 @@ impl<'a> Typer<'a> {
         // operator's parameter in its place or of its name (GEN-4).
         let mut found: Vec<Option<Argument>> = vec![None; public.generics.len()];
         for (index, parameter) in public.parameters.iter().enumerate() {
-            let argument = given.iter().find(|given| match &given.key {
-                Key::Position(position) => *position == index,
-                Key::Name(name) => *name == parameter.name,
-            });
+            let argument = given
+                .iter()
+                .find(|given| given.key.public_parameter(public) == Some(index));
             if let Some(argument) = argument.filter(|argument| !argument.by_place) {
                 infer(&parameter.ty, argument.ty(), &public.generics, &mut found);
             }
@@ -1284,14 +1299,6 @@ impl<'a> Typer<'a> {
         self.graph = selecting.graph;
         let operator = selecting.operator;
         let program = self.program;
-        let Some(Detail::Callable(public)) = program.modules[operator.module]
-            .details
-            .get(operator.declaration)
-        else {
-            return None;
-        };
-        let candidates = self.value_candidates(operator);
-        let (options, _) = super::operators::options_of(public, &candidates);
         let own: Vec<Location> = self.instance.iter().map(|(at, _)| *at).collect();
         let given = |at: Location| {
             self.instance
@@ -1303,12 +1310,9 @@ impl<'a> Typer<'a> {
                 })
         };
         for Given { key, node, .. } in &selecting.arguments {
-            let Key::Name(name) = key else {
+            let Key::Generic(name) = key else {
                 continue;
             };
-            if !options.contains(name.as_str()) {
-                continue;
-            }
             let Ok(value) = self.read_constant(node, None) else {
                 continue;
             };
@@ -1608,8 +1612,64 @@ impl Given {
 pub(super) enum Key {
     /// With no name: the place it stands in, from 0.
     Position(usize),
-    /// `name: value`.
+    /// `name: value` in the parentheses.
     Name(String),
+    /// A brace entry naming an ordinary parameter.
+    Brace(String),
+    /// A named compile-time option, from braces or parentheses.
+    Generic(String),
+    /// A brace entry naming a configuration parameter (FN-18).
+    Configuration(String),
+}
+
+impl Key {
+    /// The name written in either argument list.
+    pub(super) fn name(&self) -> Option<&str> {
+        match self {
+            Self::Position(_) => None,
+            Self::Name(name)
+            | Self::Brace(name)
+            | Self::Configuration(name)
+            | Self::Generic(name) => Some(name),
+        }
+    }
+
+    /// True for an entry in the call's braces (EXPR-10).
+    fn braced(&self) -> bool {
+        matches!(self, Self::Brace(_) | Self::Configuration(_))
+    }
+
+    /// The index of this option in a signature's generic value parameters.
+    pub(super) fn generic_parameter(&self, signature: &Signature) -> Option<usize> {
+        let Self::Generic(name) = self else {
+            return None;
+        };
+        signature.generics.iter().position(|generic| {
+            matches!(generic.kind, GenericKind::Value(_)) && generic.name == *name
+        })
+    }
+
+    /// The index of a public parameter, if this entry names one.
+    pub(super) fn public_parameter(&self, signature: &Signature) -> Option<usize> {
+        match self {
+            Self::Generic(_) => None,
+            Self::Position(position) => signature
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, parameter)| !parameter.configuration && parameter.pack.is_none())
+                .nth(*position)
+                .map(|(index, _)| index),
+            Self::Name(name) | Self::Brace(name) | Self::Configuration(name) => {
+                let configuration = matches!(self, Self::Configuration(_));
+                signature.parameters.iter().position(|parameter| {
+                    parameter.configuration == configuration
+                        && parameter.pack.is_none()
+                        && parameter.name == *name
+                })
+            }
+        }
+    }
 }
 
 /// Whether a candidate admits a call.
@@ -1656,6 +1716,9 @@ enum Place {
     /// The generic value parameter at this position of the candidate's
     /// generic parameters: an option that selects (GEN-6).
     Generic(usize),
+    /// An operator-wide generic value, already checked and used for
+    /// the requested type, which this candidate does not redeclare.
+    OperatorGeneric,
 }
 
 impl Place {
@@ -1663,7 +1726,7 @@ impl Place {
     fn parameter(self) -> Option<usize> {
         match self {
             Self::Parameter(index) | Self::Pack(index, _) => Some(index),
-            Self::Generic(_) => None,
+            Self::Generic(_) | Self::OperatorGeneric => None,
         }
     }
 }
@@ -1701,10 +1764,9 @@ fn parameter_type<'a>(
 /// the callee's generic value parameter of that name, or else its
 /// parameter of that name."
 fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<Vec<Place>> {
-    let own = public.parameters.len();
-    if signature.parameters.len() < own {
-        return None;
-    }
+    let mapping: Vec<_> = public
+        .candidate_parameters(signature)
+        .collect::<Option<_>>()?;
     let mut taken = vec![false; signature.parameters.len()];
     let mut named = vec![false; signature.generics.len()];
     let mut captured = vec![0; signature.parameters.len()];
@@ -1716,36 +1778,55 @@ fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<V
         .parameters
         .iter()
         .position(|p| p.pack == Some(Pack::Named));
-    let fixed = signature
+    let positional: Vec<_> = signature
         .parameters
         .iter()
-        .filter(|p| p.pack.is_none())
-        .count();
+        .enumerate()
+        .filter(|(_, p)| !p.configuration && p.pack.is_none())
+        .map(|(index, _)| index)
+        .collect();
     let mut places = Vec::with_capacity(given.len());
     for given in given {
         let place = match &given.key {
-            Key::Position(position) if *position >= fixed => {
-                let index = positional_pack?;
-                Place::Pack(index, captured[index])
-            }
-            Key::Position(position) => Place::Parameter(*position),
-            Key::Name(name) => {
-                let generic = signature.generics.iter().position(|generic| {
-                    matches!(generic.kind, GenericKind::Value(_)) && generic.name == *name
-                });
-                if let Some(generic) = generic {
-                    Place::Generic(generic)
-                } else if let Some(index) = public
+            Key::Position(position) => match positional.get(*position) {
+                Some(&index) => Place::Parameter(index),
+                None => {
+                    let index = positional_pack?;
+                    Place::Pack(index, captured[index])
+                }
+            },
+            Key::Configuration(name) => {
+                let index = signature
                     .parameters
                     .iter()
-                    .position(|parameter| parameter.pack.is_none() && parameter.name == *name)
+                    .position(|parameter| parameter.configuration && parameter.name == *name)?;
+                Place::Parameter(index)
+            }
+            Key::Generic(_) => {
+                if let Some(index) = given.key.generic_parameter(signature) {
+                    Place::Generic(index)
+                } else if given.key.generic_parameter(public).is_some() {
+                    Place::OperatorGeneric
+                } else {
+                    return None;
+                }
+            }
+            Key::Name(name) | Key::Brace(name) => {
+                if let Some(index) = given
+                    .key
+                    .public_parameter(public)
+                    .map(|index| mapping[index])
                     .or_else(|| {
                         signature
                             .parameters
                             .iter()
                             .enumerate()
-                            .skip(own)
-                            .find(|(_, option)| option.pack.is_none() && option.name == *name)
+                            .find(|(index, option)| {
+                                !mapping.contains(index)
+                                    && !option.configuration
+                                    && option.pack.is_none()
+                                    && option.name == *name
+                            })
                             .map(|(index, _)| index)
                     })
                 {
@@ -1760,6 +1841,10 @@ fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<V
         let slot = match place {
             Place::Parameter(index) => taken.get_mut(index)?,
             Place::Generic(index) => named.get_mut(index)?,
+            Place::OperatorGeneric => {
+                places.push(place);
+                continue;
+            }
             Place::Pack(index, _) => {
                 captured[index] += 1;
                 places.push(place);
@@ -2180,16 +2265,16 @@ fn specificity(left: &Type, right: &Type) -> Specific {
 /// other outranks. One is left where the call selects; more are a tie.
 ///
 /// GEN-5: "Select exactly one most-specific admitted candidate." The
-/// operator's own parameters, `own` of them, are compared place for
+/// operator's public parameters are compared place for
 /// place ([`specificity`]). A candidate outranks another when it is as
 /// specific in every one and more specific in one.
-fn most_specific(selected: &mut Vec<Chosen>, own: usize) {
+fn most_specific(selected: &mut Vec<Chosen>, public: &Signature) {
     if selected.len() < 2 {
         return;
     }
     let outranked: Vec<bool> = selected
         .iter()
-        .map(|chosen| selected.iter().any(|other| outranks(other, chosen, own)))
+        .map(|chosen| selected.iter().any(|other| outranks(other, chosen, public)))
         .collect();
     let mut position = 0;
     selected.retain(|_| {
@@ -2200,16 +2285,17 @@ fn most_specific(selected: &mut Vec<Chosen>, own: usize) {
 
 /// True when `better` outranks `worse`, each a candidate a call admits
 /// or may admit: as specific in each of the operator's own parameters,
-/// `own` of them, compared place for place ([`specificity`]), and more
+/// compared place for place ([`specificity`]), and more
 /// specific in one (GEN-5, GEN-12).
-fn outranks(better: &Chosen, worse: &Chosen, own: usize) -> bool {
-    let whole = better
-        .declared
-        .parameters
-        .iter()
-        .zip(&worse.declared.parameters)
-        .take(own)
-        .map(|(better, worse)| specificity(&better.ty, &worse.ty))
+fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
+    let whole = public
+        .candidate_parameters(better.declared)
+        .zip(public.candidate_parameters(worse.declared))
+        .filter_map(|(better_index, worse_index)| {
+            let better = &better.declared.parameters[better_index?];
+            let worse = &worse.declared.parameters[worse_index?];
+            Some(specificity(&better.ty, &worse.ty))
+        })
         .fold(Specific::Same, Specific::and);
     whole == Specific::More
 }

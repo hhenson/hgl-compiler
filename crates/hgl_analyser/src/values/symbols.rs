@@ -10,13 +10,13 @@ use super::candidates::{Given, Key, Settled, Wanted, typed_by_place};
 use super::control::joined;
 use super::expressions::{takes_its_type, written_null};
 use super::fit::{open, whole};
-use super::operators::{options_of, unreadable};
+use super::operators::{from_place, options_of, public_inputs, unreadable};
 use super::{BOOL, Typer};
 use crate::constant::is_least_magnitude;
 use crate::hir::{BinaryOperator, Expr, ExprKind, Form, UnaryOperator, Value, ValueCategory};
 use crate::program::{DeclarationKind, OperatorRef};
 use crate::syntax::{child, tokens, ungrouped};
-use crate::types::{Detail, Scalar, Type};
+use crate::types::{Detail, Scalar, Signature, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -569,7 +569,7 @@ impl<'a> Typer<'a> {
             return (Vec::new(), true);
         };
         let candidates = self.value_candidates(operator);
-        let (selecting, options) = options_of(public, &candidates);
+        let options = options_of(public, &candidates);
         let reported = self.diagnostics.len();
         let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut given = Vec::new();
@@ -583,12 +583,13 @@ impl<'a> Typer<'a> {
             };
             let text = name.text();
             let at = Location::new(self.file, name.span());
-            // The operator's own parameters are the symbol's operands.
-            let operand = public
-                .parameters
-                .iter()
-                .any(|parameter| parameter.name == text);
-            if !operand && !options.contains(text) {
+            let key = options.name_key(text, true);
+            // Ordinary public parameters are supplied by the operands.
+            // A configuration parameter or generic value parameter of
+            // the same name takes precedence in braces (EXPR-10).
+            let operand =
+                key.public_parameter(public).is_some() && !matches!(key, Key::Configuration(_));
+            if key.public_parameter(public).is_none() && !options.accepts_name(&key) {
                 self.diagnostics.emit(error(
                     Category::Name,
                     codes::ARGUMENT_UNKNOWN,
@@ -605,9 +606,9 @@ impl<'a> Typer<'a> {
                     "EXPR-10",
                 ));
             }
-            given.push(self.give(Key::Name(text.to_string()), value));
+            given.push(self.give(key, value));
         }
-        self.constants_given(&mut given, &selecting);
+        self.constants_given(&given, public);
         let faulty = self.diagnostics.len() != reported
             || given
                 .iter()
@@ -615,22 +616,17 @@ impl<'a> Typer<'a> {
         (given, faulty)
     }
 
-    /// What each argument given to a generic value parameter is, as a
-    /// constant where the call stands. `selecting` is the names the
-    /// operator's candidates declare as generic value parameters.
+    /// Checks each candidate-only selector as a constant where the call
+    /// stands. The public values were read with the public signature.
     ///
     /// GEN-8: "The value a call gives a generic value parameter is a
     /// compile-time constant ... Any other rejects."
-    pub(super) fn constants_given(
-        &mut self,
-        given: &mut [Given],
-        selecting: &std::collections::HashSet<&str>,
-    ) {
-        for given in given.iter_mut() {
-            let Key::Name(name) = &given.key else {
+    pub(super) fn constants_given(&mut self, given: &[Given], public: &Signature) {
+        for given in given {
+            let Key::Generic(name) = &given.key else {
                 continue;
             };
-            if !selecting.contains(name.as_str()) {
+            if given.key.generic_parameter(public).is_some() {
                 continue;
             }
             // Its type is the candidate's to say (GEN-6): it is read as a
@@ -678,12 +674,39 @@ impl<'a> Typer<'a> {
         if unreadable(public, &candidates) {
             return (self.unselected(given, symbol.form), symbol.unjudged);
         }
+        if self.missing_configuration(public, &given, symbol.text, symbol.at) {
+            return (self.unselected(given, symbol.form), symbol.unjudged);
+        }
         let own_generics: Vec<Location> =
             public.generics.iter().map(|generic| generic.at).collect();
-        // A symbol writes no generic argument.
+        let reported = self.diagnostics.len();
+        let mut found = vec![None; public.generics.len()];
+        let said = self.operator_generic_arguments(
+            public,
+            given.iter().map(|given| (&given.key, &given.node)),
+            &mut found,
+        );
+        if self.diagnostics.len() != reported {
+            return (self.unselected(given, symbol.form), symbol.unjudged);
+        }
+        let (requested, among) = if said {
+            from_place(public, symbol.place.as_ref(), &mut found);
+            let supplied = public_inputs(public, &given);
+            let requested = self.output_requested(operator, public, found, &supplied, true);
+            if let Some(unfit) = &requested.unfit {
+                self.diagnostics.emit(unfit.diagnostic(public, symbol.at));
+                return (self.unselected(given, symbol.form), symbol.unjudged);
+            }
+            (requested.place, requested.among)
+        } else {
+            (
+                None,
+                self.result_among(operator, public, &[], &own_generics),
+            )
+        };
         let wanted = Wanted {
-            place: symbol.place.as_ref(),
-            among: self.result_among(operator, public, &[], &own_generics),
+            place: requested.as_ref().or(symbol.place.as_ref()),
+            among,
             written: false,
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
@@ -765,9 +788,7 @@ impl<'a> Typer<'a> {
         let entries: Vec<String> = given
             .iter()
             .filter_map(|given| {
-                let Key::Name(name) = &given.key else {
-                    return None;
-                };
+                let name = given.key.name()?;
                 let value = if given.by_place {
                     given.node.text().to_string().trim().to_string()
                 } else {

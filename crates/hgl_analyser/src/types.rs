@@ -782,6 +782,31 @@ pub struct Signature {
 }
 
 impl Signature {
+    /// Maps each parameter of this operator to the candidate's index, in
+    /// the operator's order. Configuration parameters match by name in
+    /// the braces (FN-18); the ordinary parameters match in order
+    /// (GEN-6), even where the candidate adds its own configuration.
+    pub(crate) fn candidate_parameters<'a>(
+        &'a self,
+        candidate: &'a Signature,
+    ) -> impl Iterator<Item = Option<usize>> + 'a {
+        let mut ordinary = candidate
+            .parameters
+            .iter()
+            .enumerate()
+            .filter(|(_, parameter)| !parameter.configuration);
+        self.parameters.iter().map(move |parameter| {
+            if parameter.configuration {
+                candidate
+                    .parameters
+                    .iter()
+                    .position(|given| given.configuration && given.name == parameter.name)
+            } else {
+                ordinary.next().map(|(index, _)| index)
+            }
+        })
+    }
+
     /// The signature a struct's declaration is read with: its generic
     /// parameters, and neither a parameter nor a result. What a field's
     /// type or default may name of it is its generic parameters

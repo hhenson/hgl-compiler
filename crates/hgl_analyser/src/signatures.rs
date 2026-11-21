@@ -28,6 +28,7 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     constant_failures(program, diagnostics);
     generic_defaults(program, diagnostics);
     option_kinds(program, diagnostics);
+    configuration_shapes(program, diagnostics);
     var_parameters(program, diagnostics);
     ref_marks(program, diagnostics);
 }
@@ -534,13 +535,19 @@ fn option_kinds(program: &Program, diagnostics: &mut Diagnostics) {
             continue;
         };
         let public = &program.modules[operator.0].declarations[operator.1];
-        // A candidate's first parameters are its operator's; those after
-        // are its own options.
-        let own = match program.modules[operator.0].details.get(operator.1) {
-            Some(Detail::Callable(public)) => public.parameters.len(),
-            _ => continue,
+        let Some(Detail::Callable(signature_of_operator)) =
+            program.modules[operator.0].details.get(operator.1)
+        else {
+            continue;
         };
-        for parameter in signature.parameters.iter().skip(own) {
+        let own: std::collections::HashSet<_> = signature_of_operator
+            .candidate_parameters(signature)
+            .flatten()
+            .collect();
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            if own.contains(&index) {
+                continue;
+            }
             let Some(other) = names.get(parameter.name.as_str()) else {
                 continue;
             };
@@ -558,6 +565,69 @@ fn option_kinds(program: &Program, diagnostics: &mut Diagnostics) {
                 )
                 .with_related(*other, "a generic value parameter here"),
             );
+        }
+    }
+}
+
+/// GEN-6 and FN-18: a candidate must declare its operator's
+/// configuration parameters in braces. A temporal candidate cannot
+/// make a declared const configuration into a temporal input.
+fn configuration_shapes(program: &Program, diagnostics: &mut Diagnostics) {
+    for module in &program.modules {
+        for (index, candidate) in module.declarations.iter().enumerate() {
+            let (Some((role, Some(operator))), Some(Detail::Callable(signature))) =
+                (candidate.kind.candidate(), module.details.get(index))
+            else {
+                continue;
+            };
+            let Some(Detail::Callable(public)) = program.modules[operator.module]
+                .details
+                .get(operator.declaration)
+            else {
+                continue;
+            };
+            for (parameter, place) in public
+                .parameters
+                .iter()
+                .zip(public.candidate_parameters(signature))
+            {
+                if !parameter.configuration {
+                    continue;
+                }
+                let (at, message) = match place {
+                    None => (
+                        candidate.at,
+                        format!(
+                            "this candidate must declare `{}` in its configuration",
+                            parameter.name
+                        ),
+                    ),
+                    Some(index)
+                        if role == Role::Temporal
+                            && parameter.constant
+                            && !signature.parameters[index].constant =>
+                    {
+                        (
+                            signature.parameters[index].at,
+                            format!(
+                                "this candidate must declare configuration parameter `{}` as `const`",
+                                parameter.name
+                            ),
+                        )
+                    }
+                    Some(_) => continue,
+                };
+                diagnostics.emit(
+                    crate::local_error(
+                        Category::Operator,
+                        codes::local::IMPL_CONFIGURATION,
+                        at,
+                        message,
+                        "GEN-6",
+                    )
+                    .with_related(parameter.at, "the operator's configuration parameter"),
+                );
+            }
         }
     }
 }

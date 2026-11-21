@@ -2719,3 +2719,31 @@ fn a_tests_failure_is_named_after_a_node_written_ahead_of_it() {
         "{stdout}"
     );
 }
+
+/// FN-18, GEN-6, EXPR-10, EXPR-13: a named or symbol operator gives
+/// the selected candidate its configuration in written evaluation order.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn operator_configuration_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("operator_configuration");
+    let file = write(
+        &root,
+        "demo.operator_configuration.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.operator_configuration.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}

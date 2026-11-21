@@ -9,7 +9,7 @@ use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
-use super::candidates::{AtInstance, Given, Key, Wanted};
+use super::candidates::{AtInstance, Given, Wanted};
 use super::fit::{open, whole};
 use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, unreadable};
@@ -1089,13 +1089,7 @@ impl<'a> Typer<'a> {
             if argument.by_place && !argument.retried {
                 return None;
             }
-            let place = match &argument.key {
-                Key::Position(position) => *position,
-                Key::Name(name) => public
-                    .parameters
-                    .iter()
-                    .position(|parameter| parameter.name == *name)?,
-            };
+            let place = argument.key.public_parameter(public)?;
             // The operands a requirement is supplied with stand in the
             // operator's first places, each given once.
             if place >= given.len() || places.contains(&place) {

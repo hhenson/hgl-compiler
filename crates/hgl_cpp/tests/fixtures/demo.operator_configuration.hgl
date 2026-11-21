@@ -1,0 +1,52 @@
+module demo.operator_configuration
+
+# FN-18, GEN-6, UNIT-8: the operator owns its configuration
+# defaults even when the candidate's brace order differs.
+const offset_default: i64 = 9
+operator combine{offset: i64 = offset_default, by: i64}(value: i64) -> i64
+impl const fn combine{by: i64, extra: i64 = 2, offset: i64}(argument: i64) -> i64 =>
+    offset * 100 + by * 10 + argument + extra
+
+struct Digit { value: i64 }
+
+# A candidate-only configuration option takes a separate brace entry.
+impl const fn add_{shift: i64}(lhs: Digit, rhs: Digit) -> i64 =>
+    shift * 100 + lhs.value * 10 + rhs.value
+
+test named_operator_configuration {
+    assert combine{by: 3}(4) == 936
+    assert combine{offset: 1, by: 2, extra: 3}(value: 4) == 127
+
+    var order = 0
+    let total = combine{
+        offset: {
+            order += 1
+            order
+        },
+        by: {
+            order += 1
+            order
+        },
+    }({
+        order += 1
+        order
+    })
+    assert total == 125
+    assert order == 3
+}
+
+test symbol_configuration {
+    var order = 0
+    let total = {
+        order += 1
+        Digit(value: order)
+    } +{shift: {
+        order += 1
+        order
+    }} {
+        order += 1
+        Digit(value: order)
+    }
+    assert total == 213
+    assert order == 3
+}

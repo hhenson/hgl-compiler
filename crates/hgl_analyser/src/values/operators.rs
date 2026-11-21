@@ -3,23 +3,26 @@
 //! operator's value candidates (GEN-5, GEN-6, EXPR-2). Part of the typing
 //! pass ([`super`]); the candidate is selected in [`super::candidates`].
 
+use std::collections::HashSet;
+
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::candidates::{Chosen, Given, Key, Settled, Wanted, typed_by_place};
-use super::constants::generic_default;
+use super::constants::{constant_text, generic_default};
 use super::fit::{open, whole};
 use super::inference::{
     ExplicitGenerics, bare_parameter, fixed, infer, infer_from_place, mentions, pack_bounds,
     placed, unsaid,
 };
 use super::{Candidate, Typer};
-use crate::declared::{agree, substitute_within};
+use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
-use crate::program::{OperatorRef, Role};
+use crate::program::{OperatorRef, Program, Role};
 use crate::syntax::has_token;
 use crate::types::{
-    Argument, CallArguments, Detail, GenericKind, NamedKind, Pack, Signature, Type,
+    Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, NamedKind, Pack,
+    Signature, Type,
 };
 use crate::{codes, error};
 
@@ -222,9 +225,7 @@ impl<'a> Typer<'a> {
         // what its place expects, then its arguments, and the default
         // where none of them says."
         // What the call writes, before its place says anything.
-        let explicit = written.clone();
-        let mut found = written;
-        from_place(public, expected, &mut found);
+        let mut explicit = written;
         let candidates = self.value_candidates(operator);
         if unreadable(public, &candidates) {
             return self.unread_call(list);
@@ -236,9 +237,17 @@ impl<'a> Typer<'a> {
         // candidate an argument is given to, and what a call may leave
         // out, is each candidate's to say (GEN-6: "A call is matched
         // against each candidate's own signature").
-        let (selecting, options) = options_of(public, &candidates);
+        let options = options_of(public, &candidates);
         let reported = self.diagnostics.len();
         let written = self.operator_arguments(name, list, public, &options, pack.as_ref());
+        let named_generics = self.diagnostics.len() == reported
+            && self.operator_generic_arguments(
+                public,
+                written.iter().map(|(key, node)| (key, node)),
+                &mut explicit,
+            );
+        let mut found = explicit.clone();
+        from_place(public, expected, &mut found);
         let mut context = None;
         if public
             .parameters
@@ -276,7 +285,15 @@ impl<'a> Typer<'a> {
         }
         let mut given =
             self.read_operator_arguments(public, written, context.as_deref(), pack.as_ref());
-        self.constants_given(&mut given, &selecting);
+        self.constants_given(&given, public);
+        if self.diagnostics.len() == reported {
+            self.missing_configuration(
+                public,
+                &given,
+                name.text(),
+                Location::new(self.file, name.span()),
+            );
+        }
         // An argument given to no parameter, or rejected itself, has
         // been reported, and one whose type is not known says nothing
         // of the candidates: the call is then not judged (ERR-9).
@@ -302,7 +319,8 @@ impl<'a> Typer<'a> {
         }
         // The generic arguments the call writes, for a requirement to
         // agree with (GEN-8).
-        let written_generics: Option<Vec<Option<Argument>>> = generics.map(|_| found.clone());
+        let said = generics.is_some() || named_generics;
+        let written_generics = said.then(|| found.clone());
 
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12), and its defaults: see
@@ -312,28 +330,14 @@ impl<'a> Typer<'a> {
             place: requested,
             among,
             unfit,
-        } = self.output_requested(operator, public, found, &supplied, generics.is_some());
+        } = self.output_requested(operator, public, found, &supplied, said);
         // GEN-13: a default the call takes is of its parameter's type
         // as the call resolves it: the `2` of
         // `operator choose<T, const fallback: T = 2>` is no `str`. One
         // that is not of the type as it is declared is reported there.
-        if let Some(Unfit {
-            generic,
-            described,
-            resolved,
-        }) = unfit
-        {
-            let generic = &public.generics[generic];
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::TYPE_MISMATCH,
-                Location::new(self.file, name.span()),
-                format!(
-                    "this leaves `{}` to its default, {described}, and `{}` is `{resolved}` here",
-                    generic.name, generic.name
-                ),
-                "GEN-13",
-            ));
+        if let Some(unfit) = unfit {
+            let at = Location::new(self.file, name.span());
+            self.diagnostics.emit(unfit.diagnostic(public, at));
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
         // GEN-7: "A generic body is checked under its stated
@@ -454,7 +458,7 @@ impl<'a> Typer<'a> {
         let fixed = public
             .parameters
             .iter()
-            .filter(|parameter| parameter.pack.is_none())
+            .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
             .count();
         written
             .into_iter()
@@ -549,7 +553,8 @@ impl<'a> Typer<'a> {
                 };
                 match &given.key {
                     // An option is known by its name.
-                    Key::Name(name) if !public.parameters.iter().any(|p| p.name == *name) => {
+                    key if key.public_parameter(public).is_none() && key.name().is_some() => {
+                        let name = key.name().expect("named operator option");
                         format!("`{name}: {value}`")
                     }
                     _ => format!("`{value}`"),
@@ -658,10 +663,7 @@ impl<'a> Typer<'a> {
         let ([value], [parameter]) = (given, public.parameters.as_slice()) else {
             return None;
         };
-        let named = match &value.key {
-            Key::Position(position) => *position == 0,
-            Key::Name(name) => *name == parameter.name,
-        };
+        let named = value.key.public_parameter(public) == Some(0);
         if !named {
             return None;
         }
@@ -787,17 +789,18 @@ impl<'a> Typer<'a> {
         callee: &SyntaxToken,
         list: &SyntaxNode,
         public: &Signature,
-        options: &std::collections::HashSet<&str>,
+        options: &OperatorOptions<'_>,
         written_pack: Option<&hir::TypePackArgument>,
     ) -> Vec<(Key, SyntaxNode)> {
         let mut named_seen = false;
         let mut position = 0;
-        let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut names = HashSet::new();
+        let mut filled = HashSet::new();
         let mut arguments = Vec::new();
         let fixed = public
             .parameters
             .iter()
-            .filter(|parameter| parameter.pack.is_none())
+            .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
             .count();
         let has_named_pack = public
             .parameters
@@ -805,61 +808,90 @@ impl<'a> Typer<'a> {
             .any(|parameter| parameter.pack == Some(Pack::Named));
         let mut positional = Vec::new();
         let mut named = Vec::new();
-        for (name, value) in self.call_arguments(list) {
+        for (brace, name, value) in self.call_entries(list) {
+            let at = name.as_ref().map_or_else(
+                || self.at(&value),
+                |name| Location::new(self.file, name.span()),
+            );
             let key = match name {
                 None => {
                     if named_seen {
                         self.diagnostics.emit(error(
                             Category::Type,
                             codes::ARGUMENT_ORDER,
-                            self.at(&value),
+                            at,
                             "an argument with no name follows a named one: positional \
                              arguments come first"
                                 .to_string(),
                             "EXPR-2",
                         ));
                     }
+                    // FN-18: a surplus positional argument cannot fill a
+                    // configuration slot, even where it has no default.
+                    if !options.configuration.is_empty()
+                        && options
+                            .positional_limit
+                            .is_some_and(|maximum| position >= maximum)
+                    {
+                        self.diagnostics.emit(error(
+                            Category::Type,
+                            codes::ARGUMENT_UNEXPECTED,
+                            at,
+                            format!("`{}` takes no positional argument here", callee.text()),
+                            "FN-18",
+                        ));
+                    }
                     if position >= fixed {
-                        positional.push(self.at(&value));
+                        positional.push(at);
                     }
                     position += 1;
                     Key::Position(position - 1)
                 }
                 Some(name) => {
-                    named_seen = true;
-                    let text = name.text();
-                    let at = Location::new(self.file, name.span());
-                    // The operator's parameters are the same places in
-                    // every candidate, the first of each.
-                    let own = public
-                        .parameters
-                        .iter()
-                        .position(|parameter| parameter.pack.is_none() && parameter.name == text);
-                    let captured = own.is_none() && !options.contains(text);
-                    if captured && !has_named_pack {
-                        self.diagnostics.emit(error(
-                            Category::Name,
-                            codes::ARGUMENT_UNKNOWN,
-                            at,
-                            format!("`{}` has no parameter `{text}`", callee.text()),
-                            "EXPR-2",
-                        ));
-                    } else if !names.insert(text.to_string())
-                        || own.is_some_and(|index| index < position)
-                    {
-                        self.diagnostics.emit(error(
-                            Category::Name,
-                            codes::ARGUMENT_DUPLICATE,
-                            at,
-                            format!("`{text}` is given twice"),
-                            "EXPR-2",
-                        ));
-                    } else if captured {
-                        named.push(at);
-                    }
-                    Key::Name(text.to_string())
+                    // A named brace entry does not put the parentheses
+                    // into their named-argument portion (EXPR-2, EXPR-10).
+                    named_seen |= !brace;
+                    options.name_key(name.text(), brace)
                 }
             };
+            let own = key.public_parameter(public);
+            let mut duplicate = own.is_some_and(|index| !filled.insert(index));
+            if let Some(text) = key.name() {
+                let known = own.is_some() || options.accepts_name(&key);
+                let captured =
+                    !known && has_named_pack && !(options.configuration.contains(text) && !brace);
+                if !known && !captured {
+                    self.diagnostics.emit(error(
+                        Category::Name,
+                        codes::ARGUMENT_UNKNOWN,
+                        at,
+                        format!("`{}` has no parameter `{text}`", callee.text()),
+                        if brace || options.configuration.contains(text) {
+                            "FN-18"
+                        } else {
+                            "EXPR-2"
+                        },
+                    ));
+                } else {
+                    duplicate |= !names.insert(text.to_string());
+                    if captured && !duplicate {
+                        named.push(at);
+                    }
+                }
+            }
+            if duplicate {
+                let name = own.map_or_else(
+                    || key.name().unwrap_or_default(),
+                    |index| public.parameters[index].name.as_str(),
+                );
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::ARGUMENT_DUPLICATE,
+                    at,
+                    format!("`{name}` is given twice"),
+                    "EXPR-2",
+                ));
+            }
             arguments.push((key, value));
         }
         for parameter in &public.parameters {
@@ -872,6 +904,89 @@ impl<'a> Typer<'a> {
             self.check_pack_count(list, &parameter.name, bounds, captured);
         }
         arguments
+    }
+
+    /// GEN-8: public named generic values take part in the requested
+    /// result even where a candidate specializes it without a generic.
+    pub(super) fn operator_generic_arguments<'s>(
+        &mut self,
+        signature: &Signature,
+        written: impl Iterator<Item = (&'s Key, &'s SyntaxNode)>,
+        found: &mut [Option<Argument>],
+    ) -> bool {
+        let mut said = false;
+        for (key, node) in written {
+            let Some(index) = key.generic_parameter(signature) else {
+                continue;
+            };
+            let generic = &signature.generics[index];
+            if found[index].is_some() {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::ARGUMENT_DUPLICATE,
+                    self.at(node),
+                    format!("`{}` is given twice", generic.name),
+                    "EXPR-2",
+                ));
+                continue;
+            }
+            let expected = match &generic.kind {
+                GenericKind::Value(ty) if !names_parameter(ty) => Some(ty),
+                _ => None,
+            };
+            let read = self.read_constant(node, expected);
+            if let Some(why) = Self::not_constant(&read) {
+                let name = &generic.name;
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_CONSTANT,
+                    self.at(node),
+                    format!("`{name}` is a generic value parameter, and this is no compile-time constant: {why}"),
+                    "GEN-8",
+                ));
+            }
+            found[index] = Some(Argument::Constant(Constant {
+                text: constant_text(node),
+                value: read.unwrap_or(ConstantValue::Unknown),
+            }));
+            said = true;
+        }
+        said
+    }
+
+    /// FN-18: the operator owns the required entries in its braces.
+    /// Candidate-only options are still judged during selection (GEN-6).
+    pub(super) fn missing_configuration(
+        &mut self,
+        public: &Signature,
+        given: &[Given],
+        name: &str,
+        at: Location,
+    ) -> bool {
+        let mut missing = false;
+        for parameter in public.parameters.iter().filter(|parameter| {
+            parameter.configuration
+                && !parameter.has_default
+                && !matches!(parameter.ty, Type::Nullable(_))
+        }) {
+            if given.iter().any(
+                |given| matches!(&given.key, Key::Configuration(name) if *name == parameter.name),
+            ) {
+                continue;
+            }
+            missing = true;
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_MISSING,
+                at,
+                format!(
+                    "`{name}` is given no `{}`, a configuration parameter with no default",
+                    parameter.name
+                ),
+                "FN-18",
+            ));
+        }
+        missing
     }
 
     /// The argument `given` as the value of a parameter of type `ty`,
@@ -913,37 +1028,20 @@ impl<'a> Typer<'a> {
     }
 }
 
-/// The operator owns its parameter names and order (GEN-4).
-fn public_argument_names(key: &Key, (index, name): (usize, &str)) -> bool {
-    match key {
-        Key::Position(position) => *position == index,
-        Key::Name(written) => written == name,
-    }
-}
-
+/// FN-17: the public function template of the parameter the call gives.
 fn public_function<'s>(public: &'s Signature, key: &Key) -> Option<&'s Type> {
-    let parameter = match key {
-        Key::Position(position) => public.parameters.get(*position),
-        Key::Name(name) => public
-            .parameters
-            .iter()
-            .find(|parameter| parameter.name == *name),
-    }?;
-    (parameter.pack.is_none() && matches!(parameter.ty, Type::Function(_))).then_some(&parameter.ty)
+    let parameter = &public.parameters[key.public_parameter(public)?];
+    matches!(parameter.ty, Type::Function(_)).then_some(&parameter.ty)
 }
 
-fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<Option<&'a Type>> {
-    public
-        .parameters
-        .iter()
-        .enumerate()
-        .map(|(index, parameter)| {
-            given
-                .iter()
-                .find(|argument| public_argument_names(&argument.key, (index, &parameter.name)))
-                .map(Given::ty)
-        })
-        .collect()
+pub(super) fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<Option<&'a Type>> {
+    let mut inputs = vec![None; public.parameters.len()];
+    for argument in given {
+        if let Some(index) = argument.key.public_parameter(public) {
+            inputs[index] = Some(argument.ty());
+        }
+    }
+    inputs
 }
 
 /// The note on a call in a generic body that no candidate is known to
@@ -955,31 +1053,97 @@ pub(super) const UNSETTLED: &str = "which candidate admits this depends on a gen
      `requires name(T) -> R`, the parameter's value, `requires M == .value`, or the types or \
      values it may be, `requires T in {i64, f64}`";
 
-/// The names a call of an operator may give beside the operator's own
-/// parameters: those its candidates declare as generic value
-/// parameters, which select among them (GEN-6), and those with every
-/// other option they declare.
+/// The names available before selection, across the operator and its candidates.
+pub(super) struct OperatorOptions<'a> {
+    /// Generic value parameters used as candidate selectors (GEN-6).
+    selecting: HashSet<&'a str>,
+    /// Parameters that only the braces can supply (FN-18).
+    configuration: HashSet<&'a str>,
+    /// Ordinary candidate-only options (GEN-6).
+    ordinary: HashSet<&'a str>,
+    /// The largest number of positional arguments any candidate can take,
+    /// or no limit here because a signature has a positional pack.
+    positional_limit: Option<usize>,
+}
+
+impl OperatorOptions<'_> {
+    /// An EXPR-10 brace entry first names a configuration parameter.
+    /// Otherwise the existing generic and ordinary option binding applies.
+    pub(super) fn name_key(&self, name: &str, brace: bool) -> Key {
+        if brace && self.configuration.contains(name) {
+            Key::Configuration(name.to_string())
+        } else if self.selecting.contains(name) {
+            Key::Generic(name.to_string())
+        } else if brace {
+            Key::Brace(name.to_string())
+        } else {
+            Key::Name(name.to_string())
+        }
+    }
+
+    /// Whether the name belongs to an option in the argument's section.
+    pub(super) fn accepts_name(&self, key: &Key) -> bool {
+        key.name().is_some_and(|name| {
+            matches!(key, Key::Configuration(_) | Key::Generic(_)) || self.ordinary.contains(name)
+        })
+    }
+}
+
 pub(super) fn options_of<'a>(
-    public: &Signature,
+    public: &'a Signature,
     candidates: &[Candidate<'a>],
-) -> (
-    std::collections::HashSet<&'a str>,
-    std::collections::HashSet<&'a str>,
-) {
-    let own = public.parameters.len();
-    let selecting: std::collections::HashSet<&str> = candidates
-        .iter()
-        .flat_map(|(_, _, signature)| &signature.generics)
-        .filter(|generic| matches!(generic.kind, GenericKind::Value(_)))
-        .map(|generic| generic.name.as_str())
-        .collect();
-    let options = candidates
-        .iter()
-        .flat_map(|(_, _, signature)| signature.parameters.iter().skip(own))
-        .map(|parameter| parameter.name.as_str())
-        .chain(selecting.iter().copied())
-        .collect();
-    (selecting, options)
+) -> OperatorOptions<'a> {
+    let mut options = OperatorOptions {
+        selecting: HashSet::new(),
+        configuration: HashSet::new(),
+        ordinary: HashSet::new(),
+        positional_limit: Some(0),
+    };
+    for signature in
+        std::iter::once(public).chain(candidates.iter().map(|(_, _, signature)| *signature))
+    {
+        options.selecting.extend(
+            signature
+                .generics
+                .iter()
+                .filter(|generic| matches!(generic.kind, GenericKind::Value(_)))
+                .map(|generic| generic.name.as_str()),
+        );
+        options.configuration.extend(
+            signature
+                .parameters
+                .iter()
+                .filter(|parameter| parameter.configuration)
+                .map(|parameter| parameter.name.as_str()),
+        );
+        options.positional_limit = options.positional_limit.and_then(|maximum| {
+            (!signature
+                .parameters
+                .iter()
+                .any(|parameter| parameter.pack == Some(Pack::Positional)))
+            .then(|| {
+                maximum.max(
+                    signature
+                        .parameters
+                        .iter()
+                        .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
+                        .count(),
+                )
+            })
+        });
+    }
+    for &(_, _, signature) in candidates {
+        let shared: HashSet<_> = public.candidate_parameters(signature).flatten().collect();
+        options.ordinary.extend(
+            signature
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(index, parameter)| !parameter.configuration && !shared.contains(index))
+                .map(|(_, option)| option.name.as_str()),
+        );
+    }
+    options
 }
 
 /// What a call of an operator requests of its candidates: see
@@ -1004,6 +1168,27 @@ pub(super) struct Unfit {
     described: String,
     /// The parameter's type as the call resolves it.
     resolved: Type,
+}
+
+impl Unfit {
+    /// GEN-13: a default does not fit the type the operator requested.
+    pub(super) fn diagnostic(&self, public: &Signature, at: Location) -> Diagnostic {
+        let parameter = &public.generics[self.generic].name;
+        let Self {
+            described,
+            resolved,
+            ..
+        } = self;
+        error(
+            Category::Type,
+            codes::TYPE_MISMATCH,
+            at,
+            format!(
+                "this leaves `{parameter}` to its default, {described}, and `{parameter}` is `{resolved}` here"
+            ),
+            "GEN-13",
+        )
+    }
 }
 
 /// What the place a call stands in says of the operator's generic
@@ -1043,13 +1228,46 @@ pub(super) fn unreadable(public: &Signature, candidates: &[(usize, usize, &Signa
                 || public
                     .parameters
                     .iter()
-                    .enumerate()
-                    .any(|(index, parameter)| {
-                        signature
-                            .parameters
-                            .get(index)
-                            .and_then(|candidate| candidate.pack)
-                            != parameter.pack
+                    .zip(public.candidate_parameters(signature))
+                    .any(|(parameter, index)| {
+                        index
+                            .is_some_and(|index| signature.parameters[index].pack != parameter.pack)
+                            || index.is_none()
+                                && (parameter.configuration || parameter.pack.is_some())
                     })
         })
+}
+
+/// GEN-6: the operator owns the defaults of its configuration parameters.
+/// Copy the checked expression to each candidate's corresponding slot,
+/// keeping the operator's original bindings and source location (UNIT-7).
+pub(super) fn inherit_configuration_defaults(program: &mut Program) {
+    let mut inherited = Vec::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        for (index, declaration) in unit.declarations.iter().enumerate() {
+            let (Some((_, Some(operator))), Some(Detail::Callable(candidate))) =
+                (declaration.kind.candidate(), unit.details.get(index))
+            else {
+                continue;
+            };
+            let owner = &program.modules[operator.module];
+            let Some(Detail::Callable(public)) = owner.details.get(operator.declaration) else {
+                continue;
+            };
+            for (public_index, place) in public.candidate_parameters(candidate).enumerate() {
+                if !public.parameters[public_index].configuration {
+                    continue;
+                }
+                if let Some(place) = place
+                    && let Some(Some(default)) =
+                        owner.defaults[operator.declaration].get(public_index)
+                {
+                    inherited.push((module, index, place, default.clone()));
+                }
+            }
+        }
+    }
+    for (module, index, place, default) in inherited {
+        program.modules[module].defaults[index][place] = Some(default);
+    }
 }

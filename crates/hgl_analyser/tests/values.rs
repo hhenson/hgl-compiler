@@ -4490,3 +4490,119 @@ fn a_direct_anonymous_call_may_omit_a_nullable_argument() {
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
 }
+
+/// FN-18: operator configuration cannot be supplied by position or by a
+/// parenthesized name. EXPR-2 and EXPR-10 reject duplicate slots and names.
+#[test]
+fn operator_configuration_is_supplied_only_in_braces() {
+    let checked = module(concat!(
+        "operator step{by: i64}(value: i64) -> i64\n",
+        "impl const fn step{by: i64}(item: i64) -> i64 => item + by\n",
+        "const fn missing() -> i64 => step(1)\n",
+        "const fn named_wrong() -> i64 => step(1, by: 2)\n",
+        "const fn position_wrong() -> i64 => step(1, 2)\n",
+        "const fn unknown() -> i64 => step{wrong: 1, by: 2}(3)\n",
+        "const fn duplicated() -> i64 => step{by: 1, by: 2}(3)\n",
+        "const fn duplicates_position() -> i64 => step{by: 1, value: 2}(3)\n",
+        "const fn accepted() -> i64 => step{by: 2}(value: 1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:30 type/argument.missing FN-18",
+            "m.hgl:5:42 name/argument.unknown FN-18",
+            "m.hgl:6:45 type/argument.unexpected FN-18",
+            "m.hgl:7:35 name/argument.unknown FN-18",
+            "m.hgl:8:45 name/argument.duplicate EXPR-2",
+            "m.hgl:9:64 name/argument.duplicate EXPR-2",
+        ]
+    );
+}
+
+/// GEN-6 and FN-18: a candidate cannot move an operator's configuration
+/// parameter to the ordinary list.
+#[test]
+fn operator_candidates_declare_the_public_configuration_in_braces() {
+    let checked = module(concat!(
+        "operator step{by: i64}(value: i64) -> i64\n",
+        "impl const fn step(value: i64, by: i64) -> i64 => value + by\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:15 local:operator/impl.configuration GEN-6"]
+    );
+}
+
+/// EXPR-10, GEN-6 and GEN-8: braces can name an operator-wide generic
+/// value, an ordinary candidate option, or an ordinary public parameter.
+#[test]
+fn named_operator_braces_preserve_generic_and_ordinary_options() {
+    let checked = module(concat!(
+        "operator window<const size: i64 = 1>(value: i64) -> list<i64, size>\n",
+        "impl const fn window(value: i64) -> list<i64, 1> => [value]\n",
+        "impl const fn window(value: i64) -> list<i64, 2> => [value, value]\n",
+        "operator scale(value: i64) -> i64\n",
+        "impl const fn scale(x: i64, factor: i64 = 2) -> i64 => x * factor\n",
+        "const fn uses(x: i64) {\n",
+        "    let defaulted = window(x)\n",
+        "    let expanded = window{size: 2}(x)\n",
+        "    let both = scale{factor: 3, value: x}()\n",
+        "    let old = scale(x, factor: 3)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses")[1..],
+        [
+            "defaulted: list<i64, 1>",
+            "expanded: list<i64, 2>",
+            "both: i64",
+            "old: i64",
+        ]
+    );
+}
+
+/// FN-18 and EXPR-10: a symbol's operands skip its required public
+/// configuration slot. Its braces supply the slot by name.
+#[test]
+fn symbol_operands_skip_the_public_configuration_slots() {
+    let checked = check(&[
+        (
+            "core.hgl",
+            concat!(
+                "module core\n",
+                "export operator add_{adjustment: i64}(left: i64, right: i64) -> i64\n",
+                "impl const fn add_{adjustment: i64}(lhs: i64, rhs: i64) -> i64 => adjustment\n",
+            ),
+        ),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "const fn configured() -> i64 => 2 +{adjustment: 3} 4\n",
+                "const fn omitted() -> i64 => 2 + 4\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:32 type/argument.missing FN-18"]
+    );
+    let body = body(&checked, "configured");
+    let [
+        Stmt::Return {
+            value: Some(value), ..
+        },
+    ] = body.statements.as_slice()
+    else {
+        panic!("expected a single return");
+    };
+    let ExprKind::Call { arguments, .. } = &value.kind else {
+        panic!("the configured addition selected its candidate");
+    };
+    let slots: Vec<_> = arguments
+        .iter()
+        .map(|argument| argument.parameter)
+        .collect();
+    assert_eq!(slots, [Some(1), Some(0), Some(2)]);
+}
