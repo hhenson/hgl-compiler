@@ -1,5 +1,6 @@
 // The test host's assertions, traces and runs (testing.h, traces.h).
 #include "host_state.h"
+#include "instant_text.h"
 #include "nested.h"
 
 #include <hglrt/conversions.h>
@@ -119,41 +120,6 @@ std::string detail::key_text(const TraceKey& key) {
     return scalar_text(std::get<datetime>(key));
 }
 
-namespace {
-
-/// A time of day of `microseconds` from midnight: `09:30`, `09:30:05`,
-/// `09:30:05.25`, as the language writes one (LEX-11).
-std::string clock_text(std::int64_t microseconds) {
-    const std::int64_t minutes = microseconds / 60'000'000;
-    const std::int64_t rest = microseconds % 60'000'000;
-    std::string text = std::format("{:02}:{:02}", minutes / 60, minutes % 60);
-    if (rest != 0) {
-        text += std::format(":{:02}", rest / 1'000'000);
-        if (const std::int64_t fraction = rest % 1'000'000; fraction != 0) {
-            std::string digits = std::format("{:06}", fraction);
-            digits.erase(digits.find_last_not_of('0') + 1);
-            text += "." + digits;
-        }
-    }
-    return text;
-}
-
-/// A day and the microseconds into it of the count `microseconds` from the
-/// epoch, as the language writes a date and a time: `2026-09-03T09:30`.
-std::string day_and_clock_text(std::int64_t microseconds) {
-    const std::int64_t day = 86'400'000'000;
-    std::int64_t days = microseconds / day;
-    std::int64_t into = microseconds % day;
-    if (into < 0) {
-        into += day;
-        --days;
-    }
-    const std::chrono::year_month_day calendar{std::chrono::sys_days{std::chrono::days{days}}};
-    return std::format("{:%F}T{}", calendar, clock_text(into));
-}
-
-} // namespace
-
 std::string detail::scalar_text(i64 value) {
     return hglrt::detail::number_text(value);
 }
@@ -210,11 +176,11 @@ std::string detail::scalar_text(date value) {
 }
 
 std::string detail::scalar_text(time value) {
-    return "@" + clock_text(value.microseconds);
+    return "@" + hglrt::detail::clock_text(value.microseconds);
 }
 
 std::string detail::scalar_text(datetime value) {
-    return "@" + day_and_clock_text(value.time_since_epoch().count()) + "Z";
+    return "@" + hglrt::detail::instant_text(value, hglrt::detail::InstantFormat::compact) + "Z";
 }
 
 std::string detail::scalar_text(duration value) {
@@ -235,7 +201,8 @@ std::string detail::scalar_text(duration value) {
 }
 
 std::string detail::scalar_text(const civil_datetime& value) {
-    return "@" + day_and_clock_text(value.epoch_microseconds());
+    const datetime local{duration{value.epoch_microseconds()}};
+    return "@" + hglrt::detail::instant_text(local, hglrt::detail::InstantFormat::compact);
 }
 
 std::string detail::scalar_text(const zoned_datetime& value) {

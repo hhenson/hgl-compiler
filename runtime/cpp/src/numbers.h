@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <source_location>
 
 namespace hglrt::detail {
 
@@ -61,6 +62,19 @@ inline std::optional<i64> checked_neg(i64 value) noexcept {
     }
     return -value;
 }
+
+/// Returns the checked arithmetic result, or calls `reject` at `where`.
+/// The caller supplies a failure that does not return (NUM-2).
+inline i64 in_range(std::optional<i64> computed, void (*reject)(std::source_location),
+                    std::source_location where) {
+    if (!computed.has_value()) {
+        reject(where);
+    }
+    return *computed;
+}
+
+/// The least `f64` above every `i64`, 2^63. Its negation is the least `i64`.
+inline constexpr f64 i64_upper_bound = 0x1p63;
 
 // ---- Exact quantities --------------------------------------------------------
 

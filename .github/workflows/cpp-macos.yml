@@ -1,0 +1,175 @@
+name: macOS C++ target
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MACOSX_DEPLOYMENT_TARGET: '26.0'
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_BUILD_JOBS: '8'
+  HGL_BUILD_JOBS: '12'
+  CMAKE_BUILD_PARALLEL_LEVEL: '4'
+  MICROMAMBA_VERSION: 2.10.0-0
+
+jobs:
+  cpp-macos:
+    if: >-
+      github.repository == 'hhenson/hgl-compiler' &&
+      vars.HGL_SELF_HOSTED_MACOS == 'true' &&
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_dispatch' && github.ref_type == 'branch')
+      )
+    runs-on: [self-hosted, macOS, ARM64, hgl-release]
+    timeout-minutes: 60
+    steps:
+      - name: Isolate the job and mask paths
+        run: |
+          for path in "$HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "$RUNNER_TOOL_CACHE" \
+              "${TMPDIR:-}" "${DEVELOPER_DIR:-}" "${SDKROOT:-}"; do
+            if [[ -d $path ]]; then
+              printf '::add-mask::%s\n' "$(cd -- "$path" && pwd -P)"
+            fi
+          done
+          state="$RUNNER_TOOL_CACHE/hgl-cpp-macos"
+          {
+            echo "CARGO_HOME=$state/cargo"
+            echo "RUSTUP_HOME=$state/rustup"
+            echo "UV_CACHE_DIR=$state/uv-cache"
+            echo "UV_PYTHON_INSTALL_DIR=$state/python"
+          } >> "$GITHUB_ENV"
+          if [[ -x $HOME/.cargo/bin/cargo ]]; then
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Select the pinned SDK and runner toolchain
+        id: sdk
+        run: |
+          workspace=$(pwd -P)
+          cxx=$(command -v "${CXX:-clang++}")
+          cc=$(command -v "${CC:-clang}")
+          sdk_root=${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}
+          sdk_root=$(cd -- "$sdk_root" && pwd -P)
+          printf '::add-mask::%s\n' "$sdk_root"
+          tag=$(cat HGRAPH_TAG)
+          mkdir -p "$workspace/target/cpp-macos/tmp"
+          # The prefixes contain absolute paths. Include the workspace
+          # and actual SDK and compiler so a cache can be used as built.
+          fingerprint=$(
+            {
+              printf '%s\n' "$workspace" "$cxx" "$cc" "$sdk_root" "$MACOSX_DEPLOYMENT_TARGET"
+              sw_vers -buildVersion
+              "$cxx" --version
+              "$cc" --version
+              if [[ -f $sdk_root/SDKSettings.plist ]]; then
+                shasum -a 256 < "$sdk_root/SDKSettings.plist"
+              fi
+            } | shasum -a 256 | cut -d ' ' -f 1
+          )
+          {
+            printf 'tag=%s\n' "$tag"
+            printf 'toolchain=%s\n' "$fingerprint"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "HGRAPH_TAG=$tag"
+            echo "CXX=$cxx"
+            echo "CC=$cc"
+            echo "SDKROOT=$sdk_root"
+            echo "HGL_HGRAPH_DEPS=$workspace/target/cpp-macos/deps"
+            echo "HGL_HGRAPH_SDK=$workspace/target/cpp-macos/sdk"
+            echo "HGL_NATIVE_CACHE=$workspace/target/cpp-macos/native-plain"
+            echo "CARGO_TARGET_DIR=$workspace/target"
+            echo "TMPDIR=$workspace/target/cpp-macos/tmp"
+            # Use the pinned SDK and plain mode unless a step selects sanitizers.
+            echo 'HGL_HGRAPH_SOURCE='
+            echo 'HGL_HGRAPH_INSTALL_RPATH='
+            echo 'HGL_CPP_FLAGS='
+            echo 'DYLD_LIBRARY_PATH='
+            echo 'DYLD_FALLBACK_LIBRARY_PATH='
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target/cpp-macos/deps
+            target/cpp-macos/sdk
+          key: hgraph-sdk-noarrow-macos-${{ runner.arch }}-${{ steps.sdk.outputs.tag }}-${{ steps.sdk.outputs.toolchain }}-${{ env.MICROMAMBA_VERSION }}-${{ hashFiles('scripts/provision-hgraph-sdk.sh', 'scripts/hgraph-dependencies.sh') }}
+
+      - name: Provision or verify the SDK
+        run: |
+          if [[ ! -d $HGL_HGRAPH_DEPS ]]; then
+            # Install only the package manager binary. The provisioner
+            # gives it a temporary home and stores packages in the job prefix.
+            mamba="$GITHUB_WORKSPACE/target/cpp-macos/micromamba"
+            curl --fail --silent --show-error --location \
+              "https://github.com/mamba-org/micromamba-releases/releases/download/$MICROMAMBA_VERSION/micromamba-osx-arm64" \
+              --output "$mamba"
+            printf '%s  %s\n' c547639f5caf742236641c362746abb4a3505774753ecd08fe341643670c4c01 "$mamba" |
+              shasum -a 256 -c -
+            chmod +x "$mamba"
+            export MAMBA_EXE="$mamba"
+          fi
+          scripts/provision-hgraph-sdk.sh "$HGRAPH_TAG" "$HGL_HGRAPH_SDK"
+          echo "$HGL_HGRAPH_DEPS/bin" >> "$GITHUB_PATH"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+      - name: Set up Python for the core checker
+        run: |
+          uv python install --no-bin 3.14
+          interpreter=$(uv python find --managed-python 3.14)
+          dirname -- "$interpreter" >> "$GITHUB_PATH"
+
+      - name: Run the Rust workspace tests
+        run: cargo test --workspace --locked --config "profile.dev.package.'*'.opt-level=3"
+
+      - name: Run the C++ runtime tests
+        run: |
+          cmake -S runtime/cpp -B target/cpp-macos/runtime-plain -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake --build target/cpp-macos/runtime-plain
+          ctest --test-dir target/cpp-macos/runtime-plain --output-on-failure
+
+      - name: Run the C++ runtime tests with sanitizers
+        run: |
+          cmake -S runtime/cpp -B target/cpp-macos/runtime-sanitize -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DHGLRT_SANITIZE=ON
+          cmake --build target/cpp-macos/runtime-sanitize
+          ctest --test-dir target/cpp-macos/runtime-sanitize --output-on-failure
+
+      - name: Run the SDK and pinned core checks
+        run: |
+          python3 -m unittest discover -s crates/hgl_cpp/ci
+          cargo test -p hgl_cli --locked --config "profile.dev.package.'*'.opt-level=3" --test cpp \
+            -- --ignored --test-threads=4
+          cargo build --locked --config "profile.dev.package.'*'.opt-level=3" --bin hgl
+          python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core
+
+      - name: Run the SDK and pinned core checks with sanitizers
+        env:
+          HGL_CPP_FLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
+          HGL_NATIVE_CACHE: ${{ github.workspace }}/target/cpp-macos/native-sanitize
+        run: |
+          cargo test -p hgl_cli --locked --config "profile.dev.package.'*'.opt-level=3" --test cpp \
+            -- --ignored --test-threads=4
+          python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core

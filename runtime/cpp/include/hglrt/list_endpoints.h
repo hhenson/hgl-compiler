@@ -29,12 +29,10 @@
 #include <hglrt/checked.h>
 #include <hglrt/endpoints.h>
 #include <hglrt/failure.h>
-#include <hglrt/testing.h>
 #include <hglrt/values.h>
 
 #include <hgraph/types/generated.h>
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <format>
@@ -44,7 +42,6 @@
 #include <string>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace hglrt {
 
@@ -274,8 +271,7 @@ template <class E>
 result<schema_value_t<schema_of<E>>> checked_whole_result(const E& endpoint) {
     std::optional<schema_value_t<schema_of<E>>> read = whole<schema_of<E>>::read(endpoint);
     if (!read.has_value()) {
-        return std::unexpected(make_error("a value read whole that may not be read whole there",
-                                          std::string{codes::unset_read}));
+        return detail::unset_result("a value read whole that may not be read whole there");
     }
     return std::move(*read);
 }
@@ -415,25 +411,13 @@ struct publisher<hgraph::TSL<C, N>> {
             // The size the list holds: a list whose every position lost its
             // value keeps its positions, not valid (TYPE-16), and one
             // invalidated holds none, as hgraph empties it (END-4).
-            const std::size_t held = out.size();
-            size = held;
-            if (delta.size_modified.has_value()) {
-                const i64 written = *delta.size_modified;
-                if (written < 0) {
-                    const std::uint64_t dropped = static_cast<std::uint64_t>(-(written + 1)) + 1;
-                    size = dropped >= held ? 0 : held - static_cast<std::size_t>(dropped);
-                } else {
-                    size = static_cast<std::size_t>(written);
-                }
-                if (!delta.updated.empty() &&
-                    static_cast<std::uint64_t>(delta.updated.rbegin()->first) >= size) {
-                    detail::refused_delta(
-                        std::format("the delta updates the position {} and gives the list a size of {}",
-                                    delta.updated.rbegin()->first, size),
-                        where);
-                }
-            } else if (!delta.updated.empty()) {
-                size = std::max(held, static_cast<std::size_t>(delta.updated.rbegin()->first) + 1);
+            size = detail::list_size_after(out.size(), delta);
+            if (delta.size_modified.has_value() && !delta.updated.empty() &&
+                static_cast<std::uint64_t>(delta.updated.rbegin()->first) >= size) {
+                detail::refused_delta(
+                    std::format("the delta updates the position {} and gives the list a size of {}",
+                                delta.updated.rbegin()->first, size),
+                    where);
             }
             out.resize(size);
         } else {
@@ -549,32 +533,9 @@ hgraph::Port<C> element_port(const hgraph::Port<hgraph::TSL<C, N>>& values, i64 
         }
     }
     const hgraph::TSValueTypeMetaData* schema = hgraph::schema_descriptor<C>::ts_meta();
-    const auto projected = [&](std::vector<std::size_t> path) {
-        path.push_back(position);
-        return path;
-    };
-    hgraph::WiringPortRef element;
-    switch (list.source_kind()) {
-    case hgraph::WiringPortRef::SourceKind::Peered:
-        element = hgraph::WiringPortRef::peered_source(list.peered_node(), projected(list.peered_path()),
-                                                       schema, list.peered_output_kind());
-        break;
-    case hgraph::WiringPortRef::SourceKind::Structural:
-        element = list.structural_children().at(position);
-        break;
-    case hgraph::WiringPortRef::SourceKind::Boundary:
-        element = list.projected_boundary_source(projected(list.boundary_path()), schema);
-        break;
-    case hgraph::WiringPortRef::SourceKind::Delayed:
-        element = list.projected_delayed_source(projected(list.delayed_path()), schema);
-        break;
-    case hgraph::WiringPortRef::SourceKind::Null:
-        element = hgraph::WiringPortRef::null_source(schema);
-        break;
-    case hgraph::WiringPortRef::SourceKind::Unbound:
-        fail_uncoded("a child of a connection that is not bound", where);
-    }
-    return hgraph::Port<C>{values.wiring(), std::move(element)};
+    return hgraph::Port<C>{
+        values.wiring(),
+        detail::projected_child(list, position, schema, "a child of a connection that is not bound")};
 }
 
 } // namespace hglrt

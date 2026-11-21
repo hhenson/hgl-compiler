@@ -222,8 +222,7 @@ list<window_value_t<E>> window_value(const E& window,
 template <window_view E>
 result<list<window_value_t<E>>> window_value_checked(const E& window) {
     if (!fn_all_valid(window)) {
-        return std::unexpected(
-            make_error("a window that is not all valid is read", std::string{codes::unset_read}));
+        return detail::unset_result("a window that is not all valid is read");
     }
     return detail::held(window);
 }
@@ -242,8 +241,7 @@ result<window_value_t<E>> fn_removed_value_checked(const E& window) {
     const hgraph::TSWDataView data = window.data_view();
     const hgraph::DateTime now = window.evaluation_time();
     if (!data.has_removed_value(now)) {
-        return std::unexpected(
-            make_error("no value left the window in the cycle", std::string{codes::unset_read}));
+        return detail::unset_result("no value left the window in the cycle");
     }
     return data.removed_value(now).template checked_as<window_value_t<E>>();
 }
