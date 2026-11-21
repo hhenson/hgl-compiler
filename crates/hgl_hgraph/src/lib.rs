@@ -42,13 +42,13 @@
 //! | A value function given a connection in a graph | A node of its own that calls it (FN-6) |
 //! | A named test | A function `test_name` |
 //! | `assert condition` | `if not (condition): raise _py.AssertionError()` |
-//! | `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, input=[7, None, 9])` |
-//! | `eval(target(input: [7]), RunConfig(length: 2us))` | `_harness.evaluate(target, input=[7], _config=...)` |
-//! | `run(target(input: [7]))` in an integration test | `_harness.evaluate(target, input=[7], _real_time=True)` |
+//! | `eval target(input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` |
+//! | `eval{length: 2us} target(input: [7])` | `_harness.evaluate(target, input=[7], _config=_harness.RunConfig(length=...))` |
+//! | `run target(input: [7])` in an integration test | `_harness.evaluate(target, input=[7], _real_time=True)` |
 //! | A timed trace, `[0s: 7, 2s: 9]` | `_harness.timed([(_dt.timedelta(microseconds=0), 7), ...])` |
 //! | `assert raises("code") { ... }` | A `try` whose handler is `_harness.raised(error, "code")` |
-//! | `eval(...) == [...]` | `_harness.same(left, right)` |
-//! | An application's `eval(entry(n: 3), RunConfig(length: 2s))` | `def _application(): return _harness.run(entry, _inst_record__i64, False, n=3, _config=...)` |
+//! | `eval target(...) == [...]` | `_harness.same(left, right)` |
+//! | An application's `inject run_config{length: 2s}` and `eval entry(n: 3)` | `def _application(): return _harness.run(entry, _inst_record__i64, False, n=3, _config=_harness.RunConfig(length=...))` |
 //! | An application's `inject global_state` and `put(global_state, "limit", 3)` | `def _application_store(_store): ...`, given to `_harness.run` as `_store=` |
 //! | A trace given to a `const fn` | `_harness.publications(trace)` |
 //!

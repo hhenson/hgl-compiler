@@ -6,10 +6,10 @@ fn members(command: i64) -> set<i64> {
     }
 }
 test removed_is_not_added {
-    assert eval(members(command: [1, 2])) == [delta<set<i64>>(added: [1]), delta<set<i64>>(added: [1])]
+    assert eval members(command: [1, 2]) == [delta<set<i64>>(added: [1]), delta<set<i64>>(added: [1])]
 }
 test one_more {
-    assert eval(members(command: [1])) == [delta<set<i64>>(added: [1]), delta<set<i64>>(removed: [1])]
+    assert eval members(command: [1]) == [delta<set<i64>>(added: [1]), delta<set<i64>>(removed: [1])]
 }
 # The division is written first, and fails first: the addition
 # after it would overflow.

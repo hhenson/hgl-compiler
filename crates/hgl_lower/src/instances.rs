@@ -427,9 +427,6 @@ impl Instances {
             // entry and is recorded by core's `record`.
             if let Some(run) = &module.run_body {
                 waiting.extend(instances.asked_in(program, &run.call));
-                if let Some(config) = &run.config {
-                    waiting.extend(instances.asked_in(program, config));
-                }
                 let record = core_function(program, "record");
                 if let (Some((module, declaration)), Some(result)) =
                     (record, run_result(program, run))

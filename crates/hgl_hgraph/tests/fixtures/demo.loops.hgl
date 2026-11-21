@@ -114,5 +114,5 @@ test switches {
     assert nested(true, 5) == 11
     assert nested(false, 1) == 20
     assert only(4) == 5
-    assert eval(running(value: [2, 0, 3])) == [2, 0, 5]
+    assert eval running(value: [2, 0, 3]) == [2, 0, 5]
 }

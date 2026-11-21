@@ -8,7 +8,7 @@ test a_failure_is_expected {
     assert raises("numeric.division_by_zero") { strict(1.0, 0.0) }
     # A node's failure, which comes out of an eval.
     assert raises("numeric.division_by_zero") {
-        eval(ratios(a: [6.0], b: [0.0]))
+        eval ratios(a: [6.0], b: [0.0])
     }
     # The test goes on after the assertion.
     assert strict(6.0, 2.0) == 3.0

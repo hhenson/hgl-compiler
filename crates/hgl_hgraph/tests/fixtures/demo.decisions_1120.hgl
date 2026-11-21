@@ -64,13 +64,13 @@ fn bid_when_modified(quote: Quote, probe: bool) -> f64 {
 fn quoted_bid(bid: f64, probe: bool) -> f64 => bid_when_modified(bids(bid), probe)
 
 test a_modified_test_guards_the_read_of_the_input_it_names {
-    assert eval(forward_when_modified(value: [_, 7, _], probe: [true, true, true])) == [-1, 7, -1]
-    assert eval(latest_a(a: [1.0, _, 3.0], b: [_, 10.0, 20.0])) == [1.0, _, 3.0]
-    assert eval(positive_when_modified(value: [_, 7, -2, _], probe: [true, _, _, true])) ==
+    assert eval forward_when_modified(value: [_, 7, _], probe: [true, true, true]) == [-1, 7, -1]
+    assert eval latest_a(a: [1.0, _, 3.0], b: [_, 10.0, 20.0]) == [1.0, _, 3.0]
+    assert eval positive_when_modified(value: [_, 7, -2, _], probe: [true, _, _, true]) ==
         [-1, 7, 0, -1]
-    assert eval(null_when_modified(probe: [true, true, true], value: [_, null, 3])) ==
+    assert eval null_when_modified(probe: [true, true, true], value: [_, null, 3]) ==
         ["silent", "null", "value"]
-    assert eval(quoted_bid(bid: [_, 1.5, _], probe: [true, true, true])) == [-1.0, 1.5, -1.0]
+    assert eval quoted_bid(bid: [_, 1.5, _], probe: [true, true, true]) == [-1.0, 1.5, -1.0]
 }
 
 # ---- A window's value where a `result` is taken (ERR-14, TYPE-11) ----
@@ -144,12 +144,12 @@ fn slot_outcome(slot: i64, price: i64, at: i64) -> str =>
     outcome_code(checked_slot(slots(slot, price), at))
 
 test a_window_read_where_a_result_is_taken_gives_an_err_before_it_is_all_valid {
-    assert eval(window_outcome(reading: [1, 2, 3])) == ["value.unset_read", "ok", "ok"]
-    assert eval(window_values(reading: [1, 2, 3])) == [[], [1, 2], [1, 2, 3]]
-    assert eval(bound_flow(reading: [1, 2])) == ["value.unset_read", "ok"]
-    assert eval(given_flow(reading: [1, 2])) == ["value.unset_read", "ok"]
-    assert eval(book_outcome(price: [1, 2])) == ["value.unset_read", "ok"]
-    assert eval(slot_outcome(slot: [0, 0, 1], price: [1, 2, 3], at: [1, 0, 1])) ==
+    assert eval window_outcome(reading: [1, 2, 3]) == ["value.unset_read", "ok", "ok"]
+    assert eval window_values(reading: [1, 2, 3]) == [[], [1, 2], [1, 2, 3]]
+    assert eval bound_flow(reading: [1, 2]) == ["value.unset_read", "ok"]
+    assert eval given_flow(reading: [1, 2]) == ["value.unset_read", "ok"]
+    assert eval book_outcome(price: [1, 2]) == ["value.unset_read", "ok"]
+    assert eval slot_outcome(slot: [0, 0, 1], price: [1, 2, 3], at: [1, 0, 1]) ==
         ["value.unset_read", "ok", "value.unset_read"]
 }
 
@@ -184,9 +184,9 @@ fn offset_flow(offset: i64, reading: i64) -> i64 => offset_total(offset, collect
 fn nullable_flow(offset: i64, reading: i64) -> i64 => offset_or_negated(offset, collected(reading))
 
 test a_default_does_not_stand_for_a_window_below_its_minimum {
-    assert eval(defaulted_total(reading: [1, 2, 3])) == [_, 3, 6]
-    assert eval(offset_flow(offset: [10, _, _, 20], reading: [_, 1, 2, _])) == [10, _, 13, 23]
-    assert eval(nullable_flow(offset: [10, _, _, 20], reading: [_, 1, 2, _])) == [-10, _, 13, 23]
+    assert eval defaulted_total(reading: [1, 2, 3]) == [_, 3, 6]
+    assert eval offset_flow(offset: [10, _, _, 20], reading: [_, 1, 2, _]) == [10, _, 13, 23]
+    assert eval nullable_flow(offset: [10, _, _, 20], reading: [_, 1, 2, _]) == [-10, _, 13, 23]
 }
 
 # ---- A branch started while the program runs (CTRL-2, CTRL-7, TIME-3, END-2) ----
@@ -233,11 +233,11 @@ fn held_while(open: bool, value: i64) -> i64 {
 }
 
 test a_branch_runs_once_with_the_values_held_when_it_starts {
-    assert eval(counted_while(open: [false, true, false, true], value: [10, _, _, _])) ==
+    assert eval counted_while(open: [false, true, false, true], value: [10, _, _, _]) ==
         [_, 1, _, 1]
-    assert eval(selected_count(open: [false, true, true, false, true], value: [10, _, 20, _, _])) ==
+    assert eval selected_count(open: [false, true, true, false, true], value: [10, _, 20, _, _]) ==
         [_, 1, 2, _, 1]
-    assert eval(held_while(open: [false, true, false, true], value: [10, _, _, _])) ==
+    assert eval held_while(open: [false, true, false, true], value: [10, _, _, _]) ==
         [_, 10, _, 10]
 }
 
@@ -254,10 +254,10 @@ fn switched_count(route: str, value: i64, fallback: i64) -> i64 {
 }
 
 test a_switched_branch_runs_once_with_the_values_held_when_it_starts {
-    assert eval(switched_count(
+    assert eval switched_count(
         route:    ["off", "on", "on", "off", "on"],
         value:    [   10,    _,   20,     _,    _],
-        fallback: [  100,    _,    _,     _,    _])) ==
+        fallback: [  100,    _,    _,     _,    _]) ==
                   [    1,    1,    2,     1,    1]
 }
 
@@ -278,7 +278,7 @@ fn quiet_while(open: bool, value: i64) -> bool {
 }
 
 test nothing_is_unmodified_in_the_cycle_a_branch_starts {
-    assert eval(quiet_while(open: [false, true, _], value: [10, _, _])) == [_, false, true]
+    assert eval quiet_while(open: [false, true, _], value: [10, _, _]) == [_, false, true]
 }
 
 # CTRL-7: "Dynamic independent dictionary/list bodies create one child
@@ -316,11 +316,11 @@ fn each_level(key: str, price: i64, level: i64, tick: bool, const shown: str) ->
 }
 
 test a_keyed_child_runs_once_with_the_values_held_when_it_starts {
-    assert eval(each_level(
+    assert eval each_level(
         key:   ["a",    _, "b",    _],
         price: [  1,    _,   2,    _],
         level: [  5,    _,   _,    _],
         tick:  [  _, true,   _, true],
-        shown: "b")) ==
+        shown: "b") ==
                [  _,    0,   _,    5]
 }

@@ -10,5 +10,5 @@ fn idle(value: i64) -> i64 {
 }
 test nested {
     assert kept() == null
-    assert eval(idle(value: [7])) == [1]
+    assert eval idle(value: [7]) == [1]
 }

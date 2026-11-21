@@ -4,9 +4,9 @@ export fn pass(value: i64) -> i64 {
 }
 export fn one() -> i64 => 1
 test bounded {
-    assert eval(pass(value: [7]), RunConfig()) == [7]
+    assert eval pass(value: [7]) == [7]
 }
 # TST-17: a run in real time.
 integration_test live {
-    assert run(pass(value: [7])) == [7]
+    assert run pass(value: [7]) == [7]
 }

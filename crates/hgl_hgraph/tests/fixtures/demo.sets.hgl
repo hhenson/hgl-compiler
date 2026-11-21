@@ -33,25 +33,25 @@ fn relayed(enabled: bool, input: set<i64>) -> set<i64> {
 }
 
 test sets {
-    assert eval(members(command: [1, _, 2, 3])) == [
+    assert eval members(command: [1, _, 2, 3]) == [
         delta<set<i64>>(added: [1, 2]),
         _,
         delta<set<i64>>(added: [3], removed: [1]),
         delta<set<i64>>(removed: [2])
     ]
-    assert eval(members(command: [0])) == []
+    assert eval members(command: [0]) == []
     # What a delta adds is a set: its order is not part of it.
-    assert eval(members(command: [1])) == [delta<set<i64>>(added: [2, 1])]
+    assert eval members(command: [1]) == [delta<set<i64>>(added: [2, 1])]
     # A delta that removes an element is not one that adds it.
-    assert eval(members(command: [1, 3])) != [
+    assert eval members(command: [1, 3]) != [
         delta<set<i64>>(added: [1, 2]),
         delta<set<i64>>(added: [2])
     ]
     # Two writes in one cycle are one delta.
-    assert eval(seen(command: [1, 2])) == [
+    assert eval seen(command: [1, 2]) == [
         delta<set<i64>>(added: [1]),
         delta<set<i64>>(added: [3], removed: [1])
     ]
-    assert eval(relayed(enabled: [true, _, true], input: [_, delta<set<i64>>(added: [1])]))
+    assert eval relayed(enabled: [true, _, true], input: [_, delta<set<i64>>(added: [1])])
         == [_, delta<set<i64>>(added: [1])]
 }

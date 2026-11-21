@@ -18,29 +18,29 @@ const fn ticks(seen: list<tuple<datetime, i64>>) -> i64 {
 }
 # A simulation of four seconds, counted and not written dense.
 test bounded {
-    assert ticks(eval(beats(every: 1s), RunConfig(length: 4s))) == 3
+    assert ticks(eval{length: 4s} beats(every: 1s)) == 3
 }
 # A third of a second of the host clock.
 integration_test beats_live {
-    let seen = run(beats(every: 10ms), RunConfig(length: 300ms))
+    let seen = run{length: 300ms} beats(every: 10ms)
     assert ticks(seen) > 20
 }
 # What is replayed is published in the cycle it is given in, in
 # real time as in a simulation.
 integration_test passes_through {
-    assert run(pass(value: [7, _, 9]), RunConfig(length: 100ms)) == [7, _, 9]
+    assert run{length: 100ms} pass(value: [7, _, 9]) == [7, _, 9]
 }
 # A run with no end goes on until its test's limit.
 integration_test endless {
-    let seen = run(beats(every: 10ms))
+    let seen = run beats(every: 10ms)
     assert ticks(seen) > 0
 }
 integration_test after {
-    assert run(pass(value: [1]), RunConfig(length: 50ms)) == [1]
+    assert run{length: 50ms} pass(value: [1]) == [1]
 }
 # TST-17: a limit of the test's own, on the line before it.
 @timeout(500ms)
 integration_test brief {
-    let seen = run(beats(every: 10ms))
+    let seen = run beats(every: 10ms)
     assert ticks(seen) > 0
 }

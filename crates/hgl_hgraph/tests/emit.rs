@@ -765,8 +765,8 @@ fn modules_nest_and_empty_forms_have_a_body() {
 /// A form the target does not write yet is reported where it is
 /// written, as a `build` diagnostic: no source category, since the
 /// language accepts the source.
-/// TST-17: `run(call, config)` in an integration test is the eval's
-/// run in real time. RUN-1: an eval's run configuration is written.
+/// TST-17: `run target(...)` in an integration test is the eval's run
+/// in real time. RUN-6: an eval's run configuration is written.
 /// UNIT-14: an application is written, what it declares as a module's
 /// is and its run statement after it.
 #[test]
@@ -778,7 +778,7 @@ fn a_run_in_real_time_and_an_application_are_written() {
             "m.live.hgl"
         ),
     ]);
-    // The eval's configuration is written (RUN-1), and so are the run
+    // The eval's configuration is written (RUN-6), and so are the run
     // in real time and the application.
     assert_eq!(emitted.reported, Vec::<String>::new());
     let module = emitted.module("m");
@@ -833,9 +833,10 @@ fn a_run_in_real_time_and_an_application_are_written() {
 
 /// UNIT-14: "An application is a unit of its own ... It holds what a
 /// module holds, and one run statement". RUN-1: "its run statement is
-/// `run(call, config)` or `eval(call, config)`, where the call is of an
-/// entry ... giving the entry's const arguments, and the configuration
-/// is a value of core's `RunConfig`".
+/// `run call` or `eval call`, where the call is of an entry ... giving
+/// the entry's const arguments. The statement gives no configuration:
+/// the run's is supplied to it (RUN-6)", whose defaults the
+/// application's `inject run_config{...}` gives.
 const APPLICATIONS: [(&str, &str); 7] = [
     fixture!("applications", "demo.ticks.hgl"),
     fixture!("applications", "demo.ticks.backtest.hgl"),
@@ -881,9 +882,9 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
         backtest.ends_with(concat!(
             "def _application():\n",
             "    return _harness.run(_hgl_4demo_5ticks.doubled, ",
-            "_hgl_4core._inst_record__i64, False, upto=rounds(), ",
-            "_config=_hgl_4core.RunConfig(length=_dt.timedelta(microseconds=10000000), ",
-            "start=None, end=None))\n",
+            "_hgl_4core._inst_record__i64, False, ",
+            "_config=_harness.RunConfig(length=_dt.timedelta(microseconds=10000000)), ",
+            "upto=rounds())\n",
         )),
         "{backtest}"
     );
@@ -892,7 +893,8 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
     assert!(
         live.contains(concat!(
             "_harness.run(_hgl_4demo_5ticks.counted, _hgl_4core._inst_record__i64, True, ",
-            "upto=100, every=_dt.timedelta(microseconds=50000), ",
+            "_config=_harness.RunConfig(length=_dt.timedelta(microseconds=220000)), ",
+            "upto=100, every=_dt.timedelta(microseconds=50000)",
         )),
         "{live}"
     );
@@ -959,14 +961,15 @@ const BOUNDED_FAILS: (&str, &str) = fixture!(
     "demo.bounded.fails.hgl"
 );
 
-/// An eval's configuration is given to the harness last, as `_config`:
-/// after the call's arguments, as EXPR-13 evaluates them.
+/// An eval's configuration is given to the harness as `_config`, before
+/// the call's arguments: it is written before the call (RUN-6), and
+/// EXPR-13 evaluates it first.
 #[test]
 fn an_evals_configuration_is_given_to_the_harness() {
     let emitted = emit_clean(&[BOUNDED]);
     let python = emitted.module("demo.bounded");
     python.assert_writes(&[
-        "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1, 2, 3, 4, 5], _config=",
+        "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, _config=_harness.RunConfig(",
         "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7])",
     ]);
 }
@@ -3901,7 +3904,7 @@ fn a_window_form_not_written_yet_is_reported() {
     assert_eq!(
         emitted.blocked("recorded").as_deref(),
         Some(
-            "<core>/core/core.hgl:96:47 the hgraph target does not write `delta_value` of a \
+            "<core>/core/core.hgl:84:47 the hgraph target does not write `delta_value` of a \
              child or of a window of a duration, or `removed_value`, read where a `result` is \
              taken (ERR-14) yet"
         )
@@ -4524,7 +4527,7 @@ fn a_timed_trace_is_its_entries() {
 }
 
 /// TST-17: "An integration test ... is a named test that may run in
-/// real time: beside `eval` it writes `run(call, config)` (RUN-3),
+/// real time: beside `eval` it writes `run call` (RUN-3),
 /// whose value is the run's output as an eval's is."
 const INTEGRATION: (&str, &str) = fixture!("integration", "demo.live.hgl");
 

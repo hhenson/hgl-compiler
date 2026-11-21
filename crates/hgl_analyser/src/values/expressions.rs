@@ -118,9 +118,8 @@ impl<'a> Typer<'a> {
             // TST-3: "Eval traces are test-local values." An `eval`
             // anywhere but in a named test is not read.
             SyntaxKind::EvalExpr if self.testing => self.eval(node),
-            // TST-17: "beside `eval` it writes `run(call, config)`
-            // (RUN-3), whose value is the run's output as an eval's
-            // is."
+            // TST-17: "beside `eval` it writes `run call` (RUN-3),
+            // whose value is the run's output as an eval's is."
             SyntaxKind::RunExpr if self.testing => self.eval(node),
             // A block or an `if` whose value is used.
             SyntaxKind::Block | SyntaxKind::IfExpr => {

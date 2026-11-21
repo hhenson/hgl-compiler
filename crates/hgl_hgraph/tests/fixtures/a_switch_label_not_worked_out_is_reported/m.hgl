@@ -42,12 +42,12 @@ fn negated(route: i64, a: i64) -> i64 {
     }
 }
 test graph_path_int {
-    assert eval(by_call(route: [9], a: [1])) == [1]
+    assert eval by_call(route: [9], a: [1]) == [1]
 }
 test graph_path_enum {
-    assert eval(by_enum(side: [Side.buy], a: [1])) == [1]
+    assert eval by_enum(side: [Side.buy], a: [1]) == [1]
 }
 test graph_path_valued {
-    assert eval(valued(route: [9, 10], a: [1, 1])) == [2, 1]
-    assert eval(alone(route: [9, 10], a: [1, 1])) == [1, 3]
+    assert eval valued(route: [9, 10], a: [1, 1]) == [2, 1]
+    assert eval alone(route: [9, 10], a: [1, 1]) == [1, 3]
 }

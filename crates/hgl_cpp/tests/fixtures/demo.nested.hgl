@@ -22,13 +22,13 @@ fn grow_pairs(step: i64) -> list<tuple<i64, str>> {
 }
 
 test a_list_of_tuples_is_relayed_whole {
-    assert eval(relay_pairs(pairs: [[(1, "a"), (2, "b")], [(3, "c")]])) ==
+    assert eval relay_pairs(pairs: [[(1, "a"), (2, "b")], [(3, "c")]]) ==
         [[(1, "a"), (2, "b")], [(3, "c")]]
 }
 
 test a_list_of_tuples_is_published_by_a_delta {
     let renamed: delta<tuple<i64, str>> = (null, "c")
-    assert eval(grow_pairs(step: [0, 1, 2])) == [
+    assert eval grow_pairs(step: [0, 1, 2]) == [
         [(1, "a")],
         delta<list<tuple<i64, str>>>(updated: [1: (2, "b")], size_modified: 2),
         delta<list<tuple<i64, str>>>(updated: [0: renamed]),
@@ -37,11 +37,11 @@ test a_list_of_tuples_is_published_by_a_delta {
 
 test a_list_of_tuples_replays_its_deltas {
     let renamed: delta<tuple<i64, str>> = (null, "c")
-    assert eval(relay_pairs(pairs: [
+    assert eval relay_pairs(pairs: [
         [(1, "a"), (2, "b")],
         delta<list<tuple<i64, str>>>(updated: [0: renamed]),
         [(5, "e")],
-    ])) == [[(1, "a"), (2, "b")], [(1, "c"), (2, "b")], [(5, "e")]]
+    ]) == [[(1, "a"), (2, "b")], [(1, "c"), (2, "b")], [(5, "e")]]
 }
 
 fn relay_fixed_pairs(pairs: list<tuple<i64, str>, 2>) -> list<tuple<i64, str>, 2> {
@@ -53,11 +53,11 @@ fn set_fixed_pair(slot: i64, value: i64) -> list<tuple<i64, str>, 2> {
 }
 
 test a_fixed_list_of_tuples_is_relayed_whole {
-    assert eval(relay_fixed_pairs(pairs: [[(1, "a"), (2, "b")]])) == [[(1, "a"), (2, "b")]]
+    assert eval relay_fixed_pairs(pairs: [[(1, "a"), (2, "b")]]) == [[(1, "a"), (2, "b")]]
 }
 
 test a_fixed_list_of_tuples_is_published_by_a_delta {
-    assert eval(set_fixed_pair(slot: [0, 1], value: [5, 6])) == [
+    assert eval set_fixed_pair(slot: [0, 1], value: [5, 6]) == [
         delta<list<tuple<i64, str>, 2>>(updated: [0: (5, "x")]),
         [(5, "x"), (6, "x")],
     ]
@@ -77,16 +77,16 @@ fn retag(step: i64) -> tuple<list<i64>, bool> {
 }
 
 test a_tuple_of_a_list_is_relayed_whole {
-    assert eval(relay_tagged(tagged: [([1, 2], true), ([3], false)])) == [([1, 2], true), ([3], false)]
+    assert eval relay_tagged(tagged: [([1, 2], true), ([3], false)]) == [([1, 2], true), ([3], false)]
 }
 
 test a_tuple_of_a_list_is_published_by_a_delta {
-    assert eval(retag(step: [0, 1, 2])) == [([1, 2], true), ([1, 2, 7], true), ([], false)]
+    assert eval retag(step: [0, 1, 2]) == [([1, 2], true), ([1, 2, 7], true), ([], false)]
 }
 
 test a_tuple_of_a_list_replays_its_cells {
     let longer: delta<tuple<list<i64>, bool>> = (delta<list<i64>>(updated: [1: 9]), null)
-    assert eval(relay_tagged(tagged: [([1, 2, 3], true), longer, ([], false)])) ==
+    assert eval relay_tagged(tagged: [([1, 2, 3], true), longer, ([], false)]) ==
         [([1, 2, 3], true), ([1, 9, 3], true), ([], false)]
 }
 
@@ -104,13 +104,13 @@ fn edit_book(step: i64) -> dict<str, tuple<i64, str>> {
 }
 
 test a_dictionary_of_tuples_is_relayed_whole {
-    assert eval(relay_book(book: [["x": (1, "a")], ["x": (1, "a"), "y": (2, "b")], ["y": (3, "c")]])) ==
+    assert eval relay_book(book: [["x": (1, "a")], ["x": (1, "a"), "y": (2, "b")], ["y": (3, "c")]]) ==
         [["x": (1, "a")], ["x": (1, "a"), "y": (2, "b")], ["y": (3, "c")]]
 }
 
 test a_dictionary_of_tuples_is_published_by_a_delta {
     let renamed: delta<tuple<i64, str>> = (null, "c")
-    assert eval(edit_book(step: [0, 1, 2])) == [
+    assert eval edit_book(step: [0, 1, 2]) == [
         ["x": (1, "a"), "y": (2, "b")],
         delta<dict<str, tuple<i64, str>>>(updated: ["x": renamed]),
         ["x": (1, "c")],
@@ -119,10 +119,10 @@ test a_dictionary_of_tuples_is_published_by_a_delta {
 
 test a_dictionary_of_tuples_replays_its_deltas {
     let renamed: delta<tuple<i64, str>> = (null, "c")
-    assert eval(relay_book(book: [
+    assert eval relay_book(book: [
         ["x": (1, "a"), "y": (2, "b")],
         delta<dict<str, tuple<i64, str>>>(updated: ["x": renamed], removed: ["y"]),
-    ])) == [["x": (1, "a"), "y": (2, "b")], ["x": (1, "c")]]
+    ]) == [["x": (1, "a"), "y": (2, "b")], ["x": (1, "c")]]
 }
 
 struct Basket {
@@ -155,12 +155,12 @@ fn summed(basket: Basket) -> i64 {
 }
 
 test a_struct_with_a_list_field_is_relayed_whole {
-    assert eval(relay_basket(basket: [Basket(name: "b", counts: [1, 2]), Basket(name: "c", counts: [])])) ==
+    assert eval relay_basket(basket: [Basket(name: "b", counts: [1, 2]), Basket(name: "c", counts: [])]) ==
         [Basket(name: "b", counts: [1, 2]), Basket(name: "c", counts: [])]
 }
 
 test a_struct_with_a_list_field_is_published_by_a_delta {
-    assert eval(fill(step: [0, 1, 2])) == [
+    assert eval fill(step: [0, 1, 2]) == [
         Basket(name: "b", counts: [1, 2]),
         delta<Basket>(counts: delta<list<i64>>(updated: [2: 3], size_modified: 3)),
         Basket(name: "b", counts: []),
@@ -168,11 +168,11 @@ test a_struct_with_a_list_field_is_published_by_a_delta {
 }
 
 test a_struct_with_a_list_field_replays_its_cells {
-    assert eval(summed(basket: [
+    assert eval summed(basket: [
         Basket(name: "b", counts: [1, 2]),
         delta<Basket>(counts: delta<list<i64>>(updated: [0: 5])),
         Basket(name: "b", counts: [4]),
-    ])) == [3, 7, 4]
+    ]) == [3, 7, 4]
 }
 
 # TIME-1, TIME-9: a child of a growing list of tuples as a connection of a
@@ -183,8 +183,8 @@ fn first_pair(pairs: list<tuple<i64, str>>) -> tuple<i64, str> => pairs[0]
 fn second_relayed(pairs: list<tuple<i64, str>>) -> tuple<i64, str> => relay_pairs(pairs)[1]
 
 test a_child_of_a_list_of_tuples_is_wired {
-    assert eval(first_pair(pairs: [[(1, "a")], [(1, "a"), (2, "b")], [(3, "c")]])) == [(1, "a"), (1, "a"), (3, "c")]
-    assert eval(second_relayed(pairs: [[(1, "a")], [(1, "a"), (2, "b")], [(3, "c")], [(4, "d"), (5, "e")]])) ==
+    assert eval first_pair(pairs: [[(1, "a")], [(1, "a"), (2, "b")], [(3, "c")]]) == [(1, "a"), (1, "a"), (3, "c")]
+    assert eval second_relayed(pairs: [[(1, "a")], [(1, "a"), (2, "b")], [(3, "c")], [(4, "d"), (5, "e")]]) ==
         [_, (2, "b"), _, (5, "e")]
 }
 
@@ -192,7 +192,7 @@ test a_child_of_a_list_of_tuples_is_wired {
 fn entry_x(book: dict<str, tuple<i64, str>>) -> tuple<i64, str> => relay_book(book)["x"]
 
 test a_key_child_of_a_dictionary_of_tuples_is_wired {
-    assert eval(entry_x(book: [["x": (1, "a")], ["y": (2, "b")], ["x": (3, "c")]])) == [(1, "a"), _, (3, "c")]
+    assert eval entry_x(book: [["x": (1, "a")], ["y": (2, "b")], ["x": (3, "c")]]) == [(1, "a"), _, (3, "c")]
 }
 
 # FN-1: a struct with a list field, and a list of them, as a node's
@@ -212,8 +212,8 @@ fn counted_all(const baskets: list<Basket>, tick: i64) -> i64 {
 }
 
 test a_struct_with_a_list_field_is_a_configuration {
-    assert eval(counted(basket: Basket(name: "b", counts: [1, 2, 3]), tick: [1, 2])) == [7, 8]
-    assert eval(counted_all(baskets: [Basket(name: "b", counts: [1]), Basket(name: "c", counts: [4])], tick: [1])) == [6]
+    assert eval counted(basket: Basket(name: "b", counts: [1, 2, 3]), tick: [1, 2]) == [7, 8]
+    assert eval counted_all(baskets: [Basket(name: "b", counts: [1]), Basket(name: "c", counts: [4])], tick: [1]) == [6]
 }
 
 # CAP-6: a struct with a list field put in the run's store and got back.
@@ -226,5 +226,5 @@ fn stored(value: i64) -> i64 {
 }
 
 test a_struct_with_a_list_field_is_stored {
-    assert eval(stored(value: [1, 5])) == [2, 6]
+    assert eval stored(value: [1, 5]) == [2, 6]
 }

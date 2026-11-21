@@ -15,13 +15,14 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | `eval(target(value: [1, _, 3]))` (TST-5, CEVAL-1) | `::hglrt::testing::evaluate<T>(entry)`: the entry wires core's `replay` of each trace written to the input it is given, the target, and core's `record` of its result under `"run.output"`, and, for a result whose delta is no T, a node `held_00_` that keeps the result read whole at each publication (`::hglrt::testing::hold`); `run(...)` in an integration test runs in real time (TST-17); an eval of a target with no result is `::hglrt::testing::run(entry)` (TST-8) |
+//! | `eval target(value: [1, _, 3])` (TST-5, CEVAL-1) | `::hglrt::testing::evaluate<T>(entry)`: the entry wires core's `replay` of each trace written to the input it is given, the target, and core's `record` of its result under `"run.output"`, and, for a result whose delta is no T, a node `held_00_` that keeps the result read whole at each publication (`::hglrt::testing::hold`); `run target(...)` in an integration test runs in real time (TST-17); an eval of a target with no result is `::hglrt::testing::run(entry)` (TST-8) |
 //! | `[7, _, 9]`, `[0s: 7, 2s: 9]` (TST-6, TST-7) | `::hglrt::testing::Dense<T>{7, std::nullopt, 9}`, `::hglrt::testing::Timed<T>{...}`, each cell as its type's family writes it |
 //! | `assert left == right` of two traces (TST-4) | `::hglrt::testing::expect_same(left, right)`, the left one evaluated first; `!=` is `expect_different`; either as a value is `::hglrt::testing::same` |
 //! | A trace given to a `const fn` (TST-16) | `::hglrt::testing::publications(trace)`, its publications as a list |
-//! | `let seen = eval(...)`, a `let` of a trace | `const auto seen = ...;`: the recording, or the trace written out, as the test host has it |
+//! | `let seen = eval target(...)`, a `let` of a trace | `const auto seen = ...;`: the recording, or the trace written out, as the test host has it |
 //!
-//! An eval's configuration is the lifecycle's (`lifecycle`). An eval of a
+//! An eval's configuration, and an integration test's `inject
+//! run_config`, are the lifecycle's (`lifecycle`). An eval of a
 //! value function is its lifted node's (`lifting`), given the replays as
 //! its inputs and each default the call leaves out as configuration, and
 //! written ahead of the test.
@@ -35,6 +36,7 @@ use super::Emitter;
 use super::calls::{changes, may_fail};
 use super::forms::Family;
 use super::graphs::WIRING;
+use super::lifecycle::config_held;
 use super::lifting::Given;
 use super::names::{self, identifier};
 use super::nodes::{Context, Kind, Placed};
@@ -86,12 +88,13 @@ impl Emitter<'_> {
         self.piece.text = ahead + &text;
     }
 
-    /// `value`, an `eval(...)` (TST-5, TST-8; core's CEVAL-1): a run of
-    /// the entry made for it, and the trace it recorded.
+    /// `value`, an `eval target(...)` (TST-5, TST-8; core's CEVAL-1): a
+    /// run of the entry made for it, and the trace it recorded.
     fn eval(&mut self, scope: &mut Scope, value: &Expr) -> String {
         let ExprKind::Eval {
             call,
             config,
+            inherited,
             real_time,
         } = &value.kind
         else {
@@ -113,11 +116,12 @@ impl Emitter<'_> {
         };
         let library = names::testing("");
         let library = library.trim_end_matches("::");
-        // EXPR-2: the call's arguments in the order written, then the
-        // configuration (RUN-1). Where more than one of them may fail, or
-        // one runs statements, each is held first, in that order, before
-        // the run that reads them; a trace's cells are read where the
-        // entry is wired otherwise.
+        // EXPR-13: the configuration, written before the call (RUN-6),
+        // and then the call's arguments in the order written (EXPR-2).
+        // Where more than one of them may fail, or one runs statements,
+        // each is held first, in that order, before the run that reads
+        // them; a trace's cells are read where the entry is wired
+        // otherwise.
         // The defaults of the `const` parameters the call leaves out, which
         // are evaluated after the arguments written (EXPR-2); of a value
         // function, which is lifted, of every parameter it leaves out,
@@ -149,21 +153,38 @@ impl Emitter<'_> {
                 }
             })
             .unwrap_or_default();
+        let (config_failing, config_changes) = config_held(config);
         let held = arguments
             .iter()
             .map(|argument| &argument.value)
             .chain(left.iter().copied())
-            .chain(config.as_deref())
             .filter(|part| may_fail(part))
             .count()
+            + config_failing
             > 1
             || arguments.iter().any(|argument| changes(&argument.value))
-            || config.as_deref().is_some_and(changes);
+            || config_changes;
         let mut steps = String::new();
         let mut text = format!(
             "[&](::hgraph::Wiring& {WIRING}, [[maybe_unused]] ::hgraph::DateTime start_) {{\n"
         );
         let indent = INDENT.repeat(2);
+        // RUN-6: the run's configuration gives its bounds (CRUN-2): the
+        // eval's entries, and in an integration test that injects
+        // `run_config` the injected configuration's for the fields they
+        // do not name. An integration test's `run` gives its mode.
+        let inherited = inherited.map(|local| identifier(&scope.body.locals[local].name));
+        let configured_run = !config.is_empty() || inherited.is_some();
+        let mut bounds = if configured_run {
+            self.run_bounds(scope, config, inherited.as_deref())
+        } else {
+            "{}".to_string()
+        };
+        if held && configured_run {
+            let name = names::temporary("bounds", self.temporary());
+            steps.push_str(&format!("{indent}const auto {name} = {bounds};\n"));
+            bounds = name;
+        }
         // CEVAL-1: "core's `replay` wired to each temporal input of the
         // target", each given the trace written for it (CEVAL-2).
         let mut given: Vec<(usize, String)> = Vec::new();
@@ -251,9 +272,8 @@ impl Emitter<'_> {
             });
         }
         // EXPR-2: "the arguments written, then the defaults of those left
-        // out", and the configuration after the call: where the parts are
-        // held, each `const` parameter's default is held too, in the
-        // order of the parameters, before the configuration.
+        // out": where the parts are held, each `const` parameter's default
+        // is held too, in the order of the parameters.
         let mut defaults: Vec<(usize, String)> = Vec::new();
         if held && let Some((module, declaration)) = callee.declaration() {
             let parameters = match program.modules[module].details.get(declaration) {
@@ -316,18 +336,7 @@ impl Emitter<'_> {
                 self.ahead.push(node);
             }
         }
-        // RUN-1: the run's configuration, core's `RunConfig`, gives its
-        // bounds (CRUN-2), and an integration test's `run` its mode.
-        let mut bounds = match config {
-            Some(config) => self.run_bounds(scope, config),
-            None => "{}".to_string(),
-        };
-        if held && config.is_some() {
-            let name = names::temporary("bounds", self.temporary());
-            steps.push_str(&format!("{indent}const auto {name} = {bounds};\n"));
-            bounds = name;
-        }
-        let configured = match (config.is_some(), *real_time) {
+        let configured = match (configured_run, *real_time) {
             (_, true) => format!(", {bounds}, {library}::Mode::real_time"),
             (true, false) => format!(", {bounds}"),
             (false, false) => String::new(),

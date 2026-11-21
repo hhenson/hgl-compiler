@@ -409,7 +409,14 @@ impl Copies {
                         self.block(program, locals, default, loops);
                     }
                 }
-                Stmt::Declare { value: None, .. } | Stmt::Inject { .. } | Stmt::Unread { .. } => {}
+                Stmt::Declare { value: None, .. } | Stmt::Unread { .. } => {}
+                // RUN-6: the entries of a run's configuration, each a
+                // value of its field's type.
+                Stmt::Inject { config, .. } => {
+                    for entry in config {
+                        self.nested(program, locals, &entry.value, loops);
+                    }
+                }
                 Stmt::Return { value, .. } => {
                     if let Some(value) = value {
                         self.nested(program, locals, value, loops);
@@ -664,7 +671,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         }
         ExprKind::Eval { call, config, .. } => {
             into.push(call);
-            into.extend(config.iter().map(|config| &**config));
+            into.extend(config.iter().map(|entry| &entry.value));
         }
         ExprKind::Trace(cells) => {
             for cell in cells {

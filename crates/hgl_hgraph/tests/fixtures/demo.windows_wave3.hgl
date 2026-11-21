@@ -29,9 +29,9 @@ fn observed_three(probe: bool, reading: i64) -> list<bool, 2> =>
     readiness_of_three(probe, three(reading))
 
 test a_window_is_valid_before_its_minimum_and_all_valid_at_it {
-    assert eval(observed(probe: [true, true, true, true], reading: [_, 1, _, 2])) ==
+    assert eval observed(probe: [true, true, true, true], reading: [_, 1, _, 2]) ==
         [[false, false], [true, false], [true, false], [true, true]]
-    assert eval(observed_three(probe: [true, true, true, true], reading: [1, 2, _, 3])) ==
+    assert eval observed_three(probe: [true, true, true, true], reading: [1, 2, _, 3]) ==
         [[true, false], [true, false], [true, false], [true, true]]
 }
 
@@ -70,15 +70,15 @@ fn all_guarded_list(probe: bool, reading: i64) -> list<i64> =>
     guarded_by_all_valid(probe, readings(reading))
 
 test a_windows_value_is_read_once_it_is_all_valid {
-    assert eval(ready_list(reading: [1, 2, 3, 4])) == [_, [1, 2], [1, 2, 3], [2, 3, 4]]
-    assert eval(all_guarded_list(probe: [true, true, true], reading: [1, _, 2])) ==
+    assert eval ready_list(reading: [1, 2, 3, 4]) == [_, [1, 2], [1, 2, 3], [2, 3, 4]]
+    assert eval all_guarded_list(probe: [true, true, true], reading: [1, _, 2]) ==
         [_, _, [1, 2]]
 }
 
 test a_windows_value_read_before_it_is_all_valid_fails {
-    assert raises("value.unset_read") { eval(early_list(reading: [1, 2])) }
+    assert raises("value.unset_read") { eval early_list(reading: [1, 2]) }
     assert raises("value.unset_read") {
-        eval(guarded_list(probe: [true, true], reading: [1, 2]))
+        eval guarded_list(probe: [true, true], reading: [1, 2])
     }
 }
 
@@ -118,10 +118,10 @@ fn counted_flow(reading: i64) -> i64 => counted(readings(reading))
 fn oldest_two_flow(reading: i64) -> list<i64> => oldest_two(readings(reading))
 
 test a_windows_list_is_compared_iterated_and_counted {
-    assert eval(summed_flow(reading: [1, 2, 3, 4])) == [_, 3, 6, 9]
-    assert eval(first_pair_flow(reading: [1, 2, 3])) == [_, true, false]
-    assert eval(counted_flow(reading: [1, 2, 3, 4])) == [_, 2, 3, 3]
-    assert eval(oldest_two_flow(reading: [1, 2, 3, 4])) == [_, [1, 2], [1, 2], [2, 3]]
+    assert eval summed_flow(reading: [1, 2, 3, 4]) == [_, 3, 6, 9]
+    assert eval first_pair_flow(reading: [1, 2, 3]) == [_, true, false]
+    assert eval counted_flow(reading: [1, 2, 3, 4]) == [_, 2, 3, 3]
+    assert eval oldest_two_flow(reading: [1, 2, 3, 4]) == [_, [1, 2], [1, 2], [2, 3]]
 }
 
 fn first_held(held: rolling_window<i64, 3, 2>) -> i64 {
@@ -131,7 +131,7 @@ fn first_held(held: rolling_window<i64, 3, 2>) -> i64 {
 fn first_held_flow(reading: i64) -> i64 => first_held(readings(reading))
 
 test a_windows_list_is_indexed {
-    assert eval(first_held_flow(reading: [1, 2, 3, 4])) == [_, 1, 1, 2]
+    assert eval first_held_flow(reading: [1, 2, 3, 4]) == [_, 1, 1, 2]
 }
 
 # FN-12: "A window is passed only where it is `all_valid`: its value is
@@ -154,11 +154,11 @@ fn lifted_pair(reading: i64, other: i64) -> bool =>
 fn lifted_beside(reading: i64, scale: i64) -> i64 => total(readings(reading)) * scale
 
 test a_window_given_to_a_value_function_is_its_list {
-    assert eval(lifted_total(reading: [1, 2, 3, 4])) == [_, 3, 6, 9]
-    assert eval(lifted_count(reading: [1, 2, 3, 4])) == [_, 2, 3, 3]
-    assert eval(lifted_by_name(reading: [1, 2, 3])) == [_, 3, 6]
-    assert eval(lifted_pair(reading: [1, 2, 3, 4], other: [1, 2, 3, _])) == [_, _, false, false]
-    assert eval(lifted_beside(reading: [1, 2], scale: [10, _])) == [_, 30]
+    assert eval lifted_total(reading: [1, 2, 3, 4]) == [_, 3, 6, 9]
+    assert eval lifted_count(reading: [1, 2, 3, 4]) == [_, 2, 3, 3]
+    assert eval lifted_by_name(reading: [1, 2, 3]) == [_, 3, 6]
+    assert eval lifted_pair(reading: [1, 2, 3, 4], other: [1, 2, 3, _]) == [_, _, false, false]
+    assert eval lifted_beside(reading: [1, 2], scale: [10, _]) == [_, 30]
 }
 
 # Two windows in one node, and a generic window, its sizes the call's.
@@ -179,8 +179,8 @@ fn generic_flow(reading: i64) -> list<i64> =>
     held_generic<i64, 2, 2>(windowed<i64, 2, 2>(reading))
 
 test two_windows_and_a_generic_window_are_read_as_lists {
-    assert eval(both_flow(reading: [1, 2, 3, 4])) == [_, _, [6, 6], [9, 9]]
-    assert eval(generic_flow(reading: [1, 2, 3])) == [_, [1, 2], [2, 3]]
+    assert eval both_flow(reading: [1, 2, 3, 4]) == [_, _, [6, 6], [9, 9]]
+    assert eval generic_flow(reading: [1, 2, 3]) == [_, [1, 2], [2, 3]]
 }
 
 # TIME-7: `out` read holds what it published, a window's the list it
@@ -214,10 +214,10 @@ fn stopped(held: rolling_window<i64, 3, 2>) -> i64 {
 fn stop_flow(reading: i64) -> i64 => stopped(readings(reading))
 
 test a_windows_out_and_its_read_in_stop_are_lists {
-    assert eval(capped(price: [1, 2, 3, 4, 5])) == [1, 2, 3, _, _]
-    assert raises("value.unset_read") { eval(early_out(price: [1, 2])) }
-    assert eval(stop_flow(reading: [1, 2])) == [1, 1]
-    assert raises("value.unset_read") { eval(stop_flow(reading: [1])) }
+    assert eval capped(price: [1, 2, 3, 4, 5]) == [1, 2, 3, _, _]
+    assert raises("value.unset_read") { eval early_out(price: [1, 2]) }
+    assert eval stop_flow(reading: [1, 2]) == [1, 1]
+    assert raises("value.unset_read") { eval stop_flow(reading: [1]) }
 }
 
 # ---- A window within a value (TIME-1, TIME-9) ----
@@ -308,33 +308,33 @@ fn entry_at_flow(key: str, price: i64, at: str) -> list<i64> => entry_at(keyed(k
 fn row_flow(slot: i64, price: i64, at: i64) -> list<i64> => row_prices(rowed(slot, price), at)
 
 test a_window_within_a_value_is_read_as_its_list {
-    assert eval(book_flow(probe: [true, true, true], price: [_, 1, 2])) ==
+    assert eval book_flow(probe: [true, true, true], price: [_, 1, 2]) ==
         [[false, false, false], [true, true, false], [true, true, true]]
-    assert eval(book_prices_flow(price: [1, 2, 3])) == [_, [1, 2], [1, 2, 3]]
-    assert eval(slot_flow(slot: [0, 0, 1, 1], price: [1, 2, 3, 4], at: [_, 0, _, 1])) ==
+    assert eval book_prices_flow(price: [1, 2, 3]) == [_, [1, 2], [1, 2, 3]]
+    assert eval slot_flow(slot: [0, 0, 1, 1], price: [1, 2, 3, 4], at: [_, 0, _, 1]) ==
         [_, [1, 2], _, [3, 4]]
-    assert eval(first_slot_flow(slot: [0, 0, 1], price: [1, 2, 3])) == [_, [1, 2], [1, 2]]
-    assert eval(entry_flow(key: ["b", "a", "a", "a"], price: [1, 2, 3, 4])) ==
+    assert eval first_slot_flow(slot: [0, 0, 1], price: [1, 2, 3]) == [_, [1, 2], [1, 2]]
+    assert eval entry_flow(key: ["b", "a", "a", "a"], price: [1, 2, 3, 4]) ==
         [_, _, [2, 3], [3, 4]]
-    assert eval(entry_at_flow(key: ["a", "a", "b"], price: [1, 2, 3], at: [_, "a", _])) ==
+    assert eval entry_at_flow(key: ["a", "a", "b"], price: [1, 2, 3], at: [_, "a", _]) ==
         [_, [1, 2], _]
-    assert eval(row_flow(slot: [1, 1, 0], price: [1, 2, 3], at: [_, 1, _])) == [_, [1, 2], _]
+    assert eval row_flow(slot: [1, 1, 0], price: [1, 2, 3], at: [_, 1, _]) == [_, [1, 2], _]
 }
 
 test a_window_within_a_value_read_before_it_is_all_valid_fails {
-    assert raises("value.unset_read") { eval(early_book_flow(price: [1, 2])) }
+    assert raises("value.unset_read") { eval early_book_flow(price: [1, 2]) }
     assert raises("value.unset_read") {
-        eval(slot_flow(slot: [0, 0], price: [1, 2], at: [0, _]))
+        eval slot_flow(slot: [0, 0], price: [1, 2], at: [0, _])
     }
     assert raises("value.unset_read") {
-        eval(slot_flow(slot: [0, 0], price: [1, 2], at: [1, _]))
+        eval slot_flow(slot: [0, 0], price: [1, 2], at: [1, _])
     }
-    assert raises("value.unset_read") { eval(early_entry_flow(key: ["a"], price: [1])) }
+    assert raises("value.unset_read") { eval early_entry_flow(key: ["a"], price: [1]) }
     assert raises("value.unset_read") {
-        eval(entry_at_flow(key: ["a", "a"], price: [1, 2], at: ["b", _]))
+        eval entry_at_flow(key: ["a", "a"], price: [1, 2], at: ["b", _])
     }
     assert raises("value.unset_read") {
-        eval(row_flow(slot: [1, 1], price: [1, 2], at: [1, _]))
+        eval row_flow(slot: [1, 1], price: [1, 2], at: [1, _])
     }
 }
 
@@ -377,23 +377,23 @@ const fn price_total(values: list<f64>) -> f64 {
 fn duration_total(price: f64) -> f64 => price_total(collect(price))
 
 test a_window_of_a_duration_holds_and_drops_values_as_they_age {
-    assert eval(observed_duration(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0])) ==
+    assert eval observed_duration(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0]) ==
         [0s: [true, false], 1s: [true, false], 2s: [true, true],
          3000001us: [true, false], 4s: [true, true], 4000001us: [true, true],
          5000001us: [true, false], 7000001us: [true, false], 9s: [true, false],
          12000001us: [true, false]]
     # At 3.5s the window holds 2.0 and 3.0, which span less than 2s, and
     # is not read; at 4.5s, 3.0 and 4.0.
-    assert eval(held_flow(
+    assert eval held_flow(
         probe: [2500ms: true, 3500ms: true, 4500ms: true],
         price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0],
-    )) == [2500ms: [1.0, 2.0, 3.0], 4500ms: [3.0, 4.0]]
-    assert eval(duration_total(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0])) ==
+    ) == [2500ms: [1.0, 2.0, 3.0], 4500ms: [3.0, 4.0]]
+    assert eval duration_total(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0]) ==
         [2s: 6.0, 4s: 9.0, 4000001us: 7.0]
 }
 
 test a_window_of_a_duration_read_before_its_span_fails {
-    assert raises("value.unset_read") { eval(duration_list_flow(price: [0s: 1.0, 1s: 2.0])) }
+    assert raises("value.unset_read") { eval duration_list_flow(price: [0s: 1.0, 1s: 2.0]) }
 }
 
 # TYPE-11: "A minimum of `0s` is held by the first value, and an empty
@@ -419,11 +419,11 @@ fn zero_flow(price: f64) -> list<bool, 2> => zero_readiness(collect_from_zero(pr
 fn whole_flow(price: f64) -> list<bool, 2> => whole_readiness(collect_whole(price))
 
 test a_zero_minimum_and_an_omitted_one {
-    assert eval(zero_flow(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0])) ==
+    assert eval zero_flow(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0]) ==
         [0s: [true, true], 1s: [true, true], 2s: [true, true], 3000001us: [true, true],
          4s: [true, true], 4000001us: [true, true], 5000001us: [true, true],
          7000001us: [true, false], 9s: [true, true], 12000001us: [true, false]]
-    assert eval(whole_flow(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0])) ==
+    assert eval whole_flow(price: [0s: 1.0, 1s: 2.0, 2s: 3.0, 4s: 4.0, 9s: 5.0]) ==
         [0s: [true, false], 1s: [true, false], 2s: [true, false], 3000001us: [true, false],
          4s: [true, true], 4000001us: [true, false], 5000001us: [true, false],
          7000001us: [true, false], 9s: [true, false], 12000001us: [true, false]]

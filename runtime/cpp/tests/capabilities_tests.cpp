@@ -1,5 +1,6 @@
-// Unit tests of the logger, the clock and the global store (capabilities.h;
-// core's CAP-2, CAP-3, CAP-6), and of the list natives (lists.h). The
+// Unit tests of the logger, the clock, the global store and the run's
+// configuration (capabilities.h; core's CAP-2, CAP-3, CAP-6, CAP-7), and of
+// the list natives (lists.h). The
 // scheduler's and the alarm's are in scheduler_tests.cpp. A capability's
 // test runs a node written by hand as the compiler writes it, with hgraph's
 // front end for generated code alone, in an hgraph graph in simulation.
@@ -13,6 +14,7 @@
 
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <spdlog/logger.h>
 #include <string>
 #include <string_view>
@@ -229,6 +231,18 @@ TEST_CASE("an absent key, and a value of another type, fail with no code (CAP-6)
     // "A key keeps the type of its first value".
     CHECK_THROWS_AS(hglrt::put_GlobalState_str_V(store, "limit", hglrt::str{"three"}), hglrt::Failure);
     CHECK(hglrt::get_GlobalState_str<hglrt::i64>(store, "limit") == 3);
+}
+
+TEST_CASE("a run's configuration reads each field as supplied, null where it is left out (CAP-7)") {
+    const datetime opening = start + 5s;
+    const hglrt::RunConfig given{hglrt::RunConfig::Fields{.start = opening, .length = 3s}};
+    CHECK(given.start() == std::optional<datetime>{opening});
+    CHECK_FALSE(given.end().has_value());
+    CHECK(given.length() == std::optional<hglrt::duration>{3s});
+    const hglrt::RunConfig none{hglrt::RunConfig::Fields{}};
+    CHECK_FALSE(none.start().has_value());
+    CHECK_FALSE(none.end().has_value());
+    CHECK_FALSE(none.length().has_value());
 }
 
 TEST_CASE("append and extend grow the place they are given (LIST-1 to LIST-3)") {

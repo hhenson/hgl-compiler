@@ -100,7 +100,7 @@ fn an_application_is_listed_and_counted_as_one() {
     let live = write(
         &root,
         "live.hgl",
-        "application lib.live\nuse lib::{beat}\nrun(beat())\n",
+        "application lib.live\nuse lib::{beat}\nrun beat()\n",
     );
     let output = hgl(&["check", &argument(&root), "--modules"]);
     assert_eq!(text(&output.stderr), "");
@@ -367,7 +367,7 @@ fn the_conformance_cases_are_one_module() {
     assert!(
         stdout.contains(&format!(
             "rejection cases: {} passed, {} failed\n",
-            17 - listed.len(),
+            24 - listed.len(),
             listed.len()
         )),
         "{stdout}"

@@ -7,4 +7,4 @@ const fn sum<T>(a: T, b: T) -> T requires add_(T, T) -> T => a + b
 # store is `put`'s first parameter, wherever it is written.
 inject global_state
 put(key: "limit", store: global_state, value: sum(base, 1))
-eval(limited())
+eval limited()

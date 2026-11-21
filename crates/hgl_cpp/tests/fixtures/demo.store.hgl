@@ -99,16 +99,16 @@ fn based(value: i64) -> Quote {
 export fn quotes(const values: list<i64>) -> Quote => based(ticks(values))
 
 test a_struct_is_got_back_in_a_node {
-    assert eval(quoted(value: [1, 2])) == [2, 3]
+    assert eval quoted(value: [1, 2]) == [2, 3]
 }
 
 test a_tuple_a_dictionary_a_set_and_a_delta_are_got_back {
-    assert eval(paired(value: [1, 2])) == [1, 2]
-    assert eval(booked(value: [1, 2])) == [1, 2]
-    assert eval(counted_members(value: [1, 2])) == [3, 5]
-    assert eval(changed(value: [1, 2])) == [1, 2]
+    assert eval paired(value: [1, 2]) == [1, 2]
+    assert eval booked(value: [1, 2]) == [1, 2]
+    assert eval counted_members(value: [1, 2]) == [3, 5]
+    assert eval changed(value: [1, 2]) == [1, 2]
 }
 
 test a_struct_is_got_back_where_a_graph_is_built {
-    assert eval(seeded(x: [1])) == [6]
+    assert eval seeded(x: [1]) == [6]
 }

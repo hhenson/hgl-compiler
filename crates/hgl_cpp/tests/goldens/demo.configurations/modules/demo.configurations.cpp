@@ -62,7 +62,6 @@
 #undef shifted
 #undef signs
 #undef sources_are_given_a_set_and_a_dictionary
-#undef start
 #undef summed
 #undef t
 #undef tagged

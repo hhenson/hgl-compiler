@@ -245,13 +245,13 @@ fn a_trace_cell_is_written_whole_or_as_a_delta() {
         "    when { return values }\n",
         "}\n",
         "test whole_and_delta_cells {\n",
-        "    assert eval(relayed(quote: [\n",
+        "    assert eval relayed(quote: [\n",
         "        Quote(bid: 1.0, ask: 2.0),\n",
         "        delta<Quote>(ask: 3.0),\n",
-        "    ])) == [Quote(bid: 1.0, ask: 2.0), Quote(bid: 1.0, ask: 3.0)]\n",
-        "    assert eval(book(prices: [[\"a\": 1], delta<dict<str, i64>>(removed: [\"a\"])])) ==\n",
+        "    ]) == [Quote(bid: 1.0, ask: 2.0), Quote(bid: 1.0, ask: 3.0)]\n",
+        "    assert eval book(prices: [[\"a\": 1], delta<dict<str, i64>>(removed: [\"a\"])]) ==\n",
         "        [[\"a\": 1], [\"a\": 1, \"b\": 2]]\n",
-        "    assert eval(members(values: [[1, 2], delta<set<i64>>(added: [3])])) == [[1, 2], [1, 2, 3]]\n",
+        "    assert eval members(values: [[1, 2], delta<set<i64>>(added: [3])]) == [[1, 2], [1, 2, 3]]\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE);

@@ -22,5 +22,5 @@ test outcomes {
     assert both(true, false) == false
     assert either(true, false)
     assert neither(false)
-    assert eval(outcome(lhs: [1.0, 2.0, 3.0], rhs: [2.0, 2.0, 2.0])) == [.less, .equivalent, .greater]
+    assert eval outcome(lhs: [1.0, 2.0, 3.0], rhs: [2.0, 2.0, 2.0]) == [.less, .equivalent, .greater]
 }

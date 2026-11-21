@@ -519,12 +519,24 @@ analyser: partial
 
 - `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get`'s type what the call writes, a nullable one whole (`get<i64?>(...)` is an `i64?`), or its place expects
 - The run's own key, `"run.output"`, written out as a key is rejected (`store.reserved_key`)
-- Left: one key's type across a program; the run's key where it is a `const` parameter, which is known when the graph is built; a nullable place, `let saved: i64? = get(...)`, which gives the candidate the `i64` under the `?` until hhenson/hgl_spec#165 decides it
+- A key written out is used with one type in a program: a `put` or a `get` of another type than an earlier use is `store.key_type` (TIME-8)
+- Left: the run's key, and a key, where it is a `const` parameter, which is known when the graph is built; a nullable place, `let saved: i64? = get(...)`, which gives the candidate the `i64` under the `?` until hhenson/hgl_spec#165 decides it, and so is not judged against a key of `i64?`
 
 transpiler: partial
 
 - hgraph: `get`, `has` and `put` read and write hgraph's `GlobalState`, which wakes no node and orders none: a `put` is seen by what hgraph evaluates after it; an absent key fails the node
 - Left: a key keeping the type of its first value; the run's own key given as a `const` argument, refused when the graph is built
+
+## CAP-7
+
+analyser: done
+
+- `run_config` binds a local of core's native `RunConfig`, whose `start`, `end` and `length` are read with their types; no call constructs it (RUN-6)
+
+transpiler: partial
+
+- hgraph: an application's and an eval's configuration are the harness's `RunConfig`
+- Left, reported: a read of `run_config`
 
 ## CONF-1
 
@@ -602,7 +614,7 @@ transpiler: done
 
 runner: planned
 
-- A run of one entry with its `const` arguments under one `RunConfig`: built, started, evaluated and stopped once
+- A run of one entry with its `const` arguments under the configuration it is given: built, started, evaluated and stopped once
 
 transpiler: done
 
@@ -613,7 +625,7 @@ transpiler: done
 
 transpiler: partial
 
-- hgraph: a run's `RunConfig` is given to the harness, which runs the entry from its `start`, and where it gives none from the earliest start in simulation and the host clock's present time in real time, and ends it before its `end`, or before `length` from that start; a configuration with both an `end` and a `length` is `run.end_and_length`, raised before anything is built
+- hgraph: a run's configuration, an eval's entries or an application's `inject run_config`, is given to the harness, which runs the entry from its `start`, and where it gives none from the earliest start in simulation and the host clock's present time in real time, and ends it before its `end`, or before `length` from that start; a configuration with both an `end` and a `length` is `run.end_and_length`, raised before anything is built
 - Left: a run that ends where it starts builds no graph, since hgraph has no such run
 
 runner: planned

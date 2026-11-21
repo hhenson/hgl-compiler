@@ -296,7 +296,7 @@ impl Emitter<'_> {
                 // SOURCE-1: a source "injects `clock`, `logger`, and
                 // `global_state`, and not `out`, `scheduler`, or `alarm`",
                 // which the analyser rejects.
-                Stmt::Inject { local, at } => {
+                Stmt::Inject { local, at, .. } => {
                     let name = &body.locals[*local].name;
                     if super::endpoints::capability(name).is_none() {
                         self.unsupported(*at, &format!("an injected `{name}` in a source"));

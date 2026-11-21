@@ -228,7 +228,7 @@ fn a_function_with_a_var_parameter_is_not_lifted() {
             "    return value\n",
             "}\n",
             "test evaluated {\n",
-            "    eval(clear(value: [1]))\n",
+            "    eval clear(value: [1])\n",
             "}\n",
         )
     ));

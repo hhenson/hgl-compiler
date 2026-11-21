@@ -39,14 +39,14 @@ fn changed_at_flow(probe: bool, reading: i64) -> datetime? =>
 test an_exit_wakes_a_reader_though_nothing_arrives {
     let t = earliest_start
     # `all_valid` falls back as 1 leaves: 2 alone spans less than 1us.
-    assert eval(observed(reading: [1, 2])) ==
+    assert eval observed(reading: [1, 2]) ==
         [[true, false], [true, true], _, _, [true, false], [true, false]]
-    assert eval(change_flow(probe: [true, true, true, true, true, true, true], reading: [1, 2])) ==
+    assert eval change_flow(probe: [true, true, true, true, true, true, true], reading: [1, 2]) ==
         [true, true, false, false, true, true, false]
-    assert eval(changed_at_flow(
+    assert eval changed_at_flow(
         probe: [true, true, true, true, true, true, true],
         reading: [1, 2],
-    )) == [t, t + 1us, t + 1us, t + 1us, t + 4us, t + 5us, t + 5us]
+    ) == [t, t + 1us, t + 1us, t + 1us, t + 4us, t + 5us, t + 5us]
 }
 
 # ---- A window that falls under its minimum (TYPE-11, ERR-14) ----
@@ -74,10 +74,10 @@ fn checked_outcome(reading: i64) -> str => outcome(checked(collected(reading)))
 fn checked_values(reading: i64) -> list<i64> => values_of(checked(collected(reading)))
 
 test a_window_under_its_minimum_after_an_exit_is_not_read {
-    assert eval(checked_outcome(reading: [1, 2, 3])) ==
+    assert eval checked_outcome(reading: [1, 2, 3]) ==
         ["value.unset_read", "ok", "ok", _, "ok", "value.unset_read", "value.unset_read"]
     # TIME-7: an empty list given whole to a valid empty one is no tick.
-    assert eval(checked_values(reading: [1, 2, 3])) ==
+    assert eval checked_values(reading: [1, 2, 3]) ==
         [[], [1, 2], [1, 2, 3], _, [2, 3], [], _]
 }
 
@@ -110,7 +110,7 @@ fn values_flow(reading: i64) -> list<i64> => held_values(from_zero(reading))
 fn total_flow(reading: i64) -> i64 => total(from_zero(reading))
 
 test a_zero_minimum_is_all_valid_from_the_first_value {
-    assert eval(zero_flow(reading: [1, 2, _, 4])) ==
+    assert eval zero_flow(reading: [1, 2, _, 4]) ==
         [[true, true], [true, true], _, [true, true], [true, true], [true, true], _,
          [true, false]]
 }
@@ -118,6 +118,6 @@ test a_zero_minimum_is_all_valid_from_the_first_value {
 test the_list_read_after_an_exit_is_what_is_left {
     # A hook reads it where the window is all valid; a lifted helper is
     # given it there (FN-12), and not once the last value has left.
-    assert eval(values_flow(reading: [1, 2, _, 4])) == [[1], [1, 2], _, [1, 2, 4], [2, 4], [4]]
-    assert eval(total_flow(reading: [1, 2, _, 4])) == [1, 3, _, 7, 6, 4]
+    assert eval values_flow(reading: [1, 2, _, 4]) == [[1], [1, 2], _, [1, 2, 4], [2, 4], [4]]
+    assert eval total_flow(reading: [1, 2, _, 4]) == [1, 3, _, 7, 6, 4]
 }

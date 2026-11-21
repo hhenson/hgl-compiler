@@ -21,11 +21,11 @@ fn edited(command: i64) -> list<i64> {
 fn digits_of(command: i64) -> i64 => digits(edited(command))
 
 test an_entry_past_the_size_written_with_it {
-    let taken = eval(digits_of(command: [0, 1]))
+    let taken = eval digits_of(command: [0, 1])
 }
 
 test a_position_of_out_past_the_list {
-    let taken = eval(digits_of(command: [0, 2]))
+    let taken = eval digits_of(command: [0, 2])
 }
 
 # An empty list assigned to a position of `out`, which has no port of its
@@ -47,5 +47,5 @@ const fn width(values: list<list<i64>>) -> i64 {
 fn row_width(command: i64) -> i64 => width(rows(command))
 
 test an_empty_list_assigned_to_a_position_of_out {
-    let taken = eval(row_width(command: [0, 1]))
+    let taken = eval row_width(command: [0, 1])
 }

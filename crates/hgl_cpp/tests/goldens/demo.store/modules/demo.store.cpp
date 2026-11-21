@@ -36,7 +36,6 @@
 #undef replay
 #undef reset
 #undef seeded
-#undef start
 #undef store
 #undef ticks
 #undef value

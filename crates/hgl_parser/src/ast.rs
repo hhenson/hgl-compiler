@@ -76,10 +76,10 @@ ast_nodes! {
     ModuleDecl,
     /// `application pricing.live`
     ApplicationDecl,
-    /// `run(heartbeat())` or `eval(heartbeat())` as an item of a file
+    /// `run heartbeat()` or `eval heartbeat()` as an item of a file
     RunStmt,
-    /// `inject global_state` or `put(global_state, "limit", 3)` as an
-    /// item of a file
+    /// `inject run_config{length: 3s}`, `inject global_state` or
+    /// `put(global_state, "limit", 3)` as an item of a file
     StoreStmt,
     /// `pricing.curves`
     ModulePath,
@@ -203,7 +203,7 @@ impl StoreStmt {
 }
 
 impl RunStmt {
-    /// The `run(...)` or `eval(...)` the statement is: a `RunExpr` or
+    /// The `run call` or `eval call` the statement is: a `RunExpr` or
     /// an `EvalExpr` node.
     pub fn form(&self) -> Option<SyntaxNode> {
         self.syntax.children().next()
@@ -214,8 +214,8 @@ impl RunStmt {
         tokens(&self.form()?).next()
     }
 
-    /// True for `run(...)`, a run in real time; false for `eval(...)`,
-    /// a simulation (RUN-3).
+    /// True for `run`, a run in real time; false for `eval`, a
+    /// simulation (RUN-3).
     pub fn real_time(&self) -> bool {
         self.form()
             .is_some_and(|form| form.kind() == SyntaxKind::RunExpr)
@@ -310,10 +310,11 @@ pub enum Item {
     Test(TestDecl),
     /// `test { ... }`
     TestContext(TestContext),
-    /// `run(...)` or `eval(...)`: an application's run statement
+    /// `run call` or `eval call`: an application's run statement
     Run(RunStmt),
-    /// `inject global_state` or `put(global_state, "limit", 3)`: what
-    /// an application sets its run's store with
+    /// `inject run_config{length: 3s}`, `inject global_state` or
+    /// `put(global_state, "limit", 3)`: what an application gives its
+    /// run's configuration as defaults and sets its run's store with
     Store(StoreStmt),
 }
 

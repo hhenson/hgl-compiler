@@ -97,14 +97,14 @@ fn pair_members(pair: tuple<i64, set<i64>>) -> i64 {
 # dictionary's entries and a list's positions tick, and leave the value as
 # it was.
 test a_whole_cell_given_again_ticks_where_it_publishes_a_part {
-    assert eval(members_read(members: [[], [], [1, 2], [1, 2], []])) == [0, _, 23, _, 0]
-    assert eval(book_read(book: [[], [], ["a": 1, "b": 2], ["a": 1, "b": 2], []])) == [0, _, 23, 23, 0]
-    assert eval(readings_read(readings: [[], [], [1, 2], [1, 2], []])) == [0, _, 23, 23, 0]
+    assert eval members_read(members: [[], [], [1, 2], [1, 2], []]) == [0, _, 23, _, 0]
+    assert eval book_read(book: [[], [], ["a": 1, "b": 2], ["a": 1, "b": 2], []]) == [0, _, 23, 23, 0]
+    assert eval readings_read(readings: [[], [], [1, 2], [1, 2], []]) == [0, _, 23, 23, 0]
     # After a delta that made the value what the cell writes.
-    assert eval(members_read(members: [delta<set<i64>>(added: [1]), [1]])) == [11, _]
-    assert eval(book_read(book: [delta<dict<str, i64>>(updated: ["a": 1]), ["a": 1]])) == [11, 11]
-    assert eval(readings_read(readings: [delta<list<i64>>(updated: [0: 1]), [1]])) == [11, 11]
-    assert eval(unchanged_members(members: [[1, 2], [1, 2], []])) == [false, _, false]
+    assert eval members_read(members: [delta<set<i64>>(added: [1]), [1]]) == [11, _]
+    assert eval book_read(book: [delta<dict<str, i64>>(updated: ["a": 1]), ["a": 1]]) == [11, 11]
+    assert eval readings_read(readings: [delta<list<i64>>(updated: [0: 1]), [1]]) == [11, 11]
+    assert eval unchanged_members(members: [[1, 2], [1, 2], []]) == [false, _, false]
 }
 
 # A `const fn` given the trace reads each cell as its delta (TST-16: "A T
@@ -117,7 +117,7 @@ const fn unchanged(cells: list<tuple<datetime, delta<set<i64>>>>) -> list<bool> 
 }
 
 test a_whole_cell_given_again_is_held_as_a_delta_that_names_nothing {
-    var seen = eval(relay_members(members: [[1, 2]]))
+    var seen = eval relay_members(members: [[1, 2]])
     assert unchanged(seen) == [false]
     seen = [[1, 2], [1, 2], [2]]
     assert unchanged(seen) == [false, true, false]
@@ -141,7 +141,7 @@ fn yielded_members() -> set<i64> {
 fn yielded_members_read() -> i64 => members_read(yielded_members())
 
 test a_source_set_ticks_as_a_node_does {
-    assert eval(yielded_members_read(), RunConfig(length: 8s)) == [
+    assert eval{length: 8s} yielded_members_read() == [
         1s: 0, 5s: 11, 7s: 23,
     ]
 }
@@ -157,7 +157,7 @@ fn yielded_bags() -> Bag {
 fn yielded_bag_members() -> i64 => bag_members(yielded_bags())
 
 test a_sources_struct_with_an_empty_set_ticks_its_set_once {
-    assert eval(yielded_bag_members(), RunConfig(length: 3s)) == [1s: 0, 2s: -1]
+    assert eval{length: 3s} yielded_bag_members() == [1s: 0, 2s: -1]
 }
 
 # ---- 3. A whole value published again, unchanged ----
@@ -222,13 +222,13 @@ fn returned_readings_read(step: i64) -> i64 => readings_read(returned_readings(s
 fn assigned_readings_read(step: i64) -> i64 => readings_read(assigned_readings(step))
 
 test a_whole_value_returned_or_assigned_again_ticks_where_it_publishes_a_part {
-    assert eval(returned_members_read(step: [1, 1, 0, 0, 1])) == [23, _, 0, _, 23]
-    assert eval(assigned_members_read(step: [1, 1, 0, 0, 1])) == [23, _, 0, _, 23]
-    assert eval(returned_book_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, _, 23]
-    assert eval(assigned_book_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, _, 23]
-    assert eval(returned_readings_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, _, 23]
-    assert eval(assigned_readings_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, _, 23]
-    assert eval(returned_members_unchanged(step: [1, 1, 0])) == [false, _, false]
+    assert eval returned_members_read(step: [1, 1, 0, 0, 1]) == [23, _, 0, _, 23]
+    assert eval assigned_members_read(step: [1, 1, 0, 0, 1]) == [23, _, 0, _, 23]
+    assert eval returned_book_read(step: [1, 1, 0, 0, 1]) == [23, 23, 0, _, 23]
+    assert eval assigned_book_read(step: [1, 1, 0, 0, 1]) == [23, 23, 0, _, 23]
+    assert eval returned_readings_read(step: [1, 1, 0, 0, 1]) == [23, 23, 0, _, 23]
+    assert eval assigned_readings_read(step: [1, 1, 0, 0, 1]) == [23, 23, 0, _, 23]
+    assert eval returned_members_unchanged(step: [1, 1, 0]) == [false, _, false]
 }
 
 fn yielded_again_members() -> set<i64> {
@@ -248,8 +248,8 @@ fn yielded_again_members_read() -> i64 => members_read(yielded_again_members())
 fn yielded_again_readings_read() -> i64 => readings_read(yielded_again_readings())
 
 test a_whole_value_yielded_again_ticks_where_it_publishes_a_part {
-    assert eval(yielded_again_members_read(), RunConfig(length: 4s)) == [1s: 23, 3s: 12]
-    assert eval(yielded_again_readings_read(), RunConfig(length: 5s)) == [1s: 23, 2s: 23, 3s: 0]
+    assert eval{length: 4s} yielded_again_members_read() == [1s: 23, 3s: 12]
+    assert eval{length: 5s} yielded_again_readings_read() == [1s: 23, 2s: 23, 3s: 0]
 }
 
 # Inside a struct or a tuple published whole, from a `return`, from
@@ -301,12 +301,12 @@ fn returned_tags_woken(step: i64) -> bool => tags_woken(returned_tags(step))
 fn lifted_members_read(step: i64) -> i64 => members_read(both(step))
 
 test a_set_inside_a_whole_value_published_again_is_no_tick {
-    assert eval(returned_bag_members(step: [1, 1])) == [23, -1]
-    assert eval(assigned_bag_members(step: [1, 1])) == [23, -1]
-    assert eval(assigned_bag_part_members(step: [1, 1])) == [23, -1]
-    assert eval(returned_pair_members(step: [1, 1])) == [23, -1]
-    assert eval(returned_tags_woken(step: [1, 1])) == [true, _]
-    assert eval(lifted_members_read(step: [1, 1])) == [23, _]
+    assert eval returned_bag_members(step: [1, 1]) == [23, -1]
+    assert eval assigned_bag_members(step: [1, 1]) == [23, -1]
+    assert eval assigned_bag_part_members(step: [1, 1]) == [23, -1]
+    assert eval returned_pair_members(step: [1, 1]) == [23, -1]
+    assert eval returned_tags_woken(step: [1, 1]) == [true, _]
+    assert eval lifted_members_read(step: [1, 1]) == [23, _]
 }
 
 fn yielded_full_bags() -> Bag {
@@ -317,7 +317,7 @@ fn yielded_full_bags() -> Bag {
 fn yielded_full_bag_members() -> i64 => bag_members(yielded_full_bags())
 
 test a_set_inside_a_whole_value_yielded_again_is_no_tick {
-    assert eval(yielded_full_bag_members(), RunConfig(length: 3s)) == [1s: 23, 2s: -1]
+    assert eval{length: 3s} yielded_full_bag_members() == [1s: 23, 2s: -1]
 }
 
 # ---- 4. Invalidation empties what holds a dictionary or a set ----
@@ -453,12 +453,12 @@ fn two_pages_read(pages: list<dict<str, i64>, 2>) -> i64 {
 fn two_pages_check(step: i64) -> i64 => two_pages_read(write_two_pages(step))
 
 test an_invalidated_value_holds_no_key_or_member_after {
-    assert eval(shelf_keys(step: [0, 9, 1])) == [11, -1, 0]
-    assert eval(tagged_check(step: [0, 9, 1])) == [11, -1, 0]
-    assert eval(held_shelf_check(step: [0, 9, 1])) == [11, -1, 0]
-    assert eval(groups_check(step: [0, 9, 1])) == [111, -1, 100]
-    assert eval(pages_check(step: [0, 9, 1])) == [11, -1, 0]
-    assert eval(two_pages_check(step: [0, 9, 1])) == [11, -1, 0]
+    assert eval shelf_keys(step: [0, 9, 1]) == [11, -1, 0]
+    assert eval tagged_check(step: [0, 9, 1]) == [11, -1, 0]
+    assert eval held_shelf_check(step: [0, 9, 1]) == [11, -1, 0]
+    assert eval groups_check(step: [0, 9, 1]) == [111, -1, 100]
+    assert eval pages_check(step: [0, 9, 1]) == [11, -1, 0]
+    assert eval two_pages_check(step: [0, 9, 1]) == [11, -1, 0]
 }
 
 # ---- 5. A dictionary's entry delta that names no change ----
@@ -588,18 +588,18 @@ fn yielded_quotes() -> dict<str, Pair> {
 fn yielded_quotes_check() -> i64 => quotes_read(yielded_quotes())
 
 test a_dictionarys_entry_delta_that_names_no_change_is_no_tick {
-    assert eval(quotes_check(step: [0, 1, 2])) == [101, _, _]
-    assert eval(outer_check(step: [0, 1])) == [true, _]
-    assert eval(pair_quotes_check(step: [0, 1])) == [true, _]
-    assert eval(fixed_quotes_check(step: [0, 1])) == [true, _]
-    assert eval(nested_quotes_check(step: [0, 1])) == [true, _]
-    assert eval(desk_check(step: [0, 1])) == [true, _]
-    assert eval(yielded_quotes_check(), RunConfig(length: 4s)) == [1s: 101, 3s: 103]
-    assert eval(quotes_woken(quotes: [
+    assert eval quotes_check(step: [0, 1, 2]) == [101, _, _]
+    assert eval outer_check(step: [0, 1]) == [true, _]
+    assert eval pair_quotes_check(step: [0, 1]) == [true, _]
+    assert eval fixed_quotes_check(step: [0, 1]) == [true, _]
+    assert eval nested_quotes_check(step: [0, 1]) == [true, _]
+    assert eval desk_check(step: [0, 1]) == [true, _]
+    assert eval{length: 4s} yielded_quotes_check() == [1s: 101, 3s: 103]
+    assert eval quotes_woken(quotes: [
         delta<dict<str, Pair>>(updated: ["a": delta<Pair>(bid: 1, ask: 2)]),
         delta<dict<str, Pair>>(updated: ["a": delta<Pair>()]),
         delta<dict<str, Pair>>(updated: ["b": delta<Pair>()]),
-    ])) == [true, _, _]
+    ]) == [true, _, _]
 }
 
 # Where the dictionary is not valid, such an entry adds no key, and the
@@ -614,7 +614,7 @@ fn first_empty_quote(step: i64) -> dict<str, Pair> {
 fn first_empty_quote_check(step: i64) -> i64 => quotes_read(first_empty_quote(step))
 
 test an_entry_delta_that_names_no_change_adds_no_key {
-    assert eval(first_empty_quote_check(step: [0, 1])) == [0, 102]
+    assert eval first_empty_quote_check(step: [0, 1]) == [0, 102]
 }
 
 # ---- 6. A key or a member removed inside a tuple ----
@@ -737,18 +737,18 @@ fn shelves_read(shelves: dict<str, tuple<i64, dict<str, i64>>>) -> i64 {
 fn returned_shelves_read(step: i64) -> i64 => shelves_read(returned_shelves(step))
 
 test a_held_key_or_member_removed_inside_a_tuple_goes {
-    assert eval(returned_tuple_book_read(step: [0, 1])) == [23, 12]
-    assert eval(assigned_tuple_book_read(step: [0, 1])) == [23, 12]
-    assert eval(tuple_book_read(held: [
+    assert eval returned_tuple_book_read(step: [0, 1]) == [23, 12]
+    assert eval assigned_tuple_book_read(step: [0, 1]) == [23, 12]
+    assert eval tuple_book_read(held: [
         (null, delta<dict<str, i64>>(updated: ["a": 1, "b": 2])),
         (null, delta<dict<str, i64>>(removed: ["a"])),
-    ])) == [23, 12]
-    assert eval(returned_tuple_members_read(step: [0, 1])) == [23, 12]
-    assert eval(assigned_tuple_members_read(step: [0, 1])) == [23, 12]
-    assert eval(tuple_members_read(held: [
+    ]) == [23, 12]
+    assert eval returned_tuple_members_read(step: [0, 1]) == [23, 12]
+    assert eval assigned_tuple_members_read(step: [0, 1]) == [23, 12]
+    assert eval tuple_members_read(held: [
         (null, delta<set<i64>>(added: [1, 2])),
         (null, delta<set<i64>>(removed: [1])),
-    ])) == [23, 12]
-    assert eval(returned_drawer_read(step: [0, 1])) == [[23, 23, 23], [12, 12, 12]]
-    assert eval(returned_shelves_read(step: [0, 1])) == [23, 12]
+    ]) == [23, 12]
+    assert eval returned_drawer_read(step: [0, 1]) == [[23, 23, 23], [12, 12, 12]]
+    assert eval returned_shelves_read(step: [0, 1]) == [23, 12]
 }

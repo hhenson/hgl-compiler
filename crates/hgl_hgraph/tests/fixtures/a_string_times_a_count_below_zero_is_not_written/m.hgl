@@ -7,5 +7,5 @@ test below_zero_in_a_value_function {
 }
 
 test below_zero_in_a_graph {
-    assert eval(wired(text: ["ab"], count: [-1])) == [""]
+    assert eval wired(text: ["ab"], count: [-1]) == [""]
 }

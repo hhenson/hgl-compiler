@@ -13,12 +13,12 @@ fn paired(tag: i64) -> tuple<set<i64>, i64> {
     when { return ([tag], 1) }
 }
 test a_set_delta_in_a_struct_cell_is_compared_by_its_changes {
-    assert eval(tagged(tag: [1])) == [delta<Tagged>(tags: delta<set<i64>>(added: [1]), count: 1)]
-    assert eval(tagged(tag: [1])) != [delta<Tagged>(tags: delta<set<i64>>(removed: [1]), count: 1)]
+    assert eval tagged(tag: [1]) == [delta<Tagged>(tags: delta<set<i64>>(added: [1]), count: 1)]
+    assert eval tagged(tag: [1]) != [delta<Tagged>(tags: delta<set<i64>>(removed: [1]), count: 1)]
 }
 test a_set_delta_in_a_tuple_cell_is_compared_by_its_changes {
-    assert eval(paired(tag: [1])) == [(delta<set<i64>>(added: [1]), 1)]
-    assert eval(paired(tag: [1])) != [(delta<set<i64>>(removed: [1]), 1)]
+    assert eval paired(tag: [1]) == [(delta<set<i64>>(added: [1]), 1)]
+    assert eval paired(tag: [1]) != [(delta<set<i64>>(removed: [1]), 1)]
 }
 test two_set_deltas_are_equal_by_their_changes {
     assert delta<set<i64>>(added: [1]) != delta<set<i64>>(removed: [1])

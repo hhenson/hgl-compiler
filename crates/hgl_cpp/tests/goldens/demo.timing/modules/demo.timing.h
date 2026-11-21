@@ -2,10 +2,8 @@
 #pragma once
 
 #include <hglrt/hglrt.h>
-#include "core.types.h"
 
 // Names this file writes, which no macro of a header above takes.
-#undef RunConfig
 #undef absolute_yields
 #undef alarm_asked_in_start
 #undef alarm_asked_on_each
@@ -16,8 +14,6 @@
 #undef at
 #undef cancel_next
 #undef cause_of_wake
-#undef config
-#undef core
 #undef counter
 #undef counting_from
 #undef delay
@@ -34,11 +30,11 @@
 #undef repeated
 #undef scheduled_on_input
 #undef second
+#undef shortened
 #undef ticker
 #undef time_before_each_delay
 #undef times
 #undef timing
-#undef valid_start
 #undef value
 #undef wake_after
 #undef wake_in_the_past
@@ -148,11 +144,11 @@ namespace w_
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> absolute_yields(::hgraph::Wiring& wiring_, ::hgraph::DateTime first, ::hgraph::DateTime second);
 }  // namespace w_
 
-// opening_at(at: datetime) -> RunConfig (`const fn`), module demo.timing, line 187
-::hgl::core::m_::RunConfig opening_at(::hgraph::DateTime at);
+// opening_at(at: datetime) -> datetime (`const fn`), module demo.timing, line 187
+::hgraph::DateTime opening_at(::hgraph::DateTime at);
 
-// valid_start(config: RunConfig) -> bool (`const fn`), module demo.timing, line 190
-::hgraph::Bool valid_start(const ::hgl::core::m_::RunConfig& config);
+// shortened(at: datetime) -> bool (`const fn`), module demo.timing, line 190
+::hgraph::Bool shortened(::hgraph::DateTime at);
 
 namespace w_
 {

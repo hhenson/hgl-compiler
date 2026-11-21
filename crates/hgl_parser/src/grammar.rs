@@ -58,6 +58,7 @@ pub(crate) fn can_start_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwFn
             | SyntaxKind::KwIf
             | SyntaxKind::KwEval
+            | SyntaxKind::KwRun
             | SyntaxKind::Minus
             | SyntaxKind::Bang
     )

@@ -11,4 +11,4 @@ const fn bad() -> i64 {
 inject global_state
 put(global_state, "base", Quote(bid: bad(), ask: 1))
 
-eval(quotes(values: [1, 2]))
+eval quotes(values: [1, 2])

@@ -40,7 +40,7 @@ test enums {
     assert odd("hgl_mro") == .hgl_mro
     assert odd("mro") != odd("hgl_mro")
     assert odd("name") == .name
-    assert eval(flipped(side: [.buy, _, .sell, .hold])) == [.sell, _, .buy, .hold]
-    assert eval(chosen(value: [0, 7], other: .hold)) == [.buy, .hold]
-    assert eval(fixed(side: [.buy, .hold])) == [false, true]
+    assert eval flipped(side: [.buy, _, .sell, .hold]) == [.sell, _, .buy, .hold]
+    assert eval chosen(value: [0, 7], other: .hold) == [.buy, .hold]
+    assert eval fixed(side: [.buy, .hold]) == [false, true]
 }

@@ -21,9 +21,9 @@ const fn total(seen: list<tuple<datetime, i64>>) -> i64 {
 const fn ordered(seen: list<tuple<datetime, i64>>) -> bool => seen[0][0] < seen[1][0]
 
 test given {
-    assert ticks(eval(pass(value: [7, _, 7, 9]))) == 3
-    let seen = eval(pass(value: [_, 1, _, 2]))
+    assert ticks(eval pass(value: [7, _, 7, 9])) == 3
+    let seen = eval pass(value: [_, 1, _, 2])
     assert total(seen) == 3
     assert ordered(seen)
-    assert ticks(eval(pass(value: [_, _]))) == 0
+    assert ticks(eval pass(value: [_, _])) == 0
 }

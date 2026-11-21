@@ -271,12 +271,12 @@ fn published_then_read(step: i64, publish: bool, tick: bool) -> i64 =>
 fn counted_from_one(tick: bool) -> i64 => counted_from(ticket(1), tick)
 
 test what_is_published_is_never_changed_after {
-    assert eval(published_then_read(
+    assert eval published_then_read(
         step:    [   1,     2,    _],
         publish: [true, false,    _],
         tick:    [   _,     _, true],
-    )) ==        [   _,     _,    1]
-    assert eval(counted_from_one(tick: [true, true])) == [2, 2]
+    )  ==        [   _,     _,    1]
+    assert eval counted_from_one(tick: [true, true]) == [2, 2]
 }
 
 # FN-13: "Retained results must remain independent of later temporal
@@ -295,7 +295,7 @@ fn kept_then_grown(step: i64) -> i64 {
 }
 
 test a_retained_result_is_independent_of_later_changes {
-    assert eval(kept_then_grown(step: [1, 2])) == [1, 1]
+    assert eval kept_then_grown(step: [1, 2]) == [1, 1]
 }
 
 # A struct read whole from its bundle is made anew from the fields'
@@ -316,7 +316,7 @@ fn observe_saved(size: i64, save: bool) -> i64 =>
     saved_size(keep_ticket(ticketed(size)), save)
 
 test a_struct_read_from_its_bundle_is_its_own {
-    assert eval(observe_saved(size: [2, 7, _], save: [true, false, true])) == [2, 2, 7]
+    assert eval observe_saved(size: [2, 7, _], save: [true, false, true]) == [2, 2, 7]
 }
 
 # A result is the function's own only where every value it may be is:
@@ -382,11 +382,11 @@ test a_result_that_may_be_a_parameter_is_a_copy {
     append(first, 2)
     assert rows == [1] && standard_list == [1] && nested == [[1]]
     assert pick(rows, true) == [0] && first_of(nested, true) == [0]
-    assert eval(picked_then_read(
+    assert eval picked_then_read(
         step:    [   1,     2,    _],
         publish: [true, false,    _],
         tick:    [   _,     _, true],
-    )) ==        [   _,     _,    1]
+    )  ==        [   _,     _,    1]
 }
 
 # In a graph an ordinary value is changed where it is by a native
@@ -455,11 +455,11 @@ fn graph_source(x: i64) -> i64 {
 }
 
 test in_a_graph_an_ordinary_value_follows_the_copy_rule {
-    assert eval(graph_var(x: [0])) == [1]
-    assert eval(graph_let(x: [0])) == [1]
-    assert eval(graph_twice(x: [0])) == [3]
-    assert eval(graph_loop(x: [0])) == [2]
-    assert eval(graph_configured(tick: [true])) == [1]
-    assert eval(graph_relayed(tick: [true])) == [1]
-    assert eval(graph_source(x: [0])) == [_, 1]
+    assert eval graph_var(x: [0]) == [1]
+    assert eval graph_let(x: [0]) == [1]
+    assert eval graph_twice(x: [0]) == [3]
+    assert eval graph_loop(x: [0]) == [2]
+    assert eval graph_configured(tick: [true]) == [1]
+    assert eval graph_relayed(tick: [true]) == [1]
+    assert eval graph_source(x: [0]) == [_, 1]
 }

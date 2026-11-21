@@ -88,15 +88,15 @@ fn steady_held_of(once: bool, data: i64, use_b: bool, a: i64, b: i64, other: i64
 # `a`'s 4. One that returns an ordinary input follows the re-binding:
 # its reader ticks with what `a` holds, 2, and then has `a`'s 4.
 test a_ref_parameter_is_sampled_and_an_ordinary_input_followed {
-    assert eval(passed_on(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+    assert eval passed_on(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11]) ==
         [10, _, _, 11]
-    assert eval(held(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+    assert eval held(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11]) ==
         [10, _, 2, 4]
-    assert eval(passed_on_any(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+    assert eval passed_on_any(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11]) ==
         [10, _, _, 11]
     # The outer `pick` samples `b` from the first inner one, and later
     # `c` from the second: neither inner re-binding reaches the reader.
-    assert eval(picked_twice(
+    assert eval picked_twice(
         outer: [false, _, _, true, _],
         use_b: [true, _, false, _, _],
         use_d: [false, _, _, _, true],
@@ -104,23 +104,23 @@ test a_ref_parameter_is_sampled_and_an_ordinary_input_followed {
         b:     [10, _, _, _, _],
         c:     [100, _, _, _, _],
         d:     [1000, _, _, _, _],
-    )) == [10, _, _, 100, _]
-    assert eval(steady_of(
+    ) == [10, _, _, 100, _]
+    assert eval steady_of(
         once:  [true, _, _, _],
         data:  [1, _, 5, _],
         use_b: [true, _, false, _],
         a:     [1, 2, _, 4],
         b:     [10, _, _, 11],
         other: [100, _, _, _],
-    )) == [10, _, _, 11]
-    assert eval(steady_held_of(
+    ) == [10, _, _, 11]
+    assert eval steady_held_of(
         once:  [true, _, _, _],
         data:  [1, _, 5, _],
         use_b: [true, _, false, _],
         a:     [1, 2, _, 4],
         b:     [10, _, _, 11],
         other: [100, _, _, _],
-    )) == [10, _, 2, 4]
+    ) == [10, _, 2, 4]
 }
 
 # TIME-10: "Where the result is given the designation it holds, that
@@ -162,9 +162,9 @@ fn flagged_follow(flag: bool, a: i64, b: i64) -> i64 =>
 # Each evaluation ends designating `b`: the reader has `b`'s publications
 # and none of `a`'s, and no tick where `b` does not publish.
 test two_writes_that_end_where_they_began_give_a_reader_no_tick {
-    assert eval(twice_followed(flag: [true, true, true], a: [1, 4, _], b: [2, _, 3])) == [2, _, 3]
-    assert eval(returned_followed(flag: [true, true, true], a: [1, 4, _], b: [2, _, 3])) == [2, _, 3]
-    assert eval(flagged_follow(flag: [true, true, false, true], a: [1, _, _, 5], b: [2, _, _, _])) ==
+    assert eval twice_followed(flag: [true, true, true], a: [1, 4, _], b: [2, _, 3]) == [2, _, 3]
+    assert eval returned_followed(flag: [true, true, true], a: [1, 4, _], b: [2, _, 3]) == [2, _, 3]
+    assert eval flagged_follow(flag: [true, true, false, true], a: [1, _, _, 5], b: [2, _, _, _]) ==
         [2, _, 1, 2]
 }
 
@@ -208,11 +208,11 @@ fn last_checked(flag: bool, x: i64) -> bool => checked_any(last_action(flag, x))
 test invalidating_a_ref_result_designates_nothing {
     # `x`'s 2 does not reach the reader, and the next designation
     # samples it.
-    assert eval(maybe_followed(flag: [true, false, _, true], x: [1, _, 2, _])) == [1, _, _, 2]
-    assert eval(maybe_checked(flag: [true, false, false, true], x: [1, _, _, _])) ==
+    assert eval maybe_followed(flag: [true, false, _, true], x: [1, _, 2, _]) == [1, _, _, 2]
+    assert eval maybe_checked(flag: [true, false, false, true], x: [1, _, _, _]) ==
         [true, false, _, true]
-    assert eval(last_followed(flag: [true, false, true], x: [1, _, 3])) == [1, _, 3]
-    assert eval(last_checked(flag: [true, false, true], x: [1, _, _])) == [true, false, true]
+    assert eval last_followed(flag: [true, false, true], x: [1, _, 3]) == [1, _, 3]
+    assert eval last_checked(flag: [true, false, true], x: [1, _, _]) == [true, false, true]
 }
 
 # FN-3: "An ordinary value of type T is accepted where composition
@@ -258,14 +258,14 @@ fn of_struct(probe: i64) -> i64 => any_designations(pair)
 fn constant_followed(once: bool) -> i64 => follow(pass_on(once, 7))
 
 test a_ref_parameter_given_a_constant_designates_its_connection {
-    assert eval(of_literal(probe: [1, 2])) == [1, _]
-    assert eval(of_constant(probe: [1, 2])) == [1, _]
-    assert eval(of_configuration(probe: [1, 2], c: 4)) == [1, _]
-    assert eval(of_scalar_call(probe: [1, 2])) == [1, _]
-    assert eval(of_null(probe: [1, 2])) == [1, _]
-    assert eval(of_nullable(probe: [1, 2])) == [1, _]
-    assert eval(of_struct(probe: [1, 2])) == [1, _]
-    assert eval(constant_followed(once: [true, true])) == [7, _]
+    assert eval of_literal(probe: [1, 2]) == [1, _]
+    assert eval of_constant(probe: [1, 2]) == [1, _]
+    assert eval of_configuration(probe: [1, 2], c: 4) == [1, _]
+    assert eval of_scalar_call(probe: [1, 2]) == [1, _]
+    assert eval of_null(probe: [1, 2]) == [1, _]
+    assert eval of_nullable(probe: [1, 2]) == [1, _]
+    assert eval of_struct(probe: [1, 2]) == [1, _]
+    assert eval constant_followed(once: [true, true]) == [7, _]
 }
 
 # UNIT-8: "A parameter whose type is written `T?` needs no default to be
@@ -297,11 +297,11 @@ fn optional_valid_any<T>(probe: bool, ref x: T?) -> bool {
 }
 
 test a_ref_parameter_left_out_is_never_valid {
-    assert eval(left_out_valid(probe: [true, true])) == [false, false]
-    assert eval(left_out_modified(probe: [true, true])) == [false, false]
-    assert eval(left_out_any_valid(probe: [true, true])) == [false, false]
+    assert eval left_out_valid(probe: [true, true]) == [false, false]
+    assert eval left_out_modified(probe: [true, true]) == [false, false]
+    assert eval left_out_any_valid(probe: [true, true]) == [false, false]
     # The result designates nothing: there is no designation to publish.
-    assert eval(left_out_passed(once: [true, true])) == [_, _]
+    assert eval left_out_passed(once: [true, true]) == [_, _]
 }
 
 # FN-16: a `return` designates "a child of one, `items[idx]`", whatever
@@ -338,14 +338,14 @@ fn routed_designations(idx: i64, use_b: bool, a: i64, b: i64) -> i64 =>
     designations(route(idx, pick_list(use_b, set_one(0, a), set_one(0, b))))
 
 test a_designated_position_follows_a_re_binding_upstream {
-    assert eval(routed_of_a_ref(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+    assert eval routed_of_a_ref(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11]) ==
         [10, _, 2, 4]
-    assert eval(routed_of_an_if(idx: [0, _, _, _], flag: [false, _, true, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+    assert eval routed_of_an_if(idx: [0, _, _, _], flag: [false, _, true, _], a: [1, 2, _, 4], b: [10, _, _, 11]) ==
         [10, _, 2, 4]
-    assert eval(routed_through_a_graph(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+    assert eval routed_through_a_graph(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11]) ==
         [10, _, 2, 4]
-    assert eval(routed_of_a_list(idx: [1, _, 0], slot: [1, 0, _], reading: [5, 6, _])) == [5, _, 6]
-    assert eval(routed_designations(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+    assert eval routed_of_a_list(idx: [1, _, 0], slot: [1, 0, _], reading: [5, 6, _]) == [5, _, 6]
+    assert eval routed_designations(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11]) ==
         [1, _, 2, _]
 }
 
@@ -368,5 +368,5 @@ fn stamped(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
 fn stamped_follow(flag: bool, a: i64, b: i64) -> i64 => follow(stamped(flag, a, b))
 
 test out_of_a_ref_result_is_read_as_it_designates {
-    assert eval(stamped_follow(flag: [true, true, _], a: [1, _, 3], b: [10, _, 11])) == [10, _, 11]
+    assert eval stamped_follow(flag: [true, true, _], a: [1, _, 3], b: [10, _, 11]) == [10, _, 11]
 }

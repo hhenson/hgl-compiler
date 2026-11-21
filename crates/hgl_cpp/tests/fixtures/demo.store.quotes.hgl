@@ -5,4 +5,4 @@ use demo.store::{quotes, Quote}
 inject global_state
 put(global_state, "base", Quote(bid: 10, ask: 11))
 
-eval(quotes(values: [1, 2]))
+eval quotes(values: [1, 2])

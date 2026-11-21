@@ -372,7 +372,7 @@ fn configurations_are_written() {
 /// its lifted calls (FN-6), a constant connection (FN-3), nodes with
 /// state, handlers tested in order and capabilities (TIME-3, TIME-6,
 /// CAP-2, CAP-3), a source (SOURCE-1), and the evals of them, dense and
-/// timed, compared, one of them bounded by a `RunConfig` (TST-4 to TST-8,
+/// timed, compared, one of them given a configuration (TST-4 to TST-8, RUN-6,
 /// CRUN-2). Everything is written, and each test
 /// can be run, against the runtime library `hgl` carries.
 #[test]
@@ -508,9 +508,9 @@ fn control_flow_not_written_yet_is_reported() {
                 "    return x + y\n",
                 "}\n",
                 "\n",
-                "test a_loop { assert eval(first_open(open: [true], value: [1], passes: [1])) == [1] }\n",
+                "test a_loop { assert eval first_open(open: [true], value: [1], passes: [1]) == [1] }\n",
                 "\n",
-                "test two_vars { assert eval(both(open: [true], a: [1], b: [2])) == [3] }\n",
+                "test two_vars { assert eval both(open: [true], a: [1], b: [2]) == [3] }\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
@@ -555,9 +555,9 @@ fn a_value_that_may_fail_in_a_branch_is_reported() {
                 "    return value\n",
                 "}\n",
                 "\n",
-                "test scaled_once { assert eval(scaled(open: [false], value: [1], factor: 2)) == [1] }\n",
+                "test scaled_once { assert eval scaled(open: [false], value: [1], factor: 2) == [1] }\n",
                 "\n",
-                "test lifted_once { assert eval(lifted(open: [true], value: [1], factor: 2)) == [2] }\n",
+                "test lifted_once { assert eval lifted(open: [true], value: [1], factor: 2) == [2] }\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
@@ -607,9 +607,9 @@ fn a_value_that_may_fail_in_a_graph_a_branch_calls_is_reported() {
                 "    return value\n",
                 "}\n",
                 "\n",
-                "test guarded_once { assert eval(guarded(open: [false], value: [1])) == [1] }\n",
+                "test guarded_once { assert eval guarded(open: [false], value: [1]) == [1] }\n",
                 "\n",
-                "test evaluated_once { assert eval(evaluated(open: [false], value: [1])) == [1] }\n",
+                "test evaluated_once { assert eval evaluated(open: [false], value: [1]) == [1] }\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
@@ -662,11 +662,11 @@ fn a_default_that_may_fail_in_a_branch_is_reported() {
                 "    return value\n",
                 "}\n",
                 "\n",
-                "test noded_once { assert eval(noded(open: [false], value: [1])) == [1] }\n",
+                "test noded_once { assert eval noded(open: [false], value: [1]) == [1] }\n",
                 "\n",
-                "test lifted_once { assert eval(lifted(open: [false], value: [1])) == [1] }\n",
+                "test lifted_once { assert eval lifted(open: [false], value: [1]) == [1] }\n",
                 "\n",
-                "test literal_once { assert eval(literal(open: [false], value: [1])) == [1] }\n",
+                "test literal_once { assert eval literal(open: [false], value: [1]) == [1] }\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
@@ -794,11 +794,11 @@ fn a_change_of_activity_in_stop_is_reported() {
                 "}\n",
                 "\n",
                 "test a_change {\n",
-                "    assert eval(stopping(value: [1])) == [1]\n",
+                "    assert eval stopping(value: [1]) == [1]\n",
                 "}\n",
                 "\n",
                 "test a_read {\n",
-                "    assert eval(asking(value: [1])) == [1]\n",
+                "    assert eval asking(value: [1]) == [1]\n",
                 "}\n",
             ),
         )],
@@ -901,7 +901,7 @@ fn a_window_given_to_a_lifted_default_is_read_as_its_list() {
                 "}\n",
                 "\n",
                 "test totalled {\n",
-                "    assert eval(totals(reading: [1, 2, 3])) == [_, 3, 5]\n",
+                "    assert eval totals(reading: [1, 2, 3]) == [_, 3, 5]\n",
                 "}\n",
             ),
         )],
@@ -945,7 +945,7 @@ fn a_window_not_written_yet_is_reported() {
                 "}\n",
                 "\n",
                 "test a_nullable_window {\n",
-                "    assert eval(kept(reading: [1.0, 2.0])) == [1.0, 2.0]\n",
+                "    assert eval kept(reading: [1.0, 2.0]) == [1.0, 2.0]\n",
                 "}\n",
                 "\n",
                 "fn cleared(reading: i64) -> rolling_window<i64, 2> {\n",
@@ -954,11 +954,11 @@ fn a_window_not_written_yet_is_reported() {
                 "}\n",
                 "\n",
                 "test a_window {\n",
-                "    assert eval(counted(readings: [1, 2])) == [1, 2]\n",
+                "    assert eval counted(readings: [1, 2]) == [1, 2]\n",
                 "}\n",
                 "\n",
                 "test an_invalidated_window {\n",
-                "    assert eval(cleared(reading: [1])) == []\n",
+                "    assert eval cleared(reading: [1]) == []\n",
                 "}\n",
             ),
         )],
@@ -1023,15 +1023,15 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
                 "}\n",
                 "\n",
                 "test written_twice {\n",
-                "    assert eval(twice(reading: [1, 2])) == [11, 12]\n",
+                "    assert eval twice(reading: [1, 2]) == [11, 12]\n",
                 "}\n",
                 "\n",
                 "test written_then_invalidated {\n",
-                "    assert eval(dropped(reading: [1])) == []\n",
+                "    assert eval dropped(reading: [1]) == []\n",
                 "}\n",
                 "\n",
                 "test written_then_read {\n",
-                "    assert eval(looked(reading: [1])) == [2]\n",
+                "    assert eval looked(reading: [1]) == [2]\n",
                 "}\n",
                 "\n",
                 "fn selected(reading: i64) -> rolling_window<i64, 2> {\n",
@@ -1047,11 +1047,11 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
                 "}\n",
                 "\n",
                 "test selected_by_its_validity {\n",
-                "    assert eval(selected(reading: [1])) == [11]\n",
+                "    assert eval selected(reading: [1]) == [11]\n",
                 "}\n",
                 "\n",
                 "test selected_by_its_publication {\n",
-                "    assert eval(followed(reading: [1])) == [11]\n",
+                "    assert eval followed(reading: [1]) == [11]\n",
                 "}\n",
             ),
         )],
@@ -1242,10 +1242,11 @@ fn the_store_and_applications_are_written() {
     }
 }
 
-/// UNIT-14, EXPR-2: an application's store is set first, in the order
-/// written; then its entry's arguments, the defaults of those it leaves
-/// out and its configuration, each held in the order written, as its HGL
-/// type, where more than one may fail, before the run.
+/// UNIT-14, RUN-6, EXPR-2: an application's run configuration and its
+/// store are set first, in the order written; then its entry's arguments
+/// and the defaults of those it leaves out, each held in the order
+/// written, as its HGL type, where more than one may fail, and the run's
+/// bounds of its configuration, before the run.
 #[test]
 fn an_applications_parts_are_evaluated_in_the_order_written() {
     let emitted = emit_with(
@@ -1257,9 +1258,10 @@ fn an_applications_parts_are_evaluated_in_the_order_written() {
                     "application demo.apps.ordered\n",
                     "use demo.apps::{ticks}\n",
                     "const step: i64 = 2\n",
+                    "inject run_config{length: step * 2s}\n",
                     "inject global_state\n",
                     "put(global_state, \"first\", 6 // step)\n",
-                    "eval(ticks(values: [6 // step]), RunConfig(length: step * 2s))\n",
+                    "eval ticks(values: [6 // step], every: step * 1s)\n",
                 ),
             ),
         ],
@@ -1278,14 +1280,19 @@ fn an_applications_parts_are_evaluated_in_the_order_written() {
             .unwrap_or_else(|| panic!("{text} in\n{unit}"))
     };
     let values = "const ::hglrt::list<::hgraph::Int> argument_00_ = ";
-    // `every`, left out: its default, `1s`.
-    let every = "const ::hgraph::TimeDelta argument_01_ = ::hgraph::TimeDelta{1000000};";
-    assert!(at("::hglrt::application::Store store_;") < at("put_GlobalState_str_V"));
+    let every = "const ::hgraph::TimeDelta argument_01_ = ";
+    assert!(
+        at("::hglrt::application::Store store_;") < at("const ::hglrt::RunConfig run_config = ")
+    );
+    assert!(at("const ::hglrt::RunConfig run_config = ") < at("put_GlobalState_str_V"));
     assert!(at("put_GlobalState_str_V") < at(values));
     assert!(at(values) < at(every));
     assert!(at(every) < at("const ::hglrt::testing::Bounds bounds_ = "));
     // The entry, wired in the run, is given what was held.
-    assert!(at("w_::ticks(wiring_, argument_00_, argument_01_)") > at("bounds_ = "));
+    assert!(
+        at("argument_02_ = argument_00_; const ::hgraph::TimeDelta argument_03_ = argument_01_;")
+            > at("bounds_ = ")
+    );
 }
 
 /// The fixtures of what the run's store holds (CAP-6): the module and its
@@ -1413,7 +1420,7 @@ fn a_tests_lines_are_the_units_after_a_node_written_ahead_of_it() {
                 "module demo.ahead\n",
                 "const fn scale(value: i64) -> i64 => value * 2\n",
                 "test a_failure_after_an_eval_of_a_value_function {\n",
-                "    assert eval(scale(value: [1])) == [2]\n",
+                "    assert eval scale(value: [1]) == [2]\n",
                 "    assert scale(1) == 3\n",
                 "}\n",
             ),
@@ -1513,7 +1520,7 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
                 "\n",
                 "fn listed() -> list<i64> => first([1, 2])\n",
                 "\n",
-                "eval(listed())\n",
+                "eval listed()\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
@@ -1594,7 +1601,7 @@ fn a_capture_given_an_f64_configuration_is_reported() {
                 "}\n",
                 "\n",
                 "test shifts {\n",
-                "    assert eval(captured(value: [1.0])) == [1.0]\n",
+                "    assert eval captured(value: [1.0]) == [1.0]\n",
                 "}\n",
             ),
         )],
@@ -1828,19 +1835,19 @@ fn a_keyed_form_not_written_yet_is_reported() {
                 "fn child_a(book: dict<str, i64>) -> i64 => book[\"A\"]\n",
                 "\n",
                 "test enum_keys {\n",
-                "    assert eval(sides(values: [[Side.buy: 1]])) == [1]\n",
+                "    assert eval sides(values: [[Side.buy: 1]]) == [1]\n",
                 "}\n",
                 "\n",
                 "test a_constant_set {\n",
-                "    assert eval(constant_members()) == [[1, 2]]\n",
+                "    assert eval constant_members() == [[1, 2]]\n",
                 "}\n",
                 "\n",
                 "test an_entry_of_an_entry {\n",
-                "    assert eval(entry_a(book: [[\"A\": [\"B\": 1]]])) == [1]\n",
+                "    assert eval entry_a(book: [[\"A\": [\"B\": 1]]]) == [1]\n",
                 "}\n",
                 "\n",
                 "test a_child_in_a_graph {\n",
-                "    assert eval(child_a(book: [[\"A\": 1]])) == [1]\n",
+                "    assert eval child_a(book: [[\"A\": 1]]) == [1]\n",
                 "}\n",
             ),
         )],
@@ -1885,11 +1892,11 @@ fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
                 "}\n",
                 "\n",
                 "test blocked {\n",
-                "    assert eval(later(a: [1s])) == [2s]\n",
+                "    assert eval later(a: [1s]) == [2s]\n",
                 "}\n",
                 "\n",
                 "test runs {\n",
-                "    assert eval(kept(a: [1])) == [1]\n",
+                "    assert eval kept(a: [1]) == [1]\n",
                 "}\n",
             ),
         )],
@@ -1944,12 +1951,12 @@ fn a_connection_of_t_is_widened_where_a_nullable_is_taken() {
                 "fn picked(flag: bool, low: i64) -> i64? => pick(flag, low)\n",
                 "\n",
                 "test widens {\n",
-                "    assert eval(widened(x: [1])) == [true]\n",
-                "    assert eval(widened_result(x: [1])) == [1]\n",
+                "    assert eval widened(x: [1]) == [true]\n",
+                "    assert eval widened_result(x: [1]) == [1]\n",
                 "}\n",
                 "\n",
                 "test designates {\n",
-                "    assert eval(picked(flag: [true], low: [1])) == [1]\n",
+                "    assert eval picked(flag: [true], low: [1]) == [1]\n",
                 "}\n",
             ),
         )],
@@ -2006,15 +2013,15 @@ fn a_temporal_form_not_written_yet_is_reported() {
                 "}\n",
                 "\n",
                 "test a_list {\n",
-                "    assert eval(first(values: [[[1, 2]]])) == [1]\n",
+                "    assert eval first(values: [[[1, 2]]]) == [1]\n",
                 "}\n",
                 "\n",
                 "test a_scheduler {\n",
-                "    assert eval(later(value: [1])) == [1]\n",
+                "    assert eval later(value: [1]) == [1]\n",
                 "}\n",
                 "\n",
                 "test a_scalar {\n",
-                "    assert eval(passed(value: [7, _, 7, 9])) == [7, _, 7, 9]\n",
+                "    assert eval passed(value: [7, _, 7, 9]) == [7, _, 7, 9]\n",
                 "}\n",
             ),
         )],
@@ -2029,11 +2036,65 @@ fn a_temporal_form_not_written_yet_is_reported() {
     assert_eq!(emitted.blocked("a_scalar"), None);
 }
 
-/// EXPR-2: an eval's call, the defaults of the `const` parameters it
-/// leaves out among it, is evaluated before the run's configuration:
-/// where they are held, each default is held before the configuration.
+/// TST-17: "An integration test may inject `run_config`, before its
+/// other statements: what runs the test supplies the configuration of
+/// its runs, and the braces give defaults". `hgl test` supplies nothing,
+/// so the capability is the braces' entries. RUN-6: "a field the
+/// statement does not name is the injected configuration's", read from
+/// it, and an entry the eval writes is its own. Core's CAP-7: a property
+/// is read as any capability's is.
 #[test]
-fn an_evals_defaults_are_held_before_its_configuration() {
+fn an_integration_tests_run_configuration_is_written() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn beats(const every: duration) -> i64 {\n",
+                "    cache count: i64 = 0\n",
+                "    while count < 5 {\n",
+                "        count += 1\n",
+                "        yield every: count\n",
+                "    }\n",
+                "}\n",
+                "\n",
+                "integration_test configured {\n",
+                "    inject run_config{length: 4s}\n",
+                "    let bound = run_config.length\n",
+                "    let seen = eval beats(every: 1s)\n",
+                "    let own = eval{length: 2s} beats(every: 1s)\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_eq!(emitted.blocked("configured"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    let test = unit.split("void configured()").nth(1).unwrap();
+    for written in [
+        "[[maybe_unused]] const ::hglrt::RunConfig run_config = ::hglrt::RunConfig{::hglrt::RunConfig::Fields{.length = ::hgraph::TimeDelta{4000000}}};",
+        "const ::std::optional<::hgraph::TimeDelta> bound = (run_config).length();",
+        "::hglrt::testing::Bounds{.start = run_config.start(), .end = run_config.end(), .length = run_config.length()}",
+        "::hglrt::testing::Bounds{.start = run_config.start(), .end = run_config.end(), .length = ::hgraph::TimeDelta{2000000}}",
+    ] {
+        assert!(test.contains(written), "{written} in\n{test}");
+    }
+}
+
+/// EXPR-13: an eval's configuration, written before its call (RUN-6), is
+/// evaluated before the call, the defaults of the `const` parameters it
+/// leaves out among it: where they are held, the configuration is held
+/// before each default.
+#[test]
+fn an_evals_configuration_is_held_before_its_defaults() {
     let emitted = emit_with(
         &[(
             "m.hgl",
@@ -2049,7 +2110,7 @@ fn an_evals_defaults_are_held_before_its_configuration() {
                 "}\n",
                 "\n",
                 "test bounded {\n",
-                "    assert eval(scaled(value: [1, 2, 3]), RunConfig(length: span())) == [1, 2]\n",
+                "    assert eval{length: span()} scaled(value: [1, 2, 3]) == [1, 2]\n",
                 "}\n",
             ),
         )],
@@ -2070,7 +2131,7 @@ fn an_evals_defaults_are_held_before_its_configuration() {
     let bounds = test
         .find("= ::hglrt::testing::Bounds{.length = ::hgl::m::m_::span()};")
         .expect("the configuration held");
-    assert!(default < bounds, "{test}");
+    assert!(bounds < default, "{test}");
 }
 
 /// SOURCE-1: "A `let` there holds a working value": a `let` of a block's
@@ -2093,7 +2154,7 @@ fn a_sources_value_block_is_written() {
                 "}\n",
                 "\n",
                 "test counts {\n",
-                "    assert eval(counted(n: 2)) == [_, 3]\n",
+                "    assert eval counted(n: 2) == [_, 3]\n",
                 "}\n",
             ),
         )],
@@ -2120,7 +2181,7 @@ fn a_capability_is_made_before_the_initializers_that_read_it() {
                 "}\n",
                 "\n",
                 "test opens {\n",
-                "    assert eval(opened(value: [1])) == [earliest_start]\n",
+                "    assert eval opened(value: [1]) == [earliest_start]\n",
                 "}\n",
             ),
         )],
@@ -2164,8 +2225,8 @@ fn a_trace_held_in_a_let_given_to_an_eval_is_reported() {
                 "}\n",
                 "\n",
                 "test again {\n",
-                "    let seen = eval(pass(value: [1]))\n",
-                "    assert eval(pass(value: seen)) == [1]\n",
+                "    let seen = eval pass(value: [1])\n",
+                "    assert eval pass(value: seen) == [1]\n",
                 "}\n",
             ),
         )],
@@ -2214,15 +2275,15 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
                 "fn lifted_default(value: i64) -> i64 => add(value)\n",
                 "\n",
                 "test ordered {\n",
-                "    assert eval(twice(value: [1])) == [2]\n",
+                "    assert eval twice(value: [1]) == [2]\n",
                 "}\n",
                 "\n",
                 "test block {\n",
-                "    assert eval(blocked(value: [1])) == [3]\n",
+                "    assert eval blocked(value: [1]) == [3]\n",
                 "}\n",
                 "\n",
                 "test lifted {\n",
-                "    assert eval(lifted_default(value: [1])) == [2]\n",
+                "    assert eval lifted_default(value: [1]) == [2]\n",
                 "}\n",
             ),
         )],
@@ -2297,15 +2358,15 @@ fn a_lifted_calls_omitted_defaults_are_configuration() {
                 "fn lifted_block(value: i64) -> i64 => blocky(value)\n",
                 "\n",
                 "test twice {\n",
-                "    assert eval(lifted_twice(value: [1])) == [7]\n",
+                "    assert eval lifted_twice(value: [1]) == [7]\n",
                 "}\n",
                 "\n",
                 "test block {\n",
-                "    assert eval(lifted_block(value: [1])) == [4]\n",
+                "    assert eval lifted_block(value: [1]) == [4]\n",
                 "}\n",
                 "\n",
                 "test evaluated {\n",
-                "    assert eval(summed(a: [1, 2]), RunConfig(length: 5us)) == [7, 8]\n",
+                "    assert eval{length: 5us} summed(a: [1, 2]) == [7, 8]\n",
                 "}\n",
             ),
         )],
@@ -2350,15 +2411,16 @@ fn a_lifted_calls_omitted_defaults_are_configuration() {
         "{:?}",
         emitted.blocked("block")
     );
-    // The eval holds the defaults, `b` before `c`, before the run's
-    // configuration, and gives them to the node.
+    // The eval holds the run's configuration, written before the call
+    // (RUN-6), and then the defaults, `b` before `c`, and gives them to
+    // the node.
     let tests = unit
         .split("void evaluated()")
         .nth(1)
         .expect("the test `evaluated`");
     let b = tests.find("= ::hgl::m::m_::one();").expect("`b` held");
     let bounds = tests.find("const auto bounds_").expect("the bounds held");
-    assert!(b < bounds, "{tests}");
+    assert!(bounds < b, "{tests}");
 }
 
 /// UNIT-8: a default is written where its argument is left out; one

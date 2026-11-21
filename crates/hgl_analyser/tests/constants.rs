@@ -128,7 +128,7 @@ fn a_constant_is_read_wherever_a_value_or_a_constant_is() {
                 "fn wired(value: i64) -> i64 => node(value, scale)\n",
                 "test read {\n",
                 "    assert scaled(1) == 4\n",
-                "    assert eval(wired(value: [1])) == [2]\n",
+                "    assert eval wired(value: [1]) == [2]\n",
                 "}\n",
             ),
         ),

@@ -55,8 +55,15 @@ pub(super) fn capability_type(
 ) -> Option<String> {
     let declared = &program.modules[module].declarations[declaration];
     let core = Some(module) == program.core();
-    let known =
-        ["Logger", "Clock", "Scheduler", "Alarm", "GlobalState"].contains(&declared.name.as_str());
+    let known = [
+        "Logger",
+        "Clock",
+        "Scheduler",
+        "Alarm",
+        "GlobalState",
+        "RunConfig",
+    ]
+    .contains(&declared.name.as_str());
     (core && known && declared.kind == DeclarationKind::NativeType)
         .then(|| format!("::{}::{}", runtime::NAMESPACE, declared.name))
 }

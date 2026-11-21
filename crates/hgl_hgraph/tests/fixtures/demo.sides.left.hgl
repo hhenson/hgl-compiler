@@ -3,4 +3,4 @@ enum Side { buy, sell }
 fn kept(side: Side) -> Side {
     when { return side }
 }
-test left_sides { assert eval(kept(side: [.buy, .sell])) == [.buy, .sell] }
+test left_sides { assert eval kept(side: [.buy, .sell]) == [.buy, .sell] }

@@ -6,10 +6,9 @@
 #undef Alarm
 #undef Clock
 #undef Logger
-#undef RunConfig
 #undef Scheduler
 #undef a_resumed_source_keeps_its_locals_until_it_returns
-#undef a_run_configuration_is_a_value
+#undef a_run_configuration_is_given_in_braces
 #undef a_scheduler_wakes_a_node_with_no_input
 #undef a_source_keeps_its_cache_and_state
 #undef a_source_reads_its_clock_when_it_runs
@@ -36,7 +35,6 @@
 #undef cancel_next
 #undef cause_of_wake
 #undef clock
-#undef config
 #undef core
 #undef count
 #undef counter
@@ -47,13 +45,11 @@
 #undef earliest_start
 #undef empty_elsewhere
 #undef empty_selected
-#undef end
 #undef every
 #undef finish_early
 #undef finish_or_resume
 #undef first
 #undef get
-#undef length
 #undef limit
 #undef log_debug
 #undef logger
@@ -70,13 +66,12 @@
 #undef scheduled_on_input
 #undef scheduler
 #undef second
-#undef start
+#undef shortened
 #undef the_wake_delivered_is_pending_no_longer
 #undef ticker
 #undef time_before_each_delay
 #undef times
 #undef timing
-#undef valid_start
 #undef value
 #undef wake_after
 #undef wake_in_the_past
@@ -1023,16 +1018,16 @@ namespace w_
 }
 }  // namespace w_
 
-// opening_at(at: datetime) -> RunConfig (`const fn`), module demo.timing, line 187
-::hgl::core::m_::RunConfig opening_at([[maybe_unused]] ::hgraph::DateTime at)
+// opening_at(at: datetime) -> datetime (`const fn`), module demo.timing, line 187
+::hgraph::DateTime opening_at([[maybe_unused]] ::hgraph::DateTime at)
 {
-    return ::hgl::core::m_::RunConfig{at, ::std::nullopt, ::std::nullopt};
+    return ::hglrt::add__datetime_duration(at, ::hgraph::TimeDelta{0});
 }
 
-// valid_start(config: RunConfig) -> bool (`const fn`), module demo.timing, line 190
-::hgraph::Bool valid_start([[maybe_unused]] const ::hgl::core::m_::RunConfig& config)
+// shortened(at: datetime) -> bool (`const fn`), module demo.timing, line 190
+::hgraph::Bool shortened([[maybe_unused]] ::hgraph::DateTime at)
 {
-    return ((config).start).has_value();
+    return ::hglrt::ne__T_T<::hgraph::DateTime>(at, ::hgl::core::m_::never());
 }
 
 namespace n_::finish_or_resume
@@ -1802,42 +1797,38 @@ void a_source_keeps_its_cache_and_state()
     }();
 }
 
-void a_run_configuration_is_a_value()
+void a_run_configuration_is_given_in_braces()
 {
     ::hglrt::testing::statement();
     [[maybe_unused]] const ::hgraph::DateTime opening = ::hgraph::DateTime{::std::chrono::microseconds{1767605400000000}};
     ::hglrt::testing::statement();
-    [[maybe_unused]] const ::hgl::core::m_::RunConfig times = ::hgl::core::m_::RunConfig{opening, ::std::nullopt, ::std::nullopt};
-    ::hglrt::testing::statement();
     [&] {
-        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const auto left_00_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, ::hglrt::sub__datetime_duration(opening, ::hgraph::TimeDelta{2}), opening), ::hgraph::Str{::hglrt::testing::run_output});
-    }, [&] { const ::hgl::core::m_::RunConfig config_00_ = times; return ::hglrt::testing::Bounds{.start = config_00_.start, .end = config_00_.end, .length = config_00_.length}; }());
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{20};
-        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }, ::hglrt::testing::Bounds{.start = opening});
+        const auto right_01_ = ::hglrt::testing::Dense<::hgraph::Int>{20};
+        ::hglrt::testing::expect_same(left_00_, right_01_);
     }();
     ::hglrt::testing::statement();
     [&] {
-        const auto left_07_ = [&]() {
+        const auto left_05_ = [&]() {
+        const auto bounds_02_ = ::hglrt::testing::Bounds{.start = ::hgl::demo::timing::m_::opening_at(opening)};
         const ::hgraph::DateTime argument_03_ = opening;
         const ::hgraph::DateTime argument_04_ = ::hglrt::add__datetime_duration(opening, ::hgraph::TimeDelta{2});
-        const auto bounds_06_ = [&] { const ::hgl::core::m_::RunConfig config_05_ = ::hgl::demo::timing::m_::opening_at(opening); return ::hglrt::testing::Bounds{.start = config_05_.start, .end = config_05_.end, .length = config_05_.length}; }();
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::timing::m_::w_::absolute_yields(wiring_, argument_03_, argument_04_), ::hgraph::Str{::hglrt::testing::run_output});
-    }, bounds_06_);
+    }, bounds_02_);
     }();
-        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Int>{10, ::std::nullopt, 20};
-        ::hglrt::testing::expect_same(left_07_, right_08_);
+        const auto right_06_ = ::hglrt::testing::Dense<::hgraph::Int>{10, ::std::nullopt, 20};
+        ::hglrt::testing::expect_same(left_05_, right_06_);
     }();
-    ::hglrt::testing::statement();
-    [[maybe_unused]] const ::hgl::core::m_::RunConfig short_ = ::hgl::core::m_::RunConfig{opening, ::std::nullopt, ::hgraph::TimeDelta{3}};
     ::hglrt::testing::statement();
     [&] {
-        const auto left_010_ = ::hglrt::testing::evaluate<::hgraph::DateTime>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const auto left_07_ = ::hglrt::testing::evaluate<::hgraph::DateTime>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_datetime(wiring_, ::hgl::demo::timing::m_::w_::time_before_each_delay(wiring_), ::hgraph::Str{::hglrt::testing::run_output});
-    }, [&] { const ::hgl::core::m_::RunConfig config_09_ = (::hgl::demo::timing::m_::valid_start(short_) ? ::hgl::core::m_::RunConfig(short_) : ::hgl::core::m_::RunConfig(times)); return ::hglrt::testing::Bounds{.start = config_09_.start, .end = config_09_.end, .length = config_09_.length}; }());
-        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::DateTime>{::std::nullopt, ::std::nullopt, opening};
-        ::hglrt::testing::expect_same(left_010_, right_011_);
+    }, ::hglrt::testing::Bounds{.start = opening, .length = (::hgl::demo::timing::m_::shortened(opening) ? ::std::optional<::hgraph::TimeDelta>(::hgraph::TimeDelta{3}) : ::std::optional<::hgraph::TimeDelta>(::hgraph::TimeDelta{1000000}))});
+        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::DateTime>{::std::nullopt, ::std::nullopt, opening};
+        ::hglrt::testing::expect_same(left_07_, right_08_);
     }();
 }
 

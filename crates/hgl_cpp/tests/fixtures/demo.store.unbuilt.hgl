@@ -3,4 +3,4 @@ application demo.store.unbuilt
 use demo.store::{read_at_build}
 
 # Nothing is put under "by": the graph fails where it is built.
-eval(read_at_build(values: [1, 2]))
+eval read_at_build(values: [1, 2])

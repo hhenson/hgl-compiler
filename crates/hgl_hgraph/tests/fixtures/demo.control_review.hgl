@@ -24,7 +24,7 @@ fn routed(side: Side, a: i64, b: i64) -> i64 {
 test a_constant_label_covers_its_member {
     assert quoted(Side.buy) == "bid"
     assert quoted(Side.sell) == "ask"
-    assert eval(routed(side: [Side.buy, Side.sell], a: [1, 2], b: [10, 20])) == [1, 20]
+    assert eval routed(side: [Side.buy, Side.sell], a: [1, 2], b: [10, 20]) == [1, 20]
 }
 
 # CTRL-12: a label is "a literal, an enum member, a constant (UNIT-13),
@@ -46,7 +46,7 @@ const fn picked<const k: i64>(route: i64) -> i64 {
 }
 
 test a_generic_label {
-    assert eval(at_two(route: [2, 1], a: [1, 2])) == [10, 2]
+    assert eval at_two(route: [2, 1], a: [1, 2]) == [10, 2]
     assert picked<2>(2) == 10
     assert picked<2>(1) == 0
 }
@@ -73,11 +73,11 @@ fn nested_nullable(outer: bool, inner: bool, price: i64) -> i64? {
 }
 
 test a_nullable_result_of_a_graphs_if {
-    assert eval(gated_nullable(open: [true, false, true], price: [1, 2, 3])) == [1, _, 3]
-    assert eval(picked_nullable(open: [true, false, true], price: [1, 2, null], other: [10, 20, 30])) ==
+    assert eval gated_nullable(open: [true, false, true], price: [1, 2, 3]) == [1, _, 3]
+    assert eval picked_nullable(open: [true, false, true], price: [1, 2, null], other: [10, 20, 30]) ==
         [1, 20, null]
-    assert eval(null_branch(open: [true, false, true], price: [1, 2, 3])) == [1, null, 3]
-    assert eval(nested_nullable(outer: [true, true, false], inner: [true, false, _], price: [1, 2, 3])) ==
+    assert eval null_branch(open: [true, false, true], price: [1, 2, 3]) == [1, null, 3]
+    assert eval nested_nullable(outer: [true, true, false], inner: [true, false, _], price: [1, 2, 3]) ==
         [1, null, 3]
 }
 
@@ -104,12 +104,12 @@ fn let_null(price: i64) -> i64? {
 }
 
 test an_ordinary_nullable_is_published {
-    assert eval(maybe_three(price: [1, 2], wide: true)) == [3]
-    assert eval(maybe_three(price: [1, 2], wide: false)) == [null]
-    assert eval(maybe_three_direct(price: [1, 2], wide: true)) == [3]
-    assert eval(maybe_three_direct(price: [1, 2], wide: false)) == [null]
-    assert eval(plain_null(price: [1, 2])) == [null]
-    assert eval(let_null(price: [1, 2])) == [null]
+    assert eval maybe_three(price: [1, 2], wide: true) == [3]
+    assert eval maybe_three(price: [1, 2], wide: false) == [null]
+    assert eval maybe_three_direct(price: [1, 2], wide: true) == [3]
+    assert eval maybe_three_direct(price: [1, 2], wide: false) == [null]
+    assert eval plain_null(price: [1, 2]) == [null]
+    assert eval let_null(price: [1, 2]) == [null]
 }
 
 # CTRL-14: where the graph returns the `if`'s value, a `var` a branch
@@ -125,7 +125,7 @@ fn read_back(flag: bool, a: i64, b: i64) -> i64 {
 }
 
 test a_var_assigned_and_read_in_a_returned_branch {
-    assert eval(read_back(flag: [true, false], a: [1, 2], b: [10, 20])) == [11, 2]
+    assert eval read_back(flag: [true, false], a: [1, 2], b: [10, 20]) == [11, 2]
 }
 
 # CTRL-6: labels are "compared by resolved value". A negation that

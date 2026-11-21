@@ -22,7 +22,7 @@ enum Item {
     Constant,
     Test,
     TestContext,
-    /// An application's run statement: `run(...)` or `eval(...)`.
+    /// An application's run statement: `run call` or `eval call`.
     Run,
     /// A statement that sets an application's store: `inject ...`, or
     /// a call.
@@ -167,14 +167,9 @@ impl Parser<'_> {
             At if self.nth_word(1, "timeout") => return Some(Item::Test),
             // ERR-10: any other annotation stands before a function.
             At => return Some(Item::Function),
-            // RUN-1: `eval(...)` where an item starts is a run
-            // statement.
-            KwEval => return Some(Item::Run),
-            // LEX-10: `run` is a name that takes its meaning from where
-            // it stands: before `(`, where an item starts.
-            Ident if self.nth_word(0, "run") && self.nth(1) == LParen => {
-                return Some(Item::Run);
-            }
+            // RUN-1: `eval` or `run` where an item starts begins a run
+            // statement. Both are reserved words (LEX-10).
+            KwEval | KwRun => return Some(Item::Run),
             // UNIT-14: `store_statement = inject_decl | IDENTIFIER,
             // call_suffix`, what an application sets its run's store
             // with. No declaration begins with either.
@@ -352,9 +347,10 @@ impl Parser<'_> {
     /// `store_statement = inject_decl | IDENTIFIER, call_suffix ;`
     ///
     /// UNIT-14: "Between its declarations and its run statement it may
-    /// set the run's store: `inject global_state`, and then calls of
-    /// `put` on it." Which names and which calls is the analyser's to
-    /// say (`application.statement`).
+    /// inject `run_config`, giving the run's configuration its defaults
+    /// (RUN-6), and set the run's store: `inject global_state`, and then
+    /// calls of `put` on it." Which names and which calls is the
+    /// analyser's to say (`application.statement`).
     fn store_statement(&mut self) {
         self.start(StoreStmt);
         if self.at(KwInject) {
@@ -1044,10 +1040,7 @@ impl Parser<'_> {
             self.expect(KwTest);
         }
         self.expect_name("a test name");
-        // TST-17: in the block, `run(...)` is the run form.
-        let outer = std::mem::replace(&mut self.in_test, true);
         self.body_block();
-        self.in_test = outer;
         self.finish();
     }
 

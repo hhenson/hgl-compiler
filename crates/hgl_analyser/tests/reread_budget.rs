@@ -142,7 +142,7 @@ fn a_sequence_compared_with_an_eval_is_judged_after_any_count() {
             "test doubling {\n",
             "    let maybe: i64? = null\n",
             "    @FILL@\n",
-            "    assert [2, 4] == eval(doubled(value: [1, 2]))\n",
+            "    assert [2, 4] == eval doubled(value: [1, 2])\n",
             "}\n",
         ),
         &[],

@@ -29,7 +29,7 @@ fn reciprocals_in_a_node(tick: i64) -> list<str, 4> {
 test the_reciprocal_of_each_zero_is_its_own_infinity {
     assert reciprocals() == ["-inf", "inf", "-inf", "inf"]
     assert reciprocal<1>() == reciprocal<1.0>()
-    assert eval(reciprocals_in_a_node(tick: [1])) == [["inf", "-inf", "1.0", "1.0"]]
+    assert eval reciprocals_in_a_node(tick: [1]) == [["inf", "-inf", "1.0", "1.0"]]
 }
 
 # GEN-13: "`Scaled<1>`, `Scaled<1.0>` and `Scaled<1.00>` are one type";
@@ -75,7 +75,7 @@ fn bound_one_in_a_node(tick: i64) -> str {
 
 test an_integer_bound_as_an_f64_is_its_float {
     assert bound_one() == "1.0"
-    assert eval(bound_one_in_a_node(tick: [1])) == ["1.0"]
+    assert eval bound_one_in_a_node(tick: [1]) == ["1.0"]
 }
 
 # UNIT-9: "`= 1` and `= 1.0` of an `f64` field are one default."
@@ -148,12 +148,12 @@ fn slots_woken(slots: list<i64, 2>) -> bool {
 fn slots_watched(step: i64) -> bool => slots_woken(publish_slots(step))
 
 test a_delta_of_a_struct_a_tuple_or_a_fixed_list_that_names_no_change_is_never_a_tick {
-    assert eval(quote_watched(step: [0, 1, 0, 2, 0])) == [_, true, _, false]
-    assert eval(publish_quote(step: [0, 1, 0])) == [_, delta<Quote>(bid: 1.0)]
-    assert eval(pair_watched(step: [0, 1, 0, 2, 0])) == [_, true, _, false]
-    assert eval(slots_watched(step: [0, 1, 0, 2, 0])) == [_, true, _, false]
+    assert eval quote_watched(step: [0, 1, 0, 2, 0]) == [_, true, _, false]
+    assert eval publish_quote(step: [0, 1, 0]) == [_, delta<Quote>(bid: 1.0)]
+    assert eval pair_watched(step: [0, 1, 0, 2, 0]) == [_, true, _, false]
+    assert eval slots_watched(step: [0, 1, 0, 2, 0]) == [_, true, _, false]
     # From a trace's cell (TST-5: "as such a `return` is").
-    assert eval(quote_woken(quote: [delta<Quote>(), delta<Quote>(ask: 2.0), delta<Quote>()])) == [_, true]
+    assert eval quote_woken(quote: [delta<Quote>(), delta<Quote>(ask: 2.0), delta<Quote>()]) == [_, true]
 }
 
 # TIME-7, END-3: dropping a nested fixed patch also leaves the outer
@@ -188,13 +188,13 @@ fn yield_quotes() -> Quotes {
 fn yield_watched() -> bool => quotes_valid(yield_quotes())
 
 test a_nested_fixed_patch_naming_no_child_stays_silent {
-    assert eval(write_watched(step: [0, 1, 0, 1, 2, 0, 1])) == [_, true, _, true, false, _, true]
-    assert eval(yield_watched(), RunConfig(length: 3s)) == [1s: true]
-    assert eval(quotes_valid(quotes: [
+    assert eval write_watched(step: [0, 1, 0, 1, 2, 0, 1]) == [_, true, _, true, false, _, true]
+    assert eval{length: 3s} yield_watched() == [1s: true]
+    assert eval quotes_valid(quotes: [
         delta<Quotes>(quote: delta<Quote>()),
         delta<Quotes>(quote: delta<Quote>(ask: 2.0)),
         delta<Quotes>(quote: delta<Quote>()),
-    ])) == [_, true]
+    ]) == [_, true]
 }
 
 # TIME-9: "A published empty list or dictionary, or one that a delta
@@ -279,17 +279,17 @@ fn book_seen_of(probe: bool, step: i64) -> list<i64, 3> => book_seen(probe, publ
 fn members_seen_of(probe: bool, step: i64) -> list<i64, 2> => members_seen(probe, publish_members(step))
 
 test a_delta_that_makes_a_collection_valid_makes_it_empty_and_modified {
-    assert eval(readings_seen_of(probe: [true, true, true, true, true], step: [0, 0, 1, 2, 0])) == [
+    assert eval readings_seen_of(probe: [true, true, true, true, true], step: [0, 0, 1, 2, 0]) == [
         [1, 1, 0], [1, 0, 0], [1, 1, 1], _, [1, 1, 0],
     ]
-    assert eval(book_seen_of(probe: [true, true, true, true, true], step: [0, 0, 1, 2, 0])) == [
+    assert eval book_seen_of(probe: [true, true, true, true, true], step: [0, 0, 1, 2, 0]) == [
         [1, 1, 0], [1, 0, 0], [1, 1, 1], _, [1, 1, 0],
     ]
-    assert eval(members_seen_of(probe: [true, true, true, true, true], step: [0, 0, 1, 2, 0])) == [
+    assert eval members_seen_of(probe: [true, true, true, true, true], step: [0, 0, 1, 2, 0]) == [
         [1, 0], [0, 0], [1, 1], _, [1, 0],
     ]
     # The delta read where it makes the value valid is that delta.
-    assert eval(publish_readings(step: [0, 0, 2, 0])) == [delta<list<i64>>(), _, _, delta<list<i64>>()]
+    assert eval publish_readings(step: [0, 0, 2, 0]) == [delta<list<i64>>(), _, _, delta<list<i64>>()]
 }
 
 fn readings_stamp(probe: bool, readings: list<i64>) -> datetime? {
@@ -309,13 +309,13 @@ fn book_stamp_of(probe: bool, step: i64) -> datetime? => book_stamp(probe, publi
 fn members_stamp_of(probe: bool, step: i64) -> datetime? => members_stamp(probe, publish_members(step))
 
 test a_delta_that_names_no_change_moves_no_last_modified {
-    assert eval(readings_stamp_of(probe: [true, true, true, true], step: [0, 0, 1, 0])) == [
+    assert eval readings_stamp_of(probe: [true, true, true, true], step: [0, 0, 1, 0]) == [
         earliest_start, earliest_start, earliest_start + 2us, earliest_start + 2us,
     ]
-    assert eval(book_stamp_of(probe: [true, true, true, true], step: [0, 0, 1, 0])) == [
+    assert eval book_stamp_of(probe: [true, true, true, true], step: [0, 0, 1, 0]) == [
         earliest_start, earliest_start, earliest_start + 2us, earliest_start + 2us,
     ]
-    assert eval(members_stamp_of(probe: [true, true, true, true], step: [0, 0, 1, 0])) == [
+    assert eval members_stamp_of(probe: [true, true, true, true], step: [0, 0, 1, 0]) == [
         earliest_start, earliest_start, earliest_start + 2us, earliest_start + 2us,
     ]
 }
@@ -341,14 +341,14 @@ fn relay_readings(readings: list<i64>) -> list<i64> {
 }
 
 test a_cell_that_names_no_change_wakes_no_reader_where_the_input_is_valid {
-    assert eval(members_woken(members: [delta<set<i64>>(), delta<set<i64>>(), delta<set<i64>>(added: [1])])) == [true, _, true]
-    assert eval(readings_woken(readings: [delta<list<i64>>(), delta<list<i64>>(), delta<list<i64>>(updated: [0: 1])])) == [true, _, true]
-    assert eval(relay_members(members: [delta<set<i64>>(), delta<set<i64>>(), delta<set<i64>>(added: [1])])) == [
+    assert eval members_woken(members: [delta<set<i64>>(), delta<set<i64>>(), delta<set<i64>>(added: [1])]) == [true, _, true]
+    assert eval readings_woken(readings: [delta<list<i64>>(), delta<list<i64>>(), delta<list<i64>>(updated: [0: 1])]) == [true, _, true]
+    assert eval relay_members(members: [delta<set<i64>>(), delta<set<i64>>(), delta<set<i64>>(added: [1])]) == [
         delta<set<i64>>(),
         _,
         delta<set<i64>>(added: [1]),
     ]
-    assert eval(relay_readings(readings: [delta<list<i64>>(), delta<list<i64>>(), delta<list<i64>>(updated: [0: 1])])) == [
+    assert eval relay_readings(readings: [delta<list<i64>>(), delta<list<i64>>(), delta<list<i64>>(updated: [0: 1])]) == [
         delta<list<i64>>(),
         _,
         delta<list<i64>>(updated: [0: 1], size_modified: 1),
@@ -390,8 +390,8 @@ fn whole_watched(step: i64) -> bool => whole_woken(publish_whole(step))
 fn whole_book_watched(step: i64) -> bool => whole_book_woken(whole_book(step))
 
 test a_value_published_whole_the_same_again_ticks_where_it_gives_a_part {
-    assert eval(whole_watched(step: [0, 0, 1, 1, 2, 0, 0])) == [true, _, true, true, false, true, _]
-    assert eval(whole_book_watched(step: [0, 0, 1, 1, 2, 0, 0])) == [true, _, true, true, false, true, _]
+    assert eval whole_watched(step: [0, 0, 1, 1, 2, 0, 0]) == [true, _, true, true, false, true, _]
+    assert eval whole_book_watched(step: [0, 0, 1, 1, 2, 0, 0]) == [true, _, true, true, false, true, _]
 }
 
 # TIME-7 within a tuple and a struct that hold an unsized list: "Where it
@@ -466,13 +466,13 @@ fn shelf_woken(shelf: Shelf) -> list<bool, 3> {
 fn shelf_watched(step: i64) -> list<bool, 3> => shelf_woken(publish_shelf(step))
 
 test a_delta_that_names_no_change_beside_an_unsized_list_ticks_only_where_it_makes_a_child_valid {
-    assert eval(listed_book_watched(step: [4, 1, 0, 0, 2, 3, 4, 5, 3])) == [
+    assert eval listed_book_watched(step: [4, 1, 0, 0, 2, 3, 4, 5, 3]) == [
         _, [true, true, false], [true, true, true], _, _, _, _, [false, false, false], [true, true, false],
     ]
-    assert eval(listed_members_watched(step: [4, 1, 0, 0, 2, 3, 4, 5, 3])) == [
+    assert eval listed_members_watched(step: [4, 1, 0, 0, 2, 3, 4, 5, 3]) == [
         _, [true, true, false], [true, true, true], _, _, _, _, [false, false, false], [true, true, false],
     ]
-    assert eval(shelf_watched(step: [4, 1, 0, 0, 2, 3, 4, 5, 3])) == [
+    assert eval shelf_watched(step: [4, 1, 0, 0, 2, 3, 4, 5, 3]) == [
         _, [true, true, false], [true, true, true], _, _, _, _, [false, false, false], [true, true, false],
     ]
 }
@@ -494,7 +494,7 @@ fn listed_book_source() -> tuple<list<i64>, dict<str, i64>> {
 fn listed_book_source_seen() -> list<bool, 3> => listed_book_woken(listed_book_source())
 
 test a_sources_delta_that_names_no_change_beside_an_unsized_list_ticks_only_where_it_makes_a_child_valid {
-    assert eval(listed_book_source_seen(), RunConfig(length: 5s)) == [
+    assert eval{length: 5s} listed_book_source_seen() == [
         0s: [true, true, false],
         1s: [true, true, true],
         4s: [true, true, true],
@@ -557,7 +557,7 @@ fn shelved_books_source() -> tuple<list<i64>, dict<str, dict<str, i64>>> {
 fn shelved_books_source_seen() -> list<bool, 2> => shelved_books_woken(shelved_books_source())
 
 test an_entry_that_names_no_change_beside_an_unsized_list_is_left_out {
-    assert eval(shelved_books_watched(step: [0, 1, 2, 3])) == [[true, false], _, _, [true, true]]
-    assert eval(rack_watched(step: [0, 1, 2, 3])) == [[true, false], _, _, [true, true]]
-    assert eval(shelved_books_source_seen(), RunConfig(length: 4s)) == [0s: [true, false], 3s: [true, true]]
+    assert eval shelved_books_watched(step: [0, 1, 2, 3]) == [[true, false], _, _, [true, true]]
+    assert eval rack_watched(step: [0, 1, 2, 3]) == [[true, false], _, _, [true, true]]
+    assert eval{length: 4s} shelved_books_source_seen() == [0s: [true, false], 3s: [true, true]]
 }

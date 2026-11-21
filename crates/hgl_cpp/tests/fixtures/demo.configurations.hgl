@@ -156,36 +156,36 @@ fn branch(flag: bool, key: str, const members: set<i64>) -> i64 {
 }
 
 test sources_are_given_a_set_and_a_dictionary {
-    assert eval(from_members(members: [7])) == [1s: 7]
-    assert eval(from_book(book: ["a": 7])) == [1s: 7]
+    assert eval from_members(members: [7]) == [1s: 7]
+    assert eval from_book(book: ["a": 7]) == [1s: 7]
 }
 
 test nodes_are_given_any_value {
-    assert eval(shifted(x: [1], by: (10, 100))) == [111]
-    assert eval(first(probe: [true], h: Holder(xs: [5], n: 1))) == [6]
-    assert eval(noted_bid(x: [1], q: Noted(bid: 10))) == [11]
-    assert eval(nudged(x: [1], by: null)) == [1]
-    assert eval(nudged(x: [1], by: 5)) == [6]
-    assert eval(held_or(x: [1], h: Holder(xs: [5], n: 2))) == [3]
-    assert eval(held_or(x: [1], h: null)) == [1]
-    assert eval(pair_or(x: [1], t: (5, 6))) == [6]
-    assert eval(pair_or(x: [1], t: null)) == [1]
-    assert eval(held_first(x: [1], hs: [Holder(xs: [], n: 4)])) == [5]
-    assert eval(tagged_or(x: [1], t: Tagged(tags: [1], n: 2))) == [3]
-    assert eval(tagged_or(x: [1], t: null)) == [1]
-    assert eval(tagged_first(x: [1], tagged: [Tagged(tags: [], n: 4)])) == [5]
-    assert eval(paired(x: [1], ts: [(5, 6)])) == [7]
-    assert eval(fixed(x: [1], fs: [5, 6])) == [7]
+    assert eval shifted(x: [1], by: (10, 100)) == [111]
+    assert eval first(probe: [true], h: Holder(xs: [5], n: 1)) == [6]
+    assert eval noted_bid(x: [1], q: Noted(bid: 10)) == [11]
+    assert eval nudged(x: [1], by: null) == [1]
+    assert eval nudged(x: [1], by: 5) == [6]
+    assert eval held_or(x: [1], h: Holder(xs: [5], n: 2)) == [3]
+    assert eval held_or(x: [1], h: null) == [1]
+    assert eval pair_or(x: [1], t: (5, 6)) == [6]
+    assert eval pair_or(x: [1], t: null) == [1]
+    assert eval held_first(x: [1], hs: [Holder(xs: [], n: 4)]) == [5]
+    assert eval tagged_or(x: [1], t: Tagged(tags: [1], n: 2)) == [3]
+    assert eval tagged_or(x: [1], t: null) == [1]
+    assert eval tagged_first(x: [1], tagged: [Tagged(tags: [], n: 4)]) == [5]
+    assert eval paired(x: [1], ts: [(5, 6)]) == [7]
+    assert eval fixed(x: [1], fs: [5, 6]) == [7]
 }
 
 test configurations_that_differ_are_two_nodes {
-    assert eval(both(x: [1])) == [35]
-    assert eval(holders(probe: [true])) == [66]
-    assert eval(signs(x: [1.0])) == [true]
+    assert eval both(x: [1]) == [35]
+    assert eval holders(probe: [true]) == [66]
+    assert eval signs(x: [1.0]) == [true]
 }
 
 test lifted_calls_and_branches_are_given_any_value {
-    assert eval(checked(x: [1, 3])) == [true, false]
-    assert eval(booked(x: ["a", "b"])) == [1, -1]
-    assert eval(branch(flag: [true, false], key: ["a", "b"], members: [1, 2])) == [3, 7]
+    assert eval checked(x: [1, 3]) == [true, false]
+    assert eval booked(x: ["a", "b"]) == [1, -1]
+    assert eval branch(flag: [true, false], key: ["a", "b"], members: [1, 2]) == [3, 7]
 }

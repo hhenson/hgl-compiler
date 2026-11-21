@@ -15,14 +15,14 @@
 use std::collections::BTreeSet;
 
 use hgl_analyser::hir::{
-    Argument, BinaryOperator, Body, CalendarDate, Callee, Case, Cell, ClockTime, EndpointOperation,
-    ErrorPart, Expr, ExprKind, Hook, Local, Run, Stmt, Temporal, Tenor, UnaryOperator, Value,
-    ValueCategory,
+    Argument, BinaryOperator, Body, CalendarDate, Callee, Case, Cell, ClockTime, ConfigEntry,
+    EndpointOperation, ErrorPart, Expr, ExprKind, Hook, Local, Run, Stmt, Temporal, Tenor,
+    UnaryOperator, Value, ValueCategory,
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
-    FieldRef, LocalKind, NamedKind, OperatorRef, Parameter, Phase, Program, Role, Scalar,
-    Signature, Type,
+    FieldRef, LocalKind, NamedKind, OperatorRef, Parameter, Phase, Program, RUN_CONFIG, Role,
+    Scalar, Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_lower::calls::{LeftOut, field_default, known_duration, left_out, left_out_never_valid};
@@ -1009,31 +1009,77 @@ impl<'a> Emitter<'a> {
     /// [`APPLICATION`], which runs the entry and returns the run's
     /// output.
     ///
-    /// RUN-1: "its run statement is `run(call, config)` or `eval(call,
-    /// config)`, where the call is of an entry ... giving the entry's
-    /// const arguments, and the configuration is a value of core's
-    /// `RunConfig`, or `RunConfig()` where none is written. The entry's
-    /// result, if any, is the run's output". RUN-3: "The word of a run
-    /// statement is its mode."
+    /// RUN-1: "its run statement is `run call` or `eval call`, where
+    /// the call is of an entry ... giving the entry's const arguments.
+    /// The statement gives no configuration: the run's is supplied to
+    /// it (RUN-6). The entry's result, if any, is the run's output".
+    /// RUN-3: "The word of a run statement is its mode."
     ///
     /// The harness's `run` is given the entry, core's `record` for the
     /// entry's result, which the run wires to it (core's CRUN-8), or
     /// `None` where it has none, whether the run is in real time, and
     /// then the entry's arguments by name and the configuration as
-    /// `_config`, as an eval's are ([`Emitter::eval`]).
+    /// `_config`, as an eval's are ([`Emitter::eval`]): the entries of
+    /// the application's `inject run_config{...}`, which `hgl run`
+    /// writes what starts the application supplies over.
     fn application(&mut self) {
         let program = self.program;
         let module = &program.modules[self.module];
         let Some(headed) = module.application_at() else {
             return;
         };
+        // RUN-6: the defaults the application gives its run's
+        // configuration, `inject run_config{length: 3s}`.
+        let config: &[ConfigEntry] = module
+            .store_body
+            .iter()
+            .flat_map(|body| &body.statements)
+            .find_map(|statement| match statement {
+                Stmt::Inject { local, config, .. }
+                    if module
+                        .store_body
+                        .as_ref()
+                        .is_some_and(|body| body.locals[*local].name == RUN_CONFIG) =>
+                {
+                    Some(config.as_slice())
+                }
+                _ => None,
+            })
+            .unwrap_or(&[]);
+        // UNIT-14: each statement "is evaluated once, in the order
+        // written". The configuration is given to the harness's run, and
+        // the store's statements run inside it: a `put` written before
+        // an `inject run_config{...}` would be evaluated after it, which
+        // this target does not write.
+        if let Some(body) = &module.store_body
+            && !config.is_empty()
+        {
+            let placed = body.statements.iter().position(|statement| {
+                matches!(statement, Stmt::Inject { local, .. }
+                    if body.locals[*local].name == RUN_CONFIG)
+            });
+            if let Some(placed) = placed
+                && let Some(Stmt::Inject { at, .. }) = body.statements.get(placed)
+                && body.statements[..placed]
+                    .iter()
+                    .any(|statement| !matches!(statement, Stmt::Inject { .. }))
+            {
+                self.unsupported(*at, "an `inject run_config{...}` after a `put`");
+            }
+        }
         // UNIT-14: "Between its declarations and its run statement it
-        // may set the run's store: `inject global_state`, and then
+        // may ... set the run's store: `inject global_state`, and then
         // calls of `put` on it. Each is evaluated once, in the order
         // written, before the run's graph is built". They are a
         // function of the store, which the harness calls with the
         // run's own before it builds the graph (core's CRUN-7).
-        let seeded = match &module.store_body {
+        let sets = module.store_body.as_ref().filter(|body| {
+            body.statements.iter().any(|statement| match statement {
+                Stmt::Inject { local, .. } => body.locals[*local].name != RUN_CONFIG,
+                _ => true,
+            })
+        });
+        let seeded = match sets {
             Some(body) => {
                 let setting = Function::of(self.program, body, None, Mode::Lifecycle);
                 // The `inject` is the function's parameter.
@@ -1043,6 +1089,21 @@ impl<'a> Emitter<'a> {
                     .filter(|statement| !matches!(statement, Stmt::Inject { .. }))
                     .cloned()
                     .collect();
+                // RUN-6: "Its `put` values may read `run_config` after
+                // that `inject`": a read of a property of core's
+                // `RunConfig` (CAP-7), which this target does not write.
+                let mut reads = Vec::new();
+                hgl_analyser::hir::walk_statements(&puts, &mut |part| {
+                    if let ExprKind::Local(local) = &part.kind
+                        && body.locals[*local].name == RUN_CONFIG
+                        && body.locals[*local].kind == LocalKind::Inject
+                    {
+                        reads.push(part.at);
+                    }
+                });
+                for at in reads {
+                    self.unsupported(at, "a read of `run_config`");
+                }
                 self.hgraph = true;
                 self.line(0, "");
                 self.line(0, "");
@@ -1062,7 +1123,7 @@ impl<'a> Emitter<'a> {
                 let function = Function::cold(Mode::Test);
                 let line = self.text.matches('\n').count();
                 self.piece.statements.push((line, run.at));
-                let mut written = self.run_statement(&function, run);
+                let mut written = self.run_statement(&function, run, config);
                 if seeded {
                     // Given last, by a name no parameter has.
                     let call = written.strip_suffix(')').unwrap_or(&written).to_string();
@@ -1077,8 +1138,9 @@ impl<'a> Emitter<'a> {
         self.ran = Some(piece);
     }
 
-    /// The run statement `run` as a call of the harness's `run`.
-    fn run_statement(&mut self, function: &Function, run: &Run) -> String {
+    /// The run statement `run` as a call of the harness's `run`, given
+    /// the configuration `config`.
+    fn run_statement(&mut self, function: &Function, run: &Run, config: &[ConfigEntry]) -> String {
         let program = self.program;
         let ExprKind::Call {
             callee:
@@ -1127,11 +1189,13 @@ impl<'a> Emitter<'a> {
         );
         let real_time = if run.real_time { "True" } else { "False" };
         let mut given = vec![target, record, real_time.to_string()];
+        // The configuration's defaults are written before the run
+        // statement, and are evaluated before the entry's arguments.
+        if !config.is_empty() {
+            given.push(format!("_config={}", self.run_config(function, config)));
+        }
         if !arguments.is_empty() {
             given.push(arguments);
-        }
-        if let Some(config) = &run.config {
-            given.push(format!("_config={}", self.expression(function, config)));
         }
         format!("_harness.run({})", given.join(", "))
     }
@@ -1708,6 +1772,11 @@ impl<'a> Emitter<'a> {
             {
                 self.hgraph = true;
                 self.line(depth, "_store = _hg.GlobalState.instance()");
+            }
+            // RUN-6: an integration test's `inject run_config`, which this
+            // target does not write.
+            Stmt::Inject { local, at, .. } if function.locals[*local].name == RUN_CONFIG => {
+                self.unsupported(*at, "an `inject run_config` in an integration test");
             }
             other => self.unsupported(at_of(other, function.locals), "this statement"),
         }

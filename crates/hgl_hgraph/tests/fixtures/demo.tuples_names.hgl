@@ -58,9 +58,9 @@ fn depth_of_leveled(depth: i64) -> i64 => depth_of(leveled(depth))
 fn held_of_boxed(value: i64) -> i64 => held_of(boxed(value))
 
 test a_struct_named_as_another_modules_is_its_own_type {
-    assert eval(price_of_quoted(price: [1, 2])) == [1, 2]
-    assert eval(price_of_snapped(price: [3, 4])) == [3, 4]
-    assert eval(depth_of_leveled(depth: [5, 6])) == [5, 6]
-    assert eval(held_of_boxed(value: [7, 8])) == [7, 8]
-    assert eval(quoted(price: [1, 2])) == [delta<Quote>(price: 1), delta<Quote>(price: 2)]
+    assert eval price_of_quoted(price: [1, 2]) == [1, 2]
+    assert eval price_of_snapped(price: [3, 4]) == [3, 4]
+    assert eval depth_of_leveled(depth: [5, 6]) == [5, 6]
+    assert eval held_of_boxed(value: [7, 8]) == [7, 8]
+    assert eval quoted(price: [1, 2]) == [delta<Quote>(price: 1), delta<Quote>(price: 2)]
 }

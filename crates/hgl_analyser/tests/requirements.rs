@@ -948,7 +948,7 @@ fn a_requires_with_no_generic_parameter_is_held_too() {
         "const fn e() -> i64 => Ajar(value: 1).value\n",
         "const fn f(held: Shut, other: Ajar) -> i64 => 1\n",
         "test g {\n",
-        "    let seen = eval(node_blocked(value: [1]))\n",
+        "    let seen = eval node_blocked(value: [1])\n",
         "}\n",
     ));
     assert_eq!(

@@ -64,7 +64,7 @@ fn an_application_sets_its_runs_store_before_its_run() {
                 // argument is written.
                 "put(key: \"pace\", store: global_state, value: 2s)\n",
                 "\n",
-                "eval(counted())\n",
+                "eval counted()\n",
             ),
         ),
     ]);
@@ -122,7 +122,7 @@ fn a_statement_that_sets_no_store_is_rejected() {
                 // Before a declaration.
                 "inject global_state\n",
                 "const base: i64 = 2\n",
-                "eval(counted())\n",
+                "eval counted()\n",
                 // After the run statement.
                 "put(global_state, \"limit\", 3)\n",
             ),
@@ -141,7 +141,7 @@ fn a_statement_that_sets_no_store_is_rejected() {
                 "put(global_state, \"limit\", 3)\n",
                 // A value that reads the store: no constant's.
                 "put(global_state, \"next\", get<i64>(global_state, \"limit\") + 1)\n",
-                "eval(counted())\n",
+                "eval counted()\n",
             ),
         ),
     ]);
@@ -181,7 +181,7 @@ fn an_application_is_a_unit_that_holds_what_a_module_holds() {
                 "\n",
                 "fn twice() -> i64 => beats(every: pace) * 2\n",
                 "\n",
-                "run(twice())\n",
+                "run twice()\n",
             ),
         ),
     ]);
@@ -214,7 +214,7 @@ fn an_application_exports_nothing_and_no_use_names_one() {
                 "export const pace: duration = 2s\n",
                 "export fn twice() -> i64 => beats(every: pace) * 2\n",
                 "\n",
-                "run(twice())\n",
+                "run twice()\n",
             ),
         ),
         (
@@ -270,9 +270,9 @@ fn an_application_has_one_run_statement() {
                 "\n",
                 "use app.feed::{beats}\n",
                 "\n",
-                "run(beats())\n",
-                "eval(beats(every: 2s))\n",
-                "run(beats(every: 3s))\n",
+                "run beats()\n",
+                "eval beats(every: 2s)\n",
+                "run beats(every: 3s)\n",
             ),
         ),
     ]);
@@ -297,7 +297,7 @@ fn a_run_statement_stands_in_no_module_and_after_its_declarations() {
     let checked = check(&[
         (
             "feed.hgl",
-            &format!("{MODULE}\nrun(beats())\neval(beats())\n"),
+            &format!("{MODULE}\nrun beats()\neval beats()\n"),
         ),
         (
             "early.hgl",
@@ -306,7 +306,7 @@ fn a_run_statement_stands_in_no_module_and_after_its_declarations() {
                 "\n",
                 "use app.feed::{beats}\n",
                 "\n",
-                "run(beats())\n",
+                "run beats()\n",
                 "\n",
                 "const pace: duration = 2s\n",
                 "test late { assert true }\n",
@@ -353,15 +353,16 @@ fn running(run: &str) -> common::Checked {
 }
 
 /// RUN-1: "An entry is a temporal function with no temporal parameters.
-/// An application (UNIT-14) runs one: its run statement is `run(call,
-/// config)` or `eval(call, config)`, where the call is of an entry,
-/// written as any call is and giving the entry's const arguments, and
-/// the configuration is a value of core's `RunConfig`, or `RunConfig()`
-/// where none is written." RUN-3: "The word of a run statement is its
-/// mode."
+/// An application (UNIT-14) runs one: its run statement is `run call` or
+/// `eval call`, where the call is of an entry, written as any call is and
+/// giving the entry's const arguments. The statement gives no
+/// configuration: the run's is supplied to it (RUN-6)." RUN-3: "The word
+/// of a run statement is its mode." RUN-6: "the application gives the
+/// fields that leaves out their defaults, `inject run_config{length:
+/// 3s}`".
 #[test]
 fn a_run_statement_calls_an_entry_under_a_configuration() {
-    let live = running("run(beats(every: 2s))");
+    let live = running("run beats(every: 2s)");
     assert_eq!(live.summary(), NONE, "{}", live.report);
     let run = live
         .program
@@ -371,7 +372,6 @@ fn a_run_statement_calls_an_entry_under_a_configuration() {
         .as_ref()
         .expect("the run statement is read");
     assert!(run.real_time);
-    assert!(run.config.is_none());
     // The call is the entry's, with what it is given.
     let ExprKind::Call {
         callee: Callee::Function { .. },
@@ -384,21 +384,31 @@ fn a_run_statement_calls_an_entry_under_a_configuration() {
     assert_eq!(arguments.len(), 1);
     assert_eq!(run.call.ty.to_string(), "i64");
 
-    // `eval` is a simulation, and a configuration is a `RunConfig`.
-    let backtest = running("eval((beats()), RunConfig(end: @2026-01-01T00:00:00Z))");
+    // `eval` is a simulation, and the configuration's defaults are the
+    // entries of the application's `inject run_config`, each of its
+    // field's type.
+    let backtest = running("inject run_config{end: @2026-01-01T00:00:00Z}\neval beats()");
     assert_eq!(backtest.summary(), NONE, "{}", backtest.report);
-    let run = backtest
-        .program
-        .module("app.feed.live")
-        .unwrap()
-        .run_body
-        .as_ref()
-        .unwrap();
+    let module = backtest.program.module("app.feed.live").unwrap();
+    let run = module.run_body.as_ref().unwrap();
     assert!(!run.real_time);
-    assert_eq!(
-        run.config.as_ref().map(|config| config.ty.to_string()),
-        Some("RunConfig".to_string())
-    );
+    let store = module.store_body.as_ref().expect("the inject is read");
+    let defaults: Vec<(String, String)> = store
+        .statements
+        .iter()
+        .flat_map(|statement| match statement {
+            Stmt::Inject { local, config, .. } => {
+                assert_eq!(store.locals[*local].name, "run_config");
+                assert_eq!(store.locals[*local].ty.to_string(), "RunConfig");
+                config
+                    .iter()
+                    .map(|entry| (entry.field.clone(), entry.value.ty.to_string()))
+                    .collect()
+            }
+            _ => Vec::new(),
+        })
+        .collect();
+    assert_eq!(defaults, [("end".to_string(), "datetime".to_string())]);
     // A module has no run statement to read.
     assert!(
         backtest
@@ -410,53 +420,124 @@ fn a_run_statement_calls_an_entry_under_a_configuration() {
     );
 }
 
-/// RUN-1, `run.entry`: "A run statement's first argument is no call of
-/// an entry; the argument". The entry's arguments are a call's, and
-/// the configuration a `RunConfig`.
+/// RUN-1, `run.entry`: "A run statement's call is of no entry (RUN-1);
+/// the call". The entry's arguments are a call's. RUN-6: "a
+/// configuration on an application's run statement" rejects
+/// (`run.configuration`), and an entry of the application's `inject
+/// run_config` "that names no field is an argument that names no
+/// parameter (`argument.unknown`)".
 #[test]
 fn a_run_statement_that_calls_no_entry_is_reported() {
     let cases = [
-        // A function with a temporal input; a value function; a struct;
-        // what is no call.
+        // A function with a temporal input; a value function; a struct.
         (
-            "run(scaled(price: [1.0]))",
+            "run scaled(price: [1.0])",
             "live.hgl:5:5 type/run.entry RUN-1",
         ),
-        ("run(fixed())", "live.hgl:5:5 type/run.entry RUN-1"),
-        ("run(Held(value: 1))", "live.hgl:5:5 type/run.entry RUN-1"),
-        ("eval(7)", "live.hgl:5:6 type/run.entry RUN-1"),
-        ("run((beats))", "live.hgl:5:5 type/run.entry RUN-1"),
+        ("run fixed()", "live.hgl:5:5 type/run.entry RUN-1"),
+        ("run Held(value: 1)", "live.hgl:5:5 type/run.entry RUN-1"),
         // The entry's arguments.
         (
-            "run(beats(every: 1))",
+            "run beats(every: 1)",
             "live.hgl:5:18 type/type.mismatch EXPR-5",
         ),
         (
-            "run(beats(pace: 1s))",
+            "run beats(pace: 1s)",
             "live.hgl:5:11 name/argument.unknown EXPR-2",
         ),
         // LEX-7: an integer literal out of range, as anywhere.
         (
-            "run(paced(every: 9223372036854775808))",
+            "run paced(every: 9223372036854775808)",
             "live.hgl:5:18 parse/number.integer_range LEX-7",
         ),
-        // UNIT-14: "the arguments of the run statement's call and its
-        // configuration, are value code": a call of a node there is
-        // `call.role`, the code proposed.
+        // UNIT-14: "the arguments of the run statement's call are value
+        // code": a call of a node there is `call.role`, the code
+        // proposed.
         (
-            "run(paced(every: beats()))",
+            "run paced(every: beats())",
             "live.hgl:5:18 function-kind/call.role UNIT-14",
         ),
-        // The configuration, and what follows it.
-        ("run(beats(), 3)", "live.hgl:5:14 type/type.mismatch EXPR-5"),
+        // RUN-6: the configuration is supplied, and not written on the
+        // run statement.
         (
-            "run(beats(), RunConfig(), 4)",
-            "live.hgl:5:27 type/argument.unexpected RUN-1",
+            "eval{length: 3s} beats()",
+            "live.hgl:5:5 phase/run.configuration RUN-6",
+        ),
+        // What it holds is not read (ERR-9): a name in it nothing binds
+        // is not reported.
+        (
+            "eval{length: missing} beats()",
+            "live.hgl:5:5 phase/run.configuration RUN-6",
+        ),
+        // The defaults, each of its field's type, and of a field of
+        // core's `RunConfig`.
+        (
+            "inject run_config{until: 3s}\nrun beats()",
+            "live.hgl:5:19 name/argument.unknown RUN-6",
+        ),
+        (
+            "inject run_config{length: 3}\nrun beats()",
+            "live.hgl:5:27 type/type.mismatch EXPR-5",
+        ),
+        (
+            "inject run_config{length: 3s, length: 4s}\nrun beats()",
+            "live.hgl:5:31 name/argument.duplicate EXPR-10",
+        ),
+        // RUN-6: "braces on an `inject` of any other capability".
+        (
+            "inject global_state{key: 1}\nrun beats()",
+            "live.hgl:5:20 injectable/inject.configuration RUN-6",
+        ),
+        // RUN-6: "no expression constructs one".
+        (
+            "inject global_state\nput(global_state, \"bounds\", RunConfig(length: 3s))\nrun beats()",
+            "live.hgl:6:29 type/call.not_callable NATIVE-6",
         ),
     ];
     for (run, expected) in cases {
         let checked = running(run);
         assert_eq!(checked.summary(), [expected], "{run}\n{}", checked.report);
+    }
+}
+
+/// RUN-6: "It is read in the statements that follow its `inject`, where
+/// no other capability is (UNIT-14, TST-17)": a value given to `put` may
+/// read `run_config`, as supplied, "a start left out is null there". FN-9:
+/// "An application injects `global_state` ... and `run_config` (RUN-6),
+/// and no other."
+#[test]
+fn an_applications_store_may_read_its_run_configuration() {
+    let read = running(concat!(
+        "inject run_config{start: @2026-01-05T09:30:00Z}\n",
+        "inject global_state\n",
+        "put(global_state, \"opened\", run_config.start)\n",
+        "put(global_state, \"length\", run_config.length)\n",
+        "eval beats()",
+    ));
+    assert_eq!(read.summary(), NONE, "{}", read.report);
+    for (statements, expected) in [
+        // The store is read nowhere it is put.
+        (
+            concat!(
+                "inject run_config, global_state\n",
+                "put(global_state, \"held\", has(global_state, \"k\"))\n",
+                "run beats()",
+            ),
+            "live.hgl:6:31 phase/application.statement UNIT-14",
+        ),
+        // Any other capability is no application's.
+        (
+            "inject run_config, clock\nrun beats()",
+            "live.hgl:5:20 phase/application.statement UNIT-14",
+        ),
+    ] {
+        let checked = running(statements);
+        assert_eq!(
+            checked.summary(),
+            [expected],
+            "{statements}\n{}",
+            checked.report
+        );
     }
 }
 
@@ -469,10 +550,10 @@ fn an_applications_path_is_no_other_files() {
         ("feed.hgl", MODULE),
         (
             "a.hgl",
-            "application app.feed\n\nuse app.feed.parts::{one}\n\nrun(one())\n",
+            "application app.feed\n\nuse app.feed.parts::{one}\n\nrun one()\n",
         ),
-        ("b.hgl", "application app.twice\n\nrun(one())\n"),
-        ("c.hgl", "application app.twice\n\nrun(one())\n"),
+        ("b.hgl", "application app.twice\n\nrun one()\n"),
+        ("c.hgl", "application app.twice\n\nrun one()\n"),
     ]);
     // The first file of a path is its unit, and each later one is
     // reported and left out: nothing more is said of what it holds.

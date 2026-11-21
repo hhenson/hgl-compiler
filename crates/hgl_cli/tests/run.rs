@@ -37,7 +37,8 @@ const BACKTEST: &str = concat!(
     "\n",
     "use demo.ticks::{counted}\n",
     "\n",
-    "eval(counted(upto: 3), RunConfig(length: 10s))\n",
+    "inject run_config{length: 10s}\n",
+    "eval counted(upto: 3)\n",
 );
 
 /// An application whose run fails.
@@ -46,7 +47,7 @@ const BROKEN: &str = concat!(
     "\n",
     "use demo.ticks::{failing}\n",
     "\n",
-    "eval(failing())\n",
+    "eval failing()\n",
 );
 
 /// `hgl run` runs the one application a program has, and one of
@@ -95,7 +96,7 @@ fn a_rejected_program_is_not_run() {
             "fn pass(value: i64) -> i64 {\n",
             "    when { return value }\n",
             "}\n",
-            "eval(pass(value: [1]))\n",
+            "eval pass(value: [1])\n",
         ),
     );
     let output = hgl(&["run", &argument(&root)]);
@@ -160,11 +161,11 @@ fn a_replacement_is_checked_before_the_application_is_run() {
     // The error is where the application would have written the value,
     // and shows the statement as it was checked.
     assert!(
-        reported.contains(&format!("{application}:5:21")),
+        reported.contains(&format!("{application}:6:21")),
         "{reported}"
     );
     assert!(
-        reported.contains("eval(counted(upto: (\"three\")), RunConfig(length: 10s))"),
+        reported.contains("eval counted(upto: (\"three\"))"),
         "{reported}"
     );
     // The same for a field of the configuration.
@@ -212,14 +213,14 @@ const SIDED: &str = concat!(
     "\n",
     "use demo.sides::{sided}\n",
     "\n",
-    "eval(sided(side: .buy))\n",
+    "eval sided(side: .buy)\n",
 );
 const ECHOED: &str = concat!(
     "application demo.sides.echoed\n",
     "\n",
     "use demo.sides::{echo}\n",
     "\n",
-    "eval(echo(value: 3))\n",
+    "eval echo(value: 3)\n",
 );
 
 /// RUN-2: "a constant checked against the type it replaces". The type
@@ -249,7 +250,7 @@ fn a_replacement_does_not_change_what_the_entry_is() {
         "{reported}"
     );
     assert!(
-        reported.contains("eval(echo<i64>(value: (\"text\")))"),
+        reported.contains("eval echo<i64>(value: (\"text\"))"),
         "{reported}"
     );
 }
@@ -283,7 +284,7 @@ fn a_type_of_the_same_name_is_another_type() {
             "use demo.left as left\n",
             "use demo.right as right\n",
             "\n",
-            "eval(echo(value: left::Side.buy))\n",
+            "eval echo(value: left::Side.buy)\n",
         ),
     );
     let output = hgl(&["run", &argument(&root), "--arg", "value=right::Side.sell"]);
@@ -323,7 +324,7 @@ fn an_application_runs_with_what_starts_it_replaces() {
     let root = scratch("replaced");
     write(&root, "ticks.hgl", TICKS);
     write(&root, "backtest.hgl", BACKTEST);
-    // As written: `counted(upto: 3)` under `RunConfig(length: 10s)`.
+    // As written: `counted(upto: 3)` for a length of `10s`.
     let output = hgl(&[
         "run",
         &argument(&root),
@@ -399,7 +400,7 @@ fn an_application_runs_with_what_starts_it_replaces() {
             "\n",
             "use demo.sides::{echo, Side}\n",
             "\n",
-            "eval(echo(value: Side.buy))\n",
+            "eval echo(value: Side.buy)\n",
         ),
     );
     write(
@@ -410,7 +411,7 @@ fn an_application_runs_with_what_starts_it_replaces() {
             "\n",
             "use demo.sides::{echo}\n",
             "\n",
-            "eval(echo(value: 2.5))\n",
+            "eval echo(value: 2.5)\n",
         ),
     );
     let output = hgl(&[
@@ -489,7 +490,7 @@ fn an_application_the_target_cannot_write_is_not_run() {
             "    }\n",
             "    return first + second\n",
             "}\n",
-            "eval(waits())\n",
+            "eval waits()\n",
         ),
     );
     let output = hgl(&["run", &argument(&root)]);
@@ -532,7 +533,7 @@ const ENDLESS: &str = concat!(
     "\n",
     "use demo.ticks::{counted}\n",
     "\n",
-    "run(counted(upto: 1000000, every: 20ms))\n",
+    "run counted(upto: 1000000, every: 20ms)\n",
 );
 
 /// RUN-3: a run in real time goes on "until its host stops it". An

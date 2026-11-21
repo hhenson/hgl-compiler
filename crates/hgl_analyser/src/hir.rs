@@ -19,9 +19,11 @@ use crate::program::LocalKind;
 use crate::types::{Argument as GenericArgument, Type};
 
 /// An application's run statement, typed (RUN-1): "its run statement
-/// is `run(call, config)` or `eval(call, config)`, where the call is of
-/// an entry ... and the configuration is a value of core's `RunConfig`,
-/// or `RunConfig()` where none is written."
+/// is `run call` or `eval call`, where the call is of an entry, written
+/// as any call is and giving the entry's const arguments. The statement
+/// gives no configuration: the run's is supplied to it (RUN-6)." The
+/// defaults the application gives it are its `inject run_config`'s
+/// ([`Stmt::Inject`], among the store's statements).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Run {
     /// True for `run`, a run in real time; false for `eval`, a
@@ -29,10 +31,21 @@ pub struct Run {
     pub real_time: bool,
     /// The call of the entry, with the entry's const arguments.
     pub call: Expr,
-    /// The configuration, where one is written.
-    pub config: Option<Expr>,
     /// Where the statement is written.
     pub at: Location,
+}
+
+/// One entry of a run's configuration, `length: 3s`, written in braces
+/// after `eval` or `run` in a test or after `run_config` in an `inject`
+/// (RUN-6): "Each entry names a field of the configuration, and its value
+/// is value code of that field's type".
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigEntry {
+    /// The field it names, a property of core's `RunConfig` (core's
+    /// CAP-7): `start`, `end` or `length`.
+    pub field: String,
+    /// What it gives the field, of the field's type.
+    pub value: Expr,
 }
 
 /// The body of one function: a value function's, a node's, or a
@@ -217,10 +230,16 @@ pub enum Stmt {
         at: Location,
     },
     /// `inject name`: a capability of a node, one statement for each
-    /// name (TIME-8). `out` is the node's result (TIME-7).
+    /// name (TIME-8). `out` is the node's result (TIME-7). An
+    /// application's or an integration test's `inject run_config{...}`
+    /// gives the run's configuration its defaults (RUN-6).
     Inject {
         /// The local that names the capability.
         local: LocalId,
+        /// The entries of the configuration in braces after
+        /// `run_config`, in the order written; empty for any other name,
+        /// and where none is written.
+        config: Vec<ConfigEntry>,
         /// Where the name is written.
         at: Location,
     },
@@ -712,7 +731,7 @@ pub enum ExprKind {
     /// place expects makes a dictionary (EXPR-9). Each pair is its key
     /// and its value.
     Pairs(Vec<(Expr, Expr)>),
-    /// `eval(target, ...)` (TST-5): the call of the target it stands
+    /// `eval target(...)` (TST-5): the call of the target it stands
     /// for, with a trace given to each temporal parameter and
     /// configuration to each `const` one. Its type is a trace of the
     /// target's result, or none for a target with no result (TST-8).
@@ -720,11 +739,16 @@ pub enum ExprKind {
         /// The call the eval takes, with a trace where the function
         /// called takes a temporal input.
         call: Box<Expr>,
-        /// The run's configuration, a `RunConfig` of core's, where the
-        /// eval writes one (RUN-1).
-        config: Option<Box<Expr>>,
-        /// True for `run(...)` in an integration test (TST-17): the
-        /// run is in real time, where an eval's is a simulation
+        /// The entries of the run's configuration written in braces
+        /// after the word, `eval{length: 4s} target(...)`, in the order
+        /// written (RUN-6). A field none names is left out.
+        config: Vec<ConfigEntry>,
+        /// The local an integration test binds `run_config` to, where it
+        /// injects it before this eval (TST-17). RUN-6: "a field the
+        /// statement does not name is the injected configuration's."
+        inherited: Option<LocalId>,
+        /// True for `run target(...)` in an integration test (TST-17):
+        /// the run is in real time, where an eval's is a simulation
         /// (RUN-3).
         real_time: bool,
     },
@@ -1170,8 +1194,8 @@ impl Expr {
             }
             ExprKind::Eval { call, config, .. } => {
                 call.walk_nodes(visit);
-                if let Some(config) = config {
-                    config.walk_nodes(visit);
+                for entry in config {
+                    entry.value.walk_nodes(visit);
                 }
             }
             ExprKind::Trace(cells) => {
@@ -1269,8 +1293,8 @@ impl Expr {
             }
             ExprKind::Eval { call, config, .. } => {
                 call.walk_mut(visit);
-                if let Some(config) = config {
-                    config.walk_mut(visit);
+                for entry in config {
+                    entry.value.walk_mut(visit);
                 }
             }
             ExprKind::Trace(cells) => {
@@ -1288,7 +1312,12 @@ impl Expr {
 pub(crate) fn walk_statements_mut(statements: &mut [Stmt], visit: &mut dyn FnMut(&mut Expr)) {
     for statement in statements {
         match statement {
-            Stmt::Inject { .. } | Stmt::Unread { .. } => {}
+            Stmt::Inject { config, .. } => {
+                for entry in config {
+                    entry.value.walk_mut(visit);
+                }
+            }
+            Stmt::Unread { .. } => {}
             Stmt::Declare { value, .. } | Stmt::Return { value, .. } => {
                 if let Some(value) = value {
                     value.walk_mut(visit);
@@ -1365,7 +1394,12 @@ pub fn walk_statement_nodes<'a>(statements: &'a [Stmt], visit: &mut dyn FnMut(No
     for statement in statements {
         visit(Node::Statement(statement));
         match statement {
-            Stmt::Inject { .. } | Stmt::Unread { .. } => {}
+            Stmt::Inject { config, .. } => {
+                for entry in config {
+                    entry.value.walk_nodes(visit);
+                }
+            }
+            Stmt::Unread { .. } => {}
             Stmt::Declare { value, .. } | Stmt::Return { value, .. } => {
                 if let Some(value) = value {
                     value.walk_nodes(visit);

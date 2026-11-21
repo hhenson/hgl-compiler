@@ -1,3 +1,4 @@
 application demo.shown.printed
 use demo.shown::{numbers}
-eval(numbers(), RunConfig(length: 10s))
+inject run_config{length: 10s}
+eval numbers()

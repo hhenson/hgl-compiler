@@ -23,15 +23,15 @@
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
-use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
+use hgl_parser::{HasSpan, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
 use crate::hir::EndpointOperation;
 use crate::program::{
     Binding, Decision, DeclarationKind, ImportKind, LocalKind, Module, NameUse, PreludeName,
-    Program,
+    Program, RUN_CONFIG,
 };
-use crate::syntax::child;
+use crate::syntax::{child, leads_its_test};
 use crate::{INJECTABLES, RESULT_FORMS, codes, error};
 
 /// Resolves the names of every module, filling in [`Module::uses`] and
@@ -51,6 +51,7 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
             file: 0,
             file_id: first.file,
             in_test: false,
+            configures: false,
             frames: Vec::new(),
             hidden: Vec::new(),
             diagnostics,
@@ -116,6 +117,10 @@ struct Resolver<'a> {
     /// True inside a test or a test helper, where the module's test
     /// scope is visible (TST-1).
     in_test: bool,
+    /// True where `inject run_config` has a place, and the configuration
+    /// in braces after it is read (RUN-6): an application's statements
+    /// before its run statement, and an integration test.
+    configures: bool,
     frames: Vec<Frame>,
     hidden: Vec<Hidden>,
     diagnostics: &'a mut Diagnostics,
@@ -214,24 +219,37 @@ impl Resolver<'_> {
         }
         for test in &module.tests {
             self.enter(test.file, true);
+            self.configures = test.integration;
             self.children(&test.syntax);
+            self.configures = false;
         }
         // RUN-1: the names of an application's run statement are its
         // unit's: what it declares and imports.
         if let Some(run) = &module.run {
             self.enter(run.file, false);
-            self.children(&run.syntax);
+            // RUN-6: a configuration on an application's run statement
+            // rejects (`run.configuration`), and what it holds is not read
+            // (ERR-9): only the statement's call is resolved.
+            for form in run.syntax.children() {
+                for part in form.children() {
+                    if part.kind() != SyntaxKind::OperatorConfig {
+                        self.walk(&part);
+                    }
+                }
+            }
         }
         // UNIT-14: the statements that set the run's store are read as
         // one block is: `inject global_state` binds the name for the
         // calls after it.
         if let Some(first) = module.store.first() {
             self.enter(first.file, false);
+            self.configures = true;
             self.frames.push(Frame::default());
             for statement in &module.store {
                 self.children(&statement.syntax);
             }
             self.frames.pop();
+            self.configures = false;
         }
         for (file, node) in &module.instantiations {
             self.enter(*file, false);
@@ -428,9 +446,33 @@ impl Resolver<'_> {
         }
     }
 
-    /// `inject out, clock`.
+    /// `inject out, clock`, or `inject run_config{length: 3s}`: what a
+    /// configuration in braces holds is read before the names are bound
+    /// (RUN-6), as the value code of the statements before. Braces that
+    /// are rejected, after any other capability (`inject.configuration`)
+    /// or after a `run_config` where it has no place (`inject.position`),
+    /// are not read (ERR-9): what they name is not looked up.
     #[inline(never)]
     fn inject(&mut self, node: &SyntaxNode) {
+        // TST-17: an integration test injects it "before its other
+        // statements"; an application anywhere before its run statement.
+        let placed = self.configures && (!self.in_test || leads_its_test(node));
+        let mut after_run_config = false;
+        for element in node.children_with_tokens() {
+            match element {
+                SyntaxElement::Token(token) if token.kind() == SyntaxKind::Ident => {
+                    after_run_config = token.text() == RUN_CONFIG;
+                }
+                SyntaxElement::Node(braces)
+                    if braces.kind() == SyntaxKind::OperatorConfig
+                        && after_run_config
+                        && placed =>
+                {
+                    self.children(&braces);
+                }
+                _ => {}
+            }
+        }
         for name in identifiers(node) {
             // TIME-8: "`inject` names no other."
             if !INJECTABLES.contains(&name.text()) {

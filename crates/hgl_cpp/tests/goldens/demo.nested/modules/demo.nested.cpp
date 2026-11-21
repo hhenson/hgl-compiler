@@ -55,7 +55,6 @@
 #undef second_relayed
 #undef set_fixed_pair
 #undef slot
-#undef start
 #undef step
 #undef stored
 #undef sum

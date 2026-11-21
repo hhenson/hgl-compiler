@@ -37,13 +37,13 @@ fn read_status(clock: bool, w: rolling_window<i64, 3, 2>) -> i64 {
 fn window_status(clock: bool, action: i64) -> i64 => read_status(clock, owned_window(action))
 
 test withdrawal_forgets_held_samples_and_restarts_the_minimum {
-    assert eval(held_window(action: [1, 2, -1, -1, 3, 4])) == [_, [1, 2], _, _, _, [3, 4]]
-    assert eval(window_status(clock: [true, true, true, true, true, true],
-                              action: [1, 2, -1, -1, 3, 4])) == [1, 2, 0, 0, 1, 2]
+    assert eval held_window(action: [1, 2, -1, -1, 3, 4]) == [_, [1, 2], _, _, _, [3, 4]]
+    assert eval window_status(clock: [true, true, true, true, true, true],
+                              action: [1, 2, -1, -1, 3, 4]) == [1, 2, 0, 0, 1, 2]
 }
 
 test last_window_action_decides_the_only_arrival {
-    assert eval(held_window(action: [1, 2, -2, 3, 4, -3, 5])) ==
+    assert eval held_window(action: [1, 2, -2, 3, 4, -3, 5]) ==
         [_, [1, 2], _, _, [3, 4], _, [81, 5]]
 }
 
@@ -66,11 +66,11 @@ fn timed_status(clock: bool, window: rolling_window<i64, 3us, 0us>) -> i64 {
 fn timed_view(clock: bool, action: i64) -> i64 => timed_status(clock, timed_owned(action))
 
 test forgotten_samples_never_wake_the_window_at_their_old_expiry {
-    assert eval(timed_view(clock: [true, true, true, true, true, true, true, true, true, true],
-                           action: [1, -1, -1, _, _, 2, _, _, _, _])) ==
+    assert eval timed_view(clock: [true, true, true, true, true, true, true, true, true, true],
+                           action: [1, -1, -1, _, _, 2, _, _, _, _]) ==
         [2, 0, 0, 0, 0, 2, 2, 2, 2, 1]
-    assert eval(timed_view(clock: [true, true, true, true, true, true],
-                           action: [1, _, _, _, -1, 2])) == [2, 2, 2, 2, 0, 2]
+    assert eval timed_view(clock: [true, true, true, true, true, true],
+                           action: [1, _, _, _, -1, 2]) == [2, 2, 2, 2, 0, 2]
 }
 
 fn on_window_wake(w: rolling_window<i64, 3, 2>) -> bool {
@@ -80,5 +80,5 @@ fn active_window(action: i64) -> bool => on_window_wake(owned_window(action))
 
 # END-4: active subscribers see a transition to invalid exactly once.
 test only_a_real_withdrawal_notifies_an_active_subscriber {
-    assert eval(active_window(action: [-2, -1, 1, -1, -1, 2])) == [false, _, true, false, _, true]
+    assert eval active_window(action: [-2, -1, 1, -1, -1, 2]) == [false, _, true, false, _, true]
 }

@@ -48,9 +48,6 @@ const BARE_FN: &str = "an anonymous function is parenthesized before it is calle
 pub(crate) enum ArgMode {
     /// A call or a constructor: positional and named arguments.
     Call,
-    /// `eval(...)` and `run(...)`: a call, and then a run
-    /// configuration. Neither has a label (TST-5, RUN-1).
-    Eval,
     /// A delta constructor: every argument is named.
     Delta,
 }
@@ -172,8 +169,20 @@ impl Parser<'_> {
         if !(named || empty) {
             return;
         }
+        self.configuration();
+    }
+
+    /// ```text
+    /// operator_configuration = "{", configuration_argument, { ",", configuration_argument }, [ "," ], "}" ;
+    /// configuration_argument = member_name, ":", expression ;
+    /// ```
+    ///
+    /// The braces of named entries the cursor is on: an operator's
+    /// configuration (EXPR-10), and a run's, written the same way after
+    /// `eval` or `run` and after `run_config` in an `inject` (RUN-6).
+    pub(crate) fn configuration(&mut self) {
         self.start(OperatorConfig);
-        if empty {
+        if self.nth(1) == RBrace {
             self.error(
                 "an operator configuration has at least one entry",
                 "EXPR-10",
@@ -299,17 +308,6 @@ impl Parser<'_> {
             Int | Float | Str | Duration | Tenor | Temporal | KwTrue | KwFalse | KwNull => {
                 self.leaf(Literal);
             }
-            // TST-17: "In a test's block `run` as the callee of a call
-            // is that form, whatever else is in scope (LEX-10)".
-            // Elsewhere `run(...)` is a call of what `run` names.
-            Ident
-                if self.in_test
-                    && self.nth_word(0, "run")
-                    && self.nth(1) == LParen
-                    && self.suffix_at(1) =>
-            {
-                self.run_form(RunExpr)
-            }
             Ident => self.name_expr(),
             // `delta` is a reserved word. In an expression it begins a
             // delta constructor and nothing else.
@@ -340,7 +338,11 @@ impl Parser<'_> {
                 return true;
             }
             KwIf => self.if_expr(),
+            // RUN-1, TST-17: `run` is a reserved word (LEX-10), and
+            // begins a run in real time wherever an operand is due. Where
+            // that has no place is the analyser's to say (`run.position`).
             KwEval => self.run_form(EvalExpr),
+            KwRun => self.run_form(RunExpr),
             // CTRL-9: before the body of an `if`, `for`, `switch`, `when`
             // or `while`, the first `{` opens the body. It is left for
             // the statement to take.
@@ -354,23 +356,71 @@ impl Parser<'_> {
     }
 
     /// ```text
-    /// eval_expression = "eval", "(", expression, [ ",", expression ], [ "," ], ")" ;
-    /// run_expression = "run", "(", expression, [ ",", expression ], [ "," ], ")" ;
+    /// eval_expression = "eval", [ operator_configuration ], run_target ;
+    /// run_expression = "run", [ operator_configuration ], run_target ;
     /// ```
     ///
     /// The cursor is on the word. `kind` is the node it makes: an
-    /// `EvalExpr` or a `RunExpr`.
+    /// `EvalExpr` or a `RunExpr`, which holds the configuration, where
+    /// one is written, and then the call.
+    ///
+    /// RUN-6: "A run statement in a test gives its run's configuration
+    /// as an operator is given its own (EXPR-10), in braces after the
+    /// word: `eval{start: a, end: b} call`." No call begins with a
+    /// brace, so one after the word is the configuration, as the
+    /// operator's is, with spaces before it or none.
     pub(crate) fn run_form(&mut self, kind: crate::kind::SyntaxKind) {
         self.start(kind);
         self.bump();
-        // LEX-27: `eval(...)` is a call too.
-        if self.at(LParen) && self.suffix_at(0) {
+        if self.at(LBrace) && !self.cut() {
+            self.configuration();
+        }
+        self.run_target();
+        self.finish();
+    }
+
+    /// ```text
+    /// run_target = ( IDENTIFIER | qualified_name ), [ generic_arguments ],
+    ///              call_suffix ;
+    /// ```
+    ///
+    /// The call an `eval` or a `run` takes (RUN-1, TST-5): a `CallExpr`
+    /// of a name, or, with generic arguments written, a
+    /// `TypedConstructor`, as any call of a generic function is. Where
+    /// no call follows the word, `eval 7` or `eval target`, the token
+    /// that stands there is reported (`syntax.expected_token`).
+    fn run_target(&mut self) {
+        if !self.goes_on("a call") {
+            return;
+        }
+        if !self.at(Ident) {
+            self.expected("a call");
+            return;
+        }
+        let mark = self.mark();
+        // Where the name ends: after one token, or three when qualified.
+        let qualified = self.nth(1) == ColonColon && self.nth(2) == Ident && !self.nl_at(1);
+        let after = if qualified { 3 } else { 1 };
+        // GEN-14: after the name of the function a target calls, `<`
+        // opens its generic arguments: a target is a call, never a
+        // comparison.
+        let generic = self.nth(after) == Lt && !self.nl_at(after);
+        if generic {
+            self.name();
+            self.generic_args();
+        } else {
+            self.start(NameExpr);
+            self.name();
+            self.finish();
+        }
+        if self.at(LParen) && !self.nl() {
+            // LEX-27: a call's `(` touches what it calls.
             self.attached(Bracket::Call);
-            self.arg_list(ArgMode::Eval);
+            self.arg_list(ArgMode::Call);
+            self.wrap(mark, if generic { TypedConstructor } else { CallExpr });
         } else {
             self.expected("`(`");
         }
-        self.finish();
     }
 
     // ---- Names and constructors ----
@@ -538,7 +588,6 @@ impl Parser<'_> {
     /// ```text
     /// arguments = argument, { ",", argument }, [ "," ] ;
     /// argument = [ member_name, ":" ], expression ;
-    /// eval_expression = "eval", "(", expression, [ ",", expression ], [ "," ], ")" ;
     /// delta_arguments = delta_argument, { ",", delta_argument }, [ "," ] ;
     /// delta_argument = member_name, ":", expression ;
     /// ```
@@ -549,16 +598,10 @@ impl Parser<'_> {
         self.bump();
         // LEX-5: line breaks do not count inside parentheses.
         self.nested(Context::LIST, |parser| {
-            if mode == ArgMode::Eval && parser.at(RParen) {
-                parser.expected("an expression");
-            }
             let mut index = 0usize;
             parser.list(RParen, "an argument", true, |parser| {
-                // LEX-9: `time` may label an argument. An argument of
-                // `eval` is an expression and has no label: the names
-                // are inside the call it takes (TST-5).
-                let labelled =
-                    parser.at_member_name() && parser.nth(1) == Colon && mode != ArgMode::Eval;
+                // LEX-9: `time` may label an argument.
+                let labelled = parser.at_member_name() && parser.nth(1) == Colon;
                 if !labelled && !can_start_expression(parser.current()) {
                     return;
                 }

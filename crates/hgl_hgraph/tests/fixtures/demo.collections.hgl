@@ -101,23 +101,23 @@ fn maybe_a(price: i64) -> i64? => maybe_priced(price)["A"]
 fn chosen_of(chosen: str, key: str, price: i64) -> i64 => priced(key, price)[chosen]
 
 test lists_tick_whole_or_by_position {
-    assert eval(total_of(reading: [-1, 2, 5])) == [0, 3, 6]
-    assert eval(doubled_total_of(reading: [2, -1])) == [6, 0]
-    assert eval(second_of(reading: [2, 4])) == [2, 4]
-    assert eval(low_of(slot: [0, 1, 0], reading: [3, 8, 4])) == [3, _, 4]
-    assert eval(high_of(low: [1, 5])) == [2, 6]
-    assert eval(span_of(low: [1, 5])) == [1, 1]
-    assert eval(partial_span_of(slot: [0, 1, 0], reading: [3, 8, 4])) == [_, 5, 4]
-    assert eval(changes_of(slot: [0, 1], reading: [3, 8])) == [null, 8]
-    assert eval(pair_total_of(low: [3, 8])) == [7, 17]
+    assert eval total_of(reading: [-1, 2, 5]) == [0, 3, 6]
+    assert eval doubled_total_of(reading: [2, -1]) == [6, 0]
+    assert eval second_of(reading: [2, 4]) == [2, 4]
+    assert eval low_of(slot: [0, 1, 0], reading: [3, 8, 4]) == [3, _, 4]
+    assert eval high_of(low: [1, 5]) == [2, 6]
+    assert eval span_of(low: [1, 5]) == [1, 1]
+    assert eval partial_span_of(slot: [0, 1, 0], reading: [3, 8, 4]) == [_, 5, 4]
+    assert eval changes_of(slot: [0, 1], reading: [3, 8]) == [null, 8]
+    assert eval pair_total_of(low: [3, 8]) == [7, 17]
 }
 
 test dictionaries_tick_by_key {
-    assert eval(keys_of(key: ["A", "B", "A"], price: [1, 2, -1])) == [null, 2, 2]
-    assert eval(removals_of(key: ["A", "A"], price: [1, -1])) == [1, 10]
-    assert eval(a_of(key: ["B", "A", "A"], price: [2, 7, -1])) == [null, 7, null]
-    assert eval(maybe_a(price: [1, -1, 2])) == [1, null, 2]
-    assert eval(b_of(key: ["B", "A", "B"], price: [1, 2, 3])) == [1, _, 3]
-    assert eval(chosen_of(chosen: ["A", "B", _], key: ["A", "B", "A"], price: [1, 2, 3])) ==
+    assert eval keys_of(key: ["A", "B", "A"], price: [1, 2, -1]) == [null, 2, 2]
+    assert eval removals_of(key: ["A", "A"], price: [1, -1]) == [1, 10]
+    assert eval a_of(key: ["B", "A", "A"], price: [2, 7, -1]) == [null, 7, null]
+    assert eval maybe_a(price: [1, -1, 2]) == [1, null, 2]
+    assert eval b_of(key: ["B", "A", "B"], price: [1, 2, 3]) == [1, _, 3]
+    assert eval chosen_of(chosen: ["A", "B", _], key: ["A", "B", "A"], price: [1, 2, 3]) ==
         [1, 2, _]
 }

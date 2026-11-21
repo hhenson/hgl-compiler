@@ -888,8 +888,8 @@ fn a_call_and_an_index_touch_what_they_apply_to() {
 fn a_call_or_an_index_that_stands_apart_is_rejected() {
     // LEX-27: "`f (x)` and `x [i]` on one line are rejected". "A call
     // here is a call suffix, the arguments of a typed or delta
-    // constructor, a conversion such as `str(value)`, `eval(...)`,
-    // `raises(...)`, and a constraint call."
+    // constructor, a conversion such as `str(value)`, `raises(...)`, a
+    // constraint call, and a warning or a timeout annotation."
     let call = "a call's `(` directly follows what it calls";
     let index = "an index's `[` directly follows what it indexes";
     for (entry, text, at, message) in [
@@ -898,7 +898,7 @@ fn a_call_or_an_index_that_stands_apart_is_rejected() {
         (Entry::Statements, "let a = g(f (x))", "1:13", call),
         (Entry::Statements, "a.b (c)", "1:5", call),
         (Entry::Statements, "let s = str (x)", "1:13", call),
-        (Entry::Statements, "let e = eval (f(x: [1]))", "1:14", call),
+        (Entry::Statements, "let e = eval f (x: [1])", "1:16", call),
         (
             Entry::Statements,
             "assert raises (\"x\") { f() }",
@@ -944,10 +944,11 @@ fn on_the_next_line_a_bracket_begins_a_statement() {
         statements("x\n[i]"),
         "ExprStmt[NameExpr[\"x\"]] ExprStmt[SequenceExpr[\"[\" NameExpr[\"i\"] \"]\"]]"
     );
-    // `eval` and a conversion are nothing without their `(`.
+    // `eval` is nothing without its call, and a conversion without
+    // its `(`.
     assert_eq!(
         rejected(Entry::Statements, "let a = eval\n(b)")[0],
-        "- 1:13: expected `(`, found end of line"
+        "- 1:13: expected a call, found end of line"
     );
     assert_eq!(
         rejected(Entry::Statements, "let a = str\n(b)")[0],
@@ -1087,36 +1088,37 @@ fn an_application_is_headed_by_its_line_and_holds_a_run_statement() {
         accepted(Entry::SourceFile, "application pricing.live\n"),
         "ApplicationDecl[\"application\" ModulePath[\"pricing\" \".\" \"live\"]]"
     );
-    // RUN-1: "its run statement is `run(call, config)` or `eval(call,
-    // config)`".
+    // RUN-1: "its run statement is `run call` or `eval call`". The
+    // grammar: `run_expression = "run", [ operator_configuration ],
+    // run_target`.
     assert_eq!(
-        accepted(Entry::SourceFile, "application a\n\nrun(beat())\n"),
+        accepted(Entry::SourceFile, "application a\n\nrun beat()\n"),
         "ApplicationDecl[\"application\" ModulePath[\"a\"]] \
-         RunStmt[RunExpr[\"run\" ArgList[\"(\" Arg[CallExpr[NameExpr[\"beat\"] \
-         ArgList[\"(\" \")\"]]] \")\"]]]"
+         RunStmt[RunExpr[\"run\" CallExpr[NameExpr[\"beat\"] ArgList[\"(\" \")\"]]]]"
     );
+    // RUN-6: the configuration is the analyser's to reject on an
+    // application's run statement (`run.configuration`); the grammar
+    // has it after the word.
     assert_eq!(
         accepted(
             Entry::SourceFile,
-            "application a\n\neval(beat(every: 1s), RunConfig(end: last))\n"
+            "application a\n\neval{end: last} beat(every: 1s)\n"
         ),
         "ApplicationDecl[\"application\" ModulePath[\"a\"]] \
-         RunStmt[EvalExpr[\"eval\" ArgList[\"(\" Arg[CallExpr[NameExpr[\"beat\"] \
-         ArgList[\"(\" Arg[\"every\" \":\" Literal[\"1s\"]] \")\"]]] \",\" \
-         Arg[CallExpr[NameExpr[\"RunConfig\"] ArgList[\"(\" Arg[\"end\" \":\" \
-         NameExpr[\"last\"]] \")\"]]] \")\"]]]"
+         RunStmt[EvalExpr[\"eval\" OperatorConfig[\"{\" ConfigArg[\"end\" \":\" \
+         NameExpr[\"last\"]] \"}\"] CallExpr[NameExpr[\"beat\"] \
+         ArgList[\"(\" Arg[\"every\" \":\" Literal[\"1s\"]] \")\"]]]]"
     );
-    // LEX-10: `application` and `run` are names elsewhere. A function
-    // may be named either, and is called as any is.
+    // LEX-10: `application` is a name elsewhere, and a function may be
+    // named so. `run` is a hard reserved word, and names nothing.
     let named = accepted(
         Entry::SourceFile,
-        "module a\n\nfn run() {}\nfn application() { run() }\n",
+        "module a\n\nfn application() { beat() }\n",
     );
-    assert!(
-        named.contains("FnDecl[\"fn\" \"run\"")
-            && named.contains("FnDecl[\"fn\" \"application\"")
-            && named.contains("CallExpr[NameExpr[\"run\"]"),
-        "{named}"
+    assert!(named.contains("FnDecl[\"fn\" \"application\""), "{named}");
+    assert_eq!(
+        rejected(Entry::SourceFile, "module a\n\nfn run() {}\n"),
+        ["- 3:4: expected a function name, found `run`"]
     );
     // An application has no parts.
     assert_eq!(
@@ -1125,44 +1127,120 @@ fn an_application_is_headed_by_its_line_and_holds_a_run_statement() {
     );
     // A run statement is one form, and ends its line.
     assert_eq!(
-        rejected(Entry::SourceFile, "application a\nrun(beat()) == [1]\n"),
-        ["LEX-5 2:13: expected a line break, found `==`"]
+        rejected(Entry::SourceFile, "application a\nrun beat() == [1]\n"),
+        ["LEX-5 2:12: expected a line break, found `==`"]
     );
-    // LEX-27: the `(` of a run touches its word.
+    // LEX-27: the `(` of the call touches what it calls.
+    assert_eq!(
+        rejected(Entry::SourceFile, "application a\nrun beat ()\n"),
+        ["LEX-27 2:10: a call's `(` directly follows what it calls"]
+    );
+    // TST-5: "`eval 7` and `eval pass_through_i64`, where no call
+    // follows the word (`syntax.expected_token`)"; and a call in
+    // parentheses, which is no `run_target`.
+    assert_eq!(
+        rejected(Entry::SourceFile, "application a\neval 7\n"),
+        ["- 2:6: expected a call, found `7`"]
+    );
+    assert_eq!(
+        rejected(Entry::SourceFile, "application a\neval beat\n"),
+        ["- 3:1: expected `(`, found end of file"]
+    );
     assert_eq!(
         rejected(Entry::SourceFile, "application a\nrun (beat())\n"),
-        ["LEX-27 2:5: a call's `(` directly follows what it calls"]
-    );
-    // TST-5, RUN-1: the arguments have no labels.
-    assert_eq!(
-        rejected(Entry::SourceFile, "application a\nrun(entry: beat())\n").len(),
-        1
+        ["- 2:5: expected a call, found `(`"]
     );
     // TST-1: a test context holds no run statement.
     assert_eq!(
-        rejected(Entry::SourceFile, "module a\ntest {\n    run(beat())\n}\n"),
+        rejected(Entry::SourceFile, "module a\ntest {\n    run beat()\n}\n"),
         ["TST-1 3:5: a test context holds functions, structs, enums and named tests"]
+    );
+}
+
+#[test]
+fn a_run_takes_a_configuration_in_braces_and_a_call() {
+    // RUN-6: "A run statement in a test gives its run's configuration as
+    // an operator is given its own (EXPR-10), in braces after the word:
+    // `eval{start: a, end: b} call`." EXPR-10: "The brace is the next
+    // token; spaces may stand between."
+    let plain = statements("eval{start: a, end: b} target(value: [1])");
+    assert_eq!(
+        plain,
+        "ExprStmt[EvalExpr[\"eval\" OperatorConfig[\"{\" ConfigArg[\"start\" \":\" \
+         NameExpr[\"a\"]] \",\" ConfigArg[\"end\" \":\" NameExpr[\"b\"]] \"}\"] \
+         CallExpr[NameExpr[\"target\"] ArgList[\"(\" Arg[\"value\" \":\" \
+         SequenceExpr[\"[\" Literal[\"1\"] \"]\"]] \")\"]]]]"
+    );
+    same_tree(
+        Entry::Statements,
+        "eval {start: a, end: b} target(value: [1])",
+        "eval{start: a, end: b} target(value: [1])",
+    );
+    // `run_target = ( IDENTIFIER | qualified_name ), [ generic_arguments
+    // ], call_suffix`: a qualified name, and generic arguments, which
+    // make the call a typed constructor's form, as any call of a
+    // generic function is.
+    assert!(
+        statements("run{length: 1s} feed::beats(every: 10ms)")
+            .contains("CallExpr[NameExpr[QualifiedName[\"feed\" \"::\" \"beats\"]]"),
+    );
+    assert_eq!(
+        statements("eval through<i64>(value: [7])"),
+        "ExprStmt[EvalExpr[\"eval\" TypedConstructor[\"through\" \
+         GenericArgs[\"<\" ScalarType[\"i64\"] \">\"] ArgList[\"(\" Arg[\"value\" \
+         \":\" SequenceExpr[\"[\" Literal[\"7\"] \"]\"]] \")\"]]]]"
+    );
+    // The form is an operand: compared, bound, and given to a call.
+    assert!(statements("assert eval f() == [1]").contains("BinaryExpr[EvalExpr["));
+    assert!(statements("let seen = run f()").contains("LocalDecl[\"let\" \"seen\" \"=\" RunExpr["));
+    assert!(statements("assert ticks(eval f()) == 1").contains("Arg[EvalExpr["));
+    // EXPR-10: "Reject empty configuration".
+    assert_eq!(
+        rejected(Entry::Statements, "eval{} f()"),
+        ["EXPR-10 1:5: an operator configuration has at least one entry"]
+    );
+}
+
+#[test]
+fn an_inject_names_a_configuration_after_a_name() {
+    // RUN-6, the temporal model's grammar: `inject_decl = "inject",
+    // injected, { ",", injected }, [ "," ] ; injected = IDENTIFIER, [
+    // operator_configuration ]`. "`run_config` takes one, and no other
+    // capability does", which is the analyser's to say.
+    assert_eq!(
+        statements("inject run_config{length: 3s}, clock"),
+        "InjectDecl[\"inject\" \"run_config\" OperatorConfig[\"{\" ConfigArg[\"length\" \
+         \":\" Literal[\"3s\"]] \"}\"] \",\" \"clock\"]"
+    );
+    assert!(statements("inject clock {step: 1s}").contains("OperatorConfig["));
+    // LEX-5: a brace on the next line begins a statement of its own.
+    let block = statements("inject clock\n{ step }");
+    assert!(
+        block.starts_with("InjectDecl[\"inject\" \"clock\"] ExprStmt[Block["),
+        "{block}"
     );
 }
 
 #[test]
 fn an_application_writes_what_sets_its_runs_store() {
     // UNIT-14: "Between its declarations and its run statement it may
-    // set the run's store: `inject global_state`, and then calls of
-    // `put` on it." `store_statement = inject_decl | IDENTIFIER,
-    // call_suffix`.
+    // inject `run_config`, giving the run's configuration its defaults
+    // (RUN-6), and set the run's store: `inject global_state`, and then
+    // calls of `put` on it." `store_statement = inject_decl |
+    // IDENTIFIER, call_suffix`.
     assert_eq!(
         accepted(
             Entry::SourceFile,
-            "application a\n\ninject global_state\nput(global_state, \"limit\", 3)\n\nrun(beat())\n"
+            "application a\n\ninject run_config{length: 3s}\ninject global_state\nput(global_state, \"limit\", 3)\n\nrun beat()\n"
         ),
         "ApplicationDecl[\"application\" ModulePath[\"a\"]] \
+         StoreStmt[InjectDecl[\"inject\" \"run_config\" OperatorConfig[\"{\" \
+         ConfigArg[\"length\" \":\" Literal[\"3s\"]] \"}\"]]] \
          StoreStmt[InjectDecl[\"inject\" \"global_state\"]] \
          StoreStmt[ExprStmt[CallExpr[NameExpr[\"put\"] ArgList[\"(\" \
          Arg[NameExpr[\"global_state\"]] \",\" Arg[Literal[\"\\\"limit\\\"\"]] \",\" \
          Arg[Literal[\"3\"]] \")\"]]]] \
-         RunStmt[RunExpr[\"run\" ArgList[\"(\" Arg[CallExpr[NameExpr[\"beat\"] \
-         ArgList[\"(\" \")\"]]] \")\"]]]"
+         RunStmt[RunExpr[\"run\" CallExpr[NameExpr[\"beat\"] ArgList[\"(\" \")\"]]]]"
     );
     // Whether the file is an application's, which capability it
     // injects and which function it calls are the analyser's to say:
@@ -1201,52 +1279,46 @@ fn an_application_writes_what_sets_its_runs_store() {
 fn an_integration_test_is_a_test_that_may_write_run() {
     // TST-17: "An integration test, `integration_test name { ... }`, is
     // a named test that may run in real time: beside `eval` it writes
-    // `run(call, config)`".
+    // `run call`".
     assert_eq!(
         accepted(
             Entry::Declarations,
-            "integration_test live {\n    let seen = run(beat(), limit)\n}"
+            "integration_test live {\n    let seen = run{length: limit} beat()\n}"
         ),
         "TestDecl[\"integration_test\" \"live\" Block[\"{\" LocalDecl[\"let\" \"seen\" \"=\" \
-         RunExpr[\"run\" ArgList[\"(\" Arg[CallExpr[NameExpr[\"beat\"] ArgList[\"(\" \")\"]]] \
-         \",\" Arg[NameExpr[\"limit\"]] \")\"]]] \"}\"]]"
+         RunExpr[\"run\" OperatorConfig[\"{\" ConfigArg[\"length\" \":\" \
+         NameExpr[\"limit\"]] \"}\"] CallExpr[NameExpr[\"beat\"] ArgList[\"(\" \")\"]]]] \
+         \"}\"]]"
     );
-    // "In a test's block `run` as the callee of a call is that form,
-    // whatever else is in scope": in a test that is no integration
-    // test too, where the analyser rejects it.
+    // LEX-10: `run` is a hard reserved word, and the form is read
+    // wherever an operand is due: in a test that is no integration
+    // test, where the analyser rejects it (`run.position`), and in a
+    // function.
     let plain = accepted(
         Entry::Declarations,
-        "test plain {\n    let seen = run(beat())\n}",
+        "test plain {\n    let seen = run beat()\n}",
     );
     assert!(plain.contains("RunExpr[\"run\""), "{plain}");
     // The form reaches into what the block holds.
     let inner = accepted(
         Entry::Declarations,
-        "integration_test live {\n    if ready { assert ticks(run(beat())) > 0 }\n}",
+        "integration_test live {\n    if ready { assert ticks(run beat()) > 0 }\n}",
     );
     assert!(inner.contains("RunExpr[\"run\""), "{inner}");
-    // Outside a test's block `run(...)` is a call of what `run` names:
-    // in a function, and in a helper of a test context.
-    let function = accepted(Entry::Declarations, "fn f() -> i64 => run(1)");
-    assert!(
-        function.contains("CallExpr[NameExpr[\"run\"]") && !function.contains("RunExpr"),
-        "{function}"
+    let function = accepted(Entry::Declarations, "fn f() -> i64 => run beat()");
+    assert!(function.contains("RunExpr[\"run\""), "{function}");
+    // `run` is no name.
+    assert_eq!(
+        rejected(Entry::Declarations, "test plain {\n    let seen = run\n}"),
+        ["- 2:19: expected a call, found end of line"]
     );
-    let helper = accepted(
-        Entry::Declarations,
-        "test {\n    fn f() -> i64 => run(1)\n}",
-    );
-    assert!(!helper.contains("RunExpr"), "{helper}");
-    // In a test, `run` not before a `(` is a name as any other.
-    let name = accepted(Entry::Declarations, "test plain {\n    let seen = run\n}");
-    assert!(name.contains("NameExpr[\"run\"]"), "{name}");
     // LEX-10: `integration_test` is a name anywhere else.
     let named = accepted(Entry::Declarations, "fn integration_test() {}");
     assert!(
         named.contains("FnDecl[\"fn\" \"integration_test\""),
         "{named}"
     );
-    // Its arguments are an eval's: a call, and a configuration.
+    // RUN-6: its configuration is in braces, and no argument of a call.
     assert_eq!(
         rejected(
             Entry::Declarations,

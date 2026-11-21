@@ -34,16 +34,16 @@ fn count_inside_branch(enabled: bool, value: i64) -> i64 {
 }
 
 test a_conditional_child_restarts_only_after_leaving_its_branch {
-    assert eval(count_inside_branch(
+    assert eval count_inside_branch(
         enabled: [true, true, false, _, true, _],
-        value:   [10,   20,   30,    40, 50,  60])) ==
+        value:   [10,   20,   30,    40, 50,  60]) ==
                  [1,    2,    _,     _,  1,   2]
 }
 
 test a_branch_runs_once_with_the_values_held_when_it_starts {
-    assert eval(count_inside_branch(
+    assert eval count_inside_branch(
         enabled: [false, true, false, true],
-        value:   [   10,    _,     _,    _])) ==
+        value:   [   10,    _,     _,    _]) ==
                  [    _,    1,     _,    1]
 }
 
@@ -55,9 +55,9 @@ fn count_outside_branch(enabled: bool, value: i64) -> i64 {
 }
 
 test an_outer_producer_keeps_its_lifetime_across_branches {
-    assert eval(count_outside_branch(
+    assert eval count_outside_branch(
         enabled: [true, true, false, _, true, _],
-        value:   [10,   20,   30,    40, 50,  60])) ==
+        value:   [10,   20,   30,    40, 50,  60]) ==
                  [1,    2,    _,     _,  5,   6]
 }
 
@@ -68,9 +68,9 @@ fn bypass_ratio(bypass: bool, divisor: f64) -> f64 {
 }
 
 test an_early_return_skips_the_continuation {
-    assert eval(bypass_ratio(
+    assert eval bypass_ratio(
         bypass:  [true, false, true, false],
-        divisor: [0.0,  3.0,   0.0,  2.0])) ==
+        divisor: [0.0,  3.0,   0.0,  2.0]) ==
                  [0.0,  1.5,   0.0,  1.0]
 }
 
@@ -86,11 +86,11 @@ fn switch_input(route: str, left: i64, right: i64, fallback: i64) -> i64 {
 }
 
 test a_switch_forwards_the_selected_connection {
-    assert eval(switch_input(
+    assert eval switch_input(
         route:    ["left", "right", _, "other", _, "left"],
         left:     [1,      2,       3, 4,       5, 6],
         right:    [10,     20,      _, 40,     50, 60],
-        fallback: [100,    200,   300, 400,   500, 600])) ==
+        fallback: [100,    200,   300, 400,   500, 600]) ==
                   [1,      20,      _, 400,   500, 6]
 }
 
@@ -101,12 +101,12 @@ fn sample_selection(use_left: bool, left: i64, right: i64, probe: bool) -> i64 {
 }
 
 test a_probe_reads_a_selected_producer_that_stayed_quiet {
-    assert eval(sample_selection(
+    assert eval sample_selection(
         use_left: [true, false,    _, _, true,    _],
         left:     [   7,     _,    _, 9,    _,    _],
         right:    [  20,     _,    _, _,    _,    _],
         probe:    [true,     _, true, _,    _, true],
-    )) ==         [   7,     _,   20, _,    _,    9]
+    )  ==         [   7,     _,   20, _,    _,    9]
 }
 
 # CTRL-3: "an omitted false branch performs no conditional work".
@@ -116,9 +116,9 @@ fn guarded(open: bool, value: i64) -> i64 {
 }
 
 test an_outputless_branch_runs_only_while_selected {
-    assert eval(guarded(open: [false, false, true], value: [1, 5, 0])) == [1, 5, 0]
+    assert eval guarded(open: [false, false, true], value: [1, 5, 0]) == [1, 5, 0]
     assert raises("numeric.out_of_range") {
-        assert eval(guarded(open: [false, true], value: [5, 5])) == [5, 5]
+        assert eval guarded(open: [false, true], value: [5, 5]) == [5, 5]
     }
 }
 
@@ -128,12 +128,12 @@ fn three_way(a: bool, b: bool, x: i64, y: i64, z: i64) -> i64 {
 }
 
 test an_else_if_chain_selects_in_order {
-    assert eval(three_way(
+    assert eval three_way(
         a: [true, false, false, true],
         b: [true, true,  false,  _],
         x: [1,    2,     3,     4],
         y: [10,   20,    30,    40],
-        z: [100,  200,   300,   400])) == [1, 20, 300, 4]
+        z: [100,  200,   300,   400]) == [1, 20, 300, 4]
 }
 
 # An ordinary value a branch reads is its configuration.
@@ -143,7 +143,7 @@ fn scaled(open: bool, value: i64, const factor: i64) -> i64 {
 }
 
 test a_branch_reads_ordinary_values {
-    assert eval(scaled(open: [true, true, false, true], value: [1, 2, 3, 4], factor: 3)) ==
+    assert eval scaled(open: [true, true, false, true], value: [1, 2, 3, 4], factor: 3) ==
         [7, 10, _, 16]
 }
 
@@ -156,7 +156,7 @@ fn adjusted(rising: bool, price: i64) -> i64 {
 }
 
 test a_var_keeps_its_binding_where_the_branch_does_not_assign_it {
-    assert eval(adjusted(rising: [false, true, _, false, true], price: [10, 20, 30, 40, 50])) ==
+    assert eval adjusted(rising: [false, true, _, false, true], price: [10, 20, 30, 40, 50]) ==
         [10, 1, 2, 40, 1]
 }
 
@@ -169,7 +169,7 @@ fn either(rising: bool, price: i64) -> i64 {
 }
 
 test a_var_with_no_value_is_given_one_by_each_branch {
-    assert eval(either(rising: [true, false, _], price: [10, 20, 30])) == [11, 19, 29]
+    assert eval either(rising: [true, false, _], price: [10, 20, 30]) == [11, 19, 29]
 }
 
 # CTRL-5: a case that returns, and one that goes on.
@@ -183,7 +183,7 @@ fn routed(route: i64, value: i64) -> i64 {
 }
 
 test a_switch_returns_from_a_case_or_goes_on {
-    assert eval(routed(route: [1, 2, _, 3, 2], value: [5, 6, 7, 8, 9])) == [5, 1, 2, 108, 1]
+    assert eval routed(route: [1, 2, _, 3, 2], value: [5, 6, 7, 8, 9]) == [5, 1, 2, 108, 1]
 }
 
 # A condition that is a lifted call.
@@ -192,7 +192,7 @@ fn large(value: i64) -> i64 {
 }
 
 test a_lifted_condition_selects {
-    assert eval(large(value: [1, 20, 30, 2, 40])) == [1, 1, 2, 2, 1]
+    assert eval large(value: [1, 20, 30, 2, 40]) == [1, 1, 2, 2, 1]
 }
 
 # A temporal `if` with a `return` under a wiring-time `if` has what
@@ -205,9 +205,9 @@ fn chosen_by_config(const wide: bool, open: bool, value: i64) -> i64 {
 }
 
 test a_return_under_a_wiring_time_if_has_its_continuation {
-    assert eval(chosen_by_config(wide: true, open: [true, false, true], value: [1, 2, 3])) ==
+    assert eval chosen_by_config(wide: true, open: [true, false, true], value: [1, 2, 3]) ==
         [1, 3, 3]
-    assert eval(chosen_by_config(wide: false, open: [true, false, true], value: [1, 2, 3])) ==
+    assert eval chosen_by_config(wide: false, open: [true, false, true], value: [1, 2, 3]) ==
         [2, 3, 4]
 }
 
@@ -219,7 +219,7 @@ fn early(open: bool, value: i64) -> i64 {
 }
 
 test a_let_of_a_returning_if_returns_or_goes_on {
-    assert eval(early(open: [true, false, _, true], value: [1, 2, 3, 4])) == [1, 14, 16, 4]
+    assert eval early(open: [true, false, _, true], value: [1, 2, 3, 4]) == [1, 14, 16, 4]
 }
 
 # CTRL-6: a `switch` with no `default` runs the case each value has.
@@ -233,7 +233,7 @@ fn unmatched(route: str, value: i64) -> i64 {
 }
 
 test a_switch_with_no_default_runs_a_case_each_value_has {
-    assert eval(unmatched(route: ["a", "b", _], value: [1, 2, 3])) == [2, 4, 5]
+    assert eval unmatched(route: ["a", "b", _], value: [1, 2, 3]) == [2, 4, 5]
 }
 
 # A temporal `if` in a loop unrolled while the graph is built: each pass
@@ -247,7 +247,7 @@ fn gated_product(open: bool, price: i64, const factors: list<i64>) -> i64 {
 }
 
 test a_branch_in_an_unrolled_loop_is_configured_for_its_pass {
-    assert eval(gated_product(open: [true, false, true], price: [1, 2, 3], factors: [2, 5])) ==
+    assert eval gated_product(open: [true, false, true], price: [1, 2, 3], factors: [2, 5]) ==
         [10, 2, 30]
 }
 
@@ -270,10 +270,10 @@ fn mixed(price: i64, const wide: bool) -> i64 {
 }
 
 test a_wiring_time_if_composes_one_branch {
-    assert eval(sized(price: [10, 20, _, 30], wide: true)) == [1, 2, _, 3]
-    assert eval(sized(price: [10, 20, _, 30], wide: false)) == [10, 20, _, 30]
-    assert eval(gated_by_config(price: [10, 20], open: true)) == [10, 20]
-    assert eval(gated_by_config(price: [10, 20], open: false)) == [_, _]
-    assert eval(mixed(price: [10, 20], wide: true)) == [1, 2]
-    assert eval(mixed(price: [10, 20], wide: false)) == [5, _]
+    assert eval sized(price: [10, 20, _, 30], wide: true) == [1, 2, _, 3]
+    assert eval sized(price: [10, 20, _, 30], wide: false) == [10, 20, _, 30]
+    assert eval gated_by_config(price: [10, 20], open: true) == [10, 20]
+    assert eval gated_by_config(price: [10, 20], open: false) == [_, _]
+    assert eval mixed(price: [10, 20], wide: true) == [1, 2]
+    assert eval mixed(price: [10, 20], wide: false) == [5, _]
 }

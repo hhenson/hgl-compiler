@@ -109,5 +109,5 @@ test shared {
     assert kept == [0, 1, 2]
     failing(kept, 1)
     assert kept == [0, 1, 2, 2]
-    assert eval(saving(value: [7])) == [1]
+    assert eval saving(value: [7]) == [1]
 }

@@ -2,4 +2,5 @@ application demo.ticks.live
 use demo.ticks::{counted}
 # RUN-3: `run` is in real time, here for a fifth of a
 # second.
-run(counted(upto: 100, every: 50ms), RunConfig(length: 220ms))
+inject run_config{length: 220ms}
+run counted(upto: 100, every: 50ms)

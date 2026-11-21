@@ -21,15 +21,15 @@ fn follow(item: i64) -> i64 {
 fn picked(flag: bool, low: i64, high: i64) -> i64 => follow(pick(flag, low, high))
 
 test a_reader_observes_the_input_designated {
-    assert eval(picked(
+    assert eval picked(
         flag: [false, _, true,  _],
         low:  [    1, 2,    3,  _],
         high: [   10, _,    _, 11],
-    )) ==     [    1, 2,   10, 11]
+    )  ==     [    1, 2,   10, 11]
 }
 
 test an_eval_records_a_ref_result_as_a_reader_does {
-    assert eval(pick(flag: [true, _], low: [1, 2], high: [3, _])) == [3, _]
+    assert eval pick(flag: [true, _], low: [1, 2], high: [3, _]) == [3, _]
 }
 
 # `valid` of a `ref` parameter is whether a reference is present, and a
@@ -44,7 +44,7 @@ fn present(probe: bool, ref target: i64) -> i64 {
 }
 
 test a_ref_parameter_is_present_and_wakes_once {
-    assert eval(present(probe: [true, true, true], target: [_, 7, 8])) == [1, 1, 1]
+    assert eval present(probe: [true, true, true], target: [_, 7, 8]) == [1, 1, 1]
 }
 
 # A generic relay: each instance is a node of its own (GEN-2).
@@ -56,12 +56,12 @@ fn sample_picked(take: bool, flag: bool, low: i64, high: i64) -> i64 =>
     follow(sampled(take, pick(flag, low, high)))
 
 test a_relay_keeps_what_it_sampled {
-    assert eval(sample_picked(
+    assert eval sample_picked(
         take: [true,    _,  _, true],
         flag: [false, true, _,    _],
         low:  [    1,    2, 3,    _],
         high: [   10,    _, 11,   _],
-    )) ==     [    1,    2, 3,   11]
+    )  ==     [    1,    2, 3,   11]
 }
 
 # An input that is no `ref` parameter, designated: its reader follows a
@@ -80,13 +80,13 @@ fn chosen(flag: i64, sel: bool, a: i64, b: i64, high: i64) -> i64 =>
     follow(choose(flag, pick(sel, a, b), high))
 
 test a_designated_input_is_followed_through_its_rebinding {
-    assert eval(chosen(
+    assert eval chosen(
         flag: [    1, _,    _,  _,   2,   _, 0,     _,   1],
         sel:  [false, _, true,  _,   _,   _, _, false,   _],
         a:    [    1, 2,    _,  3,   _,   _, _,     4,   _],
         b:    [   10, _,    _, 11,   _,   _, _,     _,   _],
         high: [  100, _,    _,  _,   _, 101, _,   102,   _],
-    )) ==     [    1, 2,   10, 11, 100, 101, _,     _,   4]
+    )  ==     [    1, 2,   10, 11, 100, 101, _,     _,   4]
 }
 
 # A position of a fixed list designated, known when the `return` runs:
@@ -111,21 +111,21 @@ fn routed(idx: i64, flag: bool, low_slot: i64, low: i64, high_slot: i64, high: i
     follow(route(idx, pick_list(flag, set_item(low_slot, low), set_item(high_slot, high))))
 
 test a_designated_position_is_followed_through_its_rebinding {
-    assert eval(routed(
+    assert eval routed(
         idx:       [    1,  _,    _,  0,  _],
         flag:      [false,  _, true,  _,  _],
         low_slot:  [    1,  0,    _,  _,  0],
         low:       [   10, 11,    _,  _, 12],
         high_slot: [    1,  _,    0,  _,  _],
         high:      [   20,  _,   21,  _,  _],
-    )) ==          [   10,  _,   20, 21,  _]
+    )  ==          [   10,  _,   20, 21,  _]
 }
 
 # EXPR-3: "An index outside a list ... fails where it is evaluated", as
 # the child at it does.
 test a_designated_position_outside_the_list_fails {
     assert raises("value.index_out_of_range") {
-        eval(route(idx: [2], items: [[1, 2]]))
+        eval route(idx: [2], items: [[1, 2]])
     }
 }
 
@@ -144,11 +144,11 @@ fn selected(key: str, changed_key: str, price: i64?) -> i64 =>
     follow(write_entry(changed_key, price)[key])
 
 test a_selected_entry_is_followed_through_its_key {
-    assert eval(selected(
+    assert eval selected(
         key:         ["A",   _, "B",   _,    _,   _, "C",   _],
         changed_key: ["A", "B",   _, "A",  "B", "B",   _, "C"],
         price:       [  7,  20,   _,   8, null,  22,   _,  30],
-    )) ==            [  7,   _,  20,   _,    _,  22,   _,  30]
+    )  ==            [  7,   _,  20,   _,    _,  22,   _,  30]
 }
 
 fn present_item(probe: bool, item: i64) -> bool {
@@ -159,19 +159,19 @@ fn selected_present(probe: bool, key: str, changed_key: str, price: i64?) -> boo
     present_item(probe, write_entry(changed_key, price)[key])
 
 test a_selected_entry_the_dictionary_lacks_is_not_valid {
-    assert eval(selected_present(
+    assert eval selected_present(
         probe:       [true,  true,  true, true],
         key:         [ "A",     _,   "C",    _],
         changed_key: [ "A",   "A",     _,  "C"],
         price:       [   1,  null,     _,    3],
-    )) ==            [true, false, false, true]
+    )  ==            [true, false, false, true]
 }
 
 # The key a value, wired as a constant connection (FN-3).
 fn entry_a(changed_key: str, price: i64?) -> i64 => follow(write_entry(changed_key, price)["A"])
 
 test an_entry_at_a_value_key_is_followed {
-    assert eval(entry_a(changed_key: ["B", "A", "A"], price: [1, 2, 3])) == [_, 2, 3]
+    assert eval entry_a(changed_key: ["B", "A", "A"], price: [1, 2, 3]) == [_, 2, 3]
 }
 
 # A `ref` parameter that holds no reference, `return`ed: the result is
@@ -194,11 +194,11 @@ fn handed(take: bool, ref target: i64) -> ref i64 {
 fn handed_on(take: bool, on: bool, low: i64) -> i64 => follow(handed(take, withdrawn(on, low)))
 
 test an_empty_reference_is_handed_on {
-    assert eval(handed_on(
+    assert eval handed_on(
         take: [   _, true,     _, true, _],
         on:   [true,    _, false,    _, _],
         low:  [   1,    _,     _,    _, 5],
-    )) ==     [   _,    1,     _,    _, _]
+    )  ==     [   _,    1,     _,    _, _]
 }
 
 fn handed_if_valid(take: bool, ref target: i64) -> ref i64 {
@@ -209,11 +209,11 @@ fn handed_on_if_valid(take: bool, on: bool, low: i64) -> i64 =>
     follow(handed_if_valid(take, withdrawn(on, low)))
 
 test a_header_that_asks_valid_runs_no_handler_for_an_empty_reference {
-    assert eval(handed_on_if_valid(
+    assert eval handed_on_if_valid(
         take: [   _, true,     _, true, _],
         on:   [true,    _, false,    _, _],
         low:  [   1,    _,     _,    _, 5],
-    )) ==     [   _,    1,     _,    _, 5]
+    )  ==     [   _,    1,     _,    _, 5]
 }
 
 fn holds_one(take: bool, ref target: i64) -> bool {
@@ -223,11 +223,11 @@ fn holds_one(take: bool, ref target: i64) -> bool {
 fn holds_withdrawn(take: bool, on: bool, low: i64) -> bool => holds_one(take, withdrawn(on, low))
 
 test valid_of_a_ref_parameter_that_holds_no_reference_is_false {
-    assert eval(holds_withdrawn(
+    assert eval holds_withdrawn(
         take: [   _, true,     _,  true],
         on:   [true,    _, false,     _],
         low:  [   1,    _,     _,     _],
-    )) ==     [   _, true,     _, false]
+    )  ==     [   _, true,     _, false]
 }
 
 # The empty reference handed on, given to a lifted call and to a branch:
@@ -235,11 +235,11 @@ test valid_of_a_ref_parameter_that_holds_no_reference_is_false {
 fn handed_doubled(take: bool, on: bool, low: i64) -> i64 => handed(take, withdrawn(on, low)) * 2
 
 test a_lifted_call_of_an_empty_reference_is_silent {
-    assert eval(handed_doubled(
+    assert eval handed_doubled(
         take: [   _, true,     _, true, _],
         on:   [true,    _, false,    _, _],
         low:  [   1,    _,     _,    _, 5],
-    )) ==     [   _,    2,     _,    _, _]
+    )  ==     [   _,    2,     _,    _, _]
 }
 
 fn handed_or_low(chooses: bool, take: bool, on: bool, low: i64) -> i64 {
@@ -248,10 +248,10 @@ fn handed_or_low(chooses: bool, take: bool, on: bool, low: i64) -> i64 {
 }
 
 test a_branch_given_an_empty_reference_is_silent {
-    assert eval(handed_or_low(
+    assert eval handed_or_low(
         chooses: [true,    _,     _,    _, _],
         take: [   _, true,     _, true, _],
         on:   [true,    _, false,    _, _],
         low:  [   1,    _,     _,    _, 5],
-    )) ==     [   _,    1,     _,    _, _]
+    )  ==     [   _,    1,     _,    _, _]
 }

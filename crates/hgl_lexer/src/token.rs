@@ -147,6 +147,7 @@ define_token_kinds! {
         KwTest => "test",
         KwAssert => "assert",
         KwEval => "eval",
+        KwRun => "run",
         KwTrue => "true",
         KwFalse => "false",
         KwNull => "null",

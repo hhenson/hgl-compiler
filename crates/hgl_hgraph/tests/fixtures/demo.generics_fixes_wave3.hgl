@@ -25,8 +25,8 @@ test a_requirement_is_answered_for_each_instance {
     assert twice(1.5) == 4
     assert relay(5) == 1
     assert relay(false) == 2
-    assert eval(wired(value: [5, 6])) == [1, 1]
-    assert eval(wired(value: [true])) == [2]
+    assert eval wired(value: [5, 6]) == [1, 1]
+    assert eval wired(value: [true]) == [2]
 }
 
 # GEN-6: "A call admits the candidate only where that holds for the

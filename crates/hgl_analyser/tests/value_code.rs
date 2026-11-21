@@ -51,8 +51,8 @@ fn a_test_outside_an_eval_calls_const_fns_only() {
             "    let c = node_of(2)\n",
             "    let d = twice(b)\n",
             "    assert twice(2) == 4\n",
-            "    assert eval(pass(value: [1])) == [1]\n",
-            "    assert eval(node_of(value: [twice(1)])) == [2]\n",
+            "    assert eval pass(value: [1]) == [1]\n",
+            "    assert eval node_of(value: [twice(1)]) == [2]\n",
             "}\n",
         )
     ));
@@ -169,7 +169,7 @@ fn an_applications_statements_are_value_code() {
                 "put(global_state, \"b\", scaled(3))\n",
                 "put(global_state, \"c\", halved(4))\n",
                 "put(global_state, \"d\", twice(2))\n",
-                "run(limited(limit: pass(2)), RunConfig())\n",
+                "run limited(limit: pass(2))\n",
             ),
         ),
     ]);

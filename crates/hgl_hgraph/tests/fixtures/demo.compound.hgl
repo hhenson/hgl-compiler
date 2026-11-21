@@ -28,6 +28,6 @@ fn nested(trigger: i64) -> i64 {
     }
 }
 test a_compound_assignment_looks_up_once {
-    assert eval(compound(trigger: [1])) == [11]
-    assert eval(nested(trigger: [1])) == [7]
+    assert eval compound(trigger: [1]) == [11]
+    assert eval nested(trigger: [1]) == [7]
 }

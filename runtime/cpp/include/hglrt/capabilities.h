@@ -1,6 +1,7 @@
 // Core's capabilities (`hgl/native/capabilities.hgl`; core's CAP-1 to
-// CAP-6, the language's TIME-8): the native types `Logger`, `Clock`,
-// `Scheduler`, `Alarm` and `GlobalState`, and the native operations on them.
+// CAP-7, the language's TIME-8): the native types `Logger`, `Clock`,
+// `Scheduler`, `Alarm`, `GlobalState` and `RunConfig`, and the native
+// operations on them.
 //
 // CAP-1: "Each capability but `out` has a native type of core's module ...
 // Core constructs none in HGL. A property is read as an ordinary value and is
@@ -16,6 +17,8 @@
 //   | Alarm       | `hgraph::NodeScheduler` and the hook (`Hook`)   |
 //   | GlobalState | `hgraph::GlobalStateView`, of a node's hook or  |
 //   |             | of a graph's `Wiring::global_state()` (FN-9)    |
+//   | RunConfig   | its fields, where an application or an          |
+//   |             | integration test injects it (RUN-6)             |
 //
 // Each property core declares is a `const` member function of its name,
 // `clock.evaluation_time()`. A capability is not retained (TIME-8): each
@@ -328,5 +331,35 @@ void put_GlobalState_str_V(const GlobalState& store, std::string_view key, const
     detail::store_registered<V>();
     store.view().set(key, hgraph::Value{detail::Stored<V>{value}});
 }
+
+// ---- The run's configuration (CAP-7) -----------------------------------------
+
+/// `RunConfig` (CAP-7), what `inject run_config` binds in an application and
+/// in an integration test (the language's RUN-6): the configuration of the run
+/// as it is supplied, each field null where it is left out, and not as the run
+/// resolves it (`testing::resolved`). It is a value, made where it is injected
+/// from what supplies it, and has no operation.
+class RunConfig {
+  public:
+    /// The fields, in the order core declares them.
+    struct Fields {
+        std::optional<datetime> start{};
+        std::optional<datetime> end{};
+        std::optional<duration> length{};
+    };
+
+    /// The configuration that has `fields`.
+    explicit RunConfig(Fields fields) noexcept : fields_(fields) {}
+
+    /// `run_config.start`: the start supplied, null where none is.
+    [[nodiscard]] std::optional<datetime> start() const noexcept { return fields_.start; }
+    /// `run_config.end`: the end supplied, null where none is.
+    [[nodiscard]] std::optional<datetime> end() const noexcept { return fields_.end; }
+    /// `run_config.length`: the length supplied, null where none is.
+    [[nodiscard]] std::optional<duration> length() const noexcept { return fields_.length; }
+
+  private:
+    Fields fields_;
+};
 
 } // namespace hglrt

@@ -21,9 +21,9 @@ fn ends_badly(value: i64) -> i64 {
 }
 
 test stops {
-    assert eval(last_seen(value: [1, 2, 3], scale: 2)) == [2, 4, 6]
-    assert eval(last_seen(value: [_, _], scale: 2)) == []
+    assert eval last_seen(value: [1, 2, 3], scale: 2) == [2, 4, 6]
+    assert eval last_seen(value: [_, _], scale: 2) == []
     # The input is never valid: the guard does not hold, and the
     # division is not made.
-    assert eval(ends_badly(value: [_, _])) == []
+    assert eval ends_badly(value: [_, _]) == []
 }

@@ -23,6 +23,6 @@ test names {
     assert lambda() + lambda_() + graph() + _kept() + test_me() + float() == 21
     assert eight() == 8
     assert sized(1, 2) == sized(2, 1)
-    assert eval(doubled(value: [4])) == [9]
-    assert eval(pass(target: [1])) == [1]
+    assert eval doubled(value: [4]) == [9]
+    assert eval pass(target: [1]) == [1]
 }

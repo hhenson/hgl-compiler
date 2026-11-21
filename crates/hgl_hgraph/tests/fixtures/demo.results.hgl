@@ -63,5 +63,5 @@ test results {
     assert plain("no") == plain("no")
     # EXPR-2: the failure met first is the one written first.
     assert met() == "code"
-    assert eval(ratios(a: [6.0], b: [4.0])) == [1.5]
+    assert eval ratios(a: [6.0], b: [4.0]) == [1.5]
 }

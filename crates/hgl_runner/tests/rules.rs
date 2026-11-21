@@ -900,7 +900,7 @@ fn a_test_of_an_application_is_named_by_its_path() {
             "    # expect-error(parse, \"string.unknown_escape\")\n",
             "    assert \"a\\q\" == \"a\"\n",
             "}\n",
-            "run(entry())\n",
+            "run entry()\n",
         ),
     )];
     let ran = run_all(&PROGRAM);
@@ -929,7 +929,7 @@ fn a_test_of_an_application_is_named_by_its_path() {
         concat!(
             "application app.live\n",
             "# expect-error(parse, \"syntax.expected_token\")\n",
-            "run(beat() beat())\n",
+            "run beat(1 2)\n",
         ),
     )]);
     assert_eq!(ran.stopped, NONE);
@@ -942,7 +942,7 @@ fn a_test_of_an_application_is_named_by_its_path() {
             "application app.live\n",
             "const fn fixed() -> i64 => 1\n",
             "# expect-error(type, \"run.entry\")\n",
-            "run(fixed())\n",
+            "run fixed()\n",
         ),
     )]);
     assert_eq!(ran.stopped, NONE);
@@ -952,7 +952,7 @@ fn a_test_of_an_application_is_named_by_its_path() {
     // one over a `module` line has not.
     let ran = run_all(&[(
         "live.hgl",
-        "# expect-error(parse, \"string.unknown_escape\")\napplication app.live\nrun(entry())\n",
+        "# expect-error(parse, \"string.unknown_escape\")\napplication app.live\nrun entry()\n",
     )]);
     assert_eq!(ran.stopped.len(), 1, "{:?}", ran.stopped);
 }
@@ -1058,7 +1058,7 @@ impl Executor for Scripted {
 
 /// A program with a rejection case and three tests to run.
 const TO_RUN: &str = concat!(
-    "module examples.run\n",
+    "module examples.runs\n",
     "# expect-error(parse, \"string.unknown_escape\")\n",
     "const fn bad_escape() -> str => \"a\\q\"\n",
     "test first { assert true }\n",
@@ -1086,23 +1086,23 @@ fn executable_cases_are_run_by_the_executor() {
     assert_eq!(
         executor.asked,
         [[
-            "examples.run::first",
-            "examples.run::second",
-            "examples.run::third"
+            "examples.runs::first",
+            "examples.runs::second",
+            "examples.runs::third"
         ]]
     );
     assert!(
-        executor.modules[0].contains(&"examples.run".to_string()),
+        executor.modules[0].contains(&"examples.runs".to_string()),
         "the program given is the surviving source's"
     );
     assert_eq!(
         ran.cases,
         [
             "passed rejection run.hgl:3 const fn bad_escape",
-            "passed executable examples.run::first",
-            "failed executable examples.run::second",
+            "passed executable examples.runs::first",
+            "failed executable examples.runs::second",
             "  said the assertion does not hold",
-            "not-run executable examples.run::third",
+            "not-run executable examples.runs::third",
             "  said the target gave it no outcome",
         ]
     );
@@ -1131,7 +1131,7 @@ fn executable_cases_are_run_by_the_executor() {
         integration: false,
     };
     let ran = run_on(&[("run.hgl", TO_RUN)], &selection, Some(&mut executor));
-    assert_eq!(executor.asked, [["examples.run::second"]]);
+    assert_eq!(executor.asked, [["examples.runs::second"]]);
     assert!(ran.report.succeeded());
 }
 

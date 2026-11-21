@@ -69,7 +69,6 @@
 #undef selected_present
 #undef set_item
 #undef slot
-#undef start
 #undef take
 #undef target
 #undef valid_of_a_ref_parameter_that_holds_no_reference_is_false

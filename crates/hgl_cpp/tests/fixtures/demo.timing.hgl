@@ -183,11 +183,11 @@ fn absolute_yields(const first: datetime, const second: datetime) -> i64 {
     yield second: 20
 }
 
-# A run's configuration made by a function (RUN-1, CRUN-2).
-const fn opening_at(at: datetime) -> RunConfig => RunConfig(start: at)
+# The start of a run, made by a function (RUN-6, CRUN-2).
+const fn opening_at(at: datetime) -> datetime => at + 0us
 
-# Whether a configuration names its start.
-const fn valid_start(config: RunConfig) -> bool => config.start != null
+# Whether a run is to be short.
+const fn shortened(at: datetime) -> bool => at != never
 
 # A source keeps its locals until it returns (SOURCE-4).
 fn finish_or_resume(const finish_early: bool) -> i64 {
@@ -231,103 +231,101 @@ fn repeated<T>(const value: T, const times: i64) -> T {
 }
 
 test a_scheduler_wakes_a_node_with_no_input {
-    assert eval(ticker(every: 2us, times: 3)) == [_, _, 1, _, 2, _, 3]
+    assert eval ticker(every: 2us, times: 3) == [_, _, 1, _, 2, _, 3]
 }
 
 test a_wake_can_coincide_with_an_input {
-    assert eval(cause_of_wake(value: [7, _, 9])) ==
+    assert eval cause_of_wake(value: [7, _, 9]) ==
         ["input", _, "input and scheduler", _, "scheduler"]
 }
 
 test an_empty_selection_is_true_where_it_is_selected {
-    assert eval(empty_selected(value: [7, _, 9])) == [_, _, true]
-    assert eval(empty_elsewhere(value: [7, _, 9])) == [_, _, false, _, true]
+    assert eval empty_selected(value: [7, _, 9]) == [_, _, true]
+    assert eval empty_elsewhere(value: [7, _, 9]) == [_, _, false, _, true]
 }
 
 test scheduled_is_read_as_a_value {
-    assert eval(scheduled_on_input(value: [7, _, 9])) == [false, _, true]
+    assert eval scheduled_on_input(value: [7, _, 9]) == [false, _, true]
 }
 
 test the_wake_delivered_is_pending_no_longer {
-    assert eval(pending()) == [_, true, _, false]
-    assert eval(cancel_next()) == [_, true, _, _, _, true]
+    assert eval pending() == [_, true, _, false]
+    assert eval cancel_next() == [_, true, _, _, _, true]
 }
 
 test a_wake_before_now_is_dropped {
-    assert eval(wake_in_the_past(value: [7, _, 9])) == ["asked", _, "asked"]
+    assert eval wake_in_the_past(value: [7, _, 9]) == ["asked", _, "asked"]
 }
 
 test a_zero_duration_outside_start_fails {
     assert raises("schedule.non_positive_duration") {
-        eval(wake_after(delay: [1us, 0s]))
+        eval wake_after(delay: [1us, 0s])
     }
 }
 
 test an_alarm_wakes_a_node {
-    assert eval(alarm_or_input(value: [1, 2, 3, 4])) == ["input", "input", "input", "input"]
-    assert eval(alarmed()) == [_, 1, _, 2, _, 3]
+    assert eval alarm_or_input(value: [1, 2, 3, 4]) == ["input", "input", "input", "input"]
+    assert eval alarmed() == [_, 1, _, 2, _, 3]
 }
 
 test an_alarm_keeps_its_wake_when_an_input_ticks_first {
-    assert eval(alarm_asked_in_start(value: [1])) == ["input", _, _, "woke"]
-    assert eval(alarm_asked_in_start(value: [_, 1])) == [_, "input", _, "woke"]
-    assert eval(alarm_asked_in_start(value: [_, _, _, _, 1])) == [_, _, _, "woke", "input"]
-    assert eval(alarm_asked_once(value: [1, 2])) == ["input", "input", _, "woke"]
-    assert eval(alarm_asked_on_each(value: [1])) == ["input", _, _, "woke"]
+    assert eval alarm_asked_in_start(value: [1]) == ["input", _, _, "woke"]
+    assert eval alarm_asked_in_start(value: [_, 1]) == [_, "input", _, "woke"]
+    assert eval alarm_asked_in_start(value: [_, _, _, _, 1]) == [_, _, _, "woke", "input"]
+    assert eval alarm_asked_once(value: [1, 2]) == ["input", "input", _, "woke"]
+    assert eval alarm_asked_on_each(value: [1]) == ["input", _, _, "woke"]
 }
 
 test asking_an_alarm_again_keeps_the_earliest {
-    assert eval(alarm_asked_on_each(value: [1, 2])) == ["input", "input", _, "woke"]
-    assert eval(alarm_asked_on_each(value: [1, _, _, _, 5])) ==
+    assert eval alarm_asked_on_each(value: [1, 2]) == ["input", "input", _, "woke"]
+    assert eval alarm_asked_on_each(value: [1, _, _, _, 5]) ==
         ["input", _, _, "woke", "input", _, _, "woke"]
 }
 
 test an_alarm_beside_a_passive_input {
-    assert eval(alarm_beside_a_passive_input(value: [_, 7])) == [_, _, _, 1]
+    assert eval alarm_beside_a_passive_input(value: [_, 7]) == [_, _, _, 1]
 }
 
 # The temporal model (TIME-9): "A wake that lands with an input's tick is
 # not told from the tick": the handlers a tick wakes run, and the wake is
 # spent.
 test an_alarm_wake_that_lands_with_an_input_is_the_inputs {
-    assert eval(alarm_asked_in_start(value: [1, _, _, 4])) == ["input", _, _, "input"]
+    assert eval alarm_asked_in_start(value: [1, _, _, 4]) == ["input", _, _, "input"]
 }
 
 test a_source_reads_its_clock_when_it_runs {
-    assert eval(time_before_each_delay()) ==
+    assert eval time_before_each_delay() ==
         [_, _, earliest_start, _, _, earliest_start + 2us]
 }
 
 test absolute_targets_before_at_and_after_the_start {
-    assert eval(absolute_yields(first: never, second: earliest_start)) == [20]
-    assert eval(absolute_yields(first: earliest_start, second: earliest_start + 2us)) ==
+    assert eval absolute_yields(first: never, second: earliest_start) == [20]
+    assert eval absolute_yields(first: earliest_start, second: earliest_start + 2us) ==
         [10, _, 20]
     assert raises("yield.non_increasing_time") {
-        eval(absolute_yields(first: never, second: never))
+        eval absolute_yields(first: never, second: never)
     }
 }
 
 test a_resumed_source_keeps_its_locals_until_it_returns {
-    assert eval(finish_or_resume(finish_early: false)) == [_, _, 10, _, 20]
-    assert eval(finish_or_resume(finish_early: true)) == [_, _, 10]
+    assert eval finish_or_resume(finish_early: false) == [_, _, 10, _, 20]
+    assert eval finish_or_resume(finish_early: true) == [_, _, 10]
 }
 
 test a_source_keeps_its_cache_and_state {
-    assert eval(counter(limit: 3)) == [_, 1, 2, 3]
-    assert eval(counting_from(first: 10)) == [_, 10, 11, 12]
-    assert eval(repeated(value: 5, times: 2)) == [_, 5, 5]
+    assert eval counter(limit: 3) == [_, 1, 2, 3]
+    assert eval counting_from(first: 10) == [_, 10, 11, 12]
+    assert eval repeated(value: 5, times: 2) == [_, 5, 5]
 }
 
-# A run's configuration is an ordinary value of `RunConfig`, however it
-# is made: held in a `let`, given by a function, chosen by an `if`
-# (RUN-1, CRUN-2).
-test a_run_configuration_is_a_value {
+# Each entry of a run's configuration is value code of its field's type,
+# however it is made: held in a `let`, given by a function, chosen by an
+# `if` (RUN-6, CRUN-2).
+test a_run_configuration_is_given_in_braces {
     let opening = @2026-01-05T09:30:00Z
-    let times = RunConfig(start: opening)
-    assert eval(absolute_yields(first: opening - 2us, second: opening), times) == [20]
-    assert eval(absolute_yields(first: opening, second: opening + 2us), opening_at(opening)) ==
+    assert eval{start: opening} absolute_yields(first: opening - 2us, second: opening) == [20]
+    assert eval{start: opening_at(opening)} absolute_yields(first: opening, second: opening + 2us) ==
         [10, _, 20]
-    let short = RunConfig(start: opening, length: 3us)
-    assert eval(time_before_each_delay(), if valid_start(short) { short } else { times }) ==
+    assert eval{start: opening, length: if shortened(opening) { 3us } else { 1s }} time_before_each_delay() ==
         [_, _, opening]
 }
