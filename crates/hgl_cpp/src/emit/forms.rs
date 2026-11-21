@@ -11,7 +11,7 @@
 //!
 //! | Lookup | What it answers |
 //! | --- | --- |
-//! | a type's temporal form | [`Family::schema`], hgraph's schema of a temporal value of the type; [`Family::read`], a hook's read of its payload; [`Family::publish`], a publication of a value of it; [`Family::delta`], its `delta_value`; [`Family::constant`], a value of it wired as a connection (FN-3); [`Family::payload`], the C++ type a publication of it takes and a trace of it holds; [`Family::read_type`], the type a read of it gives |
+//! | a type's temporal form | [`Family::schema`], hgraph's schema of a temporal value of the type; [`Family::read`], a hook's read of its payload; [`Family::publish`], a publication of a value of it; [`Family::delta`], its `delta_value`; [`Family::constant`], a value of it wired as a connection (FN-3); [`Family::payload`], the C++ type a publication of it takes and a trace of it holds; [`Family::read_type`], the type a read of it gives; [`Family::evaluation`], a node's `eval` that holds what it publishes until it ends |
 //! | a type's trace cell | [`Family::cell`], one cell of a trace written out (TST-5) |
 //! | a run of statements | [`Family::statements`], a run of them, each with what follows it |
 //! | a statement | [`Family::statement`], a statement of a hook, a source's body or a graph |
@@ -102,6 +102,22 @@ pub(super) trait Family: Sync {
     /// itself: a window's is a `list<V>` (TYPE-11). A lifted call's node
     /// gives its helper an argument of that type.
     fn read_type(&self, _emitter: &mut Emitter<'_>, _ty: &Type) -> Option<Type> {
+        None
+    }
+
+    /// The body of the `eval` of a node whose result is of `ty`, given
+    /// `handlers`, the C++ of its handlers in source order, where the
+    /// result's form holds what the evaluation publishes and publishes it
+    /// once the evaluation ends (END-5: "Further writes to the already
+    /// modified endpoint in the same evaluation update its publication"):
+    /// a window, which takes at most one value a cycle (TYPE-11). `None`
+    /// where each write publishes as it is made.
+    fn evaluation(
+        &self,
+        _emitter: &mut Emitter<'_>,
+        _ty: &Type,
+        _handlers: &str,
+    ) -> Option<String> {
         None
     }
 
@@ -294,6 +310,19 @@ impl Emitter<'_> {
             .iter()
             .find_map(|family| family.read_type(self, ty))
             .unwrap_or_else(|| ty.clone())
+    }
+
+    /// The body of the `eval` of a node whose result is of `ty`, given
+    /// the C++ of its handlers ([`Family::evaluation`]): the handlers as
+    /// they are where no family holds what the evaluation publishes.
+    pub(super) fn evaluation(&mut self, ty: &Type, handlers: &str) -> String {
+        match FAMILIES
+            .iter()
+            .find_map(|family| family.evaluation(self, ty, handlers))
+        {
+            Some(body) => body,
+            None => handlers.to_string(),
+        }
     }
 
     /// One cell of a trace of `ty` ([`Family::cell`]); one no family
