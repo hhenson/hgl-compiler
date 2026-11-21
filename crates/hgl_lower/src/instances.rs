@@ -359,15 +359,49 @@ fn answer_key(program: &Program, answer: &Answer) -> Option<String> {
 /// Identify a concrete function or operator candidate, including what
 /// its generics and requirements stand for (GEN-13, GEN-16, FN-17).
 fn function_key(program: &Program, target: &Callee) -> Option<String> {
+    if let Callee::Anonymous(function) = target {
+        let types = function
+            .body
+            .locals
+            .iter()
+            .take(function.template.parameters.len() + function.captures.len())
+            .map(|local| Some((canonical(program, &local.ty)?, local.category)))
+            .collect::<Option<Vec<_>>>()?;
+        let result = match &function.template.result {
+            Some(result) => Some(canonical(program, result)?),
+            None => None,
+        };
+        let specialization = function
+            .specialization
+            .iter()
+            .map(|argument| canonical_argument(program, argument))
+            .collect::<Option<Vec<_>>>()?;
+        // The same source lambda may close over different static
+        // functions when its enclosing function is specialized.
+        let mut targets = Vec::new();
+        walk_statements(&function.body.statements, &mut |expression| {
+            let target = match &expression.kind {
+                ExprKind::Call { callee, .. } => callee,
+                ExprKind::StaticCallable(callee) => callee.as_ref(),
+                _ => return,
+            };
+            if !matches!(target, Callee::Unread) {
+                targets.push(function_key(program, target));
+            }
+        });
+        let targets = targets.into_iter().collect::<Option<Vec<_>>>()?;
+        return Some(format!(
+            "anonymous:{}:{}:{}:{types:?}:{result:?}:{specialization:?}:{targets:?}",
+            function.at.file.index(),
+            function.at.span.start,
+            function.template.value,
+        ));
+    }
     let declared = target.declaration()?;
-    let arguments = key(
-        program,
-        declared,
-        target.generics(),
-        target.type_packs(),
-        &Captures::default(),
-        &[],
-    )?;
+    let Detail::Callable(signature) = &program.modules[declared.0].details[declared.1] else {
+        return None;
+    };
+    let arguments = generic_key(program, signature, target.generics(), target.type_packs())?;
     let requirements = match target {
         Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
             requirements
@@ -396,23 +430,7 @@ fn key(
     else {
         return None;
     };
-    if generics.len() != signature.generics.len() {
-        return None;
-    }
-    let mut key = Vec::new();
-    for (index, (generic, argument)) in signature.generics.iter().zip(generics).enumerate() {
-        if matches!(generic.kind, GenericKind::Pack { .. }) {
-            let pack = type_packs.iter().find(|pack| pack.parameter == index)?;
-            let types = pack
-                .types
-                .iter()
-                .map(|ty| canonical(program, trace_payload(ty).as_ref().unwrap_or(ty)))
-                .collect::<Option<Vec<_>>>()?;
-            key.push(format!("pack[{}]", types.join(", ")));
-        } else {
-            key.push(canonical_argument(program, argument)?);
-        }
-    }
+    let mut key = generic_key(program, signature, generics, type_packs)?;
     if signature
         .parameters
         .iter()
@@ -430,6 +448,33 @@ fn key(
             "function[{slot}]:{}",
             function_key(program, target)?
         ));
+    }
+    Some(key)
+}
+
+/// The canonical identity of the type, pack and constant arguments.
+fn generic_key(
+    program: &Program,
+    signature: &Signature,
+    generics: &[GenericArgument],
+    type_packs: &[TypePackArgument],
+) -> Option<Vec<String>> {
+    if generics.len() != signature.generics.len() {
+        return None;
+    }
+    let mut key = Vec::new();
+    for (index, (generic, argument)) in signature.generics.iter().zip(generics).enumerate() {
+        if matches!(generic.kind, GenericKind::Pack { .. }) {
+            let pack = type_packs.iter().find(|pack| pack.parameter == index)?;
+            let types = pack
+                .types
+                .iter()
+                .map(|ty| canonical(program, trace_payload(ty).as_ref().unwrap_or(ty)))
+                .collect::<Option<Vec<_>>>()?;
+            key.push(format!("pack[{}]", types.join(", ")));
+        } else {
+            key.push(canonical_argument(program, argument)?);
+        }
     }
     Some(key)
 }
@@ -632,6 +677,9 @@ impl Instances {
         else {
             return Vec::new();
         };
+        if let Callee::Anonymous(function) = callee {
+            return self.asked(program, &function.body.statements);
+        }
         let (Callee::Function {
             module,
             declaration,

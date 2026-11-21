@@ -6,7 +6,7 @@
 use hgl_lower::calls::runtime_arguments;
 use std::collections::BTreeMap;
 
-use hgl_analyser::hir::{Body, Expr, ExprKind, Raise, walk_statements};
+use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Raise, walk_statements};
 use hgl_analyser::{Detail, Phase, Program, Type};
 use hgl_lower::instances::Instances;
 
@@ -47,20 +47,7 @@ impl Readers {
     /// declarations must be available across C++ translation units.
     pub(crate) fn of(program: &Program, instances: &Instances) -> Self {
         let mut readers = Self::default();
-        let mut collect = |body: &Body| {
-            walk_statements(&body.statements, &mut |value| {
-                let Some((key, reads)) = node_reads(program, instances, value) else {
-                    return;
-                };
-                if reads.is_empty() {
-                    return;
-                }
-                let variants = readers.variants.entry(key).or_default();
-                if !variants.contains(&reads) {
-                    variants.push(reads);
-                }
-            });
-        };
+        let mut collect = |body: &Body| readers.collect(program, instances, body);
         for (module, unit) in program.modules.iter().enumerate() {
             for (declaration, body) in unit.bodies.iter().enumerate() {
                 if let Some(body) = body
@@ -77,6 +64,29 @@ impl Readers {
             }
         }
         readers
+    }
+
+    /// Walk the body and any anonymous function it invokes.
+    fn collect(&mut self, program: &Program, instances: &Instances, body: &Body) {
+        walk_statements(&body.statements, &mut |value| {
+            if let ExprKind::Call {
+                callee: Callee::Anonymous(function),
+                ..
+            } = &value.kind
+            {
+                self.collect(program, instances, &function.body);
+            }
+            let Some((key, reads)) = node_reads(program, instances, value) else {
+                return;
+            };
+            if reads.is_empty() {
+                return;
+            }
+            let variants = self.variants.entry(key).or_default();
+            if !variants.contains(&reads) {
+                variants.push(reads);
+            }
+        });
     }
 
     /// The wiring variants this declaration or instance writes.

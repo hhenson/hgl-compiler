@@ -219,7 +219,14 @@ impl Captures {
                     }
                     change(local);
                 };
+                let remap_captures = |callee: &mut Callee| {
+                    if let Callee::Anonymous(function) = callee {
+                        function.captures.iter_mut().for_each(change);
+                    }
+                };
                 match &mut expression.kind {
+                    ExprKind::Call { callee, .. } => remap_captures(callee),
+                    ExprKind::StaticCallable(callee) => remap_captures(callee),
                     ExprKind::Local(local) | ExprKind::EndpointOf(local) => read(local),
                     ExprKind::Endpoint {
                         inputs: Some(locals),

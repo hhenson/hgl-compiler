@@ -36,11 +36,21 @@ use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 use hgl_lower::copies::place_of;
 
 use super::Emitter;
+use super::anonymous::{anonymous_arguments, anonymous_signature};
 use super::expressions::integer_literal;
 use super::names::{self, identifier};
 use super::statements::Scope;
 use super::types::enum_name;
 use hgl_analyser::hir::Body;
+
+/// The concrete signature and C++ name at a value call site.
+struct ValueTarget<'a> {
+    name: String,
+    signature: &'a Signature,
+    instance: Option<&'a hgl_lower::instances::Instance>,
+    /// The declaration that owns any defaults (UNIT-8).
+    declaration: Option<(usize, usize)>,
+}
 
 impl Emitter<'_> {
     /// Respect expression order when an apparent local read is a
@@ -74,6 +84,33 @@ impl Emitter<'_> {
         let at = whole.at;
         // True for the call that is the whole of a statement.
         let statement = std::mem::take(&mut scope.statement_call);
+        if let Callee::Anonymous(function) = callee {
+            if !function.template.value {
+                return self.missing(at, "a call of a temporal function");
+            }
+            let signature = anonymous_signature(function);
+            let Some(name) = self.anonymous_helper(function, &signature) else {
+                return "0".to_string();
+            };
+            let Some(arguments) = anonymous_arguments(scope, function, arguments) else {
+                return self.missing(
+                    function.at,
+                    "an anonymous function with no enclosing capture",
+                );
+            };
+            return self.value_call(
+                scope,
+                &arguments,
+                whole,
+                statement,
+                ValueTarget {
+                    name,
+                    signature: &signature,
+                    instance: None,
+                    declaration: None,
+                },
+            );
+        }
         let program = self.program;
         let (module, declaration, generics) = match callee {
             Callee::Function {
@@ -92,7 +129,7 @@ impl Emitter<'_> {
                 return self.missing(at, "an operation a generic declaration requires");
             }
             Callee::Parameter { .. } => return self.missing(at, "an unresolved function argument"),
-            Callee::Unread => return self.missing(at, "this call"),
+            Callee::Anonymous(_) | Callee::Unread => return self.missing(at, "this call"),
         };
         let declared = &program.modules[module].declarations[declaration];
         let Some(Detail::Callable(declared_signature)) =
@@ -155,6 +192,37 @@ impl Emitter<'_> {
             }
             _ => return self.missing(at, "a call of a temporal function"),
         };
+        self.value_call(
+            scope,
+            arguments,
+            whole,
+            statement,
+            ValueTarget {
+                name: called,
+                signature,
+                instance: concrete,
+                declaration: Some((module, declaration)),
+            },
+        )
+    }
+
+    /// Writes ordinary argument passing once for named and anonymous
+    /// targets, in the written evaluation order (EXPR-2).
+    fn value_call(
+        &mut self,
+        scope: &mut Scope,
+        arguments: &[Argument],
+        whole: &Expr,
+        statement: bool,
+        ValueTarget {
+            name: called,
+            signature,
+            instance: concrete,
+            declaration,
+        }: ValueTarget<'_>,
+    ) -> String {
+        let at = whole.at;
+        let program = self.program;
         // FN-15: a call that assigns places is written with what it
         // assigns where it stands, which only a statement has room for.
         let assigns = signature.parameters.iter().any(|parameter| parameter.var);
@@ -279,11 +347,14 @@ impl Emitter<'_> {
                 return self.missing(at, "a call of a function with a pack");
             }
             let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
-            match left_out(program, (module, declaration), declared, parameter) {
+            let default =
+                declaration.and_then(|callee| left_out(program, callee, declared, parameter));
+            match default {
                 Some(LeftOut::Default(default)) => {
                     // A default that calls its own function with that
                     // same argument left out would be written inside
                     // itself without end.
+                    let (module, declaration) = declaration.expect("a named default");
                     let key = (module, declaration, declared);
                     if self.expanding.contains(&key) {
                         return self.missing(default.at, "a default that leaves itself out");

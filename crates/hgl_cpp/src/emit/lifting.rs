@@ -33,6 +33,7 @@ use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 use hgl_lower::types::read_whole_all_valid;
 
 use super::Emitter;
+use super::anonymous::{anonymous_arguments, anonymous_signature};
 use super::calls::{changes, may_fail};
 use super::forms::Family;
 use super::graphs::{HeldInputs, WIRING};
@@ -204,18 +205,32 @@ impl Emitter<'_> {
             return self.missing(value.at, "this lifted call");
         };
         let program = self.program;
-        let Some((module, declaration)) = callee.declaration() else {
-            return self.missing(value.at, "this lifted call");
+        let anonymous_declared;
+        let anonymous_args;
+        let (declared, origin, arguments) = if let Callee::Anonymous(function) = callee {
+            anonymous_declared = anonymous_signature(function);
+            let Some(bound) = anonymous_arguments(scope, function, arguments) else {
+                return self.missing(
+                    function.at,
+                    "an anonymous function with no enclosing capture",
+                );
+            };
+            anonymous_args = bound;
+            (&anonymous_declared, None, anonymous_args.as_slice())
+        } else {
+            let Some((module, declaration)) = callee.declaration() else {
+                return self.missing(value.at, "this lifted call");
+            };
+            let Some(Detail::Callable(declared)) = program.modules[module].details.get(declaration)
+            else {
+                return self.missing(value.at, "this lifted call");
+            };
+            (declared, Some((module, declaration)), arguments.as_slice())
         };
-        let Some(Detail::Callable(declared)) = program.modules[module].details.get(declaration)
-        else {
-            return self.missing(value.at, "this lifted call");
-        };
-        let concrete = if declared
-            .parameters
-            .iter()
-            .any(|parameter| parameter.pack.is_some() || matches!(parameter.ty, Type::Function(_)))
-        {
+        let concrete = if origin.is_some()
+            && declared.parameters.iter().any(|parameter| {
+                parameter.pack.is_some() || matches!(parameter.ty, Type::Function(_))
+            }) {
             let Some(instance) = self.instances.find_call(program, callee, arguments) else {
                 return self.missing(value.at, "a lifted call of an instance that is not written");
             };
@@ -306,7 +321,7 @@ impl Emitter<'_> {
                     let mut local = ty.clone();
                     let declared =
                         concrete.map_or(index, |instance| instance.original_parameter(index));
-                    match left_out(program, (module, declaration), declared, parameter) {
+                    match origin.and_then(|callee| left_out(program, callee, declared, parameter)) {
                         // FN-11: "Every other input must satisfy ordinary
                         // `valid(input)`": hgraph evaluates the node only
                         // once it is.
@@ -490,51 +505,49 @@ impl Emitter<'_> {
                 return self.missing(value.at, "a lifted call that leaves out a pack");
             }
             let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
-            let (configured, ty) =
-                match left_out(program, (module, declaration), declared, parameter) {
-                    Some(LeftOut::Null) => continue,
-                    Some(LeftOut::Default(default)) if matches!(default.ty, Type::Nullable(_)) => {
-                        if may_fail(default) {
-                            return self.missing(
-                                default.at,
-                                "a lifted call that leaves out a `T?` whose default may fail",
-                            );
-                        }
-                        continue;
-                    }
-                    Some(LeftOut::Default(default)) => {
-                        let configured = match defaults.iter().find(|(at, _)| *at == declared) {
-                            Some((_, held)) => held.clone(),
-                            None => {
-                                if changes(default) {
-                                    return self
-                                        .missing(default.at, "a default that runs statements");
-                                }
-                                let cold = Body {
-                                    locals: Vec::new(),
-                                    statements: Vec::new(),
-                                };
-                                let mut defaults = Scope::cold(program, &cold);
-                                let written = self.expression(&mut defaults, default);
-                                if !defaults.before.is_empty() {
-                                    return self.missing(
-                                        default.at,
-                                        "a default that propagates a failure",
-                                    );
-                                }
-                                omitted_failing += usize::from(may_fail(default));
-                                written
-                            }
-                        };
-                        (configured, default.ty.clone())
-                    }
-                    None => {
+            let (configured, ty) = match origin
+                .and_then(|callee| left_out(program, callee, declared, parameter))
+            {
+                Some(LeftOut::Null) => continue,
+                Some(LeftOut::Default(default)) if matches!(default.ty, Type::Nullable(_)) => {
+                    if may_fail(default) {
                         return self.missing(
-                            value.at,
-                            &format!("a call that leaves out `{}`", parameter.name),
+                            default.at,
+                            "a lifted call that leaves out a `T?` whose default may fail",
                         );
                     }
-                };
+                    continue;
+                }
+                Some(LeftOut::Default(default)) => {
+                    let configured = match defaults.iter().find(|(at, _)| *at == declared) {
+                        Some((_, held)) => held.clone(),
+                        None => {
+                            if changes(default) {
+                                return self.missing(default.at, "a default that runs statements");
+                            }
+                            let cold = Body {
+                                locals: Vec::new(),
+                                statements: Vec::new(),
+                            };
+                            let mut defaults = Scope::cold(program, &cold);
+                            let written = self.expression(&mut defaults, default);
+                            if !defaults.before.is_empty() {
+                                return self
+                                    .missing(default.at, "a default that propagates a failure");
+                            }
+                            omitted_failing += usize::from(may_fail(default));
+                            written
+                        }
+                    };
+                    (configured, default.ty.clone())
+                }
+                None => {
+                    return self.missing(
+                        value.at,
+                        &format!("a call that leaves out `{}`", parameter.name),
+                    );
+                }
+            };
             let Some(cpp) = self.written_type(&ty, value.at) else {
                 return "0".to_string();
             };
@@ -626,7 +639,11 @@ impl Emitter<'_> {
         } else {
             names::temporary("lifted", self.temporary())
         };
-        let callee_name = &program.modules[module].declarations[declaration].name;
+        let callee_name = origin.map_or("anonymous function", |(module, declaration)| {
+            program.modules[module].declarations[declaration]
+                .name
+                .as_str()
+        });
         let graph = &program.modules[self.module].path;
         let line = self.line_of(value.at);
         let text = format!(
@@ -1215,6 +1232,9 @@ fn gives(emitter: &Emitter, value: &Expr) -> bool {
     let ExprKind::Call { callee, .. } = &value.kind else {
         return false;
     };
+    if let Callee::Anonymous(function) = callee {
+        return function.template.result.is_some();
+    }
     let declared = match callee {
         Callee::Function {
             module,
