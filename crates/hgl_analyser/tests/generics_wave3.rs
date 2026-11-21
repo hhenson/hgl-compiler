@@ -573,6 +573,7 @@ fn the_fragments_judged_where_they_are_declared_are_accepted() {
         "const fn floats() -> bool => less(1.5, 2.0)\n",
         "const fn seven() -> i64 => wrap(7)\n",
         "const fn yes() -> i64 => wrap(true)\n",
+        "const fn same_ints() -> bool => same(1, 2)\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
     let instance = |caller: &str| instance_called_by(&checked, body(&checked, caller));
@@ -580,8 +581,12 @@ fn the_fragments_judged_where_they_are_declared_are_accepted() {
     assert_eq!(called(&checked, &instance("floats")), ["lt_(T, T) <f64>"]);
     assert_eq!(called(&checked, &instance("seven")), ["kind_of(i64)"]);
     assert_eq!(called(&checked, &instance("yes")), ["kind_of(T) <bool>"]);
-    // A candidate that takes every `T` is selected in the body itself.
-    assert_eq!(called(&checked, body(&checked, "same")), ["eq_(T, T) <T>"]);
+    // The candidate for every T admits the body. GEN-7 selects in the instance.
+    assert_eq!(called(&checked, body(&checked, "same")), ["none"]);
+    assert_eq!(
+        called(&checked, &instance("same_ints")),
+        ["eq_(i64, i64, f64, f64)"]
+    );
 }
 
 /// GEN-7's deliberate rejections, "each at its declaration, whatever its
@@ -667,8 +672,8 @@ fn the_proposed_option_fragment_is_held_to_its_words() {
 /// variables; structurally constrained variables outrank unconstrained
 /// ones." A candidate for `list<T>` with no condition takes every
 /// `list<U>`, and outranks one for any `T` whatever that one's condition
-/// comes to: `kind(value)` in `wrap<U>(value: list<U>)` is the list
-/// candidate's, known where the body is declared, with nothing stated.
+/// comes to: the list candidate admits `kind(value)` in
+/// `wrap<U>(value: list<U>)` at the declaration, with nothing stated.
 /// Where the candidate whose condition is not known is as specific as the
 /// one that takes it, which of them is selected is not known, and the
 /// body rejects.
@@ -683,6 +688,7 @@ fn a_candidate_that_outranks_every_one_not_told_is_known() {
         "impl const fn tied<T>(value: T) -> i64 => 1\n",
         "impl const fn tied<T>(value: T) -> i64 requires !(T == i64) => 2\n",
         "const fn level<U>(value: U) -> i64 => tied(value)\n",
+        "const fn lists(values: list<i64>) -> i64 => wrap(values)\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -690,10 +696,9 @@ fn a_candidate_that_outranks_every_one_not_told_is_known() {
         "{}",
         checked.report
     );
-    assert_eq!(
-        called(&checked, body(&checked, "wrap")),
-        ["kind(list<T>) <U>"]
-    );
+    assert_eq!(called(&checked, body(&checked, "wrap")), ["none"]);
+    let instance = instance_called_by(&checked, body(&checked, "lists"));
+    assert_eq!(called(&checked, &instance), ["kind(list<T>) <i64>"]);
 }
 
 /// GEN-7: a generic body "is judged once, where it is declared, by what

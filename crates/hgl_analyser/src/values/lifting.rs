@@ -273,9 +273,12 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
                     .map(|&local| locals[local].category)
                     .fold(given, join),
                 Callee::Parameter { temporal: true, .. } => Connection,
-                // A value callback may capture a connection. Its
-                // specialized body determines whether FN-6 lifts it.
-                Callee::Parameter { .. } | Callee::Required { .. } => join(given, Unsettled),
+                // A callback may capture a connection. A call awaiting
+                // instance selection may choose a temporal candidate
+                // (GEN-7), even with only ordinary arguments.
+                Callee::Parameter { .. } | Callee::Required { .. } | Callee::Unread => {
+                    join(given, Unsettled)
+                }
                 _ => given,
             }
         }

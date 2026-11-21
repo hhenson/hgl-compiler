@@ -45,6 +45,24 @@ test instance_in_a_graph {
     assert eval in_graph(value: ["s", "t"]) == [5, 5]
 }
 
+# GEN-5 and FN-6: the selected temporal candidate makes a connection,
+# even when its input was an ordinary value during composition.
+operator live_helper<T>(value: T) -> i64
+impl const fn live_helper<T>(value: T) -> i64 => 5
+impl fn live_helper(value: i64) -> i64 {
+    when { return value }
+}
+
+fn through_graph<T>(const value: T) -> i64 {
+    let classified = live_helper(value)
+    return classified + 1
+}
+
+test instance_selects_temporal {
+    assert eval through_graph(value: 3) == [4]
+    assert eval through_graph(value: "s") == [6]
+}
+
 struct Counter { count: i64 }
 
 impl const fn add_<T>(counter: Counter, increment: T) -> i64 => counter.count + 100
