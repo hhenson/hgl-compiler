@@ -911,8 +911,8 @@ It is the module `values` (`crates/hgl_analyser/src/values.rs`): its
 `values/`: `statements`, `expressions`, `symbols`, `calls`,
 `arguments`, `inference`, `operators`, `candidates`, `requirements`,
 `call_checks`, `constants`, `lifting`, `control`, `members`, `deltas`,
-`fit`, `results`, `evals`, `node`, `endpoints`, `children` and
-`capabilities`.
+`fit`, `results`, `evals`, `node`, `endpoints`, `children`,
+`capabilities` and `sizes`.
 
 The pass is built form by form. So far it reads:
 
