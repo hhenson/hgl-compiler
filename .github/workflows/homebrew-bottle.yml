@@ -1,0 +1,209 @@
+name: Homebrew bottle
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/homebrew-bottle.yml
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published compiler release, for example 0.1.0
+        required: true
+        type: string
+      tap_sha:
+        description: Full commit SHA of the reviewed source formula in hhenson/homebrew-hgraph
+        required: true
+        type: string
+      publish:
+        description: Upload the bottle to that release (main only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  COMPILER_REPO: hhenson/hgl-compiler
+  FORMULA: hhenson/hgraph/hgl
+  # The reviewed source formula for the read-only PR rehearsal.
+  RELEASE_TAG: ${{ inputs.release_tag || '0.1.0' }}
+  TAP_SHA: ${{ inputs.tap_sha || '480963fc9f15ad268772ff05e85752f168b8c291' }}
+
+jobs:
+  bottle:
+    runs-on: macos-26
+    timeout-minutes: 25
+    outputs:
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+    steps:
+      - name: Resolve the published source archive
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for path in "$HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; do
+            if [[ -d $path ]]; then
+              printf '::add-mask::%s\n' "$(cd -- "$path" && pwd -P)"
+            fi
+          done
+          if [[ ! $RELEASE_TAG =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! $TAP_SHA =~ ^[a-f0-9]{40}$ ]]; then
+            echo 'Use a bare release version and a full lowercase tap commit SHA.' >&2
+            exit 1
+          fi
+          if [[ $(uname -m) != arm64 || $(sw_vers -productVersion) != 26.* ]]; then
+            echo 'The bottle must be built on Apple silicon with macOS 26.' >&2
+            exit 1
+          fi
+          root_url="https://github.com/$COMPILER_REPO/releases/download/$RELEASE_TAG"
+          archive="hgl-$RELEASE_TAG-macos-arm64.tar.gz"
+          release=$(gh api "repos/$COMPILER_REPO/releases/tags/$RELEASE_TAG")
+          release_id=$(jq -er --arg tag "$RELEASE_TAG" \
+            'select(.tag_name == $tag and .draft == false) | .id' <<<"$release")
+          digest=$(jq -er --arg archive "$archive" --arg url "$root_url/$archive" '
+            [.assets[] | select(.name == $archive and .browser_download_url == $url and .state == "uploaded")]
+            | select(length == 1) | .[0].digest | select(test("^sha256:[a-f0-9]{64}$"))
+          ' <<<"$release")
+          {
+            printf 'id=%s\n' "$release_id"
+            printf 'root_url=%s\n' "$root_url"
+            printf 'source_url=%s\n' "$root_url/$archive"
+            printf 'source_sha256=%s\n' "${digest#sha256:}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build the reviewed tap formula and bottle it
+        env:
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          ROOT_URL: ${{ steps.release.outputs.root_url }}
+          SOURCE_URL: ${{ steps.release.outputs.source_url }}
+          SOURCE_SHA256: ${{ steps.release.outputs.source_sha256 }}
+        run: |
+          brew tap hhenson/hgraph
+          tap=$(brew --repo hhenson/hgraph)
+          git -C "$tap" fetch --no-tags origin "$TAP_SHA"
+          git -C "$tap" checkout --detach "$TAP_SHA"
+          brew trust --formula "$FORMULA"
+          brew info --json=v2 "$FORMULA" | jq -e \
+            --arg formula "$FORMULA" --arg version "$RELEASE_TAG" \
+            --arg url "$SOURCE_URL" --arg sha "$SOURCE_SHA256" '
+              .formulae | length == 1 and (.[0]
+                | .full_name == $formula and .versions.stable == $version and .revision == 0
+                  and .urls.stable.url == $url and .urls.stable.checksum == $sha)
+            ' > /dev/null
+          brew install --build-bottle "$FORMULA"
+
+          work=$(mktemp -d "$RUNNER_TEMP/homebrew-bottle.XXXXXX")
+          cd "$work"
+          hgl="$(brew --prefix "$FORMULA")/bin/hgl"
+          [[ $("$hgl" --version) == "hgl $RELEASE_TAG (hgraph "* ]]
+          printf 'module smoke.bottle\n\nconst fn one() -> i64 => 1\n' > smoke.hgl
+          "$hgl" check smoke.hgl
+          brew bottle --json --no-rebuild --root-url="$ROOT_URL" "$FORMULA" | tee bottle.log
+
+          # Homebrew names the local tarball with two hyphens and the
+          # release download with one. Keep the download name from its JSON.
+          metadata="hgl--$RELEASE_TAG.arm64_tahoe.bottle.json"
+          jq -e --arg formula "$FORMULA" --arg version "$RELEASE_TAG" \
+            --arg revision "$TAP_SHA" --arg root "$ROOT_URL" --arg url "$SOURCE_URL" \
+            --arg source_sha "$SOURCE_SHA256" --arg id "$RELEASE_ID" '
+              .[$formula] | select(
+                .formula.name == "hgl" and .formula.pkg_version == $version and
+                .formula.tap_git_revision == $revision and .bottle.root_url == $root and
+                .bottle.rebuild == 0 and
+                (.bottle.cellar == "any" or .bottle.cellar == "any_skip_relocation") and
+                (.bottle.tags | keys == ["arm64_tahoe"])
+              ) | .bottle.tags.arm64_tahoe
+              | select(.filename == "hgl-\($version).arm64_tahoe.bottle.tar.gz" and
+                       .local_filename == "hgl--\($version).arm64_tahoe.bottle.tar.gz" and
+                       (.sha256 | test("^[a-f0-9]{64}$")))
+              | {
+                  release_tag: $version, release_id: $id, tap_sha: $revision,
+                  source_url: $url, source_sha256: $source_sha,
+                  filename, local_filename, sha256
+                }
+            ' "$metadata" > manifest.json
+          filename=$(jq -er .filename manifest.json)
+          local_filename=$(jq -er .local_filename manifest.json)
+          checksum=$(jq -er .sha256 manifest.json)
+
+          artifact="$RUNNER_TEMP/hgl-bottle"
+          mkdir "$artifact"
+          mv -- "$local_filename" "$artifact/$filename"
+          printf '%s  %s\n' "$checksum" "$filename" > "$artifact/$filename.sha256"
+          mv -- manifest.json "$artifact/"
+          awk '/^  bottle do$/ { copying = 1 } copying { print } /^  end$/ && copying { exit }' \
+            bottle.log > "$artifact/bottle.rb"
+          grep -Fx "    root_url \"$ROOT_URL\"" "$artifact/bottle.rb"
+          grep -E "^    sha256 cellar: :any(_skip_relocation)?, +arm64_tahoe: \"$checksum\"$" \
+            "$artifact/bottle.rb"
+          cd "$artifact"
+          shasum -a 256 -c "$filename.sha256"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: artifact
+        with:
+          name: hgl-${{ env.RELEASE_TAG }}-arm64-tahoe-bottle-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hgl-bottle
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.publish &&
+      github.ref == 'refs/heads/main' && github.repository == 'hhenson/hgl-compiler'
+    needs: bottle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: homebrew-bottle-publish-${{ inputs.release_tag }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.bottle.outputs.artifact-id }}
+          path: ${{ runner.temp }}/hgl-bottle
+      - name: Add the verified bottle to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP/hgl-bottle"
+          root_url="https://github.com/$COMPILER_REPO/releases/download/$RELEASE_TAG"
+          archive="hgl-$RELEASE_TAG-macos-arm64.tar.gz"
+          name=$(jq -er --arg version "$RELEASE_TAG" --arg tap "$TAP_SHA" '
+            select(.release_tag == $version and .tap_sha == $tap)
+            | .filename | select(. == "hgl-\($version).arm64_tahoe.bottle.tar.gz")
+          ' manifest.json)
+          sha=$(jq -er '.sha256 | select(test("^[a-f0-9]{64}$"))' manifest.json)
+          printf '%s  %s\n' "$sha" "$name" | sha256sum --check
+
+          release_id=$(jq -er '.release_id | select(test("^[0-9]+$"))' manifest.json)
+          source_sha=$(jq -er '.source_sha256 | select(test("^[a-f0-9]{64}$"))' manifest.json)
+          release=$(gh api "repos/$COMPILER_REPO/releases/tags/$RELEASE_TAG")
+          jq -e --arg id "$release_id" --arg tag "$RELEASE_TAG" --arg archive "$archive" \
+            --arg url "$root_url/$archive" --arg digest "sha256:$source_sha" '
+              (.id | tostring) == $id and .tag_name == $tag and .draft == false and
+              any(.assets[]; .name == $archive and .browser_download_url == $url and
+                .state == "uploaded" and .digest == $digest)
+            ' <<<"$release" > /dev/null
+
+          # Upload never replaces an existing asset. A rerun can verify
+          # an identical asset, but a different digest is an error.
+          if ! jq -e --arg name "$name" 'any(.assets[]; .name == $name)' <<<"$release" > /dev/null; then
+            gh release upload "$RELEASE_TAG" "$name" --repo "$COMPILER_REPO"
+          fi
+          if ! gh api "repos/$COMPILER_REPO/releases/$release_id/assets" --paginate --slurp |
+            jq -e --arg name "$name" --arg url "$root_url/$name" --arg digest "sha256:$sha" '
+              any(.[][]; .name == $name and .browser_download_url == $url and
+                .state == "uploaded" and .digest == $digest)
+            ' > /dev/null; then
+            echo "Release asset $name does not have the verified bottle checksum." >&2
+            exit 1
+          fi

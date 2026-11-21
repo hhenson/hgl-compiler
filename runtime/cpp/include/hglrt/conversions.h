@@ -20,6 +20,7 @@
 
 #include <chrono>
 #include <concepts>
+#include <cstddef>
 #include <expected>
 #include <optional>
 #include <source_location>
@@ -59,10 +60,23 @@ namespace detail {
 template <class T, InvalidPolicy invalid>
 using converted = std::conditional_t<invalid == InvalidPolicy::error, result<T>, T>;
 
+/// A conversion can borrow its diagnostic text from static character data
+/// only. Constructing it at compile time prevents a view of a temporary.
+class conversion_reason {
+  public:
+    template <std::size_t N>
+    consteval explicit conversion_reason(const char (&literal)[N]) : text_{literal} {}
+
+    constexpr std::string_view text() const { return text_; }
+
+  private:
+    std::string_view text_;
+};
+
 /// A conversion that can fail, made: its value, or what says why there is
 /// none.
 template <class T>
-using made = std::expected<T, std::string_view>;
+using made = std::expected<T, conversion_reason>;
 
 /// The error of a conversion that failed for the reason `why` (OPS-8: "a
 /// failure is an Err carrying error code `convert.invalid`").
@@ -78,9 +92,9 @@ template <class T, InvalidPolicy invalid>
 converted<T, invalid> outcome(made<T> value, std::source_location where) {
     if (!value.has_value()) {
         if constexpr (invalid == InvalidPolicy::error) {
-            return std::unexpected(invalid_conversion(value.error()));
+            return std::unexpected(invalid_conversion(value.error().text()));
         } else {
-            fail_conversion(value.error(), where);
+            fail_conversion(value.error().text(), where);
         }
     }
     return std::move(*value);
