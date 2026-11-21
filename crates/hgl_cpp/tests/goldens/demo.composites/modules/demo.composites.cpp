@@ -159,7 +159,7 @@ namespace hgl::demo::composites::m_
 // look(book: dict<str, delta<i64?>>, key: str) -> delta<i64?>? (`const fn`), module demo.composites, line 122
 ::std::optional<::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>> look([[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>>& book, [[maybe_unused]] const ::hgraph::Str& key)
 {
-    return ::hglrt::get_dict_K__T__K<::hgraph::Str, ::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>>(book, key);
+    return ::hglrt::result_or_null(::hglrt::get_dict_result<::hgraph::Str, ::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>>(book, key));
 }
 
 // published_null() -> delta<Reading> (`const fn`), module demo.composites, line 124
@@ -269,7 +269,7 @@ namespace c_
     [[maybe_unused]] ::hglrt::dict<::hgraph::Str, ::hgraph::Int> counts = ::hglrt::dict<::hgraph::Str, ::hgraph::Int>{};
     for (const ::hgraph::Str& word : words)
     {
-        if ((!(::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(counts, word)).has_value()))
+        if ((!(::hglrt::result_or_null(::hglrt::get_dict_result<::hgraph::Str, ::hgraph::Int>(counts, word))).has_value()))
         {
             ::hglrt::entry(counts, word) = 1;
         }
@@ -628,9 +628,9 @@ void dictionaries_read_add_and_loop()
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(book, ::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"b"}, 2}, {::hgraph::Str{"a"}, 1}})));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check((!(::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"c"})).has_value()));
+    ::hglrt::testing::check((!(::hglrt::result_or_null(::hglrt::get_dict_result<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"c"}))).has_value()));
     ::hglrt::testing::statement();
-    [[maybe_unused]] const ::std::optional<::hgraph::Int> found = ::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"b"});
+    [[maybe_unused]] const ::std::optional<::hgraph::Int> found = ::hglrt::result_or_null(::hglrt::get_dict_result<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"b"}));
     ::hglrt::testing::statement();
     ::hglrt::testing::check((found == 2));
     ::hglrt::testing::statement();
@@ -836,7 +836,7 @@ void a_nullable_delta_is_no_nullable()
     ::hglrt::testing::statement();
     [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>> book = ::hglrt::dict_of<::hgraph::Str, ::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>>({{::hgraph::Str{"a"}, ::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>{}}});
     ::hglrt::testing::statement();
-    ::hglrt::testing::check((::hglrt::get_dict_K__T__K<::hgraph::Str, ::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>>(book, ::hgraph::Str{"a"})).has_value());
+    ::hglrt::testing::check((::hglrt::result_or_null(::hglrt::get_dict_result<::hgraph::Str, ::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>>(book, ::hgraph::Str{"a"}))).has_value());
     ::hglrt::testing::statement();
     ::hglrt::testing::check([&] { const ::std::optional<::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>> left_00_ = ::hgl::demo::composites::m_::look(book, ::hgraph::Str{"a"}); const ::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int> right_01_ = ::hglrt::nullable_delta<::hgraph::Int, ::hgraph::Int>{}; return left_00_ == right_01_; }());
     ::hglrt::testing::statement();

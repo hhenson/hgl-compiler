@@ -2097,8 +2097,7 @@ The target's progress is counted in cases: core's runtime cases, and
 later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml).
-The list covers nullable store puts and the result and nullable forms
-that the target does not write yet. Build `hgl` and run
+The list covers the remaining nullable store put case. Build `hgl` and run
 `check_core.py`, which runs the pinned core's `tests/conformance`
 and `tests/implementation` on the target, including integration tests:
 

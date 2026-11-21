@@ -36,9 +36,9 @@ use hgl_lower::types::inherited;
 
 use super::Emitter;
 use super::calls::{changes, may_fail};
-use super::expressions::{held_read, integer_literal, reads_an_element};
+use super::expressions::{integer_literal, reads_an_element};
 use super::names::{self, identifier, module_namespace};
-use super::statements::{Scope, refers};
+use super::statements::Scope;
 use super::types::{cpp_type, cpp_type_in, enum_name};
 use super::values::INDENT;
 use crate::runtime;
@@ -1012,9 +1012,9 @@ impl Emitter<'_> {
         Some(Given {
             slot,
             text,
-            fails: may_fail(argument),
+            fails: self.may_fail_here(argument),
             changes: changes(argument),
-            refers: refers(argument),
+            refers: self.refers(argument),
             ty,
         })
     }
@@ -1417,7 +1417,7 @@ impl Emitter<'_> {
         base: &Expr,
         index: &Expr,
     ) -> String {
-        if held_read(base, index) {
+        if self.held_read(base, index) {
             let Some(ty) = self.written_type(&value.ty, value.at) else {
                 return "0".to_string();
             };
@@ -1427,7 +1427,7 @@ impl Emitter<'_> {
             ) else {
                 return "0".to_string();
             };
-            let held = if refers(base) && !changes(index) {
+            let held = if self.refers(base) && !changes(index) {
                 format!("const {book_type}&")
             } else {
                 format!("const {book_type}")
@@ -1488,7 +1488,7 @@ impl Emitter<'_> {
                 .push(format!("const {key_type} {key} = {written};"));
             return Some(format!("{function}({listed}, {key})"));
         }
-        if !holds && reads_an_element(base) && may_fail(index) {
+        if !holds && reads_an_element(base) && self.may_fail_here(index) {
             // A reference to the entry, or the place that adds it, which
             // holds its dictionary by reference and its key as a value.
             let result = match &base.ty {
@@ -1574,7 +1574,7 @@ impl Emitter<'_> {
         };
         let items = self.expression(scope, sequence);
         let copied = bound.iter().any(|local| scope.copies.copied(*local));
-        let over = if copied || !refers(sequence) {
+        let over = if copied || !self.refers(sequence) {
             let held = names::temporary("items", self.temporary());
             text.push_str(&format!("{indent}const {whole} {held} = {items};\n"));
             held
@@ -1655,7 +1655,9 @@ impl Emitter<'_> {
         // Either side running statements may change what the other reads,
         // a field of an abstract struct read by reference among it: both
         // are then held as values, in the order written.
-        let ordered = changes(left) || changes(right) || (may_fail(left) && may_fail(right));
+        let ordered = changes(left)
+            || changes(right)
+            || (self.may_fail_here(left) && self.may_fail_here(right));
         let left_text = self.expression(scope, left);
         let right_text = self.expression(scope, right);
         if !ordered {

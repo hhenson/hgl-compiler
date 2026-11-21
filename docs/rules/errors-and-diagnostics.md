@@ -47,9 +47,9 @@ analyser: partial
 
 - A place that needs the value of a result records where a failure goes. A value function returning a result requires the same error type. In other phases only `error` can be raised (`result.propagation_type`).
 
-transpiler: partial
+transpiler: done
 
-- C++ writes a raise in a value function returning a result or in a `when`. Other places are reported as unsupported.
+- C++ returns the original error from a fallible value function. In a `when`, `start`, `stop` or source body, at graph build, and in test or application statements, it raises the error at the HGL read.
 
 ## ERR-6
 
@@ -60,7 +60,8 @@ analyser: partial
 
 transpiler: partial
 
-- C++ brackets perform a strict read. A temporal dictionary child is an endpoint read (ERR-14).
+- C++ brackets perform a strict read. Two-argument `get` returns the whole result to the recorded ERR-15 form. A temporal dictionary child is an endpoint read (ERR-14).
+- Left: a fallback.
 
 ## ERR-7
 
@@ -111,6 +112,10 @@ analyser: done
 - In a value function, a hook and a graph a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns
 - A nullable read in a place that expects its payload records a possible `value.null` failure and its phase. A written null still needs a nullable type (TYPE-14).
 
+transpiler: done
+
+- C++ reads the payload at the recorded expression and reports `value.null` in its recorded phase. A connection's reading node performs that read.
+
 ## ERR-13
 
 parser: done
@@ -140,6 +145,6 @@ analyser: partial
 - In composition the analyser records whether a conversion belongs to the call's node or to a reader of a held connection.
 - A candidate admits at most one preferred arrangement of result reads. It keeps operands whole where possible and rejects equal minimum arrangements as `operator.ambiguous`. [Compiler issue #356](https://github.com/hhenson/hgl-compiler/issues/356)
 
-transpiler: partial
+transpiler: done
 
-- C++ preserves result data and writes raises in the phases listed under ERR-5. Other conversions are reported as unsupported.
+- C++ follows the recorded whole, success or nullable form. A lifted call or node publishes the chosen form. A held failure taken as a value fails on its publication cycle, before the consumer runs a handler. Consumers that need child tracking use a projected endpoint. [Compiler issue #355](https://github.com/hhenson/hgl-compiler/issues/355)
