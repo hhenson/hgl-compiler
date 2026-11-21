@@ -4514,6 +4514,19 @@ fn explicit_operator_references_check_candidate_option_types() {
     );
 }
 
+/// GEN-13: a supplied callback option can resolve a type parameter
+/// mentioned only in the option's candidate type.
+#[test]
+fn explicit_operator_references_infer_types_from_candidate_options() {
+    let checked = module(concat!(
+        "const fn use_it(f: const fn(i64) -> i64) -> i64 => f(1)\n",
+        "operator select<const mode: bool>(value: i64) -> i64\n",
+        "impl const fn select<T, const mode: T>(value: i64) -> i64 => value\n",
+        "const fn picked() -> i64 => use_it(select<true>)\n",
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
 /// FN-17: a template checks role, written names and plain parameter
 /// modes, and does not take an ordinary runtime value.
 #[test]

@@ -2198,11 +2198,24 @@ fn instance<'s>(
     // GEN-12: in the order they are declared, whatever order the call
     // writes them in.
     for (index, generic) in generics.iter().enumerate() {
-        let argument = bound
+        let GenericKind::Value(ty) = &generic.kind else {
+            continue;
+        };
+        let argument_type = bound
             .iter()
-            .position(|&place| place == Place::Generic(index));
-        if let (Some(position), GenericKind::Value(ty)) = (argument, &generic.kind) {
-            infer(ty, given[position].ty(), generics, &mut found);
+            .position(|&place| place == Place::Generic(index))
+            .map(|position| given[position].ty())
+            .or_else(|| {
+                wanted
+                    .callback
+                    .as_ref()?
+                    .values
+                    .iter()
+                    .find(|option| option.name == generic.name)
+                    .map(|option| &option.ty)
+            });
+        if let Some(actual) = argument_type {
+            infer(ty, actual, generics, &mut found);
         }
     }
     // GEN-6: "An option that selects among candidates is a generic

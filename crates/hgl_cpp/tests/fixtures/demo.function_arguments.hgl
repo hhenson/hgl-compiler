@@ -186,6 +186,9 @@ impl const fn signed<const positive: bool = true>(value: i64) -> i64
 operator option_bias<const amount: i64>(value: i64) -> f64
 impl const fn option_bias<const amount: f64>(value: i64) -> f64 => amount
 
+operator option_infers<const enabled: bool>(value: i64) -> i64
+impl const fn option_infers<T, const enabled: T>(value: i64) -> i64 => value
+
 operator selected_live<R, V>(value: V) -> R
 impl fn selected_live(value: i64) -> i64 {
     when { return value + 10 }
@@ -206,6 +209,7 @@ test explicit_operator_callbacks {
     assert apply(signed<false>, 8) == -8
     assert apply(signed, 8) == 8
     assert widened(option_bias<3>, 8) == 3.0
+    assert apply(option_infers<true>, 8) == 8
     assert eval lifted_convert(value: [2, 3]) == [2.0, 3.0]
     assert eval composed_operator(value: [2, 3]) == [12, 13]
 }
