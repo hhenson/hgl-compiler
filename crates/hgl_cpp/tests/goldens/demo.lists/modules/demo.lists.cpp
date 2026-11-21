@@ -3,7 +3,9 @@
 #include "core.h"
 
 // Names this file writes, which no macro of a header above takes.
+#undef a_growing_list_child_is_wired
 #undef a_list_input_replays_its_cells
+#undef a_list_of_lists_is_replayed
 #undef at
 #undef change
 #undef changes
@@ -14,6 +16,7 @@
 #undef demo
 #undef first
 #undef first_of
+#undef first_reading
 #undef first_slot
 #undef fixed_list_children
 #undef get
@@ -48,7 +51,11 @@
 #undef readings
 #undef record
 #undef relay
+#undef relay_rows
 #undef replay
+#undef row
+#undef rows
+#undef rows_total
 #undef running
 #undef second_changed
 #undef second_delta
@@ -61,7 +68,9 @@
 #undef span_of
 #undef sum
 #undef sum_of_parts
+#undef third_relayed
 #undef total
+#undef total_rows
 #undef trigger
 #undef tuple_positions
 #undef value
@@ -214,7 +223,7 @@ struct impl_
     {
         // when, line 42 (TIME-3)
         {
-            ::hglrt::publish(out_, ::hglrt::list_delta_of<std::array<::hgraph::Int, 2>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{::hglrt::checked_value(slot), ::hglrt::checked_value(reading)}}), ::hglrt::set<::hgraph::Int>{}, std::nullopt));
+            ::hglrt::publish(out_, ::hglrt::list_delta_of<::std::array<::hgraph::Int, 2>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{::hglrt::checked_value(slot), ::hglrt::checked_value(reading)}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt));
             return;
         }
     }
@@ -241,7 +250,7 @@ struct impl_
         // when, line 47 (TIME-3)
         if (::hglrt::fn_modified(probe))
         {
-            ::hglrt::publish(out_, std::array<::hgraph::Bool, 3>{::hglrt::fn_valid(pair), ::hglrt::fn_all_valid(pair), ::hglrt::fn_valid(::hglrt::child(pair, ::hglrt::checked_value(slot)))});
+            ::hglrt::publish(out_, ::std::array<::hgraph::Bool, 3>{::hglrt::fn_valid(pair), ::hglrt::fn_all_valid(pair), ::hglrt::fn_valid(::hglrt::child(pair, ::hglrt::checked_value(slot)))});
             return;
         }
     }
@@ -371,8 +380,8 @@ struct impl_
     {
         // when, line 72 (TIME-3)
         {
-            [[maybe_unused]] const std::tuple<std::optional<::hgraph::Int>, std::optional<::hgraph::Int>> only_first = std::tuple<std::optional<::hgraph::Int>, std::optional<::hgraph::Int>>{::hglrt::checked_value(value), std::nullopt};
-            [[maybe_unused]] const std::tuple<std::optional<::hgraph::Int>, std::optional<::hgraph::Int>> only_second = std::tuple<std::optional<::hgraph::Int>, std::optional<::hgraph::Int>>{std::nullopt, ::hglrt::checked_value(value)};
+            [[maybe_unused]] const ::std::tuple<::std::optional<::hgraph::Int>, ::std::optional<::hgraph::Int>> only_first = ::std::tuple<::std::optional<::hgraph::Int>, ::std::optional<::hgraph::Int>>{::hglrt::checked_value(value), ::std::nullopt};
+            [[maybe_unused]] const ::std::tuple<::std::optional<::hgraph::Int>, ::std::optional<::hgraph::Int>> only_second = ::std::tuple<::std::optional<::hgraph::Int>, ::std::optional<::hgraph::Int>>{::std::nullopt, ::hglrt::checked_value(value)};
             if (::hglrt::checked_value(first))
             {
                 ::hglrt::publish(out_, only_first);
@@ -405,7 +414,7 @@ struct impl_
         // when, line 81 (TIME-3)
         if (::hglrt::fn_modified(probe))
         {
-            ::hglrt::publish(out_, std::array<::hgraph::Bool, 2>{::hglrt::fn_valid(parts), ::hglrt::fn_all_valid(parts)});
+            ::hglrt::publish(out_, ::std::array<::hgraph::Bool, 2>{::hglrt::fn_valid(parts), ::hglrt::fn_all_valid(parts)});
             return;
         }
     }
@@ -548,10 +557,10 @@ struct impl_
         {
             if (::hglrt::checked_value(head))
             {
-                ::hglrt::publish(out_, std::tuple<::hgraph::Int, ::hgraph::Int>{::hglrt::checked_value(value), 0});
+                ::hglrt::publish(out_, ::std::tuple<::hgraph::Int, ::hgraph::Int>{::hglrt::checked_value(value), 0});
                 return;
             }
-            [[maybe_unused]] const std::tuple<std::optional<::hgraph::Int>, std::optional<::hgraph::Int>> only_second = std::tuple<std::optional<::hgraph::Int>, std::optional<::hgraph::Int>>{std::nullopt, ::hglrt::checked_value(value)};
+            [[maybe_unused]] const ::std::tuple<::std::optional<::hgraph::Int>, ::std::optional<::hgraph::Int>> only_second = ::std::tuple<::std::optional<::hgraph::Int>, ::std::optional<::hgraph::Int>>{::std::nullopt, ::hglrt::checked_value(value)};
             ::hglrt::publish(out_, only_second);
             return;
         }
@@ -579,8 +588,8 @@ struct impl_
         // when, line 115 (TIME-3)
         if (::hglrt::fn_all_valid(parts))
         {
-            [[maybe_unused]] const std::tuple<::hgraph::Int, ::hgraph::Int>& whole = ::hglrt::whole_value(parts);
-            out_.set([&] { const ::hgraph::Int& argument_00_ = ::hglrt::checked_value(::hglrt::child<1>(parts)); const ::hgraph::Int& argument_01_ = std::get<0>(whole); return ::hglrt::add__i64_i64(argument_00_, argument_01_); }());
+            [[maybe_unused]] const ::std::tuple<::hgraph::Int, ::hgraph::Int>& whole = ::hglrt::whole_value(parts);
+            out_.set([&] { const ::hgraph::Int& argument_00_ = ::hglrt::checked_value(::hglrt::child<1>(parts)); const ::hgraph::Int& argument_01_ = ::std::get<0>(whole); return ::hglrt::add__i64_i64(argument_00_, argument_01_); }());
             return;
         }
     }
@@ -631,7 +640,7 @@ struct impl_
                 ::hglrt::publish(out_, ::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}, ::hglrt::list<::hgraph::Int>{}});
                 return;
             }
-            ::hglrt::publish(out_, ::hglrt::list_delta_of<::hglrt::list<::hglrt::list<::hgraph::Int>>>(::hglrt::dict_of<::hgraph::Int, ::hglrt::list_delta<::hglrt::list<::hgraph::Int>>>({{1, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, ::hglrt::checked_value(count)}}), ::hglrt::set<::hgraph::Int>{}, std::nullopt)}}), ::hglrt::set<::hgraph::Int>{}, std::nullopt));
+            ::hglrt::publish(out_, ::hglrt::list_delta_of<::hglrt::list<::hglrt::list<::hgraph::Int>>>(::hglrt::dict_of<::hgraph::Int, ::hglrt::list_delta<::hglrt::list<::hgraph::Int>>>({{1, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, ::hglrt::checked_value(count)}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt)}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt));
             return;
         }
     }
@@ -657,7 +666,7 @@ struct impl_
     {
         // when, line 132 (TIME-3)
         {
-            ::hglrt::publish(out_, std::array<::hgraph::Bool, 3>{::hglrt::fn_valid(::hglrt::child(values, 1)), ::hglrt::fn_all_valid(values), ::hglrt::fn_valid(::hglrt::child(::hglrt::child(values, 1), 0))});
+            ::hglrt::publish(out_, ::std::array<::hgraph::Bool, 3>{::hglrt::fn_valid(::hglrt::child(values, 1)), ::hglrt::fn_all_valid(values), ::hglrt::fn_valid(::hglrt::child(::hglrt::child(values, 1), 0))});
             return;
         }
     }
@@ -803,7 +812,7 @@ struct impl_
     {
         // when, line 167 (TIME-3)
         {
-            ::hglrt::publish(out_, std::array<::hgraph::Int, 2>{first.value(), ::hglrt::add__i64_i64(first.value(), 10)});
+            ::hglrt::publish(out_, ::std::array<::hgraph::Int, 2>{first.value(), ::hglrt::add__i64_i64(first.value(), 10)});
             return;
         }
     }
@@ -892,6 +901,117 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_::first_reading
+{
+// first_reading(values: list<i64>) -> i64 (graph), module demo.lists, line 248
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values)
+    {
+        return ::hglrt::element_port(values, 0);
+    }
+};
+}  // namespace n_::first_reading
+namespace w_
+{
+// first_reading(values: list<i64>) -> i64 (graph), module demo.lists, line 248
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> first_reading(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values)
+{
+    return ::hgl::demo::lists::m_::n_::first_reading::impl_::compose(wiring_, values);
+}
+}  // namespace w_
+
+namespace n_::third_relayed
+{
+// third_relayed(values: list<i64>) -> i64 (graph), module demo.lists, line 250
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values)
+    {
+        return ::hglrt::element_port(::hgl::demo::lists::m_::w_::relay(wiring_, values), 2);
+    }
+};
+}  // namespace n_::third_relayed
+namespace w_
+{
+// third_relayed(values: list<i64>) -> i64 (graph), module demo.lists, line 250
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> third_relayed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values)
+{
+    return ::hgl::demo::lists::m_::n_::third_relayed::impl_::compose(wiring_, values);
+}
+}  // namespace w_
+
+namespace n_::relay_rows
+{
+// relay_rows(rows: list<list<i64>>) -> list<list<i64>> (node), module demo.lists, line 259
+struct impl_
+{
+    static constexpr auto name = "demo.lists::relay_rows";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"rows", ::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> out_)
+    {
+        // when, line 260 (TIME-3)
+        {
+            ::hglrt::publish(out_, ::hglrt::checked_whole(rows));
+            return;
+        }
+    }
+};
+}  // namespace n_::relay_rows
+namespace w_
+{
+// relay_rows(rows: list<list<i64>>) -> list<list<i64>> (node), module demo.lists, line 259
+::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> relay_rows(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows)
+{
+    return ::hgraph::wire<::hgl::demo::lists::m_::n_::relay_rows::impl_>(wiring_, rows);
+}
+}  // namespace w_
+
+// total_rows(rows: list<list<i64>>) -> i64 (`const fn`), module demo.lists, line 263
+::hgraph::Int total_rows([[maybe_unused]] const ::hglrt::list<::hglrt::list<::hgraph::Int>>& rows)
+{
+    [[maybe_unused]] ::hgraph::Int running = 0;
+    for (const ::hglrt::list<::hgraph::Int>& row : rows)
+    {
+        for (const ::hgraph::Int& value : row)
+        {
+            running = ::hglrt::add__i64_i64(running, value);
+        }
+    }
+    return running;
+}
+
+namespace n_::rows_total
+{
+// rows_total(rows: list<list<i64>>) -> i64 (graph), module demo.lists, line 271
+struct impl_
+{
+    // The call of `total_rows` on line 271, lifted (FN-6).
+    struct lifted_00_
+    {
+        static constexpr auto name = "demo.lists:total_rows";
+        static void eval([[maybe_unused]] ::hgraph::In<"rows", ::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+        {
+            out_.set(::hgl::demo::lists::m_::total_rows(::hglrt::checked_whole(rows)));
+            return;
+        }
+    };
+
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows)
+    {
+        return ::hgraph::wire<lifted_00_>(wiring_, rows);
+    }
+};
+}  // namespace n_::rows_total
+namespace w_
+{
+// rows_total(rows: list<list<i64>>) -> i64 (graph), module demo.lists, line 271
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> rows_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows)
+{
+    return ::hgl::demo::lists::m_::n_::rows_total::impl_::compose(wiring_, rows);
+}
+}  // namespace w_
+
 }  // namespace hgl::demo::lists::m_
 
 namespace hgl::demo::lists::m_::t_
@@ -905,7 +1025,7 @@ void published_whole_and_by_delta()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{0, 0, 3, ::hglrt::neg__i64(1), ::hglrt::neg__i64(5)}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::lists::m_::w_::total(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{0, std::nullopt, 6, 3, 0};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{0, ::std::nullopt, 6, 3, 0};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
     ::hglrt::testing::statement();
@@ -920,7 +1040,7 @@ void published_whole_and_by_delta()
                 {
                     return;
                 }
-                std::optional<::hglrt::list<::hgraph::Int>> whole_;
+                ::std::optional<::hglrt::list<::hgraph::Int>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::checked_whole(result_));
@@ -928,14 +1048,14 @@ void published_whole_and_by_delta()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<::hglrt::list<::hgraph::Int>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::hglrt::list<::hgraph::Int>>(now_, ::std::move(whole_));
             }
         };
         const auto result_05_ = ::hgl::demo::lists::m_::w_::changes_of(wiring_, input_03_);
         ::hgraph::wire<held_04_>(wiring_, result_05_);
         ::hgl::core::m_::w_::i_::record::of_1list_1i64_1_(wiring_, result_05_, ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_07_ = ::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, 1}, {1, 2}}), ::hglrt::set<::hgraph::Int>{}, 2)}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, 1}}), ::hglrt::set<::hgraph::Int>{1}, 1)}};
+        const auto right_07_ = ::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, 1}, {1, 2}}), ::hglrt::set<::hgraph::Int>{}, 2)}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, 1}}), ::hglrt::set<::hgraph::Int>{1}, 1)}};
         ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
@@ -946,10 +1066,10 @@ void fixed_list_children()
     [&] {
         const auto left_014_ = [&]() {
         const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true};
-        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 0, 1};
-        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 3, 8};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 0, 1};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 3, 8};
         const auto trace_06_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 1, 1};
-        return ::hglrt::testing::evaluate<std::array<::hgraph::Bool, 3>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        return ::hglrt::testing::evaluate<::std::array<::hgraph::Bool, 3>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
@@ -962,7 +1082,7 @@ void fixed_list_children()
                 {
                     return;
                 }
-                std::optional<std::array<::hgraph::Bool, 3>> whole_;
+                ::std::optional<::std::array<::hgraph::Bool, 3>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::checked_whole(result_));
@@ -970,7 +1090,7 @@ void fixed_list_children()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<std::array<::hgraph::Bool, 3>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::std::array<::hgraph::Bool, 3>>(now_, ::std::move(whole_));
             }
         };
         const auto result_013_ = [&] { const auto argument_08_ = input_01_; const auto argument_09_ = input_03_; const auto argument_010_ = input_05_; const auto argument_011_ = input_07_; return ::hgl::demo::lists::m_::w_::observe(wiring_, argument_08_, argument_09_, argument_010_, argument_011_); }();
@@ -978,21 +1098,21 @@ void fixed_list_children()
         ::hgl::core::m_::w_::i_::record::of_1list_1bool_1_13_1_(wiring_, result_013_, ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_015_ = ::hglrt::testing::Dense<std::array<::hgraph::Bool, 3>>{::hglrt::testing::Cell<std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<std::array<::hgraph::Bool, 3>>{std::array<::hgraph::Bool, 3>{false, false, false}}}, ::hglrt::testing::Cell<std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<std::array<::hgraph::Bool, 3>>{std::array<::hgraph::Bool, 3>{true, false, false}}}, ::hglrt::testing::Cell<std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<std::array<::hgraph::Bool, 3>>{std::array<::hgraph::Bool, 3>{true, true, true}}}};
+        const auto right_015_ = ::hglrt::testing::Dense<::std::array<::hgraph::Bool, 3>>{::hglrt::testing::Cell<::std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<::std::array<::hgraph::Bool, 3>>{::std::array<::hgraph::Bool, 3>{false, false, false}}}, ::hglrt::testing::Cell<::std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<::std::array<::hgraph::Bool, 3>>{::std::array<::hgraph::Bool, 3>{true, false, false}}}, ::hglrt::testing::Cell<::std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<::std::array<::hgraph::Bool, 3>>{::std::array<::hgraph::Bool, 3>{true, true, true}}}};
         ::hglrt::testing::expect_same(left_014_, right_015_);
     }();
     ::hglrt::testing::statement();
     [&] {
         const auto left_022_ = [&]() {
-        const auto trace_016_ = ::hglrt::testing::Dense<::hgraph::Int>{0, 1, std::nullopt, 0};
-        const auto trace_018_ = ::hglrt::testing::Dense<::hgraph::Int>{3, 8, std::nullopt, 4};
+        const auto trace_016_ = ::hglrt::testing::Dense<::hgraph::Int>{0, 1, ::std::nullopt, 0};
+        const auto trace_018_ = ::hglrt::testing::Dense<::hgraph::Int>{3, 8, ::std::nullopt, 4};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_017_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_016_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_019_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_018_, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_020_ = input_017_; const auto argument_021_ = input_019_; return ::hgl::demo::lists::m_::w_::span_of(wiring_, argument_020_, argument_021_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_023_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 5, std::nullopt, 4};
+        const auto right_023_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 5, ::std::nullopt, 4};
         ::hglrt::testing::expect_same(left_022_, right_023_);
     }();
     ::hglrt::testing::statement();
@@ -1014,8 +1134,8 @@ void fixed_list_children()
     ::hglrt::testing::statement();
     ::hglrt::testing::raises("value.unset_read", [&] {
         static_cast<void>([&]() {
-        const auto trace_035_ = ::hglrt::testing::Dense<::hgraph::Int>{0, std::nullopt};
-        const auto trace_037_ = ::hglrt::testing::Dense<::hgraph::Int>{3, std::nullopt};
+        const auto trace_035_ = ::hglrt::testing::Dense<::hgraph::Int>{0, ::std::nullopt};
+        const auto trace_037_ = ::hglrt::testing::Dense<::hgraph::Int>{3, ::std::nullopt};
         const auto trace_039_ = ::hglrt::testing::Dense<::hgraph::Int>{0, 1};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_036_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_035_, start_));
@@ -1054,7 +1174,7 @@ void children_named_in_a_hook()
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::lists::m_::w_::first_slot(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 3};
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 3};
         ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
     ::hglrt::testing::statement();
@@ -1068,7 +1188,7 @@ void children_named_in_a_hook()
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, [&] { const auto argument_012_ = input_09_; const auto argument_013_ = input_011_; return ::hgl::demo::lists::m_::w_::second_changed(wiring_, argument_012_, argument_013_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_015_ = ::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, false};
+        const auto right_015_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, true, false};
         ::hglrt::testing::expect_same(left_014_, right_015_);
     }();
     ::hglrt::testing::statement();
@@ -1087,7 +1207,7 @@ void children_named_in_a_hook()
     }();
     ::hglrt::testing::statement();
     [&] {
-        const auto left_027_ = ::hglrt::testing::evaluate<std::array<::hgraph::Bool, 3>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const auto left_027_ = ::hglrt::testing::evaluate<::std::array<::hgraph::Bool, 3>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_024_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{0, 7}, start_));
         struct held_025_
         {
@@ -1097,7 +1217,7 @@ void children_named_in_a_hook()
                 {
                     return;
                 }
-                std::optional<std::array<::hgraph::Bool, 3>> whole_;
+                ::std::optional<::std::array<::hgraph::Bool, 3>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::checked_whole(result_));
@@ -1105,14 +1225,14 @@ void children_named_in_a_hook()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<std::array<::hgraph::Bool, 3>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::std::array<::hgraph::Bool, 3>>(now_, ::std::move(whole_));
             }
         };
         const auto result_026_ = ::hgl::demo::lists::m_::w_::nested_of(wiring_, input_024_);
         ::hgraph::wire<held_025_>(wiring_, result_026_);
         ::hgl::core::m_::w_::i_::record::of_1list_1bool_1_13_1_(wiring_, result_026_, ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_028_ = ::hglrt::testing::Dense<std::array<::hgraph::Bool, 3>>{::hglrt::testing::Cell<std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<std::array<::hgraph::Bool, 3>>{std::array<::hgraph::Bool, 3>{true, true, false}}}, ::hglrt::testing::Cell<std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<std::array<::hgraph::Bool, 3>>{std::array<::hgraph::Bool, 3>{true, true, true}}}};
+        const auto right_028_ = ::hglrt::testing::Dense<::std::array<::hgraph::Bool, 3>>{::hglrt::testing::Cell<::std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<::std::array<::hgraph::Bool, 3>>{::std::array<::hgraph::Bool, 3>{true, true, false}}}, ::hglrt::testing::Cell<::std::array<::hgraph::Bool, 3>>{::hglrt::testing::Whole<::std::array<::hgraph::Bool, 3>>{::std::array<::hgraph::Bool, 3>{true, true, true}}}};
         ::hglrt::testing::expect_same(left_027_, right_028_);
     }();
     ::hglrt::testing::statement();
@@ -1159,9 +1279,9 @@ void tuple_positions()
     [&] {
         const auto left_011_ = [&]() {
         const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true};
-        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{std::nullopt, true, false};
-        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 3, 8};
-        return ::hglrt::testing::evaluate<std::array<::hgraph::Bool, 2>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, true, false};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 3, 8};
+        return ::hglrt::testing::evaluate<::std::array<::hgraph::Bool, 2>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
@@ -1173,7 +1293,7 @@ void tuple_positions()
                 {
                     return;
                 }
-                std::optional<std::array<::hgraph::Bool, 2>> whole_;
+                ::std::optional<::std::array<::hgraph::Bool, 2>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::checked_whole(result_));
@@ -1181,7 +1301,7 @@ void tuple_positions()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<std::array<::hgraph::Bool, 2>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::std::array<::hgraph::Bool, 2>>(now_, ::std::move(whole_));
             }
         };
         const auto result_010_ = [&] { const auto argument_06_ = input_01_; const auto argument_07_ = input_03_; const auto argument_08_ = input_05_; return ::hgl::demo::lists::m_::w_::observe_parts(wiring_, argument_06_, argument_07_, argument_08_); }();
@@ -1189,7 +1309,7 @@ void tuple_positions()
         ::hgl::core::m_::w_::i_::record::of_1list_1bool_1_12_1_(wiring_, result_010_, ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_012_ = ::hglrt::testing::Dense<std::array<::hgraph::Bool, 2>>{::hglrt::testing::Cell<std::array<::hgraph::Bool, 2>>{::hglrt::testing::Whole<std::array<::hgraph::Bool, 2>>{std::array<::hgraph::Bool, 2>{false, false}}}, ::hglrt::testing::Cell<std::array<::hgraph::Bool, 2>>{::hglrt::testing::Whole<std::array<::hgraph::Bool, 2>>{std::array<::hgraph::Bool, 2>{true, false}}}, ::hglrt::testing::Cell<std::array<::hgraph::Bool, 2>>{::hglrt::testing::Whole<std::array<::hgraph::Bool, 2>>{std::array<::hgraph::Bool, 2>{true, true}}}};
+        const auto right_012_ = ::hglrt::testing::Dense<::std::array<::hgraph::Bool, 2>>{::hglrt::testing::Cell<::std::array<::hgraph::Bool, 2>>{::hglrt::testing::Whole<::std::array<::hgraph::Bool, 2>>{::std::array<::hgraph::Bool, 2>{false, false}}}, ::hglrt::testing::Cell<::std::array<::hgraph::Bool, 2>>{::hglrt::testing::Whole<::std::array<::hgraph::Bool, 2>>{::std::array<::hgraph::Bool, 2>{true, false}}}, ::hglrt::testing::Cell<::std::array<::hgraph::Bool, 2>>{::hglrt::testing::Whole<::std::array<::hgraph::Bool, 2>>{::std::array<::hgraph::Bool, 2>{true, true}}}};
         ::hglrt::testing::expect_same(left_011_, right_012_);
     }();
 }
@@ -1199,7 +1319,7 @@ void a_list_input_replays_its_cells()
     ::hglrt::testing::statement();
     [&] {
         const auto left_03_ = ::hglrt::testing::evaluate<::hglrt::list<::hgraph::Int>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1list_1i64_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{2, 3}}), ::hglrt::set<::hgraph::Int>{}, std::nullopt)}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{5}}}}, start_));
+        const ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1list_1i64_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{2, 3}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt)}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{5}}}}, start_));
         struct held_01_
         {
             static void eval(::hgraph::In<"result", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> result_, ::hgraph::DateTime now_)
@@ -1208,7 +1328,7 @@ void a_list_input_replays_its_cells()
                 {
                     return;
                 }
-                std::optional<::hglrt::list<::hgraph::Int>> whole_;
+                ::std::optional<::hglrt::list<::hgraph::Int>> whole_;
                 try
                 {
                     whole_.emplace(::hglrt::checked_whole(result_));
@@ -1216,15 +1336,80 @@ void a_list_input_replays_its_cells()
                 catch (const ::hglrt::Failure&)
                 {
                 }
-                ::hglrt::testing::hold<::hglrt::list<::hgraph::Int>>(now_, std::move(whole_));
+                ::hglrt::testing::hold<::hglrt::list<::hgraph::Int>>(now_, ::std::move(whole_));
             }
         };
         const auto result_02_ = ::hgl::demo::lists::m_::w_::relay(wiring_, input_00_);
         ::hgraph::wire<held_01_>(wiring_, result_02_);
         ::hgl::core::m_::w_::i_::record::of_1list_1i64_1_(wiring_, result_02_, ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_04_ = ::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2, 3}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, 5}}), ::hglrt::set<::hgraph::Int>{1, 2}, 1)}};
+        const auto right_04_ = ::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2, 3}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, 5}}), ::hglrt::set<::hgraph::Int>{1, 2}, 1)}};
         ::hglrt::testing::expect_same(left_03_, right_04_);
+    }();
+}
+
+void a_growing_list_child_is_wired()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1list_1i64_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{2, 3}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{4}}}}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::lists::m_::w_::first_reading(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, ::std::nullopt, 4};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_1list_1i64_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1, 2, 3}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{5, 6, 7}}}}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::lists::m_::w_::third_relayed(wiring_, input_03_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{3, ::std::nullopt, 7};
+        ::hglrt::testing::expect_same(left_04_, right_05_);
+    }();
+}
+
+void a_list_of_lists_is_replayed()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_1list_1list_1i64_1_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}, ::hglrt::list<::hgraph::Int>{2, 3}}}}, ::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{4}}}}}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::lists::m_::w_::rows_total(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{6, 4};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_06_ = ::hglrt::testing::evaluate<::hglrt::list<::hglrt::list<::hgraph::Int>>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_1list_1list_1i64_1_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}, ::hglrt::list<::hgraph::Int>{2, 3}}}}, ::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hglrt::list<::hgraph::Int>>>(::hglrt::dict_of<::hgraph::Int, ::hglrt::list_delta<::hglrt::list<::hgraph::Int>>>({{1, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{2, 9}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt)}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt)}, ::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{4}}}}}, start_));
+        struct held_04_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::hglrt::list<::hglrt::list<::hgraph::Int>>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::checked_whole(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::hglrt::list<::hglrt::list<::hgraph::Int>>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_05_ = ::hgl::demo::lists::m_::w_::relay_rows(wiring_, input_03_);
+        ::hgraph::wire<held_04_>(wiring_, result_05_);
+        ::hgl::core::m_::w_::i_::record::of_1list_1list_1i64_1_1_(wiring_, result_05_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_07_ = ::hglrt::testing::Dense<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}, ::hglrt::list<::hgraph::Int>{2, 3}}}}, ::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::testing::Whole<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::hglrt::list<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{1}, ::hglrt::list<::hgraph::Int>{2, 3, 9}}}}, ::hglrt::testing::Cell<::hglrt::list<::hglrt::list<::hgraph::Int>>>{::std::in_place_index<0>, ::hglrt::list_delta_of<::hglrt::list<::hglrt::list<::hgraph::Int>>>(::hglrt::dict_of<::hgraph::Int, ::hglrt::list_delta<::hglrt::list<::hgraph::Int>>>({{0, ::hglrt::list_delta_of<::hglrt::list<::hgraph::Int>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{0, 4}}), ::hglrt::set<::hgraph::Int>{}, ::std::nullopt)}}), ::hglrt::set<::hgraph::Int>{1}, 1)}};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 

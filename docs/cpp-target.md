@@ -54,7 +54,7 @@ one executable for each test module or application
 | Enum, tuple, optional, list, fixed list, result | `enum class`, `std::tuple`, `std::optional`, `std::vector`, `std::array`, `std::expected` |
 | Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key is told apart by `==` of its type. As a temporal value, hgraph's `TSS` and `TSD`, published through hgraph's own whole write and delta write, whose ticks on hgraph 0.9.13 are TIME-7's; a temporal one's order is hgraph's |
 | Abstract struct | A class that holds any struct that inherits from it, read through a function of each field's name |
-| `delta<T>` | As a value: an optional, `hglrt::list_delta`, `set_delta`, `dict_delta`, a struct's own delta struct, a tuple. Converting to and from hgraph's delta value is each temporal form's: a struct's and a tuple's are read from and published to hgraph's bundle field by field (`hglrt/structs.h`), a set's and a dictionary's are in `hglrt/keyed.h`, a list's in `hglrt/list_endpoints.h` |
+| `delta<T>` | As a value: `hglrt::nullable_delta`, a type of its own and no optional, `hglrt::list_delta`, `set_delta`, `dict_delta`, a struct's own delta struct, a tuple. Converting to and from hgraph's delta value is each temporal form's: a struct's and a tuple's are read from and published to hgraph's bundle field by field (`hglrt/structs.h`), a set's and a dictionary's are in `hglrt/keyed.h`, a list's in `hglrt/list_endpoints.h` |
 | Temporal struct, tuple, nullable | A struct is hgraph's `NativeTSB<S>` (an `hgraph::native_bundle<S>` written beside the aggregate), or its `NominalTSB` of each field's own form where a field is optional; a tuple an `UnNamedTSB` of its positions; `atomic<S>` a `TS<S>`; a nullable `TS<Optional<T>>`. A field is a child endpoint, in a hook and in a graph (EXPR-7) |
 | Temporal list, fixed list | hgraph's `TSL<S>` and `TSL<S, N>`, built on as they are |
 | Node | A struct with `eval`, `start` and `stop`, in its module's unit, and a wiring function, in its header, that wires it: other units call the wiring function and instantiate none of hgraph's templates of the node. A handler header is the input's declared activity and validity; handlers are tested in source order. State and cache are one generated struct for each node |
@@ -145,9 +145,12 @@ it counts as pending, `un_schedule()` cancels it, and `is_scheduled_now`
 is false after `reset`; and it keeps no wake under the empty tag. The
 wall-clock option is hgraph's own, as CAP-4 has it since the owner's
 ruling: in real time a wake of it already due comes in the next cycle, and
-in simulation the option changes nothing. hgraph's alarm, which the
-target's is, drops a wake still to come where an input's tick evaluates
-the node first, which CAP-5's "best effort" admits.
+in simulation the option changes nothing. The alarm keeps its one wake
+under a tag of its own in the same `NodeScheduler`, the earliest asked
+for (CAP-5: "asking again keeps the earliest"): hgraph's
+`SingleShotScheduler` only marks the node, and an evaluation at an
+input's tick before the wake takes the mark away, where the node's
+scheduler arms the node again.
 
 ## Progress and acceptance
 

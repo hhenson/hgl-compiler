@@ -313,6 +313,17 @@ pub(super) fn temporary(word: &str, number: usize) -> String {
     format!("{word}_0{number}_")
 }
 
+/// A struct's generic parameter `written` (GEN-1) as its C++ template's
+/// parameter: the name with each `_` as `_1`, then `_p_`, a form no other
+/// name the target writes takes: [`identifier`] gives a `_` before
+/// nothing but `1` and its last, and a [`temporary`] has a `_0`. So no
+/// name the template declares inside it, a field of the parameter's name,
+/// a function's argument or the hash's `value`, shadows it (UNIT-12: "A
+/// member name is not a binding and may match any name").
+pub(super) fn template_parameter(written: &str) -> String {
+    format!("{}_p_", written.replace('_', "_1"))
+}
+
 /// A string as a C++ narrow string literal, for text the target writes
 /// itself: a test's identity.
 pub(crate) fn string(text: &str) -> String {
@@ -339,7 +350,7 @@ pub(crate) fn string(text: &str) -> String {
 
 /// Every name the program gives that [`identifier`] writes as it is: the
 /// parts of each module's path, and each declaration, test, enum member,
-/// parameter, local, struct field and struct's generic parameter. A generated file `#undef`s each of them it writes,
+/// parameter, local and struct field. A generated file `#undef`s each of them it writes,
 /// after its last `#include`, so that no macro a platform's header
 /// defines takes one (`assemble`); a macro already expanded in those
 /// headers is not changed by it.
@@ -367,11 +378,11 @@ pub(crate) fn program_names(program: &Program) -> BTreeSet<String> {
                             .map(|parameter| parameter.name.clone()),
                     );
                 }
-                // A struct's fields and its generic parameters, which its
-                // declaration writes (`composites`).
+                // A struct's fields, which its declaration writes
+                // (`composites`); its generic parameters are written as
+                // `template_parameter`s, which no macro is named as.
                 Detail::Struct(read) => {
                     names.extend(read.members.iter().map(|member| member.name.clone()));
-                    names.extend(read.generics.iter().map(|generic| generic.name.clone()));
                 }
                 _ => {}
             }

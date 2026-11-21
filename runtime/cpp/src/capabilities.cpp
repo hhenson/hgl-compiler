@@ -36,6 +36,11 @@ void check_delay(duration at, Hook hook, std::source_location where) {
     }
 }
 
+/// The tag an alarm's one wake is kept under in its node's scheduler: no
+/// tag of a scheduler's is the same (`engine_tag`), and a node injects one
+/// or the other (TIME-8).
+const std::string alarm_tag = "alarm";
+
 /// Whether a wake at `at`, asked for in `hook` at the evaluation time
 /// `now`, is dropped: one before `now`, and in an evaluation one at it,
 /// which no cycle can still run at (CRUN-3).
@@ -122,13 +127,28 @@ void schedule_Alarm_duration(const Alarm& capability, duration at, std::source_l
     schedule_Alarm_datetime(capability, add__datetime_duration(capability.view().now(), at, where));
 }
 
+Alarm::Alarm(hgraph::NodeScheduler view, Hook hook) : view_(view), hook_(hook) {
+    if (hook_ != Hook::evaluation) {
+        return;
+    }
+    // hgraph keeps the wake it delivers until the node has run.
+    if (view_.tag_is_scheduled_now(alarm_tag)) {
+        view_.un_schedule(alarm_tag);
+    }
+}
+
 void schedule_Alarm_datetime(const Alarm& capability, datetime at) {
-    // hgraph's graph refuses a time before its evaluation time, and keeps
-    // one at it for a cycle already under way.
+    // hgraph's scheduler drops a time before its evaluation time, and keeps
+    // one at it in `start` alone.
     if (dropped(at, capability.view().now(), capability.hook())) {
         return;
     }
-    capability.view().schedule(at);
+    // CAP-5: "asking again keeps the earliest".
+    const hgraph::NodeScheduler& scheduler = capability.view();
+    if (scheduler.has_tag(alarm_tag) && scheduler.tag_time(alarm_tag) <= at) {
+        return;
+    }
+    scheduler.schedule(at, alarm_tag);
 }
 
 // ---- The global store ----------------------------------------------------------

@@ -8,7 +8,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | `inject scheduler`, `inject alarm` (TIME-8) | the hook's `::hgraph::NodeScheduler` or `::hgraph::SingleShotScheduler`, and the library's `::hglrt::Scheduler` or `::hglrt::Alarm` made from it at the top of the hook with the hook it is made in, `::hglrt::Hook::evaluation`; in `eval` always, whether or not the handlers name it |
+//! | `inject scheduler`, `inject alarm` (TIME-8) | the hook's `::hgraph::NodeScheduler`, and the library's `::hglrt::Scheduler` or `::hglrt::Alarm` made from it at the top of the hook with the hook it is made in, `::hglrt::Hook::evaluation`; in `eval` always, whether or not the handlers name it |
 //! | What woke the node (TIME-9) | read once, as `eval` is entered: `timer_woke_`, the scheduler's `is_scheduled_now()`, or, for an alarm, that no input ticked (`::hglrt::ticked`); `input_woke_`, that an input ticked, and is active where the node passivates one |
 //! | A handler a wake by the timer runs: `scheduled()` in its header, or no input it subscribes to (TIME-3) | guarded by `timer_woke_` |
 //! | Another handler with no `modified` selector, in a node with a timer | guarded by `input_woke_`: "Such a wake alone runs no other handler" |
@@ -22,9 +22,10 @@
 //!
 //! hgraph evaluates a node with a scheduler at a wake that was cancelled:
 //! no wake is due in that evaluation and, but where an input ticks then
-//! too, none ticked, so it runs no handler. Its alarm, which drops a wake
-//! still to come where an input's tick evaluates the node first, is best
-//! effort as CAP-5 has it (`capabilities.h`).
+//! too, none ticked, so it runs no handler. An alarm keeps its one wake in
+//! the node's scheduler too (`capabilities.h`), so that an evaluation at an
+//! input's tick before it is due takes nothing from it (CAP-5: "asking
+//! again keeps the earliest").
 
 use hgl_analyser::hir::{Body, EndpointOperation, Expr, ExprKind, Hook, Stmt};
 use hgl_analyser::{LocalKind, Signature};
@@ -126,7 +127,7 @@ impl Family for Scheduling {
 pub(super) fn capability(name: &str) -> Option<(&'static str, &'static str)> {
     Some(match Timer::of(name)? {
         Timer::Scheduler => ("::hgraph::NodeScheduler", "::hglrt::Scheduler"),
-        Timer::Alarm => ("::hgraph::SingleShotScheduler", "::hglrt::Alarm"),
+        Timer::Alarm => ("::hgraph::NodeScheduler", "::hglrt::Alarm"),
     })
 }
 
@@ -376,7 +377,7 @@ impl Emitter<'_> {
         );
         let kept = format!(
             "{two}// What the body reaches, where it does not move.\n\
-             {two}std::unique_ptr<slot_type_> {SLOT}{{}};\n"
+             {two}::std::unique_ptr<slot_type_> {SLOT}{{}};\n"
         );
         // `start` (TIME-5, TIME-6): the slot, the first value of each
         // `state` and `cache`, then the body, which runs nothing until it
@@ -406,7 +407,7 @@ impl Emitter<'_> {
             &mut start_parameters,
         )?;
         let mut start_before =
-            format!("{two}kept_.{SLOT} = std::make_unique<slot_type_>();\n{kept_bound}{made}");
+            format!("{two}kept_.{SLOT} = ::std::make_unique<slot_type_>();\n{kept_bound}{made}");
         let mut start_after = String::new();
         let mut context = Context::new(Kind::Hook(Hook::Start), body.locals.len());
         for role in context.roles.iter_mut().take(signature.parameters.len()) {
@@ -460,14 +461,16 @@ impl Emitter<'_> {
 
     /// The `const` parameters of the source of `signature` and `body` as
     /// a hook of its node is given them, each an `hgraph::Scalar`, which
-    /// the hook reads with `.value()` (`Role::Config`). `None` where a type
+    /// the hook reads as `configuration` holds it (`Role::Config`). `None` where a type
     /// is not written yet, which is reported.
     fn hook_configs(&mut self, signature: &Signature, body: &Body) -> Option<Vec<String>> {
         let mut configs = Vec::new();
         for (local, parameter) in signature.parameters.iter().enumerate() {
             let ty = self.written_type(&parameter.ty, parameter.at)?;
+            // FN-1: as hgraph holds a configuration (`configuration`).
+            let held = super::configuration::held(self.program, &parameter.ty, &ty);
             configs.push(format!(
-                "[[maybe_unused]] ::hgraph::Scalar<{}, {ty}> {}",
+                "[[maybe_unused]] ::hgraph::Scalar<{}, {held}> {}",
                 names::string(&parameter.name),
                 identifier(&body.locals[local].name)
             ));

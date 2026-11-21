@@ -78,7 +78,8 @@ impl Executor for OnCpp<'_> {
         // What the target does not write yet is no error of the
         // program: it is why a test that needs it is not run.
         let mut unwritten = Diagnostics::new();
-        let output = hgl_cpp::transpile(program, &mut unwritten);
+        let file_name = |at: Location| self.sources.file(at.file).name().to_string();
+        let output = hgl_cpp::transpile(program, &file_name, &mut unwritten);
         let place = |at: Location| {
             let source = self.sources.file(at.file);
             format!("{}:{}", source.name(), source.line_col(at.span.start))
@@ -474,7 +475,8 @@ pub(super) fn run(
     roots: &[PathBuf],
 ) -> ExitCode {
     let mut unwritten = Diagnostics::new();
-    let output = hgl_cpp::transpile(program, &mut unwritten);
+    let file_name = |at: Location| sources.file(at.file).name().to_string();
+    let output = hgl_cpp::transpile(program, &file_name, &mut unwritten);
     let name = hgl_cpp::TARGET;
     let Some(application) = output
         .applications

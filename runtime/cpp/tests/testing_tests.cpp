@@ -187,7 +187,7 @@ TEST_CASE("a dense trace's cells are publications a smallest step apart (TST-4, 
                                      Dense<hglrt::f64>{not_a_number}));
     // A published null is a cell, `_` is none.
     using Maybe = std::optional<i64>;
-    const Recording<Maybe> nulls{start, {{start, std::nullopt}, {start + 1us, 3}}};
+    const Recording<Maybe> nulls{start, {{start, hglrt::delta_t<Maybe>{}}, {start + 1us, 3}}};
     CHECK(hglrt::testing::same(nulls, Dense<Maybe>{Maybe{}, Maybe{3}}));
     CHECK_FALSE(hglrt::testing::same(nulls, Dense<Maybe>{std::nullopt, Maybe{3}}));
 }
@@ -232,8 +232,8 @@ TEST_CASE("assert raises takes a failure of its code alone (TST-10, TST-11)") {
         hglrt::testing::raises("value.unset_read", [] { hglrt::fail("convert.invalid", "not a number"); });
         FAIL("the assertion passed");
     } catch (const hglrt::testing::AssertionFailed& failure) {
-        CHECK(std::string{failure.what()}.starts_with(
-            "the block raised convert.invalid: not a number, raised at "));
+        CHECK(std::string{failure.what()} ==
+              "the block raised convert.invalid: not a number, and `value.unset_read` was expected");
     }
     // A failure with no code satisfies no coded expectation.
     CHECK_THROWS_AS(hglrt::testing::raises("value.unset_read", [] { hglrt::fail_uncoded("uncoded"); }),
@@ -377,9 +377,7 @@ TEST_CASE("the host runs the tests named and writes what became of each") {
     CHECK(lines[3] == "failed 1 " + std::to_string(failing_line) + " the assertion does not hold");
     CHECK(lines[4] == "start 2");
     CHECK(lines[5].starts_with("failed 2 "));
-    CHECK(lines[5].find(
-              " numeric.out_of_range: an i64 result is outside the signed 64-bit range, raised at ") !=
-          std::string::npos);
+    CHECK(lines[5].ends_with(" numeric.out_of_range: an i64 result is outside the signed 64-bit range"));
     CHECK(lines[6] == "start 3");
     CHECK(lines[7] == "unloaded 3 the program has no test `host.cases::absent`");
 
@@ -406,7 +404,7 @@ TEST_CASE("a failure's text is one results line, whatever characters it holds") 
     // character is written as it is: a NUL ends no line.
     const std::string written("before \0\x01\x0b\x0c\x1b\x1f\x7f\\n\\r after", 24);
     CHECK(lines[1].starts_with("failed 0 "));
-    CHECK(lines[1].find(" user.code: said " + written + ", raised at ") != std::string::npos);
+    CHECK(lines[1].ends_with(" user.code: said " + written));
 }
 
 TEST_CASE("a time limit too long for the host's clock is one that cannot pass (TST-17)") {

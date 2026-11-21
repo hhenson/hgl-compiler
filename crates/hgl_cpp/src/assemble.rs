@@ -10,7 +10,9 @@
 //! the pieces those name, has a form that is not written. A test that
 //! is not clear is listed with the first such form, which
 //! `hgl_lower::pieces::blocked` finds as it finds it for the hgraph
-//! target.
+//! target. An instance of a generic declaration is written only where a
+//! piece that is written reaches it: one that only a piece left out asks
+//! for, an eval that reaches a form not written, is left out with it.
 
 use std::collections::BTreeSet;
 
@@ -18,7 +20,10 @@ use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Location};
 use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
-use crate::emit::{APPLICATION, Piece, Written, module_namespace, program_names, test_namespace};
+use crate::emit::{
+    APPLICATION, Piece, RESTORE, Written, module_namespace, program_names, restore_after,
+    test_namespace,
+};
 use crate::{
     Application, Executable, File, Output, Test, Unit, application_path, entry_path, header_path,
     runtime, types_header_path, unit_path,
@@ -85,6 +90,39 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                 .collect(),
         })
         .collect();
+    // The instances a piece that is written reaches, through the pieces
+    // it names: each declaration, test and run statement that is clear
+    // reaches what it names. An instance that only a piece left out asks
+    // for is not written, so that it, which may not compile, does not stop
+    // its module's unit, or core's, from being built.
+    let mut reached: BTreeSet<Used> = BTreeSet::new();
+    let mut next: Vec<Used> = Vec::new();
+    for (index, module) in written.iter().enumerate() {
+        let roots = module
+            .declarations
+            .iter()
+            .zip(&blocks[index].declarations)
+            .chain(module.tests.iter().zip(&blocks[index].tests))
+            .chain(
+                module
+                    .application
+                    .iter()
+                    .zip(std::iter::once(&blocks[index].application)),
+            );
+        for (piece, blocked) in roots {
+            if blocked.is_none() {
+                next.extend(piece.reach.uses.iter().cloned());
+            }
+        }
+    }
+    while let Some(used) = next.pop() {
+        if !reached.contains(&used) {
+            for reach in pieces(&used) {
+                next.extend(reach.uses.iter().cloned());
+            }
+            reached.insert(used);
+        }
+    }
     let mut files = Vec::new();
     let mut units = Vec::new();
     // The unit of each module, as a position in `units`.
@@ -110,8 +148,11 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                 module
                     .instances
                     .iter()
-                    .map(|(_, _, piece)| piece)
-                    .zip(&blocks[index].instances),
+                    .zip(&blocks[index].instances)
+                    .filter(|((of, suffix, _), _)| {
+                        reached.contains(&(index, *of, Some(suffix.clone())))
+                    })
+                    .map(|((_, _, piece), blocked)| (piece, blocked)),
             )
             .filter(|(piece, blocked)| {
                 blocked.is_none()
@@ -200,6 +241,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                 if !piece.text.is_empty() {
                     unit.push('\n');
                     unit.push_str(&piece.text);
+                    restore_after(&mut unit, &piece.text);
                 }
             }
             unit.push_str(&format!("\n}}  // namespace {declared}\n"));
@@ -224,10 +266,9 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         if let Some(piece) = application {
             let namespace = module_namespace(path);
             let declared = namespace.trim_start_matches("::");
-            unit.push_str(&format!(
-                "\nnamespace {declared}\n{{\n\n{}\n}}  // namespace {declared}\n",
-                piece.text
-            ));
+            unit.push_str(&format!("\nnamespace {declared}\n{{\n\n{}", piece.text));
+            restore_after(&mut unit, &piece.text);
+            unit.push_str(&format!("\n}}  // namespace {declared}\n"));
         }
         unit_of[index] = Some(units.len());
         units.push(Unit {
@@ -373,7 +414,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     let names = program_names(program);
     for file in &mut files {
         let (text, added) = undefined(&file.text, &names);
-        file.text = text;
+        file.text = restored(&text, &file.path);
         for test in tests
             .iter_mut()
             .filter(|test| unit_path(&test.module) == file.path)
@@ -658,4 +699,29 @@ fn application_entry(program: &Program, index: usize) -> String {
         runtime::APPLICATION_HOST_HEADER,
         module.path,
     )
+}
+
+/// `text`, the file at `path`, with each [`RESTORE`] line made the
+/// directive that numbers the line after it as the file's own: a test's
+/// statements are told to the test host by their lines in the file, and a
+/// failure elsewhere names them.
+fn restored(text: &str, path: &str) -> String {
+    if !text.contains(RESTORE) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    for (number, line) in text.split_inclusive('\n').enumerate() {
+        if line.trim_end() == RESTORE {
+            // `number` counts from 0: this line is `number + 1`, and the
+            // next one `number + 2`.
+            out.push_str(&format!(
+                "#line {} {}\n",
+                number + 2,
+                crate::emit::string(path)
+            ));
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
 }

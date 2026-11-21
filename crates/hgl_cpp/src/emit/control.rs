@@ -155,7 +155,16 @@ impl Family for Control {
         }
         for (index, statement) in statements.iter().enumerate() {
             let rest = &statements[index + 1..];
-            match emitter.branched(scope, statement, rest, depth, text) {
+            // A statement written as branches has each of its lines given
+            // its HGL line, as `Emitter::statement` gives a statement's.
+            let mut branched = String::new();
+            let written = emitter.branched(scope, statement, rest, depth, &mut branched);
+            if matches!(written, Branched::No) {
+                text.push_str(&branched);
+            } else {
+                emitter.push_stamped(scope, statement, &branched, text);
+            }
+            match written {
                 Branched::Ended => break,
                 Branched::Written => {}
                 Branched::No => emitter.plain_statement(scope, statement, depth, text),
@@ -680,8 +689,10 @@ impl Emitter<'_> {
             parameters.push(format!("[[maybe_unused]] ::hgraph::Port<{schema}> {port}"));
         }
         for (local, scalar, written) in &scalars {
+            // FN-1: as hgraph holds a configuration (`configuration`).
+            let held = super::configuration::held(program, &locals[*local].ty, written);
             parameters.push(format!(
-                "[[maybe_unused]] ::hgraph::Scalar<{}, {written}> {scalar}",
+                "[[maybe_unused]] ::hgraph::Scalar<{}, {held}> {scalar}",
                 names::string(&locals[*local].name)
             ));
         }
@@ -739,7 +750,9 @@ impl Emitter<'_> {
             .map(|(port, _)| format!("{port}.erased()"))
             .collect();
         let mut given = vec![WIRING.to_string()];
-        given.extend(scalars.iter().map(|(_, scalar, _)| scalar.clone()));
+        given.extend(scalars.iter().map(|(local, scalar, written)| {
+            super::configuration::given(program, &locals[*local].ty, written, scalar)
+        }));
         let keyed = if key.is_some() {
             "::hgraph::MapKeyArg::First"
         } else {
@@ -754,7 +767,7 @@ impl Emitter<'_> {
              {INDENT}{INDENT}static constexpr auto name = {label};\n\
              {INDENT}{INDENT}static void compose({})\n{INDENT}{INDENT}{{\n{statements}{INDENT}{INDENT}}}\n{INDENT}}};\n\n\
              {INDENT}static void wire_({})\n{INDENT}{{\n\
-             {deeper}const std::array<::hgraph::WiringPortRef, {}> broadcast_{{{}}};\n\
+             {deeper}const ::std::array<::hgraph::WiringPortRef, {}> broadcast_{{{}}};\n\
              {deeper}::hgraph::compiled::map_sink_({WIRING}, collection_, broadcast_, ::hgraph::compile_subgraph<child_>({}), {keyed});\n\
              {INDENT}}}\n}};\n",
             parameters.join(", "),
@@ -1353,8 +1366,10 @@ impl Emitter<'_> {
                 parameters.push(format!("[[maybe_unused]] ::hgraph::Port<{schema}> {port}"));
             }
             for (local, scalar, written) in &scalars {
+                // FN-1: as hgraph holds a configuration (`configuration`).
+                let held = super::configuration::held(program, &locals[*local].ty, written);
                 parameters.push(format!(
-                    "[[maybe_unused]] ::hgraph::Scalar<{}, {written}> {scalar}",
+                    "[[maybe_unused]] ::hgraph::Scalar<{}, {held}> {scalar}",
                     names::string(&locals[*local].name)
                 ));
             }
@@ -1388,7 +1403,9 @@ impl Emitter<'_> {
                 parameters.join(", ")
             ));
             let mut given = vec![WIRING.to_string()];
-            given.extend(scalars.iter().map(|(_, scalar, _)| scalar.clone()));
+            given.extend(scalars.iter().map(|(local, scalar, written)| {
+                super::configuration::given(program, &locals[*local].ty, written, scalar)
+            }));
             let graph_call = format!("::hgraph::compile_subgraph<{graph}>({})", given.join(", "));
             match &branch.key {
                 // CTRL-6: "Switch labels are typed source constants ...
@@ -1419,7 +1436,7 @@ impl Emitter<'_> {
             parameters.push(format!("[[maybe_unused]] {taken} {scalar}"));
         }
         let deeper = INDENT.repeat(2);
-        let mut wiring = format!("{deeper}std::vector<::hgraph::SwitchBranchGraph> branches_;\n");
+        let mut wiring = format!("{deeper}::std::vector<::hgraph::SwitchBranchGraph> branches_;\n");
         for graph in &compiled {
             wiring.push_str(&format!("{deeper}branches_.push_back({graph});\n"));
         }
@@ -1428,11 +1445,11 @@ impl Emitter<'_> {
             .map(|(port, _)| format!("{port}.erased()"))
             .collect();
         wiring.push_str(&format!(
-            "{deeper}const std::array<::hgraph::WiringPortRef, {}> inputs_{{{}}};\n",
+            "{deeper}const ::std::array<::hgraph::WiringPortRef, {}> inputs_{{{}}};\n",
             erased.len(),
             erased.join(", ")
         ));
-        let mut arguments = format!("{WIRING}, key_.erased(), inputs_, std::move(branches_)");
+        let mut arguments = format!("{WIRING}, key_.erased(), inputs_, ::std::move(branches_)");
         if let Some(fallback) = &fallback {
             arguments.push_str(&format!(", {fallback}"));
         }
@@ -1542,7 +1559,7 @@ impl Emitter<'_> {
         }
         // The branch's own context: its connections are those of the
         // graph it is written in, and each value it is configured with is
-        // its `hgraph::Scalar`, read with `.value()`.
+        // its `hgraph::Scalar`, read as `configuration` holds it.
         let outer = self.temporal.as_ref()?;
         let mut context = Context::new(Kind::Graph, locals.len());
         context.roles = outer.roles.clone();
