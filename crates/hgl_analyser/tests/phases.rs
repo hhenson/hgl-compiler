@@ -315,6 +315,53 @@ fn a_value_function_has_no_state_no_capability_and_no_hooks() {
     );
 }
 
+/// SOURCE-1, FN-1 and FN-2. An anonymous body cannot yield even where
+/// its enclosing function is a source. A named value function cannot
+/// yield either. A source's own yields are valid.
+#[test]
+fn yield_requires_a_source_body() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn source() -> i64 {\n",
+            "    (fn() { yield 1s: 2 })()\n",
+            "    yield 1s: 7\n",
+            "}\n",
+            "const fn value() -> i64 {\n",
+            "    (fn() { yield 1s: 2 })()\n",
+            "    return 0\n",
+            "}\n",
+            "fn hooked(input: i64) -> i64 {\n",
+            "    when {\n",
+            "        (fn() { yield 1s: 2 })()\n",
+            "        return input\n",
+            "    }\n",
+            "}\n",
+            "fn outputless() {\n",
+            "    (fn() { yield 1s: 2 })()\n",
+            "}\n",
+            "const fn direct() -> i64 {\n",
+            "    yield 1s: 2\n",
+            "    return 0\n",
+            "}\n",
+            "fn valid_source() -> i64 {\n",
+            "    yield 1s: 23\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:13 local:phase/yield.outside_source SOURCE-1",
+            "m.hgl:7:13 local:phase/yield.outside_source SOURCE-1",
+            "m.hgl:12:17 local:phase/yield.outside_source SOURCE-1",
+            "m.hgl:17:13 local:phase/yield.outside_source SOURCE-1",
+            "m.hgl:20:5 local:phase/yield.outside_source FN-1",
+        ]
+    );
+}
+
 /// SOURCE-1: "A source declares a result, which is what it exists to
 /// publish: one with no result arrow rejects."
 #[test]
