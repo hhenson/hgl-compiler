@@ -122,7 +122,7 @@ fn check_imported_names(program: &Program, index: usize, diagnostics: &mut Diagn
                 let note = if private.test_only {
                     "it is declared for the module's tests (TST-2)"
                 } else {
-                    "a function, a type or a constant is private unless marked `export` (UNIT-3)"
+                    "a function, a type, a constant or an operator is private unless marked `export` (UNIT-3)"
                 };
                 diagnostics.emit(
                     error(
@@ -295,8 +295,8 @@ fn check_names_against_result_forms(module: &Module, diagnostics: &mut Diagnosti
 
 /// GEN-4: a candidate "binds that operator through local declaration,
 /// selective import, or the prelude. No matching operator is a
-/// declaration error." A native candidate (NATIVE-1) binds its operator
-/// the same way.
+/// declaration error." A private operator takes candidates only in its own
+/// module (GEN-4, UNIT-3). A native candidate (NATIVE-1) binds the same way.
 fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut Diagnostics) {
     // What is found is gathered first and written back after: the search
     // reads other modules, so it cannot change this one as it goes.
@@ -312,18 +312,22 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
             continue;
         }
         let name = implementation.name.as_str();
-        let operator = |module: &Module| {
+        let operator = |module: &Module, public_only: bool| {
             module
                 .scope
                 .get(name)
                 .into_iter()
                 .flatten()
                 .copied()
-                .find(|&other| module.declarations[other].kind == DeclarationKind::Operator)
+                .find(|&other| {
+                    let declaration = &module.declarations[other];
+                    declaration.kind == DeclarationKind::Operator
+                        && (!public_only || declaration.is_public())
+                })
         };
 
         // A declaration of the module itself.
-        if let Some(declaration) = operator(module) {
+        if let Some(declaration) = operator(module, false) {
             found.push((
                 position,
                 OperatorRef {
@@ -361,7 +365,7 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
                 continue;
             };
             if import.kind == ImportKind::Selective
-                && let Some(declaration) = operator(&program.modules[target])
+                && let Some(declaration) = operator(&program.modules[target], true)
             {
                 found.push((
                     position,
@@ -378,7 +382,7 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
                         Category::Operator,
                         codes::IMPL_UNKNOWN_OPERATOR,
                         implementation.at,
-                        format!("`{name}` is not an operator, so nothing can implement it"),
+                        format!("this import binds no operator named `{name}`"),
                         "GEN-4",
                     )
                     .with_related(import.at, "imported here"),
@@ -387,11 +391,11 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
             continue;
         }
 
-        // The prelude: an operator of core's mandatory module (UNIT-11).
+        // The prelude: an exported operator of core's mandatory module (UNIT-11).
         if let Some(core) = program.core()
             && core != index
         {
-            if let Some(declaration) = operator(&program.modules[core]) {
+            if let Some(declaration) = operator(&program.modules[core], true) {
                 found.push((
                     position,
                     OperatorRef {

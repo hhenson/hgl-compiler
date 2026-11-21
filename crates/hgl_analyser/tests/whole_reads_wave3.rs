@@ -20,9 +20,9 @@ const CORE: &str = concat!(
     "export native const fn valid<T>(input: endpoint<T>) -> bool\n",
     "export native const fn all_valid<T>(input: endpoint<T>) -> bool\n",
     "export native const fn modified<T>(input: endpoint<T>) -> bool\n",
-    "operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
+    "export operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
     "native impl const fn add_(lhs: i64, rhs: i64) -> i64\n",
-    "operator gt_<L, R, O>(lhs: L, rhs: R) -> O\n",
+    "export operator gt_<L, R, O>(lhs: L, rhs: R) -> O\n",
     "native impl const fn gt_(lhs: i64, rhs: i64) -> bool\n",
 );
 

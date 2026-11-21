@@ -8,7 +8,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::candidates::{Given, Key, Settled, Wanted, typed_by_place};
 use super::control::joined;
-use super::expressions::takes_its_type;
+use super::expressions::{takes_its_type, written_null};
 use super::fit::{open, whole};
 use super::operators::{options_of, unreadable};
 use super::{BOOL, Typer};
@@ -35,11 +35,15 @@ impl<'a> Typer<'a> {
         let (Some(token), Some(operand)) = (tokens(node).next(), operand) else {
             return (ExprKind::Unread, Type::Unknown);
         };
+        let at = Location::new(self.file, token.span());
         match token.kind() {
-            // Configuration of `!` is for the pass that reads it through
-            // core's `not_`.
-            SyntaxKind::Bang if config.is_some() => (ExprKind::Unread, Type::Unknown),
             SyntaxKind::Bang => {
+                let _ = self.symbol_operator(UnaryOperator::Not.identity(), at);
+                // Configuration of `!` is for the pass that reads it through
+                // core's `not_`.
+                if config.is_some() {
+                    return (ExprKind::Unread, Type::Unknown);
+                }
                 let operand = self.expression(&operand, Some(&BOOL));
                 let operand = self.fit(operand, &BOOL, "the operand of `!`");
                 let kind = ExprKind::Unary {
@@ -58,7 +62,7 @@ impl<'a> Typer<'a> {
                     );
                 }
                 let operator = UnaryOperator::Negate;
-                let identity = self.symbol_operator(operator.identity());
+                let identity = self.symbol_operator(operator.identity(), at);
                 // EXPR-13: "Unary configuration precedes its operand."
                 let (mut given, faulty) = match (&config, identity) {
                     (Some(config), Some(identity)) => {
@@ -73,7 +77,7 @@ impl<'a> Typer<'a> {
                 let symbol = Symbol {
                     form: Form::Unary(operator),
                     text: operator.symbol(),
-                    at: Location::new(self.file, token.span()),
+                    at,
                     rule: "OPS-1",
                     unjudged: Type::Unknown,
                     place: expected.filter(|place| !open(place)).cloned(),
@@ -194,6 +198,9 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, Type::Unknown);
         };
         if matches!(operator, BinaryOperator::And | BinaryOperator::Or) {
+            if let Some(identity) = logical_identity(node, operator) {
+                let _ = self.symbol_operator(identity, operator_at);
+            }
             // Configuration of these is for the pass that reads them
             // through core's `and_` and `or_`.
             if config.is_some() {
@@ -250,7 +257,15 @@ impl<'a> Typer<'a> {
         {
             return self.trace_comparison(operator, &left, &right);
         }
-        let identity = self.symbol_operator(operator.identity());
+        // A null presence check is intrinsic, unlike the calls of a
+        // comparison identity (GEN-4 and the generics chapter).
+        let identity = if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual)
+            && (written_null(&left) || written_null(&right))
+        {
+            None
+        } else {
+            self.symbol_operator(operator.identity(), operator_at)
+        };
         // The generics chapter: a symbol's "operands are read as that
         // call's arguments are". Each is read with nothing expected of
         // it, and one with no type of its own, a `.member` or a
@@ -490,31 +505,46 @@ impl<'a> Typer<'a> {
     }
 
     /// The operator of core's module that a symbol stands for, by its
-    /// name: `add_` for `+`. `None` when the program has no such
-    /// operator.
-    pub(super) fn symbol_operator(&mut self, name: &'static str) -> Option<OperatorRef> {
-        if let Some(found) = self.identities.get(name) {
-            return *found;
-        }
+    /// name: `add_` for `+`. GEN-4 and UNIT-3 apply to symbol calls too.
+    pub(super) fn symbol_operator(
+        &mut self,
+        name: &'static str,
+        at: Location,
+    ) -> Option<OperatorRef> {
         let program = self.program;
-        let found = program.core().and_then(|core| {
+        let found = self.identities.entry(name).or_insert_with(|| {
+            let core = program.core()?;
             let module = &program.modules[core];
-            module
+            let declaration = module
                 .scope
-                .get(name)
-                .into_iter()
-                .flatten()
+                .get(name)?
+                .iter()
                 .copied()
                 .find(|&declaration| {
                     module.declarations[declaration].kind == DeclarationKind::Operator
-                })
-                .map(|declaration| OperatorRef {
-                    module: core,
-                    declaration,
-                })
+                })?;
+            Some(OperatorRef {
+                module: core,
+                declaration,
+            })
         });
-        self.identities.insert(name, found);
-        found
+        let identity = (*found)?;
+        let core = &program.modules[identity.module];
+        let declaration = &core.declarations[identity.declaration];
+        if core.path != self.module.path && !declaration.is_public() {
+            self.diagnostics.emit(
+                error(
+                    Category::Operator,
+                    codes::OPERATOR_NO_CANDIDATE,
+                    at,
+                    format!("this symbol calls `{name}`, which is private to module `core`"),
+                    "GEN-4",
+                )
+                .with_related(declaration.at, "declared here"),
+            );
+            return None;
+        }
+        Some(identity)
     }
 
     /// The entries of a symbol's configuration, `{zero: .error}`, each
@@ -851,6 +881,29 @@ pub(super) fn is_null(node: &SyntaxNode) -> bool {
 /// True when an expression is `.member`, in parentheses or not.
 fn is_implied_member(node: &SyntaxNode) -> bool {
     ungrouped(node.clone()).kind() == SyntaxKind::ImpliedMember
+}
+
+/// Check the visibility of the Boolean identity once at the outer link
+/// of an unparenthesized chain (the generics chapter). A grouped link
+/// has a parenthesis node between it and the surrounding operator.
+fn logical_identity(node: &SyntaxNode, operator: BinaryOperator) -> Option<&'static str> {
+    let same_link = |part: SyntaxNode| {
+        part.kind() == SyntaxKind::BinaryExpr
+            && tokens(&part).find_map(|token| binary_operator(token.kind())) == Some(operator)
+    };
+    if node.parent().is_some_and(same_link) {
+        return None;
+    }
+    let identity = if node.children().any(same_link) {
+        if operator == BinaryOperator::And {
+            "all_"
+        } else {
+            "any_"
+        }
+    } else {
+        operator.identity()
+    };
+    Some(identity)
 }
 
 /// The operator a token is, between two operands.

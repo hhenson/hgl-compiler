@@ -22,9 +22,8 @@ analyser: done
 
 analyser: partial
 
-- Private unless exported, a native function and a native type among them; operators still public; `impl fn` reached through its operator; import cycles rejected
-- The analyser records an operator's `export` mark (GEN-4).
-- Left: export closure and private operators (#364).
+- Functions, types, constants and operators are private unless exported. A candidate is reached through its operator (GEN-4). Private imports and import cycles reject.
+- Left: export closure.
 
 ## UNIT-4
 
