@@ -13,7 +13,7 @@
 //   | Logger      | `hgraph::LoggerView`                            |
 //   | Clock       | `hgraph::EvaluationClockView`                   |
 //   | Scheduler   | `hgraph::NodeScheduler` and the hook (`Hook`)   |
-//   | Alarm       | `hgraph::SingleShotScheduler` and the hook      |
+//   | Alarm       | `hgraph::NodeScheduler` and the hook (`Hook`)   |
 //   | GlobalState | `hgraph::GlobalStateView`, of a node's hook or  |
 //   |             | of a graph's `Wiring::global_state()` (FN-9)    |
 //
@@ -210,23 +210,28 @@ void fn_reset(const Scheduler& scheduler);
 // ---- The alarm (CAP-5) -------------------------------------------------------
 
 /// `Alarm` (CAP-5), what `inject alarm` binds: "a cheaper scheduler: best
-/// effort, with nothing tracked, moved, or cancelled", hgraph's
-/// `SingleShotScheduler`, in the hook `hook`. It has no property. Each wake
-/// asked of it marks the node to be evaluated then, and "asking again keeps
-/// the earliest". It is best effort as hgraph's is: an evaluation of the
-/// node before its wake, at an input's tick, takes the place of that wake,
-/// which does not come unless it is asked for again.
+/// effort, with nothing tracked, moved, or cancelled", in the hook `hook`.
+/// It has no property. "`schedule(alarm, at)` asks for a wake ...; asking
+/// again keeps the earliest": its one wake is kept under a tag of its own
+/// in the node's own scheduler, hgraph's `NodeScheduler`, which arms the
+/// node for it again after an evaluation of the node at an input's tick
+/// before the wake is due (hgraph's `SingleShotScheduler` only marks the
+/// node, and that evaluation takes the mark away). An alarm made in an
+/// evaluation takes the wake due then, which is delivered and pending no
+/// longer, as the scheduler takes it: a wake asked for in that evaluation
+/// is kept whatever its time. The Python-writing target's alarm is kept so
+/// too.
 class Alarm {
   public:
-    Alarm(hgraph::SingleShotScheduler view, Hook hook) noexcept : view_(view), hook_(hook) {}
+    Alarm(hgraph::NodeScheduler view, Hook hook);
 
     /// The hgraph scheduler it is made from.
-    [[nodiscard]] const hgraph::SingleShotScheduler& view() const noexcept { return view_; }
+    [[nodiscard]] const hgraph::NodeScheduler& view() const noexcept { return view_; }
     /// The hook it is used in.
     [[nodiscard]] Hook hook() const noexcept { return hook_; }
 
   private:
-    hgraph::SingleShotScheduler view_;
+    hgraph::NodeScheduler view_;
     Hook hook_;
 };
 
@@ -240,7 +245,9 @@ void schedule_Alarm_duration(const Alarm& capability, duration at,
 
 /// `schedule(capability: Alarm, at: datetime)` (CAP-5): asks for a wake at
 /// `at`; "a `datetime` before the current evaluation time is dropped", and
-/// one at it as the scheduler drops one.
+/// one at it as the scheduler drops one. A wake still pending at `at` or
+/// before it is kept, and one later is replaced: "asking again keeps the
+/// earliest".
 void schedule_Alarm_datetime(const Alarm& capability, datetime at);
 
 // ---- The global store (CAP-6) ------------------------------------------------

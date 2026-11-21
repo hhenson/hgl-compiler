@@ -125,6 +125,49 @@ fn alarmed() -> i64 {
     }
 }
 
+# An alarm keeps the earliest wake asked of it, whatever evaluates the
+# node before it is due (CAP-5: "asking again keeps the earliest"): asked
+# in `start`, in a handler once, or in a handler at each input.
+fn alarm_asked_in_start(value: i64) -> str {
+    inject alarm
+    start { schedule(alarm, 3us) }
+    when scheduled() && valid([]) { return "woke" }
+    when modified(value) { return "input" }
+}
+
+fn alarm_asked_once(value: i64) -> str {
+    state asked: bool = false
+    inject alarm
+    when scheduled() && valid([]) { return "woke" }
+    when modified(value) {
+        if !asked {
+            schedule(alarm, 3us)
+            asked = true
+        }
+        return "input"
+    }
+}
+
+fn alarm_asked_on_each(value: i64) -> str {
+    inject alarm
+    when scheduled() && valid([]) { return "woke" }
+    when modified(value) {
+        schedule(alarm, 3us)
+        return "input"
+    }
+}
+
+# An alarm beside an input no handler subscribes to, which is passive.
+fn alarm_beside_a_passive_input(value: i64) -> i64 {
+    state woken: i64 = 0
+    inject alarm
+    start { schedule(alarm, 3us) }
+    when modified([]) && valid([]) {
+        woken += 1
+        return woken
+    }
+}
+
 # A source's body reads its clock when it runs (SOURCE-2, CAP-3).
 fn time_before_each_delay() -> datetime {
     inject clock
@@ -223,6 +266,31 @@ test a_zero_duration_outside_start_fails {
 test an_alarm_wakes_a_node {
     assert eval(alarm_or_input(value: [1, 2, 3, 4])) == ["input", "input", "input", "input"]
     assert eval(alarmed()) == [_, 1, _, 2, _, 3]
+}
+
+test an_alarm_keeps_its_wake_when_an_input_ticks_first {
+    assert eval(alarm_asked_in_start(value: [1])) == ["input", _, _, "woke"]
+    assert eval(alarm_asked_in_start(value: [_, 1])) == [_, "input", _, "woke"]
+    assert eval(alarm_asked_in_start(value: [_, _, _, _, 1])) == [_, _, _, "woke", "input"]
+    assert eval(alarm_asked_once(value: [1, 2])) == ["input", "input", _, "woke"]
+    assert eval(alarm_asked_on_each(value: [1])) == ["input", _, _, "woke"]
+}
+
+test asking_an_alarm_again_keeps_the_earliest {
+    assert eval(alarm_asked_on_each(value: [1, 2])) == ["input", "input", _, "woke"]
+    assert eval(alarm_asked_on_each(value: [1, _, _, _, 5])) ==
+        ["input", _, _, "woke", "input", _, _, "woke"]
+}
+
+test an_alarm_beside_a_passive_input {
+    assert eval(alarm_beside_a_passive_input(value: [_, 7])) == [_, _, _, 1]
+}
+
+# The temporal model (TIME-9): "A wake that lands with an input's tick is
+# not told from the tick": the handlers a tick wakes run, and the wake is
+# spent.
+test an_alarm_wake_that_lands_with_an_input_is_the_inputs {
+    assert eval(alarm_asked_in_start(value: [1, _, _, 4])) == ["input", _, _, "input"]
 }
 
 test a_source_reads_its_clock_when_it_runs {
