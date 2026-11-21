@@ -383,6 +383,7 @@ impl<'a> Typer<'a> {
                 .or(expected.filter(|expected| !open(expected))),
             among,
             written: result_written,
+            callback: None,
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         // EXPR-12: "Resolve configuration that selects an expression's

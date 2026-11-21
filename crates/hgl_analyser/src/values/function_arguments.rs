@@ -5,14 +5,16 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
-use super::candidates::{Given, Wanted, in_instance};
+use super::candidates::{CallbackRequest, Given, Wanted, in_instance};
 use super::fit::whole;
 use super::inference::{ExplicitGenerics, infer};
 use crate::declared::agree;
-use crate::hir::{AnonymousFunction, Callee, Expr, ExprKind, Form, ValueCategory};
-use crate::program::{OperatorRef, Role};
+use crate::hir::{
+    AnonymousFunction, Callee, Expr, ExprKind, Form, TypePackArgument, ValueCategory,
+};
+use crate::program::{Declaration, OperatorRef, Role};
 use crate::syntax::{child, name_token, ungrouped};
-use crate::types::{Detail, FunctionType, Signature, Type};
+use crate::types::{Argument, Detail, FunctionType, GenericKind, Signature, Type};
 use crate::{codes, error, local_error};
 
 impl Typer<'_> {
@@ -23,17 +25,7 @@ impl Typer<'_> {
         let resolved = self.function_target(&argument, template);
         let (kind, ty) = resolved.map_or((ExprKind::Unread, Type::Unknown), |(callee, actual)| {
             if !matches_template(template, &actual) {
-                let expected = Type::Function(Box::new(template.clone()));
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::TYPE_MISMATCH,
-                    at,
-                    format!(
-                        "the function is `{}`, and the parameter takes `{expected}`",
-                        Type::Function(Box::new(actual))
-                    ),
-                    "FN-17",
-                ));
+                self.template_mismatch(at, template, &actual);
                 return (ExprKind::Unread, Type::Unknown);
             }
             (
@@ -77,16 +69,6 @@ impl Typer<'_> {
                     program.modules[module].declarations[index].kind
                         == crate::program::DeclarationKind::Operator
                 }) {
-                    if node.kind() == SyntaxKind::FunctionReference {
-                        self.diagnostics.emit(local_error(
-                            Category::Type,
-                            codes::local::FUNCTION_REFERENCE_UNREAD,
-                            self.at(node),
-                            "an operator with explicit generic arguments is not read as a function argument yet (compiler #362); give its bare name".to_string(),
-                            "FN-17",
-                        ));
-                        return None;
-                    }
                     return self.operator_target(
                         node,
                         &name,
@@ -145,6 +127,213 @@ impl Typer<'_> {
             self.marked_function(node, signature);
             return None;
         }
+        let (generics, pack) =
+            self.reference_arguments(node, name, (declared, signature), template)?;
+        let map = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(&generics)
+            .collect::<Vec<_>>();
+        let taken = in_instance(signature, &map);
+        let actual = function_type(&taken, declared.kind.role() == Some(Role::Value));
+        if matches_template(template, &actual) && template.types().all(whole) {
+            self.requires_met(self.at(node), (module, declaration), &generics);
+        }
+        let requirements = self.answers(module, declaration, &generics);
+        let callee = Callee::Function {
+            module,
+            declaration,
+            generics,
+            type_packs: pack.into_iter().collect(),
+            requirements,
+        };
+        Some((callee, actual))
+    }
+
+    fn operator_target(
+        &mut self,
+        node: &SyntaxNode,
+        name: &SyntaxToken,
+        operator: OperatorRef,
+        template: &FunctionType,
+    ) -> Option<(Callee, FunctionType)> {
+        // Bare references use the existing template-driven selector.
+        // With written arguments, the operator can also complete a
+        // template still open after the other arguments were read.
+        let explicit = if node.kind() == SyntaxKind::FunctionReference {
+            Some(self.operator_reference(node, name, operator, template)?)
+        } else {
+            if !template.types().all(whole) {
+                return None;
+            }
+            None
+        };
+        let request = explicit
+            .as_ref()
+            .map_or(template, |operator| &operator.signature);
+        let graph = std::mem::replace(&mut self.graph, !template.value);
+        let value_code = std::mem::replace(&mut self.value_code, false);
+        let candidates = self.value_candidates(operator);
+        let candidates: Vec<_> = candidates
+            .into_iter()
+            .filter(|(_, _, signature)| plain_parameters(signature))
+            .collect();
+        let at = self.at(node);
+        let given = request
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(index, (_, ty))| {
+                Given::read(
+                    index,
+                    node.clone(),
+                    Expr {
+                        kind: ExprKind::Unread,
+                        ty: ty.clone(),
+                        at,
+                        category: ValueCategory::Value,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut requested_values = Vec::new();
+        if let Some(explicit) = &explicit
+            && let Detail::Callable(public) =
+                &self.program.modules[operator.module].details[operator.declaration]
+        {
+            requested_values.extend(public.generics.iter().zip(&explicit.generics).filter_map(
+                |(parameter, argument)| match argument {
+                    Argument::Constant(value)
+                        if matches!(parameter.kind, GenericKind::Value(_)) =>
+                    {
+                        Some((parameter.name.as_str(), value))
+                    }
+                    _ => None,
+                },
+            ));
+        }
+        let wanted = Wanted {
+            place: request.result.as_ref(),
+            among: explicit
+                .as_ref()
+                .and_then(|operator| operator.among.clone()),
+            written: explicit.is_some(),
+            callback: explicit.as_ref().map(|_| CallbackRequest {
+                reference: request.reference,
+                values: &requested_values,
+            }),
+        };
+        let (mut matches, unknown) = self.admitted(operator, &candidates, &given, &wanted);
+        self.graph = graph;
+        self.value_code = value_code;
+        if !unknown
+            && matches.len() == 1
+            && let Some(chosen) = matches.pop()
+        {
+            let module = chosen.module;
+            let declaration = chosen.declaration;
+            let taken = chosen.signature();
+            let value = self.program.modules[module].declarations[declaration]
+                .kind
+                .role()
+                == Some(Role::Value);
+            let mut actual = function_type(taken, value);
+            if let Some(Detail::Callable(public)) = self.program.modules[operator.module]
+                .details
+                .get(operator.declaration)
+            {
+                for ((name, _), public) in actual.parameters.iter_mut().zip(&public.parameters) {
+                    *name = Some(public.name.clone());
+                }
+            }
+            let requirements = self.answers(module, declaration, &chosen.generics);
+            let callee = Callee::Candidate {
+                operator: (operator.module, operator.declaration),
+                operator_generics: explicit.map_or_else(Vec::new, |operator| operator.generics),
+                module,
+                declaration,
+                generics: chosen.generics,
+                type_packs: Vec::new(),
+                requirements,
+            };
+            return Some((callee, actual));
+        }
+        self.diagnostics.emit(error(
+            Category::Type,
+            codes::TYPE_MISMATCH,
+            at,
+            format!(
+                "the function type does not select one candidate of `{}`",
+                name.text()
+            ),
+            "FN-17",
+        ));
+        None
+    }
+
+    /// Resolve the public signature of an explicit operator reference
+    /// from its written arguments and its receiving template (FN-17).
+    fn operator_reference(
+        &mut self,
+        node: &SyntaxNode,
+        name: &SyntaxToken,
+        operator: OperatorRef,
+        template: &FunctionType,
+    ) -> Option<OperatorReference> {
+        let module = &self.program.modules[operator.module];
+        let Detail::Callable(public) = &module.details[operator.declaration] else {
+            return None;
+        };
+        if !plain_parameters(public) {
+            self.marked_function(node, public);
+            return None;
+        }
+        if public.parameters.len() != template.parameters.len()
+            || public.result.is_some() != template.result.is_some()
+            || public.reference != template.reference
+        {
+            let signature = function_type(public, template.value);
+            self.template_mismatch(self.at(node), template, &signature);
+            return None;
+        }
+        let (generics, _) = self.reference_arguments(
+            node,
+            name,
+            (&module.declarations[operator.declaration], public),
+            template,
+        )?;
+        if generics
+            .iter()
+            .any(|argument| matches!(argument, Argument::Type(ty) if !whole(ty)))
+        {
+            self.unresolved_reference(node, name);
+            return None;
+        }
+        let own: Vec<_> = public.generics.iter().map(|generic| generic.at).collect();
+        let map: Vec<_> = own.iter().copied().zip(&generics).collect();
+        let signature = function_type(&in_instance(public, &map), template.value);
+        if !matches_template(template, &signature) {
+            self.template_mismatch(self.at(node), template, &signature);
+            return None;
+        }
+        let among = self.result_among(operator, public, &map, &own);
+        Some(OperatorReference {
+            signature,
+            generics,
+            among,
+        })
+    }
+
+    /// Resolve the generic arguments shared by function and operator
+    /// references, with any written arguments taking precedence (FN-17).
+    fn reference_arguments(
+        &mut self,
+        node: &SyntaxNode,
+        name: &SyntaxToken,
+        (declared, signature): (&Declaration, &Signature),
+        template: &FunctionType,
+    ) -> Option<(Vec<Argument>, Option<TypePackArgument>)> {
         // The read pass records explicit arguments at the start of
         // the full name, including its module alias when present.
         let start = child(node, SyntaxKind::QualifiedName)
@@ -183,131 +372,41 @@ impl Typer<'_> {
             return None;
         }
         let Some(generics) = found.into_iter().collect::<Option<Vec<_>>>() else {
-            self.diagnostics.emit(
-                error(
-                    Category::Type,
-                    codes::GENERIC_UNRESOLVED,
-                    self.at(node),
-                    format!(
-                        "the function type does not determine every generic argument of `{}`",
-                        name.text()
-                    ),
-                    "FN-17",
-                )
-                .with_note("supply the template's missing generic arguments explicitly"),
-            );
+            self.unresolved_reference(node, name);
             return None;
         };
-        let map = signature
-            .generics
-            .iter()
-            .map(|generic| generic.at)
-            .zip(&generics)
-            .collect::<Vec<_>>();
-        let taken = in_instance(signature, &map);
-        let actual = function_type(&taken, declared.kind.role() == Some(Role::Value));
-        if matches_template(template, &actual) && template.types().all(whole) {
-            self.requires_met(self.at(node), (module, declaration), &generics);
-        }
-        let requirements = self.answers(module, declaration, &generics);
-        let callee = Callee::Function {
-            module,
-            declaration,
-            generics,
-            type_packs: pack.into_iter().collect(),
-            requirements,
-        };
-        Some((callee, actual))
+        Some((generics, pack))
     }
 
-    fn operator_target(
-        &mut self,
-        node: &SyntaxNode,
-        name: &SyntaxToken,
-        operator: OperatorRef,
-        template: &FunctionType,
-    ) -> Option<(Callee, FunctionType)> {
-        // A partial template leaves operator selection until the other
-        // arguments have determined its types (FN-17, GEN-5).
-        if !template.types().all(whole) {
-            return None;
-        }
-        let graph = std::mem::replace(&mut self.graph, !template.value);
-        let value_code = std::mem::replace(&mut self.value_code, false);
-        let candidates = self.value_candidates(operator);
-        let candidates: Vec<_> = candidates
-            .into_iter()
-            .filter(|(_, _, signature)| plain_parameters(signature))
-            .collect();
-        let at = self.at(node);
-        let given = template
-            .parameters
-            .iter()
-            .enumerate()
-            .map(|(index, (_, ty))| {
-                Given::read(
-                    index,
-                    node.clone(),
-                    Expr {
-                        kind: ExprKind::Unread,
-                        ty: ty.clone(),
-                        at,
-                        category: ValueCategory::Value,
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        let wanted = Wanted {
-            place: template.result.as_ref(),
-            among: None,
-            written: false,
-        };
-        let (mut matches, unknown) = self.admitted(operator, &candidates, &given, &wanted);
-        self.graph = graph;
-        self.value_code = value_code;
-        if !unknown
-            && matches.len() == 1
-            && let Some(chosen) = matches.pop()
-        {
-            let module = chosen.module;
-            let declaration = chosen.declaration;
-            let taken = chosen.signature();
-            let value = self.program.modules[module].declarations[declaration]
-                .kind
-                .role()
-                == Some(Role::Value);
-            let mut actual = function_type(taken, value);
-            if let Some(Detail::Callable(public)) = self.program.modules[operator.module]
-                .details
-                .get(operator.declaration)
-            {
-                for ((name, _), public) in actual.parameters.iter_mut().zip(&public.parameters) {
-                    *name = Some(public.name.clone());
-                }
-            }
-            let requirements = self.answers(module, declaration, &chosen.generics);
-            let callee = Callee::Candidate {
-                operator: (operator.module, operator.declaration),
-                operator_generics: Vec::new(),
-                module,
-                declaration,
-                generics: chosen.generics,
-                type_packs: Vec::new(),
-                requirements,
-            };
-            return Some((callee, actual));
-        }
+    /// Neither the reference nor its receiving template supplies every generic.
+    fn unresolved_reference(&mut self, node: &SyntaxNode, name: &SyntaxToken) {
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::GENERIC_UNRESOLVED,
+                self.at(node),
+                format!(
+                    "the function type does not determine every generic argument of `{}`",
+                    name.text()
+                ),
+                "FN-17",
+            )
+            .with_note("supply the template's missing generic arguments explicitly"),
+        );
+    }
+
+    fn template_mismatch(&mut self, at: Location, expected: &FunctionType, actual: &FunctionType) {
         self.diagnostics.emit(error(
             Category::Type,
             codes::TYPE_MISMATCH,
             at,
             format!(
-                "the function type does not select one candidate of `{}`",
-                name.text()
+                "the function is `{}`, and the parameter takes `{}`",
+                Type::Function(Box::new(actual.clone())),
+                Type::Function(Box::new(expected.clone())),
             ),
             "FN-17",
         ));
-        None
     }
 
     /// FN-17's proposed template rule does not admit marked fixed inputs.
@@ -446,6 +545,13 @@ impl Typer<'_> {
             "FN-17",
         ));
     }
+}
+
+/// The public operator signature and its resolved generic arguments (FN-17).
+struct OperatorReference {
+    signature: FunctionType,
+    generics: Vec<Argument>,
+    among: Option<Vec<Type>>,
 }
 
 fn plain_parameters(signature: &Signature) -> bool {

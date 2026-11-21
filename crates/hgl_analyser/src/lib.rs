@@ -565,10 +565,6 @@ pub mod codes {
         /// A compile-time function used as a runtime value (FN-17).
         pub const FUNCTION_VALUE: &str = "function.value";
 
-        /// An explicit generic operator reference supplied as a
-        /// function argument awaits a ruling (FN-17, issue #362).
-        pub const FUNCTION_REFERENCE_UNREAD: &str = "function.reference_unread";
-
         /// A configuration parameter has a mode FN-18 forbids.
         pub const PARAMETER_CONFIGURATION: &str = "parameter.configuration";
 
@@ -581,11 +577,10 @@ pub mod codes {
         pub const YIELD_OUTSIDE_SOURCE: &str = "yield.outside_source";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 7] = [
+        pub const ALL: [&str; 6] = [
             READING_LIMIT,
             LOOP_CARRIED,
             FUNCTION_VALUE,
-            FUNCTION_REFERENCE_UNREAD,
             PARAMETER_CONFIGURATION,
             IMPL_CONFIGURATION,
             YIELD_OUTSIDE_SOURCE,

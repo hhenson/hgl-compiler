@@ -20,7 +20,7 @@ use super::inference::{
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use crate::constant::Fault;
-use crate::declared::{names_parameter, substitute_within};
+use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, tokens, ungrouped};
@@ -278,6 +278,13 @@ impl<'a> Typer<'a> {
                 ) else {
                     continue;
                 };
+                // FN-17: a function reference supplies a signature.
+                // Contextual operand or result reads do not make it fit.
+                if let Some(callback) = &wanted.callback
+                    && !callback.matches(&taken, (given, &bound), wanted.place)
+                {
+                    continue;
+                }
                 // GEN-13: a generic value parameter has an ordinary
                 // type, and the default it takes is of that type as
                 // this call resolves it: the `2` of
@@ -1314,6 +1321,7 @@ impl<'a> Typer<'a> {
                 .as_ref()
                 .map(|among| among.iter().map(in_place).collect()),
             written: selecting.written,
+            callback: None,
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         if untold || self.rereads == 0 && given.iter().any(|given| given.by_place) {
@@ -1792,6 +1800,37 @@ pub(super) struct Wanted<'w> {
     /// result that is its type parameter and nothing more, which a
     /// candidate is given whole (GEN-8; see `infer_from_place`).
     pub(super) written: bool,
+    /// The exact signature and options of an explicit operator callback (FN-17).
+    pub(super) callback: Option<CallbackRequest<'w>>,
+}
+
+/// A callback must have the template's actual types before ranking (FN-17).
+pub(super) struct CallbackRequest<'w> {
+    /// Whether the template expects a designation as its result.
+    pub(super) reference: bool,
+    /// The operator's compile-time options taken by a candidate that uses them.
+    pub(super) values: &'w [(&'w str, &'w Constant)],
+}
+
+impl CallbackRequest<'_> {
+    fn matches(
+        &self,
+        signature: &Signature,
+        (given, bound): (&[Given], &[Place]),
+        result: Option<&Type>,
+    ) -> bool {
+        self.reference == signature.reference
+            && signature.parameters.len() == given.len()
+            && given.iter().zip(bound).all(|(given, place)| {
+                matches!(*place, Place::Parameter(index)
+                    if agree(given.ty(), &signature.parameters[index].ty))
+            })
+            && match (result, &signature.result) {
+                (Some(expected), Some(actual)) => agree(expected, actual),
+                (None, None) => true,
+                _ => false,
+            }
+    }
 }
 
 /// What an argument of a call is given to in a candidate.
@@ -2024,6 +2063,18 @@ fn instance<'s>(
         ));
     }
     let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
+    if let Some(callback) = &wanted.callback {
+        for (index, generic) in generics.iter().enumerate() {
+            if matches!(generic.kind, GenericKind::Value(_))
+                && let Some((_, value)) = callback
+                    .values
+                    .iter()
+                    .find(|(name, _)| *name == generic.name)
+            {
+                found[index] = Some(Argument::Constant((*value).clone()));
+            }
+        }
+    }
     // GEN-2: what the call writes decides first. A generic value
     // parameter it gives by name is that, whatever an argument's type
     // would say of it: `pick(pair, N: 3)` for `value: list<i64, N>` asks
