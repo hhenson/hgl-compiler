@@ -186,6 +186,7 @@ fn parts(ty: &Type) -> Vec<&Type> {
         | Type::Error
         | Type::ErrorContext
         | Type::Unknown => Vec::new(),
+        Type::Function(function) => function.types().collect(),
     }
 }
 

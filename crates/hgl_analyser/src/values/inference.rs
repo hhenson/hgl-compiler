@@ -572,6 +572,21 @@ impl<'a> Typer<'a> {
                 continue;
             }
             let pattern = patterns[index];
+            if let Type::Function(_) = pattern {
+                let arguments: Vec<_> = found
+                    .iter()
+                    .map(|found| found.clone().unwrap_or(Argument::Type(Type::Unknown)))
+                    .collect();
+                let map: Vec<_> = own.iter().copied().zip(&arguments).collect();
+                let Type::Function(template) = substitute_within(pattern, &map) else {
+                    continue;
+                };
+                let mark = self.mark();
+                let actual = self.function_argument(node, &template);
+                self.take_back(mark, false);
+                infer(pattern, &actual.ty, generics, &mut found);
+                continue;
+            }
             let unfound: Vec<Location> = generics
                 .iter()
                 .zip(&found)
@@ -780,6 +795,7 @@ impl<'a> Typer<'a> {
                 // have no reading of their own. A captured eval trace
                 // is a trace even when its cells give no type (TST-5).
                 let placeless = *settled
+                    && !matches!(slot.ty, Type::Function(_))
                     && slot.type_pack.is_none()
                     && !(traced && pack.is_some())
                     && !takes_its_type(node)
@@ -990,6 +1006,14 @@ pub(super) fn infer(
         (_, Type::Unknown) => {}
         (Type::Parameter { at, .. }, actual) => {
             find(*at, Argument::Type(actual.clone()), generics, found);
+        }
+        (Type::Function(pattern), Type::Function(actual)) => {
+            for ((_, pattern), (_, actual)) in pattern.parameters.iter().zip(&actual.parameters) {
+                infer(pattern, actual, generics, found);
+            }
+            if let (Some(pattern), Some(actual)) = (&pattern.result, &actual.result) {
+                infer(pattern, actual, generics, found);
+            }
         }
         (Type::Nullable(pattern), Type::Nullable(actual)) => {
             infer(pattern, actual, generics, found)

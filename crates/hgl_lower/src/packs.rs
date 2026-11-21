@@ -1,6 +1,6 @@
-//! Concrete parameter lists for calls with packs (FN-8, GEN-10).
-//! Lowering gives each captured argument its own parameter and local,
-//! keeping the slot and position or name from the analysed call.
+//! Concrete parameter lists for instances with packs or function
+//! parameters (FN-8, GEN-10, FN-17). Lowering gives each captured
+//! argument its own runtime slot and removes compile-time function slots.
 
 use hgl_analyser::hir::{
     Argument, Body, Callee, ExprKind, LocalId, NodeMut, PackKey, Stmt, walk_statement_nodes_mut,
@@ -14,7 +14,8 @@ use crate::instances::trace_payload;
 /// A concrete parameter's origin in the unexpanded call.
 #[derive(PartialEq, Eq)]
 pub(crate) struct Slot {
-    parameter: usize,
+    /// The position in the original signature.
+    pub(crate) parameter: usize,
     pack: Option<PackKey>,
 }
 
@@ -106,20 +107,26 @@ impl Captures {
             .find_map(|(slot, ty)| slot.takes(argument).then_some(ty))
     }
 
-    /// Expand the captured inputs and remap local identities. A use of
-    /// a pack itself still needs a typed pack expression or reflection.
+    /// Expand the packed inputs, remove the static inputs and remap
+    /// local identities. A use of a pack itself still needs a typed
+    /// pack expression or reflection.
     pub(crate) fn expand(
         self,
         signature: &mut Signature,
         body: &mut Body,
-    ) -> (Vec<Slot>, Option<Location>) {
+    ) -> (Option<Vec<Slot>>, Option<Location>) {
         let packed: Vec<_> = signature
             .parameters
             .iter()
             .map(|p| p.pack.is_some())
             .collect();
-        if !packed.contains(&true) {
-            return (Vec::new(), None);
+        let functions: Vec<_> = signature
+            .parameters
+            .iter()
+            .map(|p| matches!(p.ty, Type::Function(_)))
+            .collect();
+        if !packed.contains(&true) && !functions.contains(&true) {
+            return (None, None);
         }
         let original = std::mem::take(&mut body.locals);
         let mut remapped = vec![0; original.len()];
@@ -127,6 +134,9 @@ impl Captures {
         let mut slots = Vec::new();
         let parameters = std::mem::take(&mut signature.parameters);
         for (index, parameter) in parameters.into_iter().enumerate() {
+            if functions[index] {
+                continue;
+            }
             if parameter.pack.is_none() {
                 remapped[index] = body.locals.len();
                 inputs[index].push(body.locals.len());
@@ -167,10 +177,10 @@ impl Captures {
                 signature.parameters.push(expanded);
             }
         }
-        // Locals after the signature include the original pack bindings,
-        // so an unsupported use still has its declaration and source place.
+        // Retain unresolved pack and function bindings with their source
+        // locations for the diagnostic if a value still reads one.
         for (index, local) in original.into_iter().enumerate() {
-            if packed.get(index) != Some(&false) {
+            if packed.get(index) != Some(&false) || functions.get(index) == Some(&true) {
                 remapped[index] = body.locals.len();
                 body.locals.push(local);
             }
@@ -209,7 +219,14 @@ impl Captures {
                     }
                     change(local);
                 };
+                let remap_captures = |callee: &mut Callee| {
+                    if let Callee::Anonymous(function) = callee {
+                        function.captures.iter_mut().for_each(change);
+                    }
+                };
                 match &mut expression.kind {
+                    ExprKind::Call { callee, .. } => remap_captures(callee),
+                    ExprKind::StaticCallable(callee) => remap_captures(callee),
                     ExprKind::Local(local) | ExprKind::EndpointOf(local) => read(local),
                     ExprKind::Endpoint {
                         inputs: Some(locals),
@@ -223,6 +240,6 @@ impl Captures {
                 }
             }
         });
-        (slots, unsupported)
+        (Some(slots), unsupported)
     }
 }

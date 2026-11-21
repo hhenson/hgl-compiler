@@ -8,9 +8,10 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::candidates::{Chosen, Given, Key, Settled, Wanted, typed_by_place};
 use super::constants::generic_default;
-use super::fit::open;
+use super::fit::{open, whole};
 use super::inference::{
-    ExplicitGenerics, bare_parameter, fixed, infer, infer_from_place, pack_bounds, placed, unsaid,
+    ExplicitGenerics, bare_parameter, fixed, infer, infer_from_place, mentions, pack_bounds,
+    placed, unsaid,
 };
 use super::{Candidate, Typer};
 use crate::declared::{agree, substitute_within};
@@ -49,27 +50,7 @@ impl<'a> Typer<'a> {
         said: bool,
     ) -> Requested {
         let program = self.program;
-        // The generic parameters an argument decided: what the call
-        // writes, or its place expects, is not widened (GEN-2).
-        let mut by_argument = vec![false; public.generics.len()];
-        for (parameter, actual) in public.parameters.iter().zip(supplied) {
-            let Some(actual) = *actual else {
-                continue;
-            };
-            if let Some(generic) = bare_parameter(&parameter.ty, &public.generics)
-                && by_argument[generic]
-                && let Some(Argument::Type(decided)) = &found[generic]
-                && self.widens(decided, actual)
-            {
-                found[generic] = Some(Argument::Type(actual.clone()));
-                continue;
-            }
-            let before: Vec<bool> = found.iter().map(Option::is_some).collect();
-            infer(&parameter.ty, actual, &public.generics, &mut found);
-            for (generic, was) in before.into_iter().enumerate() {
-                by_argument[generic] |= !was && found[generic].is_some();
-            }
-        }
+        self.infer_operator_inputs(public, &mut found, supplied);
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
         let operator_syntax = &operator_declaration.syntax;
@@ -154,6 +135,38 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// GEN-2 and GEN-12: the operator's inputs resolve its generics in
+    /// declaration order, whether for the requested output or to complete
+    /// an FN-17 function template before binding static arguments.
+    fn infer_operator_inputs(
+        &self,
+        public: &Signature,
+        found: &mut [Option<Argument>],
+        supplied: &[Option<&Type>],
+    ) {
+        // The generic parameters an argument decided: what the call
+        // writes, or its place expects, is not widened (GEN-2).
+        let mut by_argument = vec![false; public.generics.len()];
+        for (parameter, actual) in public.parameters.iter().zip(supplied) {
+            let Some(actual) = *actual else {
+                continue;
+            };
+            if let Some(generic) = bare_parameter(&parameter.ty, &public.generics)
+                && by_argument[generic]
+                && let Some(Argument::Type(decided)) = &found[generic]
+                && self.widens(decided, actual)
+            {
+                found[generic] = Some(Argument::Type(actual.clone()));
+                continue;
+            }
+            let before: Vec<bool> = found.iter().map(Option::is_some).collect();
+            infer(&parameter.ty, actual, &public.generics, found);
+            for (generic, was) in before.into_iter().enumerate() {
+                by_argument[generic] |= !was && found[generic].is_some();
+            }
+        }
+    }
+
     /// A call of the operator `operator` by its name.
     ///
     /// GEN-5: "Match candidates against the requested output before
@@ -226,36 +239,43 @@ impl<'a> Typer<'a> {
         let (selecting, options) = options_of(public, &candidates);
         let reported = self.diagnostics.len();
         let written = self.operator_arguments(name, list, public, &options, pack.as_ref());
-        let fixed_count = public
+        let mut context = None;
+        if public
             .parameters
             .iter()
-            .filter(|parameter| parameter.pack.is_none())
-            .count();
-        // Each argument, read with nothing expected of it: what it
-        // reports itself is reported here, once.
-        let mut given: Vec<Given> = written
-            .into_iter()
-            .map(|(key, node)| {
-                if let Key::Position(position) = &key
-                    && let Some(ty) = position
-                        .checked_sub(fixed_count)
-                        .and_then(|index| pack.as_ref()?.types.get(index))
-                {
-                    let value = self.expression(&node, Some(ty));
-                    let value = self.fit_input(value, ty, "the explicitly typed pack argument");
-                    Given {
-                        key,
-                        node,
-                        value,
-                        by_place: false,
-                        explicit: Some(ty.clone()),
-                        retried: false,
-                    }
-                } else {
-                    self.give(key, node)
-                }
-            })
-            .collect();
+            .any(|parameter| matches!(parameter.ty, Type::Function(_)))
+        {
+            let mut inferred = found.clone();
+            let unknown: Vec<_> = public
+                .generics
+                .iter()
+                .zip(&inferred)
+                .filter_map(|(generic, given)| given.is_none().then_some(generic.at))
+                .collect();
+            if !unknown.is_empty()
+                && written.iter().any(|(key, _)| {
+                    public_function(public, key).is_some_and(|ty| mentions(ty, &unknown))
+                })
+            {
+                // GEN-2, FN-17: a function's signature may say what a
+                // generic stands for, while an argument later in the call
+                // can complete the template needed by a bare callback or
+                // lambda. The speculative read is taken back before
+                // arguments are read in source order.
+                let mark = self.mark();
+                let probe = self.read_operator_arguments(
+                    public,
+                    written.iter().cloned(),
+                    Some(&inferred),
+                    pack.as_ref(),
+                );
+                self.take_back(mark, false);
+                self.infer_operator_inputs(public, &mut inferred, &public_inputs(public, &probe));
+            }
+            context = Some(inferred);
+        }
+        let mut given =
+            self.read_operator_arguments(public, written, context.as_deref(), pack.as_ref());
         self.constants_given(&mut given, &selecting);
         // An argument given to no parameter, or rejected itself, has
         // been reported, and one whose type is not known says nothing
@@ -287,20 +307,7 @@ impl<'a> Typer<'a> {
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12), and its defaults: see
         // `Typer::output_requested`.
-        let supplied: Vec<Option<&Type>> = public
-            .parameters
-            .iter()
-            .enumerate()
-            .map(|(index, parameter)| {
-                given
-                    .iter()
-                    .find(|given| match &given.key {
-                        Key::Position(position) => *position == index,
-                        Key::Name(name) => *name == parameter.name,
-                    })
-                    .map(Given::ty)
-            })
-            .collect();
+        let supplied = public_inputs(public, &given);
         let Requested {
             place: requested,
             among,
@@ -422,6 +429,80 @@ impl<'a> Typer<'a> {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
         self.called(operator, chosen, given, (Form::Named, at))
+    }
+
+    /// Read the arguments in source order. FN-17's static arguments
+    /// take their context from the operator's public function template.
+    fn read_operator_arguments(
+        &mut self,
+        public: &Signature,
+        written: impl IntoIterator<Item = (Key, SyntaxNode)>,
+        context: Option<&[Option<Argument>]>,
+        pack: Option<&hir::TypePackArgument>,
+    ) -> Vec<Given> {
+        let resolved: Vec<_> = context
+            .unwrap_or_default()
+            .iter()
+            .map(|value| value.clone().unwrap_or(Argument::Type(Type::Unknown)))
+            .collect();
+        let map: Vec<_> = public
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(&resolved)
+            .collect();
+        let fixed = public
+            .parameters
+            .iter()
+            .filter(|parameter| parameter.pack.is_none())
+            .count();
+        written
+            .into_iter()
+            .map(|(key, node)| {
+                if context.is_some()
+                    && let Some(pattern) = public_function(public, &key)
+                    && let Type::Function(template) = substitute_within(pattern, &map)
+                {
+                    let reported = self.diagnostics.len();
+                    let value = self.function_argument(&node, &template);
+                    if self.diagnostics.len() == reported && !whole(&value.ty) {
+                        self.diagnostics.emit(error(
+                            Category::Type,
+                            codes::GENERIC_UNRESOLVED,
+                            self.at(&node),
+                            "the call does not determine every type in this function argument"
+                                .to_string(),
+                            "FN-17",
+                        ));
+                    }
+                    Given {
+                        key,
+                        node,
+                        value,
+                        by_place: false,
+                        explicit: None,
+                        retried: false,
+                    }
+                } else if let Key::Position(position) = &key
+                    && let Some(ty) = position
+                        .checked_sub(fixed)
+                        .and_then(|index| pack?.types.get(index))
+                {
+                    let value = self.expression(&node, Some(ty));
+                    let value = self.fit_input(value, ty, "the explicitly typed pack argument");
+                    Given {
+                        key,
+                        node,
+                        value,
+                        by_place: false,
+                        explicit: Some(ty.clone()),
+                        retried: false,
+                    }
+                } else {
+                    self.give(key, node)
+                }
+            })
+            .collect()
     }
 
     /// ERR-15: equally few result reads in different operands leave no
@@ -830,6 +911,39 @@ impl<'a> Typer<'a> {
             lifted: false,
         }
     }
+}
+
+/// The operator owns its parameter names and order (GEN-4).
+fn public_argument_names(key: &Key, (index, name): (usize, &str)) -> bool {
+    match key {
+        Key::Position(position) => *position == index,
+        Key::Name(written) => written == name,
+    }
+}
+
+fn public_function<'s>(public: &'s Signature, key: &Key) -> Option<&'s Type> {
+    let parameter = match key {
+        Key::Position(position) => public.parameters.get(*position),
+        Key::Name(name) => public
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name == *name),
+    }?;
+    (parameter.pack.is_none() && matches!(parameter.ty, Type::Function(_))).then_some(&parameter.ty)
+}
+
+fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<Option<&'a Type>> {
+    public
+        .parameters
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| {
+            given
+                .iter()
+                .find(|argument| public_argument_names(&argument.key, (index, &parameter.name)))
+                .map(Given::ty)
+        })
+        .collect()
 }
 
 /// The note on a call in a generic body that no candidate is known to

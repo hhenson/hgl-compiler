@@ -35,7 +35,10 @@ fn called(checked: &Checked, body: &Body) -> Vec<String> {
                 generics,
                 ..
             } => (*module, *declaration, generics),
-            Callee::Required { .. } | Callee::Unread => {
+            Callee::Required { .. }
+            | Callee::Parameter { .. }
+            | Callee::Anonymous(_)
+            | Callee::Unread => {
                 found.push("none".to_string());
                 return;
             }

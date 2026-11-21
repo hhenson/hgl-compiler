@@ -1478,6 +1478,7 @@ fn nesting<'t>(ty: &'t Type) -> usize {
                 inside(value);
                 inside(error);
             }
+            Type::Function(function) => function.types().for_each(&mut inside),
             Type::Scalar(_)
             | Type::Parameter { .. }
             | Type::Signal
@@ -1794,19 +1795,12 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     .copied()
                     .zip(made.generics.iter().cloned())
                     .collect();
-                // The body's locals, which the calls' arguments read, of
-                // their types in this instance.
-                if let Some(Some(body)) = unit.bodies.get(declaration) {
-                    typer.locals = body
-                        .locals
-                        .iter()
-                        .map(|local| hir::Local {
-                            ty: placed(substitute_within(&local.ty, &map), &declared),
-                            ..local.clone()
-                        })
-                        .collect();
-                    typer.assigned = vec![true; body.locals.len()];
-                }
+                let body_locals = unit
+                    .bodies
+                    .get(declaration)
+                    .and_then(Option::as_ref)
+                    .map_or(&[][..], |body| body.locals.as_slice());
+                let mut current_locals: Option<&[hir::Local]> = None;
                 // The last put at each place: the reading of the call
                 // that stands.
                 let standing = selecting
@@ -1819,6 +1813,20 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     })
                     .map(|(_, call)| call);
                 for call in standing {
+                    // A deferred anonymous call is read under its own
+                    // lexical locals, with the same enclosing generics.
+                    let locals = call.scope.as_deref().unwrap_or(body_locals);
+                    if !current_locals.is_some_and(|current| std::ptr::eq(current, locals)) {
+                        typer.locals = locals
+                            .iter()
+                            .map(|local| hir::Local {
+                                ty: placed(substitute_within(&local.ty, &map), &declared),
+                                ..local.clone()
+                            })
+                            .collect();
+                        typer.assigned = vec![true; locals.len()];
+                        current_locals = Some(locals);
+                    }
                     let name = &program.modules[call.operator.module].declarations
                         [call.operator.declaration]
                         .name;
@@ -2626,6 +2634,9 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
             struct_applications(value, found);
             struct_applications(error, found);
         }
+        Type::Function(function) => function
+            .types()
+            .for_each(|ty| struct_applications(ty, found)),
         Type::Scalar(_)
         | Type::Parameter { .. }
         | Type::Signal
