@@ -8,7 +8,7 @@
 mod common;
 
 use common::{Checked, body, module};
-use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, walk_statements};
+use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Stmt, ValueCategory, walk_statements};
 use hgl_analyser::{Argument, Detail};
 
 /// No findings.
@@ -755,6 +755,71 @@ fn graph_instances_check_consumers_of_deferred_calls() {
         "{}",
         checked.report
     );
+}
+
+/// GEN-7, FN-3 and CTRL-15: a graph's `while` condition must remain
+/// an ordinary value after the instance selects its candidates.
+#[test]
+fn graph_instances_check_while_conditions_after_selection() {
+    let checked = module(concat!(
+        "operator live_helper<T>(value: T) -> i64\n",
+        "impl const fn live_helper<T>(value: T) -> i64 => 5\n",
+        "impl fn live_helper(value: i64) -> i64 { when { return value } }\n",
+        "fn through_loop<T>(const value: T) -> i64 {\n",
+        "    var passed = 0\n",
+        "    while live_helper(value) > passed { passed += 1 }\n",
+        "    return passed\n",
+        "}\n",
+        "fn ordinary_loop() -> i64 => through_loop(\"s\")\n",
+        "fn temporal_loop() -> i64 => through_loop(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:11:30 phase/connection.as_constant FN-3"],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7 and CTRL-13: an inferred local follows the no-else expression's
+/// type once its selected condition is an ordinary value or connection.
+#[test]
+fn graph_instances_settle_no_else_types_after_selection() {
+    let checked = module(concat!(
+        "operator predicate<T>(value: T) -> bool\n",
+        "impl const fn predicate<T>(value: T) -> bool => true\n",
+        "impl fn predicate(value: i64) -> bool { when { return value > 0 } }\n",
+        "fn wrap<T>(const value: T) -> i64? {\n",
+        "    let chosen = if predicate(value) { 1 }\n",
+        "    return chosen\n",
+        "}\n",
+        "fn ordinary_condition() -> i64? => wrap(\"s\")\n",
+        "fn temporal_condition() -> i64? => wrap(1)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for (name, ty, category) in [
+        ("ordinary_condition", "i64?", ValueCategory::Value),
+        ("temporal_condition", "i64", ValueCategory::Connection),
+    ] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        let [
+            Stmt::Declare {
+                local,
+                value: Some(conditional),
+            },
+            Stmt::Return {
+                value: Some(returned),
+                ..
+            },
+        ] = instance.statements.as_slice()
+        else {
+            panic!("the instance binds and returns the conditional");
+        };
+        assert_eq!(conditional.ty.to_string(), ty, "{name}");
+        assert_eq!(conditional.category, category, "{name}");
+        assert_eq!(instance.locals[*local].ty.to_string(), ty, "{name}");
+        assert_eq!(returned.ty.to_string(), ty, "{name}");
+    }
 }
 
 /// GEN-7: a generic body "is judged once, where it is declared, by what

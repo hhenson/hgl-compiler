@@ -2,7 +2,7 @@
 //! `while`, `for` and `switch`, and what is assigned on each path
 //! (CTRL-5, CTRL-10 to CTRL-15). Part of the typing pass ([`super`]).
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::expressions::takes_its_type;
@@ -16,6 +16,34 @@ use crate::program::{LocalKind, Program};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{ConstantValue, Detail, Scalar, Type};
 use crate::{codes, error};
+
+/// CTRL-13: a graph's no-else `if` has its branch's type where it is a
+/// connection and a nullable branch type where it is an ordinary value.
+/// A deferred category leaves the type open until instance selection.
+pub(super) fn no_else_type(ty: Type, condition: ValueCategory, branch: ValueCategory) -> Type {
+    use ValueCategory::{Connection, Unsettled, Value};
+    match (condition, branch) {
+        (Connection, _) | (_, Connection) => ty,
+        (Value, Value) => nullable(ty),
+        (Unsettled, _) | (_, Unsettled) => Type::Unknown,
+    }
+}
+
+/// CTRL-15 and FN-3: a graph tests its `while` condition when it is
+/// built, so the condition cannot be a connection.
+pub(super) fn while_connection(condition: &Expr, category: ValueCategory) -> Option<Diagnostic> {
+    (category == ValueCategory::Connection).then(|| {
+        error(
+            Category::Phase,
+            codes::CONNECTION_AS_CONSTANT,
+            condition.at,
+            "the condition of a `while` is tested while the graph is built, and this is \
+             a connection"
+                .to_string(),
+            "FN-3",
+        )
+    })
+}
 
 /// What a `for` binds, and whether it makes one child for each member,
 /// by what it loops over (CTRL-15).
@@ -424,16 +452,7 @@ impl<'a> Typer<'a> {
             // condition is. Otherwise, where the condition or the
             // branch is not settled, neither is the type.
             (Outcome::Value(ty), None) if self.graph => {
-                use ValueCategory::{Connection, Unsettled, Value};
-                match (selects, self.category(&then.value)) {
-                    // A connection of `T` either way: selected at
-                    // runtime, or composed where the condition holds.
-                    (Connection, _) | (Value | Unsettled, Connection) => Outcome::Value(ty),
-                    (Value, Value) => Outcome::Value(nullable(ty)),
-                    (Unsettled, Value | Unsettled) | (Value, Unsettled) => {
-                        Outcome::Value(Type::Unknown)
-                    }
-                }
+                Outcome::Value(no_else_type(ty, selects, self.category(&then.value)))
             }
             // "With no `else` it is as if its `else` were null: its
             // value is a `T?`".
@@ -565,19 +584,11 @@ impl<'a> Typer<'a> {
         // CTRL-15: "The condition of a `while` is an ordinary `bool`,
         // tested while the graph is built: a connection there rejects
         // (FN-3)".
-        if let Some(condition) = &condition
-            && self.graph
-            && self.category(condition) == ValueCategory::Connection
+        if self.graph
+            && let Some(condition) = &condition
+            && let Some(report) = while_connection(condition, self.category(condition))
         {
-            self.diagnostics.emit(error(
-                Category::Phase,
-                codes::CONNECTION_AS_CONSTANT,
-                condition.at,
-                "the condition of a `while` is tested while the graph is built, and this is \
-                 a connection"
-                    .to_string(),
-                "FN-3",
-            ));
+            self.diagnostics.emit(report);
         }
         // ERR-12: the body is reached only where the condition holds,
         // so what it proves is not null is not null there.

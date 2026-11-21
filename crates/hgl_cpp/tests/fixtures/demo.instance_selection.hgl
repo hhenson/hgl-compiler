@@ -63,6 +63,44 @@ test instance_selects_temporal {
     assert eval through_graph(value: "s") == [6]
 }
 
+# GEN-7, FN-3 and CTRL-15: the ordinary instance can test a graph loop.
+fn loop_scalar<T>(const value: T) -> i64 {
+    var visits = 0
+    while live_helper(value) > visits { visits += 1 }
+    return visits
+}
+
+operator positive<T>(value: T) -> bool
+impl const fn positive<T>(value: T) -> bool => false
+impl const fn positive(value: i64) -> bool => value > 0
+
+const fn chosen_or_skip(value: i64?) -> i64 {
+    if value == null { return -1 }
+    return value
+}
+
+# CTRL-13: an ordinary no-else result is nullable. Feed it to a value
+# helper so the graph returns an ordinary i64 as a constant connection.
+fn wiring_if<T>(const value: T) -> i64 {
+    let chosen = if positive(value) { 1 }
+    return chosen_or_skip(chosen)
+}
+
+# CTRL-13: a no-else result with a connection condition is an i64
+# connection and stays silent while the condition is false.
+fn connection_if<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    return chosen
+}
+
+test an_instance_settles_its_graph_conditions {
+    assert eval loop_scalar(value: "s") == [5]
+    assert eval wiring_if(value: 3) == [1]
+    assert eval wiring_if(value: "s") == [-1]
+    assert eval connection_if(value: 3) == [1]
+    assert eval connection_if(value: 0) == []
+}
+
 struct Counter { count: i64 }
 
 impl const fn add_<T>(counter: Counter, increment: T) -> i64 => counter.count + 100
