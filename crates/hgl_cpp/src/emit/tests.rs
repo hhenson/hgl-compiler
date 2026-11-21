@@ -27,9 +27,11 @@
 //! its inputs and each default the call leaves out as configuration, and
 //! written ahead of the test.
 
+use std::ops::Deref;
+
 use hgl_analyser::hir::{Cell, Expr, ExprKind, Stmt};
 use hgl_analyser::{Argument as GenericArgument, Type};
-use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
+use hgl_lower::calls::{DefaultValue, LeftOut, left_out, runtime_arguments};
 use hgl_lower::instances::{core_function, run_wiring, trace_payload};
 
 use super::Emitter;
@@ -113,7 +115,7 @@ impl Emitter<'_> {
         // are evaluated after the arguments written (EXPR-2); of a value
         // function, which is lifted, of every parameter it leaves out,
         // which binds as configuration (FN-6).
-        let left: Vec<&Expr> = callee
+        let left: Vec<DefaultValue<'_>> = callee
             .declaration()
             .and_then(|(module, declaration)| {
                 match program.modules[module].details.get(declaration) {
@@ -129,12 +131,7 @@ impl Emitter<'_> {
                                         .any(|argument| argument.parameter == Some(*index))
                             })
                             .filter_map(|(index, parameter)| {
-                                match left_out(
-                                    program,
-                                    Some((module, declaration)),
-                                    index,
-                                    parameter,
-                                ) {
+                                match left_out(program, callee, index, parameter) {
                                     Some(LeftOut::Default(default)) => Some(default),
                                     _ => None,
                                 }
@@ -149,7 +146,7 @@ impl Emitter<'_> {
         let held = arguments
             .iter()
             .map(|argument| &argument.value)
-            .chain(left.iter().copied())
+            .chain(left.iter().map(Deref::deref))
             .filter(|part| may_fail(part))
             .count()
             + config_failing
@@ -274,18 +271,17 @@ impl Emitter<'_> {
                 if written || !(parameter.constant || !temporal) {
                     continue;
                 }
-                let Some(LeftOut::Default(default)) =
-                    left_out(program, Some((module, declaration)), index, parameter)
+                let Some(LeftOut::Default(default)) = left_out(program, callee, index, parameter)
                 else {
                     continue;
                 };
                 // A value function's default that cannot fail is the same
                 // value wherever it is evaluated: its lifted node binds it
                 // where it is wired (`lifting`).
-                if !temporal && !may_fail(default) {
+                if !temporal && !may_fail(&default) {
                     continue;
                 }
-                if changes(default) {
+                if changes(&default) {
                     return self.missing(default.at, "a default that runs statements");
                 }
                 let cold = hgl_analyser::hir::Body {
@@ -293,7 +289,7 @@ impl Emitter<'_> {
                     statements: Vec::new(),
                 };
                 let mut cold_scope = Scope::cold(program, &cold);
-                let written = self.expression(&mut cold_scope, default);
+                let written = self.expression(&mut cold_scope, &default);
                 if !cold_scope.before.is_empty() {
                     return self.missing(default.at, "a default that propagates a failure");
                 }

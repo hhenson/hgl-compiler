@@ -288,6 +288,7 @@ impl Typer<'_> {
             let requirements = self.answers(module, declaration, &chosen.generics);
             let callee = Callee::Candidate {
                 operator: (operator.module, operator.declaration),
+                operator_generics: Vec::new(),
                 module,
                 declaration,
                 generics: chosen.generics,

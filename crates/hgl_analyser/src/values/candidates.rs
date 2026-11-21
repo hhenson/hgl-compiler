@@ -506,6 +506,7 @@ impl<'a> Typer<'a> {
         operator: OperatorRef,
         chosen: Chosen,
         given: Vec<Given>,
+        operator_generics: Vec<Argument>,
         (form, at): (Form, Location),
     ) -> (ExprKind, Type) {
         let Chosen {
@@ -659,6 +660,7 @@ impl<'a> Typer<'a> {
         let kind = ExprKind::Call {
             callee: Callee::Candidate {
                 operator: (operator.module, operator.declaration),
+                operator_generics,
                 module,
                 declaration,
                 generics,
@@ -1026,7 +1028,7 @@ impl<'a> Typer<'a> {
         &mut self,
         operator: OperatorRef,
         given: &[Given],
-        (wanted, requested): (&Wanted, Option<&Type>),
+        (wanted, requested, operator_generics): (&Wanted, Option<&Type>, &[Argument]),
         (form, at, name): (Form, Location, Location),
         untold: bool,
     ) -> Settled {
@@ -1067,6 +1069,7 @@ impl<'a> Typer<'a> {
             at,
             name,
             operator,
+            operator_generics: operator_generics.to_vec(),
             form,
             arguments: given.to_vec(),
             place: wanted.place.cloned(),
@@ -1103,7 +1106,7 @@ impl<'a> Typer<'a> {
                 // (`Typer::called`): a `var` parameter's place among them.
                 AtInstance::Selected(chosen, given) => {
                     let start = self.diagnostics.len();
-                    self.called(operator, *chosen, given, (form, name));
+                    self.called(operator, *chosen, given, Vec::new(), (form, name));
                     self.diagnostics.as_slice()[start..].first().cloned()
                 }
                 AtInstance::Rejected(report) => Some(report),
@@ -1420,6 +1423,8 @@ pub(crate) struct Selecting {
     pub(crate) name: Location,
     /// The operator called.
     pub(crate) operator: OperatorRef,
+    /// The generic arguments of the public operator signature.
+    operator_generics: Vec<Argument>,
     /// How the call is written.
     pub(crate) form: Form,
     /// Its arguments as written, each with its name where it is given
@@ -1558,7 +1563,18 @@ pub(crate) fn select_in_instance(
         else {
             return;
         };
-        let (kind, ty) = typer.called(call.operator, *chosen, given, (call.form, call.name));
+        let operator_generics = call
+            .operator_generics
+            .iter()
+            .map(|argument| crate::instance::placed(argument, &map))
+            .collect();
+        let (kind, ty) = typer.called(
+            call.operator,
+            *chosen,
+            given,
+            operator_generics,
+            (call.form, call.name),
+        );
         expression.kind = kind;
         expression.ty = ty;
         after(expression);

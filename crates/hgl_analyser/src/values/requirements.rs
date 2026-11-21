@@ -835,6 +835,7 @@ impl<'a> Typer<'a> {
             place: requested,
             among,
             unfit,
+            ..
         } = self.output_requested(operator, public, found, &supplied, false);
         // GEN-13: a default the call would take is not of its
         // parameter's type as these types resolve it. The call would be
@@ -1229,6 +1230,7 @@ impl<'a> Typer<'a> {
         operator: OperatorRef,
         required: Required,
         given: Vec<Given>,
+        operator_generics: Vec<Argument>,
         form: Form,
     ) -> (ExprKind, Type) {
         let Required {
@@ -1268,6 +1270,7 @@ impl<'a> Typer<'a> {
             callee: Callee::Required {
                 operator: (operator.module, operator.declaration),
                 requirement: index,
+                operator_generics,
             },
             arguments,
             form,
@@ -1870,7 +1873,13 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                             // is selected (`Typer::called`): a `var`
                             // parameter's place among them (FN-15).
                             let mark = typer.diagnostics.len();
-                            typer.called(call.operator, *chosen, given, (call.form, call.name));
+                            typer.called(
+                                call.operator,
+                                *chosen,
+                                given,
+                                Vec::new(),
+                                (call.form, call.name),
+                            );
                             let reports = typer.diagnostics.as_slice()[mark..].to_vec();
                             typer.diagnostics.truncate(mark);
                             let fails = !reports.is_empty();

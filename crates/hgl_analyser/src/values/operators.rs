@@ -108,6 +108,7 @@ impl<'a> Typer<'a> {
                 return Requested {
                     place: None,
                     among: None,
+                    generics: Vec::new(),
                     unfit: Some(Unfit {
                         generic: index,
                         described,
@@ -134,6 +135,15 @@ impl<'a> Typer<'a> {
         Requested {
             place,
             among,
+            generics: if public
+                .parameters
+                .iter()
+                .any(|parameter| parameter.configuration && parameter.has_default)
+            {
+                explicit
+            } else {
+                Vec::new()
+            },
             unfit: None,
         }
     }
@@ -329,6 +339,7 @@ impl<'a> Typer<'a> {
         let Requested {
             place: requested,
             among,
+            generics: operator_generics,
             unfit,
         } = self.output_requested(operator, public, found, &supplied, said);
         // GEN-13: a default the call takes is of its parameter's type
@@ -351,7 +362,7 @@ impl<'a> Typer<'a> {
             (requested.as_ref(), expected),
             written_generics.as_deref(),
         ) {
-            return self.call_required(operator, result, given, Form::Named);
+            return self.call_required(operator, result, given, operator_generics, Form::Named);
         }
         // True where the output requested is the type the call writes
         // for the operator's result that is a type parameter and nothing
@@ -387,7 +398,7 @@ impl<'a> Typer<'a> {
         match self.select_per_instance(
             operator,
             &given,
-            (&wanted, requested.as_ref()),
+            (&wanted, requested.as_ref(), &operator_generics),
             (Form::Named, written, named),
             untold,
         ) {
@@ -432,7 +443,13 @@ impl<'a> Typer<'a> {
             self.diagnostics.emit(diagnostic);
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
-        self.called(operator, chosen, given, (Form::Named, at))
+        self.called(
+            operator,
+            chosen,
+            given,
+            operator_generics,
+            (Form::Named, at),
+        )
     }
 
     /// Read the arguments in source order. FN-17's static arguments
@@ -1154,6 +1171,8 @@ pub(super) struct Requested {
     pub(super) place: Option<Type>,
     /// The types the operator's own requirement admits for its result.
     pub(super) among: Option<Vec<Type>>,
+    /// The operator's resolved generic arguments, for any configuration defaults.
+    pub(super) generics: Vec<Argument>,
     /// A default the call takes that is not of its parameter's type as
     /// the call resolves it (GEN-13). Nothing is then requested.
     pub(super) unfit: Option<Unfit>,

@@ -88,7 +88,13 @@ impl<'a> Typer<'a> {
                     && let Some(operator) = identity
                     && let Some(result) = self.required(operator, &[&only], (None, expected), None)
                 {
-                    return self.call_required(operator, result, vec![only], symbol.form);
+                    return self.call_required(
+                        operator,
+                        result,
+                        vec![only],
+                        Vec::new(),
+                        symbol.form,
+                    );
                 }
                 // An operand whose operators are not judged here: see
                 // `unjudged_operand`.
@@ -367,7 +373,13 @@ impl<'a> Typer<'a> {
             && let Some(operator) = identity
             && let Some(result) = self.required(operator, &[&left, &right], (None, place), None)
         {
-            return self.call_required(operator, result, vec![left, right], symbol.form);
+            return self.call_required(
+                operator,
+                result,
+                vec![left, right],
+                Vec::new(),
+                symbol.form,
+            );
         }
         let identity = identity.filter(|_| !(as_written(&left) || as_written(&right)));
         let Some(identity) = identity else {
@@ -689,19 +701,35 @@ impl<'a> Typer<'a> {
         if self.diagnostics.len() != reported {
             return (self.unselected(given, symbol.form), symbol.unjudged);
         }
-        let (requested, among) = if said {
+        // An implicit configuration default can read the operator's
+        // generics without changing what the symbol asks of its candidates.
+        let has_default = !public.generics.is_empty()
+            && public
+                .parameters
+                .iter()
+                .any(|parameter| parameter.configuration && parameter.has_default);
+        let (requested, among, operator_generics) = if said || has_default {
             from_place(public, symbol.place.as_ref(), &mut found);
             let supplied = public_inputs(public, &given);
-            let requested = self.output_requested(operator, public, found, &supplied, true);
+            let requested = self.output_requested(operator, public, found, &supplied, said);
             if let Some(unfit) = &requested.unfit {
                 self.diagnostics.emit(unfit.diagnostic(public, symbol.at));
                 return (self.unselected(given, symbol.form), symbol.unjudged);
             }
-            (requested.place, requested.among)
+            if said {
+                (requested.place, requested.among, requested.generics)
+            } else {
+                (
+                    None,
+                    self.result_among(operator, public, &[], &own_generics),
+                    requested.generics,
+                )
+            }
         } else {
             (
                 None,
                 self.result_among(operator, public, &[], &own_generics),
+                Vec::new(),
             )
         };
         let wanted = Wanted {
@@ -728,7 +756,7 @@ impl<'a> Typer<'a> {
             let settled = self.select_per_instance(
                 operator,
                 &given,
-                (&wanted, None),
+                (&wanted, None, &operator_generics),
                 (symbol.form, written, symbol.at),
                 untold,
             );
@@ -768,7 +796,13 @@ impl<'a> Typer<'a> {
                 self.diagnostics.emit(diagnostic);
                 return (self.unselected(given, symbol.form), Type::Unknown);
             }
-            return self.called(operator, chosen, given, (symbol.form, symbol.at));
+            return self.called(
+                operator,
+                chosen,
+                given,
+                operator_generics,
+                (symbol.form, symbol.at),
+            );
         }
         // `i64` and `f64`, and after them what the configuration gives:
         // `zero: .nan`.

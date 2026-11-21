@@ -925,6 +925,9 @@ pub enum Callee {
         /// `Program::modules`, and its position in that module's
         /// `declarations`.
         operator: (usize, usize),
+        /// The operator's own generic arguments, used to read inherited
+        /// configuration defaults in its defining scope (GEN-6, UNIT-7).
+        operator_generics: Vec<GenericArgument>,
         /// The position of the candidate's module in
         /// `Program::modules`.
         module: usize,
@@ -952,6 +955,8 @@ pub enum Callee {
         /// `Program::modules`, and its position in that module's
         /// `declarations`.
         operator: (usize, usize),
+        /// The operator's own generic arguments, for inherited defaults.
+        operator_generics: Vec<GenericArgument>,
         /// The requirement of the enclosing declaration the call is:
         /// its position among the constraint calls that hold wherever
         /// the declaration's `requires` does, in the order written.
