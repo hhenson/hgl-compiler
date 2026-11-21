@@ -37,6 +37,10 @@ Each rule and the stage that implements it: [docs/rules.md](docs/rules.md).
 
 ## Use
 
+On Apple silicon with macOS 26.0 or later, install the [release bundle](docs/releases.md) with `brew install hhenson/hgraph/hgl`.
+
+To build from source, use Cargo.
+
 ```text
 git clone --recurse-submodules https://github.com/hhenson/hgl-compiler
 cargo test --workspace
