@@ -10,6 +10,7 @@
 //! | `return value`, `out = value` to a window result in a node's `when` (TIME-7, END-5) | `arrival_.hold(value);`: the node's `eval` runs its handlers in `::hglrt::WindowArrival::run`, which holds the last value written in the evaluation and then pushes it, the cycle's one arrival (TYPE-11) |
 //! | A source's `yield` to a window (TIME-7) | `::hglrt::window_push(view, value);`: the V arrives |
 //! | A read of a window's value in a hook or a lifted call's node (TYPE-11) | `::hglrt::window_value(view)`, a `list<V>` oldest first, which fails with `value.unset_read` before the window is all valid; where its place takes a `result` ([`ExprKind::CheckedWindow`]), `::hglrt::window_value_checked(view)` |
+//! | `invalidate(out)` (END-4) | discard its pending arrival and retained samples, then withdraw the window |
 //! | `all_valid(window)` (END-9) | `::hglrt::fn_all_valid(view)` |
 //! | `delta_value(window)` (END-3, END-9, ERR-14) | `::hglrt::fn_delta_value(view)`, or `fn_delta_value_checked` where its place takes a `result`: the value that arrived |
 //! | `removed_value(window)`, read only where its place takes a `result` (END-9, ERR-14) | `::hglrt::fn_removed_value_checked(view)` |
@@ -19,7 +20,7 @@
 //! `valid`, `modified` and `last_modified` of a window are the endpoints'
 //! family's, which hgraph's views answer for a window as for any value.
 //! A window whose V is no scalar, or whose bounds are not known,
-//! `invalidate` of a window result (END-4), and a node's read of its own
+//! or a node's read of its own
 //! window result in a `when`, or a handler whose header names it, which
 //! would not see what the evaluation holds to publish, are not written
 //! yet, and are reported.
@@ -142,7 +143,7 @@ fn own_window(emitter: &Emitter, locals: &[hgl_analyser::hir::Local], local: usi
 
 /// True where `value` reads the window result of the node whose `when`
 /// is being written: an endpoint operation on it but `invalidate`, which
-/// is reported of its own, its `delta_value` or `removed_value` into a
+/// withdraws the result, its `delta_value` or `removed_value` into a
 /// `result`, or its value into a `result`. (A plain read of `out` is the
 /// endpoints' family's to report.)
 fn own_read(emitter: &Emitter, locals: &[hgl_analyser::hir::Local], value: &Expr) -> bool {
@@ -392,9 +393,7 @@ impl Family for Windows {
                 let view = emitter.view(locals, *local)?;
                 Some(format!("{}({view})", library("fn_all_valid")))
             }
-            // END-4 of a window result: hgraph's window has no
-            // invalidation of its own, which the library does not stand
-            // in for yet.
+            // END-4: discard both the pending arrival and retained history.
             ExprKind::Endpoint {
                 operation: EndpointOperation::Invalidate,
                 inputs: Some(inputs),
@@ -403,7 +402,13 @@ impl Family for Windows {
                     return None;
                 };
                 window_type(emitter, locals, *local)?;
-                Some(emitter.missing(value.at, "`invalidate` of a window"))
+                scope.acted = true;
+                let view = emitter.view(locals, *local)?;
+                if holding(emitter, &view) {
+                    Some(format!("{ARRIVAL}.invalidate()"))
+                } else {
+                    Some(format!("{}({view})", library("window_invalidate")))
+                }
             }
             // TYPE-11, ERR-14: the read of a window's value where its place
             // expects `result<list<V>, error>`.

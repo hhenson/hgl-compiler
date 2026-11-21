@@ -393,8 +393,8 @@ fn emit_writes_a_unit_a_header_and_an_entry() {
 }
 
 /// `hgl run --target cpp` says what an application needs that the
-/// target does not write, and runs nothing: here the invalidation of a
-/// window result (END-4), which a node its entry wires reaches.
+/// target does not write, and runs nothing: here a read of the pending
+/// window result while its evaluation holds an arrival (TYPE-11).
 #[test]
 fn run_says_what_an_application_lacks() {
     let root = scratch("run");
@@ -405,7 +405,7 @@ fn run_says_what_an_application_lacks() {
             "application demo.app\n",
             "fn cleared(reading: i64) -> rolling_window<i64, 2> {\n",
             "    inject out\n",
-            "    when { invalidate(out) }\n",
+            "    when { if valid(out) { return reading } }\n",
             "}\n",
             "fn counted(readings: rolling_window<i64, 2>) -> i64 {\n",
             "    when { return delta_value(readings) }\n",
@@ -424,7 +424,9 @@ fn run_says_what_an_application_lacks() {
     );
     assert_eq!(
         text(&output.stderr),
-        format!("{file}:4:12: the cpp target does not write `invalidate` of a window yet\n")
+        format!(
+            "{file}:4:15: the cpp target does not write a read of a node's own window result in its `when` yet\n"
+        )
     );
 }
 
@@ -798,7 +800,12 @@ fn windows_run_on_the_sdk() {
         "src/demo.windows.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.windows.hgl"),
     );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let withdrawal = write(
+        &root,
+        "src/demo.window_withdrawal.hgl",
+        include_str!("fixtures/demo.window_withdrawal.hgl"),
+    );
+    let output = hgl_in(&["test", &file, &withdrawal, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -807,7 +814,7 @@ fn windows_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 15 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

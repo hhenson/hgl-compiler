@@ -122,6 +122,26 @@ void window_push(const E& window, const window_value_t<E>& value) {
     window.push(value);
 }
 
+/// END-4: discard the samples and their times. Bare hgraph invalidation
+/// retains window history, and a structural clear exposes the old samples
+/// as removals. Empty sample replacement starts the next write fresh.
+template <window_view E>
+void window_invalidate(const E& window) {
+    if (!window.valid()) {
+        return;
+    }
+    const auto now = window.evaluation_time();
+    const auto withdraw = [&] { static_cast<void>(window.base().begin_mutation(now).invalidate()); };
+    if (window.modified()) {
+        // A same-cycle arrival or expiry already used the window's write.
+        withdraw();
+    }
+    const auto* list = hgraph::TypeRegistry::instance().list(window.data_view().schema()->value_type);
+    const hgraph::Value empty{hgraph::ValuePlanFactory::instance().type_for(list)};
+    window.begin_mutation(now).replace_samples(empty.view(), {});
+    withdraw();
+}
+
 /// The arrival that a node's evaluation makes at its window result, held
 /// while the node's handlers run and made once they have run. END-5:
 /// "Further writes to the already modified endpoint in the same evaluation
@@ -144,6 +164,16 @@ class WindowArrival {
     /// `return value` or `out = value`: `value` is the cycle's arrival, in
     /// place of any written before it in the evaluation.
     void hold(const window_value_t<E>& value) { held_ = value; }
+
+    /// END-4: withdraw even a pending first publication, then let a later
+    /// write start a fresh history. Repeated withdrawals alone stay silent.
+    void invalidate() {
+        if (!window_.valid()) {
+            arrive();
+        }
+        held_.reset();
+        window_invalidate(window_);
+    }
 
     /// Runs `handlers`, the node's handlers, then makes the arrival held, where
     /// one was written. Where the handlers fail, the arrival held is made

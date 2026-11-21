@@ -76,11 +76,10 @@ Scheduler::Scheduler(hgraph::NodeScheduler view, Hook hook) : view_(view), hook_
     if (hook_ != Hook::evaluation) {
         return;
     }
-    // hgraph's `un_schedule()` with no tag takes its earliest wake, and that
-    // wake's tag with it.
-    while (view_.is_scheduled_now()) {
+    due_now_ = view_.is_scheduled_now();
+    // Older SDKs include a wake being delivered in the pending queue (CAP-4).
+    while (due_now_ && view_.is_scheduled() && view_.next_scheduled_time() == view_.now()) {
         view_.un_schedule();
-        due_now_ = true;
     }
 }
 

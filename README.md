@@ -96,6 +96,11 @@ hgraph's C++ SDK, whose install prefix `HGL_HGRAPH_SDK` names and whose
 dependency prefix `HGL_HGRAPH_DEPS` names, with GCC 15 or later on
 Linux or Apple clang 21 or later on macOS, and `ninja`; see [docs/architecture.md](docs/architecture.md#cpp).
 
+Before upgrading to an hgraph scheduler that excludes the current delivery from
+pending wakes, regenerate Python targets or rebuild the HGL C++ runtime with
+this adapter. An older runtime can hang on its first wake. Keep its existing
+hgraph version until the runtime is upgraded.
+
 The compiler reports nesting deeper than 100 levels and a syntax tree deeper
 than 500. `--nesting-limit` and `--tree-depth-limit` raise them.
 

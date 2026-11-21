@@ -3557,10 +3557,10 @@ fn a_timer_wakes_its_own_handlers() {
         concat!(
             "@_hg.compute_node(valid=())\n",
             "def sampled(price: _hg.TS[_py.float], every: _dt.timedelta, ",
-            "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.float]:\n",
+            "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None, _clock: _hg.EvaluationClock = None) -> _hg.TS[_py.float]:\n",
             // CAP-4: the wake being delivered is taken as the node is
             // entered, and is no longer pending.
-            "    _scheduler = _core.Wake(_scheduler)\n",
+            "    _scheduler = _core.Wake(_scheduler, _clock.evaluation_time)\n",
             // What woke the node is read where it is entered: a
             // handler before the one that asks may change it.
             "    _timer_woke = _scheduler.is_scheduled_now\n",
@@ -3596,8 +3596,8 @@ fn a_timer_wakes_its_own_handlers() {
         concat!(
             "@_hg.compute_node(active=(), valid=())\n",
             "def _node_beats(_begin: _hg.TS[_py.bool], every: _dt.timedelta, times: _py.int, ",
-            "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.int]:\n",
-            "    _scheduler = _core.Wake(_scheduler)\n",
+            "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None, _clock: _hg.EvaluationClock = None) -> _hg.TS[_py.int]:\n",
+            "    _scheduler = _core.Wake(_scheduler, _clock.evaluation_time)\n",
             "    if _scheduler.is_scheduled_now:\n",
         ),
         concat!(
@@ -3635,8 +3635,8 @@ fn scheduled_is_a_bool_where_it_selects_nothing() {
         // A disjunction: every input subscribed, and each required valid.
         concat!(
             "@_hg.compute_node\n",
-            "def either(a: _hg.TS[_py.int], b: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.int]:\n",
-            "    _scheduler = _core.Wake(_scheduler)\n",
+            "def either(a: _hg.TS[_py.int], b: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None, _clock: _hg.EvaluationClock = None) -> _hg.TS[_py.int]:\n",
+            "    _scheduler = _core.Wake(_scheduler, _clock.evaluation_time)\n",
             "    _timer_woke = _scheduler.is_scheduled_now\n",
             "    if (a.modified or a.invalidated or b.modified or b.invalidated) and ((a.modified and a.valid) or _timer_woke):\n",
         ),
@@ -3682,7 +3682,7 @@ fn the_empty_selection_as_a_bool_and_a_wakes_duration_are_written() {
         "    return _py.tuple([(not ((input.modified and input.valid))), (not (not ((input.modified and input.valid))))])\n",
         "    if ((not ((input.modified and input.valid))) or (input.modified and input.valid)):\n",
         "        return (not ((a.modified and a.valid) or (b.modified and b.valid)))\n",
-        "_begin: _hg.TS[_py.bool], _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.bool]:\n    _scheduler = _core.Wake(_scheduler)\n    if _scheduler.is_scheduled_now:\n        return True\n",
+        "_begin: _hg.TS[_py.bool], _scheduler: _hg.SCHEDULER = None, _clock: _hg.EvaluationClock = None) -> _hg.TS[_py.bool]:\n    _scheduler = _core.Wake(_scheduler, _clock.evaluation_time)\n    if _scheduler.is_scheduled_now:\n        return True\n",
         "        return (not (target.modified))\n",
         // A literal, which the analyser has judged.
         "at=_dt.timedelta(microseconds=1000000), tag=\"with input\"",
@@ -3699,7 +3699,7 @@ fn the_empty_selection_as_a_bool_and_a_wakes_duration_are_written() {
         // An instance's literal, which the analyser did not see: one
         // more than zero is given as it is, and zero is checked.
         "at=_dt.timedelta(microseconds=1000000), tag=None",
-        "def _inst_generic_after__0us(value: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.bool]:\n    _scheduler = _core.Wake(_scheduler)\n    if value.modified:\n        _core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_dt.timedelta(microseconds=0), tag=None, on_wall_clock=False, _starting=False)",
+        "def _inst_generic_after__0us(value: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None, _clock: _hg.EvaluationClock = None) -> _hg.TS[_py.bool]:\n    _scheduler = _core.Wake(_scheduler, _clock.evaluation_time)\n    if value.modified:\n        _core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_dt.timedelta(microseconds=0), tag=None, on_wall_clock=False, _starting=False)",
     ]);
     let support = emitted.text("_hgl/_core_support.py");
     assert!(support.contains("code=\"schedule.non_positive_duration\""));
@@ -3777,7 +3777,7 @@ fn every_inputless_node_has_a_hidden_input() {
             "    pass\n",
         ),
         "    _node_started_only(_begin=_hg.const(True))\n",
-        "    _scheduler = _core.Wake(_scheduler)\n",
+        "    _scheduler = _core.Wake(_scheduler, _clock.evaluation_time)\n",
     ]);
     let support = emitted.text("_hgl/_core_support.py");
     assert!(support.contains("return None if tag is None else \"#\" + tag"));

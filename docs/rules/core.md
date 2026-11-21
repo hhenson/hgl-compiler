@@ -373,7 +373,7 @@ transpiler: partial
 
 - hgraph: `invalidate(out)` clears the output; one that holds an unsized list, a dictionary or a set, at any depth of a struct, a tuple and a fixed list, empties each first (`_core.invalidated`), since hgraph's `TSL` keeps its positions and its `TSD` and `TSS` their keys and members, which the next delta read would name removed and a delta that names no change would leave in what it makes valid (TIME-7: "it makes the value valid and empty")
 - `invalidate(out)` of a `ref` result (FN-16: `out` of one takes the endpoint operations) leaves it designating nothing: the invalidation, for which hgraph 0.9.8 unbinds an ordinary reader and wakes it with its input not valid, and a `ref` parameter given it is not valid; the last action of the evaluation decides (`_core.Designation`); invalidated again while it is not valid, it wakes no reader, as hgraph has it
-- Invalidating a direct window result discards its samples and their timestamps. The final action of the evaluation decides whether it stays invalid or starts a fresh window with the last arrival.
+- Both targets discard retained samples and timestamps when a direct window result is invalidated. Its next publication begins a fresh history. The last action in the producer evaluation decides its final validity.
 - An active input's transition to invalid wakes the node
 - In a body or handler guard, `modified(input)` is false on invalidation, whether the input is active or passive
 - Repeated scalar invalidation is silent and a scalar producer's last action decides its final validity
@@ -491,7 +491,7 @@ analyser: done
 
 transpiler: partial
 
-- hgraph: as a node is entered each wake due then is taken from hgraph's scheduler (`_core.Wake`), which holds it until the node has run: it is delivered and no longer pending, so `is_scheduled`, `next_scheduled_time` (null where none is pending) and `un_schedule` with no tag see only the wakes to come, and `is_scheduled_now` holds through the evaluation, as `scheduled()` does
+- hgraph and C++: both adapters capture the wake delivered on entry and remove any requests for that evaluation time still present in the native queue. The delivery remains observable throughout evaluation. Pending queries and untagged cancellation see future requests only.
 - `schedule` with a `duration` or a `datetime`, a tag and `on_wall_clock`, `un_schedule` with a tag or without, and `reset` are hgraph's; a tag is kept with a mark before it, so the empty tag is a tag
 - A wake asked for at a `datetime` before the current evaluation time is dropped, with no failure; a zero duration in `start` wakes the node's first evaluation
 - A duration not more than zero, but a zero in `start`, fails the call with `schedule.non_positive_duration` where the compiler does not see it (TIME-8, `_starting=`): hgraph 0.9.8 drops a zero or negative duration asked for in an evaluation, and a negative one in `start`, with no failure
