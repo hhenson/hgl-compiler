@@ -126,7 +126,7 @@ fn signal_marks(
     let mut marks = Vec::new();
     let written = crate::read::parameters(syntax);
     for (parameter, node) in signature.parameters.iter().zip(&written) {
-        if !parameter.reference {
+        if !parameter.reference || parameter.configuration {
             continue;
         }
         let message = if *parameter.ty.omission_removed() == Type::Signal {
@@ -187,6 +187,10 @@ fn ref_tokens(declaration: &hgl_parser::SyntaxNode) -> Vec<hgl_parser::SyntaxTok
     let result = crate::syntax::child(declaration, hgl_parser::SyntaxKind::ReturnType);
     crate::read::parameters(declaration)
         .iter()
+        .filter(|node| {
+            node.parent()
+                .is_some_and(|list| list.kind() == SyntaxKind::ParamList)
+        })
         .chain(result.iter())
         .filter_map(|node| {
             crate::syntax::tokens(node).find(|token| token.kind() == hgl_parser::SyntaxKind::KwRef)
@@ -244,7 +248,7 @@ fn var_parameters(program: &Program, diagnostics: &mut Diagnostics) {
             };
             let written = crate::read::parameters(&declaration.syntax);
             for (parameter, node) in signature.parameters.iter().zip(&written) {
-                if !parameter.var {
+                if !parameter.var || parameter.configuration {
                     continue;
                 }
                 let Some(var) = crate::syntax::tokens(node)

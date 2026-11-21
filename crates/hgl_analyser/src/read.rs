@@ -542,6 +542,13 @@ pub(crate) fn parameters(declaration: &SyntaxNode) -> Vec<SyntaxNode> {
         .collect()
 }
 
+/// FN-18: a parameter declared in the braces before the parentheses.
+fn is_configuration_parameter(parameter: &SyntaxNode) -> bool {
+    parameter
+        .parent()
+        .is_some_and(|list| list.kind() == SyntaxKind::ConfigParamList)
+}
+
 /// What a generic parameter is written as.
 enum Form {
     /// `T`
@@ -758,9 +765,7 @@ impl Reader<'_> {
             parameters.push(Parameter {
                 name: name.text().to_string(),
                 at: self.at(name.span()),
-                configuration: parameter
-                    .parent()
-                    .is_some_and(|list| list.kind() == SyntaxKind::ConfigParamList),
+                configuration: is_configuration_parameter(&parameter),
                 constant,
                 var: has_token(&parameter, SyntaxKind::KwVar),
                 // FN-16: "`ref low: f64` ... The mark is a mode".
@@ -994,13 +999,19 @@ impl Reader<'_> {
         }) else {
             return false;
         };
-        let marked = parameters(&declaration).iter().any(|parameter| {
-            is_const(parameter)
-                && names_before_colon(parameter)
-                    .last()
-                    .is_some_and(|declared| declared.span().start == at.span.start)
-        });
-        if marked {
+        let Some(parameter) = parameters(&declaration).into_iter().find(|parameter| {
+            names_before_colon(parameter)
+                .last()
+                .is_some_and(|declared| declared.span().start == at.span.start)
+        }) else {
+            return false;
+        };
+        // FN-18: a configuration parameter, including a `const` one,
+        // is only read by the body. Requirements read generic values.
+        if is_configuration_parameter(&parameter) {
+            return false;
+        }
+        if is_const(&parameter) {
             return true;
         }
         // A value candidate. GEN-6: "Every parameter of a value
@@ -1019,7 +1030,7 @@ impl Reader<'_> {
                 .is_some_and(|declared| declared.text() == name.text())
         });
         match declared {
-            Some(parameter) => is_const(&parameter),
+            Some(parameter) => !is_configuration_parameter(&parameter) && is_const(&parameter),
             None => true,
         }
     }

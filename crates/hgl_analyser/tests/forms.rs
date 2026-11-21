@@ -12,6 +12,98 @@ use hgl_analyser::hir::{Callee, ExprKind, PackKey, walk_statements};
 /// No lines.
 const NONE: [&str; 0] = [];
 
+/// FN-18: functions and native declarations take their configuration
+/// by name in braces. EXPR-10 also lets a brace name an ordinary or
+/// generic value parameter. UNIT-8 allows any order in the braces.
+#[test]
+fn configuration_parameters_bind_in_their_braces() {
+    let checked = module(concat!(
+        "const fn mix<const scale: i64 = 2>{offset: i64 = 1, base: i64}(value: i64) -> i64 => scale * value + base + offset\n",
+        "native const fn native_mix{const increment_by: i64}(value: i64) -> i64\n",
+        "const fn bare() -> i64 => mix{base: 1, value: 2, scale: 3}()\n",
+        "const fn typed() -> i64 => mix<4>{base: 5}(6)\n",
+        "const fn native_call() -> i64 => native_mix{increment_by: 2}(7)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// FN-18: a required configuration parameter must be supplied by name
+/// in braces. EXPR-2 still detects duplicate ordinary arguments.
+#[test]
+fn configuration_parameters_are_neither_positional_nor_parenthesized() {
+    let checked = module(concat!(
+        "const fn configured{a: i64}(b: i64 = 10) -> i64 => a + b\n",
+        "const fn two(x: i64, y: i64 = 5) -> i64 => x + y\n",
+        "const fn missing() -> i64 => configured(2)\n",
+        "const fn by_position() -> i64 => configured(1, 2)\n",
+        "const fn by_name() -> i64 => configured(a: 1)\n",
+        "const fn duplicate() -> i64 => two{x: 1}(2)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:30 type/argument.missing FN-18",
+            "m.hgl:5:34 type/argument.missing FN-18",
+            "m.hgl:5:48 type/argument.unexpected EXPR-2",
+            "m.hgl:6:30 type/argument.missing FN-18",
+            "m.hgl:6:41 name/argument.unknown FN-18",
+            "m.hgl:7:36 name/argument.duplicate EXPR-2",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// EXPR-10 preserves the positional argument rules of intrinsic forms.
+#[test]
+fn positional_intrinsics_reject_named_configuration() {
+    let checked = module(concat!(
+        "const fn tagged() -> result<i64, error> => ok{ignored: 9}(2)\n",
+        "fn selected(value: i64) -> i64 {\n",
+        "    when {\n",
+        "        if (valid{ignored: 9}(value)) { return 1 }\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:47 name/argument.unknown EXPR-10",
+            "m.hgl:5:19 name/argument.unknown EXPR-10",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// FN-18 forbids parameter modes and name collisions in configuration.
+/// UNIT-8 checks the ordering of omittable parameters in parentheses.
+#[test]
+fn configuration_declarations_reject_forbidden_modes_and_names() {
+    let checked = module(concat!(
+        "const fn marked{ref low: i64, var rising: i64, items: ...i64, op: const fn(i64) -> i64}() {}\n",
+        "const fn clash{both: i64}(both: i64) -> i64 => both\n",
+        "const fn generic<const size: i64>{size: i64}(value: i64) -> i64 => value\n",
+        "const fn order{maybe: i64 = 2}(x: i64 = 1, y: i64) -> i64 => x + y\n",
+        "const fn guarded{const threshold: i64}(value: i64) -> i64 requires threshold == 0 => value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:17 local:function-kind/parameter.configuration FN-18",
+            "m.hgl:2:31 local:function-kind/parameter.configuration FN-18",
+            "m.hgl:2:55 local:function-kind/parameter.configuration FN-18",
+            "m.hgl:2:67 local:function-kind/parameter.configuration FN-18",
+            "m.hgl:3:27 name/name.duplicate UNIT-5",
+            "m.hgl:4:35 name/name.duplicate UNIT-5",
+            "m.hgl:5:44 type/default.order UNIT-8",
+            "m.hgl:6:68 type/type.not_a_type UNIT-10",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// FN-8: "`...T` captures the positional ones ... `...{Fields}` captures
 /// the named ones, each under its source name, where `Fields` is a
 /// declared type pack."

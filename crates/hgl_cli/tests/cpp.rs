@@ -1154,6 +1154,35 @@ fn function_parameters_run_on_the_sdk() {
     );
 }
 
+/// FN-18 and EXPR-10: brace arguments reach their ordinary, generic,
+/// value and temporal slots. Graphs pass const values and connections
+/// on to a node, and configuration defaults are used when omitted.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn configuration_parameters_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("configuration_parameters");
+    let file = write(
+        &root,
+        "demo.configuration_parameters.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.configuration_parameters.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code and
 /// temporal nodes, including SOURCE-2 yield times and an application failure.
 #[test]

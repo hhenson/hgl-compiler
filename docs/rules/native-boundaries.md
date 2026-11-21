@@ -6,7 +6,7 @@
 
 parser: partial
 
-- Reads `export` before a native function's declaration. An export with `impl` or before a contract body is rejected. Native configuration parameters await #363.
+- Reads `export` before a native function's declaration. An export with `impl` or before a contract body is rejected. Native functions and candidates read the same configuration parameter lists as HGL declarations (FN-18).
 
 analyser: partial
 

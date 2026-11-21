@@ -94,14 +94,14 @@ analyser: partial
 
 ## EXPR-10
 
-parser: partial
+parser: done
 
 - A named-entry brace directly after a symbolic operator holds its configuration. The brace needs at least one entry.
-- Configuration after a callable name awaits #363.
+- Reads the same configuration before a call's parentheses. In a control header a configured call must be parenthesized.
 
 analyser: partial
 
-- In a value function, a hook and a graph, a symbol's configuration is bound as the named arguments of the call the symbol stands for: to the options its operator's candidates declare, a generic value parameter before a parameter; an unknown or a repeated entry, and one no candidate for the operands declares, rejected
+- A brace entry names a configuration parameter first, then a generic value parameter, then an ordinary parameter. Functions, named operators and symbol operators use this order. Rejects repeated and unknown entries and entries no candidate for the operands declares.
 - Configuration on Boolean connectives and `!` is pending. Configuration after a callable name awaits #363.
 
 ## EXPR-11

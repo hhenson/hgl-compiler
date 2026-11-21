@@ -1,0 +1,26 @@
+module demo.configuration_parameters
+
+# FN-18 and UNIT-8: braces can put a default before a required parameter.
+const fn adjusted<const scale: i64 = 1>{offset: i64 = 2, base: i64}(value: i64) -> i64 =>
+    scale * value + base + offset
+
+# FN-18: a temporal configuration can be a connection. A const one is
+# fixed when the graph is built (FN-1).
+fn shifted{offset: i64, const width: i64 = 10}(value: i64) -> i64 {
+    when valid(value) && valid(offset) { return value + offset * width }
+}
+
+fn composed{offset: i64, const width: i64}(value: i64) -> i64 =>
+    shifted{width: width, offset: offset}(value)
+
+test value_configuration {
+    assert adjusted{base: 3}(5) == 10
+    assert adjusted{base: 3, value: 7, scale: 2, offset: 4}() == 21
+    assert adjusted{base: 3, scale: 2}(5) == 15
+    assert adjusted<2>{base: 3}(5) == 15
+}
+
+test temporal_configuration {
+    assert eval shifted{offset: [1, 2]}(value: [2, 3]) == [12, 23]
+    assert eval composed{width: 100, offset: [1, 2]}(value: [2, 3]) == [102, 203]
+}

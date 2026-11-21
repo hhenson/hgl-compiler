@@ -331,7 +331,23 @@ impl<'a> Typer<'a> {
         // reported as missing (ERR-9).
         let mut unnamed_field = false;
         let mut arguments = Vec::new();
-        for (brace, name, value) in self.call_entries(list) {
+        let entries = self.call_entries(list);
+        // EXPR-2 and EXPR-10: braces can name an ordinary slot, but the
+        // parentheses' positional arguments still start at the first
+        // ordinary parameter. Keep the value reads in written order.
+        let reserved_through = if entries.first().is_some_and(|(brace, ..)| *brace) {
+            let positional = entries.iter().filter(|(_, name, _)| name.is_none()).count();
+            slots
+                .iter()
+                .enumerate()
+                .filter(|(_, slot)| slot.takes_position())
+                .take(positional)
+                .last()
+                .map(|(index, _)| index)
+        } else {
+            None
+        };
+        for (brace, name, value) in entries {
             let at = self.at(&value);
             let slot = match &name {
                 // TYPE-5: "it takes no positional argument."
@@ -398,7 +414,12 @@ impl<'a> Typer<'a> {
                         (!configuration || brace) && !(brace && takes == Takes::Fields)
                     });
                     match found {
-                        Some(index) if filled[index] => {
+                        Some(index)
+                            if filled[index]
+                                || brace
+                                    && slots[index].takes_position()
+                                    && reserved_through.is_some_and(|last| index <= last) =>
+                        {
                             self.diagnostics.emit(error(
                                 Category::Name,
                                 codes::ARGUMENT_DUPLICATE,

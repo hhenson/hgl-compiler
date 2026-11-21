@@ -964,8 +964,19 @@ impl fmt::Display for Signature {
             comma_separated(f, &self.generics)?;
             f.write_str(">")?;
         }
+        let configuration_count = self
+            .parameters
+            .iter()
+            .take_while(|p| p.configuration)
+            .count();
+        let (configuration, parameters) = self.parameters.split_at(configuration_count);
+        if !configuration.is_empty() {
+            f.write_str("{")?;
+            comma_separated(f, configuration)?;
+            f.write_str("}")?;
+        }
         f.write_str("(")?;
-        comma_separated(f, &self.parameters)?;
+        comma_separated(f, parameters)?;
         f.write_str(")")?;
         match &self.result {
             Some(result) if self.reference => write!(f, " -> ref {result}"),

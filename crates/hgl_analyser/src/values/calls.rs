@@ -406,20 +406,39 @@ impl<'a> Typer<'a> {
         &self,
         list: &SyntaxNode,
     ) -> Vec<(bool, Option<SyntaxToken>, SyntaxNode)> {
-        list.parent()
-            .and_then(|call| child(&call, SyntaxKind::OperatorConfig))
-            .into_iter()
-            .flat_map(|braces| braces.children())
-            .filter(|entry| entry.kind() == SyntaxKind::ConfigArg)
-            .filter_map(|entry| {
-                Some((true, Some(tokens(&entry).next()?), entry.children().next()?))
-            })
+        Self::configuration_entries(list)
+            .map(|(name, value)| (true, Some(name), value))
             .chain(
                 self.call_arguments(list)
                     .into_iter()
                     .map(|(name, value)| (false, name, value)),
             )
             .collect()
+    }
+
+    /// The names and expressions in a call's configuration (EXPR-10).
+    fn configuration_entries(list: &SyntaxNode) -> impl Iterator<Item = (SyntaxToken, SyntaxNode)> {
+        list.parent()
+            .and_then(|call| child(&call, SyntaxKind::OperatorConfig))
+            .into_iter()
+            .flat_map(|braces| braces.children())
+            .filter(|entry| entry.kind() == SyntaxKind::ConfigArg)
+            .filter_map(|entry| Some((tokens(&entry).next()?, entry.children().next()?)))
+    }
+
+    /// EXPR-10 retains the rules of intrinsic forms. Where a form has
+    /// no named parameter, no brace entry can bind to it.
+    pub(super) fn reject_configuration(&mut self, form: &SyntaxToken, list: &SyntaxNode) {
+        for (name, value) in Self::configuration_entries(list) {
+            self.diagnostics.emit(error(
+                Category::Name,
+                codes::ARGUMENT_UNKNOWN,
+                Location::new(self.file, name.span()),
+                format!("`{}` has no parameter `{}`", form.text(), name.text()),
+                "EXPR-10",
+            ));
+            self.expression(&value, Some(&Type::Unknown));
+        }
     }
 
     /// A call this pass does not read: its arguments are read for what
@@ -512,10 +531,11 @@ impl<'a> Typer<'a> {
             && self.designates(input)
         {
             // The child as it is written.
-            let written = arguments_of(list)
+            let written = self
+                .call_entries(list)
                 .into_iter()
                 .next()
-                .map(|(_, value)| super::endpoint_argument(&value).text().to_string());
+                .map(|(_, _, value)| super::endpoint_argument(&value).text().to_string());
             self.ref_read(
                 input,
                 written.as_deref(),

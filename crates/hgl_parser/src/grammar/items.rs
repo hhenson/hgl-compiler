@@ -504,6 +504,9 @@ impl Parser<'_> {
             self.start(ConfigParamList);
             self.bump();
             self.nested(Context::LIST, |parser| {
+                if parser.at(RBrace) {
+                    parser.expected_rule("a configuration parameter", "FN-18");
+                }
                 parser.list(RBrace, "a configuration parameter", true, |parser| {
                     parser.parameter();
                 });
