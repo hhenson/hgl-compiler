@@ -6,7 +6,7 @@ use hgl_diagnostics::{Category, Location};
 
 use super::Typer;
 use crate::hir::{
-    Body, Callee, Expr, ExprKind, Form, Local, LocalId, Node, Stmt, ValueCategory,
+    Body, Callee, Expr, ExprKind, Form, Local, LocalId, Node, Run, Stmt, ValueCategory,
     walk_statement_nodes, walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
@@ -456,9 +456,15 @@ fn formed_in_composition(program: &Program, locals: &[Local], value: &mut Expr) 
 }
 
 /// [`record`] for an expression that stands in no body: a constant's
-/// value (UNIT-13), a default (UNIT-7), or what an application's run
-/// statement is given (RUN-1). Each is read with no local in scope, and
-/// none composes a graph.
+/// value (UNIT-13) or a default (UNIT-7). Each is read with no local
+/// in scope, and neither composes a graph.
 pub(crate) fn record_value(program: &Program, value: &mut Expr) {
     value.walk_mut(&mut |inner| recorded(program, &[], false, inner));
+}
+
+/// An application's entry arguments are value code with `run_config`
+/// in scope when injected (UNIT-14, RUN-6).
+pub(super) fn record_run(program: &Program, run: &mut Run) {
+    run.call
+        .walk_mut(&mut |inner| recorded(program, &run.locals, false, inner));
 }

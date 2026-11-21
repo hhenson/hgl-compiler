@@ -59,7 +59,7 @@ analyser: done
 - Each entry names a property of core's `RunConfig` (`argument.unknown`), once (`argument.duplicate`), and is value code of its field's type: `ConfigEntry`
 - `RunConfig` is a native type, which no call constructs (`call.not_callable`)
 - A configuration on an application's run statement is `run.configuration`
-- An application injects `run_config` and `global_state`; its `put` values may read `run_config` after its `inject`
+- An application injects `run_config` and `global_state`. Its `put` values and entry arguments may read `run_config` after its `inject`.
 - An integration test injects it before its other statements; an eval there names the injected local for the fields it leaves out (`ExprKind::Eval::inherited`)
 - `inject run_config` in a function or a test that is no integration test, or after an integration test's other statements, is `inject.position`; braces on any other capability are `inject.configuration`
 
@@ -68,4 +68,6 @@ driver: done
 - `hgl run --config FIELD=VALUE` is what starts an application: a field it gives takes the place of the application's default, an `end` takes out a default `length` and a `length` a default `end` (RUN-2)
 - `hgl test` supplies nothing to an integration test's `run_config`: its defaults stand
 
-transpiler: planned
+transpiler: done
+
+- C++ makes the supplied configuration available to application store statements and entry arguments, and makes an integration test's configuration available to its test block. An omitted start stays null when read through `run_config`.

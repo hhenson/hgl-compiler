@@ -29,6 +29,9 @@ pub struct Run {
     /// True for `run`, a run in real time; false for `eval`, a
     /// simulation. RUN-3: "The word of a run statement is its mode."
     pub real_time: bool,
+    /// The injected `run_config`, if in scope, and locals declared
+    /// inside the entry arguments (RUN-6, UNIT-14).
+    pub locals: Vec<Local>,
     /// The call of the entry, with the entry's const arguments.
     pub call: Expr,
     /// Where the statement is written.
