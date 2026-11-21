@@ -50,3 +50,22 @@ pub(crate) fn ungrouped(mut node: SyntaxNode) -> SyntaxNode {
     }
     node
 }
+
+/// True when the `inject` `node` stands among the first statements of
+/// its test's block, before any that is no `inject` (TST-17).
+pub(crate) fn leads_its_test(node: &SyntaxNode) -> bool {
+    let in_block = node.parent().is_some_and(|block| {
+        block.kind() == SyntaxKind::Block
+            && block
+                .parent()
+                .is_some_and(|test| test.kind() == SyntaxKind::TestDecl)
+    });
+    let mut before = node.prev_sibling();
+    while let Some(statement) = before {
+        if statement.kind() != SyntaxKind::InjectDecl {
+            return false;
+        }
+        before = statement.prev_sibling();
+    }
+    in_block
+}

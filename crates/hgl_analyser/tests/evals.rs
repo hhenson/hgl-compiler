@@ -480,7 +480,8 @@ fn an_integration_test_injects_its_run_configuration() {
 /// test does not, and neither does a function". TST-17: an integration
 /// test injects it "before its other statements". "`RunConfig` is the
 /// type of the capability `run_config` (TIME-8): no expression
-/// constructs one" (`call.not_callable`).
+/// constructs one" (`call.not_callable`). Braces that are rejected are
+/// not read (ERR-9): a name in them that nothing binds is not reported.
 #[test]
 fn run_config_where_it_has_no_place_is_reported() {
     let wrong = module_text(concat!(
@@ -489,14 +490,14 @@ fn run_config_where_it_has_no_place_is_reported() {
         "}\n",
         "integration_test late {\n",
         "    assert true\n",
-        "    inject run_config\n",
+        "    inject run_config{length: missing}\n",
         "}\n",
         "fn node(value: i64) -> i64 {\n",
-        "    inject run_config\n",
+        "    inject run_config{start: missing}\n",
         "    when { return value }\n",
         "}\n",
         "fn clocked(value: i64) -> datetime {\n",
-        "    inject clock{step: 1s}\n",
+        "    inject clock{step: missing}\n",
         "    when { return clock.evaluation_time }\n",
         "}\n",
         "const fn bounded() -> i64 {\n",

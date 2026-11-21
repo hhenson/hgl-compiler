@@ -14,7 +14,7 @@ use crate::hir::{
     self, Body, ConfigEntry, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt, ValueCategory,
 };
 use crate::program::{Binding, LocalKind, RUN_CONFIG};
-use crate::syntax::{child, tokens};
+use crate::syntax::{child, leads_its_test, tokens};
 use crate::types::{Detail, Type};
 use crate::{codes, error, local_error, warning};
 
@@ -193,7 +193,7 @@ impl<'a> Typer<'a> {
                     // Where `run_config` has a place: what the phase pass
                     // reports elsewhere is not judged again (ERR-9).
                     Some(braces) if name.text() == RUN_CONFIG => {
-                        if self.applying || self.integration {
+                        if self.applying || (self.integration && leads_its_test(node)) {
                             self.run_configuration(&braces)
                         } else {
                             Vec::new()
