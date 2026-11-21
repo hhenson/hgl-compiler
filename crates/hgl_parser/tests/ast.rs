@@ -172,6 +172,33 @@ fn a_function_gives_its_name_and_modifiers() {
     assert_eq!(seen, expected);
 }
 
+/// UNIT-3, GEN-4: the parser keeps an operator's optional export mark.
+#[test]
+fn an_operator_gives_its_name_and_export_mark() {
+    let source = file(concat!(
+        "module m\n",
+        "operator helper(value: i64) -> i64\n",
+        "export operator scale<T>(value: T) -> T\n",
+    ));
+    let operators: Vec<_> = source
+        .items()
+        .filter_map(|item| match item {
+            Item::Operator(operator) => Some((
+                operator.name().unwrap().text().to_string(),
+                text(operator.export()),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        operators,
+        [
+            ("helper".to_string(), None),
+            ("scale".to_string(), Some("export".to_string()))
+        ]
+    );
+}
+
 /// LEX-10, NATIVE-1, NATIVE-3: `native`, `type` and `const` are names by
 /// position, and a body makes an implementation.
 #[test]

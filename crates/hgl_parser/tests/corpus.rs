@@ -53,11 +53,6 @@ const PENDING: &[Pending] = &[
     },
     Pending {
         file: GENERICS,
-        opening: "module examples.shapes",
-        reason: "UNIT-3, GEN-4 (#364)",
-    },
-    Pending {
-        file: GENERICS,
         opening: "module examples.rooms",
         reason: "TYPE-3: comma between struct fields (hgl_spec#196)",
     },
@@ -84,7 +79,7 @@ const PENDING: &[Pending] = &[
     Pending {
         file: MAPPING,
         opening: "export enum Join { inner, outer, left }",
-        reason: "FN-17 (#362), GEN-17 and FN-8 (#366), FN-18 (#363), GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368), UNIT-3 and GEN-4 (#364)",
+        reason: "FN-17 (#362), GEN-17 and FN-8 (#366), FN-18 (#363), GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368)",
     },
     Pending {
         file: MAPPING,

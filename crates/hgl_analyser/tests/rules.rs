@@ -723,6 +723,44 @@ fn a_module_binds_cores_public_names_without_a_use() {
 
 // ---- Operators ----
 
+/// UNIT-3, GEN-4: record the export mark. Unmarked declarations still
+/// use the existing visibility until the core exports land (#364).
+#[test]
+fn an_operator_keeps_its_export_mark() {
+    let checked = check(&[
+        (
+            "lib.hgl",
+            concat!(
+                "module lib\n",
+                "operator helper<T>(value: T) -> T\n",
+                "impl const fn helper(value: i64) -> i64 => value\n",
+                "impl const fn helper(value: str) -> str => value\n",
+                "const fn count() -> i64 => helper(1)\n",
+                "const fn label() -> str => helper(\"one\")\n",
+                "export operator scale<T>(value: T) -> T\n",
+            ),
+        ),
+        (
+            "app.hgl",
+            concat!(
+                "module app\n",
+                "use lib::{helper, scale}\n",
+                "impl const fn scale(value: i64) -> i64 => value\n",
+                "const fn use_both() -> i64 => scale(helper(1))\n",
+            ),
+        ),
+    ]);
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+    let lib = checked.program.module("lib").unwrap();
+    let operators: Vec<_> = lib
+        .declarations
+        .iter()
+        .filter(|declaration| declaration.kind == DeclarationKind::Operator)
+        .map(|declaration| (declaration.name.as_str(), declaration.exported))
+        .collect();
+    assert_eq!(operators, [("helper", false), ("scale", true)]);
+}
+
 /// GEN-4: "An `impl fn` binds that operator through local declaration,
 /// selective import, or the prelude."
 #[test]

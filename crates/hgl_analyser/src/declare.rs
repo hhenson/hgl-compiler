@@ -390,7 +390,12 @@ impl Walk<'_> {
                 // private unless exported, as a function is".
                 (function.name(), kind, function.export())
             }
-            Item::Operator(operator) => (operator.name(), DeclarationKind::Operator, None),
+            // UNIT-3, GEN-4: record an operator's export mark.
+            Item::Operator(operator) => (
+                operator.name(),
+                DeclarationKind::Operator,
+                operator.export(),
+            ),
             Item::Struct(decl) => (decl.name(), DeclarationKind::Struct, decl.export()),
             Item::Enum(decl) => (decl.name(), DeclarationKind::Enum, decl.export()),
             Item::NativeType(decl) => (decl.name(), DeclarationKind::NativeType, decl.export()),
