@@ -258,6 +258,41 @@ test rejected {
     );
 }
 
+/// GEN-8 and TST-5: a packed trace containing only contextual cells
+/// needs a resolved pack type even when it has publications.
+#[test]
+fn a_pack_cannot_infer_from_contextual_cells_in_an_eval() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn positional<...Ts>(rest: ...Ts) -> i64 { when { return 1 } }
+fn named<...Ts>(rest: ...{Ts}) -> i64 { when { return 1 } }
+test traces {
+    assert eval positional([null]) == []
+    assert eval positional([ok(1)]) == []
+    assert eval named(x: [0s: null]) == []
+    assert eval named(x: [0s: ok(1)]) == []
+    assert eval positional([(null, 1)]) == []
+    assert eval positional<i64?, result<i64, error>>([null], [ok(1)]) == [1]
+    assert eval positional([(null, not_here)]) == []
+}
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:17 type/generic.unresolved GEN-8",
+            "m.hgl:6:17 type/generic.unresolved GEN-8",
+            "m.hgl:7:17 type/generic.unresolved GEN-8",
+            "m.hgl:8:17 type/generic.unresolved GEN-8",
+            "m.hgl:9:17 type/generic.unresolved GEN-8",
+            "m.hgl:11:36 name/name.unknown UNIT-10",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// EXPR-13: operands are evaluated in the order written, and CTRL-10
 /// has a block among them assign what a later one reads. A trace
 /// written out on the left of an eval takes its type from the eval,

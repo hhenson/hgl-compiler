@@ -3,7 +3,7 @@
 //! of the rest (GEN-2, GEN-8, GEN-12, GEN-13). Part of the typing pass
 //! ([`super`]).
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Location, Severity};
 use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
 
 use super::Typer;
@@ -800,14 +800,19 @@ impl<'a> Typer<'a> {
                 // nothing is expected, so that what it leaves unresolved
                 // itself is reported: the `repeat(1)` of
                 // `same(repeat(1), repeat(2))`. `null` and `.member`
-                // have no reading of their own. A captured eval trace
-                // is a trace even when its cells give no type (TST-5).
+                // have no reading of their own. An unwritten type pack
+                // learns each argument's type separately (GEN-8). A
+                // captured eval trace stays a trace even when its cells
+                // give no type (TST-5).
+                let unfound_type = match slot.type_pack {
+                    Some(parameter) => written_pack.is_none_or(|(given, _)| given != parameter),
+                    None => mentions(patterns[index], &unfound),
+                };
                 let placeless = *settled
                     && !matches!(slot.ty, Type::Function(_))
-                    && slot.type_pack.is_none()
                     && !(traced && pack.is_some())
                     && !takes_its_type(node)
-                    && mentions(patterns[index], &unfound);
+                    && unfound_type;
                 let mut argument = match values[position].take() {
                     None if placeless => hir::Argument {
                         parameter: Some(index),
@@ -857,7 +862,26 @@ impl<'a> Typer<'a> {
             })
             .collect();
         let unknown = assigned.iter().zip(&arguments).any(|(assigned, argument)| {
-            // A packed trace with no publications gives no evidence for
+            if whole(&argument.value.ty) || takes_its_type(&assigned.value) {
+                return false;
+            }
+            if argument.pack.is_some()
+                && assigned
+                    .slot
+                    .is_some_and(|index| slots[index].type_pack.is_some())
+            {
+                // GEN-8: each captured argument must resolve its own
+                // type. Report an unresolved pack unless an earlier
+                // error in the argument already explains it (ERR-9).
+                let span = assigned.value.span();
+                return self.diagnostics.as_slice().iter().any(|report| {
+                    report.severity == Severity::Error
+                        && report.primary.file == self.file
+                        && report.primary.span.start >= span.start
+                        && report.primary.span.end <= span.end
+                });
+            }
+            // Gaps in a homogeneous packed trace give no evidence for
             // inference. GEN-8 reports an unresolved generic at the call.
             let empty_trace = argument.pack.is_some()
                 && assigned
@@ -865,7 +889,7 @@ impl<'a> Typer<'a> {
                     .is_some_and(|index| matches!(patterns[index], Type::Trace { .. }))
                 && matches!(&argument.value.kind, hir::ExprKind::Trace(cells)
                     if cells.iter().all(|cell| cell.value.is_none()));
-            !empty_trace && !takes_its_type(&assigned.value) && !whole(&argument.value.ty)
+            !empty_trace
         });
         Inferred {
             arguments,
