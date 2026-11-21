@@ -2484,8 +2484,9 @@ from its entry unit and the units its module's reaches, and runs it as
 (`hglrt/application_host.h`) runs the run statement once and writes
 RESULTS in the form the hgraph target's driver writes (`start`,
 `published TIME TEXT`, `stopped`, `stopped none`, `host`, `failed
-TEXT`); `hgl` reads it and prints the output, the exit status and the
-reason for a failure as it does for the hgraph target. TIME is the
+TEXT`); `hgl` reads it and reports the outcome. A failed run prints
+its failure to standard error and exits with status 1. If the application
+could not be run, `hgl` exits with status 2. TIME is the
 instant in UTC, `1970-01-01T00:00:01.000001Z`, and TEXT the value as the
 library's `text_of` writes it, as a trace's text is. What the program
 and hgraph print goes to standard error. An interrupt of `hgl`, or a
@@ -2493,7 +2494,8 @@ request for it to end, is passed to the executable down its standard
 input, `stop`; an interrupt from a terminal reaches it as well. A run in
 real time asked to stop is stopped through hgraph's executor, as a test
 past its time limit is (one asked before it starts is stopped as it
-starts), and ends as at its end, with what it recorded; a simulation
+starts). When the run stops cleanly, `hgl` exits with status 0 and prints
+the publications recorded up to the stop. A simulation
 asked to stop, and a run interrupted a second time, end the executable
 at once, `failed interrupted`, and a second interrupt of `hgl` ends it
 too. The executable's standard input closed is such a request: what
