@@ -814,11 +814,21 @@ impl<'a> Typer<'a> {
                     && !takes_its_type(node)
                     && unfound_type;
                 let mut argument = match values[position].take() {
-                    None if placeless => hir::Argument {
-                        parameter: Some(index),
-                        pack: None,
-                        value: self.expression(node, None),
-                    },
+                    None if placeless => {
+                        let value = self.expression(node, None);
+                        // TST-16: a const function takes the publications
+                        // of a trace even when the slot supplies no type.
+                        let value = if slot.listed {
+                            publications(value)
+                        } else {
+                            value
+                        };
+                        hir::Argument {
+                            parameter: Some(index),
+                            pack: None,
+                            value,
+                        }
+                    }
                     Some(value) if unfitted[position] => hir::Argument {
                         parameter: Some(index),
                         pack: None,
