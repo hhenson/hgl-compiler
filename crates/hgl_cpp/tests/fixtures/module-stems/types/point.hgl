@@ -1,0 +1,4 @@
+module tc.a
+
+export struct Point { x: i64 }
+export const fn px(p: Point) -> i64 => p.x

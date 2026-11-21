@@ -141,7 +141,12 @@ fn own_files(output: &Output) -> Vec<&hgl_cpp::File> {
     output
         .files
         .iter()
-        .filter(|file| !file.path.starts_with("modules/core."))
+        .filter(|file| {
+            !matches!(
+                file.path.as_str(),
+                "modules/mod-core.h" | "modules/mod-core.cpp" | "modules/type-core.h"
+            )
+        })
         .collect()
 }
 
@@ -223,19 +228,19 @@ fn a_value_function_and_its_tests_are_written() {
     let output = &emitted.output;
     assert_eq!(output.executables.len(), 1);
     let executable = &output.executables[0];
-    assert_eq!(executable.source, "tests/demo.calc.cpp");
+    assert_eq!(executable.source, "tests/test-demo-calc.cpp");
     let units: Vec<&str> = executable
         .units
         .iter()
         .map(|&unit| output.units[unit].source.as_str())
         .collect();
-    assert_eq!(units, ["modules/demo.calc.cpp"]);
+    assert_eq!(units, ["modules/mod-demo-calc.cpp"]);
     // A failure at a line of the unit is traced to the statement of the
     // test that line is in.
     let unit = &output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.calc.cpp")
+        .find(|file| file.path == "modules/mod-demo-calc.cpp")
         .unwrap()
         .text;
     let sums = output
@@ -311,7 +316,7 @@ fn a_form_not_written_yet_blocks_what_reaches_it() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.partial.cpp")
+        .find(|file| file.path == "modules/mod-demo-partial.cpp")
         .unwrap()
         .text;
     assert!(unit.contains("::hgraph::Int total("), "{unit}");
@@ -346,7 +351,7 @@ fn configurations_are_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.configurations.cpp")
+        .find(|file| file.path == "modules/mod-demo-configurations.cpp")
         .unwrap()
         .text;
     for written in [
@@ -396,7 +401,7 @@ fn temporal_code_is_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/core.cpp")
+        .find(|file| file.path == "modules/mod-core.cpp")
         .unwrap()
         .text;
     for instance in [
@@ -420,7 +425,7 @@ fn temporal_code_is_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.temporal.cpp")
+        .find(|file| file.path == "modules/mod-demo-temporal.cpp")
         .unwrap()
         .text;
     for function in ["name", "compose"] {
@@ -436,7 +441,7 @@ fn temporal_code_is_written() {
         .iter()
         .map(|&unit| emitted.output.units[unit].source.as_str())
         .collect();
-    assert!(units.contains(&"modules/core.cpp"), "{units:?}");
+    assert!(units.contains(&"modules/mod-core.cpp"), "{units:?}");
 }
 
 /// Control flow over connections in a graph (`demo.control`): each
@@ -462,7 +467,7 @@ fn control_flow_is_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.control.cpp")
+        .find(|file| file.path == "modules/mod-demo-control.cpp")
         .unwrap()
         .text;
     // CTRL-3: the branch of no `else` never ticks; CTRL-6: a `switch`
@@ -740,7 +745,7 @@ fn activity_and_enums_are_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.activity.cpp")
+        .find(|file| file.path == "modules/mod-demo-activity.cpp")
         .unwrap()
         .text;
     // END-5: "Activity belongs to each input binding": the input's own
@@ -761,7 +766,7 @@ fn activity_and_enums_are_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.activity.types.h")
+        .find(|file| file.path == "modules/type-demo-activity.h")
         .unwrap()
         .text;
     assert!(
@@ -836,7 +841,7 @@ fn windows_are_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.windows.cpp")
+        .find(|file| file.path == "modules/mod-demo-windows.cpp")
         .unwrap()
         .text;
     for written in [
@@ -860,7 +865,7 @@ fn windows_are_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/core.cpp")
+        .find(|file| file.path == "modules/mod-core.cpp")
         .unwrap()
         .text;
     for written in [
@@ -913,7 +918,7 @@ fn a_window_given_to_a_lifted_default_is_read_as_its_list() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.cpp")
+        .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
     for written in [
@@ -1062,7 +1067,7 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.cpp")
+        .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
     for written in [
@@ -1120,7 +1125,7 @@ fn references_are_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.references.cpp")
+        .find(|file| file.path == "modules/mod-demo-references.cpp")
         .unwrap()
         .text;
     for written in [
@@ -1233,9 +1238,9 @@ fn the_store_and_applications_are_written() {
             .map(|&unit| emitted.output.units[unit].source.as_str())
             .collect();
         for unit in [
-            "modules/core.cpp",
-            "modules/demo.apps.cpp",
-            &format!("modules/{stem}.cpp"),
+            "modules/mod-core.cpp",
+            "modules/mod-demo-apps.cpp",
+            &format!("modules/mod-{}.cpp", stem.strip_prefix("app-").unwrap()),
         ] {
             assert!(units.contains(&unit), "{unit} in {units:?}");
         }
@@ -1272,7 +1277,7 @@ fn an_applications_parts_are_evaluated_in_the_order_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/app-demo-apps-ordered.cpp")
+        .find(|file| file.path == "modules/mod-demo-apps-ordered.cpp")
         .unwrap()
         .text;
     let at = |text: &str| {
@@ -1358,7 +1363,7 @@ fn a_statement_names_its_hgl_file_and_line() {
             .unwrap()
             .text
     };
-    let module = text("modules/demo.apps.cpp");
+    let module = text("modules/mod-demo-apps.cpp");
     let lines: Vec<&str> = module.lines().collect();
     // The graph `seeded`: its `put`, on line 26 of its file, set where it is
     // built (FN-9).
@@ -1372,12 +1377,12 @@ fn a_statement_names_its_hgl_file_and_line() {
     for (index, line) in lines.iter().enumerate() {
         if let Some(number) = line
             .strip_prefix("#line ")
-            .and_then(|rest| rest.strip_suffix(" \"modules/demo.apps.cpp\""))
+            .and_then(|rest| rest.strip_suffix(" \"modules/mod-demo-apps.cpp\""))
         {
             assert_eq!(number.parse::<usize>().unwrap(), index + 2, "{line}");
         }
     }
-    assert!(module.contains("\"modules/demo.apps.cpp\""));
+    assert!(module.contains("\"modules/mod-demo-apps.cpp\""));
     // A test's statements are told to the test host by the unit's lines:
     // none in its body sets an HGL line.
     let test = module
@@ -1387,7 +1392,7 @@ fn a_statement_names_its_hgl_file_and_line() {
     let body = &test[..test.find("\n}\n").unwrap()];
     assert!(!body.contains("#line"), "{body}");
     // An application's store statements and its run statement.
-    let application = text("modules/app-demo-apps-backtest.cpp");
+    let application = text("modules/mod-demo-apps-backtest.cpp");
     let lines: Vec<&str> = application.lines().collect();
     let stored = lines
         .iter()
@@ -1433,7 +1438,7 @@ fn a_tests_lines_are_the_units_after_a_node_written_ahead_of_it() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.ahead.cpp")
+        .find(|file| file.path == "modules/mod-demo-ahead.cpp")
         .unwrap()
         .text;
     let lines: Vec<&str> = unit.lines().collect();
@@ -1452,7 +1457,7 @@ fn a_tests_lines_are_the_units_after_a_node_written_ahead_of_it() {
         .unwrap();
     assert_eq!(
         lines[last],
-        format!("#line {} \"modules/demo.ahead.cpp\"", last + 2)
+        format!("#line {} \"modules/mod-demo-ahead.cpp\"", last + 2)
     );
     assert!(!lines[test..].iter().any(|line| line.starts_with("#line ")));
 }
@@ -1483,7 +1488,7 @@ fn a_units_lines_are_its_own_again_after_a_window_node() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.windowed.cpp")
+        .find(|file| file.path == "modules/mod-demo-windowed.cpp")
         .unwrap()
         .text;
     let lines: Vec<&str> = unit.lines().collect();
@@ -1499,7 +1504,7 @@ fn a_units_lines_are_its_own_again_after_a_window_node() {
         .unwrap();
     assert_eq!(
         lines[last],
-        format!("#line {} \"modules/demo.windowed.cpp\"", last + 2),
+        format!("#line {} \"modules/mod-demo-windowed.cpp\"", last + 2),
         "{unit}"
     );
 }
@@ -1569,7 +1574,7 @@ fn lifting_code_is_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.lifting.cpp")
+        .find(|file| file.path == "modules/mod-demo-lifting.cpp")
         .unwrap()
         .text;
     // FN-11: an input whose parameter has a default is not required valid,
@@ -1614,7 +1619,7 @@ fn a_capture_given_an_f64_configuration_is_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.cpp")
+        .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
     assert!(unit.contains("::hglrt::capture<captured_"), "{unit}");
@@ -1643,7 +1648,7 @@ fn nested_forms_are_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.nested.cpp")
+        .find(|file| file.path == "modules/mod-demo-nested.cpp")
         .unwrap()
         .text;
     let pair = "::hgraph::UnNamedTSB<::hgraph::Field<\"0\", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<\"1\", ::hgraph::TS<::hgraph::Str>>>";
@@ -1666,7 +1671,7 @@ fn nested_forms_are_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.nested.types.h")
+        .find(|file| file.path == "modules/type-demo-nested.h")
         .unwrap()
         .text;
     assert!(
@@ -1739,7 +1744,7 @@ fn list_code_is_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/core.cpp")
+        .find(|file| file.path == "modules/mod-core.cpp")
         .unwrap()
         .text;
     // TIME-7: core's `replay` of a list yields the delta of each cell,
@@ -1769,7 +1774,7 @@ fn timing_is_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.timing.cpp")
+        .find(|file| file.path == "modules/mod-demo-timing.cpp")
         .unwrap()
         .text;
     // TIME-9: what woke a node is read once, as it is entered: the
@@ -1804,7 +1809,7 @@ fn keyed_temporal_code_is_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/core.cpp")
+        .find(|file| file.path == "modules/mod-core.cpp")
         .unwrap()
         .text;
     assert!(
@@ -1916,7 +1921,7 @@ fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/core.cpp")
+        .find(|file| file.path == "modules/mod-core.cpp")
         .unwrap()
         .text;
     assert!(!core.contains("of_duration"), "{core}");
@@ -1969,7 +1974,7 @@ fn a_connection_of_t_is_widened_where_a_nullable_is_taken() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.cpp")
+        .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
     assert!(
@@ -2076,7 +2081,7 @@ fn an_integration_tests_run_configuration_is_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.cpp")
+        .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
     let test = unit.split("void configured()").nth(1).unwrap();
@@ -2122,7 +2127,7 @@ fn an_evals_configuration_is_held_before_its_defaults() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.cpp")
+        .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
     let test = unit.split("void bounded()").nth(1).unwrap();
@@ -2193,7 +2198,7 @@ fn a_capability_is_made_before_the_initializers_that_read_it() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.cpp")
+        .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
     let start = unit
@@ -2295,7 +2300,7 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.cpp")
+        .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
     // Both defaults call `one`, and each may fail: each is held, `by`
@@ -2379,7 +2384,7 @@ fn a_lifted_calls_omitted_defaults_are_configuration() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.cpp")
+        .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
     let twice = unit
@@ -2476,7 +2481,7 @@ fn an_executable_links_what_its_units_call() {
         .iter()
         .map(|&unit| output.units[unit].source.as_str())
         .collect();
-    assert_eq!(units, ["modules/demo.a.cpp", "modules/demo.b.cpp"]);
+    assert_eq!(units, ["modules/mod-demo-a.cpp", "modules/mod-demo-b.cpp"]);
 }
 
 /// EXPR-2: arguments are evaluated in the order written, and then the
@@ -2500,7 +2505,7 @@ fn arguments_that_may_fail_are_evaluated_in_order() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.order.cpp")
+        .find(|file| file.path == "modules/mod-demo-order.cpp")
         .unwrap()
         .text;
     let one = "::hgl::demo::order::m_::one()";
@@ -2760,7 +2765,7 @@ fn names_a_platform_may_take_are_kept_and_undefined() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.h")
+        .find(|file| file.path == "modules/mod-m.h")
         .expect("the module's header")
         .text;
     assert!(
@@ -2831,7 +2836,7 @@ fn a_place_beside_an_argument_that_runs_statements_is_taken_at_the_call() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/m.cpp")
+        .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
     assert!(
@@ -2876,12 +2881,12 @@ fn temporal_structs_and_nullables_are_written() {
     };
     // TYPE-9: beside the aggregate, its nominal schema; a struct with an
     // optional field has each field's own form.
-    let types = file("modules/demo.structs.types.h");
+    let types = file("modules/type-demo-structs.h");
     assert!(
         types.contains("struct hgraph::native_bundle<::hgl::demo::structs::m_::MarketQuote>"),
         "{types}"
     );
-    let unit = file("modules/demo.structs.cpp");
+    let unit = file("modules/mod-demo-structs.cpp");
     assert!(
         unit.contains(
             "::hgraph::Out<::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>> out_"
@@ -2971,7 +2976,7 @@ fn composite_values_are_written() {
         .output
         .files
         .iter()
-        .find(|file| file.path == "modules/demo.composites.types.h")
+        .find(|file| file.path == "modules/type-demo-composites.h")
         .unwrap()
         .text;
     // UNIT-6: `Line` is declared before `Point`, which it holds.
@@ -3126,10 +3131,10 @@ fn a_struct_of_another_module_is_named_through_its_types_header() {
             .unwrap_or_else(|| panic!("no {path}"))
             .text
     };
-    assert!(file("modules/demo.a.types.h").contains("#include \"demo.b.types.h\""));
-    assert!(file("modules/demo.b.h").contains("#include \"demo.a.types.h\""));
-    assert!(file("modules/demo.a.h").contains("#include \"demo.a.types.h\""));
-    assert!(!file("modules/demo.b.types.h").contains("demo.a"));
+    assert!(file("modules/type-demo-a.h").contains("#include \"type-demo-b.h\""));
+    assert!(file("modules/mod-demo-b.h").contains("#include \"type-demo-a.h\""));
+    assert!(file("modules/mod-demo-a.h").contains("#include \"type-demo-a.h\""));
+    assert!(!file("modules/type-demo-b.h").contains("type-demo-a.h"));
     // A generic parameter of another module's enum.
-    assert!(file("modules/demo.c.types.h").contains("#include \"demo.b.types.h\""));
+    assert!(file("modules/type-demo-c.h").contains("#include \"type-demo-b.h\""));
 }
