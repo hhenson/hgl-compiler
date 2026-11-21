@@ -84,7 +84,9 @@ analyser: partial
 - What a `return` in a hook, an assignment to `out` and a source's `yield` publish is a complete value of the result or its `delta<T>` (TYPE-16), as core's cases relay a set with `return delta_value(input)`; a window's result takes a V, which arrives, and nothing else (`type.mismatch`), but of a nullable V its delta as well
 - A `ref` result takes no value: a `return` to it, and `out =` of it, names an endpoint, which it designates, and `out` of it is as a `ref` parameter is (FN-16)
 
-transpiler: planned
+transpiler: partial
+
+- C++ sources can yield both whole values and deltas for output types the target writes. Each yield preserves its form until publication. A delta that names no change on a valid collection remains silent.
 
 ## TIME-8
 

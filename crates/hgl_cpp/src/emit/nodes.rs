@@ -64,6 +64,8 @@ pub(super) struct Context {
     /// The result of the node, where it has one: what a `return` and an
     /// `out =` publish (TIME-7).
     pub(super) result: Option<Type>,
+    /// The delta type when a source can yield both it and a whole value.
+    pub(super) mixed_source_delta: Option<Type>,
     /// The nodes of a graph's lifted calls written so far, each a struct
     /// written in the graph's own (`graphs`).
     pub(super) lifted: Vec<String>,
@@ -87,6 +89,7 @@ impl Context {
             kind,
             roles: vec![Role::Plain; locals],
             result: None,
+            mixed_source_delta: None,
             lifted: Vec::new(),
             signature: None,
             timer: None,
