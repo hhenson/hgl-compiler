@@ -493,11 +493,22 @@ impl Parser<'_> {
     }
 
     /// The part of a declaration shared by functions, operators and native
-    /// functions: `[ generic_parameters ], function_signature,
+    /// functions: `[ generic_parameters ], [ configuration_parameters ], function_signature,
     /// [ requires_clause ]`.
     fn callable_header(&mut self) {
         if self.at(Lt) && !self.nl() {
             self.generic_params();
+        }
+        // FN-18: a declaration puts its configuration parameters before the parentheses.
+        if self.at(LBrace) && !self.cut() {
+            self.start(ConfigParamList);
+            self.bump();
+            self.nested(Context::LIST, |parser| {
+                parser.list(RBrace, "a configuration parameter", true, |parser| {
+                    parser.parameter();
+                });
+            });
+            self.finish();
         }
         self.signature();
         // A `requires` clause may stand on its own line.

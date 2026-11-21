@@ -129,6 +129,7 @@ define_syntax_kinds! {
         TimeoutAnnotation,
         /// `(value: f64, const factor: f64 = 2.0)`, of a declaration or of
         /// a function expression
+        ConfigParamList,
         ParamList,
         /// `const factor: f64 = 2.0` or `items: ...T`
         Param,

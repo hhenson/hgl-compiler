@@ -183,6 +183,7 @@ impl<'a> Typer<'a> {
                 let ty = substitute_within(&member.ty, &map);
                 Slot {
                     name: &member.name,
+                    configuration: false,
                     // TYPE-4: "A field is optional when its type is
                     // nullable ... or an `atomic<...>` of a nullable
                     // type", the generic arguments in place: the
@@ -330,7 +331,7 @@ impl<'a> Typer<'a> {
         // reported as missing (ERR-9).
         let mut unnamed_field = false;
         let mut arguments = Vec::new();
-        for (name, value) in self.call_arguments(list) {
+        for (brace, name, value) in self.call_entries(list) {
             let at = self.at(&value);
             let slot = match &name {
                 // TYPE-5: "it takes no positional argument."
@@ -364,9 +365,9 @@ impl<'a> Typer<'a> {
                     // positional pack takes what the others leave
                     // (FN-8).
                     let next = (0..slots.len())
-                        .find(|&index| !filled[index] && slots[index].pack.is_none());
+                        .find(|&index| !filled[index] && slots[index].takes_position());
                     if next.is_none() && !has_positional_pack {
-                        let fixed = slots.iter().filter(|slot| slot.pack.is_none()).count();
+                        let fixed = slots.iter().filter(|slot| slot.takes_position()).count();
                         self.diagnostics.emit(error(
                             Category::Type,
                             codes::ARGUMENT_UNEXPECTED,
@@ -382,17 +383,18 @@ impl<'a> Typer<'a> {
                     next.or(positional_pack)
                 }
                 Some(name) => {
-                    named_seen = true;
-                    // GEN-8: "A name binds the callee's generic value
-                    // parameter of that name, or else its parameter of
-                    // that name." One that does is no place's.
-                    if aside.contains(&name.text()) {
-                        continue;
-                    }
+                    named_seen |= !brace;
                     let name_at = Location::new(self.file, name.span());
                     let found = slots
                         .iter()
                         .position(|slot| slot.pack.is_none() && slot.name == name.text());
+                    let configuration = found.is_some_and(|index| slots[index].configuration);
+                    // EXPR-10: configuration names bind first, then
+                    // generic value parameters, then ordinary ones.
+                    if !configuration && aside.contains(&name.text()) {
+                        continue;
+                    }
+                    let found = found.filter(|_| (!configuration || brace) && !(brace && takes == Takes::Fields));
                     match found {
                         Some(index) if filled[index] => {
                             self.diagnostics.emit(error(
@@ -407,7 +409,7 @@ impl<'a> Typer<'a> {
                         Some(index) => Some(index),
                         // A named pack takes the names the others
                         // leave (FN-8).
-                        None if has_named_pack => {
+                        None if has_named_pack && !configuration => {
                             if named_pack.is_some() && !pack_names.insert(name.text().to_string()) {
                                 self.diagnostics.emit(error(
                                     Category::Name,
@@ -427,7 +429,7 @@ impl<'a> Typer<'a> {
                                 codes::ARGUMENT_UNKNOWN,
                                 name_at,
                                 format!("`{}` has no {what} `{}`", callee.text(), name.text()),
-                                "EXPR-2",
+                                if configuration { "FN-18" } else { "EXPR-2" },
                             ));
                             None
                         }
@@ -467,7 +469,7 @@ impl<'a> Typer<'a> {
                         callee.text(),
                         slot.name
                     ),
-                    "EXPR-2",
+                    if slot.configuration { "FN-18" } else { "EXPR-2" },
                 ));
             }
         }
@@ -627,6 +629,8 @@ pub(super) struct Assigned {
 pub(super) struct Slot<'a> {
     /// Its name.
     pub(super) name: &'a str,
+    /// True for a parameter that only a call's braces can name (FN-18).
+    pub(super) configuration: bool,
     /// Its type; not known when it names a generic parameter that
     /// nothing has given an argument.
     pub(super) ty: Type,
@@ -641,6 +645,12 @@ pub(super) struct Slot<'a> {
     /// True for a parameter of a `const fn`: a trace given to it is the
     /// list of its publications there (TST-16).
     pub(super) listed: bool,
+}
+
+impl Slot<'_> {
+    fn takes_position(&self) -> bool {
+        !self.configuration && self.pack.is_none()
+    }
 }
 
 /// What takes the arguments of a call.

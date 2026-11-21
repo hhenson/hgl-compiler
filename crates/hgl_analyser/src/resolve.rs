@@ -282,11 +282,7 @@ impl Resolver<'_> {
         if let Some(generics) = child(node, SyntaxKind::GenericParams) {
             self.generic_params(&generics);
         }
-        let parameters: Vec<SyntaxNode> = child(node, SyntaxKind::ParamList)
-            .into_iter()
-            .flat_map(|list| list.children())
-            .filter(|child| child.kind() == SyntaxKind::Param)
-            .collect();
+        let parameters = crate::read::parameters(node);
         // The types first: they see the generic parameters.
         for parameter in &parameters {
             for part in split_at_default(parameter).0 {
@@ -318,7 +314,7 @@ impl Resolver<'_> {
         // The result type, the constraints, the body.
         for part in node.children() {
             match part.kind() {
-                SyntaxKind::GenericParams | SyntaxKind::ParamList => {}
+                SyntaxKind::GenericParams | SyntaxKind::ConfigParamList | SyntaxKind::ParamList => {}
                 // A native contract's `inject` names stand in the
                 // declaration's own scope: it has no block.
                 SyntaxKind::NativeContractBody => self.children(&part),

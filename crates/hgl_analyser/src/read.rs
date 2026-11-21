@@ -529,8 +529,9 @@ pub(crate) fn is_const(parameter: &SyntaxNode) -> bool {
 /// The parameters a function, an operator or a native function
 /// declares, as written.
 pub(crate) fn parameters(declaration: &SyntaxNode) -> Vec<SyntaxNode> {
-    child(declaration, SyntaxKind::ParamList)
-        .into_iter()
+    declaration
+        .children()
+        .filter(|list| matches!(list.kind(), SyntaxKind::ConfigParamList | SyntaxKind::ParamList))
         .flat_map(|list| list.children())
         .filter(|parameter| parameter.kind() == SyntaxKind::Param)
         .collect()
@@ -725,11 +726,7 @@ impl Reader<'_> {
     /// function.
     fn signature(&mut self, node: &SyntaxNode) -> Signature {
         let mut parameters = Vec::new();
-        let written = child(node, SyntaxKind::ParamList)
-            .into_iter()
-            .flat_map(|list| list.children())
-            .filter(|parameter| parameter.kind() == SyntaxKind::Param);
-        for parameter in written {
+        for parameter in crate::read::parameters(node) {
             let Some(name) = names_before_colon(&parameter).pop() else {
                 continue;
             };
@@ -753,6 +750,9 @@ impl Reader<'_> {
             parameters.push(Parameter {
                 name: name.text().to_string(),
                 at: self.at(name.span()),
+                configuration: parameter
+                    .parent()
+                    .is_some_and(|list| list.kind() == SyntaxKind::ConfigParamList),
                 constant,
                 var: has_token(&parameter, SyntaxKind::KwVar),
                 // FN-16: "`ref low: f64` ... The mark is a mode".

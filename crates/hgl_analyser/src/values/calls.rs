@@ -393,13 +393,29 @@ impl<'a> Typer<'a> {
             .collect()
     }
 
+    /// Entries of a call, in written order (EXPR-2, EXPR-10). The flag
+    /// says whether the name is in the braces.
+    pub(super) fn call_entries(
+        &self,
+        list: &SyntaxNode,
+    ) -> Vec<(bool, Option<SyntaxToken>, SyntaxNode)> {
+        list.parent()
+            .and_then(|call| child(&call, SyntaxKind::OperatorConfig))
+            .into_iter()
+            .flat_map(|braces| braces.children())
+            .filter(|entry| entry.kind() == SyntaxKind::ConfigArg)
+            .filter_map(|entry| Some((true, Some(tokens(&entry).next()?), entry.children().next()?)))
+            .chain(self.call_arguments(list).into_iter().map(|(name, value)| (false, name, value)))
+            .collect()
+    }
+
     /// A call this pass does not read: its arguments are read for what
     /// they report themselves, with nothing expected of them.
     pub(super) fn unread_call(&mut self, list: &SyntaxNode) -> (ExprKind, Type) {
         let arguments = self
-            .call_arguments(list)
+            .call_entries(list)
             .into_iter()
-            .map(|(_, value)| hir::Argument {
+            .map(|(_, _, value)| hir::Argument {
                 parameter: None,
                 pack: None,
                 value: self.expression(&value, Some(&Type::Unknown)),
@@ -619,6 +635,7 @@ impl<'a> Typer<'a> {
                 .iter()
                 .map(|parameter| Slot {
                     name: &parameter.name,
+                    configuration: parameter.configuration,
                     ty: taken(parameter, known(&parameter.ty)),
                     required: required(parameter),
                     pack: parameter.pack,
@@ -671,7 +688,7 @@ impl<'a> Typer<'a> {
             .collect();
         let callee = &program.modules[module].declarations[declaration];
         let reported = self.diagnostics.len();
-        let named = self.named_generics(list, generics, &mut found);
+        let named = self.named_generics(list, signature, &mut found);
 
         // The requested output: `let names: list<str> = repeat(3)` says
         // what the `T` of `repeat<T>(count: i64) -> list<T>` is.
@@ -689,6 +706,7 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|parameter| Slot {
                 name: &parameter.name,
+                configuration: parameter.configuration,
                 ty: Type::Unknown,
                 required: required(parameter),
                 pack: parameter.pack,

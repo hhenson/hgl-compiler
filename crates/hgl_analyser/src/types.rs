@@ -757,6 +757,8 @@ pub struct Parameter {
     pub name: String,
     /// Where the name is written.
     pub at: Location,
+    /// True for a brace parameter, given only by name in configuration (FN-18).
+    pub configuration: bool,
     /// True when it is marked `const`: fixed configuration (FN-1).
     pub constant: bool,
     /// True when it is marked `var`: a call gives it a place, which the
