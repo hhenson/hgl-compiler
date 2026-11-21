@@ -1870,8 +1870,17 @@ fn an_application_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert_eq!(output.status.code(), Some(0));
-    assert!(kept.join("applications/demo.ticks.backtest.cpp").is_file());
-    assert!(kept.join("run/demo.ticks.backtest").is_file());
+    assert!(
+        kept.join("applications/app-demo-ticks-backtest.cpp")
+            .is_file()
+    );
+    assert!(
+        kept.join(format!(
+            "run/app-demo-ticks-backtest{}",
+            std::env::consts::EXE_SUFFIX
+        ))
+        .is_file()
+    );
 
     // RUN-2: an argument replaced.
     let output = run("demo.ticks.backtest", &["--arg", "values=[5]"]);
@@ -1997,6 +2006,108 @@ fn an_application_runs_on_the_sdk() {
         summary.starts_with("ran demo.ticks.live on cpp: "),
         "{printed}"
     );
+}
+
+/// UNIT-14: application paths stay visible, while their files have
+/// distinct stems. The `.app` case also exercises launch on macOS,
+/// which treats a dotted `.app` filename as a bundle.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn applications_with_extension_like_names_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("application_filenames");
+    let kept = root.join("build");
+    let cases = [
+        ("demo.pricing.app", "app-demo-pricing-app", 11),
+        ("demo.pricing.exe", "app-demo-pricing-exe", 12),
+        ("demo.pricing.so", "app-demo-pricing-so", 13),
+        ("a.b_c", "app-a-b_c", 21),
+        ("a_b.c", "app-a_b-c", 22),
+        ("a.B_c", "app-a-+b_c", 23),
+    ];
+    for (index, (path, _, value)) in cases.iter().enumerate() {
+        let test = if *path == "demo.pricing.app" {
+            "test artifact_identity { assert true }\n"
+        } else {
+            ""
+        };
+        write(
+            &root,
+            &format!("case-{index}.hgl"),
+            &format!(
+                "application {path}\n\
+                 struct Quote {{ cents: i64 }}\n\
+                 fn price(const item: Quote) -> i64 {{ yield 0s: item.cents }}\n\
+                 {test}eval price(item: Quote(cents: {value}))\n"
+            ),
+        );
+    }
+    let suffix = std::env::consts::EXE_SUFFIX;
+    for (path, stem, value) in cases {
+        let output = hgl_in(
+            &[
+                "run",
+                &argument(&root),
+                "--target",
+                "cpp",
+                "--keep",
+                &argument(&kept),
+                "--application",
+                path,
+            ],
+            &[],
+            &[],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{path}: {}",
+            text(&output.stderr)
+        );
+        assert_eq!(
+            text(&output.stdout),
+            format!("1970-01-01T00:00:00.000001Z  {value}\nran {path} on cpp: 1 publication\n"),
+        );
+        for artifact in [
+            format!("applications/{stem}.cpp"),
+            format!("modules/{stem}.cpp"),
+            format!("modules/{stem}.h"),
+            format!("modules/{stem}.types.h"),
+            format!("obj/applications/{stem}.o"),
+            format!("obj/modules/{stem}.o"),
+            format!("results/{stem}.run.txt"),
+            format!("run/{stem}{suffix}"),
+        ] {
+            assert!(kept.join(&artifact).is_file(), "{path}: missing {artifact}");
+        }
+    }
+
+    let tests = hgl_in(
+        &[
+            "test",
+            &argument(&root),
+            "--target",
+            "cpp",
+            "--keep",
+            &argument(&kept),
+            "--test",
+            "artifact_identity",
+        ],
+        &[],
+        &[],
+    );
+    assert_eq!(tests.status.code(), Some(0), "{}", text(&tests.stderr));
+    assert!(
+        text(&tests.stdout).contains("passed   executable  demo.pricing.app::artifact_identity")
+    );
+    assert!(kept.join("tests/app-demo-pricing-app.cpp").is_file());
+    assert!(
+        kept.join(format!("bin/app-demo-pricing-app{suffix}"))
+            .is_file()
+    );
+    assert!(kept.join("results/app-demo-pricing-app.0.txt").is_file());
 }
 
 /// An application of `ticks` whose arguments and configuration are

@@ -24,7 +24,7 @@
 //! | --- | --- |
 //! | Module `demo.calc` | `modules/demo.calc.h` and `modules/demo.calc.cpp`, in the namespace `hgl::demo::calc::m_`, and `modules/demo.calc.types.h` of the types it declares |
 //! | Its named tests | Functions in `hgl::demo::calc::m_::t_`, and `tests/demo.calc.cpp`, an entry unit that registers each with the runtime library's test host and runs those its command line names |
-//! | Application `demo.app` (UNIT-14) | Its module's unit, with its run statement as the function `hgl::demo::app::m_::application_`, and `applications/demo.app.cpp`, an entry unit whose `main` is the runtime library's host of that run |
+//! | Application `demo.app` (UNIT-14) | Its module's unit, with its run statement as the function `hgl::demo::app::m_::application_`, and `applications/app-demo-app.cpp`, an entry unit whose `main` is the runtime library's host of that run |
 //! | `const fn total(a: i64, b: i64) -> i64` | A function `::hgraph::Int total(::hgraph::Int a, ::hgraph::Int b)`; a generic one, a function for each instance |
 //! | The scalars, enums, `T?`, tuples, lists, results | hgraph's scalars, `enum class`, `std::optional`, `std::tuple`, `hglrt::list`, `hglrt::result` |
 //! | Structs, sets, dictionaries, deltas | Aggregates with HGL's equality, `hglrt::set`, `hglrt::dict`, the deltas of `hglrt` and of each struct |
@@ -104,6 +104,8 @@ pub struct Unit {
 pub struct Executable {
     /// The module whose tests it runs.
     pub module: String,
+    /// The stem of the build artifacts for this executable.
+    pub stem: String,
     /// Its entry unit's file, one of [`Output::files`]: its `main`.
     pub source: String,
     /// The units it is linked from, as positions in [`Output::units`]:
@@ -213,11 +215,30 @@ pub fn entry_path(module: &str) -> String {
     format!("tests/{module}.cpp")
 }
 
-/// The entry unit of application `path`: `applications/demo.app.cpp`. An
+/// The file stem of application `path` (UNIT-14). Hyphens replace dots,
+/// and a `+` marks each folded uppercase letter, so the encoding is
+/// distinct even on a case-insensitive filesystem. Neither character
+/// occurs in an HGL identifier. The prefix avoids reserved basenames.
+pub fn application_stem(path: &str) -> String {
+    let mut stem = String::from("app-");
+    for character in path.chars() {
+        match character {
+            '.' => stem.push('-'),
+            'A'..='Z' => {
+                stem.push('+');
+                stem.push(character.to_ascii_lowercase());
+            }
+            other => stem.push(other),
+        }
+    }
+    stem
+}
+
+/// The entry unit of application `path`: `applications/app-demo-app.cpp`. An
 /// application's path is no module's (UNIT-14), and the directory is not
 /// the tests' own.
 pub fn application_path(path: &str) -> String {
-    format!("applications/{path}.cpp")
+    format!("applications/{}.cpp", application_stem(path))
 }
 
 /// Writes `program` as C++: each module's header and unit, and an entry

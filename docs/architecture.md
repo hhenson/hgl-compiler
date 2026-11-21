@@ -1755,7 +1755,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | `eval{start: s, length: l} call` (RUN-6, CRUN-2) | The run given `::hglrt::testing::Bounds{.start = s, .length = l}`, each field the configuration names (`lifecycle`); the configuration and then the call's arguments held first, in the order written, where more than one may fail (EXPR-2, EXPR-13). In an integration test that injects `run_config`, a field the eval does not name is the injected one's, `.end = run_config.end()` |
 | `inject run_config{length: 3s}` in an integration test (TST-17, RUN-6) | `const ::hglrt::RunConfig run_config = ::hglrt::RunConfig{::hglrt::RunConfig::Fields{.length = ...}};`: `hgl test` supplies nothing, and the defaults stand. `run_config.start` is `(run_config).start()`, a `std::optional` |
 | `let seen = eval target(...)` | `const auto seen = ...;`, the recording, read where a trace is |
-| Application `demo.app` (UNIT-14) | In its module's unit, `::hglrt::application::Output application_()`, which runs its run statement once; `applications/demo.app.cpp`, an entry unit whose `main` is the library's host of that run, `::hglrt::application::main` (`apps`, `assemble`) |
+| Application `demo.app` (UNIT-14) | In its module's unit, `::hglrt::application::Output application_()`, which runs its run statement once; `applications/app-demo-app.cpp`, an entry unit whose `main` is the library's host of that run, `::hglrt::application::main` (`apps`, `assemble`) |
 | Its `inject run_config{...}`, `inject global_state` and `put`s before its run statement (UNIT-14, RUN-6) | The function's first statements, in the order written: `const ::hglrt::RunConfig run_config = ...;` of the braces, which `hgl run` has written what starts it gives over, and a store of its own, `::hglrt::application::Store store_`, which the run gives its graph before the entry is wired |
 | `eval call`, `run call` (RUN-1, RUN-3) | `::hglrt::application::run<T>(store_, entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"`, as an eval's does; `run` of an entry with no result. The call's arguments are an eval's, held in the order written where that shows (EXPR-2); `bounds_` is each field of `run_config`, or `Bounds{}` where the application injects none. `eval` is a simulation, `run` in real time |
 | `let seen = capture(attempt, value)` (ERR-7, ERR-8) | A graph of its own for the call, a struct `captured_00_` in the graph's struct, whose `compose` takes each connection of the call as a port and each other argument as an `hgraph::Scalar`, and calls the callable; the library's `::hglrt::capture<captured_00_>(wiring_, value)`, which is hgraph's `compiled::try_except_` of it with canonical errors (`<hglrt/capture.h>`): a node of its own, which hgraph interns with no other, so that two given `0.0` and `-0.0` stay two |
@@ -2041,10 +2041,12 @@ Executables run side by side.
 `hgl emit --target cpp --out DIR` writes the files. `hgl run --target
 cpp` runs an application (UNIT-14, "Running an application" above),
 with what it replaces read again: it builds the
-application's executable, `run/<application>`, in the program's
+application's executable, `run/<application-stem>`, in the program's
 workspace (`--keep`'s directory, or the one under the cache), linked
 from its entry unit and the units its module's reaches, and runs it as
-`EXECUTABLE RESULTS` (`cpp/application.rs`). The executable's host
+`EXECUTABLE RESULTS` (`cpp/application.rs`). Application artifacts share a
+stem such as `app-demo-pricing-app` for `demo.pricing.app`, and reports
+keep the HGL path. The executable's host
 (`hglrt/application_host.h`) runs the run statement once and writes
 RESULTS (`start`, `published TIME TEXT`, `stopped`, `stopped none`,
 `host`, `failed TEXT`). `hgl` reads it and reports the outcome. A failed

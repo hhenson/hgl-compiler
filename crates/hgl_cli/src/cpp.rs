@@ -309,7 +309,8 @@ fn launch_one(
     sources: &SourceMap,
     libraries: Option<&(&'static str, OsString)>,
 ) -> Vec<(usize, Outcome)> {
-    let module = &output.executables[launch.executable].module;
+    let target = &output.executables[launch.executable];
+    let stem = &target.stem;
     let all = |reason: String| -> Vec<(usize, Outcome)> {
         launch
             .tests
@@ -321,7 +322,7 @@ fn launch_one(
     let results = workspace
         .directory
         .join("results")
-        .join(format!("{module}.{position}.txt"));
+        .join(format!("{stem}.{position}.txt"));
     // What an earlier run recorded is not this run's.
     let cleared = match fs::remove_file(&results) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(format!(
@@ -336,7 +337,7 @@ fn launch_one(
     }
     // `EXECUTABLE RESULTS NAME...`: the runtime library's test host
     // (`hglrt/testing.h`).
-    let executable = workspace.executable(module);
+    let executable = workspace.executable(target);
     let mut command = Command::new(&executable);
     if let Some((variable, value)) = libraries {
         command.env(variable, value);

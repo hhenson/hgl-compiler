@@ -14,7 +14,7 @@
 //! build has one object for each module's unit and each entry unit,
 //! compiled with the precompiled header, one executable for each
 //! module with tests, `bin/<module>`, and one for each application,
-//! `run/<application>` (UNIT-14), each linked from its entry and the
+//! `run/<application-stem>` (UNIT-14), each linked from its entry and the
 //! units `hgl_cpp` says it needs.
 //!
 //! A build that fails runs no executable it did not finish: where
@@ -28,7 +28,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use hgl_cpp::Output;
+use hgl_cpp::{Executable, Output, application_stem};
 
 use super::sdk::{Description, last_lines};
 
@@ -180,14 +180,14 @@ impl Workspace {
         })
     }
 
-    /// The executable of the tests of module `module`.
-    pub(super) fn executable(&self, module: &str) -> PathBuf {
-        self.directory.join("bin").join(module)
+    /// The path to a test executable in this workspace.
+    pub(super) fn executable(&self, executable: &Executable) -> PathBuf {
+        self.directory.join(test_target(executable))
     }
 
     /// The executable of application `path` (UNIT-14).
     pub(super) fn application(&self, path: &str) -> PathBuf {
-        self.directory.join("run").join(path)
+        self.directory.join(application_target(path))
     }
 
     /// Writes what the target wrote, `output`, and the `build.ninja`
@@ -218,7 +218,7 @@ impl Workspace {
     ) -> Result<Built, String> {
         let targets: Vec<String> = wanted
             .iter()
-            .map(|&executable| format!("bin/{}", output.executables[executable].module))
+            .map(|&executable| test_target(&output.executables[executable]))
             .collect();
         self.build_targets(ninja, &targets, jobs)
     }
@@ -347,7 +347,7 @@ fn ninja_file(output: &Output, description: &Description) -> String {
         );
         text.push_str(&format!(
             "build {}: link {}\n",
-            ninja_path(&format!("bin/{}", executable.module)),
+            ninja_path(&test_target(executable)),
             objects.join(" ")
         ));
     }
@@ -378,10 +378,25 @@ fn ninja_file(output: &Output, description: &Description) -> String {
     text
 }
 
+/// The test executable's path. An application's encoded stem uses the
+/// host's executable suffix, as its run executable does (UNIT-14).
+fn test_target(executable: &Executable) -> String {
+    let suffix = if executable.stem == executable.module {
+        ""
+    } else {
+        std::env::consts::EXE_SUFFIX
+    };
+    format!("bin/{}{suffix}", executable.stem)
+}
+
 /// The path, in the build, of the executable of application `path`:
-/// `run/demo.app`, beside no module's tests, whose are under `bin/`.
+/// `run/app-demo-app`, with the host's executable suffix where required.
 fn application_target(path: &str) -> String {
-    format!("run/{path}")
+    format!(
+        "run/{}{}",
+        application_stem(path),
+        std::env::consts::EXE_SUFFIX
+    )
 }
 
 /// The object a unit at `source` is compiled to: `obj/modules/demo.calc.o`

@@ -1,5 +1,5 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
-#include "demo.store.failing.h"
+#include "app-demo-store-failing.h"
 #include "core.h"
 #include "demo.store.h"
 

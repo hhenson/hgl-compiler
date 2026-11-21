@@ -1,5 +1,5 @@
 // Written by the hgl compiler for hgraph's C++ API. Do not edit.
-#include "demo.apps.live.h"
+#include "app-demo-apps-live.h"
 #include "demo.apps.h"
 
 // Names this file writes, which no macro of a header above takes.
