@@ -411,7 +411,7 @@ fn a_place_assigned_in_a_graph_rebinds_its_var() {
             // assignment that reads the place it selects.
             "m.hgl:35:9 type/binding.category CTRL-14",
             "m.hgl:36:5 type/binding.category CTRL-14",
-            "m.hgl:44:9 phase/loop.carried CTRL-15",
+            "m.hgl:44:9 local:phase/loop.carried CTRL-15",
         ]
     );
     // The `var` is a connection before and after, and the assignment is
@@ -516,8 +516,8 @@ fn a_loop_in_a_graph_binds_values_or_connections() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:25:9 phase/loop.carried CTRL-15",
-            "m.hgl:26:9 phase/loop.carried CTRL-15",
+            "m.hgl:25:9 local:phase/loop.carried CTRL-15",
+            "m.hgl:26:9 local:phase/loop.carried CTRL-15",
             "m.hgl:34:18 type/type.mismatch CTRL-15",
         ]
     );
@@ -540,7 +540,10 @@ fn a_loop_in_a_graph_binds_values_or_connections() {
         "    }\n",
         "}\n",
     ));
-    assert_eq!(nested.summary(), ["m.hgl:11:13 phase/loop.carried CTRL-15"]);
+    assert_eq!(
+        nested.summary(),
+        ["m.hgl:11:13 local:phase/loop.carried CTRL-15"]
+    );
     let bound: Vec<String> = locals(&checked, "loops")
         .into_iter()
         .filter(|local| {

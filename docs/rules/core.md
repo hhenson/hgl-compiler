@@ -510,3 +510,117 @@ runner: planned
 runner: planned
 
 - A failed run or a missing required recording fails the eval; neither is an empty result
+
+## MAP-1
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## MAP-2
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## MAP-3
+
+transpiler: planned
+
+- #369 and #370.
+
+## MAP-4
+
+transpiler: planned
+
+- #370.
+
+## MAP-5
+
+transpiler: planned
+
+- #370.
+
+## MAP-6
+
+transpiler: planned
+
+- #370.
+
+## MAP-7
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## MAP-8
+
+transpiler: planned
+
+- #370.
+
+## MAP-9
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## MAP-10
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## RED-1
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## RED-2
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## RED-3
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## RED-4
+
+transpiler: planned
+
+- #370.
+
+## RED-5
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## RED-6
+
+transpiler: planned
+
+- #369 and #370.
+
+## RED-7
+
+transpiler: planned
+
+- #367.
+
+## SET-1
+
+transpiler: planned
+
+- #370.
+
+## SET-2
+
+transpiler: planned
+
+- #370.

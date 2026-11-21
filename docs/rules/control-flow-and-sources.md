@@ -12,6 +12,8 @@ analyser: done
 
 transpiler: planned
 
+- The proposed child startup rule for core mapping awaits #370.
+
 ## CTRL-3
 
 analyser: done
@@ -49,9 +51,10 @@ transpiler: planned
 
 ## CTRL-7
 
-analyser: done
+analyser: partial
 
-- What a `for` in a graph receives: ordinary values over ordinary data, a connection of `T` over a connection of `list<T, N>`, and over a connection of `list<T>`, `set<T>` or `dict<K, V>` one child for each member, with the set's member and the dictionary's key ordinary values (with CTRL-15)
+- A graph loop binds values from ordinary data and child connections from a fixed-size temporal list.
+- Struct fields and rejecting a temporal sequence with changing membership await #373. The compiler still accepts dynamic temporal loop forms. Core still tests the dictionary form.
 
 transpiler: planned
 
@@ -59,7 +62,6 @@ transpiler: planned
 
 analyser: partial
 
-- In a loop that makes one child for each member, an assignment to a `var` declared outside it and a `return` are rejected (`loop.carried`)
 - Iteration over a `ref` parameter reads it, and is `ref.read` (FN-16)
 - Left: the traversal forms `elements`, `keys`, `values` and `items`
 
@@ -89,9 +91,10 @@ analyser: partial
 
 ## CTRL-12
 
-analyser: done
+analyser: partial
 
 - In a value function: `for` over a list, a set or a dictionary; `while` with its condition (`while.condition`); a `switch`'s selector, and each label a constant of its type (CTRL-6)
+- Field iteration in value code and hooks awaits #373.
 
 transpiler: planned
 
@@ -114,21 +117,31 @@ transpiler: planned
 
 ## CTRL-15
 
-analyser: done
+analyser: partial
 
-- In a graph: a `switch` over an ordinary value or over a connection, its labels compile-time constants (`connection.as_constant`, local `switch.label_constant`); what a `for` binds by what it loops over, and a loop that makes one child for each member carrying nothing (`loop.carried`); a `while` with an ordinary condition (`connection.as_constant`, `while.condition`)
+- A graph supports `switch` over an ordinary value or a connection with compile-time labels, and `while` with an ordinary condition. It binds loop items by sequence type.
+- Struct and atomic struct iteration and the proposed `for.sequence` diagnostic await #373. Dynamic loops continue to accept temporal collections and report local `loop.carried` for an outer assignment or a return.
+
+transpiler: planned
+
+## CTRL-16
+
+analyser: planned
+
+- #368 tracks checking only the selected branch of a constant condition in an unrolled pass.
 
 transpiler: planned
 
 ## SOURCE-1
 
-analyser: done
+analyser: partial
 
 - A source's shape: no temporal parameter (`source.input`), no `when` (`source.when`), no `var`, and no `inject` of `out`, `scheduler` or `alarm` (`source.statement`)
 - One with a declaration or a hook has its declarations, `start`, one block that holds every `yield` (`{ }`, `while` or `for`), and `stop`, in that order and nothing else: a statement outside the block, a second block, a hook out of order and a `yield` in a hook are `source.statement`
 - Its declarations and hooks stand in its body itself and each hook once, as a node's do (TIME-5)
 - Its body is read: its declarations and hooks as a node's, and its other statements as value code, with each `yield`'s value held to the result's type
 - It injects neither `scheduler` nor `alarm`, so `scheduled()` in it is `inject.no_scheduler` (TIME-9)
+- The analyser still accepts a source without a result. The rejection and its proposed `source.result` code await #337.
 
 transpiler: planned
 

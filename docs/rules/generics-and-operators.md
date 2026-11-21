@@ -31,6 +31,8 @@ transpiler: planned
 
 analyser: partial
 
+- Binding a generic from a positive `any` conjunct awaits #367.
+
 - A parameter compared in a constraint is a const option or is rejected, and each constant it is compared with is a value of the option's type (`type.mismatch`, `member.unknown`, `enum.context_type`, at the declaration); a constant of a module among those is its value (UNIT-13)
 - At a named operator call in a value function, a candidate's `T in {types}` and `T == type` are checked against what `T` stands for, and a named operator requirement is tested with the call's types (GEN-16)
 - Where `T` stands for a generic parameter of the declaration the call is written in, which is not given there, such a condition is not told ("under negation/disjunction it only tests already-resolved data"; `declared::same_type`: `U` is not known to be `i64` or not, where it was taken to differ). GEN-7: "A generic body is checked under its stated requirements", so no candidate is known to admit the call, which is `operator.no_candidate` where the body is declared, by name and by symbol, in a value function and a graph (`const fn wrap<U>(value: U) -> i64 => kind_of(value)`); under `requires kind_of(U) -> i64` it is the operation the body requires (GEN-16)
@@ -47,7 +49,8 @@ analyser: partial
 
 - An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and one that names no operator is `impl.unknown_operator`; a value candidate's body is read as a value function's
 - An operator's requirement `O in {...}` on its bare result parameter limits its candidates' results
-- Left: operator identity in selection; every other requirement of an operator
+- Operator identity in selection and other requirements of an operator are pending.
+- Operators still have public visibility. Reading and enforcing `export operator` await #364.
 
 transpiler: planned
 
@@ -72,11 +75,14 @@ analyser: partial
 - An option's name is one kind across an operator's candidates
 - A value candidate may mark a parameter `var`, which takes no part in selecting it (FN-15)
 - An option given a generic value parameter of the enclosing function, `step(v, mode: M)` in `go<const M: Mode>`, admits a candidate where the function's `requires` binds the parameter, `requires M == .slow` (GEN-3); where it states nothing of it, a default of it included, no candidate is known to admit the call, which is `operator.no_candidate` where the function is declared (GEN-7)
+- The compiler still accepts a fixed parameter in an operator pack's place. The proposed `impl.pack` check is pending. Bare Boolean requirements await #367.
 - Left: a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidates
 
 ## GEN-7
 
 analyser: partial
+
+- The proposed checking of passes over the keys of a generic pack awaits #368.
 
 - In a body with generic parameters, a call of an operator, by name or by symbol, with an argument whose type names one of them is admitted where a requirement of the declaration names that operator with those types, each given by its position or by the operator's parameter name, and is of the type its arrow states; with none it selects among the candidates as any call does, so one that takes any type is still taken
 - The call records the position of the requirement it is (`Callee::Required`), so that a call of the declaration says which candidate it calls
@@ -112,15 +118,15 @@ optimiser: planned
 
 ## GEN-10
 
-parser: done
+parser: partial
 
-- A cardinality after a pack parameter or a generic pack parameter
+- A cardinality after a pack parameter or a generic pack parameter. The `any` quantifier awaits #367.
 
 analyser: partial
 
 - A cardinality bounds the arguments a generic type's pack takes, and has its upper bound at least its lower
 - Function and operator calls check the cardinality of captured arguments against the value parameter and its generic type pack. Explicit positional type sequences also constrain the argument count. The HIR records the resolved sequence of types for each captured type pack.
-- Left: pack reflection and declaration checks for `pack.duplicate` and `impl.pack` after the catalogue is pinned. [Compiler issue #336](https://github.com/hhenson/hgl-compiler/issues/336)
+- Pack reflection and evaluation of `any`, including its generic binding rule (#367), are pending. The declaration checks for `pack.duplicate` and `impl.pack` are pending under FN-8 and GEN-6.
 
 transpiler: partial
 
@@ -167,9 +173,9 @@ analyser: partial
 
 ## GEN-15
 
-parser: done
+parser: partial
 
-- Constraint precedence: negation, then conjunction, then disjunction
+- Negation binds tighter than conjunction, which binds tighter than disjunction. The new `any` form and named Boolean terms await #367.
 
 ## GEN-16
 
@@ -186,5 +192,27 @@ analyser: partial
 - `Program::instance` gives a generic declaration's signature and body for one call: its generic arguments in place, and each operation it requires as the call of the candidate that answers there
 - A function's requirement that does not hold at a call of it, and a struct's where it is constructed, is `requires.unmet` (GEN-3)
 - Left: a predicate, and the arrow rejected on one; a requirement supplied with a value or a set; a requirement checked where it is declared
+
+transpiler: planned
+
+## GEN-17
+
+parser: planned
+
+- #366 tracks a function's remaining parameters as a named pack, and syntax for keys and member types.
+
+analyser: planned
+
+- Compile-time keys, member lookup and `pack.name` await #366.
+
+## GEN-18
+
+parser: planned
+
+- #367 tracks law predicates and bare Boolean constraints.
+
+analyser: planned
+
+- Reading the given function's laws in requirements and defaults awaits #367.
 
 transpiler: planned

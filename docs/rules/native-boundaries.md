@@ -4,9 +4,9 @@
 
 ## NATIVE-1
 
-parser: done
+parser: partial
 
-- `export` before a native function's declaration; with `impl`, or before a contract body, it is rejected
+- Reads `export` before a native function's declaration. An export with `impl` or before a contract body is rejected. Native configuration parameters await #363.
 
 analyser: partial
 
