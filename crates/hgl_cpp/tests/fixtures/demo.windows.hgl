@@ -202,3 +202,60 @@ test a_window_is_recorded_and_replayed {
     assert eval(observe_total(reading: [1, 2])) == [1, 3, _, _, 2, -1]
     assert eval(total_at_tick(readings: [1, 2])) == [1, 3, _, _, 2, -1]
 }
+
+# Two writes to a window of two in one evaluation. END-5: "Further writes
+# to the already modified endpoint in the same evaluation update its
+# publication without notifying again"; TYPE-11: "A window takes at most
+# one value a cycle": the last value written is the cycle's one arrival.
+fn written_twice(reading: i64) -> rolling_window<i64, 2> {
+    inject out
+    when {
+        out = reading
+        out = reading + 10
+    }
+}
+
+# Two handlers that both run, each writing the window.
+fn written_by_two(reading: i64) -> rolling_window<i64, 2> {
+    inject out
+    when { out = reading }
+    when modified(reading) { return reading + 10 }
+}
+
+fn pair_held(readings: rolling_window<i64, 2>) -> list<i64> {
+    when all_valid(readings) { return readings }
+}
+
+fn pair_arrival(readings: rolling_window<i64, 2>) -> i64 {
+    when modified(readings) { return delta_value(readings) }
+}
+
+fn pair_departure(readings: rolling_window<i64, 2>) -> str {
+    when modified(readings) { return value_or_code(removed_value(readings)) }
+}
+
+fn held_twice(reading: i64) -> list<i64> => pair_held(written_twice(reading))
+
+fn arrived_twice(reading: i64) -> i64 => pair_arrival(written_twice(reading))
+
+fn departed_twice(reading: i64) -> str => pair_departure(written_twice(reading))
+
+fn held_by_two(reading: i64) -> list<i64> => pair_held(written_by_two(reading))
+
+fn departed_by_two(reading: i64) -> str => pair_departure(written_by_two(reading))
+
+# A window written twice in a cycle takes the last value, once: each cycle
+# has one arrival, and the third pushes out one value, the oldest held.
+test the_last_write_of_a_cycle_arrives {
+    assert eval(held_twice(reading: [1, 2, 3])) == [_, [11, 12], [12, 13]]
+    assert eval(arrived_twice(reading: [1, 2, 3])) == [11, 12, 13]
+    assert eval(departed_twice(reading: [1, 2, 3])) ==
+        ["value.unset_read", "value.unset_read", "11"]
+}
+
+# Two handlers that write a window in one cycle are two writes of it.
+test two_handlers_write_one_arrival {
+    assert eval(held_by_two(reading: [1, 2, 3])) == [_, [11, 12], [12, 13]]
+    assert eval(departed_by_two(reading: [1, 2, 3])) ==
+        ["value.unset_read", "value.unset_read", "11"]
+}
