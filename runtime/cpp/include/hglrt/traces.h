@@ -449,10 +449,9 @@ bool same(const Left& left, const Right& right) {
 
 // ---- What a trace written out publishes (CEVAL-2, TST-9, TST-16) ---------
 
-/// The delta that publishing a whole value of `T` records, where `T`'s
-/// temporal form says it beside its other code: a static `delta(value)`.
-/// A struct's is structs.h's; a tuple's and a list's are `whole_delta`'s
-/// own, below.
+/// The delta that publishing a whole value of `T` records where it needs
+/// nothing of what was held before, and `T`'s temporal form says it beside
+/// its other code: a static `delta(value)` (structs.h: an atomic struct's).
 template <class T>
 struct whole_publication;
 
@@ -477,86 +476,123 @@ std::size_t size_after(std::size_t size, const list_delta<L>& delta) {
     return std::max(size, static_cast<std::size_t>(delta.updated.rbegin()->first) + 1);
 }
 
-template <class T>
-delta_t<T> whole_delta(const T& value, std::size_t size);
-
-/// The delta that publishing `part` whole records where it is a part of
-/// another value, a list's element, a struct's field or a tuple's position,
-/// whatever that part held before (TST-9: "a T whole, which replaces what
-/// the input held"): the part itself where it publishes whole; an unsized
-/// list's, each position and its size, which shrinks one that held more
-/// (TYPE-16: "A delta written with a smaller `size_modified` and no `removed`
-/// shrinks the list"); and any other's as its whole value records it.
-template <class P>
-delta_t<P> whole_part_delta(const P& part) {
-    if constexpr (publishes_whole<P>) {
-        return part;
-    } else if constexpr (hglrt::detail::is_list<P>::value) {
-        delta_t<P> delta;
-        for (std::size_t position = 0; position < part.size(); ++position) {
-            const typename P::value_type element = part[position];
-            delta.updated.emplace(static_cast<i64>(position), whole_part_delta(element));
-        }
-        delta.size_modified = static_cast<i64>(part.size());
-        return delta;
-    } else {
-        return whole_delta(part, 0);
-    }
-}
-
-/// The delta that publishing `value` whole records, to a value that held
-/// `size` positions, where it is a list (TST-9: "a T whole, which replaces
-/// what the input held"; TST-16: "A T published whole is held as its delta
-/// too"): a tuple's, each position; a fixed list's, each position; an
-/// unsized list's, each position, the tail past them removed, and the new
-/// size where it moves (TYPE-16: "on a shrink names the tail positions it
-/// drops in `removed`"). Each part is published whole (`whole_part_delta`).
-template <class T>
-delta_t<T> whole_delta(const T& value, std::size_t size) {
-    if constexpr (requires { whole_publication<T>::delta(value); }) {
-        return whole_publication<T>::delta(value);
-    } else if constexpr (hglrt::detail::is_tuple<T>::value) {
-        return std::apply([](const auto&... part) { return delta_t<T>{whole_part_delta(part)...}; }, value);
-    } else {
-        delta_t<T> delta;
-        for (std::size_t position = 0; position < value.size(); ++position) {
-            const typename T::value_type element = value[position];
-            delta.updated.emplace(static_cast<i64>(position), whole_part_delta(element));
-        }
-        if constexpr (hglrt::detail::is_list<T>::value) {
-            for (std::size_t position = value.size(); position < size; ++position) {
-                delta.removed.insert(static_cast<i64>(position));
-            }
-            if (value.size() != size) {
-                delta.size_modified = static_cast<i64>(value.size());
-            }
-        }
-        return delta;
-    }
-}
-
-/// What each cell of a trace of a T publishes, in order, a whole one as the
-/// delta that replaces what the value held: the size of a list is followed
-/// through each cell, a delta's among them. A header of this library that
-/// declares a value type whose whole cell needs more of what the earlier
-/// cells left specializes it for that type (keyed.h: a set, a dictionary).
+/// What each cell of a trace of a T publishes, in order (TST-9): a delta as
+/// it is, and a cell written whole as "a T whole, which replaces what the
+/// input held": its change from what the earlier cells left, as publishing
+/// it whole records it (TST-16: "A T published whole is held as its delta
+/// too"). Each part of a composite is followed by a publisher of its own: a
+/// tuple's positions, a fixed list's positions, a growing list's size and
+/// positions, which it gives each position published, the tail past them
+/// removed and the new size where it moves (TYPE-16: "on a shrink names the
+/// tail positions it drops in `removed`"), at any depth. A header of this
+/// library that declares a value type whose cell needs more specializes it
+/// for that type (structs.h: a struct; keyed.h: a set, a dictionary).
 template <class T>
 class Publisher {
   public:
     delta_t<T> operator()(const Cell<T>& cell) {
         if constexpr (publishes_whole<T>) {
             return cell;
+        } else if (cell.index() == 0) {
+            follow(std::get<0>(cell));
+            return std::get<0>(cell);
         } else {
-            delta_t<T> delta =
-                cell.index() == 0 ? std::get<0>(cell) : whole_delta(std::get<1>(cell).value, size_);
-            if constexpr (hglrt::detail::is_list_delta<delta_t<T>>::value) {
-                size_ = size_after(size_, delta);
+            return replace(std::get<1>(cell).value);
+        }
+    }
+
+    /// The delta publishing `value` whole records, from what this has
+    /// followed; it follows that publication.
+    delta_t<T> replace(const T& value) {
+        if constexpr (publishes_whole<T>) {
+            return value;
+        } else if constexpr (requires { whole_publication<T>::delta(value); }) {
+            return whole_publication<T>::delta(value);
+        } else if constexpr (hglrt::detail::is_tuple<T>::value) {
+            return [&]<std::size_t... I>(std::index_sequence<I...>) {
+                return delta_t<T>{std::get<I>(parts_).replace(std::get<I>(value))...};
+            }(std::make_index_sequence<std::tuple_size_v<T>>{});
+        } else {
+            delta_t<T> delta;
+            if constexpr (hglrt::detail::is_list<T>::value) {
+                parts_.resize(std::max(parts_.size(), value.size()));
+            }
+            for (std::size_t position = 0; position < value.size(); ++position) {
+                const typename T::value_type element = value[position];
+                delta.updated.emplace(static_cast<i64>(position), parts_[position].replace(element));
+            }
+            if constexpr (hglrt::detail::is_list<T>::value) {
+                for (std::size_t position = value.size(); position < size_; ++position) {
+                    delta.removed.insert(static_cast<i64>(position));
+                }
+                if (value.size() != size_) {
+                    delta.size_modified = static_cast<i64>(value.size());
+                }
+                size_ = value.size();
+                parts_.resize(size_);
             }
             return delta;
         }
     }
 
+    /// Follows `delta`, published: what each part it changes holds.
+    void follow(const delta_t<T>& delta) {
+        if constexpr (hglrt::detail::is_tuple<T>::value) {
+            [&]<std::size_t... I>(std::index_sequence<I...>) {
+                (
+                    [&] {
+                        if (const auto& part = std::get<I>(delta); part.has_value()) {
+                            std::get<I>(parts_).follow(*part);
+                        }
+                    }(),
+                    ...);
+            }(std::make_index_sequence<std::tuple_size_v<T>>{});
+        } else if constexpr (hglrt::detail::is_list<T>::value || hglrt::detail::is_fixed_list<T>::value) {
+            if constexpr (hglrt::detail::is_list<T>::value) {
+                size_ = size_after(size_, delta);
+                parts_.resize(std::max(parts_.size(), size_));
+            }
+            // A position that loses its value holds none for its next
+            // publication to change (TYPE-16).
+            for (const i64 position : delta.removed) {
+                if (position >= 0 && static_cast<std::size_t>(position) < parts_.size()) {
+                    parts_[static_cast<std::size_t>(position)] = Publisher<typename T::value_type>{};
+                }
+            }
+            for (const auto& [position, change] : delta.updated) {
+                if (position >= 0 && static_cast<std::size_t>(position) < parts_.size()) {
+                    parts_[static_cast<std::size_t>(position)].follow(change);
+                }
+            }
+            if constexpr (hglrt::detail::is_list<T>::value) {
+                parts_.resize(size_);
+            }
+        } else {
+            static_cast<void>(delta);
+        }
+    }
+
   private:
+    /// A publisher of each part: a tuple's of its positions, a list's of its
+    /// positions; none of any other.
+    template <class V>
+    struct parts_of {
+        using type = std::monostate;
+    };
+    template <class... P>
+    struct parts_of<std::tuple<P...>> {
+        using type = std::tuple<Publisher<P>...>;
+    };
+    template <class E, std::size_t N>
+    struct parts_of<std::array<E, N>> {
+        using type = std::array<Publisher<E>, N>;
+    };
+    template <class E>
+    struct parts_of<list<E>> {
+        using type = std::vector<Publisher<E>>;
+    };
+
+    [[no_unique_address]] typename parts_of<T>::type parts_{};
     std::size_t size_ = 0;
 };
 } // namespace detail

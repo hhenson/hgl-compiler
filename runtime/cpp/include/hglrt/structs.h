@@ -472,13 +472,15 @@ struct whole_publication<atomic_trace<S>> {
 
 /// The recording of an eval of an atomic struct `S` as a recording of `S`,
 /// to compare with a trace whose cells are `S` (TST-4, TST-5): each whole
-/// publication is the delta of every field (TST-9), and the value the result
-/// then held is the struct published.
+/// publication is the delta of every field, from what the publications
+/// before it left (TST-9), and the value the result then held is the struct
+/// published.
 template <class S>
 Recording<S> as_struct_recording(const Recording<atomic_trace<S>>& atomic) {
     Recording<S> out{atomic.start, {}, Held<S>{}};
+    detail::Publisher<S> publish;
     for (const auto& [at, value] : atomic.entries) {
-        out.entries.emplace_back(at, whole_publication<S>::delta(value));
+        out.entries.emplace_back(at, publish.replace(value));
         out.held->emplace_back(at, value);
     }
     return out;
@@ -508,43 +510,82 @@ std::optional<std::string> difference(const Left& left, const Recording<atomic_t
 }
 
 namespace detail {
-/// The delta of type `D` that publishing the part `part` whole records:
-/// the part itself where `D` is its own type, an atomic field's payload, and
-/// otherwise its whole value's delta as a part (`whole_part_delta`).
-template <class D, class P>
-D whole_part(const P& part) {
-    if constexpr (std::is_same_v<D, P>) {
-        return part;
-    } else {
-        return whole_part_delta(part);
-    }
-}
-} // namespace detail
-
-/// What publishing a whole struct records (TST-9: "a T whole, which
-/// replaces what the input held"; TST-16: "A T published whole is held as
-/// its delta too"): its delta with every field, each as its whole value
-/// records it. Which that is is the delta's property's to say: an atomic
-/// field, whose C++ value is its payload's, publishes whole, and its
-/// property holds the payload (TYPE-16: "`atomic<V>`: V").
+/// What each cell of a trace of a struct publishes (TST-9): a delta as it
+/// is, and a struct written whole as "a T whole, which replaces what the
+/// input held": its delta with every field, each field as its own whole
+/// value records it from what that field held (a `Publisher` of each; TST-16:
+/// "A T published whole is held as its delta too"). Which that is is the
+/// delta's property's to say: an atomic field, whose C++ value is its
+/// payload's, publishes whole, and its property holds the payload (TYPE-16:
+/// "`atomic<V>`: V").
 template <class T>
     requires requires { hgraph::native_bundle<T>::members; }
-struct whole_publication<T> {
-    static delta_t<T> delta(const T& value) {
+class Publisher<T> {
+    static constexpr std::size_t count = std::tuple_size_v<std::remove_cvref_t<decltype(fields<T>::members)>>;
+
+    template <std::size_t I>
+    using member_t = std::remove_cvref_t<decltype(std::declval<T&>().*std::get<I>(hglrt::detail::members_of<T>))>;
+
+    template <std::size_t I>
+    using property_t = typename std::remove_cvref_t<decltype(std::declval<delta_t<T>&>().*
+                                                             std::get<I>(hglrt::detail::delta_members_of<T>))>::value_type;
+
+    template <class Indices>
+    struct parts_for;
+    template <std::size_t... I>
+    struct parts_for<std::index_sequence<I...>> {
+        using type = std::tuple<Publisher<member_t<I>>...>;
+    };
+
+  public:
+    delta_t<T> operator()(const Cell<T>& cell) {
+        if (cell.index() == 0) {
+            follow(std::get<0>(cell));
+            return std::get<0>(cell);
+        }
+        return replace(std::get<1>(cell).value);
+    }
+
+    /// The delta publishing `value` whole records, from what each field
+    /// held; it follows that publication.
+    delta_t<T> replace(const T& value) {
         delta_t<T> change{};
-        constexpr std::size_t count = std::tuple_size_v<std::remove_cvref_t<decltype(fields<T>::members)>>;
         [&]<std::size_t... I>(std::index_sequence<I...>) {
             (
                 [&] {
+                    const member_t<I>& field = value.*std::get<I>(hglrt::detail::members_of<T>);
                     auto& property = change.*std::get<I>(hglrt::detail::delta_members_of<T>);
-                    property = detail::whole_part<typename std::remove_cvref_t<decltype(property)>::value_type>(
-                        value.*std::get<I>(hglrt::detail::members_of<T>));
+                    if constexpr (std::is_same_v<property_t<I>, member_t<I>>) {
+                        property = field;
+                    } else {
+                        property = std::get<I>(parts_).replace(field);
+                    }
                 }(),
                 ...);
         }(std::make_index_sequence<count>{});
         return change;
     }
+
+    /// Follows `delta`, published: what each field it changes holds.
+    void follow(const delta_t<T>& delta) {
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            (
+                [&] {
+                    if constexpr (!std::is_same_v<property_t<I>, member_t<I>>) {
+                        if (const auto& property = delta.*std::get<I>(hglrt::detail::delta_members_of<T>);
+                            property.has_value()) {
+                            std::get<I>(parts_).follow(*property);
+                        }
+                    }
+                }(),
+                ...);
+        }(std::make_index_sequence<count>{});
+    }
+
+  private:
+    typename parts_for<std::make_index_sequence<count>>::type parts_{};
 };
+} // namespace detail
 
 } // namespace hglrt::testing
 

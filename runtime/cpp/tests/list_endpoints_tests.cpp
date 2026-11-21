@@ -580,16 +580,27 @@ TEST_CASE("a list of tuples is published, read and read as its delta through the
                                           D{.updated = {{0, {std::nullopt, hglrt::str{"c"}}}}}});
 }
 
-/// TST-9: a whole cell of a list of tuples publishes each position as its
-/// whole tuple's delta, and a whole tuple of a list its list with its size.
-TEST_CASE("a whole cell publishes each part as its own whole value records it (TST-9)") {
-    using hglrt::testing::detail::whole_delta;
-    const auto names = whole_delta(list<Named>{Named{1, "a"}}, 2);
-    CHECK(names == list_delta<list<Named>>{.updated = {{0, {1, hglrt::str{"a"}}}}, .removed = {1}, .size_modified = 1});
+/// TST-9: a cell written whole publishes its change from what the cells
+/// before it left, each part followed by its own publisher: a list of tuples
+/// gives each position published and the tail it drops; a tuple's list does
+/// as a list does, and moves its size only where it moves (TYPE-16).
+TEST_CASE("a whole cell publishes each part as its change from what it held (TST-9, TYPE-16)") {
+    using hglrt::testing::detail::Publisher;
+    Publisher<list<Named>> names;
+    static_cast<void>(names.replace(list<Named>{Named{1, "a"}, Named{2, "b"}}));
+    CHECK(names.replace(list<Named>{Named{1, "a"}}) ==
+          list_delta<list<Named>>{.updated = {{0, {1, hglrt::str{"a"}}}}, .removed = {1}, .size_modified = 1});
     using Tagged = std::tuple<list<i64>, bool>;
-    const auto tagged = whole_delta(Tagged{list<i64>{}, true}, 0);
-    CHECK(std::get<0>(tagged) == list_delta<list<i64>>{.size_modified = 0});
-    CHECK(std::get<1>(tagged) == std::optional<bool>{true});
+    Publisher<Tagged> tagged;
+    static_cast<void>(tagged.replace(Tagged{list<i64>{1, 2}, true}));
+    const auto shrunk = tagged.replace(Tagged{list<i64>{3}, false});
+    CHECK(std::get<0>(shrunk) == list_delta<list<i64>>{.updated = {{0, 3}}, .removed = {1}, .size_modified = 1});
+    CHECK(std::get<1>(shrunk) == std::optional<bool>{false});
+    // A list given its own size moves none; a delta followed moves it.
+    CHECK(std::get<0>(tagged.replace(Tagged{list<i64>{4}, false})) == list_delta<list<i64>>{.updated = {{0, 4}}});
+    tagged.follow({list_delta<list<i64>>{.updated = {{1, 5}}}, std::nullopt});
+    CHECK(std::get<0>(tagged.replace(Tagged{list<i64>{}, false})) ==
+          list_delta<list<i64>>{.removed = {0, 1}, .size_modified = 0});
 }
 
 } // namespace
