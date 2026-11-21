@@ -63,9 +63,9 @@ analyser: partial
 analyser: partial
 
 - Any parameter but a pack may have a default; a pack's is rejected under FN-8
-- A parameter that may be omitted follows every one that may not, and a value function's call may omit one written `T?`
+- A parameter that may be omitted follows every one that may not within the parentheses. Configuration parameters in braces can stand in any order. A value function's call may omit a parameter written `T?`.
 - A default is read as a value of its parameter's type (`type.mismatch`) and kept for the stages after, `Module::defaults`
-- Configuration parameter ordering awaits #363, and law predicates in defaults await #367.
+- Law predicates in defaults await #367.
 - Left: that a default is a required constant; the default of a window, an atomic or a reference, which is held to no type; a default whose parameter's type names a generic parameter
 
 transpiler: partial

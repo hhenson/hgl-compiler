@@ -58,7 +58,7 @@ struct ValueTarget<'a> {
     signature: &'a Signature,
     instance: Option<&'a hgl_lower::instances::Instance>,
     /// The declaration that owns any defaults (UNIT-8).
-    declaration: Option<(usize, usize)>,
+    callee: &'a Callee,
 }
 
 impl Emitter<'_> {
@@ -116,7 +116,7 @@ impl Emitter<'_> {
                     name,
                     signature: &signature,
                     instance: None,
-                    declaration: None,
+                    callee,
                 },
             );
         }
@@ -210,7 +210,7 @@ impl Emitter<'_> {
                 name: called,
                 signature,
                 instance: concrete,
-                declaration: Some((module, declaration)),
+                callee,
             },
         )
     }
@@ -227,7 +227,7 @@ impl Emitter<'_> {
             name: called,
             signature,
             instance: concrete,
-            declaration,
+            callee,
         }: ValueTarget<'_>,
     ) -> String {
         let at = whole.at;
@@ -358,13 +358,13 @@ impl Emitter<'_> {
                 return self.missing(at, "a call of a function with a pack");
             }
             let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
-            let default = left_out(program, declaration, declared, parameter);
+            let default = left_out(program, callee, declared, parameter);
             match default {
                 Some(LeftOut::Default(default)) => {
                     // A default that calls its own function with that
                     // same argument left out would be written inside
                     // itself without end.
-                    let (module, declaration) = declaration.expect("a named default");
+                    let (module, declaration) = callee.declaration().expect("a named default");
                     let key = (module, declaration, declared);
                     if self.expanding.contains(&key) {
                         return self.missing(default.at, "a default that leaves itself out");
@@ -372,7 +372,7 @@ impl Emitter<'_> {
                     // The analyser keeps a default as a value with no
                     // locals of its own, so a block in it that runs
                     // statements cannot be written.
-                    if changes(default) {
+                    if changes(&default) {
                         return self.missing(default.at, "a default that runs statements");
                     }
                     let cold = Body {
@@ -381,7 +381,7 @@ impl Emitter<'_> {
                     };
                     let mut defaults = Scope::cold(program, &cold);
                     self.expanding.push(key);
-                    let value = self.expression(&mut defaults, default);
+                    let value = self.expression(&mut defaults, &default);
                     self.expanding.pop();
                     if !defaults.before.is_empty() {
                         return self.missing(default.at, "a default that propagates a failure");
@@ -389,7 +389,7 @@ impl Emitter<'_> {
                     let Some(ty) = self.named_type(&default.ty) else {
                         return self.missing(default.at, &format!("the type `{}`", default.ty));
                     };
-                    defaulted.push((index, value, may_fail(default), Held::Value(ty)));
+                    defaulted.push((index, value, may_fail(&default), Held::Value(ty)));
                 }
                 // UNIT-8: "A parameter whose type is written `T?` needs no
                 // default to be omitted: it is taken to have a default of

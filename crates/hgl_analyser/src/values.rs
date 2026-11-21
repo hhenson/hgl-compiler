@@ -310,6 +310,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     }
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
+    operators::inherit_configuration_defaults(program);
     requirements::instances_hold(program, diagnostics);
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.

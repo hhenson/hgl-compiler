@@ -56,6 +56,34 @@ struct InstanceArguments<'a> {
 }
 
 impl Program {
+    /// Places the operator's generic arguments in a checked configuration default.
+    /// Its declaration references still name the operator's defining scope (UNIT-7).
+    pub fn specialize_operator_default(
+        &self,
+        default: &Expr,
+        operator: (usize, usize),
+        generics: &[Argument],
+    ) -> Expr {
+        let mut default = default.clone();
+        let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
+            return default;
+        };
+        let types: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(generics)
+            .collect();
+        let instance = InstanceArguments {
+            declaration: operator,
+            generics,
+            types: &types,
+            requirements: &[],
+        };
+        default.walk_mut(&mut |expression| self.place(expression, &instance, &[]));
+        default
+    }
+
     /// The signature and the body of `declaration` of `module` as one
     /// call takes it: `None` for a declaration that is no function, or
     /// has no body.
@@ -188,9 +216,48 @@ impl Program {
                     expression.kind = kind;
                 }
             }
-            ExprKind::Call { callee, .. } => self.place_target(callee, instance, functions),
+            ExprKind::Call {
+                callee, arguments, ..
+            } => {
+                let required = matches!(callee, Callee::Required { .. });
+                self.place_target(callee, instance, functions);
+                if required
+                    && let Callee::Candidate {
+                        operator,
+                        module,
+                        declaration,
+                        ..
+                    } = callee
+                {
+                    self.place_required_arguments(*operator, (*module, *declaration), arguments);
+                }
+            }
             ExprKind::StaticCallable(callee) => self.place_target(callee, instance, functions),
             _ => {}
+        }
+    }
+
+    /// A GEN-16 call records public parameter indices. The chosen
+    /// candidate may arrange or add configuration slots (FN-18).
+    fn place_required_arguments(
+        &self,
+        operator: (usize, usize),
+        candidate: (usize, usize),
+        arguments: &mut [crate::hir::Argument],
+    ) {
+        let Some(Detail::Callable(public)) = self.modules[operator.0].details.get(operator.1)
+        else {
+            return;
+        };
+        let Some(Detail::Callable(candidate)) = self.modules[candidate.0].details.get(candidate.1)
+        else {
+            return;
+        };
+        let slots: Vec<_> = public.candidate_parameters(candidate).collect();
+        for argument in arguments {
+            argument.parameter = argument
+                .parameter
+                .and_then(|index| slots.get(index).copied().flatten());
         }
     }
 
@@ -404,6 +471,7 @@ fn hidden_captures(
             local.kind = LocalKind::Parameter;
             *capture = signature.parameters.len();
             signature.parameters.push(Parameter {
+                configuration: false,
                 name,
                 at: local.at,
                 constant: temporal && local.category == ValueCategory::Value,
@@ -453,6 +521,17 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
             }
         }
     }
+    if let Callee::Candidate {
+        operator_generics, ..
+    }
+    | Callee::Required {
+        operator_generics, ..
+    } = callee
+    {
+        for argument in operator_generics {
+            *argument = placed(argument, map);
+        }
+    }
     match callee {
         Callee::Function {
             generics,
@@ -471,7 +550,11 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
                 place_answer(answer, map, answers);
             }
         }
-        Callee::Required { requirement, .. } => {
+        Callee::Required {
+            requirement,
+            operator_generics,
+            ..
+        } => {
             if let Some(Answer::Candidate {
                 operator,
                 module,
@@ -482,6 +565,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
             {
                 *callee = Callee::Candidate {
                     operator: *operator,
+                    operator_generics: std::mem::take(operator_generics),
                     module: *module,
                     declaration: *declaration,
                     generics: generics.clone(),
@@ -522,7 +606,7 @@ fn place_answer(answer: &mut Answer, map: &Map, answers: &[Answer]) {
 /// parameters replaced, a constant that is a generic value parameter
 /// replaced by the constant given for it, and one that holds such a
 /// parameter, `N + 1` or `[N]`, worked out with it.
-fn placed(argument: &Argument, map: &Map) -> Argument {
+pub(crate) fn placed(argument: &Argument, map: &Map) -> Argument {
     let given = |at: Location| {
         map.iter().find_map(|(declared, given)| match given {
             Argument::Constant(given) if *declared == at => Some(given),

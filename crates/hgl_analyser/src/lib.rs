@@ -577,8 +577,14 @@ pub mod codes {
         /// function argument awaits a ruling (FN-17, issue #362).
         pub const FUNCTION_REFERENCE_UNREAD: &str = "function.reference_unread";
 
+        /// A configuration parameter has a mode FN-18 forbids.
+        pub const PARAMETER_CONFIGURATION: &str = "parameter.configuration";
+
+        /// A candidate does not declare one of its operator's configuration parameters (GEN-6).
+        pub const IMPL_CONFIGURATION: &str = "impl.configuration";
+
         /// Every local code of this stage.
-        pub const ALL: [&str; 11] = [
+        pub const ALL: [&str; 13] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
@@ -590,6 +596,8 @@ pub mod codes {
             LOOP_CARRIED,
             FUNCTION_VALUE,
             FUNCTION_REFERENCE_UNREAD,
+            PARAMETER_CONFIGURATION,
+            IMPL_CONFIGURATION,
         ];
     }
 }

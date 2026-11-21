@@ -1706,8 +1706,8 @@ fn default_may_fail(program: &Program, value: &Expr) -> bool {
         })
         .any(|(index, parameter)| {
             matches!(
-                left_out(program, Some((module, declaration)), index, parameter),
-                Some(LeftOut::Default(default)) if may_fail(default)
+                left_out(program, callee, index, parameter),
+                Some(LeftOut::Default(default)) if may_fail(&default)
             )
         })
 }
