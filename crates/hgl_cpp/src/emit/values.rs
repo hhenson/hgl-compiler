@@ -21,7 +21,7 @@
 //! it is read") is a function that gives a reference to one value, made
 //! the first time it is read.
 
-use hgl_analyser::hir::Body;
+use hgl_analyser::hir::{Body, ExprKind, Raise, walk_statements};
 use hgl_analyser::{Detail, Signature, Type};
 use hgl_diagnostics::Location;
 
@@ -30,6 +30,7 @@ use super::calls::changes;
 use super::names::{self, identifier};
 use super::statements::Scope;
 use super::types::by_value;
+use crate::runtime;
 
 /// One level of indentation in the generated code.
 pub(super) const INDENT: &str = "    ";
@@ -104,9 +105,36 @@ impl Emitter<'_> {
         let Some((prototype, head)) = self.head(&name, signature, declaration.at) else {
             return;
         };
-        let mut scope = Scope::of(self.program, body, signature);
+        let mut scope = Scope::cold(self.program, body);
         let mut text = format!("{head}\n{{\n");
-        self.statements(&mut scope, &body.statements, 1, &mut text);
+        let mut propagates = false;
+        walk_statements(&body.statements, &mut |expression| {
+            propagates |= matches!(
+                expression.kind,
+                ExprKind::Raised {
+                    raise: Raise::Return,
+                    ..
+                } | ExprKind::NullRead {
+                    raise: Raise::Return,
+                    ..
+                }
+            );
+        });
+        if propagates && let Some(Type::Result { error, .. }) = &signature.result {
+            let Some(error) = self.written_type(error, declaration.at) else {
+                return;
+            };
+            let library = runtime::NAMESPACE;
+            // ERR-5: only a contextual return becomes the function's
+            // error. Execution failures still leave it by their own route.
+            text.push_str(&format!("{INDENT}try\n{INDENT}{{\n"));
+            self.statements(&mut scope, &body.statements, 2, &mut text);
+            text.push_str(&format!(
+                "{INDENT}}}\n{INDENT}catch (const ::{library}::return_error<{error}>& failure_)\n{INDENT}{{\n{INDENT}{INDENT}return ::std::unexpected(failure_.value);\n{INDENT}}}\n"
+            ));
+        } else {
+            self.statements(&mut scope, &body.statements, 1, &mut text);
+        }
         text.push_str("}\n");
         let place = self.place_of(index);
         let comment = format!("// {described}, {place}\n");

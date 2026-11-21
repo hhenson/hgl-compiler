@@ -143,12 +143,12 @@ bool has_GlobalState_str(const GlobalState& store, std::string_view key) {
     return store.view().contains(key);
 }
 
-void detail::store_missing(std::string_view key, std::source_location where) {
-    fail_uncoded(std::format("the global store holds nothing under '{}'", key), where);
+error detail::store_missing(std::string_view key) {
+    return make_error(std::format("the global store holds nothing under '{}'", key));
 }
 
-void detail::store_type(std::string_view key, std::source_location where) {
-    fail_uncoded(std::format("the global store holds a value of another type under '{}'", key), where);
+error detail::store_type(std::string_view key) {
+    return make_error(std::format("the global store holds a value of another type under '{}'", key));
 }
 
 } // namespace hglrt

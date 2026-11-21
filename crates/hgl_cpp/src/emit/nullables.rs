@@ -18,7 +18,7 @@
 //! a type that is no ordinary value marks a parameter that may be left
 //! out (TYPE-14), and is the type under it (`Type::omission_removed`).
 
-use hgl_analyser::hir::{BinaryOperator, Callee, Expr, ExprKind, Value};
+use hgl_analyser::hir::{BinaryOperator, Callee, Expr, ExprKind, LocalId, Value};
 use hgl_analyser::{Argument as GenericArgument, DeclarationKind, Detail, Scalar, Type};
 
 use super::Emitter;
@@ -60,13 +60,8 @@ fn payload(emitter: &mut Emitter, ty: &Type) -> Option<String> {
     }
 }
 
-/// The view of `value` where it names a temporal input of the node whose
-/// type is a nullable this family writes, with that type.
-fn nullable_input<'v>(
-    emitter: &Emitter,
-    scope: &Scope,
-    value: &'v Expr,
-) -> Option<(String, &'v Type)> {
+/// The parameter position where `value` names a nullable temporal input.
+fn nullable_input(emitter: &Emitter, scope: &Scope, value: &Expr) -> Option<LocalId> {
     let ExprKind::Local(local) = value.kind else {
         return None;
     };
@@ -74,7 +69,7 @@ fn nullable_input<'v>(
         return None;
     }
     let declared = &scope.body.locals[local];
-    matches!(declared.ty, Type::Nullable(_)).then(|| (identifier(&declared.name), &value.ty))
+    matches!(declared.ty, Type::Nullable(_)).then_some(local)
 }
 
 /// The name of the declaration the call `value` calls, where it is one.
@@ -176,10 +171,11 @@ impl Family for Nullables {
             // its payload's type there": a nullable input so read is its
             // payload, which the test has proved is there.
             ExprKind::Local(_) => {
-                let (view, read) = nullable_input(emitter, scope, value)?;
-                if matches!(read, Type::Nullable(_)) {
+                let local = nullable_input(emitter, scope, value)?;
+                if matches!(value.ty, Type::Nullable(_)) {
                     return None;
                 }
+                let view = identifier(&scope.body.locals[local].name);
                 scope.read = true;
                 scope.acted = true;
                 Some(format!(
@@ -200,10 +196,16 @@ impl Family for Nullables {
                     (false, true) => left,
                     _ => return None,
                 };
-                let (view, _) = nullable_input(emitter, scope, tested)?;
+                let local = nullable_input(emitter, scope, tested)?;
+                let declared = &scope.body.locals[local];
                 scope.read = true;
                 scope.acted = true;
-                let read = format!("::{}::nullable_value({view})", runtime::NAMESPACE);
+                let read = emitter
+                    .reader_value(scope, local, &declared.ty, tested.at)
+                    .unwrap_or_else(|| {
+                        let view = identifier(&declared.name);
+                        format!("::{}::nullable_value({view})", runtime::NAMESPACE)
+                    });
                 Some(if *operator == BinaryOperator::Equal {
                     format!("(!{read}.has_value())")
                 } else {

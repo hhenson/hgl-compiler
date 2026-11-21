@@ -553,7 +553,7 @@ struct impl_
         // when, line 222 (TIME-3)
         {
             ::hglrt::put_GlobalState_str_V<::hgl::demo::nested::m_::Basket>(global_state, ::hgraph::Str{"basket"}, ::hgl::demo::nested::m_::Basket{::hgraph::Str{"b"}, ::hglrt::list<::hgraph::Int>{::hglrt::checked_value(value), 1}});
-            out_.set(::hgl::demo::nested::m_::total(::hglrt::get_GlobalState_str<::hgl::demo::nested::m_::Basket>(global_state, ::hgraph::Str{"basket"})));
+            out_.set(::hgl::demo::nested::m_::total(::hglrt::require_result(::hglrt::get_store_result<::hgl::demo::nested::m_::Basket>(global_state, ::hgraph::Str{"basket"}), ::std::source_location::current())));
             return;
         }
     }
