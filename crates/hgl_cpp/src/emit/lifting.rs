@@ -3,7 +3,7 @@
 //! args...)`, a temporal error boundary around a call (ERR-7, ERR-8); with
 //! them the temporal form of an `error` and of a `result`, which a
 //! capture's `.error` and a call that returns its failure as data
-//! publish, and a `?` in a `when`, which fails the node with the error it
+//! publish. A contextual read in a `when` fails the node with the error it
 //! keeps (ERR-5). Part of the transpiler, the last stage; a family of the
 //! dispatch point (`forms`).
 //!
@@ -18,7 +18,7 @@
 //! | `seen.value`, `seen.error` (ERR-7) | `::hglrt::captured_value(seen)`, `::hglrt::captured_error(seen)` |
 //! | A temporal value of `error`, of `result<T, error>` | `TS<::hglrt::error>`, which is hgraph's `CanonicalError`; `TS<::hglrt::result<T>>`, a `std::expected` registered with hgraph as an atomic (`<hglrt/capture.h>`) |
 //! | A cell of a trace of either (TST-5) | the value, `::hglrt::result<::hgraph::Int>{...}`, compared by its own equality, which excludes an error's provenance |
-//! | `value?` in a `when` (ERR-5, ERR-8) | the result held before the statement, and the node failed with its error as it is, `::hglrt::raise(held.error())`, which keeps the context a retained error has |
+//! | A result read as its value in a `when` (ERR-5, ERR-8) | the result read as its success, and the node failed with its original error on failure, which keeps the context a retained error has |
 //! | `failure.context`, and its `.node`, `.phase`, `.evaluation_time` (ERR-4) | `(failure).context`, a `std::optional` of hgraph's `ErrorContext`; its members of those names |
 //!
 //! Not written yet, and reported: a lifted call or a capture given an
@@ -26,18 +26,19 @@
 //! candidate.
 
 use hgl_analyser::hir::{
-    Argument, Body, Callee, ErrorPart, Expr, ExprKind, Hook, Local, Raise, Stmt, ValueCategory,
+    Argument, Body, Callee, ErrorPart, Expr, ExprKind, Local, Raise, Stmt, ValueCategory,
 };
-use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Type};
+use hgl_analyser::{DeclarationKind, Detail, LocalKind, Phase as BodyPhase, Role as Phase, Type};
 use hgl_lower::calls::{LeftOut, left_out};
 use hgl_lower::types::read_whole_all_valid;
 
 use super::Emitter;
 use super::calls::{changes, may_fail};
 use super::forms::Family;
-use super::graphs::WIRING;
+use super::graphs::{HeldInputs, WIRING};
 use super::names::{self, identifier};
-use super::nodes::{Context, Kind, OUT, Role};
+use super::nodes::{Context, Kind, OUT, ResultForm, Role};
+use super::readers::watches_failure;
 use super::statements::Scope;
 use super::values::INDENT;
 use crate::runtime;
@@ -56,6 +57,103 @@ pub(super) struct Given {
 }
 
 impl Emitter<'_> {
+    /// A new Err must fail the reading node before it tests admission
+    /// or runs a handler (ERR-15, owner's ruling on #355).
+    pub(super) fn check_result_tick(&mut self, form: &Expr, view: &str, indent: &str) -> String {
+        let input = reader_operand(form);
+        let value = self.temporal_read(&input.ty, view, input.at);
+        let name = names::temporary("outcome", self.temporary());
+        let place = self.source_location(form.at);
+        let library = runtime::NAMESPACE;
+        format!(
+            "{indent}if (::{library}::fn_modified({view}))\n{indent}{{\n\
+             {indent}{INDENT}const auto {name} = {value};\n\
+             {indent}{INDENT}if (!{name}.has_value()) ::{library}::raise({name}.error(), {place});\n{indent}}}\n"
+        )
+    }
+
+    /// Wire the reader of a result or nullable connection returned by
+    /// a graph. A held error is raised when the reader sees its cycle
+    /// (ERR-12 and ERR-15), and silence never produces an output.
+    fn wire_read(&mut self, scope: &mut Scope, form: &Expr, operand: &Expr) -> String {
+        let port = self.wiring_form(scope, operand);
+        self.wire_read_on_port(form, operand, &port)
+    }
+
+    /// A read wired in a graph that already has the operand's port,
+    /// such as the child graph of an error boundary (ERR-7).
+    fn wire_read_on_port(&mut self, form: &Expr, operand: &Expr, port: &str) -> String {
+        let Some(input_schema) = self.temporal_schema(&operand.ty, operand.at) else {
+            return "0".to_string();
+        };
+        let Some(output_schema) = self.temporal_schema(&form.ty, form.at) else {
+            return "0".to_string();
+        };
+        let input = self.temporal_read(&operand.ty, "input_", operand.at);
+        let value = self.apply_read(form, &input);
+        let publish = self.temporal_publish(&form.ty, OUT, &value, form.at);
+        let name = if self.kind() == Some(Kind::Entry) {
+            let unique = self.temporary();
+            format!(
+                "read_0{}_{}_{unique}_",
+                form.at.file.index(),
+                form.at.span.start
+            )
+        } else {
+            names::temporary("read", self.temporary())
+        };
+        let graph = &self.program.modules[self.module].path;
+        let line = self.line_of(form.at);
+        let label = names::string(&format!("{graph}:read:{line}"));
+        let text = format!(
+            "struct {name}\n{{\n\
+             {INDENT}static constexpr auto name = {label};\n\
+             {INDENT}static void eval(::hgraph::In<\"value\", {input_schema}> input_, ::hgraph::Out<{output_schema}> {OUT})\n\
+             {INDENT}{{\n{INDENT}{INDENT}{publish}\n{INDENT}}}\n}};\n",
+        );
+        let Some(context) = self.temporal.as_mut() else {
+            return self.missing(form.at, "a connection read outside a graph");
+        };
+        context.lifted.push(text);
+        format!("::hgraph::wire<{name}>({WIRING}, {port})")
+    }
+
+    /// Keep a reader inside the capture even if its consumer needs an
+    /// already projected port.
+    fn wire_reader_chain(&mut self, value: &Expr, port: &str) -> String {
+        match reader_inner(value) {
+            Some(inner) => {
+                let port = self.wire_reader_chain(inner, port);
+                self.wire_read_on_port(value, inner, &port)
+            }
+            None => port.to_string(),
+        }
+    }
+
+    /// A HIR read applied to the C++ value from its temporal endpoint.
+    fn apply_read(&mut self, form: &Expr, value: &str) -> String {
+        match form.kind {
+            ExprKind::Raised { raise, .. } => self.result_value(raise, value, form.at),
+            ExprKind::OrNull { .. } => format!("::{}::result_or_null({value})", runtime::NAMESPACE),
+            ExprKind::NullRead { raise, .. } => {
+                self.nullable_payload(raise, value, &form.ty, form.at)
+            }
+            _ => unreachable!("apply_read requires a recorded result or nullable read"),
+        }
+    }
+
+    /// Reapply each recorded reader form inside the consuming node,
+    /// after it acquires its input (ERR-12 and ERR-15).
+    pub(super) fn apply_reader_chain(&mut self, value: &Expr, input: &str) -> String {
+        match reader_inner(value) {
+            Some(inner) => {
+                let written = self.apply_reader_chain(inner, input);
+                self.apply_read(value, &written)
+            }
+            None => input.to_string(),
+        }
+    }
+
     /// The lifted call `value` (FN-6: "A selected value helper ... with
     /// temporal arguments in composition is lifted: temporal arguments
     /// become inputs; scalar arguments and omitted defaults bind as
@@ -81,6 +179,20 @@ impl Emitter<'_> {
         given: &[Given],
         defaults: &[(usize, String)],
         result: Option<&Type>,
+    ) -> String {
+        self.lifted_with_form(scope, value, given, defaults, result, None)
+    }
+
+    /// Wire a lifted call whose result is read before publication
+    /// (ERR-15). Its own node makes the result's error a node failure.
+    fn lifted_with_form(
+        &mut self,
+        scope: &mut Scope,
+        value: &Expr,
+        given: &[Given],
+        defaults: &[(usize, String)],
+        result: Option<&Type>,
+        publication: Option<&Expr>,
     ) -> String {
         let ExprKind::Call {
             callee,
@@ -128,6 +240,19 @@ impl Emitter<'_> {
         let mut synthetic: Vec<Argument> = Vec::new();
         // For each argument, the name of its scalar where it is one.
         let mut labels: Vec<Option<String>> = Vec::new();
+        let reads_raw_input = |position, argument: &Argument| {
+            let input = reader_operand(&argument.value);
+            !std::ptr::eq(input, &argument.value)
+                && given
+                    .iter()
+                    .find(|given| given.position == position)
+                    .is_none_or(|given| given.input.as_ref() == Some(&input.ty))
+        };
+        let observes_results = arguments.iter().enumerate().any(|(position, argument)| {
+            reads_raw_input(position, argument) && watches_failure(&argument.value).is_some()
+        });
+        let mut checks = String::new();
+        let mut admission = String::new();
         // What `eval` does before it calls the function: FN-11's
         // admission, and the values the inputs that need not be valid
         // bind.
@@ -148,12 +273,14 @@ impl Emitter<'_> {
             let name = identifier(&parameter.name);
             let label = names::string(&parameter.name);
             let written = given.iter().find(|given| given.position == position);
+            let input_value = reader_operand(&argument.value);
+            let mut local_read = reads_raw_input(position, argument);
+            let watched = local_read
+                .then(|| watches_failure(&argument.value))
+                .flatten();
             let input = match written {
                 Some(given) => given.input.clone(),
-                None => argument
-                    .value
-                    .is_connection()
-                    .then(|| argument.value.ty.clone()),
+                None => input_value.is_connection().then(|| input_value.ty.clone()),
             };
             // The type of the body's local, and the type the helper is
             // given: for an input, what a read of it gives, which is not
@@ -179,8 +306,21 @@ impl Emitter<'_> {
                         // `valid(input)`": hgraph evaluates the node only
                         // once it is.
                         None => {
-                            parameters.push(format!("::hgraph::In<{label}, {schema}> {name}"));
+                            let policy = if observes_results {
+                                // ERR-15: failure ticks are observed even
+                                // while another input is still invalid.
+                                admission
+                                    .push_str(&format!("{indent}if (!{valid}({name})) return;\n"));
+                                ", ::hgraph::InputValidity::Unchecked"
+                            } else {
+                                ""
+                            };
+                            parameters
+                                .push(format!("::hgraph::In<{label}, {schema}{policy}> {name}"));
                             roles.push(Role::Input);
+                            if let Some(form) = watched {
+                                checks.push_str(&self.check_result_tick(form, &name, &indent));
+                            }
                             if whole {
                                 prelude.push_str(&format!(
                                     "{indent}if (!{all_valid}({name}))\n{indent}{{\n{indent}{INDENT}return;\n{indent}}}\n"
@@ -201,11 +341,22 @@ impl Emitter<'_> {
                             parameters.push(format!(
                                 "::hgraph::In<{label}, {schema}, ::hgraph::InputValidity::Unchecked> {view}"
                             ));
+                            if let Some(form) = watched {
+                                checks.push_str(&self.check_result_tick(form, &view, &indent));
+                            }
                             roles.push(Role::Plain);
                             // TYPE-14: "A T is a value where a `T?` is
                             // expected": a connection of T given to a
                             // parameter written `T?` binds a `T?`, the value
                             // read or its fallback.
+                            let input = self.temporal_read(&ty, &view, at);
+                            let value = if local_read {
+                                read = argument.value.ty.clone();
+                                local_read = false;
+                                self.apply_reader_chain(&argument.value, &input)
+                            } else {
+                                input
+                            };
                             let nullable =
                                 matches!(parameter.ty.omission_removed(), Type::Nullable(_));
                             if nullable && !matches!(read, Type::Nullable(_)) {
@@ -215,7 +366,6 @@ impl Emitter<'_> {
                             let Some(cpp) = self.written_type(&read, at) else {
                                 return "0".to_string();
                             };
-                            let value = self.temporal_read(&ty, &view, at);
                             let fallback = match fallback {
                                 LeftOut::Default(default) => {
                                     // The analyser keeps a default as a
@@ -259,7 +409,7 @@ impl Emitter<'_> {
                     }
                     wired.push(match written {
                         Some(given) => given.written.clone(),
-                        None => self.wiring_form(scope, &argument.value),
+                        None => self.wiring_form(scope, input_value),
                     });
                     labels.push(None);
                     (local, read)
@@ -291,15 +441,21 @@ impl Emitter<'_> {
                     (ty.clone(), ty)
                 }
             };
+            let value = Expr {
+                kind: ExprKind::Local(locals.len()),
+                ty: read,
+                at,
+                category: ValueCategory::Value,
+            };
+            let value = if local_read {
+                with_reader_chain(&argument.value, value)
+            } else {
+                value
+            };
             synthetic.push(Argument {
                 parameter: argument.parameter,
                 pack: argument.pack.clone(),
-                value: Expr {
-                    kind: ExprKind::Local(locals.len()),
-                    ty: read,
-                    at,
-                    category: ValueCategory::Value,
-                },
+                value,
             });
             locals.push(Local {
                 name: parameter.name.clone(),
@@ -422,9 +578,13 @@ impl Emitter<'_> {
                 form: *form,
                 lifted: false,
             },
-            ty: result.cloned().unwrap_or_else(|| value.ty.clone()),
+            ty: value.ty.clone(),
             at: value.at,
             category: ValueCategory::Value,
+        };
+        let call = match publication {
+            Some(form) => form_on(form, call),
+            None => call,
         };
         let statement = if result.is_some() {
             Stmt::Return {
@@ -442,7 +602,9 @@ impl Emitter<'_> {
         context.roles = roles;
         context.result = result.cloned();
         let mut lifted_scope = Scope::cold(program, &body);
-        let mut statements = prelude;
+        let mut statements = checks;
+        statements.push_str(&admission);
+        statements.push_str(&prelude);
         self.in_context(&mut context, |emitter| {
             emitter.statements(&mut lifted_scope, &body.statements, 2, &mut statements);
         });
@@ -571,6 +733,9 @@ impl Emitter<'_> {
         let mut parameters = vec![format!("::hgraph::Wiring& {WIRING}")];
         let mut outer: Vec<String> = vec![WIRING.to_string()];
         let mut given: Vec<Given> = Vec::new();
+        let mut raw_ports = Vec::new();
+        let readers = self.readers;
+        let reader = readers.at_call(program, self.instances, call);
         for (position, argument) in arguments.iter().enumerate() {
             let index = concrete.map_or_else(
                 || argument.parameter.filter(|_| argument.pack.is_none()),
@@ -582,6 +747,34 @@ impl Emitter<'_> {
             let parameter = &signature.parameters[index];
             let name = names::temporary("input", self.temporary());
             if argument.value.is_connection() {
+                let operand = reader_operand(&argument.value);
+                if reader_inner(&argument.value).is_some() {
+                    let Some(schema) = self.temporal_schema(&operand.ty, operand.at) else {
+                        return "0".to_string();
+                    };
+                    parameters.push(format!("[[maybe_unused]] ::hgraph::Port<{schema}> {name}"));
+                    outer.push(self.connection(scope, operand, &operand.ty));
+                    let inside_consumer = lifted
+                        || reader.is_some_and(|(_, reads)| {
+                            reads.iter().any(|read| read.parameter == index)
+                        });
+                    if inside_consumer {
+                        raw_ports.push(position);
+                        given.push(Given {
+                            position,
+                            written: name,
+                            input: Some(operand.ty.clone()),
+                        });
+                    } else {
+                        let written = self.wire_reader_chain(&argument.value, &name);
+                        given.push(Given {
+                            position,
+                            written,
+                            input: Some(argument.value.ty.clone()),
+                        });
+                    }
+                    continue;
+                }
                 // TYPE-14: a connection of T given to a temporal parameter
                 // written `T?` is widened where the boundary is given it
                 // (`graphs::widened_from`); a lifted call's input binds it.
@@ -662,7 +855,16 @@ impl Emitter<'_> {
                 .iter()
                 .map(|given| (given.position, given.written.clone()))
                 .collect();
-            self.temporal_call(scope, call, &ports)
+            self.temporal_call_in_form(
+                scope,
+                call,
+                HeldInputs {
+                    given: &ports,
+                    raw_ports: &raw_ports,
+                    ..HeldInputs::default()
+                },
+                ResultForm::Whole,
+            )
         };
         let statement = if gives {
             format!("return {inner};")
@@ -724,38 +926,6 @@ impl Emitter<'_> {
             "captured_value"
         };
         format!("::{}::{field}({boundary})", runtime::NAMESPACE)
-    }
-
-    /// A result given where its T is expected in a `when` (ERR-5: "In a
-    /// `when` only a `result<T,error>` raises, and the node fails ... No
-    /// success output is written; completed effects stand"): the result
-    /// held under a name of its own before the statement, and the node
-    /// failed with its error where it is a failure; the expression is the
-    /// success's payload. The error is raised as it is, so that a retained
-    /// one keeps its context (ERR-8: "A consumer that raises a retained
-    /// error again (ERR-5) makes a new failure event, whose error keeps its
-    /// first provenance"). Only where it is the first thing its statement
-    /// evaluates, as a value function's is (`expressions`).
-    fn raised(
-        &mut self,
-        scope: &mut Scope,
-        operand: &Expr,
-        at: hgl_diagnostics::Location,
-    ) -> String {
-        if scope.conditional > 0 || scope.acted {
-            return self.missing(at, "a result raised in a `when` here");
-        }
-        if scope.read {
-            return self.missing(at, "a result raised after a read in its statement");
-        }
-        let written = self.expression(scope, operand);
-        let held = names::temporary("propagated", self.temporary());
-        scope.before.push(format!("const auto {held} = {written};"));
-        scope.before.push(format!(
-            "if (!{held}.has_value())\n{{\n{INDENT}::{}::raise({held}.error());\n}}",
-            runtime::NAMESPACE
-        ));
-        format!("(*{held})")
     }
 }
 
@@ -883,12 +1053,6 @@ impl Family for Lifting {
         value: &Expr,
     ) -> Option<String> {
         match &value.kind {
-            ExprKind::Raised {
-                result,
-                raise: Raise::Node,
-            } if emitter.kind() == Some(Kind::Hook(Hook::When)) => {
-                Some(emitter.raised(scope, result, value.at))
-            }
             // ERR-4: "`.context` is a read-only nullable record of `.node:
             // str`, `.phase: str`, one of `"evaluate"`, `"start"`, and
             // `"stop"`, and `.evaluation_time: datetime`; a constructed
@@ -916,6 +1080,43 @@ impl Family for Lifting {
         value: &Expr,
     ) -> Option<String> {
         match &value.kind {
+            ExprKind::Raised {
+                result,
+                raise: Raise::CallNode,
+            }
+            | ExprKind::OrNull {
+                result,
+                reader: false,
+            } if result.is_lifted() => Some(emitter.lifted_with_form(
+                scope,
+                result,
+                &[],
+                &[],
+                Some(&value.ty),
+                Some(value),
+            )),
+            ExprKind::Raised {
+                result,
+                raise: Raise::CallNode,
+            }
+            | ExprKind::OrNull {
+                result,
+                reader: false,
+            } if result_node(emitter, result) => {
+                let form = if matches!(value.kind, ExprKind::Raised { .. }) {
+                    ResultForm::Value
+                } else {
+                    ResultForm::Nullable
+                };
+                emitter.temporal_schema(&value.ty, value.at)?;
+                Some(emitter.temporal_call_in_form(scope, result, HeldInputs::default(), form))
+            }
+            ExprKind::Raised { result, .. } | ExprKind::OrNull { result, .. } => {
+                Some(emitter.wire_read(scope, value, result))
+            }
+            ExprKind::NullRead { value: operand, .. } => {
+                Some(emitter.wire_read(scope, value, operand))
+            }
             ExprKind::Call { .. } if value.is_lifted() => {
                 let result = value.ty.clone();
                 let gives = gives(emitter, value);
@@ -925,6 +1126,80 @@ impl Family for Lifting {
             ExprKind::Captured { capture, error } => Some(emitter.captured(scope, capture, *error)),
             _ => None,
         }
+    }
+}
+
+/// A body that can publish the call's result form in its own node.
+fn result_node(emitter: &Emitter, value: &Expr) -> bool {
+    let ExprKind::Call { callee, .. } = &value.kind else {
+        return false;
+    };
+    let Some((module, declaration)) = callee.declaration() else {
+        return false;
+    };
+    let unit = &emitter.program.modules[module];
+    unit.phases.get(declaration).copied().flatten() == Some(BodyPhase::Node)
+        && matches!(unit.details.get(declaration), Some(Detail::Callable(signature)) if !signature.reference)
+}
+
+/// Apply a read recorded by the analyser to the value the node
+/// evaluates or receives from an input (ERR-12 and ERR-15).
+fn form_on(form: &Expr, operand: Expr) -> Expr {
+    let kind = match form.kind {
+        ExprKind::Raised { raise, .. } => ExprKind::Raised {
+            result: Box::new(operand),
+            raise,
+        },
+        ExprKind::OrNull { reader, .. } => ExprKind::OrNull {
+            result: Box::new(operand),
+            reader,
+        },
+        ExprKind::NullRead { raise, code, .. } => ExprKind::NullRead {
+            value: Box::new(operand),
+            raise,
+            code,
+        },
+        _ => unreachable!("form_on requires a recorded result or nullable read"),
+    };
+    Expr {
+        kind,
+        ty: form.ty.clone(),
+        at: form.at,
+        category: ValueCategory::Value,
+    }
+}
+
+/// The operand of a form specified to read in the consumer's node.
+pub(super) fn reader_inner(value: &Expr) -> Option<&Expr> {
+    match &value.kind {
+        ExprKind::Raised {
+            result,
+            raise: Raise::Reader,
+        }
+        | ExprKind::OrNull {
+            result,
+            reader: true,
+        } => Some(result),
+        ExprKind::NullRead {
+            value,
+            raise: Raise::Reader,
+            ..
+        } => Some(value),
+        _ => None,
+    }
+}
+
+/// The unconverted input of one or more reader forms. A call-node
+/// form stays with its producer.
+pub(super) fn reader_operand(value: &Expr) -> &Expr {
+    reader_inner(value).map_or(value, reader_operand)
+}
+
+/// The reads required once the consumer has acquired `input`.
+fn with_reader_chain(value: &Expr, input: Expr) -> Expr {
+    match reader_inner(value) {
+        Some(inner) => form_on(value, with_reader_chain(inner, input)),
+        None => input,
     }
 }
 

@@ -235,13 +235,15 @@ const ::hgraph::TimeDelta& step()
 // doubled(value: i64) -> result<i64, error> (`const fn`), module demo.values, line 87
 ::hglrt::result<::hgraph::Int> doubled([[maybe_unused]] ::hgraph::Int value)
 {
-    const auto propagated_00_ = ::hgl::demo::values::m_::checked(value);
-    if (!propagated_00_.has_value())
+    try
     {
-        return ::std::unexpected(propagated_00_.error());
+        [[maybe_unused]] const ::hgraph::Int checked_value = ::hglrt::propagate(::hgl::demo::values::m_::checked(value));
+        return ::hglrt::result<::hgraph::Int>{::hglrt::mul__i64_i64(checked_value, 2)};
     }
-    [[maybe_unused]] const ::hgraph::Int checked_value = (*propagated_00_);
-    return ::hglrt::result<::hgraph::Int>{::hglrt::mul__i64_i64(checked_value, 2)};
+    catch (const ::hglrt::return_error<::hglrt::error>& failure_)
+    {
+        return ::std::unexpected(failure_.value);
+    }
 }
 
 // pick(a: i64, b: i64) -> i64 (`const fn`), module demo.values, line 95

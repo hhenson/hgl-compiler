@@ -367,7 +367,10 @@ analyser: partial
 - A key written out is used with one type in a program: a `put` or a `get` of another type than an earlier use is `store.key_type` (TIME-8)
 - Left: the run's key, and a key, where it is a `const` parameter, which is known when the graph is built
 
-transpiler: planned
+transpiler: partial
+
+- C++ `get` returns the whole result to the recorded ERR-15 form.
+- Left: nullable store puts.
 
 ## CAP-7
 

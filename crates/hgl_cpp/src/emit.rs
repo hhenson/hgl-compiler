@@ -61,6 +61,7 @@ mod lists;
 mod names;
 mod nodes;
 mod nullables;
+pub(crate) mod readers;
 mod references;
 mod scalars;
 mod scheduling;
@@ -142,6 +143,7 @@ pub(crate) fn module(
     provides: &dyn Fn(&str) -> bool,
     file_name: Option<crate::FileName>,
     instances: &Instances,
+    readers: &readers::Readers,
     diagnostics: &mut Diagnostics,
 ) -> Written {
     let mut emitter = Emitter {
@@ -151,6 +153,7 @@ pub(crate) fn module(
         file_name,
         lines: Vec::new(),
         instances,
+        readers,
         diagnostics,
         piece: Piece::default(),
         expanding: Vec::new(),
@@ -203,6 +206,8 @@ struct Emitter<'a> {
     lines: Vec<(Location, Vec<usize>)>,
     /// The instances of generic declarations the program asks for.
     instances: &'a Instances,
+    /// Schema variants for contextual reads in a node.
+    readers: &'a readers::Readers,
     /// Where what is not written yet is reported.
     diagnostics: &'a mut Diagnostics,
     /// The piece being written.

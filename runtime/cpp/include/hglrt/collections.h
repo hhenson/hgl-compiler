@@ -231,6 +231,18 @@ nullable_t<T> get_dict_K__T__K(const dict<K, T>& store, const std::type_identity
     return found->second;
 }
 
+/// The ERR-6 result of a dictionary read. An absent key fails, while a
+/// held nullable value, including null, is an ordinary success.
+template <class K, class T>
+result<T> get_dict_result(const dict<K, T>& store, const std::type_identity_t<K>& key) {
+    const auto found = store.find(key);
+    if (found == store.end()) {
+        return std::unexpected(make_error("the dictionary has no value for the key",
+                                          std::string{codes::missing_key}));
+    }
+    return result<T>{std::in_place, found->second};
+}
+
 /// `delta<set<K>>` (TYPE-16): "with the properties `added` and `removed`, each
 /// a `set<K>`".
 template <class K>

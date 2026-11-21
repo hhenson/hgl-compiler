@@ -115,6 +115,16 @@ namespace w_
 // returned(value: i64) -> result<i64, error> (node), module demo.lifting, line 59
 ::hgraph::Port<::hgraph::TS<::hglrt::result<::hgraph::Int>>> returned(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
 }  // namespace w_
+namespace w_
+{
+// returned(value: i64) -> result<i64, error> (node), module demo.lifting, line 59
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> returned_result_value_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
+}  // namespace w_
+namespace w_
+{
+// returned(value: i64) -> result<i64, error> (node), module demo.lifting, line 59
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> returned_result_nullable_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
+}  // namespace w_
 
 namespace w_
 {
