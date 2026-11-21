@@ -109,12 +109,27 @@ impl Program {
             .map(|generic| generic.at)
             .zip(generics)
             .collect();
+        let mut required = false;
+        default.walk(&mut |value| {
+            required |= matches!(
+                value.kind,
+                ExprKind::Call {
+                    callee: Callee::Required { .. },
+                    ..
+                }
+            );
+        });
+        let requirements = if required {
+            crate::values::operator_default_answers(self, operator, generics, diagnostics)
+        } else {
+            Vec::new()
+        };
         let reports = RefCell::new(Diagnostics::new());
         let instance = InstanceArguments {
             declaration: operator,
             generics,
             types: &types,
-            requirements: &[],
+            requirements: &requirements,
             diagnostics: &reports,
         };
         default.walk_mut(&mut |expression| self.place(expression, &instance, &[]));
