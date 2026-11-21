@@ -11,5 +11,10 @@ repository.workspace = true
 hgl_diagnostics.workspace = true
 hgl_analyser.workspace = true
 
+[dev-dependencies]
+hgl_lexer.workspace = true
+hgl_parser.workspace = true
+hgl_source.workspace = true
+
 [lints]
 workspace = true
