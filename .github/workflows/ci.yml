@@ -99,8 +99,6 @@ jobs:
     # image has GCC 15, which the SDK needs.
     runs-on: ubuntu-26.04
     env:
-      # The hgraph release the SDK is built from.
-      HGRAPH_TAG: "0.9.23"
       # The image's GCC 15, for the SDK and for the library.
       CXX: g++-15
       # The dependency prefix and the SDK, which the steps below make or
@@ -114,12 +112,13 @@ jobs:
         # core's module from the pinned hgl_core submodule.
         with:
           submodules: recursive
+      - run: echo "HGRAPH_TAG=$(cat HGRAPH_TAG)" >> "$GITHUB_ENV"
       # What the two are made from: how the SDK is configured (without
       # Arrow), the tag, the script, which names every package of the
       # prefix, and the image they are built on.
       - id: key
         shell: bash
-        run: echo "key=hgraph-sdk-noarrow-$ImageOS-$RUNNER_ARCH-$HGRAPH_TAG-${{ hashFiles('scripts/provision-hgraph-sdk.sh') }}" >> "$GITHUB_OUTPUT"
+        run: echo "key=hgraph-sdk-noarrow-$ImageOS-$RUNNER_ARCH-$HGRAPH_TAG-${{ hashFiles('scripts/provision-hgraph-sdk.sh', 'scripts/hgraph-dependencies.sh') }}" >> "$GITHUB_OUTPUT"
       # A run with this key restores both and builds neither. A run that
       # builds them saves them, from a pull request too: the key changes
       # only with the tag, the script or the image, and a pull request that
