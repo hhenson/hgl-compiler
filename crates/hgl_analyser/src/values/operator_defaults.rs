@@ -220,6 +220,19 @@ fn configuration_default(parameter: &Parameter) -> bool {
     parameter.configuration && parameter.has_default
 }
 
+/// GEN-16: a call in a default uses the operator's own requirements,
+/// with the operator's types in place and its lexical candidates visible.
+pub(crate) fn operator_default_answers(
+    program: &Program,
+    operator: (usize, usize),
+    generics: &[Argument],
+    diagnostics: &mut Diagnostics,
+) -> Vec<hir::Answer> {
+    with_configuration_typer(program, operator, diagnostics, |typer| {
+        typer.answers(operator.0, operator.1, generics)
+    })
+}
+
 /// Apply the ordinary place rules to the substituted expression in the
 /// operator's context. No syntax or nested defaults are read again.
 pub(crate) fn fit_operator_default(
@@ -317,9 +330,25 @@ fn fit_configuration(
     context: Option<&ConfigurationRead>,
     diagnostics: &mut Diagnostics,
 ) -> Expr {
+    with_configuration_typer(program, declaration, diagnostics, |typer| {
+        typer.fit_with(
+            value,
+            expected,
+            &format!("the configuration parameter `{name}`"),
+            context,
+        )
+    })
+}
+
+fn with_configuration_typer<T>(
+    program: &Program,
+    declaration: (usize, usize),
+    diagnostics: &mut Diagnostics,
+    use_typer: impl FnOnce(&mut Typer<'_>) -> T,
+) -> T {
     let owner = &program.modules[declaration.0];
     let Detail::Callable(signature) = &owner.details[declaration.1] else {
-        return value;
+        unreachable!("configuration is read in a callable declaration");
     };
     let (bindings, written, calls) = (HashMap::new(), HashMap::new(), HashMap::new());
     let selecting = RefCell::new(Vec::new());
@@ -336,10 +365,5 @@ fn fit_configuration(
         },
         diagnostics,
     );
-    typer.fit_with(
-        value,
-        expected,
-        &format!("the configuration parameter `{name}`"),
-        context,
-    )
+    use_typer(&mut typer)
 }
