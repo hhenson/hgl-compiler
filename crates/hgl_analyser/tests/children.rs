@@ -23,9 +23,9 @@ const CORE: &str = concat!(
     "export native const fn delta_value<T>(input: endpoint<T>) -> T\n",
     "export native const fn last_modified<T>(input: endpoint<T>) -> datetime?\n",
     "export native const fn is_active<T>(input: endpoint<T>) -> bool\n",
-    "operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
+    "export operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
     "native impl const fn add_(lhs: i64, rhs: i64) -> i64\n",
-    "operator neg_<T, O>(value: T) -> O\n",
+    "export operator neg_<T, O>(value: T) -> O\n",
     "native impl const fn neg_(value: i64) -> i64\n",
 );
 

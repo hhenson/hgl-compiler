@@ -285,7 +285,7 @@ fn an_import_binds_public_declarations() {
             "export struct Quote { bid: f64 }\n",
             "export enum Side { buy, sell }\n",
             "export native type Handle\n",
-            "operator add(left: i64, right: i64) -> i64\n",
+            "export operator add(left: i64, right: i64) -> i64\n",
             // Of a pair, the exported one is what an import binds.
             "export fn pair() {}\n",
             "const fn pair() -> i64 => 1\n",
@@ -656,8 +656,8 @@ fn a_module_binds_cores_public_names_without_a_use() {
             concat!(
                 "module core\n",
                 "export enum CmpResult { less, equivalent, greater, unordered }\n",
-                "operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
-                "operator sub_<L, R, O>(lhs: L, rhs: R) -> O\n",
+                "export operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
+                "export operator sub_<L, R, O>(lhs: L, rhs: R) -> O\n",
                 "native impl const fn add_(lhs: i64, rhs: i64) -> i64\n",
                 // Private to core: no prelude name.
                 "const fn hidden() -> i64 => 1\n",
@@ -723,10 +723,10 @@ fn a_module_binds_cores_public_names_without_a_use() {
 
 // ---- Operators ----
 
-/// UNIT-3, GEN-4: record the export mark. Unmarked declarations still
-/// use the existing visibility until the core exports land (#364).
+/// UNIT-3, GEN-4: an operator takes candidates within its own module.
+/// An exported operator also takes candidates in the modules that import it.
 #[test]
-fn an_operator_keeps_its_export_mark() {
+fn operators_can_be_used_locally_or_exported() {
     let checked = check(&[
         (
             "lib.hgl",
@@ -744,9 +744,9 @@ fn an_operator_keeps_its_export_mark() {
             "app.hgl",
             concat!(
                 "module app\n",
-                "use lib::{helper, scale}\n",
+                "use lib::{scale}\n",
                 "impl const fn scale(value: i64) -> i64 => value\n",
-                "const fn use_both() -> i64 => scale(helper(1))\n",
+                "const fn scaled() -> i64 => scale(1)\n",
             ),
         ),
     ]);
@@ -761,6 +761,119 @@ fn an_operator_keeps_its_export_mark() {
     assert_eq!(operators, [("helper", false), ("scale", true)]);
 }
 
+/// UNIT-3, GEN-4: a private operator cannot be imported through a
+/// selective import or a module alias and binds no external candidate.
+#[test]
+fn a_private_operator_cannot_be_imported_or_implemented_outside_its_module() {
+    let checked = check(&[
+        (
+            "lib.hgl",
+            "module lib\noperator hidden(value: i64) -> i64\n",
+        ),
+        ("import.hgl", "module try_import\nuse lib::{hidden}\n"),
+        (
+            "alias.hgl",
+            "module try_alias\nuse lib as l\nconst fn bad() -> i64 => l::hidden(1)\n",
+        ),
+        (
+            "impl.hgl",
+            "module try_impl\nimpl const fn hidden(value: i64) -> i64 => value\n",
+        ),
+        (
+            "both.hgl",
+            "module try_both\nuse lib::{hidden}\nimpl const fn hidden(value: i64) -> i64 => value\n",
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "alias.hgl:3:29 module/import.private UNIT-2",
+            "both.hgl:2:11 module/import.private UNIT-2",
+            "both.hgl:3:15 operator/impl.unknown_operator GEN-4",
+            "impl.hgl:2:15 operator/impl.unknown_operator GEN-4",
+            "import.hgl:2:11 module/import.private UNIT-2",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-11, GEN-4: an unexported core operator is absent from the
+/// prelude, and syntax cannot call the private identity from outside core.
+#[test]
+fn the_prelude_excludes_private_core_operators() {
+    let checked = check(&[
+        (
+            "core.hgl",
+            concat!(
+                "module core\n",
+                "operator add_(lhs: i64, rhs: i64) -> i64\n",
+                "impl const fn add_(lhs: i64, rhs: i64) -> i64 => lhs\n",
+                "const fn local() -> i64 => 1 + 2\n",
+                "operator eq_(lhs: i64, rhs: i64) -> bool\n",
+            ),
+        ),
+        (
+            "app.hgl",
+            concat!(
+                "module app\n",
+                "impl const fn add_(lhs: i64, rhs: i64) -> i64 => rhs\n",
+                "const fn named() -> i64 => add_(1, 2)\n",
+                "const fn symbol() -> i64 => 1 + 2\n",
+                "const fn absent(value: i64?) -> bool => value == null\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "app.hgl:2:15 operator/impl.unknown_operator GEN-4",
+            "app.hgl:3:28 name/name.unknown UNIT-10",
+            "app.hgl:4:31 operator/operator.no_candidate GEN-4",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-4 applies to Boolean symbols as well. Single links and grouped
+/// pairs bind `and_`, while an unparenthesized chain binds `all_`.
+#[test]
+fn boolean_symbols_cannot_call_private_operator_identities() {
+    let checked = check(&[
+        (
+            "core.hgl",
+            concat!(
+                "module core\n",
+                "operator and_(lhs: bool, rhs: bool) -> bool\n",
+                "operator not_(value: bool) -> bool\n",
+                "export operator all_(values: ...bool) -> bool\n",
+            ),
+        ),
+        (
+            "app.hgl",
+            concat!(
+                "module app\n",
+                "const fn pair() -> bool => true && false\n",
+                "const fn one() -> bool => !true\n",
+                "const fn chain() -> bool => true && false && true\n",
+                "const fn grouped() -> bool => (true && false) && true\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "app.hgl:2:33 operator/operator.no_candidate GEN-4",
+            "app.hgl:3:27 operator/operator.no_candidate GEN-4",
+            "app.hgl:5:37 operator/operator.no_candidate GEN-4",
+            "app.hgl:5:47 operator/operator.no_candidate GEN-4",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-4: "An `impl fn` binds that operator through local declaration,
 /// selective import, or the prelude."
 #[test]
@@ -768,7 +881,7 @@ fn an_implementation_finds_its_operator() {
     let checked = check(&[
         (
             "lib.hgl",
-            "module lib\noperator mul(left: i64, right: i64) -> i64\nexport fn plain() {}\n",
+            "module lib\nexport operator mul(left: i64, right: i64) -> i64\nexport fn plain() {}\n",
         ),
         (
             "app.hgl",
@@ -817,7 +930,7 @@ fn an_implementation_of_something_else_is_rejected() {
     let checked = check(&[
         (
             "lib.hgl",
-            "module lib\noperator mul(left: i64, right: i64) -> i64\nexport fn plain() {}\n",
+            "module lib\nexport operator mul(left: i64, right: i64) -> i64\nexport fn plain() {}\n",
         ),
         (
             "app.hgl",

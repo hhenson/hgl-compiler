@@ -61,7 +61,8 @@ analyser: partial
 - An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and one that names no operator is `impl.unknown_operator`; a value candidate's body is read as a value function's
 - An operator's requirement `O in {...}` on its bare result parameter limits its candidates' results
 - Operator identity in selection and other requirements of an operator are pending.
-- An operator's `export` mark is recorded. Operators remain public until the core export update and visibility checks (#364).
+- A private operator is used only in its own module. Importing one rejects with `import.private` (UNIT-3). A candidate in another module needs a binding to an exported operator or reports `impl.unknown_operator`.
+- A symbol call whose core identity is private rejects outside core with `operator.no_candidate`.
 
 transpiler: planned
 
