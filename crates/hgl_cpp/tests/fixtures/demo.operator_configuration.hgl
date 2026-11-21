@@ -7,6 +7,20 @@ operator combine{offset: i64 = offset_default, by: i64}(value: i64) -> i64
 impl const fn combine{by: i64, extra: i64 = 2, offset: i64}(argument: i64) -> i64 =>
     offset * 100 + by * 10 + argument + extra
 
+# UNIT-7: the inherited default reads the operator's generic arguments
+# and its defining scope. The candidate has no generic arguments of its own.
+operator with_generic<const amount: i64 = 2>{offset: i64 = amount + offset_default}() -> i64
+impl const fn with_generic{offset: i64}() -> i64 => offset
+
+const fn forwarded<const amount: i64>() -> i64 => with_generic<amount>()
+
+test a_configuration_default_reads_the_operators_generics {
+    assert with_generic() == 11
+    assert with_generic<7>() == 16
+    assert with_generic{amount: 8}() == 17
+    assert forwarded<4>() == 13
+}
+
 struct Digit { value: i64 }
 
 # A candidate-only configuration option takes a separate brace entry.
