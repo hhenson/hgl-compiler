@@ -1013,11 +1013,16 @@ impl<'a> Typer<'a> {
     /// the first reading declared is gone, and the value read again
     /// declares its own. `place` names the parameter for messages.
     pub(super) fn argument_value(&mut self, given: Given, ty: &Type, place: &str) -> Expr {
+        let value = self.argument_read(given, ty);
+        self.fit(value, ty, place)
+    }
+
+    /// Reads an argument before its place takes its form.
+    pub(super) fn argument_read(&mut self, given: Given, ty: &Type) -> Expr {
         if given.retried {
-            let value = self.expression(&given.node, Some(ty));
-            self.fit(value, ty, place)
+            self.expression(&given.node, Some(ty))
         } else {
-            self.fit(given.value, ty, place)
+            given.value
         }
     }
 

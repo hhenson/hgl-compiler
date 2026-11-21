@@ -32,12 +32,14 @@
 //! types (GEN-7: "Each instance then selects its own candidate";
 //! [`crate::values::Selecting`]).
 
+use std::cell::RefCell;
+
 use hgl_diagnostics::{Diagnostics, Location};
 
 use crate::declared::substitute_within;
 use crate::hir::{
-    AnonymousFunction, Answer, Body, Callee, Expr, ExprKind, ValueCategory, walk_statements,
-    walk_statements_mut,
+    AnonymousFunction, Answer, Body, Callee, ConfigurationRead, Expr, ExprKind, ValueCategory,
+    walk_statements, walk_statements_mut,
 };
 use crate::program::{LocalKind, Phase, Program, Role};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
@@ -53,6 +55,7 @@ struct InstanceArguments<'a> {
     generics: &'a [Argument],
     types: &'a Map<'a>,
     requirements: &'a [Answer],
+    diagnostics: &'a RefCell<Diagnostics>,
 }
 
 impl Program {
@@ -106,11 +109,13 @@ impl Program {
             .map(|generic| generic.at)
             .zip(generics)
             .collect();
+        let reports = RefCell::new(Diagnostics::new());
         let instance = InstanceArguments {
             declaration: operator,
             generics,
             types: &types,
             requirements: &[],
+            diagnostics: &reports,
         };
         default.walk_mut(&mut |expression| self.place(expression, &instance, &[]));
         crate::values::fit_operator_default(self, operator, default, parameter, diagnostics)
@@ -153,6 +158,25 @@ impl Program {
         requirements: &[Answer],
         functions: &[(usize, Callee)],
     ) -> Option<(Signature, Body)> {
+        self.checked_instance(
+            (module, declaration),
+            generics,
+            requirements,
+            functions,
+            &RefCell::new(Diagnostics::new()),
+        )
+    }
+
+    /// Instantiate a body and report any configuration that fails to fit
+    /// the concrete candidate selected for a requirement (FN-18, GEN-16).
+    pub(crate) fn checked_instance(
+        &self,
+        (module, declaration): (usize, usize),
+        generics: &[Argument],
+        requirements: &[Answer],
+        functions: &[(usize, Callee)],
+        diagnostics: &RefCell<Diagnostics>,
+    ) -> Option<(Signature, Body)> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
             return None;
@@ -188,6 +212,7 @@ impl Program {
             generics,
             types: &map,
             requirements,
+            diagnostics,
         };
         self.place_body(&mut body, &arguments, &functions);
         // FN-3, FN-6: what each expression is, and which calls are
@@ -252,17 +277,22 @@ impl Program {
             ExprKind::Call {
                 callee, arguments, ..
             } => {
-                let required = matches!(callee, Callee::Required { .. });
+                let required = if let Callee::Required { configuration, .. } = callee {
+                    Some(configuration.take())
+                } else {
+                    None
+                };
                 self.place_target(callee, instance, functions);
-                if required
-                    && let Callee::Candidate {
-                        operator,
-                        module,
-                        declaration,
+                if let Some(configuration) = required {
+                    if let Callee::Required {
+                        configuration: unresolved,
                         ..
                     } = callee
-                {
-                    self.place_required_arguments(*operator, (*module, *declaration), arguments);
+                    {
+                        *unresolved = configuration;
+                    } else {
+                        self.place_required_arguments(callee, arguments, configuration, instance);
+                    }
                 }
             }
             ExprKind::StaticCallable(callee) => self.place_target(callee, instance, functions),
@@ -274,23 +304,70 @@ impl Program {
     /// candidate may arrange or add configuration slots (FN-18).
     fn place_required_arguments(
         &self,
-        operator: (usize, usize),
-        candidate: (usize, usize),
+        callee: &Callee,
         arguments: &mut [crate::hir::Argument],
+        context: Option<Box<ConfigurationRead>>,
+        instance: &InstanceArguments<'_>,
     ) {
+        let Callee::Candidate {
+            operator,
+            module,
+            declaration,
+            generics,
+            ..
+        } = callee
+        else {
+            return;
+        };
         let Some(Detail::Callable(public)) = self.modules[operator.0].details.get(operator.1)
         else {
             return;
         };
-        let Some(Detail::Callable(candidate)) = self.modules[candidate.0].details.get(candidate.1)
+        let Some(Detail::Callable(candidate)) = self.modules[*module].details.get(*declaration)
         else {
             return;
         };
         let slots: Vec<_> = public.candidate_parameters(candidate).collect();
+        let map: Vec<_> = candidate
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(generics)
+            .collect();
+        let context = context.map(|mut context| {
+            context.result = context
+                .result
+                .map(|ty| substitute_within(&ty, instance.types));
+            context
+        });
         for argument in arguments {
             argument.parameter = argument
                 .parameter
                 .and_then(|index| slots.get(index).copied().flatten());
+            let Some(parameter) = argument.parameter.map(|slot| &candidate.parameters[slot]) else {
+                continue;
+            };
+            let Some(context) = context.as_deref().filter(|_| parameter.configuration) else {
+                continue;
+            };
+            // This walk visits the call before each argument. Its type
+            // is specialized here, while the expression still records
+            // whether it was written as a literal or a generic constant.
+            let actual = substitute_within(&argument.value.ty, instance.types);
+            let expected = substitute_within(&parameter.ty, &map);
+            if actual != expected {
+                let mut value = argument.value.clone();
+                value.ty = actual;
+                argument.value = crate::values::fit_required_configuration(
+                    self,
+                    instance.declaration,
+                    value,
+                    &expected,
+                    &parameter.name,
+                    context,
+                    &mut instance.diagnostics.borrow_mut(),
+                );
+            }
         }
     }
 

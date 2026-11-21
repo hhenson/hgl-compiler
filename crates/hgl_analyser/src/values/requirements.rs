@@ -3,7 +3,7 @@
 //! body may call because its requirements name them (GEN-3, GEN-7,
 //! GEN-15, GEN-16). Part of the typing pass ([`super`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
@@ -161,64 +161,135 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|generic| generic.at)
             .collect();
+        let mut seen = HashSet::new();
+        relations
+            .iter()
+            .filter_map(|relation| self.stated_membership(relation, &own))
+            .filter(|(at, _)| seen.insert(*at))
+            .collect()
+    }
+
+    /// SOURCE-2 and GEN-7: the known type bound on a yield time's
+    /// parameter, where its declaration states a finite set of types.
+    pub(super) fn yield_time_types(&self, parameter: Location) -> Option<Vec<Type>> {
+        let clause = child(&self.declaration.syntax, SyntaxKind::RequiresClause)?;
+        let condition = clause.children().next()?;
+        let own: Vec<Location> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        self.type_bound(&condition, parameter, &own)
+    }
+
+    /// A positive bound on `parameter` in `condition`. A conjunction
+    /// holds only within each known bound. A disjunction has a bound
+    /// only if each alternative has one. Unknown comparisons keep a
+    /// member in the bound.
+    fn type_bound(
+        &self,
+        condition: &SyntaxNode,
+        parameter: Location,
+        own: &[Location],
+    ) -> Option<Vec<Type>> {
+        match condition.kind() {
+            SyntaxKind::ConstraintRelation => {
+                let (at, members) = self.stated_membership(condition, own)?;
+                if at != parameter {
+                    return None;
+                }
+                members
+                    .into_iter()
+                    .map(|member| match member {
+                        Argument::Type(ty) => Some(ty),
+                        Argument::Constant(_) => None,
+                    })
+                    .collect()
+            }
+            SyntaxKind::ConstraintParen => {
+                self.type_bound(&condition.children().next()?, parameter, own)
+            }
+            SyntaxKind::ConstraintBinary => {
+                let mut sides = condition.children();
+                let left = self.type_bound(&sides.next()?, parameter, own);
+                let right = self.type_bound(&sides.next()?, parameter, own);
+                if has_token(condition, SyntaxKind::AmpAmp) {
+                    match (left, right) {
+                        (Some(mut left), Some(right)) => {
+                            left.retain(|ty| {
+                                right
+                                    .iter()
+                                    .any(|other| same_type(ty, other) != Some(false))
+                            });
+                            Some(left)
+                        }
+                        (left, right) => left.or(right),
+                    }
+                } else if has_token(condition, SyntaxKind::PipePipe) {
+                    let mut left = left?;
+                    left.extend(right?);
+                    Some(left)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// A relation that names the known members of one generic parameter.
+    fn stated_membership(
+        &self,
+        relation: &SyntaxNode,
+        own: &[Location],
+    ) -> Option<(Location, Vec<Argument>)> {
+        let mut operands = relation.children();
+        let (Some(left), Some(right), None) = (operands.next(), operands.next(), operands.next())
+        else {
+            return None;
+        };
+        if left.kind() != SyntaxKind::NamedType {
+            return None;
+        }
+        let name = left.text().to_string();
+        let generic = self
+            .signature
+            .generics
+            .iter()
+            .find(|generic| generic.name == name.trim())?;
         // What the `read` pass said a type written here means: one that
         // names no generic parameter of the declaration.
         let type_at = |node: &SyntaxNode| -> Option<Type> {
             let ty = self.written.get(&(self.file, node.span().start))?;
-            (whole(ty) && !mentions(ty, &own)).then(|| (*ty).clone())
+            (whole(ty) && !mentions(ty, own)).then(|| (*ty).clone())
         };
-        let mut found: Vec<(Location, Vec<Argument>)> = Vec::new();
-        for relation in relations {
-            let operands: Vec<SyntaxNode> = relation.children().collect();
-            let [left, right] = operands.as_slice() else {
-                continue;
-            };
-            let Some(generic) = (left.kind() == SyntaxKind::NamedType)
-                .then(|| left.text().to_string().trim().to_string())
-                .and_then(|name| {
-                    self.signature
-                        .generics
-                        .iter()
-                        .find(|generic| generic.name == name)
-                })
-            else {
-                continue;
-            };
-            if found.iter().any(|(at, _)| *at == generic.at) {
-                continue;
+        let within = tokens(relation).any(|token| token.text() == "in")
+            && right.kind() == SyntaxKind::ConstraintSet;
+        let equal = has_token(relation, SyntaxKind::EqEq);
+        let members: Vec<Argument> = match &generic.kind {
+            GenericKind::Type | GenericKind::Plain if within => right
+                .children()
+                .map(|member| type_at(&member).map(Argument::Type))
+                .collect::<Option<Vec<_>>>()?,
+            GenericKind::Type | GenericKind::Plain if equal => {
+                vec![Argument::Type(type_at(&right)?)]
             }
-            let within = tokens(&relation).any(|token| token.text() == "in")
-                && right.kind() == SyntaxKind::ConstraintSet;
-            let equal = has_token(&relation, SyntaxKind::EqEq);
-            let members: Option<Vec<Argument>> = match &generic.kind {
-                GenericKind::Type | GenericKind::Plain if within => right
-                    .children()
-                    .map(|member| type_at(&member).map(Argument::Type))
-                    .collect(),
-                GenericKind::Type | GenericKind::Plain if equal => {
-                    type_at(right).map(|ty| vec![Argument::Type(ty)])
-                }
-                GenericKind::Value(ty) if within => right
-                    .children()
-                    .map(|member| {
-                        let value = self.read_constant(&member, Some(ty)).ok()?;
-                        (crate::constant::worked_out(&value) && !value.names_one_of(&own)).then(
-                            || {
-                                Argument::Constant(Constant {
-                                    text: member.text().to_string().trim().to_string(),
-                                    value,
-                                })
-                            },
-                        )
+            GenericKind::Value(ty) if within => right
+                .children()
+                .map(|member| {
+                    let value = self.read_constant(&member, Some(ty)).ok()?;
+                    (crate::constant::worked_out(&value) && !value.names_one_of(own)).then(|| {
+                        Argument::Constant(Constant {
+                            text: member.text().to_string().trim().to_string(),
+                            value,
+                        })
                     })
-                    .collect(),
-                _ => None,
-            };
-            if let Some(members) = members.filter(|members| !members.is_empty()) {
-                found.push((generic.at, members));
-            }
-        }
-        found
+                })
+                .collect::<Option<Vec<_>>>()?,
+            _ => return None,
+        };
+        (!members.is_empty()).then_some((generic.at, members))
     }
 
     /// The types an operator's requirement admits for its result, with
@@ -1270,6 +1341,13 @@ impl<'a> Typer<'a> {
             }
         }
         let map: Vec<_> = fixed(&public.generics).zip(&operator_generics).collect();
+        let configuration = places.iter().any(|place| place.operand.is_none()).then(|| {
+            Box::new(hir::ConfigurationRead {
+                raise: self.raise_here(),
+                result: self.result_type().cloned(),
+                anonymous: self.anonymous.is_some(),
+            })
+        });
         let arguments = given
             .into_iter()
             .zip(places)
@@ -1284,11 +1362,15 @@ impl<'a> Typer<'a> {
                     None => {
                         let configuration = &public.parameters[place.parameter];
                         let ty = substitute_within(&configuration.ty, &map);
-                        self.argument_value(
-                            given,
+                        // Check the public place now. The candidate's
+                        // place chooses its own form once it is known.
+                        let value = self.argument_read(given, &ty);
+                        self.fit(
+                            value.clone(),
                             &ty,
                             &format!("configuration parameter `{}`", configuration.name),
-                        )
+                        );
+                        value
                     }
                 };
                 hir::Argument {
@@ -1303,6 +1385,7 @@ impl<'a> Typer<'a> {
                 operator: (operator.module, operator.declaration),
                 requirement: index,
                 operator_generics,
+                configuration,
             },
             arguments,
             form,
@@ -1738,7 +1821,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 break;
             }
             if configured.contains(&made.callee) {
-                super::operator_defaults::check_instance(
+                let _ = super::operator_defaults::check_instance(
                     program,
                     made.callee,
                     &made.generics,
