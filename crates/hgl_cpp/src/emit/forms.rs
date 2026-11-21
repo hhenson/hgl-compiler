@@ -218,10 +218,7 @@ impl Emitter<'_> {
     pub(super) fn temporal_schema(&mut self, ty: &Type, at: Location) -> Option<String> {
         let found = self.temporal_schema_of(ty);
         if found.is_none() {
-            let what = super::structs::unwritten(self.program, ty)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("a temporal value of `{ty}`"));
-            self.unsupported(at, &what);
+            self.unsupported(at, &format!("a temporal value of `{ty}`"));
         }
         found
     }

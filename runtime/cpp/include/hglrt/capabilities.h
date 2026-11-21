@@ -120,10 +120,12 @@ class Clock {
 /// `Scheduler` (CAP-4), what `inject scheduler` binds: the node's own
 /// scheduler, hgraph's `NodeScheduler`, in the hook `hook`.
 ///
-/// Capture whether a scheduler wake brought about this evaluation (TIME-9).
-/// Clear any delivered requests still visible in the pending queue on older
-/// hgraph SDKs. Pending queries and cancellation then act on future wakes
-/// throughout the evaluation (CAP-4).
+/// CAP-4 has a wake pending until it is delivered: `is_scheduled` is "True
+/// while a wake is pending". hgraph's scheduler has it so: in the
+/// evaluation a wake brings about, that wake is due and no longer pending,
+/// so `is_scheduled`, `next_scheduled_time` and `un_schedule` with no tag
+/// see only the wakes to come, and `is_scheduled_now` stays true for the
+/// rest of that evaluation after `un_schedule` or `reset` in it (TIME-9).
 ///
 /// hgraph marks the node for the earliest wake asked of it, and a wake
 /// cancelled (`un_schedule`, `reset`) or replaced under its tag leaves the
@@ -146,7 +148,7 @@ class Scheduler {
     /// `start` and `stop`, which are no evaluation, whether a wake is due at
     /// the hook's time, as hgraph has it: in `start`, one asked for with
     /// `0s` is.
-    [[nodiscard]] bool is_scheduled_now() const noexcept;
+    [[nodiscard]] bool is_scheduled_now() const noexcept { return view_.is_scheduled_now(); }
 
     /// The hgraph scheduler it is made from.
     [[nodiscard]] const hgraph::NodeScheduler& view() const noexcept { return view_; }
@@ -156,7 +158,6 @@ class Scheduler {
   private:
     hgraph::NodeScheduler view_;
     Hook hook_;
-    bool due_now_ = false;
 };
 
 // The wall-clock option, `on_wall_clock: true`, is hgraph's own, as CAP-4

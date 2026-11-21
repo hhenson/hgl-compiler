@@ -119,6 +119,16 @@ fn differ(a: bool, b: bool) -> bool {
 
 fn signs(x: f64) -> bool => differ(above(x, (0.0, 1.0)), above(x, (-0.0, 1.0)))
 
+# The same of one capture in a graph called twice (ERR-7): each boundary
+# is a node of its own.
+fn over(x: f64, const by: f64) -> bool {
+    when { return x /{zero: .ieee} by > 0.0 }
+}
+
+fn captured_over(x: f64, const by: f64) -> bool => capture(over, x, by).value
+
+fn captured_signs(x: f64) -> bool => differ(captured_over(x, 0.0), captured_over(x, -0.0))
+
 # A lifted call given a set and a dictionary.
 const fn member_of(x: i64, members: set<i64>) -> bool {
     for m in members {
@@ -182,6 +192,7 @@ test configurations_that_differ_are_two_nodes {
     assert eval both(x: [1]) == [35]
     assert eval holders(probe: [true]) == [66]
     assert eval signs(x: [1.0]) == [true]
+    assert eval captured_signs(x: [1.0]) == [true]
 }
 
 test lifted_calls_and_branches_are_given_any_value {

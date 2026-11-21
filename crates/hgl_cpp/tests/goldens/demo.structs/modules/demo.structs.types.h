@@ -4,6 +4,7 @@
 #include <hglrt/hglrt.h>
 
 // Names this file writes, which no macro of a header above takes.
+#undef Holding
 #undef Inner
 #undef MarketQuote
 #undef NotedQuote
@@ -19,6 +20,7 @@
 #undef low
 #undef note
 #undef noted
+#undef quote
 #undef size
 #undef structs
 #undef value
@@ -32,6 +34,7 @@ struct Inner;
 struct Outer;
 struct PlainQuote;
 struct Wrapped;
+struct Holding;
 namespace d_
 {
 struct MarketQuote;
@@ -40,6 +43,7 @@ struct Inner;
 struct Outer;
 struct PlainQuote;
 struct Wrapped;
+struct Holding;
 }  // namespace d_
 }  // namespace hgl::demo::structs::m_
 
@@ -72,6 +76,11 @@ template <>
 struct hglrt::delta_of<::hgl::demo::structs::m_::Wrapped>
 {
     using type = ::hgl::demo::structs::m_::d_::Wrapped;
+};
+template <>
+struct hglrt::delta_of<::hgl::demo::structs::m_::Holding>
+{
+    using type = ::hgl::demo::structs::m_::d_::Holding;
 };
 
 namespace hgl::demo::structs::m_
@@ -200,6 +209,27 @@ struct Wrapped
     ::std::optional<::hgraph::Int> count;
 
     friend bool operator==(const struct Wrapped&, const struct Wrapped&) = default;
+};
+}  // namespace d_
+
+// struct Holding (TYPE-3), module demo.structs, line 404
+struct Holding
+{
+    ::hgl::demo::structs::m_::NotedQuote quote;
+    ::hgraph::Int count;
+
+    friend bool operator==(const struct Holding&, const struct Holding&) = default;
+};
+
+namespace d_
+{
+// delta<Holding> (TYPE-16)
+struct Holding
+{
+    ::std::optional<::hgl::demo::structs::m_::NotedQuote> quote;
+    ::std::optional<::hgraph::Int> count;
+
+    friend bool operator==(const struct Holding&, const struct Holding&) = default;
 };
 }  // namespace d_
 
@@ -449,5 +479,46 @@ struct hglrt::type_named<::hgl::demo::structs::m_::d_::Wrapped>
 {
     static constexpr ::std::string_view name = "delta<demo.structs::Wrapped>";
     static constexpr ::std::array<::std::string_view, 2> fields{"noted", "count"};
+    static constexpr bool delta = true;
+};
+template <>
+struct hglrt::fields<::hgl::demo::structs::m_::Holding>
+{
+    static constexpr auto members = ::std::tuple{&::hgl::demo::structs::m_::Holding::quote, &::hgl::demo::structs::m_::Holding::count};
+};
+template <>
+struct hglrt::fields<::hgl::demo::structs::m_::d_::Holding>
+{
+    static constexpr auto members = ::std::tuple{&::hgl::demo::structs::m_::d_::Holding::quote, &::hgl::demo::structs::m_::d_::Holding::count};
+};
+template <>
+struct std::hash<::hgl::demo::structs::m_::Holding>
+{
+    ::std::size_t operator()(const ::hgl::demo::structs::m_::Holding& value) const { return ::hglrt::key_hash_of(value); }
+};
+template <>
+struct std::hash<::hgl::demo::structs::m_::d_::Holding>
+{
+    ::std::size_t operator()(const ::hgl::demo::structs::m_::d_::Holding& value) const { return ::hglrt::key_hash_of(value); }
+};
+// TYPE-9: `Holding` as hgraph's nominal bundle, its fields as `fields` names them.
+template <>
+struct hgraph::native_bundle<::hgl::demo::structs::m_::Holding>
+{
+    using schema = ::hgraph::NominalBundle<"demo.structs", "Holding", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<>, ::hgraph::Field<"quote", ::hgraph::native_bundle<::hgl::demo::structs::m_::NotedQuote>::schema>, ::hgraph::Field<"count", ::hgraph::Int>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::structs::m_::Holding>::members;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::structs::m_::Holding>
+{
+    static constexpr ::std::string_view name = "demo.structs::Holding";
+    static constexpr ::std::array<::std::string_view, 2> fields{"quote", "count"};
+    static constexpr bool delta = false;
+};
+template <>
+struct hglrt::type_named<::hgl::demo::structs::m_::d_::Holding>
+{
+    static constexpr ::std::string_view name = "delta<demo.structs::Holding>";
+    static constexpr ::std::array<::std::string_view, 2> fields{"quote", "count"};
     static constexpr bool delta = true;
 };

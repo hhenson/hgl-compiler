@@ -22,6 +22,7 @@
 #undef an_atomic_quote_wakes_its_bid_projection
 #undef an_atomic_struct_is_a_trace_cell
 #undef an_atomic_struct_is_replayed_whole
+#undef an_atomic_struct_with_an_optional_field_is_one_endpoint
 #undef changing_a_sibling_field_does_not_publish_a_bid
 #undef demo
 #undef last_modified_follows_the_last_publication
@@ -51,6 +52,7 @@ void a_tuple_position_is_read_and_projected();
 void a_struct_that_holds_one_with_an_optional_field_is_read_whole();
 void an_atomic_struct_is_a_trace_cell();
 void an_atomic_struct_is_replayed_whole();
+void an_atomic_struct_with_an_optional_field_is_one_endpoint();
 void an_atomic_eval_kept_in_a_let_is_compared();
 void a_whole_tuple_of_composites_is_a_trace_cell();
 }  // namespace hgl::demo::structs::m_::t_
@@ -79,8 +81,9 @@ const ::hglrt::testing::Registration test_17{"demo.structs::a_tuple_position_is_
 const ::hglrt::testing::Registration test_18{"demo.structs::a_struct_that_holds_one_with_an_optional_field_is_read_whole", &::hgl::demo::structs::m_::t_::a_struct_that_holds_one_with_an_optional_field_is_read_whole};
 const ::hglrt::testing::Registration test_19{"demo.structs::an_atomic_struct_is_a_trace_cell", &::hgl::demo::structs::m_::t_::an_atomic_struct_is_a_trace_cell};
 const ::hglrt::testing::Registration test_20{"demo.structs::an_atomic_struct_is_replayed_whole", &::hgl::demo::structs::m_::t_::an_atomic_struct_is_replayed_whole};
-const ::hglrt::testing::Registration test_21{"demo.structs::an_atomic_eval_kept_in_a_let_is_compared", &::hgl::demo::structs::m_::t_::an_atomic_eval_kept_in_a_let_is_compared};
-const ::hglrt::testing::Registration test_22{"demo.structs::a_whole_tuple_of_composites_is_a_trace_cell", &::hgl::demo::structs::m_::t_::a_whole_tuple_of_composites_is_a_trace_cell};
+const ::hglrt::testing::Registration test_21{"demo.structs::an_atomic_struct_with_an_optional_field_is_one_endpoint", &::hgl::demo::structs::m_::t_::an_atomic_struct_with_an_optional_field_is_one_endpoint};
+const ::hglrt::testing::Registration test_22{"demo.structs::an_atomic_eval_kept_in_a_let_is_compared", &::hgl::demo::structs::m_::t_::an_atomic_eval_kept_in_a_let_is_compared};
+const ::hglrt::testing::Registration test_23{"demo.structs::a_whole_tuple_of_composites_is_a_trace_cell", &::hgl::demo::structs::m_::t_::a_whole_tuple_of_composites_is_a_trace_cell};
 }  // namespace
 
 int main(int argc, char **argv)

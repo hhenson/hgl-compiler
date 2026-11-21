@@ -5,6 +5,7 @@
 #include "demo.structs.types.h"
 
 // Names this file writes, which no macro of a header above takes.
+#undef Holding
 #undef MarketQuote
 #undef NotedQuote
 #undef Outer
@@ -23,11 +24,15 @@
 #undef doubled
 #undef first
 #undef first_of
+#undef held_count
+#undef holding
 #undef input
 #undef is_bid
 #undef make_outer
 #undef nested_total
 #undef note_is_null
+#undef note_or_none
+#undef noted_note
 #undef nullable_delta_payload
 #undef observe_noted_quote
 #undef observe_part_validity
@@ -65,10 +70,13 @@
 #undef update_quote
 #undef value
 #undef watched
+#undef whole_noted
 #undef whole_plain
 #undef whole_quote
+#undef whole_wrapped
 #undef wrap
 #undef wrapped
+#undef wrapped_note
 #undef wrapped_of
 #undef wrapped_sum
 #undef write_bid
@@ -316,13 +324,49 @@ namespace w_
 
 namespace w_
 {
-// quoted_total(pair: tuple<MarketQuote, i64>) -> i64 (node), module demo.structs, line 381
+// whole_noted(bid: i64) -> atomic<NotedQuote> (node), module demo.structs, line 377
+::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>> whole_noted(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid);
+}  // namespace w_
+
+namespace w_
+{
+// note_or_none(quote: atomic<NotedQuote>) -> str (node), module demo.structs, line 384
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> note_or_none(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>> quote);
+}  // namespace w_
+
+namespace w_
+{
+// noted_note(bid: i64) -> str? (graph), module demo.structs, line 392
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Str>>> noted_note(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid);
+}  // namespace w_
+
+namespace w_
+{
+// whole_wrapped(bid: i64) -> atomic<Wrapped> (node), module demo.structs, line 394
+::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::Wrapped>> whole_wrapped(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> bid);
+}  // namespace w_
+
+namespace w_
+{
+// wrapped_note(wrapped: atomic<Wrapped>) -> bool (node), module demo.structs, line 398
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> wrapped_note(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgl::demo::structs::m_::Wrapped>> wrapped);
+}  // namespace w_
+
+namespace w_
+{
+// held_count(holding: Holding) -> i64 (node), module demo.structs, line 409
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> held_count(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::NominalTSB<::hgl::demo::structs::m_::Holding, ::hgraph::Field<"quote", ::hgraph::TS<::hgl::demo::structs::m_::NotedQuote>>, ::hgraph::Field<"count", ::hgraph::TS<::hgraph::Int>>>> holding);
+}  // namespace w_
+
+namespace w_
+{
+// quoted_total(pair: tuple<MarketQuote, i64>) -> i64 (node), module demo.structs, line 434
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> quoted_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::NativeTSB<::hgl::demo::structs::m_::MarketQuote>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> pair);
 }  // namespace w_
 
 namespace w_
 {
-// nested_total(pair: tuple<tuple<i64, i64>, i64>) -> i64 (node), module demo.structs, line 385
+// nested_total(pair: tuple<tuple<i64, i64>, i64>) -> i64 (node), module demo.structs, line 438
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> nested_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::UnNamedTSB<::hgraph::Field<"0", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>>, ::hgraph::Field<"1", ::hgraph::TS<::hgraph::Int>>>> pair);
 }  // namespace w_
 

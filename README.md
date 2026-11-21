@@ -87,7 +87,9 @@ if the application had written it. Exit status is 0 when the source is
 accepted and every selected case passed or the application's run ended,
 1 when the source is rejected, a case failed or the run failed, 2 when
 the command could not run or a selected test or the application was not
-run.
+run. `hgl run` prints a run failure to standard error. On the C++ target,
+a real-time run that stops cleanly after an interrupt exits with status 0
+and prints the publications recorded before it stopped.
 
 `--target cpp` is the C++ target, a skeleton that writes value
 functions over `i64`, `f64` and `bool` and tests that assert on them,
@@ -97,9 +99,10 @@ dependency prefix `HGL_HGRAPH_DEPS` names, with GCC 15 or later on
 Linux or Apple clang 21 or later on macOS, and `ninja`; see [docs/architecture.md](docs/architecture.md#cpp).
 
 Before upgrading to an hgraph scheduler that excludes the current delivery from
-pending wakes, regenerate Python targets or rebuild the HGL C++ runtime with
-this adapter. An older runtime can hang on its first wake. Keep its existing
-hgraph version until the runtime is upgraded.
+pending wakes, regenerate Python targets with this adapter. An older runtime
+can hang on its first wake. Keep its existing hgraph version until the runtime
+is upgraded. The C++ runtime is built for hgraph 0.9.23, whose scheduler
+excludes it.
 
 The compiler reports nesting deeper than 100 levels and a syntax tree deeper
 than 500. `--nesting-limit` and `--tree-depth-limit` raise them.

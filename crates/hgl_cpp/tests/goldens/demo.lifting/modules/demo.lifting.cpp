@@ -19,6 +19,7 @@
 #undef boundary
 #undef branch_widened
 #undef by
+#undef captured_pick
 #undef captured_shown
 #undef check
 #undef checked
@@ -43,6 +44,7 @@
 #undef inner
 #undef kept_time
 #undef lifting
+#undef low
 #undef message
 #undef multiplied
 #undef never
@@ -53,6 +55,9 @@
 #undef outcome
 #undef outcomes
 #undef outer
+#undef pick
+#undef picked
+#undef picked_validity
 #undef produced
 #undef provenance
 #undef quotient
@@ -1068,6 +1073,104 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_::pick
+{
+// pick(flag: bool, ref low: i64?) -> ref i64? (node), module demo.lifting, line 252
+struct impl_
+{
+    static constexpr auto name = "demo.lifting::pick";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"flag", ::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::In<"low", ::hgraph::REF<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> low, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>> out_)
+    {
+        // when, line 253 (TIME-3)
+        if (::hglrt::fn_modified(flag))
+        {
+            out_.set(::hglrt::designation(low));
+            return;
+        }
+    }
+};
+}  // namespace n_::pick
+namespace w_
+{
+// pick(flag: bool, ref low: i64?) -> ref i64? (node), module demo.lifting, line 252
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> pick(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> low)
+{
+    return ::hgraph::wire<::hgl::demo::lifting::m_::n_::pick::impl_>(wiring_, flag, low).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>();
+}
+}  // namespace w_
+
+namespace n_::picked
+{
+// picked(flag: bool, low: i64) -> i64? (graph), module demo.lifting, line 256
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+    {
+        return ::hgl::demo::lifting::m_::w_::pick(wiring_, flag, (low).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>());
+    }
+};
+}  // namespace n_::picked
+namespace w_
+{
+// picked(flag: bool, low: i64) -> i64? (graph), module demo.lifting, line 256
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> picked(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+{
+    return ::hgl::demo::lifting::m_::n_::picked::impl_::compose(wiring_, flag, low);
+}
+}  // namespace w_
+
+namespace n_::picked_validity
+{
+// picked_validity(flag: bool, command: i64) -> bool (graph), module demo.lifting, line 258
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> command)
+    {
+        return ::hgl::demo::lifting::m_::w_::validity(wiring_, ::hgl::demo::lifting::m_::w_::pick(wiring_, flag, (::hgl::demo::lifting::m_::w_::produced(wiring_, command)).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>()));
+    }
+};
+}  // namespace n_::picked_validity
+namespace w_
+{
+// picked_validity(flag: bool, command: i64) -> bool (graph), module demo.lifting, line 258
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> picked_validity(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> command)
+{
+    return ::hgl::demo::lifting::m_::n_::picked_validity::impl_::compose(wiring_, flag, command);
+}
+}  // namespace w_
+
+namespace n_::captured_pick
+{
+// captured_pick(flag: bool, low: i64) -> str (graph), module demo.lifting, line 260
+struct impl_
+{
+    // The `capture` of `pick` on line 260 (ERR-7): the graph hgraph's
+    // `try_except_` evaluates as its child.
+    struct captured_02_
+    {
+        static constexpr auto name = "demo.lifting:capture(pick)";
+        static ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_00_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> input_01_)
+        {
+            return ::hgl::demo::lifting::m_::w_::pick(wiring_, input_00_, input_01_);
+        }
+    };
+
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Str>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+    {
+        return ::hgl::demo::lifting::m_::w_::shown(wiring_, ::hglrt::captured_value(::hglrt::capture<captured_02_>(wiring_, flag, (low).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>())));
+    }
+};
+}  // namespace n_::captured_pick
+namespace w_
+{
+// captured_pick(flag: bool, low: i64) -> str (graph), module demo.lifting, line 260
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> captured_pick(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+{
+    return ::hgl::demo::lifting::m_::n_::captured_pick::impl_::compose(wiring_, flag, low);
+}
+}  // namespace w_
+
 }  // namespace hgl::demo::lifting::m_
 
 namespace hgl::demo::lifting::m_::t_
@@ -1425,6 +1528,69 @@ void a_connection_of_i64_is_one_of_i64_nullable()
     });
         const auto right_042_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"3"}};
         ::hglrt::testing::expect_same(left_041_, right_042_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_051_ = [&]() {
+        const auto trace_043_ = ::hglrt::testing::Dense<::hgraph::Bool>{true};
+        const auto trace_045_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2};
+        return ::hglrt::testing::evaluate<::std::optional<::hgraph::Int>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_044_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_043_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_046_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_045_, start_));
+        struct held_049_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::std::optional<::hgraph::Int>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::nullable_value(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::std::optional<::hgraph::Int>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_050_ = [&] { const auto argument_047_ = input_044_; const auto argument_048_ = input_046_; return ::hgl::demo::lifting::m_::w_::picked(wiring_, argument_047_, argument_048_); }();
+        ::hgraph::wire<held_049_>(wiring_, result_050_);
+        ::hgl::core::m_::w_::i_::record::of_1i64_1_(wiring_, result_050_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_052_ = ::hglrt::testing::Dense<::std::optional<::hgraph::Int>>{::std::optional<::hgraph::Int>{1}, ::std::optional<::hgraph::Int>{2}};
+        ::hglrt::testing::expect_same(left_051_, right_052_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_059_ = [&]() {
+        const auto trace_053_ = ::hglrt::testing::Dense<::hgraph::Bool>{true};
+        const auto trace_055_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 0, 2};
+        return ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_054_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_053_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_056_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_055_, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, [&] { const auto argument_057_ = input_054_; const auto argument_058_ = input_056_; return ::hgl::demo::lifting::m_::w_::picked_validity(wiring_, argument_057_, argument_058_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_060_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, false, true};
+        ::hglrt::testing::expect_same(left_059_, right_060_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_067_ = [&]() {
+        const auto trace_061_ = ::hglrt::testing::Dense<::hgraph::Bool>{true};
+        const auto trace_063_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2};
+        return ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_062_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_061_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_064_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_063_, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, [&] { const auto argument_065_ = input_062_; const auto argument_066_ = input_064_; return ::hgl::demo::lifting::m_::w_::captured_pick(wiring_, argument_065_, argument_066_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_068_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"1"}, ::hgraph::Str{"2"}};
+        ::hglrt::testing::expect_same(left_067_, right_068_);
     }();
 }
 

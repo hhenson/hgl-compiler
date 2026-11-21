@@ -1103,7 +1103,7 @@ fn temporal_structs_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 23 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 24 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1635,6 +1635,27 @@ fn names_a_platform_takes_are_built() {
         stdout.contains("passed   executable  demo.names::each_is_its_own"),
         "{stdout}{}",
         text(&output.stderr)
+    );
+}
+
+/// A valid application that cannot be built because no SDK is named
+/// exits with status 2 and reports why it was not run.
+#[test]
+fn an_application_is_not_run_without_an_sdk() {
+    let root = scratch("application_no_sdk");
+    write(&root, "ticks.hgl", TICKS);
+    write(&root, "backtest.hgl", BACKTEST);
+    let output = hgl_in(
+        &["run", &argument(&root), "--target", "cpp"],
+        &[],
+        &["HGL_HGRAPH_SDK", "HGL_HGRAPH_DEPS"],
+    );
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(text(&output.stdout), "");
+    assert!(
+        stderr.starts_with("hgl: demo.ticks.backtest was not run: HGL_HGRAPH_SDK is not set"),
+        "{stderr}"
     );
 }
 
