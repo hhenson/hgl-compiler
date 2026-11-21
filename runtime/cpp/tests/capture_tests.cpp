@@ -229,8 +229,26 @@ TEST_CASE("a result publishes whole, an equal one and an error among them (ERR-2
     CHECK_FALSE(outcomes[1].has_value());
     CHECK(outcomes[1] == outcomes[2]);
     CHECK(hgraph::scalar_descriptor<hglrt::result<i64>>::value_meta() != nullptr);
-    CHECK(hglrt::detail::held_name<hglrt::result<hglrt::result<i64>>>() ==
-          "result<result<i64, error>, error>");
+    CHECK(hglrt::type_name<hglrt::result<hglrt::result<i64>>>() == "result<result<i64, error>, error>");
+}
+
+TEST_CASE("an error and a result are named, written and hashed as their equality has them (ERR-2, ERR-4)") {
+    const hglrt::error plain = hglrt::make_error("m");
+    const hglrt::error coded = hglrt::make_error("m", "value.unset_read");
+    hglrt::error placed = coded;
+    placed.context = hgraph::ErrorContext{"test::node@1", "evaluate", start};
+    CHECK(hglrt::type_name<hglrt::error>() == "error");
+    CHECK(hglrt::testing::text_of(plain) == R"(error(message: "m"))");
+    CHECK(hglrt::testing::text_of(coded) == R"(error(message: "m", code: "value.unset_read"))");
+    CHECK(hglrt::testing::text_of(hglrt::result<i64>{2}) == "ok(2)");
+    CHECK(hglrt::testing::text_of(hglrt::result<i64>{std::unexpect, plain}) == R"(err(error(message: "m")))");
+    // ERR-4: "Equality excludes provenance", and so does the hash.
+    CHECK(placed == coded);
+    CHECK(hglrt::hash_of(placed) == hglrt::hash_of(coded));
+    CHECK(hglrt::hash_of(hglrt::result<i64>{std::unexpect, placed}) ==
+          hglrt::hash_of(hglrt::result<i64>{std::unexpect, coded}));
+    CHECK(hglrt::hash_of(hglrt::list<hglrt::result<i64>>{hglrt::result<i64>{2}}) ==
+          hglrt::hash_of(hglrt::list<hglrt::result<i64>>{hglrt::result<i64>{2}}));
 }
 
 } // namespace

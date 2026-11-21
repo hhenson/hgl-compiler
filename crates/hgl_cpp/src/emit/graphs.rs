@@ -13,6 +13,7 @@
 //! | A call of a temporal function | its wiring function, `w_::f(wiring_, a)`; a generic one's instance's |
 //! | A lifted call, `value + 1` (FN-6); `capture` (ERR-7) | the lifting family's (`lifting`) |
 //! | An ordinary value where a connection is expected (FN-3) | its temporal form's constant, `::hglrt::constant<T>(wiring_, value)` |
+//! | A connection of T where one of `T?` is taken (TYPE-14) | hgraph's widening of its port, `(x).as<TS<Optional<T>>>()`; one given to a `ref` parameter of `T?` is reported, as hgraph binds no `REF` of a `T?` to an output of T |
 //!
 //! Not written yet, and reported: `if`, `switch` and `for` over
 //! connections (CTRL-7), a `var` connection, and a call that leaves out a
@@ -123,7 +124,21 @@ impl Emitter<'_> {
     /// a connection is one wherever it is read: a loop's key, which the
     /// language has as an ordinary value and hgraph gives a child graph
     /// as a connection (CTRL-15).
+    ///
+    /// TYPE-14: "A T is a value where a `T?` is expected": a connection of
+    /// T where one of `T?` is taken is hgraph's own read-only nullable
+    /// widening of it, its port as one of `T?` (`Port::as`), which reads
+    /// each value as present, and is valid, modified and invalid as the
+    /// connection is ("The runtime endpoint borrows the producer's payload
+    /// and tracking; no conversion node is needed").
     pub(super) fn connection(&mut self, scope: &mut Scope, value: &Expr, ty: &Type) -> String {
+        if let Some(inner) = widened_from(&value.ty, ty) {
+            let port = self.connection(scope, value, inner);
+            let Some(schema) = self.temporal_schema(ty, value.at) else {
+                return "0".to_string();
+            };
+            return format!("({port}).as<{schema}>()");
+        }
         let ported =
             matches!(value.kind, ExprKind::Local(local) if self.role(local) == Role::Connection);
         if value.is_connection() || ported {
@@ -212,6 +227,18 @@ impl Emitter<'_> {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let parameter = &signature.parameters[index];
+            // TYPE-14 and FN-16: hgraph binds no `REF` of a `T?` to an
+            // output of T, neither as it is nor widened (`Port::as`): "TSOutput
+            // alternative binding requires dereference-compatible schemas".
+            if parameter.reference && widened_from(&argument.value.ty, &parameter.ty).is_some() {
+                return self.missing(
+                    argument.value.at,
+                    &format!(
+                        "a connection of `{}` given to a `ref` parameter of `{}`",
+                        argument.value.ty, parameter.ty
+                    ),
+                );
+            }
             let port = given
                 .iter()
                 .find(|(at, _)| *at == position)
@@ -308,6 +335,19 @@ impl Emitter<'_> {
         let mut all = vec![WIRING.to_string()];
         all.extend(written.into_iter().flatten());
         format!("{called}({})", all.join(", "))
+    }
+}
+
+/// The T of `expected` where it is `T?` and `given` is that T, so that a
+/// connection of `given` is widened where one of `expected` is taken
+/// (TYPE-14). A `T?` that only marks a temporal parameter that may be left
+/// out (`Type::omission_removed`) is no nullable, and is not widened to.
+pub(super) fn widened_from<'t>(given: &Type, expected: &'t Type) -> Option<&'t Type> {
+    match expected.omission_removed() {
+        Type::Nullable(inner) if !matches!(given, Type::Nullable(_)) && **inner == *given => {
+            Some(inner)
+        }
+        _ => None,
     }
 }
 

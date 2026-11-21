@@ -120,7 +120,8 @@ in `crates/hgl_cpp/ci/unsupported_cases.toml` ([architecture](architecture.md#cp
 | `inject scheduler` and `inject alarm` in a node; `schedule`, `un_schedule`, `reset`; what woke the node, which decides the handlers it runs; `scheduled()` and `modified([])` read as a `bool` | TIME-3, TIME-8, TIME-9, CAP-4, CAP-5 |
 | A graph; a value where a connection is expected; a lifted call, an input that binds its default or null where it is not valid, a parameter left out bound as configuration, a sink | FN-2, FN-3, FN-6, FN-11 |
 | `eval`, dense and timed traces, their comparison, a `let` of one, a trace given to a `const fn`; an eval of a value function | TST-4 to TST-8, TST-16 |
-| `capture`, its `.value` and `.error`; an `error` and a `result` as temporal values; `?` in a `when`; an error's `.context` | ERR-2, ERR-4, ERR-5, ERR-7, ERR-8 |
+| `capture`, its `.value` and `.error`; an `error` and a `result` as temporal values and in a trace; `?` in a `when`; an error's `.context` | ERR-2, ERR-4, ERR-5, ERR-7, ERR-8, TST-5 |
+| A connection of T where one of `T?` is taken | TYPE-14, FN-11 |
 | A temporal candidate of an operator | GEN-4, OPS-9 |
 | A run's bounds from its `RunConfig` | RUN-1, CRUN-2 |
 | A window of a scalar, of a tick count or of a duration: a publication to one, `all_valid`, its value read in a hook or given to a lifted helper where it is all valid, its delta and `removed_value` in the form their place takes, its trace, record and replay | TYPE-11, TYPE-16, END-3, END-9, ERR-14, FN-12, TIME-7, TST-16 |
@@ -156,8 +157,10 @@ loop's body the store or an ordinary value that may fail (FN-9: hgraph
 builds each child as the graph around it is built), a `return` under a
 branch selected at runtime in a loop unrolled where the graph is built,
 branches that assign two `var`s (CTRL-14), a `capture` given an `f64`
-configuration (ERR-7, hgraph issue 1866), and a lifted call that leaves out a
-`T?` whose default may fail (FN-6). A call
+configuration (ERR-7, hgraph issue 1866), a lifted call that leaves out a
+`T?` whose default may fail (FN-6), and a connection of T given to a `ref`
+parameter of `T?` (TYPE-14: hgraph binds no `REF` of a `T?` to an output
+of T). A call
 of a function with a pack, core's `all_` and `any_`, has no callee the
 analyser reads.
 

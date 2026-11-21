@@ -1362,6 +1362,124 @@ fn a_keyed_form_not_written_yet_is_reported() {
     );
 }
 
+/// An instance that only a piece left out asks for is not written: an
+/// eval that reaches a form the target does not write asks for core's
+/// `replay` and `record` of its types, which are left out of core's unit
+/// with it, so that what is not written stops no other module's tests
+/// ("Assembly"). One a test that runs asks for is written.
+#[test]
+fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "const fn half(d: duration) -> result<duration, error> => ok(d)\n",
+                "\n",
+                "fn later(a: duration) -> duration {\n",
+                "    when { return a + half(a)? }\n",
+                "}\n",
+                "\n",
+                "fn kept(a: i64) -> i64 {\n",
+                "    when { return a }\n",
+                "}\n",
+                "\n",
+                "test blocked {\n",
+                "    assert eval(later(a: [1s])) == [2s]\n",
+                "}\n",
+                "\n",
+                "test runs {\n",
+                "    assert eval(kept(a: [1])) == [1]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert!(
+        emitted
+            .blocked("blocked")
+            .is_some_and(|reason| reason.ends_with("does not write a `?` here yet")),
+        "{:?}",
+        emitted.blocked("blocked")
+    );
+    assert_eq!(emitted.blocked("runs"), None);
+    let core = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/core.cpp")
+        .unwrap()
+        .text;
+    assert!(!core.contains("of_duration"), "{core}");
+    assert!(
+        core.contains("::hgraph::wire<::hgl::core::m_::n_::i_::record::of_i64::impl_>"),
+        "{core}"
+    );
+}
+
+/// TYPE-14: a connection of T is one of `T?` where one is taken, through
+/// hgraph's own widening of its port (`Port::as`): given to a node's input
+/// and returned as a graph's result. hgraph binds no `REF` of a `T?` to an
+/// output of T, so one given to a `ref` parameter of `T?` is reported.
+#[test]
+fn a_connection_of_t_is_widened_where_a_nullable_is_taken() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "\n",
+                "fn shown(x: i64?) -> bool {\n",
+                "    when { return valid(x) }\n",
+                "}\n",
+                "\n",
+                "fn widened(x: i64) -> bool => shown(x)\n",
+                "\n",
+                "fn widened_result(x: i64) -> i64? => x\n",
+                "\n",
+                "fn pick(flag: bool, ref low: i64?) -> ref i64? {\n",
+                "    when modified(flag) { return low }\n",
+                "}\n",
+                "\n",
+                "fn picked(flag: bool, low: i64) -> i64? => pick(flag, low)\n",
+                "\n",
+                "test widens {\n",
+                "    assert eval(widened(x: [1])) == [true]\n",
+                "    assert eval(widened_result(x: [1])) == [1]\n",
+                "}\n",
+                "\n",
+                "test designates {\n",
+                "    assert eval(picked(flag: [true], low: [1])) == [1]\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.blocked("widens"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/m.cpp")
+        .unwrap()
+        .text;
+    assert!(
+        unit.contains("::hgl::m::m_::w_::shown(wiring_, (x).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>())"),
+        "{unit}"
+    );
+    assert!(
+        unit.contains("return (x).as<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>();"),
+        "{unit}"
+    );
+    assert_eq!(
+        emitted.blocked("designates").as_deref(),
+        Some(
+            "m.hgl:15:55 the cpp target does not write a connection of `i64` given to a `ref` parameter of `i64?` yet"
+        )
+    );
+}
+
 /// A temporal form the target does not write yet is reported through the
 /// dispatch point, where it is written, and blocks what reaches it: a
 /// temporal value of a type no family writes. A test that reaches none is

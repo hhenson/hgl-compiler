@@ -1,6 +1,9 @@
 // A temporal error boundary, `capture(callable, args...)` (the language's
 // ERR-7 and ERR-8), and the temporal values of what HGL's errors are: an
-// `error` and a `result<T, error>` (ERR-2, ERR-4).
+// `error` and a `result<T, error>` (ERR-2, ERR-4), with the name, the text
+// and the hash the library gives each (`value_form`, values.h), by which a
+// trace of either is compared and written, and a replay of one is
+// configuration hgraph can intern.
 //
 // ERR-7: "In composition, `capture(callable, args...)` creates a temporal
 // error boundary ... read through two connections: `.value` retains the
@@ -39,6 +42,7 @@
 #pragma once
 
 #include <hglrt/failure.h>
+#include <hglrt/traces.h>
 #include <hglrt/values.h>
 
 #include <hgraph/types/generated.h>
@@ -116,26 +120,43 @@ inline hgraph::Port<hgraph::TS<error>> captured_error(const hgraph::Port<hgraph:
     return boundary;
 }
 
-namespace detail {
-template <class T>
-struct is_result : std::false_type {};
-template <class V, class E>
-struct is_result<std::expected<V, E>> : std::true_type {};
-
-/// The HGL name of the type `T` holds, as a result's name is made of it: an
-/// `error` is `error`, a result its own, and any other as `type_name` gives.
-template <class T>
-std::string held_name() {
-    if constexpr (std::is_same_v<T, error>) {
-        return "error";
-    } else if constexpr (is_result<T>::value) {
-        return "result<" + held_name<typename T::value_type>() + ", " + held_name<typename T::error_type>() +
-               ">";
-    } else {
-        return type_name<T>();
+/// An `error`'s name and text (ERR-4), as the library names a type and
+/// writes a value (`value_form`, values.h): `error(message: "m", code:
+/// "c")`, its code where it has one. Its context is no part of its text, as
+/// it is none of its equality ("Equality excludes provenance").
+template <>
+struct value_form<error> {
+    static std::string name() { return "error"; }
+    /// The hash of its code and its message, which its equality compares.
+    static std::size_t hash(const error& value) {
+        return detail::combined(hash_of(value.code), hash_of(value.message));
     }
-}
-} // namespace detail
+    static std::string text(const error& value) {
+        std::string text = "error(message: " + testing::text_of(value.message);
+        if (value.code.has_value()) {
+            text += ", code: " + testing::text_of(*value.code);
+        }
+        return text + ")";
+    }
+};
+
+/// A result's name and text (ERR-2): `result<i64, error>`; `ok(2)`,
+/// `err(error(message: "m"))`.
+template <class V, class E>
+struct value_form<std::expected<V, E>> {
+    static std::string name() { return "result<" + type_name<V>() + ", " + type_name<E>() + ">"; }
+    /// The hash of its tag and its payload, which its equality compares.
+    static std::size_t hash(const std::expected<V, E>& value) {
+        return value.has_value() ? detail::combined(1, hash_of(*value))
+                                 : detail::combined(2, hash_of(value.error()));
+    }
+    static std::string text(const std::expected<V, E>& value) {
+        if (value.has_value()) {
+            return "ok(" + testing::text_of(*value) + ")";
+        }
+        return "err(" + testing::text_of(value.error()) + ")";
+    }
+};
 
 } // namespace hglrt
 
@@ -149,7 +170,7 @@ template <class V, class E>
 struct hgraph::scalar_descriptor<std::expected<V, E>> {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta() {
-        static const std::string name = "hgl." + hglrt::detail::held_name<std::expected<V, E>>();
+        static const std::string name = "hgl." + hglrt::type_name<std::expected<V, E>>();
         return TypeRegistry::instance().register_scalar<std::expected<V, E>>(name);
     }
 };

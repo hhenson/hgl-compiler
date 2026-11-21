@@ -4,17 +4,24 @@
 #include <hglrt/hglrt.h>
 
 // Names this file writes, which no macro of a header above takes.
+#undef a
 #undef attempt
+#undef b
+#undef branch_widened
 #undef by
+#undef captured_shown
 #undef check
 #undef checked
 #undef checked_errors
+#undef command
 #undef demo
 #undef describe
 #undef error
+#undef errors_of
 #undef factor
 #undef failure
 #undef first
+#undef flag
 #undef guarded
 #undef guarded_values
 #undef handled
@@ -22,11 +29,15 @@
 #undef lifting
 #undef multiplied
 #undef offset
+#undef or_zero
+#undef or_zero_of
 #undef outcome
 #undef outcomes
+#undef produced
 #undef provenance
 #undef raise_again
 #undef raised
+#undef relayed
 #undef repeat
 #undef repeated
 #undef returned
@@ -35,10 +46,19 @@
 #undef scaled_by
 #undef shifted
 #undef shifted_values
+#undef shown
+#undef shown_five
+#undef shown_of
 #undef taken
+#undef validity
 #undef value
+#undef widened_node_result
+#undef widened_result
+#undef widened_validity
 #undef write_then_fail
 #undef written_values
+#undef x
+#undef y
 
 namespace hgl::demo::lifting::m_
 {
@@ -161,6 +181,87 @@ namespace w_
 {
 // provenance(value: i64, repeat: bool) -> datetime (graph), module demo.lifting, line 133
 ::hgraph::Port<::hgraph::TS<::hgraph::DateTime>> provenance(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> repeat);
+}  // namespace w_
+
+namespace w_
+{
+// errors_of(value: i64) -> error (graph), module demo.lifting, line 179
+::hgraph::Port<::hgraph::TS<::hglrt::error>> errors_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
+}  // namespace w_
+
+// or_zero(a: i64, b: i64?) -> i64 (`const fn`), module demo.lifting, line 194
+::hgraph::Int or_zero(::hgraph::Int a, std::optional<::hgraph::Int> b);
+
+namespace w_
+{
+// or_zero_of(a: i64, b: i64) -> i64 (graph), module demo.lifting, line 200
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> or_zero_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> a, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> b);
+}  // namespace w_
+
+namespace w_
+{
+// shown(x: i64?) -> str (node), module demo.lifting, line 202
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> shown(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> x);
+}  // namespace w_
+
+namespace w_
+{
+// relayed(x: i64) -> i64 (node), module demo.lifting, line 210
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> relayed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x);
+}  // namespace w_
+
+namespace w_
+{
+// shown_of(x: i64) -> str (graph), module demo.lifting, line 214
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> shown_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x);
+}  // namespace w_
+
+namespace w_
+{
+// shown_five(flag: bool) -> str (graph), module demo.lifting, line 216
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> shown_five(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag);
+}  // namespace w_
+
+namespace w_
+{
+// widened_result(x: i64) -> i64? (graph), module demo.lifting, line 218
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> widened_result(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x);
+}  // namespace w_
+
+namespace w_
+{
+// widened_node_result(x: i64) -> i64? (graph), module demo.lifting, line 220
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> widened_node_result(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x);
+}  // namespace w_
+
+namespace w_
+{
+// produced(command: i64) -> i64 (node), module demo.lifting, line 225
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> produced(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> command);
+}  // namespace w_
+
+namespace w_
+{
+// validity(x: i64?) -> bool (node), module demo.lifting, line 233
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> validity(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> x);
+}  // namespace w_
+
+namespace w_
+{
+// widened_validity(command: i64) -> bool (graph), module demo.lifting, line 237
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> widened_validity(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> command);
+}  // namespace w_
+
+namespace w_
+{
+// branch_widened(flag: bool, x: i64, y: i64) -> i64? (graph), module demo.lifting, line 239
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> branch_widened(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y);
+}  // namespace w_
+
+namespace w_
+{
+// captured_shown(x: i64) -> str (graph), module demo.lifting, line 244
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> captured_shown(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x);
 }  // namespace w_
 
 }  // namespace hgl::demo::lifting::m_
