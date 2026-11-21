@@ -68,7 +68,7 @@ const EXIT_FAILED: u8 = 2;
 #[derive(Parser)]
 #[command(
     name = "hgl",
-    version,
+    version = concat!(env!("CARGO_PKG_VERSION"), " (hgraph ", env!("HGL_HGRAPH_TAG"), ")"),
     about = "HGL compiler (experimental; makes no conformance claim)"
 )]
 struct Cli {
@@ -289,7 +289,7 @@ fn chosen_application(program: &Program, named: Option<&str>) -> Result<String, 
 #[derive(Clone, Copy, ValueEnum)]
 enum Target {
     /// C++ against hgraph's C++ API, built with the SDK that
-    /// `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name.
+    /// the bundle provides or `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name.
     Cpp,
 }
 

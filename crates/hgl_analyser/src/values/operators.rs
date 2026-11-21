@@ -417,7 +417,31 @@ impl<'a> Typer<'a> {
         let Some(chosen) = selected.pop() else {
             return (self.unselected(given, Form::Named), Type::Unknown);
         };
+        if let Some(diagnostic) = self.ambiguous_result_reads(&chosen, at) {
+            self.diagnostics.emit(diagnostic);
+            return (self.unselected(given, Form::Named), Type::Unknown);
+        }
         self.called(operator, chosen, given, (Form::Named, at))
+    }
+
+    /// ERR-15: equally few result reads in different operands leave no
+    /// way to choose which values the candidate takes.
+    pub(super) fn ambiguous_result_reads(
+        &self,
+        chosen: &Chosen,
+        at: Location,
+    ) -> Option<Diagnostic> {
+        chosen.ambiguous_reads.then(|| {
+            let candidate = &self.program.modules[chosen.module].declarations[chosen.declaration];
+            error(
+                Category::Operator,
+                codes::OPERATOR_AMBIGUOUS,
+                at,
+                "one operator candidate takes the call in more than one arrangement of result reads".to_string(),
+                "ERR-15",
+            )
+            .with_related(candidate.at, "this candidate")
+        })
     }
 
     /// The report of a call of an operator, named `name` and written at

@@ -143,7 +143,7 @@ analyser: partial
 - A call or held result keeps its tag in a result place, gives its success or raises in a T place, and gives its success or null in a `T?` place. An unannotated `let` keeps the result. A nullable success type is itself the T form.
 - A `result<U?, error>` given where a U is expected raises its original error on failure and reads the success under ERR-12. The owner confirmed the two reads while the specification update was in review. [Compiler issue #345](https://github.com/hhenson/hgl-compiler/issues/345#issuecomment-7060418814)
 - In composition the analyser records whether a conversion belongs to the call's node or to a reader of a held connection.
-- Equal minimum arrangements of result reads in one candidate await #356 (`operator.ambiguous`).
+- A candidate keeps operands whole where possible. Equal minimum arrangements of result reads are `operator.ambiguous`. [Compiler issue #356](https://github.com/hhenson/hgl-compiler/issues/356)
 
 transpiler: done
 
