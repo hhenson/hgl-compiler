@@ -366,14 +366,14 @@ detail::made<i64> detail::whole_of(f64 value, Rounding rounding, std::optional<i
         if (nan.has_value()) {
             return *nan;
         }
-        return std::unexpected("a NaN is no `i64`");
+        return std::unexpected(conversion_reason{"a NaN is no `i64`"});
     }
     if (std::isinf(value)) {
-        return std::unexpected("an infinity is no `i64`");
+        return std::unexpected(conversion_reason{"an infinity is no `i64`"});
     }
     const f64 whole = rounded(value, rounding);
     if (whole < -i64_upper_bound || whole >= i64_upper_bound) {
-        return std::unexpected("the number is outside `i64` once rounded");
+        return std::unexpected(conversion_reason{"the number is outside `i64` once rounded"});
     }
     return static_cast<i64>(whole);
 }
@@ -385,11 +385,11 @@ detail::made<i64> detail::integer_of(std::string_view text) {
     }
     const std::optional<IntegerLiteral> literal = integer_literal(text);
     if (!literal.has_value()) {
-        return std::unexpected("the text is no integer literal");
+        return std::unexpected(conversion_reason{"the text is no integer literal"});
     }
     const u128 magnitude = magnitude_of(*literal);
     if (!fits_i64(negative, magnitude)) {
-        return std::unexpected("the number the text writes is outside `i64`");
+        return std::unexpected(conversion_reason{"the number the text writes is outside `i64`"});
     }
     return signed_of(negative, magnitude);
 }
@@ -414,10 +414,10 @@ detail::made<f64> detail::real_of(std::string_view text) {
     } else if (const std::optional<IntegerLiteral> literal = integer_literal(text); literal.has_value()) {
         magnitude = nearest_of(*literal);
     } else {
-        return std::unexpected("the text is no number");
+        return std::unexpected(conversion_reason{"the text is no number"});
     }
     if (std::isinf(magnitude)) {
-        return std::unexpected("the number the text writes rounds to an infinity");
+        return std::unexpected(conversion_reason{"the number the text writes rounds to an infinity"});
     }
     return negative ? -magnitude : magnitude;
 }
@@ -429,12 +429,12 @@ detail::made<bool> detail::flag_of(std::string_view text) {
     if (text == "false") {
         return false;
     }
-    return std::unexpected("the text is no `bool` literal");
+    return std::unexpected(conversion_reason{"the text is no `bool` literal"});
 }
 
 detail::made<str> detail::decoded(const bytes& value) {
     if (!well_formed(value.data)) {
-        return std::unexpected("the bytes are not well-formed UTF-8");
+        return std::unexpected(conversion_reason{"the bytes are not well-formed UTF-8"});
     }
     return value.data;
 }
