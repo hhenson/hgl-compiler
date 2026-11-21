@@ -64,7 +64,9 @@ analyser: partial
 - A private operator is used only in its own module. Importing one rejects with `import.private` (UNIT-3). A candidate in another module needs a binding to an exported operator or reports `impl.unknown_operator`.
 - A symbol call whose core identity is private rejects outside core with `operator.no_candidate`.
 
-transpiler: planned
+transpiler: done
+
+- An HGL candidate has a separate name in its declaring module, using its declared parameter types and declaration identity (`emit::names::placed`). Its generic instances are named below that candidate's own namespace.
 
 ## GEN-5
 
@@ -77,6 +79,10 @@ analyser: partial
 - In value code, a test's outside an `eval` or a `run` and an application's statements, a call selects among both too, a value candidate outranking a temporal one of the same parameter types; a temporal candidate it selects is `call.role`, the code proposed (TST-3, UNIT-14)
 - A packed candidate matches each captured argument and checks the pack's bounds. Equally specific candidates stay tied when their admitted cardinalities overlap.
 - Left: an argument that is itself a call only its requested output selects; composition, where a temporal candidate outranks a value one of the same parameter types, and runtime bodies
+
+transpiler: done
+
+- Named and symbol calls use the selected candidate's module, declaration and instance to name its value function or temporal wiring. C++ sees the selected candidate's own name (`emit::names::placed`).
 
 ## GEN-6
 
