@@ -463,6 +463,12 @@ fn a_run_statement_that_calls_no_entry_is_reported() {
             "eval{length: 3s} beats()",
             "live.hgl:5:5 phase/run.configuration RUN-6",
         ),
+        // What it holds is not read (ERR-9): a name in it nothing binds
+        // is not reported.
+        (
+            "eval{length: missing} beats()",
+            "live.hgl:5:5 phase/run.configuration RUN-6",
+        ),
         // The defaults, each of its field's type, and of a field of
         // core's `RunConfig`.
         (

@@ -227,7 +227,16 @@ impl Resolver<'_> {
         // unit's: what it declares and imports.
         if let Some(run) = &module.run {
             self.enter(run.file, false);
-            self.children(&run.syntax);
+            // RUN-6: a configuration on an application's run statement
+            // rejects (`run.configuration`), and what it holds is not read
+            // (ERR-9): only the statement's call is resolved.
+            for form in run.syntax.children() {
+                for part in form.children() {
+                    if part.kind() != SyntaxKind::OperatorConfig {
+                        self.walk(&part);
+                    }
+                }
+            }
         }
         // UNIT-14: the statements that set the run's store are read as
         // one block is: `inject global_state` binds the name for the
