@@ -312,6 +312,28 @@ pub(super) fn temporary(word: &str, number: usize) -> String {
     format!("{word}_0{number}_")
 }
 
+/// The unchecked input that watches a result on `local` (ERR-15).
+/// It ends in `_` and contains `_w`, which [`identifier`] never does
+/// in a name ending in `_`.
+pub(super) fn result_watch(local: usize) -> String {
+    format!("result_watch_{local}_")
+}
+
+/// The suffix that distinguishes a physical reader variant (ERR-15).
+/// The appended `_read_` and final `_` cannot occur together in a
+/// name from [`identifier`], which escapes each internal `_` as `_1`
+/// in a name ending in `_`.
+pub(super) fn reader_suffix(number: usize) -> String {
+    format!("_read_{number}_")
+}
+
+/// The alias for a source's mixed whole and delta payload (TIME-7).
+/// Its final `_` and internal `_t` cannot occur together in a name
+/// from [`identifier`].
+pub(super) fn source_payload_type() -> &'static str {
+    "payload_type_"
+}
+
 /// A struct's generic parameter `written` (GEN-1) as its C++ template's
 /// parameter: the name with each `_` as `_1`, then `_p_`, a form no other
 /// name the target writes takes: [`identifier`] gives a `_` before

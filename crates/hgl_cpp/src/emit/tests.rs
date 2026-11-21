@@ -64,10 +64,6 @@ impl Emitter<'_> {
                 .push((line, statement_at(statement, &body.locals)));
             let marked = names::testing("statement");
             text.push_str(&format!("{INDENT}{marked}();\n"));
-            if let hgl_analyser::hir::Stmt::Return { at, .. } = statement {
-                self.unsupported(*at, "a `return` in a test");
-                continue;
-            }
             self.statement(&mut scope, statement, 1, &mut text);
         }
         text.push_str("}\n");
