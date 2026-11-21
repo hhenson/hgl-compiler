@@ -122,9 +122,10 @@ analyser: partial
 - Function and operator calls check the cardinality of captured arguments against the value parameter and its generic type pack. Explicit positional type sequences also constrain the argument count. The HIR records the resolved sequence of types for each captured type pack.
 - Left: pack reflection and declaration checks for `pack.duplicate` and `impl.pack` after the catalogue is pinned. [Compiler issue #336](https://github.com/hhenson/hgl-compiler/issues/336)
 
-transpiler: planned
+transpiler: partial
 
-- `schemas(pack)` as a runtime-only borrowed view
+- C++ uses the analysed argument order, names and types when it writes each pack's parameters, including an empty capture.
+- Left: `schemas(pack)` as a runtime-only borrowed view.
 
 ## GEN-11
 

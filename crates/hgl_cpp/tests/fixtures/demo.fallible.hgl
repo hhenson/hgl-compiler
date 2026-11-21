@@ -111,6 +111,15 @@ fn checking_for_null(input: i64) -> i64 {
     return when_present(held)
 }
 
+fn consume_pack(items: ...i64{2}) -> i64 {
+    when { return 7 }
+}
+
+fn capture_pack(input: i64, other: i64) -> error {
+    let held = checked(input)
+    return capture(consume_pack, other, held).error
+}
+
 test reads_in_the_consumer {
     assert eval reading_outcome(input: [1, 7], enabled: [false, true]) == [0, 7]
     assert eval reading_nullable(input: [1, 7], enabled: [false, true]) == [0, 7]
@@ -129,6 +138,8 @@ test reads_in_the_consumer {
     assert raises("convert.invalid") { eval waiting_for_an_input(input: [-1], delayed: [_]) }
     assert raises("convert.invalid") { eval lifted_waiting_for_an_input(input: [-1], delayed: [_]) }
     assert eval checking_for_null(input: [7, -1, 9]) == [7, 0, 9]
+    assert eval capture_pack(input: [-1], other: [_]) ==
+        [error(message: "invalid input", code: "convert.invalid")]
 }
 
 # ERR-5, ERR-12 and ERR-15: reading a failure runs where the expression

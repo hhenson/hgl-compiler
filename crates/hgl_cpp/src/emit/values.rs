@@ -51,7 +51,7 @@ impl Emitter<'_> {
             self.unsupported(at, "a value function with no body");
             return;
         };
-        if !signature.generics.is_empty() {
+        if self.instances.instanced(program, self.module, index) {
             // Each instance is a piece of its own; the declaration's
             // piece holds nothing, and a call names the instance.
             let instances = self.instances;
@@ -63,13 +63,17 @@ impl Emitter<'_> {
                     kind_of(declaration.kind),
                     instance.suffix
                 );
-                self.function(
-                    index,
-                    Some(&instance.suffix),
-                    &instance.signature,
-                    &instance.body,
-                    &described,
-                );
+                if let Some(at) = instance.pack_use {
+                    self.unsupported(at, "a read of a pack as a whole");
+                } else {
+                    self.function(
+                        index,
+                        Some(&instance.suffix),
+                        &instance.signature,
+                        &instance.body,
+                        &described,
+                    );
+                }
                 let piece = self.close();
                 self.instanced.push((index, instance.suffix.clone(), piece));
             }
@@ -188,10 +192,6 @@ impl Emitter<'_> {
         let mut parameters = Vec::new();
         let mut defined = Vec::new();
         for parameter in &signature.parameters {
-            if parameter.pack.is_some() {
-                self.unsupported(parameter.at, "a pack");
-                return None;
-            }
             let ty = self.written_type(&parameter.ty, parameter.at)?;
             let taken = parameter_type(self.program, &parameter.ty, parameter.var, &ty);
             let parameter = format!("{taken} {}", identifier(&parameter.name));

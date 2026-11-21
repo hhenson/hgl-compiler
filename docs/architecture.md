@@ -578,8 +578,9 @@ temporal function with no temporal parameters; anything else is
 gives no configuration (`run.configuration`): what starts the
 application supplies it, over the defaults of an `inject
 run_config{...}` among the statements before it (RUN-6), whose entries
-are an eval's and are the `Stmt::Inject` of `Module::store_body`. A
-value given to `put` there may read `run_config`, and no other
+are an eval's and are the `Stmt::Inject` of `Module::store_body`.
+Store values and the entry's arguments may read this `run_config`. The
+entry's arguments carry its binding in `Run::locals` and read no other
 capability.
 
 | Check | Rule | Code |
@@ -1634,7 +1635,7 @@ analysed program.
 | Module | What it decides | Rules |
 | --- | --- | --- |
 | `copies` | Where a value is copied: which `let`s and loops take a copy, what a name refers into, whether what a call gives is its own; which structs are values (`by_value`) | the owner's rule (compiler issue 151), FN-13, FN-15 |
-| `instances`, `canonical` | Which instances of generic declarations a program asks for, each keyed by its canonical text, every generic value function's among them (`Instances::typed`); what an eval's run and an application's run are wired with | GEN-2, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
+| `instances`, `canonical`, `packs` | Which instances a program asks for, including generic value functions and packed calls. A pack's captured types and keys identify its instance, and each capture becomes an individual parameter. These modules also describe what an eval's run and an application's run are wired with. | FN-8, GEN-2, GEN-10, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
 | `pieces` | What a piece a target writes reaches (`Reach`), and whether a test or an application reaches a form the target does not write (`blocked`) | |
 | `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, the `var`s a branch assigns, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
 | `types` | A struct's fields and descendants, whether a struct has none, and which values are read whole only where they are all valid | TYPE-3, TYPE-4, TYPE-9, TIME-1 |

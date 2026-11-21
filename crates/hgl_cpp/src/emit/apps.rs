@@ -133,7 +133,11 @@ impl Emitter<'_> {
             locals: Vec::new(),
             statements: Vec::new(),
         };
-        let mut scope = Scope::cold(program, &none);
+        let entry_arguments = Body {
+            locals: run.locals.clone(),
+            statements: Vec::new(),
+        };
+        let mut scope = Scope::cold(program, &entry_arguments);
         let (callee, arguments) = match &run.call.kind {
             ExprKind::Call {
                 callee, arguments, ..
@@ -231,8 +235,8 @@ impl Emitter<'_> {
         // file and line of the call (`stamped`).
         let directive = self.line_directive(run.call.at);
         let mut entry = String::new();
-        let mut called = Scope::cold(program, &none);
-        let mut context = Context::new(Kind::Entry, 0);
+        let mut called = Scope::cold(program, &entry_arguments);
+        let mut context = Context::new(Kind::Entry, entry_arguments.locals.len());
         let mut target = String::new();
         self.in_context(&mut context, |emitter| {
             target = emitter.temporal_call_held(&mut called, &run.call, &given, &defaults);

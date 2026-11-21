@@ -586,14 +586,15 @@ fn weight(ty: &Type) -> usize {
     }
 }
 
-/// [`substitute`], unless the result could weigh more than [`WEIGHT`]:
-/// then the type is not known.
+/// Replace generic parameters in `ty` with the arguments in `map`,
+/// indexed by their declaration locations (GEN-2). An application that
+/// could exceed the type-size bound gives `Type::Unknown`.
 ///
 /// Each argument may stand in a type many times, and a chain of generic
 /// parents that each give the next `tuple<T, T>` doubles a field's type
 /// at every link. The weight is bounded before anything is built: no
 /// more than the type's own, times the heaviest argument's.
-pub(crate) fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
+pub fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
     let heaviest = map
         .iter()
         .map(|(_, argument)| match argument {

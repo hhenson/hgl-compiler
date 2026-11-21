@@ -43,12 +43,17 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Run, Stmt, walk_statements};
-use hgl_analyser::{
-    Argument as GenericArgument, DeclarationKind, Detail, Program, Role, Signature, Type,
+use hgl_analyser::hir::{
+    Answer, Argument, Body, Callee, Expr, ExprKind, Run, Stmt, TypePackArgument, walk_statements,
 };
+use hgl_analyser::{
+    Argument as GenericArgument, DeclarationKind, Detail, GenericKind, Program, Role, Signature,
+    Type,
+};
+use hgl_diagnostics::Location;
 
-use crate::canonical::canonical_argument;
+use crate::canonical::{canonical, canonical_argument};
+use crate::packs::{Captures, Slot};
 
 /// A generic temporal declaration as one set of generic arguments takes
 /// it.
@@ -66,6 +71,21 @@ pub struct Instance {
     /// Its body, with them in place, and each operation the declaration
     /// requires as the call of the candidate that answers it (GEN-16).
     pub body: Body,
+    /// The original slot and key of each expanded parameter.
+    slots: Vec<Slot>,
+    /// Where an expression still needs a pack as a whole.
+    pub pack_use: Option<Location>,
+}
+
+impl Instance {
+    /// The concrete parameter an analysed argument supplies.
+    pub fn parameter(&self, argument: &Argument) -> Option<usize> {
+        if self.slots.is_empty() {
+            argument.parameter.filter(|_| argument.pack.is_none())
+        } else {
+            self.slots.iter().position(|slot| slot.takes(argument))
+        }
+    }
 }
 
 /// The instances of each generic temporal declaration of a program, in
@@ -88,6 +108,10 @@ struct Asked {
     declaration: usize,
     /// What each of its generic parameters stands for at the call.
     generics: Vec<GenericArgument>,
+    /// The concrete type sequences of the call's generic packs.
+    type_packs: Vec<TypePackArgument>,
+    /// Which arguments the call captures in its parameter packs.
+    captures: Captures,
     /// What answers each requirement it states there.
     requirements: Vec<Answer>,
 }
@@ -96,9 +120,9 @@ struct Asked {
 /// wired to each temporal input of the target, and the target's result
 /// as the entry's").
 pub struct Wiring {
-    /// Each temporal input the eval gives a trace: its parameter's
-    /// name, and the type the input is of.
-    pub inputs: Vec<(String, Type)>,
+    /// Each replay, by the argument's position in the call and the type
+    /// of its input. Several replays can supply one pack (FN-8).
+    pub inputs: Vec<(usize, Type)>,
     /// The type of the target's result, where it has one.
     pub result: Option<Type>,
 }
@@ -145,7 +169,7 @@ fn published_type(cell: &Type) -> Type {
 pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring> {
     let ExprKind::Call {
         callee:
-            Callee::Function {
+            callee @ Callee::Function {
                 module,
                 declaration,
                 generics,
@@ -174,18 +198,23 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
     let parameters = instance
         .as_ref()
         .map_or(&signature.parameters, |(taken, _)| &taken.parameters);
+    let captures = Captures::of(program, callee, signature, arguments);
     let inputs = arguments
         .iter()
-        .filter_map(|argument| {
+        .enumerate()
+        .filter_map(|(position, argument)| {
             let parameter = parameters.get(argument.parameter?)?;
             // Only an argument that is a trace is replayed.
             let payload = trace_payload(&argument.value.ty)?;
+            if let Some(ty) = captures.ty(argument) {
+                return Some((position, ty.clone()));
+            }
             // TYPE-16: a window's delta is "V: the value that arrived",
             // so a trace of one is a trace of V: the window is the
             // parameter's.
             let windowed = matches!(parameter.ty, Type::RollingWindow { .. });
             Some((
-                parameter.name.clone(),
+                position,
                 if known || windowed {
                     parameter.ty.clone()
                 } else {
@@ -263,7 +292,7 @@ fn generic(program: &Program, module: usize, declaration: usize) -> bool {
     };
     let generic = matches!(
         declared.details.get(declaration),
-        Some(Detail::Callable(signature)) if !signature.generics.is_empty()
+        Some(Detail::Callable(signature)) if !signature.generics.is_empty() || signature.parameters.iter().any(|parameter| parameter.pack.is_some())
     );
     generic && matches!(declared.bodies.get(declaration), Some(Some(_)))
 }
@@ -276,6 +305,8 @@ fn key(
     program: &Program,
     (module, declaration): (usize, usize),
     generics: &[GenericArgument],
+    type_packs: &[TypePackArgument],
+    captures: &Captures,
 ) -> Option<Vec<String>> {
     let Some(Detail::Callable(signature)) = program.modules.get(module)?.details.get(declaration)
     else {
@@ -284,10 +315,29 @@ fn key(
     if generics.len() != signature.generics.len() {
         return None;
     }
-    generics
+    let mut key = Vec::new();
+    for (index, (generic, argument)) in signature.generics.iter().zip(generics).enumerate() {
+        if matches!(generic.kind, GenericKind::Pack { .. }) {
+            let pack = type_packs.iter().find(|pack| pack.parameter == index)?;
+            let types = pack
+                .types
+                .iter()
+                .map(|ty| canonical(program, trace_payload(ty).as_ref().unwrap_or(ty)))
+                .collect::<Option<Vec<_>>>()?;
+            key.push(format!("pack[{}]", types.join(", ")));
+        } else {
+            key.push(canonical_argument(program, argument)?);
+        }
+    }
+    if signature
+        .parameters
         .iter()
-        .map(|argument| canonical_argument(program, argument))
-        .collect()
+        .any(|parameter| parameter.pack.is_some())
+    {
+        key.push("arguments".to_string());
+        key.extend(captures.key(program)?);
+    }
+    Some(key)
 }
 
 impl Instances {
@@ -346,6 +396,8 @@ impl Instances {
                         module,
                         declaration,
                         generics: vec![GenericArgument::Type(result)],
+                        type_packs: Vec::new(),
+                        captures: Captures::default(),
                         requirements: Vec::new(),
                     });
                 }
@@ -373,7 +425,13 @@ impl Instances {
             .collect();
         let mut made: BTreeMap<(usize, usize, usize), usize> = BTreeMap::new();
         while let Some((next, root)) = waiting.pop_front() {
-            let Some(key) = key(program, (next.module, next.declaration), &next.generics) else {
+            let Some(key) = key(
+                program,
+                (next.module, next.declaration),
+                &next.generics,
+                &next.type_packs,
+                &next.captures,
+            ) else {
                 continue;
             };
             let found = instances.declared(next.module, next.declaration);
@@ -390,7 +448,7 @@ impl Instances {
                 continue;
             }
             *count += 1;
-            let Some((signature, body)) = program.instance(
+            let Some((mut signature, mut body)) = program.instance(
                 next.module,
                 next.declaration,
                 &next.generics,
@@ -398,6 +456,7 @@ impl Instances {
             ) else {
                 continue;
             };
+            let (slots, pack_use) = next.captures.expand(&mut signature, &mut body);
             // The arguments as part of a name.
             let plain: String = key
                 .join("_")
@@ -433,6 +492,8 @@ impl Instances {
                     suffix,
                     signature,
                     body,
+                    slots,
+                    pack_use,
                 });
         }
         instances
@@ -453,6 +514,8 @@ impl Instances {
                     module,
                     declaration,
                     generics: vec![GenericArgument::Type(ty.clone())],
+                    type_packs: Vec::new(),
+                    captures: Captures::default(),
                     requirements: Vec::new(),
                 })
             };
@@ -465,7 +528,10 @@ impl Instances {
                 .chain(wiring.result.as_ref().and_then(|ty| of(record, ty)))
                 .collect();
         }
-        let ExprKind::Call { callee, .. } = &value.kind else {
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = &value.kind
+        else {
             return Vec::new();
         };
         let (Callee::Function {
@@ -488,10 +554,16 @@ impl Instances {
         if !self.instanced(program, *module, *declaration) {
             return Vec::new();
         }
+        let Some(Detail::Callable(signature)) = program.modules[*module].details.get(*declaration)
+        else {
+            return Vec::new();
+        };
         vec![Asked {
             module: *module,
             declaration: *declaration,
             generics: generics.clone(),
+            type_packs: callee.type_packs().to_vec(),
+            captures: Captures::of(program, callee, signature, arguments),
             requirements: requirements.clone(),
         }]
     }
@@ -538,7 +610,38 @@ impl Instances {
         (module, declaration): (usize, usize),
         generics: &[GenericArgument],
     ) -> Option<&Instance> {
-        let key = key(program, (module, declaration), generics)?;
+        let key = key(
+            program,
+            (module, declaration),
+            generics,
+            &[],
+            &Captures::default(),
+        )?;
+        self.declared(module, declaration)
+            .iter()
+            .find(|instance| instance.key == key)
+    }
+
+    /// The concrete instance this analysed call requests, including any
+    /// captured argument types and keys (FN-8, GEN-10).
+    pub fn find_call(
+        &self,
+        program: &Program,
+        callee: &Callee,
+        arguments: &[Argument],
+    ) -> Option<&Instance> {
+        let (module, declaration) = callee.declaration()?;
+        let Detail::Callable(signature) = program.modules[module].details.get(declaration)? else {
+            return None;
+        };
+        let captures = Captures::of(program, callee, signature, arguments);
+        let key = key(
+            program,
+            (module, declaration),
+            callee.generics(),
+            callee.type_packs(),
+            &captures,
+        )?;
         self.declared(module, declaration)
             .iter()
             .find(|instance| instance.key == key)

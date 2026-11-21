@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use hgl_analyser::hir::{Body, Expr, ExprKind, Raise, walk_statements};
-use hgl_analyser::{Detail, Phase, Program, Signature, Type};
+use hgl_analyser::{Detail, Phase, Program, Type};
 use hgl_lower::instances::Instances;
 
 use super::lifting::{reader_inner, reader_operand};
@@ -48,10 +48,9 @@ impl Readers {
         let mut readers = Self::default();
         let mut collect = |body: &Body| {
             walk_statements(&body.statements, &mut |value| {
-                let Some((key, signature)) = node(program, instances, value) else {
+                let Some((key, reads)) = node_reads(program, instances, value) else {
                     return;
                 };
-                let reads = reads(value, signature);
                 if reads.is_empty() {
                     return;
                 }
@@ -64,7 +63,7 @@ impl Readers {
         for (module, unit) in program.modules.iter().enumerate() {
             for (declaration, body) in unit.bodies.iter().enumerate() {
                 if let Some(body) = body
-                    && matches!(unit.details.get(declaration), Some(Detail::Callable(signature)) if signature.generics.is_empty())
+                    && !instances.instanced(program, module, declaration)
                 {
                     collect(body);
                 }
@@ -98,21 +97,24 @@ impl Readers {
         instances: &Instances,
         value: &Expr,
     ) -> Option<(usize, &[Reading])> {
-        let (key, signature) = node(program, instances, value)?;
-        let reads = reads(value, signature);
+        let (key, reads) = node_reads(program, instances, value)?;
         let variants = self.variants.get(&key)?;
         let number = variants.iter().position(|variant| *variant == reads)?;
         Some((number, &variants[number]))
     }
 }
 
-/// The resolved declaration whose body is a node.
-fn node<'a>(
-    program: &'a Program,
-    instances: &'a Instances,
+/// The resolved node and the reads of its concrete inputs (FN-8,
+/// ERR-12, ERR-15). A `ref` parameter designates the projected endpoint.
+fn node_reads(
+    program: &Program,
+    instances: &Instances,
     value: &Expr,
-) -> Option<(InstanceKey, &'a Signature)> {
-    let ExprKind::Call { callee, .. } = &value.kind else {
+) -> Option<(InstanceKey, Vec<Reading>)> {
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = &value.kind
+    else {
         return None;
     };
     let (module, declaration) = callee.declaration()?;
@@ -129,30 +131,21 @@ fn node<'a>(
     if signature.reference {
         return None;
     }
-    if signature.generics.is_empty() {
-        Some(((module, declaration, None), signature))
+    let instance = if instances.instanced(program, module, declaration) {
+        Some(instances.find_call(program, callee, arguments)?)
     } else {
-        let instance = instances.find(program, (module, declaration), callee.generics())?;
-        Some((
-            (module, declaration, Some(instance.suffix.clone())),
-            &instance.signature,
-        ))
-    }
-}
-
-/// A direct node reads these operands in its handlers. A `ref`
-/// parameter instead designates the endpoint of the projected port.
-fn reads(value: &Expr, signature: &Signature) -> Vec<Reading> {
-    let ExprKind::Call { arguments, .. } = &value.kind else {
-        return Vec::new();
+        None
     };
-    arguments
+    let signature = instance.map_or(signature, |instance| &instance.signature);
+    let reads = arguments
         .iter()
         .filter_map(|argument| {
-            let parameter = argument.parameter?;
+            let parameter = instance.map_or_else(
+                || argument.parameter.filter(|_| argument.pack.is_none()),
+                |instance| instance.parameter(argument),
+            )?;
             let declared = signature.parameters.get(parameter)?;
-            if argument.pack.is_some()
-                || declared.constant
+            if declared.constant
                 || declared.reference
                 || !direct_read(&argument.value.ty)
                 || reader_inner(&argument.value).is_none()
@@ -165,7 +158,9 @@ fn reads(value: &Expr, signature: &Signature) -> Vec<Reading> {
                 form: argument.value.clone(),
             })
         })
-        .collect()
+        .collect();
+    let suffix = instance.map(|instance| instance.suffix.clone());
+    Some(((module, declaration, suffix), reads))
 }
 
 /// Whole publications and their deltas can be read directly for
