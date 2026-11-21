@@ -219,7 +219,13 @@ def verify(bundle, forbidden, target):
         for candidate in (path, path.resolve())
         if str(candidate) not in ("", "/")
     }
-    scratch_path = re.compile(rb"(?:/private)?/var/folders/[^\s\x00]+|/(?:Users|home)/[^\s\x00]+")
+    # Ignore URL paths inside license notices, such as crates.io/crates/home.
+    path_start = rb"(?:file://|(?<![\w./~%-]))"
+    scratch_path = re.compile(
+        path_start + rb"(?:(?:/private)?/var/folders/|/(?:Users|home|root)/|/tmp/hgl-release\.)[^\s\x00]+"
+    )
+    local_path = re.compile(path_start + rb"(?:" + b"|".join(map(re.escape, sorted(prefixes)))
+                            + rb")(?![\w.~-])") if prefixes else None
     for path in bundle.rglob("*"):
         if path.is_symlink():
             if path.readlink().is_absolute() or not path.resolve(strict=True).is_relative_to(bundle):
@@ -227,7 +233,7 @@ def verify(bundle, forbidden, target):
             continue
         if path.is_file():
             data = path.read_bytes()
-            if any(prefix in data for prefix in prefixes) or scratch_path.search(data):
+            if scratch_path.search(data) or (local_path and local_path.search(data)):
                 raise ValueError(f"build path in {path.relative_to(bundle)}")
             if path.suffix in RELEASE_METADATA:
                 verify_metadata_paths(bundle, path, data)
