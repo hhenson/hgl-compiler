@@ -136,7 +136,7 @@ transpiler: planned
 
 analyser: done
 
-- A `yield` time is a `duration` or `datetime` (`type.mismatch` for other types). A nullable or fallible time is read as its payload (ERR-12, ERR-15) and raises a failure in the source (ERR-5).
+- A `yield` time is a `duration` or `datetime` (`type.mismatch` for other types). A nullable or fallible time is read as its payload (ERR-12, ERR-15). Any failure is raised in the source (ERR-5).
 
 transpiler: planned
 
