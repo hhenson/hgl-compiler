@@ -1306,6 +1306,34 @@ fn contextual_result_reads_run_on_the_sdk() {
     assert_eq!(stderr.lines().last(), Some(expected.as_str()), "{stderr}");
 }
 
+/// ERR-12 and FN-11: a null publication fails a required input
+/// before handler or lifted-call admission, including captured pack slots.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn unread_null_inputs_fail_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("unread_null_input");
+    let file = write(
+        &root,
+        "demo.unread_null_input.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.unread_null_input.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// Lifting and capture on the SDK (`demo.lifting`): lifted calls binding
 /// defaults, a sink, an eval of a value function, captures of a node, a
 /// graph and a lifted call, a write that stands before a failure, a `?` in
