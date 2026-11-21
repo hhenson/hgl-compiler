@@ -10,9 +10,9 @@ use super::Typer;
 use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
-use super::evals::{holds_trace, publications};
+use super::evals::{holds_trace, publications, trace_input_type, trace_pack_type};
 use super::expressions::{holds_block, takes_its_type};
-use super::fit::{not_null, whole};
+use super::fit::{not_null, open, whole};
 use super::forms::Taken;
 use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
@@ -476,6 +476,34 @@ impl<'a> Typer<'a> {
         (!rejected).then_some((found, faulty))
     }
 
+    /// An unwritten type pack takes each trace's type from its own
+    /// cells. Fit the cells once that type is found, as for the traces
+    /// of an eval with fixed parameters (FN-8, TST-5).
+    fn infer_trace_pack_argument(
+        &mut self,
+        index: usize,
+        node: &SyntaxNode,
+        slot: &Slot,
+    ) -> hir::Argument {
+        let mark = self.mark();
+        let before = self.diagnostics.len();
+        let argument = self.argument(Some(index), node, Some((slot, true)), Takes::Parameters);
+        if self.diagnostics.len() == before
+            && matches!(argument.value.kind, hir::ExprKind::Trace(_))
+            && let Some(ty) =
+                trace_pack_type(&argument.value.ty).filter(|ty| whole(ty) && !open(ty))
+            && self.may_reread()
+        {
+            let typed = Slot {
+                ty: trace_input_type(ty.clone()),
+                ..*slot
+            };
+            self.take_back(mark, false);
+            return self.argument(Some(index), node, Some((&typed, true)), Takes::Parameters);
+        }
+        argument
+    }
+
     /// Reads the arguments of a call into places whose types name
     /// generic parameters, finding what those stand for from the values
     /// given (GEN-2). `found` is what is known of each parameter
@@ -741,11 +769,22 @@ impl<'a> Typer<'a> {
                 let Some(index) = *slot else {
                     return self.argument(None, node, None, takes);
                 };
-                let ty = written_pack
+                let pattern = patterns[index];
+                let traced = matches!(pattern, Type::Trace { .. });
+                let resolved_type = |ty| placed(substitute_within(ty, &map), &own);
+                let written_type = written_pack
                     .filter(|(generic, _)| slots[index].type_pack == Some(*generic))
-                    .and_then(|(_, types)| types.get(pack.as_ref()?.0))
-                    .cloned()
-                    .unwrap_or_else(|| placed(substitute_within(patterns[index], &map), &own));
+                    .and_then(|(_, types)| types.get(pack.as_ref()?.0));
+                let ty = match (written_type, pattern) {
+                    (Some(ty), Type::Trace { .. }) => trace_input_type(ty.clone()),
+                    (Some(ty), _) => ty.clone(),
+                    // TST-5: form the publication type after a homogeneous
+                    // or heterogeneous pack's input type is substituted.
+                    (None, Type::Trace { cell, .. }) if pack.is_some() && names_parameter(cell) => {
+                        trace_input_type(resolved_type(cell))
+                    }
+                    (None, _) => resolved_type(pattern),
+                };
                 let slot = Slot { ty, ..slots[index] };
                 // A place whose type names a parameter nothing resolved
                 // is not known, and where the call is settled it never
@@ -753,16 +792,14 @@ impl<'a> Typer<'a> {
                 // nothing is expected, so that what it leaves unresolved
                 // itself is reported: the `repeat(1)` of
                 // `same(repeat(1), repeat(2))`. `null` and `.member`
-                // have no reading of their own.
+                // have no reading of their own. A captured eval trace
+                // is a trace even when its cells give no type (TST-5).
                 let placeless = *settled
                     && !matches!(slot.ty, Type::Function(_))
                     && slot.type_pack.is_none()
+                    && !(traced && pack.is_some())
                     && !takes_its_type(node)
                     && mentions(patterns[index], &unfound);
-                // True for a place that is a trace an eval gives
-                // (TST-5), and not one a generic parameter was made by
-                // what it was given.
-                let traced = matches!(patterns[index], Type::Trace { .. });
                 let mut argument = match values[position].take() {
                     None if placeless => hir::Argument {
                         parameter: Some(index),
@@ -802,6 +839,9 @@ impl<'a> Typer<'a> {
                             value,
                         }
                     }
+                    None if traced && written_type.is_none() && slot.type_pack.is_some() => {
+                        self.infer_trace_pack_argument(index, node, &slot)
+                    }
                     None => self.argument(Some(index), node, Some((&slot, traced)), takes),
                 };
                 argument.pack = pack.as_ref().map(|(_, key)| key.clone());
@@ -809,7 +849,15 @@ impl<'a> Typer<'a> {
             })
             .collect();
         let unknown = assigned.iter().zip(&arguments).any(|(assigned, argument)| {
-            !takes_its_type(&assigned.value) && !whole(&argument.value.ty)
+            // A packed trace with no publications gives no evidence for
+            // inference. GEN-8 reports an unresolved generic at the call.
+            let empty_trace = argument.pack.is_some()
+                && assigned
+                    .slot
+                    .is_some_and(|index| matches!(patterns[index], Type::Trace { .. }))
+                && matches!(&argument.value.kind, hir::ExprKind::Trace(cells)
+                    if cells.iter().all(|cell| cell.value.is_none()));
+            !empty_trace && !takes_its_type(&assigned.value) && !whole(&argument.value.ty)
         });
         Inferred {
             arguments,

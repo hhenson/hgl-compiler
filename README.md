@@ -93,8 +93,10 @@ and prints the publications recorded before it stopped.
 `--target cpp` is the one target, and what `hgl emit` and `hgl run`
 use when none is named. It builds against hgraph's C++ SDK, whose
 install prefix `HGL_HGRAPH_SDK` names and whose dependency prefix
-`HGL_HGRAPH_DEPS` names, with GCC 15 or later on Linux or Apple clang 21
-or later on macOS, and `ninja`; see [docs/architecture.md](docs/architecture.md#cpp).
+`HGL_HGRAPH_DEPS` names. The [macOS release bundle](docs/releases.md)
+provides both prefixes. The target builds with GCC 15 or later on Linux
+or Apple clang 21 or later on macOS, and uses CMake and Ninja. See
+[docs/architecture.md](docs/architecture.md#cpp).
 `--target` takes no other value. `--target unknown` is refused
 before anything is read, with `error: invalid value 'unknown' for
 '--target <TARGET>'` and the values it takes, and status 2.

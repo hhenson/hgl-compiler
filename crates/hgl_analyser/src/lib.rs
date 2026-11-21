@@ -285,6 +285,8 @@ pub mod codes {
     pub const SOURCE_WHEN: &str = "source.when";
     /// A temporal parameter of a source (SOURCE-1).
     pub const SOURCE_INPUT: &str = "source.input";
+    /// A `yield` time of a type other than `duration` or `datetime` (SOURCE-2).
+    pub const YIELD_TIME_TYPE: &str = "yield.time_type";
     /// `out` used in `start` or written in `stop`, or a `return` with a
     /// value in either (TIME-7).
     pub const OUT_LIFECYCLE: &str = "out.lifecycle";

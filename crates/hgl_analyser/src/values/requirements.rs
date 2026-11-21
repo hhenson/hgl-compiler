@@ -926,7 +926,7 @@ impl<'a> Typer<'a> {
         }
         // GEN-5: "Select exactly one most-specific admitted candidate."
         Some(match (selected.pop(), selected.is_empty()) {
-            (Some(chosen), true) => Answered::Selected {
+            (Some(chosen), true) if !chosen.ambiguous_reads => Answered::Selected {
                 module: chosen.module,
                 declaration: chosen.declaration,
                 generics: chosen.generics,

@@ -213,6 +213,28 @@ test phase_failures {
     assert raises("convert.invalid") { eval from_build(input: -1) }
 }
 
+# SOURCE-2, ERR-12, ERR-15: a timestamp or delay is read before the payload.
+const fn checked_delay(admitted: bool) -> result<duration, error> {
+    if admitted { return ok(2us) }
+    return err(error(message: "invalid delay", code: "convert.invalid"))
+}
+
+fn yield_after(const admitted: bool, const divisor: i64) -> i64 {
+    yield checked_delay(admitted): 12 // divisor
+}
+
+fn yield_at(const target: datetime?) -> i64 {
+    yield target: 2
+}
+
+test contextual_yield_times {
+    let start_time = @2026-01-05T09:30:00Z
+    assert eval yield_after(admitted: true, divisor: 3) == [_, _, 4]
+    assert eval{start: start_time} yield_at(target: start_time) == [2]
+    assert raises("convert.invalid") { eval yield_after(admitted: false, divisor: 0) }
+    assert raises("value.null") { eval yield_at() }
+}
+
 # ERR-6: held null is an ok of null, missing is an err, and a
 # required read of a non-nullable dictionary value raises absence.
 test dictionary_forms {

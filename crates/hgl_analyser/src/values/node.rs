@@ -8,14 +8,14 @@ use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::endpoints::endpoint_argument;
-use super::fit::{accepts_float, is_integer_literal, open};
+use super::fit::{accepts_float, is_integer_literal, open, whole};
 use super::{Fact, Typer, children};
 use crate::hir::{
     self, Body, ConfigEntry, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt, ValueCategory,
 };
 use crate::program::{Binding, LocalKind, RUN_CONFIG};
 use crate::syntax::{child, leads_its_test, tokens};
-use crate::types::{Detail, Type};
+use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error, local_error, warning};
 
 impl<'a> Typer<'a> {
@@ -132,14 +132,13 @@ impl<'a> Typer<'a> {
 
     /// `yield time: value` (SOURCE-1): it "writes its output and sets
     /// its next evaluation". The value is of the source's result type.
-    /// What the time may be is proposed (SOURCE-2), and is not judged.
     pub(super) fn yield_statement(&mut self, node: &SyntaxNode) -> Stmt {
         let at = self.at(node);
         let mut parts = node.children();
         let (Some(time), Some(value)) = (parts.next(), parts.next()) else {
             return self.unread(node);
         };
-        let time = self.expression(&time, None);
+        let time = self.yield_time(&time);
         let result = self.signature.result.clone();
         let value = match &result {
             // TIME-7: "A `ref` result takes no value", and a source has
@@ -153,6 +152,35 @@ impl<'a> Typer<'a> {
             None => self.expression(&value, Some(&Type::Unknown)),
         };
         Stmt::Yield { time, value, at }
+    }
+
+    /// SOURCE-2: "A duration is relative to current evaluation time; a
+    /// datetime is absolute." Either type is taken, reading a result
+    /// or nullable's payload as that type (ERR-12, ERR-15).
+    fn yield_time(&mut self, node: &SyntaxNode) -> Expr {
+        let time = self.expression(node, None);
+        if let Some(taken) = [Scalar::Duration, Scalar::Datetime]
+            .into_iter()
+            .find_map(|scalar| self.taken(&Type::Scalar(scalar), &time.ty))
+        {
+            return self.take(time, taken);
+        }
+        if whole(&time.ty)
+            && !open(&time.ty)
+            && !matches!(time.ty, Type::Scalar(Scalar::Duration | Scalar::Datetime))
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::YIELD_TIME_TYPE,
+                time.at,
+                format!(
+                    "this is `{}`, and a yield time is a `duration` or a `datetime`",
+                    time.ty
+                ),
+                "SOURCE-2",
+            ));
+        }
+        time
     }
 
     /// `inject name, ...`: each name is a capability of the node

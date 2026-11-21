@@ -90,3 +90,13 @@ test lifted_packs {
     assert eval via_lifting(first: [1, 8], second: [_, 5], flag: [true, false]) == [_, 36]
     assert eval via_nullable_lifting(first: [1, 2], second: [_, 3]) == [15, 15]
 }
+
+# TST-5, FN-8: eval replays each captured argument to its own input.
+test direct_eval_packs {
+    assert eval node_homogeneous([1, 8], [_, 5]) == [_, 21]
+    assert eval node_different([1, 8], [_, true]) == [_, 22]
+    assert eval node_different<i64, bool>([1, 8], [_, true]) == [_, 22]
+    assert eval node_named(right: [1, 8], left: [_, true]) == [_, 23]
+    assert eval node_stateful(30, [1, 2, 3], [_, 4, _]) == [_, 31, 32]
+    assert eval value_homogeneous([1, 8], [_, 5]) == [_, 11]
+}

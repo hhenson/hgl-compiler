@@ -10,7 +10,8 @@ use hgl_source::{FileId, Span};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
-use super::fit::{not_null, open};
+use super::evals::{trace_input_type, trace_pack_type};
+use super::fit::{not_null, open, whole};
 use super::inference::{
     ExplicitGenerics, Inferred, Places, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
@@ -441,9 +442,6 @@ impl<'a> Typer<'a> {
     /// widened to an `f64` so decided (EXPR-5), and another argument of
     /// another type rejects." So `let real: f64 = same(1, 2)` is an
     /// `f64`.
-    ///
-    /// Not read here: a function with a type pack or a pack parameter.
-    /// A type of it that names a generic parameter is then not known.
     pub(super) fn call_function(
         &mut self,
         name: &SyntaxToken,
@@ -577,21 +575,10 @@ impl<'a> Typer<'a> {
         // parameter's type T". A type that names a generic parameter
         // stands for its cells until they say what it is.
         let taken = |parameter: &crate::types::Parameter, ty: Type| {
-            if !evaluating
-                || parameter.constant
-                || parameter.pack.is_some()
-                || matches!(ty, Type::Function(_))
-            {
-                return ty;
-            }
-            let cell = if names_parameter(&ty) || matches!(ty, Type::Unknown) {
-                ty
+            if evaluating && !parameter.constant && !matches!(ty, Type::Function(_)) {
+                trace_input_type(ty)
             } else {
-                Type::trace_cell(ty)
-            };
-            Type::Trace {
-                cell: Box::new(cell),
-                style: None,
+                ty
             }
         };
         // TST-16: "A trace given to a `const fn` is an ordinary value
@@ -760,6 +747,11 @@ impl<'a> Typer<'a> {
                                 .and_then(|pack| pack.types.get(position))
                                 .cloned()
                                 .unwrap_or_else(|| {
+                                    if evaluating {
+                                        return trace_pack_type(&argument.value.ty)
+                                            .cloned()
+                                            .unwrap_or(Type::Unknown);
+                                    }
                                     self.inferred_from(listed, &argument.value, Takes::Parameters)
                                 })
                         })
@@ -788,7 +780,12 @@ impl<'a> Typer<'a> {
             .iter()
             .zip(&found)
             .zip(&inferred_packs)
-            .filter(|((_, found), pack)| found.is_none() && pack.is_none())
+            .filter(|((_, found), pack)| {
+                found.is_none()
+                    && pack
+                        .as_ref()
+                        .is_none_or(|types| evaluating && types.iter().any(|ty| !whole(ty)))
+            })
             .map(|((generic, _), _)| generic)
             .filter(|generic| {
                 !place_unknown
