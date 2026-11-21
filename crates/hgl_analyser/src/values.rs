@@ -225,12 +225,6 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 .test(test.integration);
             test_bodies.push(body);
         }
-        // RUN-1: an application's run statement. It is no declaration
-        // either, and is read as a graph with no parameter is.
-        let mut run_body = module.run.as_ref().and_then(|run| {
-            let stand_in = Declaration::stand_in("run", run.at, run.file, &run.syntax, false);
-            Typer::new(program, module, &stand_in, &empty, found, diagnostics).run_statement()
-        });
         // UNIT-14: the statements an application sets its run's store
         // with are no declaration either. They are read together, as
         // the statements of one block are.
@@ -238,6 +232,13 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             let stand_in =
                 Declaration::stand_in("store", first.at, first.file, &first.syntax, false);
             Typer::new(program, module, &stand_in, &empty, found, diagnostics).store(&module.store)
+        });
+        // RUN-1, RUN-6: an application's run statement reads the
+        // run configuration injected in the statements before it.
+        let mut run_body = module.run.as_ref().and_then(|run| {
+            let stand_in = Declaration::stand_in("run", run.at, run.file, &run.syntax, false);
+            Typer::new(program, module, &stand_in, &empty, found, diagnostics)
+                .run_statement(store_body.as_ref())
         });
         // UNIT-8: "Defaults remain required-constant/cold expressions
         // checked against the expected type. Any parameter but a pack
@@ -289,11 +290,10 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         {
             lifting::record(program, body, false);
         }
-        for value in run_body
-            .iter_mut()
-            .map(|run| &mut run.call)
-            .chain(defaults.iter_mut().flatten().flatten())
-        {
+        if let Some(run) = &mut run_body {
+            lifting::record_run(program, run);
+        }
+        for value in defaults.iter_mut().flatten().flatten() {
             lifting::record_value(program, value);
         }
         program.modules[index].bodies = bodies;

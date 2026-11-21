@@ -223,10 +223,28 @@ impl Resolver<'_> {
             self.children(&test.syntax);
             self.configures = false;
         }
-        // RUN-1: the names of an application's run statement are its
-        // unit's: what it declares and imports.
+        // UNIT-14: the statements before the run share a block. RUN-6
+        // carries its run_config binding into the run statement.
+        let configuration = if let Some(first) = module.store.first() {
+            self.enter(first.file, false);
+            self.configures = true;
+            self.frames.push(Frame::default());
+            for statement in &module.store {
+                self.children(&statement.syntax);
+            }
+            self.configures = false;
+            self.frames
+                .pop()
+                .and_then(|mut frame| frame.bound.remove_entry(RUN_CONFIG))
+        } else {
+            None
+        };
         if let Some(run) = &module.run {
             self.enter(run.file, false);
+            self.frames.push(Frame {
+                bound: configuration.into_iter().collect(),
+                ..Frame::default()
+            });
             // RUN-6: a configuration on an application's run statement
             // rejects (`run.configuration`), and what it holds is not read
             // (ERR-9): only the statement's call is resolved.
@@ -237,19 +255,7 @@ impl Resolver<'_> {
                     }
                 }
             }
-        }
-        // UNIT-14: the statements that set the run's store are read as
-        // one block is: `inject global_state` binds the name for the
-        // calls after it.
-        if let Some(first) = module.store.first() {
-            self.enter(first.file, false);
-            self.configures = true;
-            self.frames.push(Frame::default());
-            for statement in &module.store {
-                self.children(&statement.syntax);
-            }
             self.frames.pop();
-            self.configures = false;
         }
         for (file, node) in &module.instantiations {
             self.enter(*file, false);

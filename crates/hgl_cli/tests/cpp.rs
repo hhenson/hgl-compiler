@@ -1079,6 +1079,57 @@ fn lifting_code_runs_on_the_sdk() {
     );
 }
 
+/// RUN-6, UNIT-14: an entry receives the supplied configuration's start;
+/// an omitted start is still null when the argument is evaluated.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn an_application_entry_reads_the_run_configuration() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("entry_run_config");
+    let app = write(
+        &root,
+        "demo.entry_config.hgl",
+        concat!(
+            "application demo.entry_config\n",
+            "fn chosen(const supplied: datetime?) -> bool {\n",
+            "    yield 0s: supplied == null\n",
+            "}\n",
+            "inject run_config\n",
+            "eval chosen(supplied: run_config.start)\n",
+        ),
+    );
+    let omitted = hgl_in(&["run", &app, "--target", "cpp"], &[], &[]);
+    assert_eq!(omitted.status.code(), Some(0), "{}", text(&omitted.stderr));
+    assert_eq!(
+        text(&omitted.stdout),
+        "1970-01-01T00:00:00.000001Z  true\nran demo.entry_config on cpp: 1 publication\n"
+    );
+    let supplied = hgl_in(
+        &[
+            "run",
+            &app,
+            "--target",
+            "cpp",
+            "--config",
+            "start=@2026-01-02T00:00:00Z",
+        ],
+        &[],
+        &[],
+    );
+    assert_eq!(
+        supplied.status.code(),
+        Some(0),
+        "{}",
+        text(&supplied.stderr)
+    );
+    assert_eq!(
+        text(&supplied.stdout),
+        "2026-01-02T00:00:00Z  false\nran demo.entry_config on cpp: 1 publication\n"
+    );
+}
+
 /// Control flow over connections on the SDK (`demo.control`): each
 /// branch of an `if` or a `switch` over a connection a child graph that
 /// hgraph's `compiled::switch_` runs while it is selected, started fresh

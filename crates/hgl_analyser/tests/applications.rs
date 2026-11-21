@@ -340,13 +340,14 @@ fn running(run: &str) -> common::Checked {
                 "export const fn fixed() -> i64 => 1\n",
                 "export struct Held { value: i64 }\n",
                 "export fn paced(const every: i64) -> i64 => every\n",
+                "export fn chosen(const supplied: datetime?) -> bool => supplied == null\n",
             ),
         ),
         (
             "live.hgl",
             &format!(
                 "application app.feed.live\n\nuse app.feed::{{beats}}\n\
-                 use app.other::{{scaled, fixed, Held, paced}}\n{run}\n"
+                 use app.other::{{scaled, fixed, Held, paced, chosen}}\n{run}\n"
             ),
         ),
     ])
@@ -417,6 +418,37 @@ fn a_run_statement_calls_an_entry_under_a_configuration() {
             .unwrap()
             .run_body
             .is_none()
+    );
+}
+
+/// RUN-6 and UNIT-14: entry arguments see the typed configuration
+/// binding after its injection.
+#[test]
+fn entry_arguments_read_the_injected_run_configuration() {
+    let checked = running("inject run_config\neval chosen(supplied: run_config.start)");
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let module = checked.program.module("app.feed.live").unwrap();
+    let run = module.run_body.as_ref().unwrap();
+    let ExprKind::Call { arguments, .. } = &run.call.kind else {
+        panic!("the run statement calls the entry");
+    };
+    let value = &arguments[0].value;
+    assert_eq!(value.ty.to_string(), "datetime?");
+    let ExprKind::Field { base, .. } = &value.kind else {
+        panic!("the argument reads a configuration property");
+    };
+    let ExprKind::Local(local) = base.kind else {
+        panic!("the property reads the injected local");
+    };
+    let store = module.store_body.as_ref().unwrap();
+    assert_eq!(run.locals[local], store.locals[0]);
+
+    let missing = running("eval chosen(supplied: run_config.start)");
+    assert_eq!(
+        missing.summary(),
+        ["live.hgl:5:23 name/name.unknown UNIT-10"],
+        "{}",
+        missing.report
     );
 }
 

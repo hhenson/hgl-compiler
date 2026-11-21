@@ -667,9 +667,29 @@ impl<'a> Typer<'a> {
     /// entry is its temporal definition (`evaluated`), and what it is
     /// given is read as value code is: a `const` parameter takes a
     /// value, and a temporal call there is `call.role`.
-    pub(super) fn run_statement(mut self) -> Option<Run> {
+    pub(super) fn run_statement(mut self, store: Option<&Body>) -> Option<Run> {
         self.graph = false;
         self.value_code = true;
+        // RUN-6: the resolver exposes the application's injection to
+        // the entry arguments. Give the same declaration its typed local.
+        if let Some(configuration) = store.and_then(|body| {
+            body.statements
+                .iter()
+                .find_map(|statement| match statement {
+                    Stmt::Inject { local, .. } if body.locals[*local].name == RUN_CONFIG => {
+                        Some(&body.locals[*local])
+                    }
+                    _ => None,
+                })
+        }) {
+            self.declare(
+                RUN_CONFIG,
+                configuration.at,
+                LocalKind::Inject,
+                configuration.ty.clone(),
+                true,
+            );
+        }
         let form = self.declaration.syntax.children().next()?;
         let at = self.at(&form);
         let real_time = form.kind() == SyntaxKind::RunExpr;
@@ -757,6 +777,7 @@ impl<'a> Typer<'a> {
         };
         Some(Run {
             real_time,
+            locals: self.locals,
             call,
             at,
         })

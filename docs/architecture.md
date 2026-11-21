@@ -578,8 +578,9 @@ temporal function with no temporal parameters; anything else is
 gives no configuration (`run.configuration`): what starts the
 application supplies it, over the defaults of an `inject
 run_config{...}` among the statements before it (RUN-6), whose entries
-are an eval's and are the `Stmt::Inject` of `Module::store_body`. A
-value given to `put` there may read `run_config`, and no other
+are an eval's and are the `Stmt::Inject` of `Module::store_body`.
+Store values and the entry's arguments may read this `run_config`. The
+entry's arguments carry its binding in `Run::locals` and read no other
 capability.
 
 | Check | Rule | Code |
