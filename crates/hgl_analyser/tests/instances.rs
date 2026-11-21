@@ -4,7 +4,7 @@
 mod common;
 
 use common::{Checked, body, module};
-use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Value, walk_statements};
+use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Raise, Value, walk_statements};
 use hgl_analyser::{Argument, Detail, Signature};
 
 /// No lines.
@@ -149,6 +149,45 @@ fn an_instance_has_the_calls_types_and_candidates() {
     let (taken, instance) = first_instance(&checked, "texts");
     assert_eq!(signature(&taken), "(a: str, b: str) -> str");
     assert_eq!(called(&checked, &instance), ["add_(str, str)"]);
+}
+
+#[test]
+fn a_required_call_reads_configuration_as_its_selected_parameter() {
+    // GEN-16, EXPR-5, ERR-5: the selected candidate reads the result's
+    // value, and its failure is returned by the function doing the read.
+    let checked = module(
+        "operator choose<T>{fallback: result<i64, error> = ok(0)}(value: T) -> i64
+impl const fn choose{fallback: i64}(value: bool) -> i64 => fallback
+const fn forward<T>(value: T, fallback: result<i64, error>) -> result<i64, error> requires choose(T) -> i64 {
+    return ok(choose{fallback: fallback}(value))
+}
+const fn use_it(fallback: result<i64, error>) -> result<i64, error> => forward(false, fallback)",
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let (_, instance) = first_instance(&checked, "use_it");
+    let mut found = false;
+    walk_statements(&instance.statements, &mut |value| {
+        let ExprKind::Call {
+            callee: Callee::Candidate { .. },
+            arguments,
+            ..
+        } = &value.kind
+        else {
+            return;
+        };
+        let configuration = arguments
+            .iter()
+            .find(|argument| argument.parameter == Some(0));
+        assert!(matches!(
+            configuration.map(|argument| &argument.value.kind),
+            Some(ExprKind::Raised {
+                raise: Raise::Return,
+                ..
+            })
+        ));
+        found = true;
+    });
+    assert!(found);
 }
 
 /// GEN-7: a call in a generic body is answered by what that body's

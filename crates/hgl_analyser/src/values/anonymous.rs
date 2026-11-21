@@ -176,6 +176,7 @@ impl Typer<'_> {
         let slots: Vec<_> = parameters
             .iter()
             .map(|(name, ty)| Slot {
+                configuration: false,
                 name: name.text(),
                 ty: ty.clone().unwrap_or(Type::Unknown),
                 // UNIT-8: an omitted argument of a written nullable type is null.

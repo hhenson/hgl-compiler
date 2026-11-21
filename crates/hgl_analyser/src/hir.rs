@@ -896,6 +896,18 @@ pub enum Raise {
     Reader,
 }
 
+/// Where a required operator call reads its configuration if the selected
+/// parameter takes a result's or a nullable value's payload (EXPR-5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigurationRead {
+    /// Where a read raises an error.
+    pub raise: Raise,
+    /// The enclosing function's result, for propagation (ERR-5).
+    pub result: Option<Type>,
+    /// Whether the result belongs to an anonymous function.
+    pub anonymous: bool,
+}
+
 /// What a call calls.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Callee {
@@ -925,6 +937,9 @@ pub enum Callee {
         /// `Program::modules`, and its position in that module's
         /// `declarations`.
         operator: (usize, usize),
+        /// The operator's own generic arguments, used to read inherited
+        /// configuration defaults in its defining scope (GEN-6, UNIT-7).
+        operator_generics: Vec<GenericArgument>,
         /// The position of the candidate's module in
         /// `Program::modules`.
         module: usize,
@@ -952,10 +967,15 @@ pub enum Callee {
         /// `Program::modules`, and its position in that module's
         /// `declarations`.
         operator: (usize, usize),
+        /// The operator's own generic arguments, for inherited defaults.
+        operator_generics: Vec<GenericArgument>,
         /// The requirement of the enclosing declaration the call is:
         /// its position among the constraint calls that hold wherever
         /// the declaration's `requires` does, in the order written.
         requirement: usize,
+        /// The context of supplied configuration, fitted to the selected
+        /// candidate's parameters once the requirement is answered.
+        configuration: Option<Box<ConfigurationRead>>,
     },
     /// A call of a function parameter, or that parameter forwarded as
     /// a compile-time argument (FN-17).

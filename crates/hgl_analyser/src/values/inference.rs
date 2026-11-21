@@ -95,14 +95,22 @@ impl<'a> Typer<'a> {
     pub(super) fn named_generics(
         &mut self,
         list: &SyntaxNode,
-        generics: &[GenericParameter],
+        signature: &crate::types::Signature,
         found: &mut [Option<Argument>],
     ) -> Vec<(usize, SyntaxNode)> {
+        let generics = &signature.generics;
         let mut named = Vec::new();
-        for (name, value) in self.call_arguments(list) {
+        for (_, name, value) in self.call_entries(list) {
             let Some(name) = name else {
                 continue;
             };
+            if signature
+                .parameters
+                .iter()
+                .any(|parameter| parameter.configuration && parameter.name == name.text())
+            {
+                continue;
+            }
             let index = generics.iter().position(|generic| {
                 matches!(generic.kind, GenericKind::Value(_)) && generic.name == name.text()
             });

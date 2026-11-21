@@ -32,12 +32,14 @@
 //! types (GEN-7: "Each instance then selects its own candidate";
 //! [`crate::values::Selecting`]).
 
-use hgl_diagnostics::Location;
+use std::cell::RefCell;
+
+use hgl_diagnostics::{Diagnostics, Location};
 
 use crate::declared::substitute_within;
 use crate::hir::{
-    AnonymousFunction, Answer, Body, Callee, Expr, ExprKind, ValueCategory, walk_statements,
-    walk_statements_mut,
+    AnonymousFunction, Answer, Body, Callee, ConfigurationRead, Expr, ExprKind, Stmt,
+    ValueCategory, walk_statements, walk_statements_mut,
 };
 use crate::program::{LocalKind, Phase, Program, Role};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
@@ -53,9 +55,110 @@ struct InstanceArguments<'a> {
     generics: &'a [Argument],
     types: &'a Map<'a>,
     requirements: &'a [Answer],
+    diagnostics: &'a RefCell<Diagnostics>,
 }
 
 impl Program {
+    /// The operator's configuration default inherited by a candidate's parameter
+    /// at `slot` (GEN-6). Candidate-only configuration has its own default.
+    pub fn inherited_configuration_default(&self, callee: &Callee, slot: usize) -> Option<&Expr> {
+        let Callee::Candidate {
+            operator,
+            module,
+            declaration,
+            ..
+        } = callee
+        else {
+            return None;
+        };
+        let owner = self.modules.get(operator.0)?;
+        let Detail::Callable(public) = owner.details.get(operator.1)? else {
+            return None;
+        };
+        let Detail::Callable(candidate) = self.modules.get(*module)?.details.get(*declaration)?
+        else {
+            return None;
+        };
+        let index = public
+            .candidate_parameters(candidate)
+            .position(|index| index == Some(slot))?;
+        if !public.parameters[index].configuration {
+            return None;
+        }
+        owner.defaults.get(operator.1)?.get(index)?.as_ref()
+    }
+
+    /// Places the operator's generic arguments in a checked configuration default.
+    /// Its declaration references still name the operator's defining scope (UNIT-7).
+    /// The selected configuration parameter gives the default its type (UNIT-8).
+    pub fn specialize_operator_default(
+        &self,
+        default: &Expr,
+        operator: (usize, usize),
+        generics: &[Argument],
+        parameter: &Parameter,
+        diagnostics: &mut Diagnostics,
+    ) -> Expr {
+        let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
+            return default.clone();
+        };
+        let types: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(generics)
+            .collect();
+        let mut uses = Vec::new();
+        default.walk(&mut |value| {
+            if let ExprKind::Call {
+                callee: Callee::Required { requirement, .. },
+                ..
+            } = &value.kind
+            {
+                uses.push((*requirement, value.at));
+            }
+        });
+        let reports = RefCell::new(Diagnostics::new());
+        let requirements = if uses.is_empty() {
+            Vec::new()
+        } else {
+            crate::values::operator_default_answers(
+                self,
+                operator,
+                generics,
+                &uses,
+                &mut reports.borrow_mut(),
+            )
+        };
+        let instance = InstanceArguments {
+            declaration: operator,
+            generics,
+            types: &types,
+            requirements: &requirements,
+            diagnostics: &reports,
+        };
+        // UNIT-7: a default has no formal parameters in scope. Run the
+        // same membership-based selection here as in a specialized body.
+        let mut body = Body {
+            locals: Vec::new(),
+            statements: vec![Stmt::Expr(default.clone())],
+        };
+        self.place_body(&mut body, &instance, &[]);
+        let Some(Stmt::Expr(default)) = body.statements.pop() else {
+            unreachable!("the default is a single expression");
+        };
+        let reports = reports.into_inner();
+        for report in reports.as_slice() {
+            if !diagnostics.as_slice().contains(report) {
+                diagnostics.emit(report.clone());
+            }
+        }
+        if reports.has_errors() {
+            return default;
+        }
+        crate::values::fit_operator_default(self, operator, default, parameter, diagnostics)
+    }
+
     /// The signature and the body of `declaration` of `module` as one
     /// call takes it: `None` for a declaration that is no function, or
     /// has no body.
@@ -93,6 +196,25 @@ impl Program {
         requirements: &[Answer],
         functions: &[(usize, Callee)],
     ) -> Option<(Signature, Body)> {
+        self.checked_instance(
+            (module, declaration),
+            generics,
+            requirements,
+            functions,
+            &RefCell::new(Diagnostics::new()),
+        )
+    }
+
+    /// Instantiate a body and report any configuration that fails to fit
+    /// the concrete candidate selected for a requirement (FN-18, GEN-16).
+    pub(crate) fn checked_instance(
+        &self,
+        (module, declaration): (usize, usize),
+        generics: &[Argument],
+        requirements: &[Answer],
+        functions: &[(usize, Callee)],
+        diagnostics: &RefCell<Diagnostics>,
+    ) -> Option<(Signature, Body)> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
             return None;
@@ -128,6 +250,7 @@ impl Program {
             generics,
             types: &map,
             requirements,
+            diagnostics,
         };
         self.place_body(&mut body, &arguments, &functions);
         // FN-3, FN-6: what each expression is, and which calls are
@@ -188,9 +311,100 @@ impl Program {
                     expression.kind = kind;
                 }
             }
-            ExprKind::Call { callee, .. } => self.place_target(callee, instance, functions),
+            ExprKind::Call {
+                callee, arguments, ..
+            } => {
+                let required = if let Callee::Required { configuration, .. } = callee {
+                    Some(configuration.take())
+                } else {
+                    None
+                };
+                self.place_target(callee, instance, functions);
+                if let Some(configuration) = required {
+                    if let Callee::Required {
+                        configuration: unresolved,
+                        ..
+                    } = callee
+                    {
+                        *unresolved = configuration;
+                    } else {
+                        self.place_required_arguments(callee, arguments, configuration, instance);
+                    }
+                }
+            }
             ExprKind::StaticCallable(callee) => self.place_target(callee, instance, functions),
             _ => {}
+        }
+    }
+
+    /// A GEN-16 call records public parameter indices. The chosen
+    /// candidate may arrange or add configuration slots (FN-18).
+    fn place_required_arguments(
+        &self,
+        callee: &Callee,
+        arguments: &mut [crate::hir::Argument],
+        context: Option<Box<ConfigurationRead>>,
+        instance: &InstanceArguments<'_>,
+    ) {
+        let Callee::Candidate {
+            operator,
+            module,
+            declaration,
+            generics,
+            ..
+        } = callee
+        else {
+            return;
+        };
+        let Some(Detail::Callable(public)) = self.modules[operator.0].details.get(operator.1)
+        else {
+            return;
+        };
+        let Some(Detail::Callable(candidate)) = self.modules[*module].details.get(*declaration)
+        else {
+            return;
+        };
+        let slots: Vec<_> = public.candidate_parameters(candidate).collect();
+        let map: Vec<_> = candidate
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(generics)
+            .collect();
+        let context = context.map(|mut context| {
+            context.result = context
+                .result
+                .map(|ty| substitute_within(&ty, instance.types));
+            context
+        });
+        for argument in arguments {
+            argument.parameter = argument
+                .parameter
+                .and_then(|index| slots.get(index).copied().flatten());
+            let Some(parameter) = argument.parameter.map(|slot| &candidate.parameters[slot]) else {
+                continue;
+            };
+            let Some(context) = context.as_deref().filter(|_| parameter.configuration) else {
+                continue;
+            };
+            // This walk visits the call before each argument. Its type
+            // is specialized here, while the expression still records
+            // whether it was written as a literal or a generic constant.
+            let actual = substitute_within(&argument.value.ty, instance.types);
+            let expected = substitute_within(&parameter.ty, &map);
+            if actual != expected {
+                let mut value = argument.value.clone();
+                value.ty = actual;
+                argument.value = crate::values::fit_required_configuration(
+                    self,
+                    instance.declaration,
+                    value,
+                    &expected,
+                    &parameter.name,
+                    context,
+                    &mut instance.diagnostics.borrow_mut(),
+                );
+            }
         }
     }
 
@@ -404,6 +618,7 @@ fn hidden_captures(
             local.kind = LocalKind::Parameter;
             *capture = signature.parameters.len();
             signature.parameters.push(Parameter {
+                configuration: false,
                 name,
                 at: local.at,
                 constant: temporal && local.category == ValueCategory::Value,
@@ -453,6 +668,17 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
             }
         }
     }
+    if let Callee::Candidate {
+        operator_generics, ..
+    }
+    | Callee::Required {
+        operator_generics, ..
+    } = callee
+    {
+        for argument in operator_generics {
+            *argument = placed(argument, map);
+        }
+    }
     match callee {
         Callee::Function {
             generics,
@@ -471,7 +697,11 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
                 place_answer(answer, map, answers);
             }
         }
-        Callee::Required { requirement, .. } => {
+        Callee::Required {
+            requirement,
+            operator_generics,
+            ..
+        } => {
             if let Some(Answer::Candidate {
                 operator,
                 module,
@@ -482,6 +712,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
             {
                 *callee = Callee::Candidate {
                     operator: *operator,
+                    operator_generics: std::mem::take(operator_generics),
                     module: *module,
                     declaration: *declaration,
                     generics: generics.clone(),
@@ -522,7 +753,7 @@ fn place_answer(answer: &mut Answer, map: &Map, answers: &[Answer]) {
 /// parameters replaced, a constant that is a generic value parameter
 /// replaced by the constant given for it, and one that holds such a
 /// parameter, `N + 1` or `[N]`, worked out with it.
-fn placed(argument: &Argument, map: &Map) -> Argument {
+pub(crate) fn placed(argument: &Argument, map: &Map) -> Argument {
     let given = |at: Location| {
         map.iter().find_map(|(declared, given)| match given {
             Argument::Constant(given) if *declared == at => Some(given),

@@ -321,7 +321,7 @@ impl Emitter<'_> {
                     let mut local = ty.clone();
                     let declared =
                         concrete.map_or(index, |instance| instance.original_parameter(index));
-                    match left_out(program, origin, declared, parameter) {
+                    match left_out(program, callee, declared, parameter) {
                         // FN-11: "Every other input must satisfy ordinary
                         // `valid(input)`": hgraph evaluates the node only
                         // once it is.
@@ -392,7 +392,7 @@ impl Emitter<'_> {
                                     // value with no locals of its own, so a
                                     // block in it that runs statements
                                     // cannot be written (`calls`).
-                                    if changes(default) {
+                                    if changes(&default) {
                                         return self
                                             .missing(default.at, "a default that runs statements");
                                     }
@@ -403,7 +403,7 @@ impl Emitter<'_> {
                                         statements: Vec::new(),
                                     };
                                     let mut defaults = Scope::cold(program, &cold);
-                                    let written = self.expression(&mut defaults, default);
+                                    let written = self.expression(&mut defaults, &default);
                                     if !defaults.before.is_empty() {
                                         return self.missing(
                                             default.at,
@@ -505,10 +505,10 @@ impl Emitter<'_> {
                 return self.missing(value.at, "a lifted call that leaves out a pack");
             }
             let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
-            let (configured, ty) = match left_out(program, origin, declared, parameter) {
+            let (configured, ty) = match left_out(program, callee, declared, parameter) {
                 Some(LeftOut::Null) => continue,
                 Some(LeftOut::Default(default)) if matches!(default.ty, Type::Nullable(_)) => {
-                    if may_fail(default) {
+                    if may_fail(&default) {
                         return self.missing(
                             default.at,
                             "a lifted call that leaves out a `T?` whose default may fail",
@@ -520,7 +520,7 @@ impl Emitter<'_> {
                     let configured = match defaults.iter().find(|(at, _)| *at == declared) {
                         Some((_, held)) => held.clone(),
                         None => {
-                            if changes(default) {
+                            if changes(&default) {
                                 return self.missing(default.at, "a default that runs statements");
                             }
                             let cold = Body {
@@ -528,12 +528,12 @@ impl Emitter<'_> {
                                 statements: Vec::new(),
                             };
                             let mut defaults = Scope::cold(program, &cold);
-                            let written = self.expression(&mut defaults, default);
+                            let written = self.expression(&mut defaults, &default);
                             if !defaults.before.is_empty() {
                                 return self
                                     .missing(default.at, "a default that propagates a failure");
                             }
-                            omitted_failing += usize::from(may_fail(default));
+                            omitted_failing += usize::from(may_fail(&default));
                             written
                         }
                     };

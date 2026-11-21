@@ -247,13 +247,21 @@ transpiler: partial
 
 ## FN-18
 
-parser: planned
+parser: done
 
-- #363 tracks configuration parameter syntax, binding and writing.
+- Reads configuration parameters in braces before the parentheses of functions, operators, candidates and native declarations.
 
-analyser: planned
+analyser: partial
 
-transpiler: planned
+- Binds configuration only by name in the braces. Checks defaults, missing and misplaced arguments, naming conflicts, and forbidden parameter modes.
+- Holds omitted operator configuration defaults to the selected candidate's parameter types in the operator's defining scope (GEN-6, UNIT-7, UNIT-8).
+- Fits supplied configuration of a required operator call to the selected candidate's parameters when instantiating the caller (GEN-16, EXPR-5).
+- Left: matching a call with a pack declared for a function and checking configuration defaults against function types (#362, #366).
+
+transpiler: partial
+
+- Passes configuration as values, const graph inputs or connections in functions, node hooks, graphs and operator candidates. The SDK tests cover each role.
+- Packs declared for a function and function type compatibility await #366.
 
 - Callable configuration parameters await #363.
 
