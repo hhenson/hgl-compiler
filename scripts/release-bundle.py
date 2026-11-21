@@ -1,16 +1,27 @@
-"""Collect release license notices and check the finished macOS bundle."""
+"""Prepare, verify and find reusable macOS release assets."""
 
 import argparse
+import errno
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 import tomllib
+from urllib.parse import urlencode
 from urllib.request import urlopen
 
 TARGET = "aarch64-apple-darwin"
+ARTIFACT = "hgl-macos-arm64"
+NATIVE_LIBRARIES = ("fmt", "spdlog", "simdjson")
+NATIVE_DIRECTORIES = (
+    "libexec/hgraph-sdk",
+    "libexec/hgraph-deps",
+    *(f"licenses/{name}" for name in NATIVE_LIBRARIES),
+)
 NOTICE = re.compile(r"^(?:copying|license|notice|unlicense)", re.IGNORECASE)
 SYSTEM_LIBRARIES = ("/usr/lib/", "/System/Library/")
 SYSTEM_PATHS = tuple(map(Path, (
@@ -33,6 +44,82 @@ def command(*args):
 def version():
     with Path("Cargo.toml").open("rb") as manifest:
         return tomllib.load(manifest)["workspace"]["package"]["version"]
+
+
+def native_cache_key():
+    """Hash the SDK recipe and the effective compiler/SDK configuration."""
+    recipe = [
+        "HGRAPH_TAG",
+        "scripts/hgraph-dependencies.sh",
+        "scripts/provision-hgraph-sdk.sh",
+        "scripts/package-release.sh",
+        "scripts/release-bundle.py",
+    ]
+    environment = [
+        "CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS",
+        "DEVELOPER_DIR", "SDKROOT", "MACOSX_DEPLOYMENT_TARGET",
+    ]
+    inputs = {"target": TARGET}
+    inputs.update({name: os.environ.get(name, "") for name in environment})
+    for name, args in [
+        ("compiler", [os.environ.get("CXX") or "/usr/bin/clang++", "--version"]),
+        ("sdk", ["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-version"]),
+    ]:
+        try:
+            inputs[name] = subprocess.check_output(args, stderr=subprocess.DEVNULL, text=True)
+        except (OSError, subprocess.CalledProcessError):
+            # The package script diagnoses an unusable compiler or SDK.
+            inputs[name] = "unavailable"
+    inputs.update({name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in recipe})
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+
+
+def copy_native(source, destination):
+    """Keep SDK and dependency libraries, their relative links and notices together."""
+    for directory in NATIVE_DIRECTORIES:
+        shutil.copytree(source / directory, destination / directory, symlinks=True)
+
+
+def save_native(bundle, cache):
+    """Publish the verified native tree atomically on the cache's filesystem."""
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".hgl-native-", dir=cache.parent) as scratch:
+        staged = Path(scratch) / "native"
+        copy_native(bundle, staged)
+        try:
+            staged.rename(cache)
+        except OSError as error:
+            # Another build can populate the same cache key first.
+            if error.errno not in (errno.EEXIST, errno.ENOTEMPTY) or not all(
+                (cache / directory).is_dir() for directory in NATIVE_DIRECTORIES
+            ):
+                raise
+
+
+def github_items(endpoint, key):
+    """Read every page of a GitHub Actions list, surfacing API errors."""
+    rows = command("gh", "api", "--paginate", "--jq", f".{key}[] | @json", endpoint)
+    return (json.loads(row) for row in rows.splitlines())
+
+
+def verified_run(repository, commit, current_run):
+    """Find a completed main push that verified this commit's live artifact."""
+    base = f"repos/{repository}/actions"
+    query = urlencode({
+        "branch": "main", "event": "push", "head_sha": commit,
+        "status": "success", "per_page": 100,
+    })
+    for run in github_items(f"{base}/workflows/release.yml/runs?{query}", "workflow_runs"):
+        if (run["head_sha"], run["head_branch"], run["event"], run["conclusion"]) != (
+            commit, "main", "push", "success",
+        ) or str(run["id"]) == current_run:
+            continue
+        artifacts = github_items(f"{base}/runs/{run['id']}/artifacts?per_page=100", "artifacts")
+        name = f"{ARTIFACT}-{run['run_attempt']}"
+        for artifact in artifacts:
+            if artifact["name"] == name and not artifact["expired"]:
+                return run["id"], artifact["id"]
+    return None
 
 
 def rust_licenses(destination):
@@ -93,6 +180,11 @@ def verify(bundle, forbidden):
     ]:
         if not path.exists():
             raise ValueError(f"missing {path.relative_to(bundle)}")
+
+    for library in NATIVE_LIBRARIES:
+        notices = bundle / "licenses" / library
+        if not any(file.is_file() and NOTICE.match(file.name) for file in notices.glob("*")):
+            raise ValueError(f"missing license notice for {library}")
 
     libraries = [*sdk.glob("lib/*.dylib"), *deps.glob("lib/*.dylib")]
     names = {lib.name for lib in libraries}
@@ -167,6 +259,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
     modes.add_parser("version")
+    modes.add_parser("native-key")
+    for name in ("copy-native", "save-native"):
+        native = modes.add_parser(name)
+        native.add_argument("source", type=Path)
+        native.add_argument("destination", type=Path)
+    reuse = modes.add_parser("find-verified-run")
+    reuse.add_argument("repository")
+    reuse.add_argument("commit")
+    reuse.add_argument("current_run")
     modes.add_parser("licenses").add_argument("destination", type=Path)
     audit = modes.add_parser("verify")
     audit.add_argument("bundle", type=Path)
@@ -174,6 +275,17 @@ def main():
     args = parser.parse_args()
     if args.mode == "version":
         print(version())
+    elif args.mode == "native-key":
+        print(native_cache_key())
+    elif args.mode == "copy-native":
+        copy_native(args.source, args.destination)
+    elif args.mode == "save-native":
+        save_native(args.source, args.destination)
+    elif args.mode == "find-verified-run":
+        found = verified_run(args.repository, args.commit, args.current_run)
+        if found:
+            run, artifact = found
+            print(f"run-id={run}\nartifact-id={artifact}")
     elif args.mode == "licenses":
         rust_licenses(args.destination)
     else:

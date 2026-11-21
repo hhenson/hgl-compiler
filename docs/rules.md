@@ -168,14 +168,12 @@ analyser reads.
 | Rule | Remaining work |
 | --- | --- |
 | CTRL-7, CTRL-12, CTRL-15, CTRL-2 | Unroll graph loops over fields and fixed structure, reject changing membership (`for.sequence` proposed) and move dynamic child startup to core mapping. The dictionary conformance case stays passing. [#373](https://github.com/hhenson/hgl-compiler/issues/373), [#370](https://github.com/hhenson/hgl-compiler/issues/370) |
-| SOURCE-1 | Require a source result (`source.result` proposed). The analyser still accepts sources without a result. [#337](https://github.com/hhenson/hgl-compiler/issues/337) |
 | FN-8, GEN-6 | Check duplicate pack declarations (`pack.duplicate`) and a fixed candidate parameter in place of an operator pack (`impl.pack` proposed). Existing declarations keep their behavior. |
 | ERR-6 | Implement the exact-type `get` fallback, including a nullable fallback value. |
 | FN-17, GEN-17, FN-8 | Function parameters, parameter reflection and packs declared for a function, with `function.argument` and `pack.name`. [#362](https://github.com/hhenson/hgl-compiler/issues/362), [#366](https://github.com/hhenson/hgl-compiler/issues/366) |
 | FN-18, EXPR-10 | Configuration parameters and configuration after a callable name. [#363](https://github.com/hhenson/hgl-compiler/issues/363) |
 | GEN-3, GEN-6, GEN-10, GEN-18 | Read `any`, law predicates and bare Boolean constraints. [#367](https://github.com/hhenson/hgl-compiler/issues/367) |
 | LEX-29, EXPR-16, EXPR-17, FN-19, CTRL-16 | Ranges, loops that make lists and packs, and constant branches in unrolled passes. [#368](https://github.com/hhenson/hgl-compiler/issues/368) |
-| UNIT-3, GEN-4 | The parser and analyser read `export operator`. Operators remain public pending the core export update and visibility checks. [#364](https://github.com/hhenson/hgl-compiler/issues/364) |
 | MAP-1 to MAP-10, RED-1 to RED-7, SET-1 and SET-2 | Core mapping, reduction and key sets. [#367](https://github.com/hhenson/hgl-compiler/issues/367), [#369](https://github.com/hhenson/hgl-compiler/issues/369), [#370](https://github.com/hhenson/hgl-compiler/issues/370) |
 | TYPE-1 | Reject `f64` and types containing it as keys or set members (`key.unstable`). |
 | EXPR-9 | Reject duplicate constant dictionary keys (`dict.duplicate_key`). |
