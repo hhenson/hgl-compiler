@@ -653,6 +653,9 @@ pub enum ExprKind {
         /// The fields given, as they are written. A field's position
         /// is its place among the struct's `members`.
         arguments: Vec<Argument>,
+        /// Whether GEN-2 infers the type arguments from these fields.
+        /// Explicit arguments and an expected struct type stay fixed.
+        infer_types: bool,
     },
     /// A member of an enum: `Side.buy`, or `.buy` where a `Side` is
     /// expected (TYPE-7).

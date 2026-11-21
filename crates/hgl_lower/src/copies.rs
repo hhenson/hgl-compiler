@@ -481,6 +481,7 @@ fn fresh_defaults(program: &Program, value: &Expr) -> bool {
         module,
         declaration,
         arguments,
+        ..
     } = &value.kind
     else {
         return false;

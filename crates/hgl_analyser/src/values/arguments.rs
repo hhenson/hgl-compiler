@@ -10,9 +10,10 @@ use hgl_source::Span;
 
 use super::Typer;
 use super::evals::{holds_trace, publications};
-use super::inference::{Inferred, Places, fixed, placed};
+use super::fit::whole;
+use super::inference::{Inferred, Places, fixed, infer, mentions, placed};
 use crate::declared::{is_optional, substitute_within};
-use crate::hir::{self, EndpointOperation, ExprKind};
+use crate::hir::{self, EndpointOperation, ExprKind, Value};
 use crate::program::DeclarationKind;
 use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{Argument, Detail, GenericKind, GenericParameter, NamedKind, Pack, Type};
@@ -282,8 +283,79 @@ impl<'a> Typer<'a> {
             module,
             declaration,
             arguments,
+            infer_types: inferring,
         };
         (kind, ty)
+    }
+
+    /// GEN-2: finish inference for a constructor whose supplied fields
+    /// included an unsettled value. As with source inference, the first
+    /// eligible field in written order decides each argument.
+    pub(super) fn infer_settled_fields(
+        &self,
+        mut ty: Type,
+        fields: &[hir::Argument],
+    ) -> Option<Type> {
+        let Type::Named {
+            module,
+            declaration,
+            arguments,
+            kind: NamedKind::Struct,
+            ..
+        } = &mut ty
+        else {
+            return None;
+        };
+        let Detail::Struct(structure) = &self.program.modules[*module].details[*declaration] else {
+            return None;
+        };
+        let generics = &structure.generics;
+        let mut found: Vec<_> = generics
+            .iter()
+            .zip(arguments.iter())
+            .map(|(generic, argument)| match argument {
+                Argument::Type(ty) if generic.kind == GenericKind::Type && !whole(ty) => None,
+                _ => Some(argument.clone()),
+            })
+            .collect();
+        if found.len() != generics.len() {
+            return None;
+        }
+        for field in fields {
+            let Some(pattern) = field
+                .parameter
+                .and_then(|slot| structure.members.get(slot))
+                .map(|field| &field.ty)
+            else {
+                continue;
+            };
+            // A written `null` never decides a parameter (EXPR-9).
+            if matches!(field.value.kind, ExprKind::Literal(Value::Null)) {
+                continue;
+            }
+            let unfound: Vec<_> = generics
+                .iter()
+                .zip(&found)
+                .filter(|(_, found)| found.is_none())
+                .map(|(generic, _)| generic.at)
+                .collect();
+            if !mentions(pattern, &unfound) {
+                continue;
+            }
+            // A later field must wait if this one can still decide
+            // the slot. Other fields' already known types stay fixed.
+            if !whole(&field.value.ty) {
+                return None;
+            }
+            let actual = self.inference_input(pattern, &field.value.ty, generics, &found, None);
+            infer(pattern, actual, generics, &mut found);
+        }
+        for (argument, inferred) in arguments.iter_mut().zip(found) {
+            if let Some(inferred) = inferred {
+                *argument = inferred;
+            }
+        }
+        Some(ty)
     }
 
     /// Gives each argument of `list` to one of `slots`: the parameters

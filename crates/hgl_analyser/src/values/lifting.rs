@@ -14,7 +14,7 @@ use crate::hir::{
     walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
-use crate::types::{Detail, Type};
+use crate::types::{Argument, Detail, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -467,15 +467,15 @@ fn lifts(program: &Program, callee: &Callee) -> bool {
 /// category or fills a hole in an inferred type. In a graph this
 /// includes a no-else `if` whose type depends on the categories (CTRL-13).
 pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
-    record_with(program, body, composition, |_, _| Type::Unknown);
+    record_with(program, body, composition, None);
 }
 
-/// Settle a concrete graph with the source branch-typing check available.
+/// Settle a concrete graph with source branch and field inference available.
 pub(super) fn record_with(
     program: &Program,
     body: &mut Body,
     composition: bool,
-    mut join: impl FnMut(&mut Expr, &mut Expr) -> Type,
+    mut typer: Option<&mut Typer<'_>>,
 ) {
     use ValueCategory::{Connection, Unsettled};
     let Body { locals, statements } = body;
@@ -517,7 +517,7 @@ pub(super) fn record_with(
                     return;
                 }
                 NodeMut::Expression(value) if composition && !whole(&value.ty) => {
-                    if let Some(ty) = settled_type(program, locals, value, &mut join) {
+                    if let Some(ty) = settled_type(program, locals, value, typer.as_deref_mut()) {
                         settling |= fill_type(&mut value.ty, ty);
                     }
                     return;
@@ -589,6 +589,30 @@ fn fill_type(current: &mut Type, inferred: Type) -> bool {
             }
             changed
         }
+        (
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                ..
+            },
+            Type::Named {
+                module: new_module,
+                declaration: new_declaration,
+                arguments: inferred,
+                ..
+            },
+        ) if (*module, *declaration) == (new_module, new_declaration)
+            && arguments.len() == inferred.len() =>
+        {
+            let mut changed = false;
+            for (current, inferred) in arguments.iter_mut().zip(inferred) {
+                if let (Argument::Type(current), Argument::Type(inferred)) = (current, inferred) {
+                    changed |= fill_type(current, inferred);
+                }
+            }
+            changed
+        }
         _ => false,
     }
 }
@@ -600,7 +624,7 @@ fn settled_type(
     program: &Program,
     locals: &[Local],
     value: &mut Expr,
-    join: &mut dyn FnMut(&mut Expr, &mut Expr) -> Type,
+    typer: Option<&mut Typer<'_>>,
 ) -> Option<Type> {
     let ty = match &mut value.kind {
         ExprKind::If {
@@ -608,7 +632,7 @@ fn settled_type(
             otherwise: Some(otherwise),
             join_branches: true,
             ..
-        } if whole(&then.ty) && whole(&otherwise.ty) => join(then, otherwise),
+        } if whole(&then.ty) && whole(&otherwise.ty) => typer?.one_type(then, otherwise),
         ExprKind::If {
             condition,
             then,
@@ -656,6 +680,14 @@ fn settled_type(
             };
             index_result(indexed_payload(&base.ty), position)?.clone()
         }
+        ExprKind::Construct {
+            arguments,
+            infer_types: true,
+            ..
+        } => typer?.infer_settled_fields(value.ty.clone(), arguments)?,
+        // EXPR-7: the member's position was checked where it was read.
+        // Its field type uses the struct's now-concrete type arguments.
+        ExprKind::Field { base, member } => program.field_types(&base.ty)?.get(*member)?.clone(),
         _ => return None,
     };
     (ty != Type::Unknown).then_some(ty)

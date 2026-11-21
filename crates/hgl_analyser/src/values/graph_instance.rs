@@ -10,7 +10,7 @@ use hgl_source::Span;
 use super::arguments::Takes;
 use super::control::bound_by_loop;
 use super::fit::{open, whole};
-use super::inference::{fixed, type_pack};
+use super::inference::type_pack;
 use super::lifting::{assignment_category, record, record_with};
 use super::members::{index_collection, index_operand, indexed_payload};
 use super::statements::{child_loop_return, child_loop_write, place_assignment_category};
@@ -78,9 +78,7 @@ impl GraphDestinations {
             diagnostics,
         );
         typer.graph = true;
-        record_with(program, body, true, |then, otherwise| {
-            typer.one_type(then, otherwise)
-        });
+        record_with(program, body, true, Some(&mut typer));
         typer.locals.clone_from(&body.locals);
         if !self.0.is_empty() {
             hir::walk_statement_nodes_mut(&mut body.statements, &mut |node| {
@@ -164,18 +162,15 @@ impl GraphDestinations {
             NodeMut::Expression(Expr {
                 kind:
                     ExprKind::Construct {
-                        module,
-                        declaration,
                         arguments,
-                    },
-                ty:
-                    Type::Named {
-                        arguments: generics,
+                        infer_types,
                         ..
                     },
+                ty,
+                at,
                 ..
             }) => {
-                self.fit_fields(typer, (*module, *declaration), generics, arguments);
+                self.fit_fields(typer, ty, arguments, *infer_types, *at);
                 return;
             }
             // EXPR-5 and EXPR-9: use the types already established for
@@ -330,34 +325,62 @@ impl GraphDestinations {
     fn fit_fields(
         &self,
         typer: &mut Typer<'_>,
-        (module, declaration): (usize, usize),
-        generics: &[crate::types::Argument],
+        ty: &Type,
         arguments: &mut [hir::Argument],
+        infer_types: bool,
+        at: Location,
     ) {
-        let Detail::Struct(structure) = &typer.program.modules[module].details[declaration] else {
+        let completed = self.0.contains(&at) && whole(ty);
+        if !completed && !arguments.iter().any(|argument| self.known(&argument.value)) {
+            return;
+        }
+        let Type::Named {
+            module,
+            declaration,
+            arguments: generic_arguments,
+            ..
+        } = ty
+        else {
             return;
         };
-        let map: Vec<_> = fixed(&structure.generics).zip(generics).collect();
-        for argument in arguments
-            .iter_mut()
-            .filter(|argument| self.known(&argument.value))
-        {
-            let Some(field) = argument
-                .parameter
-                .and_then(|slot| structure.members.get(slot))
-            else {
+        let Detail::Struct(structure) = &typer.program.modules[*module].details[*declaration]
+        else {
+            return;
+        };
+        let Some(types) = typer.program.field_types(ty) else {
+            return;
+        };
+        let before = typer.diagnostics.len();
+        for argument in arguments {
+            let Some(slot) = argument.parameter else {
                 continue;
             };
-            let ty = substitute_within(&field.ty, &map);
-            if whole(&ty) {
-                self.fit(
-                    typer,
-                    &mut argument.value,
-                    &ty,
-                    &format!("the field `{}`", field.name),
-                    false,
-                );
+            let Some((field, expected)) = structure.members.get(slot).zip(types.get(slot)) else {
+                continue;
+            };
+            if !whole(expected) {
+                continue;
             }
+            let value = &mut argument.value;
+            let place = format!("the field `{}`", field.name);
+            if completed
+                && !whole(&value.ty)
+                && matches!(value.kind, ExprKind::Literal(Value::Null))
+                && let Some(node) = typer.syntax_of(value)
+            {
+                *value = typer.expression(&node, Some(expected));
+            } else if completed && whole(&value.ty) && value.ty != *expected {
+                // An earlier argument may decide a field's type only
+                // now, even when this sibling was already known.
+                *value = typer.fit(value.clone(), expected, &place);
+            } else {
+                self.fit(typer, value, expected, &place, false);
+            }
+        }
+        // GEN-3, ERR-9: an inferred application checks its requirements
+        // once its arguments fit and its type is concrete.
+        if completed && infer_types && typer.diagnostics.len() == before {
+            typer.requires_met(at, (*module, *declaration), generic_arguments);
         }
     }
 

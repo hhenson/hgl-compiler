@@ -1463,6 +1463,68 @@ fn graph_instances_propagate_indexed_types_and_reads() {
     }
 }
 
+/// GEN-2 and GEN-7: a deferred constructor field can determine an
+/// unbound type parameter. EXPR-7 projections and GEN-3 requirements
+/// use that concrete struct application.
+#[test]
+fn graph_instances_finish_inferred_constructor_arguments() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "struct Holder<X> { value: X }\n",
+        "struct OnlyNumber<X> requires X == i64 { value: X }\n",
+        "fn reads<T>(const input: T) -> i64? {\n",
+        "    let held = Holder(value: [if predicate(input) { 1 }])\n",
+        "    let values = held.value\n",
+        "    return values[0]\n",
+        "}\n",
+        "fn expected<T>(const input: T) -> Holder<list<i64?>> {\n",
+        "    return Holder(value: [if predicate(input) { 1 }])\n",
+        "}\n",
+        "fn wrong_result<T>(const input: T) -> str {\n",
+        "    let held = Holder(value: [if predicate(input) { 1 }])\n",
+        "    return held.value[0]\n",
+        "}\n",
+        "fn wrong_requirement<T>(const input: T) -> i64 {\n",
+        "    let held = OnlyNumber(value: [if predicate(input) { 1 }])\n",
+        "    return 0\n",
+        "}\n",
+        "fn accepted() -> i64? => reads(\"s\")\n",
+        "fn accepted_expected() -> Holder<list<i64?>> => expected(\"s\")\n",
+        "fn mismatch() -> str => wrong_result(\"s\")\n",
+        "fn unmet() -> i64 => wrong_requirement(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:25:25 type/type.mismatch EXPR-5",
+            "m.hgl:26:22 constraint/requires.unmet GEN-3",
+        ],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    assert_eq!(instance.locals[1].ty.to_string(), "Holder<list<i64?>>");
+    assert_eq!(instance.locals[2].ty.to_string(), "list<i64?>");
+    let expected = instance_called_by(&checked, body(&checked, "accepted_expected"));
+    let Some(Stmt::Return {
+        value: Some(returned),
+        ..
+    }) = expected.statements.last()
+    else {
+        panic!("the expected constructor is returned");
+    };
+    assert_eq!(returned.ty.to_string(), "Holder<list<i64?>>");
+    assert!(matches!(
+        returned.kind,
+        ExprKind::Construct {
+            infer_types: false,
+            ..
+        }
+    ));
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

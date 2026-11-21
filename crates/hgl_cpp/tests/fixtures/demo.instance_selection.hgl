@@ -154,6 +154,16 @@ fn dictionary_entries<T>(const value: T) -> i64 {
     return values["key"]
 }
 
+# GEN-2 and EXPR-7: a settled field completes an inferred constructor
+# type and stays concrete when the field is read.
+struct Holder<T> { value: T }
+
+fn inferred_holder<T>(const value: T) -> i64 {
+    let held = Holder(value: [if live_helper(value) > 0 { 2 }])
+    let values = held.value
+    return chosen_or_skip(values[0])
+}
+
 # CTRL-15: a deferred selector and its label settle to i64.
 fn selected_case<T>(const value: T) -> i64 {
     let key = if live_helper(value) > 0 { 1 }
@@ -183,6 +193,7 @@ test an_instance_settles_its_graph_conditions {
     assert raises("value.null") { eval optional_elements(value: "s") }
     assert eval dictionary_entries(value: 3) == [4]
     assert raises("value.null") { eval dictionary_entries(value: "s") }
+    assert eval inferred_holder(value: "s") == [2]
     assert eval selected_case(value: 3) == [4]
     assert eval value_phase_choice(value: 3) == [1]
     assert eval value_phase_choice(value: "s") == [-1]
