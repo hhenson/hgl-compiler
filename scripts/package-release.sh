@@ -16,8 +16,8 @@ cd -- "$root"
 [[ -z $(git status --porcelain) ]] || fail "requires a clean checkout"
 
 version=$(python3 scripts/release-bundle.py version)
-[[ -z $version_tag || $version_tag == "v$version" ]] ||
-    fail "tag $version_tag does not match workspace version v$version"
+[[ -z $version_tag || $version_tag == "$version" ]] ||
+    fail "tag $version_tag does not match workspace version $version"
 name=hgl-$version-macos-arm64
 read -r hgraph_tag < HGRAPH_TAG
 source scripts/hgraph-dependencies.sh
