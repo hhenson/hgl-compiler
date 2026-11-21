@@ -62,7 +62,7 @@ deps=$bundle/libexec/hgraph-deps
 sdk=$bundle/libexec/hgraph-sdk
 jobs=${HGL_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}
 mkdir -p -- "$bundle/bin" "$bundle/licenses"
-export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-ffile-prefix-map=$work=/hgl-release"
+native_cache=${HGL_RELEASE_NATIVE_CACHE:-}
 
 build_dependency() {
     local name=$1 repository=$2 tag=$3
@@ -81,35 +81,58 @@ build_dependency() {
     done
 }
 
-# Build the same library versions as the SDK provisioner with the system's
-# libc++. A conda prefix would add its own libc++ to the bundle's dependencies.
-build_dependency fmt https://github.com/fmtlib/fmt.git "$FMT_VERSION" -DFMT_TEST=OFF -DFMT_DOC=OFF
-build_dependency spdlog https://github.com/gabime/spdlog.git "v$SPDLOG_VERSION" \
-    -DSPDLOG_FMT_EXTERNAL=ON -DSPDLOG_BUILD_SHARED=ON -DSPDLOG_BUILD_TESTS=OFF
-build_dependency simdjson https://github.com/simdjson/simdjson.git "v$SIMDJSON_VERSION" \
-    -DSIMDJSON_DEVELOPER_MODE=OFF
-# Keep only headers, dylibs and CMake packages from the native dependencies.
-rm -rf -- "$deps/lib/pkgconfig" "$deps/share"
-TMPDIR=$work HGL_HGRAPH_DEPS=$deps HGL_HGRAPH_INSTALL_RPATH=@loader_path/../../hgraph-deps/lib \
-    HGL_BUILD_JOBS=$jobs scripts/provision-hgraph-sdk.sh "$hgraph_tag" "$sdk"
-sed 's|^dependencies=.*|dependencies=../hgraph-deps|' "$sdk/hgl-sdk.txt" >"$work/sdk-stamp"
-mv -- "$work/sdk-stamp" "$sdk/hgl-sdk.txt"
+build_native() (
+    export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-ffile-prefix-map=$work=/hgl-release"
+    # Build the same library versions as the SDK provisioner with the system's
+    # libc++. A conda prefix would add its own libc++ to the bundle's dependencies.
+    build_dependency fmt https://github.com/fmtlib/fmt.git "$FMT_VERSION" -DFMT_TEST=OFF -DFMT_DOC=OFF
+    build_dependency spdlog https://github.com/gabime/spdlog.git "v$SPDLOG_VERSION" \
+        -DSPDLOG_FMT_EXTERNAL=ON -DSPDLOG_BUILD_SHARED=ON -DSPDLOG_BUILD_TESTS=OFF
+    build_dependency simdjson https://github.com/simdjson/simdjson.git "v$SIMDJSON_VERSION" \
+        -DSIMDJSON_DEVELOPER_MODE=OFF
+    # Keep only headers, dylibs and CMake packages from the native dependencies.
+    rm -rf -- "$deps/lib/pkgconfig" "$deps/share"
+    TMPDIR=$work HGL_HGRAPH_DEPS=$deps HGL_HGRAPH_INSTALL_RPATH=@loader_path/../../hgraph-deps/lib \
+        HGL_BUILD_JOBS=$jobs scripts/provision-hgraph-sdk.sh "$hgraph_tag" "$sdk"
+    sed 's|^dependencies=.*|dependencies=../hgraph-deps|' "$sdk/hgl-sdk.txt" >"$work/sdk-stamp"
+    mv -- "$work/sdk-stamp" "$sdk/hgl-sdk.txt"
+)
+
+if [[ -n $native_cache && -d $native_cache/libexec ]]; then
+    python3 scripts/release-bundle.py copy-native "$native_cache" "$bundle"
+    grep -qxF "tag=$hgraph_tag" "$sdk/hgl-sdk.txt" &&
+        grep -qxF "arrow=off" "$sdk/hgl-sdk.txt" ||
+        fail "the cached SDK must be hgraph $hgraph_tag built without Arrow"
+    echo "Using the cached hgraph SDK and dependency prefix"
+else
+    build_native
+fi
 
 # Runtime panic locations may carry source paths. Remap workspace and
 # registry paths as well as stripping debug symbols from the release.
 cargo_home=${CARGO_HOME:-$HOME/.cargo}
+cargo_target=${CARGO_TARGET_DIR:-$work/cargo-target}
+mkdir -p -- "$cargo_target"
+cargo_target=$(cd -- "$cargo_target" && pwd -P)
 export CARGO_ENCODED_RUSTFLAGS
 CARGO_ENCODED_RUSTFLAGS=$(printf '%s\037%s\037%s' \
     "--remap-path-prefix=$root=." "--remap-path-prefix=$cargo_home=/cargo" \
-    "--remap-path-prefix=$work=/hgl-release")
+    "--remap-path-prefix=$cargo_target=/cargo-target")
 export CARGO_PROFILE_RELEASE_STRIP=symbols
 cargo build --locked --release --package hgl_cli --target aarch64-apple-darwin \
-    --target-dir "$work/cargo-target" --jobs "$jobs"
-cp -- "$work/cargo-target/aarch64-apple-darwin/release/hgl" "$bundle/bin/hgl"
+    --target-dir "$cargo_target" --jobs "$jobs"
+cp -- "$cargo_target/aarch64-apple-darwin/release/hgl" "$bundle/bin/hgl"
 cp -- LICENSE "$bundle/licenses/hgl-compiler.txt"
 cp -- spec/hgl_core/LICENSE "$bundle/licenses/hgl-core.txt"
 python3 scripts/release-bundle.py licenses "$bundle/licenses"
-python3 scripts/release-bundle.py verify "$bundle" --forbid "$root" --forbid "$work" --forbid "$HOME"
+audit=(--forbid "$root" --forbid "$work" --forbid "$HOME" --forbid "$cargo_target")
+if [[ -n $native_cache ]]; then
+    audit+=(--forbid "$native_cache")
+fi
+python3 scripts/release-bundle.py verify "$bundle" "${audit[@]}"
+if [[ -n $native_cache && ! -d $native_cache/libexec ]]; then
+    python3 scripts/release-bundle.py save-native "$bundle" "$native_cache"
+fi
 
 mkdir -p -- "$destination"
 destination=$(cd -- "$destination" && pwd -P)
