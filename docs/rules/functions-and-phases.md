@@ -190,7 +190,7 @@ analyser: partial
 transpiler: partial
 
 - A static target specializes the called body. The C++ target emits ordinary value helpers and composed graph calls; anonymous functions carry their permitted lexical captures as inputs.
-- Function templates with reflected packs await #366.
+- Function templates with reflected packs await #366. The C++ target does not yet write `valid` on a temporal input captured by a value callback (#397).
 
 ## FN-18
 

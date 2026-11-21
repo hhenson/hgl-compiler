@@ -83,6 +83,30 @@ fn optional_callbacks(input: i64) -> i64 =>
 fn nullable_inputs(input: i64, extra: i64?) -> i64 =>
     apply_lifted_input(fn(n, bias) => if bias == null { n + 1 } else { n + bias }, input, extra)
 
+operator dispatch(f: const fn(i64) -> i64, x: i64) -> i64
+impl const fn dispatch(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)
+
+operator dispatch_generic<T, R>(f: const fn(T) -> R, x: T) -> R
+impl const fn dispatch_generic<T, R>(f: const fn(T) -> R, x: T) -> R => f(x)
+
+const fn shows_text(x: str) -> bool => x != ""
+
+const fn identity<T>(x: T) -> T => x
+
+const fn forward_to_operator(f: const fn(i64) -> i64, x: i64) -> i64 =>
+    dispatch(f, x)
+
+const fn capture_in_operator(x: i64) -> i64 {
+    let bump = x + 2
+    return dispatch(fn(y) => y + bump, x)
+}
+
+operator dispatch_live(f: fn(i64) -> i64, x: i64) -> i64
+impl fn dispatch_live(f: fn(i64) -> i64, x: i64) -> i64 => f(x)
+
+fn operator_graph(x: i64, offset: i64) -> i64 =>
+    dispatch_live(fn(y) => live_double(y) + offset, x)
+
 test ordinary_callbacks {
     assert apply(increment) == 4
     assert apply(double<i64>, 4) == 8
@@ -93,6 +117,12 @@ test ordinary_callbacks {
     assert via_capture(4) == 9
     assert transitive_capture(4) == 9
     assert apply_optional(fn(n) => if n == null { 7 } else { n }) == 7
+    assert dispatch(increment, 3) == 4
+    assert dispatch(x: 3, f: fn(y) => y * 2) == 6
+    assert capture_in_operator(4) == 10
+    assert forward_to_operator(increment, 4) == 5
+    assert dispatch_generic(shows_text, "yes")
+    assert dispatch_generic(identity, 7) == 7
 }
 
 test temporal_callbacks {
@@ -109,4 +139,5 @@ test temporal_callbacks {
     assert eval lifted_lambda(input: [2, 3]) == [5, 6]
     assert eval optional_callbacks(input: [2, 3]) == [3, 4]
     assert eval nullable_inputs(input: [2, 3], extra: [_, 9]) == [3, 12]
+    assert eval operator_graph(x: [2, 3], offset: [1, 2]) == [5, 8]
 }
