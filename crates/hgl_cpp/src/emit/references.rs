@@ -11,7 +11,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | `ref low: i64`, a `ref` parameter | hgraph's `REF` input of the parameter's temporal form, `::hgraph::In<"low", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>>`, active and required as any input is: active where a handler subscribes to it, which wakes the node where it is given a designation, and valid where a reference is present (TIME-10); its wiring function takes a connection of T |
+//! | `ref low: i64`, a `ref` parameter | hgraph's `REF` input of the parameter's temporal form, `::hgraph::In<"low", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>>`: active where a handler subscribes to it, which wakes the node where it is given a designation, and valid where a reference is present (TIME-10); required only by a header that asks `valid` of it (`admission`), so that one holding no reference, returned, gives the result the empty reference; its wiring function takes a connection of T |
 //! | `-> ref i64`, a `ref` result | hgraph's `REF` output, `::hgraph::Out<::hgraph::REF<...>>`; the wiring function gives it as a connection of T, `.as<::hgraph::TS<...>>()`, to which an ordinary reader is bound as hgraph binds a reader of a `REF` |
 //! | `return low` of a whole `ref` parameter | `out_.set(::hglrt::designation(low));`: what it designates as the `return` runs, which the result keeps until the node writes it again |
 //! | `return price` of an input that is no `ref` parameter | the input is given to the node again, as a `REF` input it is active on (`designated_00_`); the node keeps which it designates in its state (`designates_`), publishes what that `REF` holds, and, where it ticks while the result designates it, publishes it again and runs no handler for that wake |
@@ -26,11 +26,11 @@
 //! of a source; and a designation of an input that is no `ref` parameter
 //! in a node that injects a scheduler or an alarm.
 
-use hgl_analyser::hir::{Body, EndpointOperation, Expr, ExprKind, Hook, Stmt};
+use hgl_analyser::hir::{Body, EndpointOperation, Expr, ExprKind, Hook, Local, Stmt};
 use hgl_analyser::{ConstantValue, Phase, Signature, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::nodes::{
-    Designated, Timer, designated, designates, designations, is_out, is_reference,
+    Designated, Handler, Timer, designated, designates, designations, is_out, is_reference,
 };
 
 use super::Emitter;
@@ -144,6 +144,28 @@ impl Family for References {
         let keyed = emitter.temporal_schema(key, index.at)?;
         Some(emitter.selected_entry(scope, value, base, index, &dictionary, &keyed, &entry))
     }
+}
+
+/// What `handler`, of a node whose locals are `locals` and whose
+/// signature is `signature`, requires of its `ref` parameters. A `ref`
+/// parameter that holds no reference does not keep a handler from
+/// running where its header names no validity selector: returned, it
+/// gives the result the empty reference, which designates nothing (the
+/// owner's decision of 2026-11-21: "reference has an empty type
+/// describing no reference, this is expected to be returned"; FN-16:
+/// "Returning a whole `ref` parameter samples its current designation").
+/// A header that asks `valid(target)` requires it as it requires any
+/// input (TIME-3), and TIME-10's `valid` of it is still "whether a
+/// reference is present". The pinned TIME-3 has "Omitting the validity
+/// selector requires all temporal inputs to be valid", the `ref`
+/// parameter among them, until the specification gives the decision.
+pub(super) fn admission(handler: &mut Handler, locals: &[Local], signature: &Signature) {
+    if handler.asks_valid {
+        return;
+    }
+    handler
+        .required
+        .retain(|&local| !is_reference(locals, Some(signature), local));
 }
 
 /// What a node follows of an input that is no `ref` parameter, which its

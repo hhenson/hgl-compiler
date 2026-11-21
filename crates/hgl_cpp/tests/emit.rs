@@ -1124,8 +1124,13 @@ fn references_are_written() {
         .unwrap()
         .text;
     for written in [
-        // A `ref` parameter, passive where no handler subscribes to it.
-        "::hgraph::In<\"low\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive> low",
+        // A `ref` parameter, passive where no handler subscribes to it,
+        // and required by no header that names no validity selector: one
+        // that holds no reference keeps no handler from running (FN-16,
+        // the owner's decision of 2026-11-21).
+        "::hgraph::In<\"low\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> low",
+        // A header that asks `valid(target)` requires it (TIME-3).
+        "::hgraph::In<\"take\", ::hgraph::TS<::hgraph::Bool>, ::hgraph::InputValidity::Unchecked> take, [[maybe_unused]] ::hgraph::In<\"target\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive> target",
         // FN-16: "Returning a whole `ref` parameter samples its current
         // designation when the `return` executes".
         "out_.set(::hglrt::designation(high));",

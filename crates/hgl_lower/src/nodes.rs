@@ -57,6 +57,11 @@ pub struct Handler<'a> {
     /// conjunct: the selector, which a wake of the scheduler or the
     /// alarm runs, and in its body `modified([])` is true (TIME-3).
     pub empty: bool,
+    /// True where its header has a validity selector, `valid(a)`,
+    /// `valid()` or `valid([])`, alone or as a top-level conjunct: what it
+    /// requires is what those name. With none, "Omitting the validity
+    /// selector requires all temporal inputs to be valid" (TIME-3).
+    pub asks_valid: bool,
     /// Its statements.
     pub body: &'a [Stmt],
 }
@@ -73,6 +78,19 @@ impl<'a> Handler<'a> {
                 inputs: Some(inputs),
             } if inputs.is_empty())
         });
+        // A selector is an endpoint operation the analyser typed the
+        // conjunct as (TIME-3: "A selector sets subscription or admission
+        // when it stands alone in the header or appears as a top-level
+        // conjunct").
+        let asks_valid = conjuncts.iter().any(|conjunct| {
+            matches!(
+                &conjunct.kind,
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::Valid,
+                    ..
+                }
+            )
+        });
         Handler {
             subscribed: header.subscribed.clone(),
             required: header.required.clone(),
@@ -85,6 +103,7 @@ impl<'a> Handler<'a> {
             selects: header.selects,
             beside: header.beside,
             empty,
+            asks_valid,
             body,
         }
     }

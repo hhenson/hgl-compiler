@@ -4,34 +4,50 @@
 
 // Names this file writes, which no macro of a header above takes.
 #undef a
+#undef a_branch_given_an_empty_reference_is_silent
 #undef a_designated_input_is_followed_through_its_rebinding
 #undef a_designated_position_is_followed_through_its_rebinding
 #undef a_designated_position_outside_the_list_fails
+#undef a_header_that_asks_valid_runs_no_handler_for_an_empty_reference
+#undef a_lifted_call_of_an_empty_reference_is_silent
 #undef a_reader_observes_the_input_designated
 #undef a_ref_parameter_is_present_and_wakes_once
 #undef a_relay_keeps_what_it_sampled
 #undef a_selected_entry_is_followed_through_its_key
 #undef a_selected_entry_the_dictionary_lacks_is_not_valid
+#undef an_empty_reference_is_handed_on
 #undef an_entry_at_a_value_key_is_followed
 #undef an_eval_records_a_ref_result_as_a_reader_does
 #undef b
 #undef changed_key
 #undef choose
+#undef chooses
 #undef chosen
 #undef core
 #undef demo
 #undef entry_a
 #undef flag
 #undef follow
+#undef given
+#undef handed
+#undef handed_doubled
+#undef handed_if_valid
+#undef handed_on
+#undef handed_on_if_valid
+#undef handed_or_low
 #undef high
 #undef high_slot
+#undef holds_one
+#undef holds_withdrawn
 #undef idx
 #undef item
 #undef items
 #undef key
+#undef lhs
 #undef low
 #undef low_slot
 #undef modified
+#undef on
 #undef pick
 #undef pick_list
 #undef picked
@@ -43,6 +59,7 @@
 #undef record
 #undef references
 #undef replay
+#undef rhs
 #undef route
 #undef routed
 #undef sample_picked
@@ -55,7 +72,10 @@
 #undef start
 #undef take
 #undef target
+#undef valid_of_a_ref_parameter_that_holds_no_reference_is_false
+#undef value
 #undef wakes
+#undef withdrawn
 #undef write_entry
 
 namespace hgl::demo::references::m_
@@ -68,7 +88,7 @@ struct impl_
 {
     static constexpr auto name = "demo.references::pick";
 
-    static void eval([[maybe_unused]] ::hgraph::In<"flag", ::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::In<"low", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive> low, [[maybe_unused]] ::hgraph::In<"high", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive> high, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Int>>> out_)
+    static void eval([[maybe_unused]] ::hgraph::In<"flag", ::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::In<"low", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> low, [[maybe_unused]] ::hgraph::In<"high", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> high, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Int>>> out_)
     {
         // when, line 10 (TIME-3)
         if (::hglrt::fn_modified(flag))
@@ -165,7 +185,7 @@ struct impl_
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& wakes = kept_.wakes;
         // when, line 39 (TIME-3)
-        if (::hglrt::fn_valid(target) && ::hglrt::fn_modified(target))
+        if (::hglrt::fn_modified(target))
         {
             wakes = ::hglrt::add__i64_i64(wakes, 1);
         }
@@ -438,7 +458,7 @@ struct impl_
 {
     static constexpr auto name = "demo.references::pick_list";
 
-    static void eval([[maybe_unused]] ::hgraph::In<"flag", ::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::In<"low", ::hgraph::REF<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>>, ::hgraph::InputActivity::Passive> low, [[maybe_unused]] ::hgraph::In<"high", ::hgraph::REF<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>>, ::hgraph::InputActivity::Passive> high, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>>> out_)
+    static void eval([[maybe_unused]] ::hgraph::In<"flag", ::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::In<"low", ::hgraph::REF<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> low, [[maybe_unused]] ::hgraph::In<"high", ::hgraph::REF<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> high, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>>> out_)
     {
         // when, line 104 (TIME-3)
         if (::hglrt::fn_modified(flag))
@@ -637,6 +657,264 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_::withdrawn
+{
+// withdrawn(on: bool, ref low: i64) -> ref i64 (node), module demo.references, line 182
+struct impl_
+{
+    static constexpr auto name = "demo.references::withdrawn";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"on", ::hgraph::TS<::hgraph::Bool>> on, [[maybe_unused]] ::hgraph::In<"low", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> low, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Int>>> out_)
+    {
+        // when, line 184 (TIME-3)
+        if (::hglrt::fn_modified(on))
+        {
+            if (::hglrt::checked_value(on))
+            {
+                out_.set(::hglrt::designation(low));
+                return;
+            }
+            ::hglrt::fn_invalidate(out_);
+        }
+    }
+};
+}  // namespace n_::withdrawn
+namespace w_
+{
+// withdrawn(on: bool, ref low: i64) -> ref i64 (node), module demo.references, line 182
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> withdrawn(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+{
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::withdrawn::impl_>(wiring_, on, low).as<::hgraph::TS<::hgraph::Int>>();
+}
+}  // namespace w_
+
+namespace n_::handed
+{
+// handed(take: bool, ref target: i64) -> ref i64 (node), module demo.references, line 190
+struct impl_
+{
+    static constexpr auto name = "demo.references::handed";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"take", ::hgraph::TS<::hgraph::Bool>> take, [[maybe_unused]] ::hgraph::In<"target", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> target, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Int>>> out_)
+    {
+        // when, line 191 (TIME-3)
+        if (::hglrt::fn_modified(take))
+        {
+            out_.set(::hglrt::designation(target));
+            return;
+        }
+    }
+};
+}  // namespace n_::handed
+namespace w_
+{
+// handed(take: bool, ref target: i64) -> ref i64 (node), module demo.references, line 190
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> target)
+{
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::handed::impl_>(wiring_, take, target).as<::hgraph::TS<::hgraph::Int>>();
+}
+}  // namespace w_
+
+namespace n_::handed_on
+{
+// handed_on(take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 194
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+    {
+        return ::hgl::demo::references::m_::w_::follow(wiring_, ::hgl::demo::references::m_::w_::handed(wiring_, take, ::hgl::demo::references::m_::w_::withdrawn(wiring_, on, low)));
+    }
+};
+}  // namespace n_::handed_on
+namespace w_
+{
+// handed_on(take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 194
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed_on(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+{
+    return ::hgl::demo::references::m_::n_::handed_on::impl_::compose(wiring_, take, on, low);
+}
+}  // namespace w_
+
+namespace n_::handed_if_valid
+{
+// handed_if_valid(take: bool, ref target: i64) -> ref i64 (node), module demo.references, line 204
+struct impl_
+{
+    static constexpr auto name = "demo.references::handed_if_valid";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"take", ::hgraph::TS<::hgraph::Bool>, ::hgraph::InputValidity::Unchecked> take, [[maybe_unused]] ::hgraph::In<"target", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive> target, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Int>>> out_)
+    {
+        // when, line 205 (TIME-3)
+        if (::hglrt::fn_modified(take))
+        {
+            out_.set(::hglrt::designation(target));
+            return;
+        }
+    }
+};
+}  // namespace n_::handed_if_valid
+namespace w_
+{
+// handed_if_valid(take: bool, ref target: i64) -> ref i64 (node), module demo.references, line 204
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed_if_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> target)
+{
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::handed_if_valid::impl_>(wiring_, take, target).as<::hgraph::TS<::hgraph::Int>>();
+}
+}  // namespace w_
+
+namespace n_::handed_on_if_valid
+{
+// handed_on_if_valid(take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 208
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+    {
+        return ::hgl::demo::references::m_::w_::follow(wiring_, ::hgl::demo::references::m_::w_::handed_if_valid(wiring_, take, ::hgl::demo::references::m_::w_::withdrawn(wiring_, on, low)));
+    }
+};
+}  // namespace n_::handed_on_if_valid
+namespace w_
+{
+// handed_on_if_valid(take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 208
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed_on_if_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+{
+    return ::hgl::demo::references::m_::n_::handed_on_if_valid::impl_::compose(wiring_, take, on, low);
+}
+}  // namespace w_
+
+namespace n_::holds_one
+{
+// holds_one(take: bool, ref target: i64) -> bool (node), module demo.references, line 219
+struct impl_
+{
+    static constexpr auto name = "demo.references::holds_one";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"take", ::hgraph::TS<::hgraph::Bool>> take, [[maybe_unused]] ::hgraph::In<"target", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> target, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_)
+    {
+        // when, line 220 (TIME-3)
+        if (::hglrt::fn_modified(take))
+        {
+            out_.set(::hglrt::fn_valid(target));
+            return;
+        }
+    }
+};
+}  // namespace n_::holds_one
+namespace w_
+{
+// holds_one(take: bool, ref target: i64) -> bool (node), module demo.references, line 219
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> holds_one(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> target)
+{
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::holds_one::impl_>(wiring_, take, target);
+}
+}  // namespace w_
+
+namespace n_::holds_withdrawn
+{
+// holds_withdrawn(take: bool, on: bool, low: i64) -> bool (graph), module demo.references, line 223
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+    {
+        return ::hgl::demo::references::m_::w_::holds_one(wiring_, take, ::hgl::demo::references::m_::w_::withdrawn(wiring_, on, low));
+    }
+};
+}  // namespace n_::holds_withdrawn
+namespace w_
+{
+// holds_withdrawn(take: bool, on: bool, low: i64) -> bool (graph), module demo.references, line 223
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> holds_withdrawn(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+{
+    return ::hgl::demo::references::m_::n_::holds_withdrawn::impl_::compose(wiring_, take, on, low);
+}
+}  // namespace w_
+
+namespace n_::handed_doubled
+{
+// handed_doubled(take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 235
+struct impl_
+{
+    // The call of `mul_` on line 235, lifted (FN-6).
+    struct lifted_00_
+    {
+        static constexpr auto name = "demo.references:mul_";
+        static void eval([[maybe_unused]] ::hgraph::In<"lhs", ::hgraph::TS<::hgraph::Int>> lhs, [[maybe_unused]] ::hgraph::Scalar<"rhs", ::hgraph::Int> rhs, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+        {
+            out_.set(::hglrt::mul__i64_i64(::hglrt::checked_value(lhs), rhs.value()));
+            return;
+        }
+    };
+
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+    {
+        return ::hgraph::wire<lifted_00_>(wiring_, ::hgl::demo::references::m_::w_::handed(wiring_, take, ::hgl::demo::references::m_::w_::withdrawn(wiring_, on, low)), static_cast<::hgraph::Int>(2));
+    }
+};
+}  // namespace n_::handed_doubled
+namespace w_
+{
+// handed_doubled(take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 235
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed_doubled(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+{
+    return ::hgl::demo::references::m_::n_::handed_doubled::impl_::compose(wiring_, take, on, low);
+}
+}  // namespace w_
+
+namespace n_::handed_or_low
+{
+// handed_or_low(chooses: bool, take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 245
+struct impl_
+{
+    // The `if` on line 247 over a connection (CTRL-2, CTRL-13 to CTRL-15): a child
+    // graph for each branch, of which hgraph's `switch_` runs the one selected.
+    struct switch_00_
+    {
+        // The branch selected while the condition is `true`.
+        struct branch_00_
+        {
+            static constexpr auto name = "demo.references:if on line 247";
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> given)
+            {
+                return given;
+            }
+        };
+    
+        // The branch selected while the condition is `false`.
+        struct branch_01_
+        {
+            static constexpr auto name = "demo.references:if on line 247";
+            static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> given)
+            {
+                return low;
+            }
+        };
+    
+        static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> given)
+        {
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
+            branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
+            branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
+            const ::std::array<::hgraph::WiringPortRef, 2> inputs_{low.erased(), given.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+        }
+    };
+
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> chooses, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+    {
+        [[maybe_unused]] const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> given = ::hgl::demo::references::m_::w_::handed(wiring_, take, ::hgl::demo::references::m_::w_::withdrawn(wiring_, on, low));
+        return ::hgl::demo::references::m_::w_::follow(wiring_, switch_00_::wire_(wiring_, chooses, low, given));
+    }
+};
+}  // namespace n_::handed_or_low
+namespace w_
+{
+// handed_or_low(chooses: bool, take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 245
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed_or_low(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> chooses, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low)
+{
+    return ::hgl::demo::references::m_::n_::handed_or_low::impl_::compose(wiring_, chooses, take, on, low);
+}
+}  // namespace w_
+
 namespace n_::i_::sampled::of_i64
 {
 // sampled(take: bool, ref target: i64) -> ref i64 (node), the instance `i64`, module demo.references, line 51
@@ -644,7 +922,7 @@ struct impl_
 {
     static constexpr auto name = "demo.references::sampled[i64]";
 
-    static void eval([[maybe_unused]] ::hgraph::In<"take", ::hgraph::TS<::hgraph::Bool>> take, [[maybe_unused]] ::hgraph::In<"target", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive> target, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Int>>> out_)
+    static void eval([[maybe_unused]] ::hgraph::In<"take", ::hgraph::TS<::hgraph::Bool>> take, [[maybe_unused]] ::hgraph::In<"target", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> target, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Int>>> out_)
     {
         // when, line 52 (TIME-3)
         if (::hglrt::fn_modified(take))
@@ -872,6 +1150,108 @@ void an_entry_at_a_value_key_is_followed()
     }();
         const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 2, 3};
         ::hglrt::testing::expect_same(left_06_, right_07_);
+    }();
+}
+
+void an_empty_reference_is_handed_on()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_09_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, true, ::std::nullopt, true, ::std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, false, ::std::nullopt, ::std::nullopt};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, ::std::nullopt, ::std::nullopt, 5};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_06_ = input_01_; const auto argument_07_ = input_03_; const auto argument_08_ = input_05_; return ::hgl::demo::references::m_::w_::handed_on(wiring_, argument_06_, argument_07_, argument_08_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 1, ::std::nullopt, ::std::nullopt, ::std::nullopt};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
+    }();
+}
+
+void a_header_that_asks_valid_runs_no_handler_for_an_empty_reference()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_09_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, true, ::std::nullopt, true, ::std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, false, ::std::nullopt, ::std::nullopt};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, ::std::nullopt, ::std::nullopt, 5};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_06_ = input_01_; const auto argument_07_ = input_03_; const auto argument_08_ = input_05_; return ::hgl::demo::references::m_::w_::handed_on_if_valid(wiring_, argument_06_, argument_07_, argument_08_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 1, ::std::nullopt, ::std::nullopt, 5};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
+    }();
+}
+
+void valid_of_a_ref_parameter_that_holds_no_reference_is_false()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_09_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, true, ::std::nullopt, true};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, false, ::std::nullopt};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, ::std::nullopt, ::std::nullopt};
+        return ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, [&] { const auto argument_06_ = input_01_; const auto argument_07_ = input_03_; const auto argument_08_ = input_05_; return ::hgl::demo::references::m_::w_::holds_withdrawn(wiring_, argument_06_, argument_07_, argument_08_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, true, ::std::nullopt, false};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
+    }();
+}
+
+void a_lifted_call_of_an_empty_reference_is_silent()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_09_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, true, ::std::nullopt, true, ::std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, false, ::std::nullopt, ::std::nullopt};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, ::std::nullopt, ::std::nullopt, 5};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_06_ = input_01_; const auto argument_07_ = input_03_; const auto argument_08_ = input_05_; return ::hgl::demo::references::m_::w_::handed_doubled(wiring_, argument_06_, argument_07_, argument_08_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 2, ::std::nullopt, ::std::nullopt, ::std::nullopt};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
+    }();
+}
+
+void a_branch_given_an_empty_reference_is_silent()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_012_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, ::std::nullopt, ::std::nullopt, ::std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{::std::nullopt, true, ::std::nullopt, true, ::std::nullopt};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, false, ::std::nullopt, ::std::nullopt};
+        const auto trace_06_ = ::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, ::std::nullopt, ::std::nullopt, 5};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_07_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_06_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_08_ = input_01_; const auto argument_09_ = input_03_; const auto argument_010_ = input_05_; const auto argument_011_ = input_07_; return ::hgl::demo::references::m_::w_::handed_or_low(wiring_, argument_08_, argument_09_, argument_010_, argument_011_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_013_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 1, ::std::nullopt, ::std::nullopt, ::std::nullopt};
+        ::hglrt::testing::expect_same(left_012_, right_013_);
     }();
 }
 

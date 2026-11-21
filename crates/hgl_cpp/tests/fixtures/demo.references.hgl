@@ -173,3 +173,85 @@ fn entry_a(changed_key: str, price: i64?) -> i64 => follow(write_entry(changed_k
 test an_entry_at_a_value_key_is_followed {
     assert eval(entry_a(changed_key: ["B", "A", "A"], price: [1, 2, 3])) == [_, 2, 3]
 }
+
+# A `ref` parameter that holds no reference, `return`ed: the result is
+# given the empty reference, which designates nothing (the owner's
+# decision of 2026-11-21), and its reader is not valid from then on. Its
+# handler's header decides whether it runs: one with no validity selector
+# does, and one whose header is `valid(target)` does not.
+fn withdrawn(on: bool, ref low: i64) -> ref i64 {
+    inject out
+    when modified(on) {
+        if on { return low }
+        invalidate(out)
+    }
+}
+
+fn handed(take: bool, ref target: i64) -> ref i64 {
+    when modified(take) { return target }
+}
+
+fn handed_on(take: bool, on: bool, low: i64) -> i64 => follow(handed(take, withdrawn(on, low)))
+
+test an_empty_reference_is_handed_on {
+    assert eval(handed_on(
+        take: [   _, true,     _, true, _],
+        on:   [true,    _, false,    _, _],
+        low:  [   1,    _,     _,    _, 5],
+    )) ==     [   _,    1,     _,    _, _]
+}
+
+fn handed_if_valid(take: bool, ref target: i64) -> ref i64 {
+    when modified(take) && valid(target) { return target }
+}
+
+fn handed_on_if_valid(take: bool, on: bool, low: i64) -> i64 =>
+    follow(handed_if_valid(take, withdrawn(on, low)))
+
+test a_header_that_asks_valid_runs_no_handler_for_an_empty_reference {
+    assert eval(handed_on_if_valid(
+        take: [   _, true,     _, true, _],
+        on:   [true,    _, false,    _, _],
+        low:  [   1,    _,     _,    _, 5],
+    )) ==     [   _,    1,     _,    _, 5]
+}
+
+fn holds_one(take: bool, ref target: i64) -> bool {
+    when modified(take) { return valid(target) }
+}
+
+fn holds_withdrawn(take: bool, on: bool, low: i64) -> bool => holds_one(take, withdrawn(on, low))
+
+test valid_of_a_ref_parameter_that_holds_no_reference_is_false {
+    assert eval(holds_withdrawn(
+        take: [   _, true,     _,  true],
+        on:   [true,    _, false,     _],
+        low:  [   1,    _,     _,     _],
+    )) ==     [   _, true,     _, false]
+}
+
+# The empty reference handed on, given to a lifted call and to a branch:
+# each reads the endpoint it designates, which is not valid.
+fn handed_doubled(take: bool, on: bool, low: i64) -> i64 => handed(take, withdrawn(on, low)) * 2
+
+test a_lifted_call_of_an_empty_reference_is_silent {
+    assert eval(handed_doubled(
+        take: [   _, true,     _, true, _],
+        on:   [true,    _, false,    _, _],
+        low:  [   1,    _,     _,    _, 5],
+    )) ==     [   _,    2,     _,    _, _]
+}
+
+fn handed_or_low(chooses: bool, take: bool, on: bool, low: i64) -> i64 {
+    let given = handed(take, withdrawn(on, low))
+    return follow(if chooses { given } else { low })
+}
+
+test a_branch_given_an_empty_reference_is_silent {
+    assert eval(handed_or_low(
+        chooses: [true,    _,     _,    _, _],
+        take: [   _, true,     _, true, _],
+        on:   [true,    _, false,    _, _],
+        low:  [   1,    _,     _,    _, 5],
+    )) ==     [   _,    1,     _,    _, _]
+}
