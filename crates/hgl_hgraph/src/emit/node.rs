@@ -216,6 +216,9 @@ impl Emitter<'_> {
             lifecycle.push(written.clone());
             stopping.push(written);
         }
+        if timer.is_some() && !capabilities.iter().any(|(name, _)| *name == "_clock") {
+            parameters.push("_clock: _hg.EvaluationClock = None".to_string());
+        }
         let stopping = stopping.join(", ");
         let lifecycle = lifecycle.join(", ");
         for at in handlers.iter().filter_map(|handler| handler.beside) {
@@ -437,15 +440,13 @@ impl Emitter<'_> {
         );
         let before = self.text.len();
         self.unheld(signature);
-        // Core's CAP-4 has `is_scheduled` "True while a wake is
-        // pending", and the wake being delivered is pending no longer.
-        // hgraph holds that wake until the node has run, so the
-        // provider takes it as the node is entered, and keeps that it
-        // was due: the scheduler then says what is still to come, for
-        // the scheduler as for the alarm.
+        // CAP-4: save the current delivery before asking which wakes are pending.
         if timer.is_some() {
             self.natives = true;
-            self.line(1, "_scheduler = _core.Wake(_scheduler)");
+            self.line(
+                1,
+                "_scheduler = _core.Wake(_scheduler, _clock.evaluation_time)",
+            );
         }
         if let (true, Some(woke)) = (holds_timer, &timer_woke) {
             self.line(1, &format!("_timer_woke = {woke}"));

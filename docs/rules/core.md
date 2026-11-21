@@ -491,7 +491,7 @@ analyser: done
 
 transpiler: partial
 
-- hgraph: as a node is entered each wake due then is taken from hgraph's scheduler (`_core.Wake`), which holds it until the node has run: it is delivered and no longer pending, so `is_scheduled`, `next_scheduled_time` (null where none is pending) and `un_schedule` with no tag see only the wakes to come, and `is_scheduled_now` holds through the evaluation, as `scheduled()` does
+- hgraph and C++: both adapters capture the wake delivered on entry and remove any requests for that evaluation time still present in the native queue. The delivery remains observable throughout evaluation. Pending queries and untagged cancellation see future requests only.
 - `schedule` with a `duration` or a `datetime`, a tag and `on_wall_clock`, `un_schedule` with a tag or without, and `reset` are hgraph's; a tag is kept with a mark before it, so the empty tag is a tag
 - A wake asked for at a `datetime` before the current evaluation time is dropped, with no failure; a zero duration in `start` wakes the node's first evaluation
 - A duration not more than zero, but a zero in `start`, fails the call with `schedule.non_positive_duration` where the compiler does not see it (TIME-8, `_starting=`): hgraph 0.9.8 drops a zero or negative duration asked for in an evaluation, and a negative one in `start`, with no failure
