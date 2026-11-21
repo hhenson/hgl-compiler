@@ -97,11 +97,11 @@ TEST_CASE("f64 division under each zero policy (NUM-3, NUM-9)") {
     // "`1.0 /{zero: .fail} 0.0`": numeric.division_by_zero.
     CHECK(code_raised([] { (void)hglrt::div__f64_f64<ZeroPolicy::fail>(1.0, 0.0); }) ==
           "numeric.division_by_zero");
-    // "`6.0 /{zero: .error} 2.0`": `ok(3.0)`; a zero divisor of either sign an Err.
+    // NUM-10: checked division returns Ok or Err data without an execution failure.
     CHECK(*hglrt::div__f64_f64<ZeroPolicy::error>(6.0, 2.0) == 3.0);
     CHECK(hglrt::div__f64_f64<ZeroPolicy::error>(1.0, 0.0).error().code == "numeric.division_by_zero");
     CHECK(hglrt::div__f64_f64<ZeroPolicy::error>(0.0, -0.0).error().code == "numeric.division_by_zero");
-    // "NaN divided by a nonzero value with `zero: .error`": Ok containing NaN.
+    // ERR-11: checked division of NaN by a nonzero value gives Ok containing NaN.
     CHECK(std::isnan(*hglrt::div__f64_f64<ZeroPolicy::error>(not_a_number, 2.0)));
     CHECK(hglrt::div__f64_f64<ZeroPolicy::error>(not_a_number, 0.0).error().code ==
           "numeric.division_by_zero");
@@ -157,6 +157,7 @@ TEST_CASE("plain numeric equality is exact (NUM-2, NUM-4, NUM-5)") {
     CHECK(hglrt::ne__i64_f64_f64_f64(0, not_a_number));
 }
 
+// NUM-11: the native receives scalar tolerance arguments at invocation.
 TEST_CASE("numeric equality within tolerances is exact (NUM-4, NUM-5)") {
     // "`1.0 =={abs: 0.01} 1.005`": true.
     CHECK(hglrt::eq__f64_f64_f64_f64(1.0, 1.005, 0.01));

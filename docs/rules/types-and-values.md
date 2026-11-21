@@ -9,7 +9,12 @@ analyser: partial
 - Scalar type identities
 - Left: capabilities
 
-transpiler: planned
+transpiler: partial
+
+- Uses distinct C++ representations for bool, i64, f64, Unicode strings and byte
+  sequences and the admitted ordinary collection types.
+- Left: The unstable key restriction for f64 and types containing it is pending. An
+  ordinary type with no C++ representation is reported.
 
 ## TYPE-2
 
@@ -23,7 +28,12 @@ analyser: partial
 - A temporal constant is the value it denotes: two `datetime`s are one where they are one UTC instant (UNIT-13: "`@2026-09-03T09:30Z` and `@2026-09-03T10:30+01:00`, one instant"), and two `zoned_datetime`s where they are one instant in one zone ("zone aliases are distinct names"); a `zoned_time` is its parts
 - Left: the domains of computed values
 
-transpiler: planned
+transpiler: partial
+
+- Writes temporal scalar domains as distinct SDK value types, including civil time and
+  zoned values, with provider-backed zone lookup.
+- Left: Temporal connections of timezone and zoned time are outside the scalar family.
+  Unsupported literal forms and types are reported.
 
 ## TYPE-3
 
@@ -33,7 +43,14 @@ analyser: partial
 - an abstract struct is not constructed in a value function
 - Left: constructions elsewhere
 
-transpiler: planned
+transpiler: partial
+
+- Uses nominal C++ struct types and abstract bases, generating a template for supported
+  generic arguments.
+- Left: Reports self-containing structs, abstract fields named after their type,
+  unsupported fields or bases, and template applications that lose HGL atomic identity
+  or would duplicate nullability. Struct parameter packs and value parameters outside
+  the supported constant kinds are not emitted.
 
 ## TYPE-4
 
@@ -50,7 +67,13 @@ analyser: partial
 - A construction in a value function names each field it gives, in any order, and gives every field that has no default and is not optional; a positional argument is rejected
 - Left: constructions elsewhere
 
-transpiler: planned
+transpiler: partial
+
+- Constructs concrete structs by name and in argument order, using inherited defaults
+  and implicit nulls.
+- Left: Reports a generic field default the emitter cannot specialize, a default that
+  runs statements or propagates failure, and a default that recursively omits itself.
+  Unmapped fields and missing required constructor inputs have defensive reports.
 
 ## TYPE-6
 
@@ -58,6 +81,13 @@ analyser: partial
 
 - No struct inherits from itself; a struct holds itself only through a field that is optional, `Node?`, `atomic<Node?>` or `atomic<Node>?`, or that holds it only as elements of a collection that may be empty; the field's default is `null` or `[]`, and the structs below keep a null one; the field passes each generic parameter on whole; an abstract-typed field holds each descendant; a collection is admitted inside an `atomic<...>` only
 - Left: a constant argument built from a parameter
+
+transpiler: partial
+
+- Emits abstract parent values and accesses inherited fields through the concrete
+  struct's generated implementation.
+- Left: Reports recursive struct layouts, even where the analyser admits them through
+  nullable fields or empty-capable containers.
 
 ## TYPE-7
 
@@ -72,7 +102,12 @@ analyser: done
 - A call of the enum's name constructs a member from an `i64` or a `str`, one argument by position; a constant that is no member's number or name is `member.unknown`
 - A construction from a constant that names a member is read as that member: a `switch` label, a `const` argument and a generic value argument take it as they take `Side.buy`
 
-transpiler: planned
+transpiler: partial
+
+- Emits enum members and constructs members from names or numbers. Supplies enum
+  payload, constant and trace forms.
+- Left: An unavailable enum layout or unsupported construction source is reported. A
+  failed construction lacks `enum.no_member`.
 
 ## TYPE-8
 
@@ -82,7 +117,7 @@ analyser: planned
 
 transpiler: planned
 
-- A boxed value keeps its exact type; equality, capability failure, independent copies
+- The value representation for boxed `any` is pending.
 
 ## TYPE-9
 
@@ -95,7 +130,15 @@ analyser: partial
 - In a hook an atomic input's payload is its V
 - Left: temporalization of composite types; an atomic connection given to a lifted value function of V
 
-transpiler: planned
+transpiler: partial
+
+- Writes structural temporal lists, tuples, structs, sets and dictionaries, including
+  atomic struct connections, and maps supported children to endpoints.
+- Left: Reports generic or abstract temporal structs, bundles with unsupported field
+  types, list parts that are sets, dictionaries, windows or atomic structs, nullable
+  aggregate connections, non-scalar temporal keys, and dictionary values outside
+  scalars, sets, dictionaries and tuples of supported keyed forms. The family dispatch
+  reports unsupported schemas, reads, writes, deltas, constants and traces.
 
 ## TYPE-10
 
@@ -106,7 +149,11 @@ analyser: partial
 - A size a generic value parameter gives is held where the parameter is given (`values::sizes`): by a struct application written in any type, a construction's and a parent's included, its argument written, defaulted, or worked out from a size expression, through the fields of the structs it applies; and by a call of a generic function, in its parameters and result. A negative count, or no count, is `list.size` there
 - Left: an unsized pattern accepting a fixed size; a size inside a generic body, a local's `list<i64, N - 3>`, which GEN-7 judges once where the body is declared
 
-transpiler: planned
+transpiler: partial
+
+- Writes growing lists and positive fixed-size lists in value code and as connections.
+- Left: Zero-size and unresolved sizes have no C++ representation. Temporal element
+  forms follow TYPE-9.
 
 ## TYPE-11
 
@@ -121,7 +168,12 @@ analyser: partial
 - A size a generic value parameter gives is held to the same kind and bounds where the parameter is given, as TYPE-10's is (`values::sizes`): `Ticks<0>` for a `rolling_window<f64, N>` is `rolling_window.size_bounds`, and `Kinded<"x">` `rolling_window.size_kind`
 - Left: a size computed by a call; a size inside a generic body (GEN-7); the delta of a window of a duration that a generic parameter stands for, which is read in an instance
 
-transpiler: planned
+transpiler: partial
+
+- Writes tick-count and duration windows with their analysed maximum and minimum, and
+  emits their arrivals and supported reads.
+- Left: Windows of nonscalar types, enums, timezone and zoned time are reported.
+  Endpoint restrictions are under END-9.
 
 ## TYPE-12
 
@@ -136,7 +188,13 @@ analyser: done
 - `rolling_window`, `atomic` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)
 - A `signal` takes no default but `null` (`type.mismatch`), and a hook gives it to an endpoint operation and reads it nowhere else (`type.not_ordinary`)
 
-transpiler: planned
+transpiler: partial
+
+- Maps a mode-marked node parameter or result to reference wiring while preserving the
+  parameter's payload type in ordinary code. Endpoint arguments are borrowed by
+  supported natives.
+- Left: a `signal` input has no supported temporal schema. Reference designations and
+  borrowed endpoint calls are limited to the forms under FN-16 and TIME-9.
 
 ## TYPE-13
 
@@ -156,7 +214,13 @@ analyser: partial
 - a literal `null` is no value of a type with no `?`, and is rejected where nothing gives it a type
 - Left: null from other expressions
 
-transpiler: planned
+transpiler: partial
+
+- Uses optionals for ordinary `T?`, preserves null in admitted collection types and
+  compares a nullable value with its T. Writes nullable scalar and enum connections and
+  lifts T to a supported `T?` connection.
+- Left: Temporal nullable composites and generic applications where nullability would
+  incorrectly nest are unsupported (TYPE-9, TYPE-3).
 
 ## TYPE-15
 
@@ -169,7 +233,12 @@ analyser: partial
 - `list<f64?>` and `list<f64>?` are two types
 - Left: a present null is data, distinct from an invalid input
 
-transpiler: planned
+transpiler: partial
+
+- Keeps null distinct from invalidity and silence in nullable scalar and enum
+  connections. A supported bundle's absent optional field reads as null.
+- Left: Nullable temporal aggregate types and unsupported optional field forms follow
+  TYPE-9.
 
 ## TYPE-16
 
@@ -185,7 +254,13 @@ analyser: partial
 - A constant position of a list's delta that is negative or past a fixed list's bounds is `delta.index_bounds`; a negative `size_modified` is a count to reduce by
 - Left: a constructor written for a tuple's delta, which is not judged
 
-transpiler: planned
+transpiler: partial
+
+- Writes scalar, nullable, whole atomic, tuple, list, set, dictionary and struct deltas
+  with the supported properties and temporal adapters.
+- Left: Reports unsupported delta constructors, properties and member-delta types. Trace
+  and publication support depend on TYPE-9. A window's delta is available only through
+  its supported endpoint forms (END-9).
 
 ## TYPE-17
 
@@ -194,4 +269,7 @@ analyser: done
 - `tenor` is a scalar type of its own, and a tenor literal is one: its count of months and of days, or of business days, so `1Y` and `12M` are one value
 - Its operators are core's (TEN-1)
 
-transpiler: planned
+transpiler: done
+
+- Uses the shared SDK tenor scalar and preserves its two forms and checked counts in
+  emitted values.

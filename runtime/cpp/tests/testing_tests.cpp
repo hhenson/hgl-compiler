@@ -123,7 +123,7 @@ TEST_CASE("an eval runs its entry in simulation and reads its recording (CEVAL-1
     const auto counted =
         hglrt::testing::evaluate<i64>(entry_of<Counted>(Dense<i64>{7, std::nullopt, 7, 7, std::nullopt}));
     CHECK(hglrt::testing::same(counted, Dense<i64>{1, std::nullopt, 2, 3}));
-    // runs_are_independent: each run has fresh state and a fresh recording.
+    // RUN-4 and CEVAL-5: each run has fresh state and a fresh recording.
     CHECK(hglrt::testing::same(hglrt::testing::evaluate<i64>(entry_of<Counted>(Dense<i64>{})), Dense<i64>{}));
     CHECK(
         hglrt::testing::same(hglrt::testing::evaluate<i64>(entry_of<Counted>(Dense<i64>{7, std::nullopt, 7})),

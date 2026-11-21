@@ -2,7 +2,8 @@
 //! connections and no payload read) as structs whose static `compose`
 //! wires hgraph's graph. Part of the transpiler, the last stage; a family of the
 //! dispatch point (`forms`) for the statements and the connections of a
-//! graph.
+//! graph. The wiring supplies dependencies for the runtime's cycle
+//! scheduler (TIME-2).
 //!
 //! | HGL | C++ |
 //! | --- | --- |
