@@ -1,0 +1,10 @@
+module tc.a.types
+
+use tc.a::{Point, px}
+
+export struct Other { y: i64 }
+export const fn both(p: Point, o: Other) -> i64 => px(p) + o.y
+
+test both_types {
+    assert both(Point(x: 2), Other(y: 3)) == 5
+}
