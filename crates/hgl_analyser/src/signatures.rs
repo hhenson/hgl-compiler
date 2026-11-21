@@ -19,7 +19,7 @@ use crate::constant::{Constants, Fault, Scope};
 use crate::declared::names_parameter;
 use crate::program::{Binding, Declaration, DeclarationKind, Phase, Program, Role};
 use crate::syntax::{child, has_token};
-use crate::types::{Detail, GenericKind, NamedKind, Type};
+use crate::types::{Detail, GenericKind, NamedKind, Pack, Type};
 use crate::values::generic_default;
 use crate::{codes, error};
 
@@ -28,9 +28,77 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     constant_failures(program, diagnostics);
     generic_defaults(program, diagnostics);
     option_kinds(program, diagnostics);
+    pack_declarations(program, diagnostics);
     configuration_shapes(program, diagnostics);
     var_parameters(program, diagnostics);
     ref_marks(program, diagnostics);
+}
+
+/// FN-8 permits one pack of each kind. GEN-6 requires an operator's
+/// pack slot to stay a pack in each candidate, even for one argument.
+fn pack_declarations(program: &Program, diagnostics: &mut Diagnostics) {
+    for module in &program.modules {
+        for (declaration, detail) in module.declarations.iter().zip(&module.details) {
+            let Detail::Callable(signature) = detail else {
+                continue;
+            };
+            let (mut positional, mut named) = (None, None);
+            for parameter in &signature.parameters {
+                let (first, kind) = match parameter.pack {
+                    Some(Pack::Positional) => (&mut positional, "positional"),
+                    Some(Pack::Named) => (&mut named, "named"),
+                    None => continue,
+                };
+                if let Some(at) = *first {
+                    diagnostics.emit(
+                        error(
+                            Category::Type,
+                            codes::PACK_DUPLICATE,
+                            parameter.at,
+                            format!("`{}` is a second {kind} pack", parameter.name),
+                            "FN-8",
+                        )
+                        .with_related(at, "the first pack of this kind"),
+                    );
+                } else {
+                    *first = Some(parameter.at);
+                }
+            }
+
+            let Some((_, Some(operator))) = declaration.kind.candidate() else {
+                continue;
+            };
+            let owner = &program.modules[operator.module];
+            let Some(Detail::Callable(public)) = owner.details.get(operator.declaration) else {
+                continue;
+            };
+            for (parameter, index) in public
+                .parameters
+                .iter()
+                .zip(public.candidate_parameters(signature))
+            {
+                let Some(index) = index.filter(|_| parameter.pack.is_some()) else {
+                    continue;
+                };
+                let candidate = &signature.parameters[index];
+                if candidate.pack.is_none() {
+                    diagnostics.emit(
+                        error(
+                            Category::Operator,
+                            codes::IMPL_PACK,
+                            candidate.at,
+                            format!(
+                                "`{}` is a fixed parameter where the operator declares a pack",
+                                candidate.name
+                            ),
+                            "GEN-6",
+                        )
+                        .with_related(parameter.at, "the operator's pack"),
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// FN-16: "A node (FN-2, NATIVE-3) may mark a temporal parameter `ref`,

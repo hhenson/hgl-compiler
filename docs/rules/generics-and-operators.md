@@ -94,7 +94,7 @@ analyser: partial
 - A candidate declares its operator's configuration parameters. Named and symbolic calls bind those parameters in braces, and a candidate may use the operator's default (FN-18, EXPR-10).
 - A value candidate may mark a parameter `var`, which takes no part in selecting it (FN-15)
 - An option given a generic value parameter of the enclosing function, `step(v, mode: M)` in `go<const M: Mode>`, admits a candidate where the function's `requires` binds the parameter, `requires M == .slow` (GEN-3); where it states nothing of it, a default of it included, no candidate is known to admit the call, which is `operator.no_candidate` where the function is declared (GEN-7)
-- The compiler still accepts a fixed parameter in an operator pack's place. The proposed `impl.pack` check is pending. Bare Boolean requirements await #367.
+- A fixed parameter in an operator pack's place reports the proposed `impl.pack` code at the candidate parameter name. A pack with cardinality one is accepted. Bare Boolean requirements await #367.
 - Left: a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidates
 
 ## GEN-7
@@ -146,7 +146,7 @@ analyser: partial
 
 - A cardinality bounds the arguments a generic type's pack takes, and has its upper bound at least its lower
 - Function and operator calls check the cardinality of captured arguments against the value parameter and its generic type pack. Explicit positional type sequences also constrain the argument count. The HIR records the resolved sequence of types for each captured type pack.
-- Pack reflection and evaluation of `any`, including its generic binding rule (#367), are pending. The declaration checks for `pack.duplicate` and `impl.pack` are pending under FN-8 and GEN-6.
+- Pack reflection and evaluation of `any`, including its generic binding rule (#367), are pending.
 
 transpiler: partial
 
