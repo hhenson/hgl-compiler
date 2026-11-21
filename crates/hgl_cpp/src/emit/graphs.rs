@@ -175,18 +175,16 @@ impl Emitter<'_> {
     ) -> String {
         let ExprKind::Call {
             callee:
-                Callee::Function {
+                callee @ (Callee::Function {
                     module,
                     declaration,
-                    generics,
                     ..
                 }
                 | Callee::Candidate {
                     module,
                     declaration,
-                    generics,
                     ..
-                },
+                }),
             arguments,
             ..
         } = &value.kind
@@ -199,15 +197,17 @@ impl Emitter<'_> {
         else {
             return self.missing(value.at, "this call");
         };
-        let (signature, suffix): (&Signature, Option<String>) = if declared.generics.is_empty() {
-            (declared, None)
-        } else {
+        let concrete = if self.instances.instanced(program, module, declaration) {
             let instances = self.instances;
-            match instances.find(program, (module, declaration), generics) {
-                Some(instance) => (&instance.signature, Some(instance.suffix.clone())),
+            match instances.find_call(program, callee, arguments) {
+                Some(instance) => Some(instance),
                 None => return self.missing(value.at, "a call of an instance that is not written"),
             }
+        } else {
+            None
         };
+        let signature = concrete.map_or(declared, |instance| &instance.signature);
+        let suffix = concrete.map(|instance| instance.suffix.clone());
         self.piece
             .reach
             .uses
@@ -220,10 +220,11 @@ impl Emitter<'_> {
         let mut failing = 0;
         let mut changing = false;
         for (position, argument) in arguments.iter().enumerate() {
-            let Some(index) = argument
-                .parameter
-                .filter(|&index| argument.pack.is_none() && index < signature.parameters.len())
-            else {
+            let index = concrete.map_or_else(
+                || argument.parameter.filter(|_| argument.pack.is_none()),
+                |instance| instance.parameter(argument),
+            );
+            let Some(index) = index.filter(|&index| index < signature.parameters.len()) else {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let parameter = &signature.parameters[index];

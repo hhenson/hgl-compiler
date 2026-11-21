@@ -140,10 +140,11 @@ impl Emitter<'_> {
         };
         // What is called, and the signature its parameters are of: an
         // instance's has the call's generic arguments in place.
+        let mut concrete = None;
         let (called, signature): (String, &Signature) = match declared.kind {
             DeclarationKind::Function(Role::Value)
             | DeclarationKind::Implementation(Role::Value, _) => {
-                if declared_signature.generics.is_empty() {
+                if !self.instances.instanced(program, module, declaration) {
                     self.piece.reach.uses.insert((module, declaration, None));
                     (
                         names::function(program, module, declaration, None),
@@ -151,8 +152,7 @@ impl Emitter<'_> {
                     )
                 } else {
                     let instances = self.instances;
-                    let Some(instance) = instances.find(program, (module, declaration), generics)
-                    else {
+                    let Some(instance) = instances.find_call(program, callee, arguments) else {
                         return self.missing(at, "a call of an instance that is not written");
                     };
                     self.piece.reach.uses.insert((
@@ -160,6 +160,7 @@ impl Emitter<'_> {
                         declaration,
                         Some(instance.suffix.clone()),
                     ));
+                    concrete = Some(instance);
                     (
                         names::function(program, module, declaration, Some(&instance.suffix)),
                         &instance.signature,
@@ -234,10 +235,11 @@ impl Emitter<'_> {
         // it is held where it is evaluated before the call.
         let mut written: Vec<(usize, String, bool, Held)> = Vec::new();
         for argument in arguments {
-            let Some(index) = argument
-                .parameter
-                .filter(|&index| argument.pack.is_none() && index < signature.parameters.len())
-            else {
+            let index = concrete.map_or_else(
+                || argument.parameter.filter(|_| argument.pack.is_none()),
+                |instance| instance.parameter(argument),
+            );
+            let Some(index) = index.filter(|&index| index < signature.parameters.len()) else {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let parameter = &signature.parameters[index];
