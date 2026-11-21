@@ -146,7 +146,8 @@ const BACKTEST: &str = concat!(
     "eval doubled(values: rounds)\n",
 );
 
-/// UNIT-14: an application that sets the run's store before its run.
+/// UNIT-14: an application that sets the run's store before its run,
+/// calling a specialization of a named operator requirement (GEN-16).
 const STORED: &str = concat!(
     "application demo.ticks.stored\n",
     "\n",
@@ -734,7 +735,8 @@ fn list_code_runs_on_the_sdk() {
 /// replayed, each part through its own form (TYPE-9); a child of a list of
 /// tuples and a key's child of a dictionary of tuples as connections of a
 /// graph (TIME-9, EXPR-7); a struct with a list field, and a list of them,
-/// as a node's configuration (FN-1), and one in the run's store (CAP-6).
+/// as a node's configuration (FN-1), traversed by a hook (CTRL-8),
+/// and one in the run's store (CAP-6).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn nested_forms_run_on_the_sdk() {
@@ -1184,7 +1186,8 @@ fn configuration_parameters_run_on_the_sdk() {
 }
 
 /// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code and
-/// temporal nodes, including SOURCE-2 yield times and an application failure.
+/// temporal nodes, including result guards (ERR-3), SOURCE-2 yield times
+/// and an application failure.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn contextual_result_reads_run_on_the_sdk() {

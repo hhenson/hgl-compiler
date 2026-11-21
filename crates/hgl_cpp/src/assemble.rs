@@ -88,6 +88,8 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     };
     let mut found = Found::new();
     let mut blocked = |piece: &Piece| blocked(pieces, &mut found, &piece.reach);
+    // TST-14: keep an independent outcome for each case. A target
+    // failure in one test's dependency graph does not block the others.
     let blocks: Vec<Blocks> = written
         .iter()
         .map(|module| Blocks {
@@ -174,7 +176,8 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             })
             .map(|(piece, _)| piece)
             .collect();
-        // Core's tests are no tests of the program's.
+        // TST-2: a test gets its own executable entry. Core's tests
+        // are excluded from the program's test list.
         let tests: Vec<(usize, &Piece)> = module
             .tests
             .iter()

@@ -269,8 +269,8 @@ fn a_value_function_and_its_tests_are_written() {
 }
 
 /// A form the target does not write yet is reported where it is
-/// written, and a test that reaches it is not run, with that reason; a
-/// test that reaches nothing of the kind is run all the same.
+/// written. A test that reaches a missing native is blocked (NATIVE-7),
+/// and independent tests keep their own outcome (TST-14).
 #[test]
 fn a_form_not_written_yet_blocks_what_reaches_it() {
     let emitted = emit(&[(
@@ -2327,7 +2327,7 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
 
 /// FN-6: "scalar arguments and omitted defaults bind as configuration": a
 /// lifted call that leaves out a parameter gives the node its default as
-/// an `hgraph::Scalar`, evaluated where the graph is built, after the
+/// an `hgraph::Scalar`, evaluated where the graph is built (EXPR-14), after the
 /// arguments written and in the order of the parameters, each held first
 /// where more than one may fail (EXPR-2); one written `T?` with none is
 /// null in the node's call (UNIT-8); a default that runs statements is
@@ -2446,8 +2446,8 @@ fn a_default_that_leaves_itself_out_is_reported() {
 }
 
 /// A unit holds every function of its module that is written, and is
-/// linked whole: an executable is linked with every unit its own calls
-/// into, though no test calls the function that does.
+/// linked whole. The test has a separate entry (TST-2) and links every
+/// unit its own calls into, even for callees the test never uses.
 #[test]
 fn an_executable_links_what_its_units_call() {
     let emitted = emit(&[
@@ -2575,7 +2575,8 @@ fn provides_natives(name: &str) -> bool {
         .contains(&name)
 }
 
-/// Core's native candidates as the target calls them: a generic one's
+/// Core's native candidates through the selected provider (NATIVE-4,
+/// NUM-8): a generic one's
 /// arguments are its template's, a zero policy (NUM-3) and the type of
 /// an equality (OPS-2); a candidate of `convert`, whose candidates are
 /// told apart by what they give (OPS-4), that takes the value alone is

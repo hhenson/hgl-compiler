@@ -25,7 +25,13 @@ analyser: partial
 - A generic value parameter takes its default where nothing else says what it is: a function's and a candidate's at a call, a struct's where it is named bare or constructed, an operator's in the output requested
 - Left: packs; solvable equalities; temporal bodies
 
-transpiler: planned
+transpiler: partial
+
+- Writes each demanded concrete value or temporal function instance and ordinary generic
+  struct templates. Keeps references to instances in the declaring module.
+- Left: An unresolved or unavailable instance is reported. Generic struct template and
+  argument limits are under TYPE-3. A native argument outside the supported type and
+  constant representations is reported.
 
 ## GEN-3
 
@@ -137,8 +143,10 @@ analyser: partial
 
 transpiler: partial
 
-- C++ uses the analysed argument order, names and types when it writes each pack's parameters, including an empty capture.
-- Left: `schemas(pack)` as a runtime-only borrowed view.
+- C++ uses the analysed argument order, names and types when it writes each pack's
+  parameters, including an empty capture.
+- Left: Reading a pack as a whole and `schemas(pack)` remain unsupported. Function
+  parameter reflection awaits #366, and `any` over a pack awaits #367.
 
 ## GEN-11
 
@@ -200,7 +208,12 @@ analyser: partial
 - A function's requirement that does not hold at a call of it, and a struct's where it is constructed, is `requires.unmet` (GEN-3)
 - Left: a predicate, and the arrow rejected on one; a requirement supplied with a value or a set; a requirement checked where it is declared
 
-transpiler: planned
+transpiler: partial
+
+- Lowers a generic instance's supplied answer to a named operator requirement to its
+  resolved candidate.
+- Left: An operator requirement left without an executable answer is reported. Function
+  law predicates await #367 (GEN-18).
 
 ## GEN-17
 
@@ -223,3 +236,5 @@ analyser: planned
 - Reading the given function's laws in requirements and defaults awaits #367.
 
 transpiler: planned
+
+- Function law predicates await #367.

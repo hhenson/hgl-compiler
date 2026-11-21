@@ -7,7 +7,8 @@
 //! for each SDK, wherever `hgl` is installed. The emitter reads the
 //! library's headers for one thing: which of core's native functions
 //! the library defines ([`provides`]), so that a call of one it does not
-//! is reported, as any other form the target does not write yet.
+//! is reported, as any other form the target does not write yet. This
+//! is the bundled provider binding used by the C++ target (NATIVE-4).
 
 use std::collections::HashSet;
 use std::sync::LazyLock;

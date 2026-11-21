@@ -60,7 +60,14 @@ analyser: partial
 - Law predicates in defaults await #367.
 - Left: that a default is a required constant; the default of a window, an atomic or a reference, which is held to no type; a default whose parameter's type names a generic parameter
 
-transpiler: planned
+transpiler: partial
+
+- Binds omitted defaults or null after explicit arguments. Wires an omitted temporal
+  default as a constant or leaves an optional input silent.
+- Left: defaults that run statements, propagate a failure, recursively leave
+  themselves out or have unsupported types. A graph call leaving out a nullable
+  temporal input is reported (#399), as is a fallible default of a lifted nullable
+  argument.
 
 ## UNIT-9
 
@@ -113,7 +120,11 @@ analyser: partial
 - One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a default a call leaves to be read
 - Left: the value of a constant computed by a `const fn`; a struct's field default counts for a construction that gives the field; a formatter's writing a constant back as written, as there is no formatter yet
 
-transpiler: planned
+transpiler: partial
+
+- Emits one module constant value and reuses it at its reads.
+- Left: Reports a constant whose value runs statements or propagates a failure. A
+  constant with no value has a defensive report.
 
 ## UNIT-14
 
@@ -133,4 +144,7 @@ analyser: done
 - The entry arguments can read an earlier `inject run_config` (RUN-6).
 - Its path is no other file's: the first file of the path is the unit and each later one is reported (`application.duplicate_path`)
 
-transpiler: planned
+transpiler: done
+
+- Emits each application's own entry unit, computes its pre-run arguments and store
+  actions in written order and links the pieces it reaches.

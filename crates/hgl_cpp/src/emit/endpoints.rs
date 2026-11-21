@@ -12,7 +12,7 @@
 //! | `delta_value(a)` (END-3, ERR-14) | the plain read, or the read whose place takes a `result` where the analyser recorded it so ([`ExprKind::CheckedDelta`]): `::hglrt::fn_delta_value(a)`, `fn_delta_value_checked(a)` for a scalar |
 //! | `last_modified(a)` (END-6) | `::hglrt::fn_last_modified(a)` |
 //! | `invalidate(out)` (END-4) | `::hglrt::fn_invalidate(out_)` |
-//! | `is_active(a)`, an `endpoint<T>` argument of a native (TIME-9) | `::hglrt::fn_is_active(a)`: the view itself, which the natives take as it is |
+//! | `is_active(a)`, an `endpoint<T>` argument of a native (TIME-9, TYPE-12) | `::hglrt::fn_is_active(a)`: the view itself, which the natives take as it is |
 //! | `clock.evaluation_time`, a property of a capability (CAP-1) | `clock.evaluation_time()`: the library's capability, made at the top of the hook |
 //!
 //! `is_active`, `activate` and `passivate` of an input are the `activity`
@@ -35,6 +35,7 @@ use crate::runtime;
 
 /// The capability `inject name` binds (TIME-8), as the hook's hgraph
 /// view of it and the library's type made from that (`capabilities.h`).
+/// The borrowed logger and clock views supply CAP-2 and CAP-3.
 /// `None` for `scheduler` and `alarm`, which the timers' work writes, and
 /// for any other name.
 pub(super) fn capability(name: &str) -> Option<(&'static str, &'static str)> {

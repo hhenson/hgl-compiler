@@ -29,7 +29,8 @@
 //! ([`Instances::typed`]): which candidate answers a requirement it
 //! states (GEN-16) or a call a membership it states authorises (GEN-3,
 //! GEN-7), and what a generic value parameter is (GEN-13), each instance
-//! says.
+//! says. For tenor date movement the instances call the selected
+//! calendar and rolling operations (TEN-5, TEN-6, TEN-7, TEN-8).
 //!
 //! An eval asks for instances too: its run is wired with core's
 //! `replay` for each input it gives a trace and core's `record` for

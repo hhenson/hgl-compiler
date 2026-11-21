@@ -39,9 +39,12 @@ driver: planned
 
 - Target selection is explicit
 
-transpiler: planned
+transpiler: partial
 
-- The provider meets the declared contract
+- Selects the bundled C++ runtime bindings by core identity and signature, checking for
+  a provider before emitting a native call.
+- Left: Selection and matching of user native implementation parts, including native
+  temporal hooks, remains pending.
 
 ## NATIVE-5
 
@@ -69,6 +72,10 @@ analyser: done
 - A native declaration is checked from what it declares, with no provider: its role, its signature, a native type's properties, an operator's native candidates
 - One with no implementation part keeps its role
 
-transpiler: planned
+transpiler: partial
 
-- Execution needs a compatible provider; an absent binding fails
+- Emits a core native call only when the provider advertises the binding. The transpiler
+  reports a missing binding and excludes code that reaches it.
+- Left: User-supplied native functions, candidates and types, non-HGL temporal bodies,
+  and native arguments with no provider representation are reported. Runtime providers
+  for further core operations are tracked under those operations.
