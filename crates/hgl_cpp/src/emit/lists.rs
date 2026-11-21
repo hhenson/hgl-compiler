@@ -20,7 +20,7 @@
 //! a nullable, a list, and a struct or a tuple, the `structs` family's. A
 //! part the library does not read and publish as a part yet, a set, a
 //! dictionary, a window, an atomic struct, is not this family's, and is
-//! reported; so is a child of a list of structs or tuples named in a hook. FN-11 gives a lifted helper a fixed list only where it
+//! reported. FN-11 gives a lifted helper a fixed list only where it
 //! is `all_valid`, which the lifted call's node asks first (`lifting`).
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind};
@@ -111,18 +111,6 @@ fn bundle(schema: &str) -> bool {
     .any(|form| schema.starts_with(form))
 }
 
-/// True where `ty`, the type of a list's element, is a struct or a tuple.
-fn bundled(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Tuple(_)
-            | Type::Named {
-                kind: NamedKind::Struct,
-                ..
-            }
-    )
-}
-
 /// The library's function of the operation `operation` on an endpoint,
 /// as `endpoints.h` names it, where it is one a child is given.
 fn native(operation: EndpointOperation) -> Option<&'static str> {
@@ -156,15 +144,6 @@ impl Emitter<'_> {
         };
         let namespace = runtime::NAMESPACE;
         let shape = shape(&base.ty)?;
-        // A child of a list of structs or tuples named in a hook: the
-        // library's `Child` of one is no view a struct's or a tuple's own
-        // reads take (structs.h).
-        if bundled(&child.ty) {
-            return Some(self.missing(
-                child.at,
-                "a child of a list of structs or tuples, named in a hook",
-            ));
-        }
         match shape {
             // EXPR-2: the parent is chosen before the next index is
             // evaluated, as C++ evaluates a call's arguments in no order it

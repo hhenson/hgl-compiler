@@ -794,6 +794,42 @@ fn a_partial_dictionary_tuple_entry_reads_as_err_on_the_sdk() {
     );
 }
 
+/// END-8 and ERR-14: hold the selected key, read a partial composite in
+/// each form, and report the HGL place of a failing value read.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn endpoint_read_forms_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("endpoint-read-forms");
+    let fixture = include_str!("../../hgl_cpp/tests/fixtures/demo.endpoint_read_forms.hgl");
+    let file = write(&root, "src/demo.endpoint_read_forms.hgl", fixture);
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 1 failed, 0 not run\n"),
+        "{stdout}"
+    );
+    let line = fixture
+        .lines()
+        .position(|line| line.contains("# consuming read"))
+        .expect("the read to which the error points")
+        + 1;
+    assert!(
+        stdout.contains("FAILED   executable  demo.endpoint_read_forms::a_plain_child_failure_points_to_the_read\n")
+            && stdout.contains("value.unset_read")
+            && stdout.contains(&format!("raised at {file}:{line}")),
+        "{stdout}"
+    );
+}
+
 /// The temporal code of scalars on the SDK: a graph with lifted calls, a
 /// constant connection, nodes with state, handlers in order and
 /// capabilities, a source, and the evals of them (`demo.temporal`).

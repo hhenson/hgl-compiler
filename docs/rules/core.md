@@ -351,14 +351,14 @@ analyser: partial
 
 - `delta_value(x)` is a `delta<T>` for an input of T, and for a child of one (END-8), the value itself for a scalar
 - For a nullable scalar it is the optional TYPE-16 gives it, and for a window the V that arrived
-- Where its place takes `result<delta<T>, error>` it is of that result (`CheckedDelta`, the language's ERR-14), of any endpoint, a generic body's `T` among them, as core's `record` reads it
+- A result place takes `CheckedDelta`, including in a generic body such as core's `record`. A nullable place takes the same checked delta and discards its error (ERR-14, ERR-15).
 - A child's `delta_value` needs the child's admission (TIME-1)
 - Left: proof that `x` is valid and modified
 
 transpiler: partial
 
 - Reads current scalar, nullable, collection and window deltas, with checked result
-  forms where selected.
+  and nullable forms where selected.
 - Left: Reports unsupported endpoint deltas and window observations, including a node's
   own window in its `when`. The temporal forms are under TYPE-9.
 
@@ -406,12 +406,17 @@ transpiler: partial
 analyser: partial
 
 - A collection's child is an endpoint, valid or not: `valid`, `modified`, `delta_value` and `last_modified` take it, and `all_valid` where it is a collection; its value and delta are read where it is admitted (TIME-1); a read at an index known only when it runs is `CheckedChild` (ERR-14)
-- A struct, a tuple or a fixed list read whole, a child among them, is admitted only where it is all valid by its own `all_valid`, which core's rejection case `quote_without_admission` checks; one at an index known only when it runs fails with `value.unset_read` where it is not all valid, or gives that `err` (ERR-14)
+- An inferred `let` holds its child and a value use reads it. A checked child,
+  dictionary or unsized-list read takes the requested value, result or nullable form.
+- A statically known struct, tuple or fixed list read whole still requires its own
+  `all_valid` (TIME-1), as core's `quote_without_admission` rejection checks.
 
 transpiler: partial
 
 - Emits child reads and endpoint observations for supported list, tuple, struct and
   dictionary projections.
+- Captures each held child's position or key at binding. A valid but incomplete
+  dictionary entry fails the whole read, and a wholly unset entry is omitted.
 - Left: The unsupported child forms under EXPR-7 and TYPE-9 are reported, including a
   nested dictionary entry and unsupported operations on a field or child.
 
@@ -420,7 +425,7 @@ transpiler: partial
 analyser: partial
 
 - `all_valid` takes a window, and its value is read in a hook, and given to a value function in composition, as a `list<V>` (TYPE-11, FN-12)
-- `delta_value(x)` of a window is the V that arrived, read before it is all valid as after; of a window of a duration it is read where a `result` is taken, and a plain read is `payload.unguarded` (TYPE-11)
+- `delta_value(x)` of a window is the V that arrived, read before it is all valid as after. A duration window's delta takes a result or nullable place, and a plain read is `payload.unguarded` (TYPE-11).
 - `removed_value(x)` is core's declaration, given a window, read where a `result<V, error>` is taken, and a plain read is `payload.unguarded` for every window
 
 transpiler: partial
@@ -824,3 +829,81 @@ transpiler: planned
 transpiler: planned
 
 - #370.
+
+## FMT-1
+
+analyser: planned
+
+- #434.
+
+## FMT-2
+
+analyser: planned
+
+- #434.
+
+## FMT-3
+
+analyser: planned
+
+- #434.
+
+## FMT-4
+
+transpiler: planned
+
+- #434.
+
+## FMT-5
+
+transpiler: planned
+
+- #434.
+
+## FMT-6
+
+transpiler: planned
+
+- #434.
+
+## DBG-1
+
+transpiler: planned
+
+- #434.
+
+## DBG-2
+
+transpiler: planned
+
+- #434.
+
+## DBG-3
+
+transpiler: planned
+
+- #434.
+
+## DBG-4
+
+transpiler: planned
+
+- #434.
+
+## DBG-5
+
+transpiler: planned
+
+- #434.
+
+## DBG-6
+
+transpiler: planned
+
+- #434.
+
+## DBG-7
+
+transpiler: planned
+
+- #434.

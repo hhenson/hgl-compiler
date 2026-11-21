@@ -153,12 +153,28 @@ struct keyed_form<hgraph::TSD<K, V>> {
     /// The entries that are valid, each read whole: "A dictionary ... holds
     /// what it holds" (TIME-1).
     template <class E>
-    static type read(const E& endpoint, std::source_location where) {
+    static std::optional<type> held(const E& endpoint) {
         type held;
-        for (const auto& [key, child] : endpoint.valid_items()) {
-            held.insert_or_assign(keyed_detail::key_of<K>(key), keyed_form<V>::read(child, where));
+        for (const auto& [key, child] : detail::viewed(endpoint).valid_items()) {
+            if (!fn_valid(child)) {
+                continue;
+            }
+            auto entry = hglrt::whole<V>::read(child);
+            if (!entry.has_value()) {
+                return std::nullopt;
+            }
+            held.insert_or_assign(keyed_detail::key_of<K>(key), std::move(*entry));
         }
         return held;
+    }
+
+    template <class E>
+    static type read(const E& endpoint, std::source_location where) {
+        auto entries = held(endpoint);
+        if (!entries.has_value()) {
+            unset_read(keyed_detail::incomplete_tuple_read, where);
+        }
+        return std::move(*entries);
     }
 
     /// hgraph's map of `value`, each entry hgraph's value of its own form.
@@ -190,6 +206,40 @@ struct keyed_form<hgraph::TSD<K, V>> {
         built.set("removed", keyed_detail::set_value<K>(delta.removed));
         built.set("modified", modified.build());
         return built.build();
+    }
+};
+
+/// A set read whole, as the part of a collection or through a bound child.
+template <class K>
+struct schema_value<hgraph::TSS<K>> {
+    using type = set<K>;
+};
+template <class K>
+struct whole<hgraph::TSS<K>> {
+    template <class E>
+    static std::optional<set<K>> read(const E& endpoint) {
+        if (!fn_valid(endpoint)) {
+            return std::nullopt;
+        }
+        return keyed_form<hgraph::TSS<K>>::read(detail::viewed(endpoint),
+                                                  std::source_location::current());
+    }
+};
+
+/// A dictionary read whole. A wholly unset entry is omitted, and a valid
+/// entry that cannot be read whole fails the read (TIME-1, ERR-14).
+template <class K, class V>
+struct schema_value<hgraph::TSD<K, V>> {
+    using type = typename keyed_form<hgraph::TSD<K, V>>::type;
+};
+template <class K, class V>
+struct whole<hgraph::TSD<K, V>> {
+    template <class E>
+    static std::optional<schema_value_t<hgraph::TSD<K, V>>> read(const E& endpoint) {
+        if (!fn_valid(endpoint)) {
+            return std::nullopt;
+        }
+        return keyed_form<hgraph::TSD<K, V>>::held(endpoint);
     }
 };
 
@@ -257,10 +307,10 @@ struct endpoint_read<hgraph::TSS<K>> {
     template <class E>
     static set_delta<K> delta(const E& endpoint) {
         set_delta<K> change;
-        for (const auto& member : endpoint.added()) {
+        for (const auto& member : detail::viewed(endpoint).added()) {
             change.added.insert(keyed_detail::key_of<K>(member));
         }
-        for (const auto& member : endpoint.removed()) {
+        for (const auto& member : detail::viewed(endpoint).removed()) {
             change.removed.insert(keyed_detail::key_of<K>(member));
         }
         return change;
@@ -278,10 +328,10 @@ struct endpoint_read<hgraph::TSD<K, V>> {
     template <class E>
     static delta_type delta(const E& endpoint) {
         delta_type change;
-        for (const auto& [key, child] : endpoint.modified_items()) {
+        for (const auto& [key, child] : detail::viewed(endpoint).modified_items()) {
             change.updated.insert_or_assign(keyed_detail::key_of<K>(key), endpoint_read<V>::delta(child));
         }
-        for (const auto& [key, child] : endpoint.removed_items()) {
+        for (const auto& [key, child] : detail::viewed(endpoint).removed_items()) {
             change.removed.insert(keyed_detail::key_of<K>(key));
         }
         return change;
@@ -296,8 +346,8 @@ struct endpoint_read<hgraph::TSD<K, V>> {
         if (!endpoint.valid()) {
             return false;
         }
-        for (const auto& child : endpoint.values()) {
-            if (!child.valid()) {
+        for (const auto& child : detail::viewed(endpoint).values()) {
+            if (!fn_valid(child)) {
                 return false;
             }
         }
@@ -361,6 +411,20 @@ auto entry_view(const E& book, const key_of_t<E>& key) -> std::optional<decltype
 }
 } // namespace keyed_detail
 
+/// The logical entry at `key`, including where it has no current view
+/// (TIME-1). A read of a bound entry looks it up when used.
+template <class E, class K>
+auto keyed_child(const E& book, const K& key) {
+    using V = decltype(detail::viewed(book).at_slot(0));
+    if (detail::present(book)) {
+        auto entry = keyed_detail::entry_view(detail::viewed(book), key);
+        if (entry.has_value()) {
+            return Child<V>{std::move(*entry)};
+        }
+    }
+    return Child<V>{};
+}
+
 /// `valid(book[key])` (END-1, TIME-9): whether the dictionary holds the key
 /// and its entry is valid.
 template <class E>
@@ -420,7 +484,7 @@ auto keyed_entry_value(const E& book, const keyed_detail::key_of_t<E>& key,
                        std::source_location where = std::source_location::current()) ->
     typename keyed_form<keyed_detail::entry_schema_t<E>>::type {
     const auto entry = keyed_detail::entry_view(book, key);
-    if (!entry.has_value() || !entry->valid()) {
+    if (!entry.has_value() || !fn_valid(*entry)) {
         unset_read("an entry that is not valid is read", where);
     }
     return keyed_form<keyed_detail::entry_schema_t<E>>::read(*entry, where);
@@ -432,22 +496,17 @@ auto keyed_entry_value(const E& book, const keyed_detail::key_of_t<E>& key,
 /// read whole gives the same error (TIME-1).
 template <class E>
 auto keyed_entry_result(const E& book, const keyed_detail::key_of_t<E>& key,
-                        std::source_location where = std::source_location::current())
+                        std::source_location = std::source_location::current())
     -> result<typename keyed_form<keyed_detail::entry_schema_t<E>>::type> {
     const auto entry = keyed_detail::entry_view(book, key);
-    if (!entry.has_value() || !entry->valid()) {
+    if (!entry.has_value() || !fn_valid(*entry)) {
         return detail::unset_result("an entry that is not valid is read");
     }
-    using Schema = keyed_detail::entry_schema_t<E>;
-    if constexpr (detail::bundle<Schema>) {
-        auto held = whole<Schema>::read(*entry);
-        if (!held.has_value()) {
-            return detail::unset_result(keyed_detail::incomplete_tuple_read);
-        }
-        return std::move(*held);
-    } else {
-        return keyed_form<Schema>::read(*entry, where);
+    auto held = whole<keyed_detail::entry_schema_t<E>>::read(*entry);
+    if (!held.has_value()) {
+        return detail::unset_result(keyed_detail::incomplete_tuple_read);
     }
+    return std::move(*held);
 }
 
 /// `invalidate(out)` of a set's result (END-4): clears its validity and its
