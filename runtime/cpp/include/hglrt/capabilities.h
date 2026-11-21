@@ -268,6 +268,26 @@ class GlobalState {
 };
 
 namespace detail {
+/// What the store holds for a value of `V` (CAP-6: "a run-wide store of
+/// ordinary values under string keys"): the value itself, in a type of the
+/// library's own, which hgraph keeps whole as an atomic, one for each `V`.
+/// hgraph's own schema of a value is no use here: a struct's is a bundle,
+/// which hgraph keeps field by field and gives back as no `V`, and a tuple,
+/// a set, a dictionary and a delta have none. So every ordinary value is
+/// held alike, and `get` gives back exactly the type that was put.
+template <class V>
+struct Stored {
+    V value{};
+};
+
+/// Registers `Stored<V>` with hgraph, the first time one is put.
+template <class V>
+void store_registered() {
+    static const hgraph::ValueTypeMetaData* const registered =
+        hgraph::TypeRegistry::instance().register_scalar<Stored<V>>();
+    (void)registered;
+}
+
 /// Fails a read of the store under `key`, which holds nothing.
 [[noreturn]] void store_missing(std::string_view key, std::source_location where);
 /// Fails a read or a write of the store under `key`, which holds a value of
@@ -296,11 +316,11 @@ V get_GlobalState_str(const GlobalState& store, std::string_view key,
     if (!store.view().contains(key)) {
         detail::store_missing(key, where);
     }
-    const V* held = store.view().get(key).template try_as<V>();
+    const detail::Stored<V>* held = store.view().get(key).template try_as<detail::Stored<V>>();
     if (held == nullptr) {
         detail::store_type(key, where);
     }
-    return *held;
+    return held->value;
 }
 
 /// `put<V>(store: GlobalState, const key: str, value: V)`: puts a copy of
@@ -308,12 +328,11 @@ V get_GlobalState_str(const GlobalState& store, std::string_view key,
 template <class V>
 void put_GlobalState_str_V(const GlobalState& store, std::string_view key, const V& value,
                            std::source_location where = std::source_location::current()) {
-    if (store.view().contains(key) && store.view().get(key).template try_as<V>() == nullptr) {
+    if (store.view().contains(key) && store.view().get(key).template try_as<detail::Stored<V>>() == nullptr) {
         detail::store_type(key, where);
     }
-    // hgraph holds a value of a type it has a schema for.
-    (void)hgraph::scalar_descriptor<V>::value_meta();
-    store.view().set(key, hgraph::Value{value});
+    detail::store_registered<V>();
+    store.view().set(key, hgraph::Value{detail::Stored<V>{value}});
 }
 
 } // namespace hglrt

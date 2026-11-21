@@ -29,6 +29,7 @@
 #undef set_fixed_pair
 #undef slot
 #undef step
+#undef stored
 #undef summed
 #undef tagged
 #undef tick
@@ -135,6 +136,12 @@ namespace w_
 {
 // counted_all(const baskets: list<Basket>, tick: i64) -> i64 (node), module demo.nested, line 204
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counted_all(::hgraph::Wiring& wiring_, const ::hglrt::list<::hgl::demo::nested::m_::Basket>& baskets, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> tick);
+}  // namespace w_
+
+namespace w_
+{
+// stored(value: i64) -> i64 (node), module demo.nested, line 220
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> stored(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value);
 }  // namespace w_
 
 }  // namespace hgl::demo::nested::m_

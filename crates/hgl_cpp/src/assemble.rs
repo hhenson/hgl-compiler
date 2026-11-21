@@ -18,7 +18,10 @@ use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Location};
 use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
-use crate::emit::{APPLICATION, Piece, Written, module_namespace, program_names, test_namespace};
+use crate::emit::{
+    APPLICATION, Piece, RESTORE, Written, module_namespace, program_names, restore_after,
+    test_namespace,
+};
 use crate::{
     Application, Executable, File, Output, Test, Unit, application_path, entry_path, header_path,
     runtime, types_header_path, unit_path,
@@ -200,6 +203,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                 if !piece.text.is_empty() {
                     unit.push('\n');
                     unit.push_str(&piece.text);
+                    restore_after(&mut unit, &piece.text);
                 }
             }
             unit.push_str(&format!("\n}}  // namespace {declared}\n"));
@@ -224,10 +228,9 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         if let Some(piece) = application {
             let namespace = module_namespace(path);
             let declared = namespace.trim_start_matches("::");
-            unit.push_str(&format!(
-                "\nnamespace {declared}\n{{\n\n{}\n}}  // namespace {declared}\n",
-                piece.text
-            ));
+            unit.push_str(&format!("\nnamespace {declared}\n{{\n\n{}", piece.text));
+            restore_after(&mut unit, &piece.text);
+            unit.push_str(&format!("\n}}  // namespace {declared}\n"));
         }
         unit_of[index] = Some(units.len());
         units.push(Unit {
@@ -373,7 +376,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     let names = program_names(program);
     for file in &mut files {
         let (text, added) = undefined(&file.text, &names);
-        file.text = text;
+        file.text = restored(&text, &file.path);
         for test in tests
             .iter_mut()
             .filter(|test| unit_path(&test.module) == file.path)
@@ -658,4 +661,29 @@ fn application_entry(program: &Program, index: usize) -> String {
         runtime::APPLICATION_HOST_HEADER,
         module.path,
     )
+}
+
+/// `text`, the file at `path`, with each [`RESTORE`] line made the
+/// directive that numbers the line after it as the file's own: a test's
+/// statements are told to the test host by their lines in the file, and a
+/// failure elsewhere names them.
+fn restored(text: &str, path: &str) -> String {
+    if !text.contains(RESTORE) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    for (number, line) in text.split_inclusive('\n').enumerate() {
+        if line.trim_end() == RESTORE {
+            // `number` counts from 0: this line is `number + 1`, and the
+            // next one `number + 2`.
+            out.push_str(&format!(
+                "#line {} {}\n",
+                number + 2,
+                crate::emit::string(path)
+            ));
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
 }

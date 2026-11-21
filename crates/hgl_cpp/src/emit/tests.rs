@@ -71,10 +71,14 @@ impl Emitter<'_> {
         text.push_str("}\n");
         // What the test's evals wire that a function cannot hold, ahead
         // of it: its statements' lines move down by as many lines.
-        let ahead: String = std::mem::take(&mut self.ahead)
+        let mut ahead: String = std::mem::take(&mut self.ahead)
             .into_iter()
             .map(|node| node + "\n")
             .collect();
+        // A node written ahead sets the HGL lines of its statements; the
+        // test's own are the unit's again after it.
+        let nodes = ahead.clone();
+        super::restore_after(&mut ahead, &nodes);
         let moved = ahead.matches('\n').count();
         for (line, _) in &mut self.piece.statements {
             *line += moved;

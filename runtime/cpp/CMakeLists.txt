@@ -140,6 +140,7 @@ if(BUILD_TESTING)
         tests/scheduler_tests.cpp
         tests/structs_tests.cpp
         tests/sources_tests.cpp
+        tests/store_tests.cpp
         tests/temporal_tests.cpp
         tests/tenor_tests.cpp
         tests/testing_tests.cpp

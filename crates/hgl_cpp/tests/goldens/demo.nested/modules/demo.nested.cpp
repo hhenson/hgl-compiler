@@ -4,6 +4,7 @@
 
 // Names this file writes, which no macro of a header above takes.
 #undef Basket
+#undef GlobalState
 #undef a_child_of_a_list_of_tuples_is_wired
 #undef a_dictionary_of_tuples_is_published_by_a_delta
 #undef a_dictionary_of_tuples_is_relayed_whole
@@ -17,6 +18,7 @@
 #undef a_struct_with_a_list_field_is_a_configuration
 #undef a_struct_with_a_list_field_is_published_by_a_delta
 #undef a_struct_with_a_list_field_is_relayed_whole
+#undef a_struct_with_a_list_field_is_stored
 #undef a_struct_with_a_list_field_replays_its_cells
 #undef a_tuple_of_a_list_is_published_by_a_delta
 #undef a_tuple_of_a_list_is_relayed_whole
@@ -34,6 +36,7 @@
 #undef entry_x
 #undef fill
 #undef first_pair
+#undef global_state
 #undef grow_pairs
 #undef key
 #undef longer
@@ -54,6 +57,7 @@
 #undef slot
 #undef start
 #undef step
+#undef stored
 #undef sum
 #undef summed
 #undef tagged
@@ -534,6 +538,34 @@ namespace w_
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> counted_all(::hgraph::Wiring& wiring_, const ::hglrt::list<::hgl::demo::nested::m_::Basket>& baskets, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> tick)
 {
     return ::hgraph::wire<::hgl::demo::nested::m_::n_::counted_all::impl_>(wiring_, baskets, tick);
+}
+}  // namespace w_
+
+namespace n_::stored
+{
+// stored(value: i64) -> i64 (node), module demo.nested, line 220
+struct impl_
+{
+    static constexpr auto name = "demo.nested::stored";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_, [[maybe_unused]] ::hgraph::GlobalStateView capability_01_)
+    {
+        [[maybe_unused]] const ::hglrt::GlobalState global_state{capability_01_};
+        // when, line 222 (TIME-3)
+        {
+            ::hglrt::put_GlobalState_str_V<::hgl::demo::nested::m_::Basket>(global_state, ::hgraph::Str{"basket"}, ::hgl::demo::nested::m_::Basket{::hgraph::Str{"b"}, ::hglrt::list<::hgraph::Int>{::hglrt::checked_value(value), 1}});
+            out_.set(::hgl::demo::nested::m_::total(::hglrt::get_GlobalState_str<::hgl::demo::nested::m_::Basket>(global_state, ::hgraph::Str{"basket"})));
+            return;
+        }
+    }
+};
+}  // namespace n_::stored
+namespace w_
+{
+// stored(value: i64) -> i64 (node), module demo.nested, line 220
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> stored(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hgraph::wire<::hgl::demo::nested::m_::n_::stored::impl_>(wiring_, value);
 }
 }  // namespace w_
 
@@ -1137,6 +1169,19 @@ void a_struct_with_a_list_field_is_a_configuration()
     }();
         const auto right_013_ = ::hglrt::testing::Dense<::hgraph::Int>{6};
         ::hglrt::testing::expect_same(left_012_, right_013_);
+    }();
+}
+
+void a_struct_with_a_list_field_is_stored()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 5}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::nested::m_::w_::stored(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{2, 6};
+        ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }
 

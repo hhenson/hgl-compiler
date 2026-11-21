@@ -67,6 +67,12 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
 /// [`emit`], for a runtime library that defines the natives `provides`
 /// names.
 fn emit_with(files: &[(&str, &str)], provides: &dyn Fn(&str) -> bool) -> Emitted {
+    emit_named(files, provides, false)
+}
+
+/// [`emit_with`], where `named` gives the target the files' names, so that
+/// it sets the HGL file and line of each statement with `#line`.
+fn emit_named(files: &[(&str, &str)], provides: &dyn Fn(&str) -> bool, named: bool) -> Emitted {
     let mut sources = SourceMap::new();
     let mut diagnostics = Diagnostics::new();
     let mut parsed = Vec::new();
@@ -91,7 +97,9 @@ fn emit_with(files: &[(&str, &str)], provides: &dyn Fn(&str) -> bool) -> Emitted
         render::to_string(&sources, &diagnostics)
     );
     let before = diagnostics.len();
-    let output = transpile_for(&program, provides, &mut diagnostics);
+    let file_name = |at: hgl_diagnostics::Location| sources.file(at.file).name().to_string();
+    let file_name: Option<hgl_cpp::FileName> = named.then_some(&file_name);
+    let output = transpile_for(&program, provides, file_name, &mut diagnostics);
     let reported = diagnostics.as_slice()[before..]
         .iter()
         .map(|diagnostic| {
@@ -1279,6 +1287,168 @@ fn an_applications_parts_are_evaluated_in_the_order_written() {
     assert!(at(every) < at("const ::hglrt::testing::Bounds bounds_ = "));
     // The entry, wired in the run, is given what was held.
     assert!(at("w_::ticks(wiring_, argument_00_, argument_01_)") > at("bounds_ = "));
+}
+
+/// The fixtures of what the run's store holds (CAP-6): the module and its
+/// applications.
+const STORE: [(&str, &str); 4] = [
+    ("demo.store.hgl", include_str!("fixtures/demo.store.hgl")),
+    (
+        "demo.store.quotes.hgl",
+        include_str!("fixtures/demo.store.quotes.hgl"),
+    ),
+    (
+        "demo.store.failing.hgl",
+        include_str!("fixtures/demo.store.failing.hgl"),
+    ),
+    (
+        "demo.store.unbuilt.hgl",
+        include_str!("fixtures/demo.store.unbuilt.hgl"),
+    ),
+];
+
+/// CAP-6: every ordinary value is put in the run's store and got back as
+/// itself, in a node, where a graph is built and by an application: a
+/// struct, a tuple, a dictionary, a set and a delta among them, through the
+/// library's natives, whatever schema hgraph has of the value.
+#[test]
+fn every_ordinary_value_is_put_in_the_store() {
+    let emitted = emit_with(&STORE, &hgl_cpp::runtime::provides);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.store", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    for application in &emitted.output.applications {
+        assert!(application.blocked.is_none(), "{}", application.path);
+    }
+}
+
+/// Where the driver gives the files' names, each statement written outside
+/// a test, a constant's value and a handler's condition are preceded by
+/// the `#line` of their HGL file and line, so that a failure raised there
+/// names it; after each piece the unit numbers its lines as its own again,
+/// which a test's statements are told to the test host by.
+#[test]
+fn a_statement_names_its_hgl_file_and_line() {
+    let emitted = emit_named(
+        &[
+            ("demo.apps.hgl", include_str!("fixtures/demo.apps.hgl")),
+            (
+                "demo.apps.backtest.hgl",
+                include_str!("fixtures/demo.apps.backtest.hgl"),
+            ),
+        ],
+        &hgl_cpp::runtime::provides,
+        true,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let text = |path: &str| {
+        &emitted
+            .output
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap()
+            .text
+    };
+    let module = text("modules/demo.apps.cpp");
+    let lines: Vec<&str> = module.lines().collect();
+    // The graph `seeded`: its `put`, on line 26 of its file, set where it is
+    // built (FN-9).
+    let put = lines
+        .iter()
+        .position(|line| line.contains("put_GlobalState_str_V<::hgraph::Int>(global_state, ::hgraph::Str{\"limit\"}, limit)"))
+        .expect("the graph's put is written");
+    assert_eq!(lines[put - 1], "#line 26 \"demo.apps.hgl\"");
+    // After each piece the unit's own numbering again, the line after the
+    // directive numbered as it is in the unit.
+    for (index, line) in lines.iter().enumerate() {
+        if let Some(number) = line
+            .strip_prefix("#line ")
+            .and_then(|rest| rest.strip_suffix(" \"modules/demo.apps.cpp\""))
+        {
+            assert_eq!(number.parse::<usize>().unwrap(), index + 2, "{line}");
+        }
+    }
+    assert!(module.contains("\"modules/demo.apps.cpp\""));
+    // A test's statements are told to the test host by the unit's lines:
+    // none in its body sets an HGL line.
+    let test = module
+        .split("void the_store_is_set_where_the_graph_is_built()")
+        .nth(1)
+        .unwrap();
+    let body = &test[..test.find("\n}\n").unwrap()];
+    assert!(!body.contains("#line"), "{body}");
+    // An application's store statements and its run statement.
+    let application = text("modules/demo.apps.backtest.cpp");
+    let lines: Vec<&str> = application.lines().collect();
+    let stored = lines
+        .iter()
+        .position(|line| line.contains("put_GlobalState_str_V"))
+        .unwrap();
+    assert_eq!(lines[stored - 1], "#line 9 \"demo.apps.backtest.hgl\"");
+    let recorded = lines
+        .iter()
+        .position(|line| line.contains("record::of_i64(wiring_"))
+        .unwrap();
+    assert_eq!(lines[recorded - 1], "#line 12 \"demo.apps.backtest.hgl\"");
+    // A constant's value.
+    let constant = lines
+        .iter()
+        .position(|line| line.contains("static const ::hgraph::Int value = 2;"))
+        .unwrap();
+    assert_eq!(lines[constant - 1], "#line 5 \"demo.apps.backtest.hgl\"");
+}
+
+/// A node a test writes ahead of itself, an eval's lifted call of a value
+/// function (TST-8), sets the HGL lines of its statements; the test's own
+/// statements, which it tells the test host by their lines in the unit,
+/// are numbered as the unit's again after it.
+#[test]
+fn a_tests_lines_are_the_units_after_a_node_written_ahead_of_it() {
+    let emitted = emit_named(
+        &[(
+            "demo.ahead.hgl",
+            concat!(
+                "module demo.ahead\n",
+                "const fn scale(value: i64) -> i64 => value * 2\n",
+                "test a_failure_after_an_eval_of_a_value_function {\n",
+                "    assert eval(scale(value: [1])) == [2]\n",
+                "    assert scale(1) == 3\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+        true,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.ahead.cpp")
+        .unwrap()
+        .text;
+    let lines: Vec<&str> = unit.lines().collect();
+    let test = lines
+        .iter()
+        .position(|line| *line == "void a_failure_after_an_eval_of_a_value_function()")
+        .unwrap();
+    // The node ahead of the test sets an HGL line; the last directive
+    // before the test numbers the unit's own lines again, so that the line
+    // each statement of the test tells the test host is its line in the
+    // unit, which the target recorded the statement at.
+    assert!(lines[..test].contains(&"#line 4 \"demo.ahead.hgl\""));
+    let last = lines[..test]
+        .iter()
+        .rposition(|line| line.starts_with("#line "))
+        .unwrap();
+    assert_eq!(
+        lines[last],
+        format!("#line {} \"modules/demo.ahead.cpp\"", last + 2)
+    );
+    assert!(!lines[test..].iter().any(|line| line.starts_with("#line ")));
 }
 
 /// An application that needs a form the target does not write yet is

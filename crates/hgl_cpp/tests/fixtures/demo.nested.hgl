@@ -6,7 +6,7 @@ module demo.nested
 # Each as a node's input and its result, and as a trace's cells, whole and
 # as deltas; a child of a list of tuples and a key's child of a dictionary of
 # tuples as connections of a graph; a struct with a list field as a node's
-# configuration.
+# configuration and in the run's store.
 
 fn relay_pairs(pairs: list<tuple<i64, str>>) -> list<tuple<i64, str>> {
     when { return pairs }
@@ -214,4 +214,17 @@ fn counted_all(const baskets: list<Basket>, tick: i64) -> i64 {
 test a_struct_with_a_list_field_is_a_configuration {
     assert eval(counted(basket: Basket(name: "b", counts: [1, 2, 3]), tick: [1, 2])) == [7, 8]
     assert eval(counted_all(baskets: [Basket(name: "b", counts: [1]), Basket(name: "c", counts: [4])], tick: [1])) == [6]
+}
+
+# CAP-6: a struct with a list field put in the run's store and got back.
+fn stored(value: i64) -> i64 {
+    inject global_state
+    when {
+        put(global_state, "basket", Basket(name: "b", counts: [value, 1]))
+        return total(get<Basket>(global_state, "basket"))
+    }
+}
+
+test a_struct_with_a_list_field_is_stored {
+    assert eval(stored(value: [1, 5])) == [2, 6]
 }

@@ -115,8 +115,7 @@ struct Doubled {
 };
 
 /// `record<T>` at any T, as `Record` is at `i64`, with its cache as its
-/// state. It puts what it kept in the store through hgraph's own store, which
-/// `put` is a layer over.
+/// state.
 template <class T>
 struct RecordOf {
     static constexpr auto name = "test::record_of";
@@ -132,8 +131,7 @@ struct RecordOf {
 
     static void stop(hgraph::Scalar<"key", hglrt::str> key, hgraph::State<Recorded<T>> state,
                      hgraph::GlobalStateView global_state) {
-        (void)hgraph::scalar_descriptor<Recorded<T>>::value_meta();
-        global_state.set(key.value(), hgraph::Value{state.ref()});
+        hglrt::put_GlobalState_str_V(hglrt::GlobalState{global_state}, key.value(), state.ref());
     }
 };
 
