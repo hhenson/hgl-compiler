@@ -5,8 +5,8 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
-//! | The body, its statements and `yield` among them | a static member `body_` of the node's struct, an `::hglrt::generator` of `::hglrt::Yielded<T>`, or of `Yielded<delta<T>>` where every `yield` gives a delta that is a type of its own (TIME-7), given the source's `const` parameters by value: no hgraph view is held across a `yield` |
-//! | `yield time: value` (SOURCE-2) | `co_yield yielded_type_{time, value};`, the time evaluated first, then the payload |
+//! | The body, its statements and `yield` among them | a static member `body_` of the node's struct, an `::hglrt::generator` of `::hglrt::Yielded<T>` or `Yielded<delta<T>>`, with a variant as its payload where the body yields both forms (TIME-7). The source's `const` parameters are given by value: no hgraph view is held across a `yield` |
+//! | `yield time: value` (SOURCE-2) | `co_yield yielded_type_{time, value};`, the time evaluated first, then the payload, tagged for a mixed source |
 //! | A bare `return`, the body's end (SOURCE-4) | `co_return;`, the coroutine's end |
 //! | Its node | `start` makes the body, held in the node's state with where it is; `eval` steps it with `::hglrt::resume`, which publishes what is due and asks the node's scheduler for the next target (SOURCE-2, SOURCE-3); `stop` destroys it, and the locals in its frame |
 //!
@@ -49,7 +49,16 @@ impl Family for Sources {
             // order written.
             Stmt::Yield { time, value, .. } => {
                 let time = emitter.expression(scope, time);
-                let value = emitter.expression(scope, value);
+                let alternative = emitter
+                    .temporal
+                    .as_ref()
+                    .and_then(|context| context.mixed_source_delta.as_ref())
+                    .map(|delta| usize::from(value.ty == *delta));
+                let mut value = emitter.expression(scope, value);
+                if let Some(alternative) = alternative {
+                    value =
+                        format!("payload_type_{{::std::in_place_index<{alternative}>, {value}}}");
+                }
                 text.push_str(&format!(
                     "{indent}co_yield yielded_type_{{{time}, {value}}};\n"
                 ));
@@ -111,17 +120,25 @@ impl Emitter<'_> {
             _ if matches!(result, Type::Atomic(_)) => &delta,
             _ => result,
         };
-        if delta != *result && yielded.contains(&delta) && yielded.len() > 1 {
-            self.unsupported(at, "a source that yields both a whole value and a delta");
-            return;
-        }
-        let payload = if given == result {
+        let mixed = delta != *result && yielded.contains(&delta) && yielded.len() > 1;
+        let payload = if mixed || given == result {
             self.payload_type(result, at)
         } else {
             self.written_type(given, at)
         };
         let Some(payload) = payload else {
             return;
+        };
+        let (payload, mixed_payload) = if mixed {
+            let Some(change) = self.written_type(&delta, at) else {
+                return;
+            };
+            (
+                "payload_type_".to_string(),
+                format!("{INDENT}using payload_type_ = ::std::variant<{payload}, {change}>;\n"),
+            )
+        } else {
+            (payload, String::new())
         };
         let Some(schema) = self.temporal_schema(result, at) else {
             return;
@@ -147,6 +164,7 @@ impl Emitter<'_> {
         }
         let mut context = Context::new(Kind::Source, body.locals.len());
         context.result = Some(result.clone());
+        context.mixed_source_delta = mixed.then_some(delta);
         let mut scope = Scope::cold(program, body);
         let mut statements = hooked.prologue.clone();
         self.in_context(&mut context, |emitter| {
@@ -155,6 +173,16 @@ impl Emitter<'_> {
         let placed = Placed::of(program, self.module, index, instance);
         let qualified = placed.qualified(program, self.module);
         let published = self.temporal_publish(result, OUT, "value_", at);
+        // TIME-7: publish each yield in the form it had in the body. The
+        // endpoint's normal whole/delta overloads apply the change.
+        let publish = if mixed {
+            format!(
+                "[&{OUT}]({payload} publication_) {{ \
+                 ::std::visit([&{OUT}](const auto& value_) {{ {published} }}, publication_); }}"
+            )
+        } else {
+            format!("[&{OUT}]({payload} value_) {{ {published} }}")
+        };
         let library = runtime::NAMESPACE;
         let state = "::hgraph::State<state_type_> state_".to_string();
         let mut start = views.clone();
@@ -177,6 +205,7 @@ impl Emitter<'_> {
              {INDENT}static constexpr auto name = {display};\n\
              {INDENT}// SOURCE-2: \"The first evaluation begins the body\".\n\
              {INDENT}static constexpr bool schedule_on_start = true;\n\
+             {mixed_payload}\
              {INDENT}using yielded_type_ = ::{library}::Yielded<{payload}>;\n\
              {INDENT}using body_type_ = ::{library}::generator<yielded_type_>;\n\n\
              {declared}\
@@ -219,7 +248,7 @@ impl Emitter<'_> {
              {INDENT}{INDENT}{INDENT}{INDENT}}}\n\
              {INDENT}{INDENT}{INDENT}{INDENT}return ::std::optional<yielded_type_>{{**kept_.at_}};\n\
              {INDENT}{INDENT}{INDENT}}},\n\
-             {INDENT}{INDENT}{INDENT}[&{OUT}]({payload} value_) {{ {published} }});\n\
+             {INDENT}{INDENT}{INDENT}{publish});\n\
              {INDENT}}}\n\n\
              {INDENT}// SOURCE-4: the body's frame, and the locals in it, end with the run.\n\
              {INDENT}static void stop({stop})\n{INDENT}{{\n\
