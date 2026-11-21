@@ -56,7 +56,11 @@ pub(super) fn while_connection(condition: &Expr, category: ValueCategory) -> Opt
 /// (CTRL-7): `item` is a connection of `T` for a list and an ordinary
 /// `T`, the member itself, for a set; `key` is an ordinary `K` and
 /// `value` a connection of `V` for a dictionary."
-fn bound_by_loop(over: ValueCategory, ty: &Type, names: usize) -> (Vec<ValueCategory>, bool) {
+pub(super) fn bound_by_loop(
+    over: ValueCategory,
+    ty: &Type,
+    names: usize,
+) -> (Vec<ValueCategory>, bool) {
     use ValueCategory::{Connection, Unsettled, Value};
     match (over, ty) {
         (Connection, Type::List { size, .. }) => {

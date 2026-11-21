@@ -5,7 +5,8 @@
 use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 
 use super::Typer;
-use super::control::{no_else_type, while_connection};
+use super::control::{bound_by_loop, no_else_type, while_connection};
+use super::fit::{open, whole};
 use crate::hir::{
     Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Run, Stmt, ValueCategory,
     walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
@@ -448,60 +449,121 @@ fn lifts(program: &Program, callee: &Callee) -> bool {
 /// lifted". A node's hooks, a value function and a test lift nothing
 /// (a test's eval wires its target itself, TST-8).
 ///
-/// A local that is not settled takes what the first of its values that
-/// is settled is (EXPR-3: "Initialization fixes a binding's
-/// value/connection category"), as the typing pass has it. That changes
-/// nothing in a body as it was read, and settles an instance's
-/// ([`Program::instance`]): there each operation the declaration
+/// A local that is not settled waits for its first value (EXPR-3), or
+/// for the sequence of the `for` that binds it (CTRL-15). In an
+/// instance ([`Program::instance`]), each operation the declaration
 /// requires is the call of the candidate that answers it, a temporal
 /// one or a value one, so what it gives is known. A value may read a
 /// local declared inside it, `let s = { let t = add_(k, k); t }`, which
 /// a walk meets after the declaration it is in, so the walk is made
 /// again until it settles no more: each walk but the last settles one
-/// category or inferred type. In a graph this includes a no-else `if`
-/// whose type depends on the settled categories (CTRL-13).
+/// category or fills a hole in an inferred type. In a graph this
+/// includes a no-else `if` whose type depends on the categories (CTRL-13).
 pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
-    use ValueCategory::Unsettled;
+    use ValueCategory::{Connection, Unsettled};
     let Body { locals, statements } = body;
+    let first_values = first_values(locals, statements);
     let mut settling = true;
     while settling {
         settling = false;
         walk_statement_nodes_mut(statements, &mut |node| {
-            let (local, value, declares) = match node {
+            let (local, value, at, declares) = match node {
                 NodeMut::Statement(Stmt::Declare {
                     local,
                     value: Some(value),
-                }) => (*local, value, true),
-                NodeMut::Statement(Stmt::Assign { local, value, .. }) => (*local, value, false),
-                NodeMut::Expression(value) if composition && value.ty == Type::Unknown => {
+                }) => (*local, value, locals[*local].at, true),
+                NodeMut::Statement(Stmt::Assign {
+                    local, value, at, ..
+                }) => (*local, value, *at, false),
+                NodeMut::Statement(Stmt::For {
+                    names, sequence, ..
+                }) if composition => {
+                    if names
+                        .iter()
+                        .all(|&local| locals[local].category != Unsettled)
+                    {
+                        return;
+                    }
+                    let over = category(program, locals, sequence);
+                    // A connection still needs its collection kind to
+                    // decide whether each iteration binding is one.
+                    if over == Unsettled || over == Connection && open(&sequence.ty) {
+                        return;
+                    }
+                    let (categories, _) = bound_by_loop(over, &sequence.ty, names.len());
+                    for (&local, given) in names.iter().zip(categories) {
+                        if locals[local].category == Unsettled && given != Unsettled {
+                            locals[local].category = given;
+                            settling = true;
+                        }
+                    }
+                    return;
+                }
+                NodeMut::Expression(value) if composition && !whole(&value.ty) => {
                     if let Some(ty) = settled_type(program, locals, value) {
-                        value.ty = ty;
-                        settling = true;
+                        settling |= fill_type(&mut value.ty, ty);
                     }
                     return;
                 }
                 _ => return,
             };
-            if locals[local].category == Unsettled {
+            if first_values[local] == Some(at) && locals[local].category == Unsettled {
                 let given = category(program, locals, value);
                 if given != Unsettled {
                     locals[local].category = given;
                     settling = true;
                 }
             }
-            if composition
-                && declares
-                && locals[local].ty == Type::Unknown
-                && value.ty != Type::Unknown
-            {
-                locals[local].ty = value.ty.clone();
-                settling = true;
+            if composition && declares && !whole(&locals[local].ty) {
+                settling |= fill_type(&mut locals[local].ty, value.ty.clone());
             }
         });
     }
     walk_statements_mut(statements, &mut |value| {
         recorded(program, locals, composition, value);
     });
+}
+
+/// EXPR-3: the initializer takes precedence, or the first assignment
+/// of a `var` with no initializer. A write inside an assignment's
+/// right-hand side completes before the enclosing write.
+fn first_values(locals: &[Local], statements: &[Stmt]) -> Vec<Option<Location>> {
+    let mut first: Vec<Option<Location>> = vec![None; locals.len()];
+    walk_statement_nodes(statements, &mut |node| match node {
+        Node::Statement(Stmt::Declare {
+            local,
+            value: Some(_),
+        }) => {
+            first[*local] = Some(locals[*local].at);
+        }
+        Node::Statement(Stmt::Assign { local, at, .. })
+            if first[*local].is_none_or(|before| at.span.end < before.span.end) =>
+        {
+            first[*local] = Some(*at);
+        }
+        _ => {}
+    });
+    first
+}
+
+/// EXPR-3 and EXPR-9: each pass fills holes in a type, preserving all
+/// previously known positions, including members typed by an annotation.
+fn fill_type(current: &mut Type, inferred: Type) -> bool {
+    match (current, inferred) {
+        (current @ Type::Unknown, inferred) if inferred != Type::Unknown => {
+            *current = inferred;
+            true
+        }
+        (Type::Nullable(current), Type::Nullable(inferred)) => fill_type(current, *inferred),
+        (Type::Tuple(current), Type::Tuple(inferred)) if current.len() == inferred.len() => {
+            let mut changed = false;
+            for (current, inferred) in current.iter_mut().zip(inferred) {
+                changed |= fill_type(current, inferred);
+            }
+            changed
+        }
+        _ => false,
+    }
 }
 
 /// CTRL-13: decide a no-else expression's type once its categories
@@ -521,6 +583,10 @@ fn settled_type(program: &Program, locals: &[Local], value: &Expr) -> Option<Typ
         ExprKind::Block {
             value: Some(tail), ..
         } => tail.ty.clone(),
+        // Tuple entries each have their own position and type (EXPR-9).
+        ExprKind::Tuple(entries) => {
+            Type::Tuple(entries.iter().map(|entry| entry.ty.clone()).collect())
+        }
         ExprKind::Local(local) => locals.get(*local)?.ty.clone(),
         _ => return None,
     };

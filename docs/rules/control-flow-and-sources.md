@@ -135,7 +135,7 @@ transpiler: partial
 analyser: done
 
 - In a graph the condition of an `if` expects a `bool`, a value or a connection, reading a result or nullable where necessary (ERR-12, ERR-15); the `if` has its branches' one type, and is a connection when its condition or a branch is one; with no `else` it is a `T` connection under a temporal condition, and a `T?` or a `T` connection under a wiring-time one by what its branch is
-- When an instance selects a deferred operator call, the resulting categories settle a no-else expression and the inferred local that holds it. The analyser fits newly known types at their conditions, assignments, arguments and returns, including any required implicit reads (GEN-7, EXPR-5).
+- When an instance selects a deferred operator call, the resulting categories settle a no-else expression. Its type propagates through inferred tuple members, block tails and local reads. The analyser fits newly known types at their conditions, assignments, arguments and returns, including any required implicit reads (GEN-7, EXPR-5).
 
 transpiler: partial
 
@@ -168,6 +168,7 @@ analyser: partial
 
 - A graph supports `switch` over an ordinary value or a connection with compile-time labels, and `while` with an ordinary condition. It binds loop items by sequence type.
 - A graph instance rechecks a `while` condition after selecting deferred operator calls. A connection there is `connection.as_constant` (FN-3, GEN-7).
+- Selection also settles each `for` binding's category from the sequence before the instance checks its uses (FN-3, GEN-7).
 - CTRL-15 allows an outer `var` to carry across passes over a connection of `list<T, N>` or a range with constant bounds (EXPR-16). Each pass rebinds the `var` at wiring time (EXPR-15). #368 tracks constant ranges.
 - Struct and atomic struct iteration and the proposed `for.sequence` diagnostic await #373. Dynamic loops continue to accept temporal collections and report local `loop.carried` for an outer assignment or a return.
 

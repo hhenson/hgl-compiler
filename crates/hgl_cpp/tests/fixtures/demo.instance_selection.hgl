@@ -100,6 +100,17 @@ fn required_choice<T>(const value: T) -> i64 {
     return chosen
 }
 
+# CTRL-13 and EXPR-5: both the inferred tuple and the local that reads
+# it carry the settled nullable type to the parameter of a value helper.
+const fn pair_score(value: tuple<i64?, i64>) -> i64 =>
+    chosen_or_skip(value[0]) + value[1]
+
+fn inferred_pair<T>(const value: T) -> i64 {
+    let pair = (if positive(value) { 2 }, 10)
+    let saved = { pair }
+    return pair_score(saved)
+}
+
 test an_instance_settles_its_graph_conditions {
     assert eval loop_scalar(value: "s") == [5]
     assert eval wiring_if(value: 3) == [1]
@@ -108,6 +119,8 @@ test an_instance_settles_its_graph_conditions {
     assert eval connection_if(value: 0) == []
     assert eval required_choice(value: 3) == [2]
     assert raises("value.null") { eval required_choice(value: "s") }
+    assert eval inferred_pair(value: 3) == [12]
+    assert eval inferred_pair(value: "s") == [9]
 }
 
 struct Counter { count: i64 }

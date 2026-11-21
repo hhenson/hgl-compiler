@@ -25,7 +25,7 @@ impl GraphDestinations {
     pub(crate) fn pending(body: &Body) -> Self {
         let mut pending = HashSet::new();
         hir::walk_statements(&body.statements, &mut |value| {
-            if value.ty == Type::Unknown {
+            if !whole(&value.ty) {
                 pending.insert(value.at);
             }
         });
@@ -45,10 +45,16 @@ impl GraphDestinations {
         // In source a later assignment may have a known category while
         // the initializer still awaits selection. The first value now
         // decides the category, including for a `var` with no initializer.
-        hir::walk_statement_nodes(&body.statements, &mut |node| {
-            if let Node::Statement(Stmt::Declare { local, .. }) = node {
+        hir::walk_statement_nodes(&body.statements, &mut |node| match node {
+            Node::Statement(Stmt::Declare { local, .. }) => {
                 body.locals[*local].category = ValueCategory::Unsettled;
             }
+            Node::Statement(Stmt::For { names, .. }) => {
+                for &local in names {
+                    body.locals[local].category = ValueCategory::Unsettled;
+                }
+            }
+            _ => {}
         });
         record(program, body, true);
         if !self.0.is_empty() {
@@ -186,7 +192,7 @@ impl GraphDestinations {
     }
 
     fn known(&self, value: &Expr) -> bool {
-        value.ty != Type::Unknown && self.0.contains(&value.at)
+        self.0.contains(&value.at) && whole(&value.ty)
     }
 
     fn fit_condition(&self, typer: &mut Typer<'_>, value: &mut Expr) {
