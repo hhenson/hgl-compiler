@@ -54,16 +54,33 @@ impl<'a> Typer<'a> {
     pub(super) fn body(mut self) -> Option<Body> {
         let syntax = &self.declaration.syntax;
         let result = self.signature.result.clone();
+        let at = self.declaration.at;
+        let name = format!("`{}`", self.declaration.name);
+        let statements = self.check_body(syntax, result.as_ref(), at, &name)?;
+        Some(Body {
+            locals: self.locals,
+            statements,
+        })
+    }
+
+    /// Check a declaration's or an anonymous function's body (FN-7).
+    pub(super) fn check_body(
+        &mut self,
+        syntax: &SyntaxNode,
+        result: Option<&Type>,
+        at: Location,
+        name: &str,
+    ) -> Option<Vec<Stmt>> {
         let statements = if let Some(block) = child(syntax, SyntaxKind::Block) {
             let (mut statements, last) = self.block_head(&block);
             if let Some(last) = last {
-                statements.push(self.final_expression(&last, result.as_ref()));
+                statements.push(self.final_expression(&last, result));
             }
             statements
         } else {
             let arrow = child(syntax, SyntaxKind::ArrowBody)?;
             match arrow.children().next() {
-                Some(value) => vec![self.final_expression(&value, result.as_ref())],
+                Some(value) => vec![self.final_expression(&value, result)],
                 None => Vec::new(),
             }
         };
@@ -72,27 +89,23 @@ impl<'a> Typer<'a> {
         // returns a value in a branch selected at runtime does too:
         // "the continuation returns a value too, and one that can reach
         // its end with none rejects."
-        if let Some(result) = &result
+        if let Some(result) = result
             && !open(result)
             && !self.returned
             && !self.unsure
-            && (!self.graph || self.must_return)
+            && (self.anonymous.is_some() || !self.graph || self.must_return)
         {
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::RETURN_MISSING,
-                self.declaration.at,
+                at,
                 format!(
-                    "`{}` declares a result of `{result}`, and can reach its end with no value",
-                    self.declaration.name
+                    "{name} declares a result of `{result}`, and can reach its end with no value"
                 ),
                 "FN-7",
             ));
         }
-        Some(Body {
-            locals: self.locals,
-            statements,
-        })
+        Some(statements)
     }
 
     /// The expression a body ends in: what the function returns, when
@@ -180,10 +193,10 @@ impl<'a> Typer<'a> {
             // TST-3: a test "cannot itself declare state/cache, inject,
             // lifecycle hooks, when, yield, or return". The phase pass
             // reports a `return` there, and it is not read.
-            SyntaxKind::ReturnStmt if self.testing => self.unread(node),
+            SyntaxKind::ReturnStmt if self.testing && self.anonymous.is_none() => self.unread(node),
             // A `yield` is a statement of a source's own (SOURCE-1). In
             // a hook it is reported by the phase pass, and not read.
-            SyntaxKind::YieldStmt if self.generating => {
+            SyntaxKind::YieldStmt if self.generating && self.anonymous.is_none() => {
                 // SOURCE-4: "A valued return and yield inside a value
                 // expression reject."
                 if self.valued > 0 {
@@ -205,7 +218,7 @@ impl<'a> Typer<'a> {
             // source ... A valued return ... reject[s]": a source writes
             // its output with `yield` (SOURCE-1). The value is read for
             // what it reports itself.
-            SyntaxKind::ReturnStmt if self.generating => {
+            SyntaxKind::ReturnStmt if self.generating && self.anonymous.is_none() => {
                 let value = node
                     .children()
                     .next()
@@ -236,9 +249,9 @@ impl<'a> Typer<'a> {
                 // with nothing written yields none.
                 // In a temporal function a `return` with no value "ends
                 // the evaluation and publishes nothing itself".
-                if let (None, Some(result)) = (&value, &self.signature.result)
+                if let (None, Some(result)) = (&value, self.result_type())
                     && !open(result)
-                    && self.hook.is_none()
+                    && (self.anonymous.is_some() || self.hook.is_none())
                 {
                     self.diagnostics.emit(error(
                         Category::Type,
@@ -250,7 +263,7 @@ impl<'a> Typer<'a> {
                 }
                 // "`return value` [rejects] in a function that declares
                 // no result."
-                if let (Some(value), None) = (&value, &self.signature.result) {
+                if let (Some(value), None) = (&value, self.result_type()) {
                     self.diagnostics.emit(error(
                         Category::Type,
                         codes::TYPE_MISMATCH,
@@ -262,6 +275,7 @@ impl<'a> Typer<'a> {
                 // TIME-7: "a `return` with a value stands in neither
                 // `start` nor `stop`."
                 if let (Some(value), Some(hook @ (Hook::Start | Hook::Stop))) = (&value, self.hook)
+                    && self.anonymous.is_none()
                 {
                     self.out_lifecycle(
                         value.at,
@@ -318,9 +332,10 @@ impl<'a> Typer<'a> {
     /// FN-7: "A value return yields an ordinary value." EXPR-5: the
     /// result type is the type expected of it.
     fn returned(&mut self, node: &SyntaxNode) -> Expr {
-        let result = self.signature.result.clone();
+        let result = self.result_type().cloned();
         // FN-16: a `return` to a `ref` result designates what it names.
         if let Some(result) = &result
+            && self.anonymous.is_none()
             && self.signature.reference
             && self.hook.is_some()
         {
@@ -328,6 +343,7 @@ impl<'a> Typer<'a> {
         }
         // TIME-7: "A runtime return publishes to its result."
         if let Some(result) = &result
+            && self.anonymous.is_none()
             && (self.hook.is_some() || self.generating)
         {
             return self.published(node, result, "the function's result");

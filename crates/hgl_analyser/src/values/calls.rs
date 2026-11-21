@@ -19,7 +19,7 @@ use super::sizes;
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Callee, EndpointOperation, ExprKind, Form, Hook};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
-use crate::syntax::{child, has_token, name_token, tokens};
+use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
     Argument, CallArguments, ConstantValue, Detail, GenericKind, NamedKind, Parameter, Scalar, Type,
 };
@@ -73,6 +73,12 @@ impl<'a> Typer<'a> {
         else {
             return (ExprKind::Unread, Type::Unknown);
         };
+        let direct = ungrouped(callee.clone());
+        if direct.kind() == SyntaxKind::FnExpr
+            && let Some(keyword) = tokens(&direct).find(|token| token.kind() == SyntaxKind::KwFn)
+        {
+            return self.call_anonymous(&direct, &keyword, &list, expected);
+        }
         // ERR-13: "as the callee of a call each is the form this
         // chapter defines, whatever else is in scope."
         if callee.kind() == SyntaxKind::NameExpr
@@ -116,8 +122,8 @@ impl<'a> Typer<'a> {
             // The callee is an expression like any other, and is read
             // where it is written, for what it reads (FN-14: "An
             // anonymous function's scope is the scope around it plus its
-            // parameters"): `(fn(x) => x + 1)(7)` (FN-10), the call of
-            // what one gives, `(fn(a) => fn(b) => a + b)(1)(2)`, and one
+            // parameters"): the call of what one gives,
+            // `(fn(a) => fn(b) => a + b)(1)(2)`, and one
             // chosen by an `if` or taken from a list, `[fn() => x][0]()`.
             let called = self.expression(&callee, Some(&Type::Unknown));
             // FN-7: "inference does not create a general callable value

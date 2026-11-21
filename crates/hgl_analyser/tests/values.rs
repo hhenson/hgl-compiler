@@ -357,6 +357,56 @@ fn a_return_is_of_the_result_type() {
     );
 }
 
+/// FN-7 checks a body's result and the use of its parameters against
+/// their annotations or the context of a direct call. CTRL-5 targets
+/// the anonymous function for a return inside it.
+#[test]
+fn an_anonymous_body_is_checked_with_its_own_types() {
+    let checked = module(concat!(
+        "const fn bad_result(v: i64) -> i64 => (fn(x: i64) -> i64 => \"text\")(v)\n",
+        "const fn bad_use(v: i64) -> i64 => (fn(x: i64) -> i64 => if x { 1 } else { 2 })(v)\n",
+        "const fn inferred(v: i64) -> i64 => (fn(x) => if x { 1 } else { 2 })(v)\n",
+        "const fn inferred_result(v: i64) -> str => (fn(x) { return x })(v)\n",
+        "const fn good(v: i64) -> i64 => (fn(x) => x + 1)(v)\n",
+        "const fn declared(v: i64) -> i64 {\n",
+        "    let f = fn() -> i64 { return \"text\" }\n",
+        "    return v\n",
+        "}\n",
+        "const fn nested(v: i64) -> i64 {\n",
+        "    let f = fn() => fn() -> i64 => \"text\"\n",
+        "    return v\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:61 type/type.mismatch EXPR-5",
+            "m.hgl:3:61 type/type.mismatch CTRL-10",
+            "m.hgl:4:50 type/type.mismatch CTRL-10",
+            "m.hgl:5:60 type/type.mismatch EXPR-5",
+            "m.hgl:8:34 type/type.mismatch EXPR-5",
+            "m.hgl:12:36 type/type.mismatch EXPR-5",
+        ]
+    );
+}
+
+/// FN-14 permits a `let` capture in the anonymous body's checked scope
+/// and rejects a `var` capture.
+#[test]
+fn an_anonymous_body_types_the_let_it_captures() {
+    let checked = module(concat!(
+        "const fn accepted(v: i64) -> i64 {\n",
+        "    let fixed = 1\n",
+        "    return (fn(x) => x + fixed)(v)\n",
+        "}\n",
+        "const fn rejected(v: i64) -> i64 {\n",
+        "    var moving = 2\n",
+        "    return (fn(x: i64) -> i64 => x + moving)(v)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:8:38 name/name.captured FN-14"]);
+}
+
 /// TYPE-6: "A field whose type is an abstract struct holds every struct
 /// that inherits from it": a value of a struct is a value of the
 /// abstract structs it inherits from. TYPE-3: "Generic applications are
