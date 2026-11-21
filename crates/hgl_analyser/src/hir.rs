@@ -811,6 +811,9 @@ pub enum Callee {
         /// and for one whose generic parameters this pass does not
         /// resolve.
         generics: Vec<GenericArgument>,
+        /// Resolved type packs (GEN-10), in the order of their generic
+        /// parameters. A pack has no single type in `generics`.
+        type_packs: Vec<TypePackArgument>,
         /// What answers each requirement the function states, with
         /// `generics` in place: see [`Answer`]. Empty where `generics`
         /// is.
@@ -888,6 +891,15 @@ impl Callee {
             Callee::Required { .. } | Callee::Unread => &[],
         }
     }
+}
+
+/// The ordered list of types that a call gives one generic type pack.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypePackArgument {
+    /// Its position among the function's generic parameters.
+    pub parameter: usize,
+    /// Each type of the pack in binding order, possibly none.
+    pub types: Vec<Type>,
 }
 
 /// What answers a requirement a call's callee states (GEN-16).
@@ -971,10 +983,22 @@ pub struct Cell {
 pub struct Argument {
     /// The parameter or field it is given to: its index among the
     /// function's parameters, or among the struct's fields, a parent's
-    /// first. `None` when it is given to a pack, or to nothing.
+    /// first. `None` when it is given to nothing.
     pub parameter: Option<usize>,
+    /// The position or name of an argument captured by that parameter's
+    /// pack (FN-8, GEN-10).
+    pub pack: Option<PackKey>,
     /// Its value.
     pub value: Expr,
+}
+
+/// What identifies a captured argument within a pack (FN-8, GEN-10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackKey {
+    /// Zero-based position in a positional pack in written order.
+    Position(usize),
+    /// The supplied source name in a named pack.
+    Name(String),
 }
 
 /// The value of a literal.

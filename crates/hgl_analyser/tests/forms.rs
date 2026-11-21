@@ -5,7 +5,9 @@
 
 mod common;
 
-use common::check;
+use common::{body, check, module};
+use hgl_analyser::Argument;
+use hgl_analyser::hir::{Callee, ExprKind, PackKey, walk_statements};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -31,6 +33,150 @@ fn pack_parameters_are_accepted_in_their_forms() {
         ),
     )]);
     assert_eq!(checked.summary(), NONE);
+}
+
+/// FN-8 and GEN-10: capture in written order, keeping the pack slot,
+/// positional indexes or named keys, and the resolved argument types.
+#[test]
+fn calls_record_their_pack_arguments() {
+    let checked = module(concat!(
+        "const fn same<T>(fixed: T, rest: ...T) -> T => fixed\n",
+        "const fn different<...Types>(rest: ...Types) -> i64 => 1\n",
+        "const fn both<T, ...Fields>(rest: ...T, named: ...{Fields}) -> i64 => 1\n",
+        "const fn no_args() -> i64 => different()\n",
+        "const fn positional() -> i64 => same(1, 2, 3)\n",
+        "const fn mixed() -> i64 => both(1, 9, right: true, left: \"x\")\n",
+        "fn temporal(items: ...i64) -> i64 { when { return 1 } }\n",
+        "fn graph() -> i64 => temporal(1, 2)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let recorded = |name| {
+        let mut keys = Vec::new();
+        let mut types = Vec::new();
+        let mut ordinary = Vec::new();
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::Call {
+                callee, arguments, ..
+            } = &expr.kind
+            {
+                keys.extend(arguments.iter().map(|argument| {
+                    (
+                        argument.parameter.unwrap(),
+                        argument.pack.clone(),
+                        argument.value.ty.to_string(),
+                    )
+                }));
+                if let Callee::Function {
+                    type_packs,
+                    generics,
+                    ..
+                } = callee
+                {
+                    types.extend(type_packs.iter().map(|pack| {
+                        (
+                            pack.parameter,
+                            pack.types
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>(),
+                        )
+                    }));
+                    ordinary.extend(generics.iter().filter_map(|argument| match argument {
+                        Argument::Type(ty) => Some(ty.to_string()),
+                        _ => None,
+                    }));
+                }
+            }
+        });
+        (keys, types, ordinary)
+    };
+    let (keys, packs, _) = recorded("no_args");
+    assert!(keys.is_empty());
+    assert_eq!(packs, [(0, Vec::new())]);
+    let (keys, _, ordinary) = recorded("positional");
+    assert_eq!(ordinary, ["i64"]);
+    assert_eq!(
+        keys,
+        [
+            (0, None, "i64".into()),
+            (1, Some(PackKey::Position(0)), "i64".into()),
+            (1, Some(PackKey::Position(1)), "i64".into()),
+        ]
+    );
+    let (keys, packs, _) = recorded("mixed");
+    assert_eq!(packs, [(1, vec!["bool".into(), "str".into()])]);
+    assert_eq!(
+        keys,
+        [
+            (0, Some(PackKey::Position(0)), "i64".into()),
+            (0, Some(PackKey::Position(1)), "i64".into()),
+            (1, Some(PackKey::Name("right".into())), "bool".into()),
+            (1, Some(PackKey::Name("left".into())), "str".into()),
+        ]
+    );
+    let (keys, _, _) = recorded("graph");
+    assert_eq!(
+        keys,
+        [
+            (0, Some(PackKey::Position(0)), "i64".into()),
+            (0, Some(PackKey::Position(1)), "i64".into()),
+        ]
+    );
+}
+
+/// EXPR-2, FN-8 and GEN-10: packs constrain the kind, type and count
+/// of captured arguments. #336 specifies the locations for count errors.
+#[test]
+fn calls_check_their_pack_arguments() {
+    let checked = module(concat!(
+        "const fn pair(items: ...i64{2}) -> i64 => 1\n",
+        "const fn at_least(items: ...i64{1:*}) -> i64 => 1\n",
+        "const fn bounded<...Ts{1:2}>(items: ...Ts{0:3}) -> i64 => 1\n",
+        "const fn named<...Fields>(items: ...{Fields}) -> i64 => 1\n",
+        "const fn wrong_type() -> i64 => pair(true, 1)\n",
+        "const fn exact_too_few() -> i64 => pair(1)\n",
+        "const fn minimum_too_few() -> i64 => at_least()\n",
+        "const fn maximum_too_many() -> i64 => bounded(true, 1, \"x\")\n",
+        "const fn wrong_named() -> i64 => pair(1, 2, extra: 3)\n",
+        "const fn wrong_positional() -> i64 => named(1)\n",
+        "const fn repeated_key() -> i64 => named(key: 1, key: 2)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:38 type/type.mismatch EXPR-5",
+            "m.hgl:7:42 type/pack.cardinality GEN-10",
+            "m.hgl:8:47 type/pack.cardinality GEN-10",
+            "m.hgl:9:56 type/pack.cardinality GEN-10",
+            "m.hgl:10:45 name/argument.unknown EXPR-2",
+            "m.hgl:11:45 type/argument.unexpected EXPR-2",
+            "m.hgl:12:49 name/argument.duplicate EXPR-2",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-8 and GEN-14 (see #336): explicitly written types give the
+/// corresponding pack arguments a type. Named packs use written order.
+#[test]
+fn a_written_type_checks_the_argument_in_its_pack_position() {
+    let checked = module(concat!(
+        "const fn f<...Ts>(items: ...Ts) -> i64 => 1\n",
+        "const fn names<...Ts>(items: ...{Ts}) -> i64 => 1\n",
+        "const fn accepts() -> i64 => f<i64, bool>(1, true) + names<str, bool>(z: \"a\", a: false)\n",
+        "const fn rejects() -> i64 => f<i64>(true)\n",
+        "const fn rejects_named() -> i64 => names<i64, bool>(z: 1, a: 8)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:37 type/type.mismatch EXPR-5",
+            "m.hgl:6:62 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
 }
 
 /// FN-8: "Packs have no defaults, cannot be const, and follow all fixed

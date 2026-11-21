@@ -210,6 +210,7 @@ impl<'a> Typer<'a> {
                 }
                 arguments.push(hir::Argument {
                     parameter: None,
+                    pack: None,
                     value: self.expression(&value, Some(&Type::Unknown)),
                 });
                 continue;
@@ -230,6 +231,7 @@ impl<'a> Typer<'a> {
             let place = format!("the property `{property}`");
             arguments.push(hir::Argument {
                 parameter: Some(position),
+                pack: None,
                 value: self.fit(read, expected, &place),
             });
             written.push((position, value, expected.clone()));

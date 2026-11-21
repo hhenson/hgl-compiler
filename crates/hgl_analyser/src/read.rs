@@ -759,6 +759,7 @@ impl Reader<'_> {
                 reference: has_token(&parameter, SyntaxKind::KwRef),
                 ty,
                 pack,
+                pack_bounds: cardinality(child(&parameter, SyntaxKind::Cardinality)),
                 has_default,
             });
         }

@@ -771,6 +771,9 @@ pub struct Parameter {
     pub ty: Type,
     /// What kind of pack it is, when it is one (FN-8).
     pub pack: Option<Pack>,
+    /// The fewest and most arguments this parameter captures (GEN-10).
+    /// Unbounded when it writes no cardinality.
+    pub pack_bounds: (u64, Option<u64>),
     /// True when it has a default.
     pub has_default: bool,
 }

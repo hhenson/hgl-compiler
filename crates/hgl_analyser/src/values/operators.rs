@@ -193,8 +193,11 @@ impl<'a> Typer<'a> {
         let written: Vec<Option<Argument>> = match generics {
             None => vec![None; public.generics.len()],
             Some(_) => {
-                let Some((explicit, _)) = self.generic_arguments(name, &public.generics, generics)
-                else {
+                let Some((explicit, _)) = self.generic_arguments(
+                    name,
+                    &public.generics,
+                    generics.map(|given| given.arguments.as_slice()),
+                ) else {
                     return self.unread_call(list);
                 };
                 explicit
@@ -736,6 +739,7 @@ impl<'a> Typer<'a> {
             .into_iter()
             .map(|given| hir::Argument {
                 parameter: None,
+                pack: None,
                 value: if given.retried {
                     self.expression(&given.node, Some(&Type::Unknown))
                 } else {

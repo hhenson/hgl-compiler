@@ -175,7 +175,7 @@ impl Emitter<'_> {
         for argument in arguments {
             let Some(index) = argument
                 .parameter
-                .filter(|&index| index < signature.parameters.len())
+                .filter(|&index| argument.pack.is_none() && index < signature.parameters.len())
             else {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };

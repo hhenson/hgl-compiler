@@ -624,6 +624,7 @@ fn a_composite_constant_is_its_elements_in_an_instance() {
                         declaration,
                         generics,
                         requirements,
+                        ..
                     },
                 ..
             } = &value.kind

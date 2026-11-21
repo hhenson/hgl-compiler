@@ -114,7 +114,8 @@ parser: done
 analyser: partial
 
 - A cardinality bounds the arguments a generic type's pack takes, and has its upper bound at least its lower
-- Left: pack views; `each`; the arity of a call
+- Function calls check the cardinality of captured arguments against both the value parameter and its generic type pack. The HIR records the resolved sequence of types for each captured type pack.
+- Explicitly written types check the corresponding arguments of a single trailing type pack. Pack reflection and the remaining explicit type-pack cases are tracked separately. [Compiler issue #336](https://github.com/hhenson/hgl-compiler/issues/336)
 
 transpiler: planned
 

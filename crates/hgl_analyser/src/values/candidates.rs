@@ -327,6 +327,7 @@ impl<'a> Typer<'a> {
                 .into_iter()
                 .map(|given| hir::Argument {
                     parameter: None,
+                    pack: None,
                     value: given.value,
                 })
                 .collect();
@@ -389,6 +390,7 @@ impl<'a> Typer<'a> {
                     None => {
                         return Some(hir::Argument {
                             parameter: None,
+                            pack: None,
                             value: given.value,
                         });
                     }
@@ -404,6 +406,7 @@ impl<'a> Typer<'a> {
                 }
                 Some(hir::Argument {
                     parameter: Some(index),
+                    pack: None,
                     value,
                 })
             })

@@ -7,7 +7,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
 
 use super::Typer;
-use super::arguments::{Slot, Takes};
+use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
 use super::evals::{holds_trace, publications};
@@ -17,9 +17,7 @@ use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
 use crate::hir::{self, Expr};
 use crate::program::Declaration;
-use crate::types::{
-    Argument, CallArguments, Constant, ConstantValue, GenericKind, GenericParameter, Type,
-};
+use crate::types::{Argument, Constant, ConstantValue, GenericKind, GenericParameter, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -264,14 +262,14 @@ impl<'a> Typer<'a> {
         &mut self,
         name: &SyntaxToken,
         generics: &[GenericParameter],
-        given: Option<&CallArguments>,
+        given: Option<&[(Location, Argument)]>,
     ) -> Option<(Vec<Option<Argument>>, bool)> {
         let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
         let Some(given) = given else {
             return Some((found, false));
         };
         let callee = name.text();
-        if given.arguments.len() > generics.len() {
+        if given.len() > generics.len() {
             let takes = match generics.len() {
                 0 => "no generic arguments".to_string(),
                 1 => "1 generic argument".to_string(),
@@ -281,17 +279,14 @@ impl<'a> Typer<'a> {
                 Category::Type,
                 codes::GENERIC_ARGUMENT_COUNT,
                 Location::new(self.file, name.span()),
-                format!(
-                    "`{callee}` takes {takes} and is given {}",
-                    given.arguments.len()
-                ),
+                format!("`{callee}` takes {takes} and is given {}", given.len()),
                 "GEN-8",
             ));
             return None;
         }
         let mut faulty = false;
         let mut rejected = false;
-        for (position, (at, argument)) in given.arguments.iter().enumerate() {
+        for (position, (at, argument)) in given.iter().enumerate() {
             let generic = &generics[position];
             let mismatch = match (&generic.kind, argument) {
                 // Reported where it is written.
@@ -380,6 +375,7 @@ impl<'a> Typer<'a> {
             settled,
             aside,
             values: named,
+            written_pack,
             defaults,
         } = places;
         // The parameters being resolved. A place's type that still
@@ -395,7 +391,7 @@ impl<'a> Typer<'a> {
         // what another reads (CTRL-10), so with one such a reading is
         // tried and taken back, and every argument is then read where
         // it is written.
-        let ordered = assigned.iter().any(|(_, node)| holds_block(node));
+        let ordered = assigned.iter().any(|argument| holds_block(&argument.value));
         // GEN-12: a call's parameters say what a generic is "in declared
         // parameter order". A struct's fields have no order of their
         // own (TYPE-5: named, "in any order"), so the first written
@@ -408,10 +404,15 @@ impl<'a> Typer<'a> {
         // writes, or its place expects, is not widened (GEN-2).
         let mut by_argument = vec![false; generics.len()];
         for position in order {
-            let (slot, node) = &assigned[position];
+            let Assigned {
+                slot, value: node, ..
+            } = &assigned[position];
             let Some(index) = *slot else {
                 continue;
             };
+            if slots[index].type_pack.is_some() {
+                continue;
+            }
             let pattern = patterns[index];
             let unfound: Vec<Location> = generics
                 .iter()
@@ -560,7 +561,12 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|found| found.clone().unwrap_or(Argument::Type(Type::Unknown)))
             .collect();
-        let map: Vec<(Location, &Argument)> = fixed(generics).zip(&resolved).collect();
+        let map: Vec<(Location, &Argument)> = generics
+            .iter()
+            .zip(&resolved)
+            .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
+            .map(|(generic, argument)| (generic.at, argument))
+            .collect();
         // The parameters nothing resolved.
         let unfound: Vec<Location> = generics
             .iter()
@@ -571,15 +577,21 @@ impl<'a> Typer<'a> {
         let arguments: Vec<hir::Argument> = assigned
             .iter()
             .enumerate()
-            .map(|(position, (slot, node))| {
+            .map(|(position, assigned)| {
+                let Assigned {
+                    slot,
+                    pack,
+                    value: node,
+                } = assigned;
                 let Some(index) = *slot else {
                     return self.argument(None, node, None, takes);
                 };
-                let ty = substitute_within(patterns[index], &map);
-                let slot = Slot {
-                    ty: placed(ty, &own),
-                    ..slots[index]
-                };
+                let ty = written_pack
+                    .filter(|(generic, _)| slots[index].type_pack == Some(*generic))
+                    .and_then(|(_, types)| types.get(pack.as_ref()?.0))
+                    .cloned()
+                    .unwrap_or_else(|| placed(substitute_within(patterns[index], &map), &own));
+                let slot = Slot { ty, ..slots[index] };
                 // A place whose type names a parameter nothing resolved
                 // is not known, and where the call is settled it never
                 // will be. Its argument is then read as one of which
@@ -587,19 +599,23 @@ impl<'a> Typer<'a> {
                 // itself is reported: the `repeat(1)` of
                 // `same(repeat(1), repeat(2))`. `null` and `.member`
                 // have no reading of their own.
-                let placeless =
-                    *settled && !takes_its_type(node) && mentions(patterns[index], &unfound);
+                let placeless = *settled
+                    && slot.type_pack.is_none()
+                    && !takes_its_type(node)
+                    && mentions(patterns[index], &unfound);
                 // True for a place that is a trace an eval gives
                 // (TST-5), and not one a generic parameter was made by
                 // what it was given.
                 let traced = matches!(patterns[index], Type::Trace { .. });
-                match values[position].take() {
+                let mut argument = match values[position].take() {
                     None if placeless => hir::Argument {
                         parameter: Some(index),
+                        pack: None,
                         value: self.expression(node, None),
                     },
                     Some(value) if unfitted[position] => hir::Argument {
                         parameter: Some(index),
+                        pack: None,
                         value,
                     },
                     // A value that holds a trace is the place's to
@@ -607,11 +623,13 @@ impl<'a> Typer<'a> {
                     // not held to its type.
                     Some(value) if !traced && holds_trace(&value.ty) => hir::Argument {
                         parameter: Some(index),
+                        pack: None,
                         value,
                     },
                     Some(value) if self.lifted_window(&slot.ty, slot.listed, &value, takes) => {
                         hir::Argument {
                             parameter: Some(index),
+                            pack: None,
                             value,
                         }
                     }
@@ -624,17 +642,19 @@ impl<'a> Typer<'a> {
                         };
                         hir::Argument {
                             parameter: Some(index),
+                            pack: None,
                             value,
                         }
                     }
                     None => self.argument(Some(index), node, Some((&slot, traced)), takes),
-                }
+                };
+                argument.pack = pack.as_ref().map(|(_, key)| key.clone());
+                argument
             })
             .collect();
-        let unknown = assigned
-            .iter()
-            .zip(&arguments)
-            .any(|((_, node), argument)| !takes_its_type(node) && !whole(&argument.value.ty));
+        let unknown = assigned.iter().zip(&arguments).any(|(assigned, argument)| {
+            !takes_its_type(&assigned.value) && !whole(&argument.value.ty)
+        });
         Inferred {
             arguments,
             found,
@@ -665,6 +685,8 @@ pub(super) struct Places<'s> {
     /// What the call gives those: each with the position of its
     /// parameter among `generics`.
     pub(super) values: &'s [(usize, SyntaxNode)],
+    /// The written types of a call's sole trailing type pack, when given.
+    pub(super) written_pack: Option<(usize, &'s [Type])>,
     /// The default of each generic value parameter that has one (GEN-2):
     /// an entry for each of `generics`, or none at all.
     pub(super) defaults: Vec<Option<Constant>>,
@@ -690,11 +712,11 @@ pub(super) struct Inferred {
 /// GEN-12: "A prior binding constrains every later occurrence in
 /// declared parameter order." So in `same(right: 1, left: 2.0)` it is
 /// `left` that says what `T` is.
-fn declared_order(assigned: &[(Option<usize>, SyntaxNode)]) -> Vec<usize> {
+fn declared_order(assigned: &[Assigned]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..assigned.len()).collect();
     // A stable sort: two arguments of one place keep their written
     // order.
-    order.sort_by_key(|&position| assigned[position].0.unwrap_or(usize::MAX));
+    order.sort_by_key(|&position| assigned[position].slot.unwrap_or(usize::MAX));
     order
 }
 

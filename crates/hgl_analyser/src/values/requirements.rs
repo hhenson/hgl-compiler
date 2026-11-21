@@ -1265,6 +1265,7 @@ impl<'a> Typer<'a> {
                 };
                 hir::Argument {
                     parameter: (place < parameters).then_some(place),
+                    pack: None,
                     value,
                 }
             })
@@ -2263,6 +2264,7 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
                     declaration,
                     generics,
                     requirements,
+                    ..
                 }
                 | Callee::Candidate {
                     module,

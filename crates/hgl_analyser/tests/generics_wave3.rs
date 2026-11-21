@@ -92,6 +92,7 @@ fn first_call(body: &Body) -> (usize, usize, Vec<Argument>, Vec<hgl_analyser::hi
                     declaration,
                     generics,
                     requirements,
+                    ..
                 },
             ..
         } = &value.kind

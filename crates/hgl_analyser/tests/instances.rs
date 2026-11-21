@@ -28,6 +28,7 @@ fn calls(body: &Body) -> Vec<Called> {
                 declaration,
                 generics,
                 requirements,
+                ..
             }
             | Callee::Candidate {
                 module,

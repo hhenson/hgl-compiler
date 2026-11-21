@@ -239,6 +239,13 @@ impl Program {
 /// that answers the requirement (GEN-16); one nothing answers is left
 /// as it is.
 fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer]) {
+    if let Callee::Function { type_packs, .. } = callee {
+        for pack in type_packs {
+            for ty in &mut pack.types {
+                *ty = substitute_within(ty, map);
+            }
+        }
+    }
     match callee {
         Callee::Function {
             generics,
