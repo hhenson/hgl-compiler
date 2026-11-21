@@ -58,11 +58,6 @@ const PENDING: &[Pending] = &[
     },
     Pending {
         file: GENERICS,
-        opening: "module examples.rooms",
-        reason: "TYPE-3: comma between struct fields (hgl_spec#196)",
-    },
-    Pending {
-        file: GENERICS,
         opening: "operator call_through<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R",
         reason: "FN-17 (#362), GEN-17 and FN-8 (#366)",
     },
