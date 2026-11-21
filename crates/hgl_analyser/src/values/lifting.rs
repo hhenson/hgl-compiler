@@ -5,12 +5,13 @@
 use hgl_diagnostics::{Category, Diagnostics, Location};
 
 use super::Typer;
+use super::control::{no_else_type, while_connection};
 use crate::hir::{
-    Body, Callee, Expr, ExprKind, Local, LocalId, Node, Run, Stmt, ValueCategory,
-    walk_statement_nodes, walk_statements_mut,
+    Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Run, Stmt, ValueCategory,
+    walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
-use crate::types::Detail;
+use crate::types::{Detail, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -196,7 +197,8 @@ fn check_const_arguments(
 }
 
 /// GEN-7: a selected temporal candidate can make a formerly unsettled
-/// argument a connection. Check its consumers after recording the instance.
+/// argument or a loop condition a connection. Check the graph's
+/// constant places after recording the instance.
 pub(super) fn check_instance_constants(
     program: &Program,
     body: &Body,
@@ -204,17 +206,29 @@ pub(super) fn check_instance_constants(
     diagnostics: &mut Diagnostics,
 ) {
     let mut reports = Diagnostics::new();
-    crate::hir::walk_statements(&body.statements, &mut |value| {
-        check_const_arguments(program, &body.locals, &value.kind, &mut reports);
+    walk_statement_nodes(&body.statements, &mut |node| match node {
+        Node::Expression(value) => {
+            check_const_arguments(program, &body.locals, &value.kind, &mut reports);
+        }
+        Node::Statement(Stmt::While {
+            condition: Some(condition),
+            ..
+        }) => {
+            if let Some(report) = while_connection(condition, condition.category) {
+                reports.emit(report);
+            }
+        }
+        _ => {}
     });
     for report in reports.as_slice() {
         if diagnostics.as_slice().contains(report) {
             continue;
         }
         for &root in from {
-            let mut here = report
-                .clone()
-                .with_related(report.primary, "the const argument in the generic body");
+            let mut here = report.clone().with_related(
+                report.primary,
+                "this place in the generic body needs a value",
+            );
             here.primary = root;
             if !diagnostics.as_slice().contains(&here) {
                 diagnostics.emit(here);
@@ -420,20 +434,28 @@ fn lifts(program: &Program, callee: &Callee) -> bool {
 /// local declared inside it, `let s = { let t = add_(k, k); t }`, which
 /// a walk meets after the declaration it is in, so the walk is made
 /// again until it settles no more: each walk but the last settles one
-/// at least.
+/// category or inferred type. In a graph this includes a no-else `if`
+/// whose type depends on the settled categories (CTRL-13).
 pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
     use ValueCategory::Unsettled;
     let Body { locals, statements } = body;
     let mut settling = true;
     while settling {
         settling = false;
-        walk_statement_nodes(statements, &mut |node| {
-            let (local, value) = match node {
-                Node::Statement(Stmt::Declare {
+        walk_statement_nodes_mut(statements, &mut |node| {
+            let (local, value, declares) = match node {
+                NodeMut::Statement(Stmt::Declare {
                     local,
                     value: Some(value),
-                })
-                | Node::Statement(Stmt::Assign { local, value, .. }) => (*local, value),
+                }) => (*local, value, true),
+                NodeMut::Statement(Stmt::Assign { local, value, .. }) => (*local, value, false),
+                NodeMut::Expression(value) if composition && value.ty == Type::Unknown => {
+                    if let Some(ty) = settled_type(program, locals, value) {
+                        value.ty = ty;
+                        settling = true;
+                    }
+                    return;
+                }
                 _ => return,
             };
             if locals[local].category == Unsettled {
@@ -443,11 +465,42 @@ pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
                     settling = true;
                 }
             }
+            if composition
+                && declares
+                && locals[local].ty == Type::Unknown
+                && value.ty != Type::Unknown
+            {
+                locals[local].ty = value.ty.clone();
+                settling = true;
+            }
         });
     }
     walk_statements_mut(statements, &mut |value| {
         recorded(program, locals, composition, value);
     });
+}
+
+/// CTRL-13: decide a no-else expression's type once its categories
+/// settle. A block tail or a read of an inferred local also takes its
+/// type from the value once that type is known.
+fn settled_type(program: &Program, locals: &[Local], value: &Expr) -> Option<Type> {
+    let ty = match &value.kind {
+        ExprKind::If {
+            condition,
+            then,
+            otherwise: None,
+        } if gives_a_value(then) => no_else_type(
+            then.ty.clone(),
+            category(program, locals, condition),
+            category(program, locals, then),
+        ),
+        ExprKind::Block {
+            value: Some(tail), ..
+        } => tail.ty.clone(),
+        ExprKind::Local(local) => locals.get(*local)?.ty.clone(),
+        _ => return None,
+    };
+    (ty != Type::Unknown).then_some(ty)
 }
 
 /// Records what `value` is and, for a call, whether it is lifted, as
