@@ -177,7 +177,7 @@ namespace hgl::demo::composites::m_
 namespace c_
 {
 // add_(lhs: Point, rhs: Point) -> Point (candidate `impl const fn`), module demo.composites, line 129
-::hgl::demo::composites::m_::Point add_1_([[maybe_unused]] ::hgl::demo::composites::m_::Point lhs, [[maybe_unused]] ::hgl::demo::composites::m_::Point rhs)
+::hgl::demo::composites::m_::Point add_1_1Point_1Point_d28_([[maybe_unused]] ::hgl::demo::composites::m_::Point lhs, [[maybe_unused]] ::hgl::demo::composites::m_::Point rhs)
 {
     return [&]() -> ::hgl::demo::composites::m_::Point { const ::hgraph::Float field_00_ = ::hglrt::add__f64_f64((lhs).x, (rhs).x); const ::hgraph::Float field_01_ = ::hglrt::add__f64_f64((lhs).y, (rhs).y); return ::hgl::demo::composites::m_::Point{field_00_, field_01_}; }();
 }
@@ -516,7 +516,7 @@ void structs_are_values()
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(point, ::hgl::demo::composites::m_::Point{1.0, 2.0}));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check([&] { const ::hgl::demo::composites::m_::Point argument_04_ = ::hgl::demo::composites::m_::c_::add_1_(point, ::hgl::demo::composites::m_::Point{3.0, 0.0}); const ::hgl::demo::composites::m_::Point argument_05_ = ::hgl::demo::composites::m_::Point{4.0, 2.0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_04_, argument_05_); }());
+    ::hglrt::testing::check([&] { const ::hgl::demo::composites::m_::Point argument_04_ = ::hgl::demo::composites::m_::c_::add_1_1Point_1Point_d28_(point, ::hgl::demo::composites::m_::Point{3.0, 0.0}); const ::hgl::demo::composites::m_::Point argument_05_ = ::hgl::demo::composites::m_::Point{4.0, 2.0}; return ::hglrt::eq__T_T<::hgl::demo::composites::m_::Point>(argument_04_, argument_05_); }());
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__f64_f64_f64_f64(::hgl::demo::composites::m_::first_x(), 1.0, 0.0, 0.0));
     ::hglrt::testing::statement();

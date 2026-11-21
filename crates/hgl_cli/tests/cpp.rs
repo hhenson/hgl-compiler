@@ -1097,6 +1097,34 @@ fn activity_runs_on_the_sdk() {
     );
 }
 
+/// GEN-4, GEN-5: each selected HGL candidate owns its C++ name, for
+/// named and symbol calls of value and temporal candidates.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn operator_candidates_have_distinct_cpp_names_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("candidate_names");
+    let file = write(
+        &root,
+        "demo.candidate_names.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.candidate_names.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-8 and GEN-10: C++ calls bind the individual inputs of positional
 /// and named packs in value helpers, nodes, and graphs. TST-5: eval
 /// replays the trace of each captured argument.

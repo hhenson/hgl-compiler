@@ -27,7 +27,7 @@
 //! in a node that injects a scheduler or an alarm.
 
 use hgl_analyser::hir::{Body, EndpointOperation, Expr, ExprKind, Hook, Local, Stmt};
-use hgl_analyser::{ConstantValue, Phase, Signature, Type};
+use hgl_analyser::{ConstantValue, Signature, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::nodes::{
     Designated, Handler, Timer, designated, designates, designations, is_out, is_reference,
@@ -286,41 +286,6 @@ impl Designations {
 }
 
 impl Emitter<'_> {
-    /// True where the `ref` parameters and result of `signature`, a
-    /// temporal function's of `phase` (a source's where `source`), are
-    /// written; each that is not is reported, at `at` for the result.
-    pub(super) fn references_written(
-        &mut self,
-        signature: &Signature,
-        phase: Phase,
-        source: bool,
-        at: Location,
-    ) -> bool {
-        let marked = signature
-            .parameters
-            .iter()
-            .find(|parameter| parameter.reference);
-        // FN-16: "A value function, a graph, and an operator mark none",
-        // which the analyser rejects (`ref.position`).
-        if phase == Phase::Graph {
-            if signature.reference {
-                self.unsupported(at, "a `ref` result of a graph");
-                return false;
-            }
-            if let Some(parameter) = marked {
-                self.unsupported(parameter.at, "a `ref` parameter of a graph");
-                return false;
-            }
-        }
-        // SOURCE-1: a source names no temporal input, which a `ref`
-        // result would designate; the analyser rejects its `yield`.
-        if source && signature.reference {
-            self.unsupported(at, "a `ref` result of a source");
-            return false;
-        }
-        true
-    }
-
     /// hgraph's schema of a node's temporal parameter or result of `ty`:
     /// its temporal form, and where `reference` (FN-16) hgraph's `REF` of
     /// it, `::hgraph::REF<::hgraph::TS<::hgraph::Int>>`. One whose type

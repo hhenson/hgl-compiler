@@ -18,7 +18,7 @@ use crate::hir::{
 use crate::program::{DeclarationKind, Role};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{Argument, CallArguments, ConstantValue, NamedKind, Scalar, Type};
-use crate::{codes, error, local_error};
+use crate::{codes, error};
 
 impl<'a> Typer<'a> {
     /// True when the node being read injects its scheduler or its
@@ -94,9 +94,9 @@ impl<'a> Typer<'a> {
             "a value function"
         };
         self.diagnostics.emit(
-            local_error(
+            error(
                 Category::Phase,
-                codes::local::SCHEDULED_OUTSIDE_NODE,
+                codes::SCHEDULED_OUTSIDE_NODE,
                 selector,
                 format!(
                     "`scheduled()` asks a node's scheduler or alarm, and {what} is no node: it has \

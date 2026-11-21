@@ -251,24 +251,47 @@ pub(crate) fn testing(name: &str) -> String {
     format!("::{}::{name}", crate::runtime::TESTING)
 }
 
+/// The C++ identifier of one HGL candidate (GEN-4, GEN-5). Its declared
+/// parameter types make the name readable. Its declaration index keeps
+/// it distinct even when two candidates have the same parameter types
+/// or those types have the same spelling after mangling. The module's
+/// namespace supplies the other half of the declaration's identity.
+fn candidate_identifier(name: &str, detail: Option<&Detail>, declaration: usize) -> String {
+    let types: Vec<_> = match detail {
+        Some(Detail::Callable(signature)) => signature
+            .parameters
+            .iter()
+            .map(|parameter| mangled(&parameter.ty))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let stem = identifier(&format!("{name}_{}", types.join("_")));
+    let stem = stem.trim_end_matches('_');
+    format!("{stem}_d{declaration}_")
+}
+
 /// Where a function of the program is defined: the namespace it is in,
-/// under its module's (`module_namespace`), and its name there. A value
-/// function is named `identifier` gives its name, `total`. An HGL
-/// candidate of an operator is in `c_`, where the candidates of one
-/// operator are C++ overloads of its name, `c_::add_1_` (GEN-4). An
-/// instance of a generic declaration (GEN-2) is named by its suffix in a
-/// namespace of its declaration's own under `i_`: `i_::spread::of_f64`,
-/// `c_::i_::add_1_::of_Weekdays`. `c_` and `i_` have the form the target's
-/// own names have, which no HGL name gives.
+/// under its module's ([`module_namespace`]), and its name there. A value
+/// function is named as [`identifier`] gives its name, `total`. Each HGL
+/// candidate of an operator has its own name in `c_` (GEN-4, GEN-5).
+/// An instance of a generic declaration (GEN-2) is named by its suffix
+/// in a namespace of its declaration's own under `i_`:
+/// `i_::spread::of_f64`, `c_::i_::candidate_name::of_f64`. `c_` and `i_`
+/// have the form the target's own names have, which no HGL name gives.
 pub(super) fn placed(
     program: &Program,
     module: usize,
     declaration: usize,
     instance: Option<&str>,
 ) -> (Option<String>, String) {
-    let declared = &program.modules[module].declarations[declaration];
+    let unit = &program.modules[module];
+    let declared = &unit.declarations[declaration];
     let candidate = matches!(declared.kind, DeclarationKind::Implementation(..));
-    let name = identifier(&declared.name);
+    let name = if candidate {
+        candidate_identifier(&declared.name, unit.details.get(declaration), declaration)
+    } else {
+        identifier(&declared.name)
+    };
     match (candidate, instance) {
         (false, None) => (None, name),
         (true, None) => (Some("c_".to_string()), name),
@@ -310,6 +333,28 @@ pub(super) fn function(
 /// the last, and a plain one does not end with `_`.
 pub(super) fn temporary(word: &str, number: usize) -> String {
     format!("{word}_0{number}_")
+}
+
+/// The unchecked input that watches a result on `local` (ERR-15).
+/// It ends in `_` and contains `_w`, which [`identifier`] never does
+/// in a name ending in `_`.
+pub(super) fn result_watch(local: usize) -> String {
+    format!("result_watch_{local}_")
+}
+
+/// The suffix that distinguishes a physical reader variant (ERR-15).
+/// The appended `_read_` and final `_` cannot occur together in a
+/// name from [`identifier`], which escapes each internal `_` as `_1`
+/// in a name ending in `_`.
+pub(super) fn reader_suffix(number: usize) -> String {
+    format!("_read_{number}_")
+}
+
+/// The alias for a source's mixed whole and delta payload (TIME-7).
+/// Its final `_` and internal `_t` cannot occur together in a name
+/// from [`identifier`].
+pub(super) fn source_payload_type() -> &'static str {
+    "payload_type_"
 }
 
 /// A struct's generic parameter `written` (GEN-1) as its C++ template's

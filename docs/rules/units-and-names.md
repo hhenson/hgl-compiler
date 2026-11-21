@@ -122,7 +122,7 @@ analyser: partial
 - One computed by a call is held by its name, the same as itself and known beside no other
 - Two are one where their values are the same, however each is written (`ConstantValue::same`): `1`, `1.0` and `1.00` of an `f64`, `60s` and `1m`, two `datetime`s at one instant; `-0.0` and `0.0` are two, though `-0.0 == 0.0`, and any two NaNs one, `0.0 / 0.0` among them. That sameness is a type's identity (TYPE-3) and a call's instance (GEN-13); an equality the program writes, in a `requires` as elsewhere, is the language's `==` (`ConstantValue::equals`, GEN-3): `Flag<(-0.0 == 0.0)>` is `Flag<true>`
 - How one is written is kept beside its value (`Constant::text`), for a message, and is never compared
-- One whose evaluation fails, an `i64` out of range or a division of two `i64` by zero, is local `constant.failure` where it is declared ("a failure in evaluating it is a required-constant failure (ERR-9)"), and says nothing more where it is read
+- One whose evaluation fails, an `i64` out of range or a division of two `i64` by zero, is `constant.failure` where it is declared ("a failure in evaluating it is a required-constant failure (ERR-9)"), and says nothing more where it is read
 - One the reader does not work out, a datetime moved by a duration, is no value a generic value argument is given (`generic.argument_constant`), as the same expression written in place is not
 - An expression is read in a loop along a chain of operators, `1 + 1 + ... + 1`, of any length the parser builds a tree for
 - One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a default a call leaves to be read

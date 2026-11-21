@@ -16,7 +16,7 @@ use crate::hir::{
 use crate::program::{Binding, LocalKind, RUN_CONFIG};
 use crate::syntax::{child, leads_its_test, tokens};
 use crate::types::{Detail, Scalar, Type};
-use crate::{codes, error, local_error, warning};
+use crate::{codes, error, warning};
 
 impl<'a> Typer<'a> {
     /// The body of a node: its declarations and then its hooks (FN-2).
@@ -689,21 +689,19 @@ impl<'a> Typer<'a> {
             ));
             return;
         }
-        // TIME-1: a cache's initializer admits no read either. TIME-6:
-        // a cache is "initialized on every start", and TIME-5: that is
-        // "before any has a value". The catalogue's `state.input_read`
-        // names a state's initializer alone, so the code is local.
+        // A cache is "initialized on every start" (TIME-6), which is
+        // "before any [input] has a value" (TIME-5).
         if self.caching {
             self.diagnostics.emit(
-                local_error(
+                error(
                     Category::Phase,
-                    codes::local::CACHE_INPUT_READ,
+                    codes::CACHE_INPUT_READ,
                     at,
                     format!(
                         "`{name}` is a temporal input, and a `cache` is given its first value \
                          on every start, before any input has one"
                     ),
-                    "TIME-1",
+                    "TIME-5",
                 )
                 .with_note("a `when` reads it, and may assign the cache"),
             );

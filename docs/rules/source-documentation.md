@@ -18,7 +18,7 @@ docs: unscheduled
 
 analyser: partial
 
-- A key of an `Args:` or a `Type Args:` section, a name and a `:` four spaces in once SDOC-2's common indentation is removed, names a parameter or a generic parameter of what the comment documents; a declaration with none has none to name (local `doc.unknown_key`)
+- A key of an `Args:` or a `Type Args:` section, a name and a `:` four spaces in once SDOC-2's common indentation is removed, names a parameter or a generic parameter of what the comment documents; a declaration with none has none to name (`doc.unknown_key`)
 - Left: `Requires:` and `Properties:` keys, which the chapter does not say how to write; `Args:` of a struct, whose fields are its construction's arguments
 
 docs: unscheduled

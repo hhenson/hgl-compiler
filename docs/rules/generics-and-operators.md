@@ -64,7 +64,9 @@ analyser: partial
 - A private operator is used only in its own module. Importing one rejects with `import.private` (UNIT-3). A candidate in another module needs a binding to an exported operator or reports `impl.unknown_operator`.
 - A symbol call whose core identity is private rejects outside core with `operator.no_candidate`.
 
-transpiler: planned
+transpiler: done
+
+- An HGL candidate has a separate name in its declaring module, using its declared parameter types and declaration identity (`emit::names::placed`). Its generic instances are named below that candidate's own namespace.
 
 ## GEN-5
 
@@ -77,6 +79,10 @@ analyser: partial
 - In value code, a test's outside an `eval` or a `run` and an application's statements, a call selects among both too, a value candidate outranking a temporal one of the same parameter types; a temporal candidate it selects is `call.role`, the code proposed (TST-3, UNIT-14)
 - A packed candidate matches each captured argument and checks the pack's bounds. Equally specific candidates stay tied when their admitted cardinalities overlap.
 - Left: an argument that is itself a call only its requested output selects; composition, where a temporal candidate outranks a value one of the same parameter types, and runtime bodies
+
+transpiler: done
+
+- Named and symbol calls use the selected candidate's module, declaration and instance to name its value function or temporal wiring. C++ sees the selected candidate's own name (`emit::names::placed`).
 
 ## GEN-6
 
@@ -101,7 +107,8 @@ analyser: partial
 - The call records the position of the requirement it is (`Callee::Required`), so that a call of the declaration says which candidate it calls
 - "It is judged once, where it is declared, by what its `requires` states, and never again for the generic arguments a call of it gives": a call of an operator in it is admitted where a candidate takes every generic argument the requirements admit, where a named operator requirement states it, or under a membership where each listed type has one (GEN-3), and otherwise the declaration rejects (`operator.no_candidate`, with a note), by name and by symbol, in a value function and a graph: the fragments `less` and `wrap` with no `requires`
 - Each instance selects again for an operator call whose operand types use the enclosing declaration's generic parameters, including when a generic candidate admitted the body. The new selection uses the instance's operands and the operator binding at the call (GEN-5), including private operators, symbols, and calls in nodes and graphs.
-- Left: a requirement met by widening an argument; a type or size parameter used as a runtime value
+- A generic body's value parameter, including a fixed list's size `N` (GEN-13), is specified to be read as a constant, such as in `0..<N` or an index. #368 tracks ranges.
+- Left: a requirement met by widening an argument, and checking misuse of a type or size parameter as a runtime value
 
 ## GEN-8
 

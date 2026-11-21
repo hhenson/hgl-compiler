@@ -59,8 +59,9 @@ impl Family for Sources {
                     .map(|delta| usize::from(value.ty == *delta));
                 let mut value = emitter.expression(scope, value);
                 if let Some(alternative) = alternative {
+                    let payload_type = names::source_payload_type();
                     value =
-                        format!("payload_type_{{::std::in_place_index<{alternative}>, {value}}}");
+                        format!("{payload_type}{{::std::in_place_index<{alternative}>, {value}}}");
                 }
                 text.push_str(&format!(
                     "{indent}co_yield yielded_type_{{{time}, {value}}};\n"
@@ -71,10 +72,6 @@ impl Family for Sources {
             // source."
             Stmt::Return { value: None, .. } => {
                 text.push_str(&format!("{indent}co_return;\n"));
-                true
-            }
-            Stmt::Return { at, .. } => {
-                emitter.unsupported(*at, "a `return` with a value in a source");
                 true
             }
             _ => false,
@@ -100,10 +97,10 @@ impl Emitter<'_> {
         let Some(hooked) = self.source_hooks(signature, body) else {
             return;
         };
-        let Some(result) = &signature.result else {
-            self.unsupported(at, "a source with no result");
-            return;
-        };
+        let result = signature
+            .result
+            .as_ref()
+            .expect("SOURCE-1: the analyser requires a result on a source");
         // TIME-7: a `yield` gives "a complete value of the result's type
         // T, published whole, or a `delta<T>`": the body's yields give what
         // their values are, which is T's delta where every one is a delta
@@ -136,9 +133,10 @@ impl Emitter<'_> {
             let Some(change) = self.written_type(&delta, at) else {
                 return;
             };
+            let payload_type = names::source_payload_type();
             (
-                "payload_type_".to_string(),
-                format!("{INDENT}using payload_type_ = ::std::variant<{payload}, {change}>;\n"),
+                payload_type.to_string(),
+                format!("{INDENT}using {payload_type} = ::std::variant<{payload}, {change}>;\n"),
             )
         } else {
             (payload, String::new())
