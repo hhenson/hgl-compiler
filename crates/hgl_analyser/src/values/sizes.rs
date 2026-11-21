@@ -25,6 +25,11 @@ use crate::{codes, error};
 /// this depth nothing more is held.
 const DEPTH: usize = 32;
 
+/// How many struct applications one type written, or one call, has
+/// followed at most. Two fields that each apply the struct again with
+/// other arguments would double the applications at each depth.
+const APPLICATIONS: usize = 256;
+
 /// A size that TYPE-10 or TYPE-11 rejects, as an application gives it.
 struct Fault {
     /// The field it is in, through the fields of the structs on the
@@ -198,7 +203,15 @@ fn struct_fault(
     else {
         return None;
     };
-    if depth >= DEPTH || seen.contains(application) {
+    if depth >= DEPTH || seen.len() >= APPLICATIONS || seen.contains(application) {
+        return None;
+    }
+    // Below the type written, a struct is followed only where its
+    // arguments are known. One that still names a generic parameter
+    // gives no size that is known, and putting its arguments in place
+    // again would grow them at each depth: `Grow<N + N>` in the fields of
+    // `Grow<const N: i64>` would double.
+    if depth > 0 && names_a_parameter(application) {
         return None;
     }
     seen.push(application.clone());
@@ -220,6 +233,28 @@ fn struct_fault(
         path.push(member.name.clone());
         fault_in(program, &member.ty, (&map, &own), (&path, depth + 1), seen)
     })
+}
+
+/// True when `ty` names a generic parameter, as a type or in a
+/// constant: `Grow<N + N>`, `Box<T>`.
+fn names_a_parameter(ty: &Type) -> bool {
+    ty.any_part(
+        &|part| matches!(part, Type::Parameter { .. }),
+        &|constant| symbolic(&constant.value),
+    )
+}
+
+/// True when `value` names a generic value parameter, at any depth.
+fn symbolic(value: &ConstantValue) -> bool {
+    match value {
+        ConstantValue::Parameter { .. } => true,
+        ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
+            symbolic(operand)
+        }
+        ConstantValue::Binary(_, left, right) => symbolic(left) || symbolic(right),
+        ConstantValue::List(values) | ConstantValue::Tuple(values) => values.iter().any(symbolic),
+        _ => false,
+    }
 }
 
 /// The first fault in the sizes of `declared`, a type written in the

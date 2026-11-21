@@ -175,3 +175,35 @@ fn a_call_that_gives_a_list_a_negative_size_is_rejected() {
          negative"
     );
 }
+
+/// A struct that holds itself with arguments that grow at each level
+/// gives no size that is known below the type written, and holding it
+/// ends: `Grow<N + N>` in `Grow<const N: i64>`, and `Twice<tuple<T, T>>`
+/// in `Twice<T>`, where each writes it and where each is applied with
+/// known arguments. TYPE-10 as above for `Grow<-1>`.
+#[test]
+fn a_struct_that_holds_itself_with_growing_arguments_is_held_in_bounds() {
+    let checked = module(concat!(
+        "struct Grow<const N: i64> {\n",
+        "    next: atomic<list<Grow<N + N>>>\n",
+        "    items: list<i64, N>\n",
+        "}\n",
+        "struct Twice<T> {\n",
+        "    next: atomic<list<Twice<tuple<T, T>>>>\n",
+        "    value: T\n",
+        "}\n",
+        "const fn grown(g: Grow<1>, t: Twice<i64>) -> i64 => 0\n",
+        "const fn shrunk(g: Grow<-1>) -> i64 => 0\n",
+    ));
+    // TYPE-6 rejects `Twice`, which holds itself; the instances of
+    // `Grow` end at an `N + N` out of range (GEN-8).
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:5 type/field.recursive TYPE-6",
+            "m.hgl:10:19 type/generic.argument_constant GEN-8",
+            "m.hgl:11:20 type/generic.argument_constant GEN-8",
+            "m.hgl:11:20 type/list.size TYPE-10",
+        ]
+    );
+}
