@@ -27,7 +27,9 @@ use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Value};
 use hgl_analyser::{ConstantValue, NamedKind, Type};
 
 use super::Emitter;
+use super::calls::{changes, may_fail};
 use super::forms::Family;
+use super::names;
 use super::nodes::{Kind, Role};
 use super::statements::Scope;
 use crate::runtime;
@@ -126,6 +128,21 @@ impl Emitter<'_> {
         };
         let namespace = runtime::NAMESPACE;
         match shape(&base.ty)? {
+            // EXPR-2: a child of a child is chosen before the next index
+            // is evaluated, as C++ evaluates a call's arguments in no order
+            // it promises: where that index runs statements or may fail,
+            // the parent is held first.
+            Shape::Growing(_) | Shape::Fixed(..)
+                if matches!(base.kind, ExprKind::Index { .. })
+                    && (changes(index) || may_fail(index)) =>
+            {
+                let held = names::temporary("parent", self.temporary());
+                let at = names::temporary("index", self.temporary());
+                let index = self.expression(scope, index);
+                Some(format!(
+                    "[&]() {{ const auto {held} = {parent}; const ::hgraph::Int {at} = {index}; return ::{namespace}::child({held}, {at}); }}()"
+                ))
+            }
             Shape::Growing(_) | Shape::Fixed(..) => {
                 let index = self.expression(scope, index);
                 Some(format!("::{namespace}::child({parent}, {index})"))

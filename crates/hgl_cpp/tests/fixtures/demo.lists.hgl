@@ -134,6 +134,20 @@ fn nested_valid(values: list<list<i64>>) -> list<bool, 3> {
 
 fn nested_of(count: i64) -> list<bool, 3> => nested_valid(nested(count))
 
+# EXPR-2: a child of a child, its indices evaluated in the order written:
+# the row is chosen before the next index changes `at`.
+fn ordered_child(values: list<list<i64>>) -> bool {
+    when {
+        var at: i64 = 0
+        return valid(values[at][{
+            at = 1
+            0
+        }])
+    }
+}
+
+fn ordered_of(count: i64) -> bool => ordered_child(nested(count))
+
 # A list input replayed from a trace, its cells whole and a delta (TST-9).
 fn relay(values: list<i64>) -> list<i64> {
     when { return values }
@@ -169,6 +183,7 @@ test children_named_in_a_hook {
     assert eval(second_changed(slot: [0, 1, 0], reading: [3, 8, 4])) == [_, true, false]
     assert eval(sum_of_parts(head: [true, false], value: [3, 8])) == [3, 11]
     assert eval(nested_of(count: [0, 7])) == [[true, true, false], [true, true, true]]
+    assert eval(ordered_of(count: [0])) == [true]
 }
 
 test tuple_positions {

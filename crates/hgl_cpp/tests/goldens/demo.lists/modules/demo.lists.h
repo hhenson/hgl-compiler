@@ -21,6 +21,8 @@
 #undef nested_valid
 #undef observe
 #undef observe_parts
+#undef ordered_child
+#undef ordered_of
 #undef pair
 #undef part_sum
 #undef part_validity
@@ -195,7 +197,19 @@ namespace w_
 
 namespace w_
 {
-// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 138
+// ordered_child(values: list<list<i64>>) -> bool (node), module demo.lists, line 139
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> ordered_child(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> values);
+}  // namespace w_
+
+namespace w_
+{
+// ordered_of(count: i64) -> bool (graph), module demo.lists, line 149
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> ordered_of(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count);
+}  // namespace w_
+
+namespace w_
+{
+// relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 152
 ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> relay(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values);
 }  // namespace w_
 
