@@ -133,6 +133,10 @@ define_syntax_kinds! {
         ParamList,
         /// `const factor: f64 = 2.0` or `items: ...T`
         Param,
+        /// `const fn(i64, price: f64) -> bool` as a parameter's type.
+        FunctionType,
+        /// One input of a function type, with an optional name.
+        FunctionTypeParam,
         /// `{T}` after `...` in a parameter
         PackType,
         /// `{2}`, `{1:*}` or `{1:4}` after a pack: how many it may hold
@@ -269,6 +273,8 @@ define_syntax_kinds! {
         /// `a<b>(c)`. The parser guesses the constructor and the
         /// analyser confirms it (GEN-14).
         UndecidedConstructor,
+        /// A callable with explicit generic arguments, given to a parameter (FN-17).
+        FunctionReference,
         /// `delta<list<f64>>(added: values)`
         DeltaConstructor,
         /// `str(value)`, `bytes(value)` or `any(value)`

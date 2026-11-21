@@ -42,7 +42,10 @@ fn calls(body: &Body) -> Vec<Called> {
                 generics.clone(),
                 requirements.clone(),
             )),
-            Callee::Required { .. } | Callee::Unread => {}
+            Callee::Required { .. }
+            | Callee::Parameter { .. }
+            | Callee::Anonymous(_)
+            | Callee::Unread => {}
         }
     });
     found

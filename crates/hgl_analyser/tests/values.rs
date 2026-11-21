@@ -4337,6 +4337,150 @@ fn a_default_is_a_value_of_its_parameters_type() {
     );
 }
 
+/// FN-17: a function template admits declared, generic and operator
+/// targets. A function passed on is never a runtime value.
+#[test]
+fn function_arguments_select_static_targets() {
+    let checked = module(concat!(
+        "const fn apply_callback(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "const fn apply_typed<V>(f: const fn(V) -> V, x: V) -> V => f(x)\n",
+        "const fn inc_callback(x: i64) -> i64 => x + 1\n",
+        "const fn callback_identity<T>(x: T) -> T => x\n",
+        "const fn plain_callback(x: i64) -> i64 => apply_callback(inc_callback, x)\n",
+        "const fn explicit_callback(x: i64) -> i64 => apply_callback(callback_identity<i64>, x)\n",
+        "const fn inferred_callback(x: f64) -> f64 => apply_typed(callback_identity, x)\n",
+        "const fn forward_callback(g: const fn(i64) -> i64, x: i64) -> i64 => apply_callback(g, x)\n",
+        "operator twice_callback<T>(value: T) -> T\n",
+        "impl const fn twice_callback(value: i64) -> i64 => value + value\n",
+        "const fn operator_callback(x: i64) -> i64 => apply_callback(twice_callback, x)\n",
+        "const fn lambda_callback(x: i64) -> i64 {\n",
+        "    let offset = x + 1\n",
+        "    return apply_callback(fn(n) => n + offset, x)\n",
+        "}\n",
+        "fn graph_callback(f: fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "fn node_callback(x: i64) -> i64 { when { return x } }\n",
+        "fn graph_lambda(x: i64) -> i64 => graph_callback(fn(n) => node_callback(n + x), x)\n",
+        "fn lifted_callback(x: i64) -> i64 => graph_callback(inc_callback, x)\n",
+    ));
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+    let outer = body(&checked, "lambda_callback");
+    let Stmt::Return {
+        value: Some(call), ..
+    } = outer.statements.last().unwrap()
+    else {
+        panic!("the caller returns the result of applying the anonymous argument");
+    };
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = &call.kind
+    else {
+        panic!("expected a call taking a static function");
+    };
+    let ExprKind::StaticCallable(target) = &arguments[0].value.kind else {
+        panic!("the first argument carries a compile-time target");
+    };
+    assert_eq!(
+        arguments[1].parameter,
+        Some(2),
+        "the captured value has its own slot"
+    );
+    assert!(matches!(arguments[1].value.kind, ExprKind::Local(1)));
+    let (module, declaration) = callee.declaration().unwrap();
+    let (_, invoked) = checked
+        .program
+        .instance_with_functions(
+            module,
+            declaration,
+            &[],
+            &[],
+            &[(0, target.as_ref().clone())],
+        )
+        .unwrap();
+    let [
+        Stmt::Return {
+            value: Some(inlined),
+            ..
+        },
+    ] = invoked.statements.as_slice()
+    else {
+        panic!("the specialized body returns the invocation");
+    };
+    assert!(
+        matches!(&inlined.kind, ExprKind::Call { callee: Callee::Anonymous(definition), .. }
+        if definition.captures == [2]),
+        "the invocation reads its specialized capture"
+    );
+}
+
+/// FN-17: a template checks role, written names and plain parameter
+/// modes, and does not take an ordinary runtime value.
+#[test]
+fn function_arguments_check_their_template() {
+    let checked = module(concat!(
+        "const fn by_name(f: const fn(item: i64) -> i64, x: i64) -> i64 => f(item: x)\n",
+        "const fn unnamed(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "const fn different_name(value: i64) -> i64 => value\n",
+        "const fn modify_callback(var item: i64) -> i64 => item\n",
+        "fn temporal_callback(item: i64) -> i64 { when { return item } }\n",
+        "const fn wrong_name(x: i64) -> i64 => by_name(different_name, x)\n",
+        "const fn wrong_mode(x: i64) -> i64 => unnamed(modify_callback, x)\n",
+        "const fn wrong_role(x: i64) -> i64 => unnamed(temporal_callback, x)\n",
+        "const fn wrong_value(x: i64) -> i64 => unnamed(x, x)\n",
+        "const fn wrong_lambda(x: i64) -> i64 => unnamed(fn(n) => temporal_callback(n), x)\n",
+        "const fn plus_generic<const N: i64>(x: i64) -> i64 => x + N\n",
+        "const fn unresolved_callback(x: i64) -> i64 => unnamed(plus_generic, x)\n",
+        "operator pick<T>(value: T) -> T\n",
+        "impl const fn pick(value: i64) -> i64 => value\n",
+        "impl const fn pick(value: str) -> str => value\n",
+        "const fn explicit_operator(x: i64) -> i64 => unnamed(pick<str>, x)\n",
+        "const fn missing_name(f: const fn(i64) -> i64) -> i64 => f(value: 4)\n",
+    ));
+    let codes: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "type/type.mismatch",
+            "type/type.mismatch",
+            "type/type.mismatch",
+            "type/function.argument",
+            "function-kind/call.role",
+            "type/generic.unresolved",
+            "local:type/function.reference_unread",
+            "type/argument.missing",
+            "name/argument.unknown",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FN-14 and TIME-4: a value callback reads the enclosing hook's
+/// input under the admission in effect where the callback is written.
+#[test]
+fn function_arguments_obey_node_admission() {
+    let checked = module(concat!(
+        "const fn one(f: const fn(i64) -> i64, n: i64) -> i64 => f(n)\n",
+        "fn unguarded(value: i64, probe: i64) -> i64 {\n",
+        "    when modified(probe) && valid([]) { return one(fn(n) => n + value, 0) }\n",
+        "}\n",
+        "fn guarded(value: i64) -> i64 {\n",
+        "    when valid([]) {\n",
+        "        if valid(value) { return one(fn(n) => n + value, 0) }\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:65 phase/payload.unguarded TIME-4"],
+        "{}",
+        checked.report,
+    );
+}
+
 /// UNIT-8: a direct anonymous call may omit an input written as nullable.
 #[test]
 fn a_direct_anonymous_call_may_omit_a_nullable_argument() {

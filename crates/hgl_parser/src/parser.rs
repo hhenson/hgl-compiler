@@ -111,6 +111,8 @@ pub(crate) enum Verdict {
 pub(crate) enum Choice {
     /// `name<...>(...)` constructs a generic type, rather than comparing.
     Constructor,
+    /// An argument that is a name with explicit generic arguments and no call (FN-17).
+    FunctionReference,
     /// A generic argument is a type, rather than an expression.
     GenericArgument,
     /// A constraint operand is a type, rather than an expression.

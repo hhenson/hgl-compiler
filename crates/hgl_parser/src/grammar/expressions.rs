@@ -601,6 +601,39 @@ impl Parser<'_> {
         self.finish();
     }
 
+    /// FN-17: a name with generic arguments and no call, written as
+    /// an entire argument. The closing delimiter distinguishes it from
+    /// a constructor or a comparison with an operand after the `>`.
+    fn function_reference(&mut self) -> bool {
+        if !self.at(Ident) {
+            return false;
+        }
+        let qualified = self.nth(1) == ColonColon && self.nth(2) == Ident && !self.nl_at(1);
+        let after = if qualified { 3 } else { 1 };
+        if self.nth(after) != Lt || !self.adjacent_at(after) {
+            return false;
+        }
+        let verdict = self.choose(Choice::FunctionReference, |parser| {
+            let errors = parser.errors;
+            parser.name();
+            let shape = parser.generic_args_unchecked();
+            if shape.closed && parser.errors == errors && matches!(parser.current(), Comma | RParen)
+            {
+                Verdict::Yes
+            } else {
+                Verdict::No
+            }
+        });
+        if verdict != Verdict::Yes {
+            return false;
+        }
+        self.start(FunctionReference);
+        self.name();
+        self.generic_args();
+        self.finish();
+        true
+    }
+
     // ---- Arguments ----
 
     /// ```text
@@ -630,7 +663,9 @@ impl Parser<'_> {
                 } else if mode == ArgMode::Delta {
                     parser.expected("a named argument");
                 }
-                parser.expression();
+                if mode != ArgMode::Call || !parser.function_reference() {
+                    parser.expression();
+                }
                 parser.finish();
                 index += 1;
             });

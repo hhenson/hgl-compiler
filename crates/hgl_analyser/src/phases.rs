@@ -446,9 +446,12 @@ fn source_body(declaration: &Declaration, file: FileId, diagnostics: &mut Diagno
         ));
     };
     let name = &declaration.name;
-    // "No temporal parameters": each parameter is `const`.
+    // SOURCE-1 forbids temporal inputs. A function parameter is fixed
+    // at compile time (FN-17), so it supplies no input.
     for parameter in crate::read::parameters(&declaration.syntax) {
-        if !crate::read::is_const(&parameter) {
+        if !crate::read::is_const(&parameter)
+            && child(&parameter, SyntaxKind::FunctionType).is_none()
+        {
             diagnostics.emit(
                 error(
                     Category::Phase,

@@ -79,7 +79,7 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
     (
         "hgl_spec/spec/language/functions-and-phases.md",
         "examples.function_parameters",
-        "FN-17 (#362)",
+        "GEN-17 (#366)",
     ),
 ];
 

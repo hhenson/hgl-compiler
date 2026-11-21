@@ -201,6 +201,14 @@ pub fn named_in(node: hgl_analyser::hir::Node, read: &mut Vec<usize>, declared: 
             kind: ExprKind::Local(local),
             ..
         }) => read.push(*local),
+        Node::Expression(Expr {
+            kind:
+                ExprKind::Call {
+                    callee: Callee::Anonymous(function),
+                    ..
+                },
+            ..
+        }) => read.extend(&function.captures),
         _ => {}
     }
 }

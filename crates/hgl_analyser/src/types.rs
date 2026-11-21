@@ -237,12 +237,35 @@ pub enum Type {
         /// Dense or timed, where a trace that has cells says which.
         style: Option<TraceStyle>,
     },
+    /// Template of a compile-time callable taken as a parameter (FN-17).
+    Function(Box<FunctionType>),
     /// `f64?`: an `f64` or null (TYPE-14). The `?` covers the whole type
     /// before it (TYPE-15).
     Nullable(Box<Type>),
     /// Not known. The name is left for the prelude, or the type has been
     /// reported; nothing is reported about a use of it (ERR-9).
     Unknown,
+}
+
+/// The signature a parameter taking a function expects (FN-17).
+/// It is part of source checking and has no runtime value representation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionType {
+    /// True for a `const fn` template.
+    pub value: bool,
+    /// Input types in declaration order, each with a name if the template requires it.
+    pub parameters: Vec<(Option<String>, Type)>,
+    /// The output, if the function gives one.
+    pub result: Option<Type>,
+    /// True when the output designates a reference (FN-16).
+    pub reference: bool,
+}
+
+impl FunctionType {
+    /// The parameter types and then the result type, when present.
+    pub(crate) fn types(&self) -> impl Iterator<Item = &Type> {
+        self.parameters.iter().map(|(_, ty)| ty).chain(&self.result)
+    }
 }
 
 impl Type {
@@ -280,6 +303,7 @@ impl Type {
                 minimum,
             } => constant(maximum) || minimum.as_ref().is_some_and(constant) || part(value),
             Type::Result { value, error } => part(value) || part(error),
+            Type::Function(function) => function.types().any(part),
             Type::Scalar(_)
             | Type::Parameter { .. }
             | Type::Signal
@@ -415,6 +439,7 @@ impl Type {
             | Type::Signal
             | Type::Endpoint(_)
             | Type::Trace { .. }
+            | Type::Function(_)
             | Type::Unknown => Type::Delta(Box::new(of)),
         }
     }
@@ -661,6 +686,27 @@ impl fmt::Display for Type {
             Type::Delta(shape) => write!(f, "delta<{shape}>"),
             // No type that source writes: named in words.
             Type::Trace { cell, .. } => write!(f, "trace of {cell}"),
+            Type::Function(function) => {
+                if function.value {
+                    f.write_str("const ")?;
+                }
+                f.write_str("fn(")?;
+                for (index, (name, ty)) in function.parameters.iter().enumerate() {
+                    if index != 0 {
+                        f.write_str(", ")?;
+                    }
+                    if let Some(name) = name {
+                        write!(f, "{name}: ")?;
+                    }
+                    write!(f, "{ty}")?;
+                }
+                f.write_str(")")?;
+                if let Some(result) = &function.result {
+                    let mode = if function.reference { "ref " } else { "" };
+                    write!(f, " -> {mode}{result}")?;
+                }
+                Ok(())
+            }
             Type::Nullable(inner) => write!(f, "{inner}?"),
             Type::Unknown => f.write_str("_"),
         }

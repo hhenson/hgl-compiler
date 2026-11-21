@@ -80,6 +80,13 @@ impl<'a> Typer<'a> {
         {
             return self.call_anonymous(&direct, &keyword, &list, expected);
         }
+        if direct.kind() == SyntaxKind::NameExpr
+            && let Some(index) = self.local_of(&direct)
+            && let Type::Function(template) = self.locals[index].ty.clone()
+            && let Some(name) = name_token(&direct)
+        {
+            return self.call_function_parameter(&name, &list, index, &template);
+        }
         // ERR-13: "as the callee of a call each is the form this
         // chapter defines, whatever else is in scope."
         if callee.kind() == SyntaxKind::NameExpr
@@ -584,7 +591,7 @@ impl<'a> Typer<'a> {
         // parameter's type T". A type that names a generic parameter
         // stands for its cells until they say what it is.
         let taken = |parameter: &crate::types::Parameter, ty: Type| {
-            if evaluating && !parameter.constant {
+            if evaluating && !parameter.constant && !matches!(ty, Type::Function(_)) {
                 trace_input_type(ty)
             } else {
                 ty

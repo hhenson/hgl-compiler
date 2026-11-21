@@ -420,6 +420,7 @@ impl Resolver<'_> {
             SyntaxKind::NameExpr
             | SyntaxKind::NamedType
             | SyntaxKind::TypedConstructor
+            | SyntaxKind::FunctionReference
             | SyntaxKind::ConstraintCall
             | SyntaxKind::Instantiation => self.name_use(node),
             SyntaxKind::UndecidedConstructor => self.undecided(node),
