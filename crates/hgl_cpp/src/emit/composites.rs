@@ -250,9 +250,11 @@ fn template_keeps(
     {
         return false;
     }
+    // A struct's parents are written in its template too: `Mid<T> :
+    // Base<T?>` converts to `Base<T?>`.
     let mut nullable_of = Vec::new();
-    for member in members {
-        made_nullable(&member.ty, &mut nullable_of);
+    for ty in members.iter().map(|member| &member.ty).chain(&read.parents) {
+        made_nullable(ty, &mut nullable_of);
     }
     let flattened = nullable_of.iter().any(|at| {
         generics
@@ -267,8 +269,8 @@ fn template_keeps(
     // Each generic struct a field names, applied to what our arguments
     // make of its own.
     let mut nested = Vec::new();
-    for member in members {
-        walk_types(&member.ty, &mut |part| {
+    for ty in members.iter().map(|member| &member.ty).chain(&read.parents) {
+        walk_types(ty, &mut |part| {
             if let Type::Named {
                 module,
                 declaration,
@@ -551,10 +553,17 @@ fn substituted(ty: &Type, generics: &[GenericParameter], arguments: &[GenericArg
                 .collect(),
             kind: *kind,
         },
-        Type::Nullable(inner) => Type::Nullable(again(inner)),
+        // As the analyser substitutes (`declared::substitute`): TYPE-14,
+        // "A `T?` whose T is given a nullable type is that type"; an
+        // atomic and a delta formed again with what they now hold
+        // (TYPE-9, TYPE-16).
+        Type::Nullable(inner) => match substituted(inner, generics, arguments) {
+            inner @ Type::Nullable(_) => inner,
+            inner => Type::Nullable(Box::new(inner)),
+        },
         Type::Set(inner) => Type::Set(again(inner)),
-        Type::Delta(inner) => Type::Delta(again(inner)),
-        Type::Atomic(inner) => Type::Atomic(again(inner)),
+        Type::Delta(inner) => Type::delta(substituted(inner, generics, arguments)),
+        Type::Atomic(inner) => Type::atomic(substituted(inner, generics, arguments)),
         // A size that is a generic value parameter of `generics` is the
         // constant its argument gives (GEN-13).
         Type::List { element, size } => Type::List {

@@ -2125,6 +2125,9 @@ fn composite_forms_not_written_yet_are_reported() {
             "const fn whole(change: delta<Maybe<atomic<list<i64>>>>) -> bool => change.value == null\n",
             "struct Snapshot<T> { value: atomic<T> }\n",
             "struct Wrap<T> { inner: Maybe<T> }\n",
+            "abstract struct Root<T> { held: T }\n",
+            "abstract struct Mid<T> : Root<T?> {}\n",
+            "struct Tip : Mid<i64?> {}\n",
             "const fn unwrapped(box: Wrap<i64?>) -> i64? => box.inner.value\n",
             "const fn snapped(change: delta<Snapshot<list<i64>?>>) -> list<i64>? => change.value\n",
             "test noded {\n",
@@ -2152,12 +2155,14 @@ fn composite_forms_not_written_yet_are_reported() {
             // TYPE-16: an atomic's delta is the whole value, which the
             // template, given the value the atomic holds, would not have.
             "m.hgl:34:16 the cpp target does not write the type `delta<Maybe<atomic<list<i64>>>>` yet",
+            // A parent written `Root<T?>`, its `T` given an `i64?`.
+            "m.hgl:39:8 the cpp target does not write the type `Mid<i64?>` yet",
             // A field that names `Maybe<T>`, given an `i64?`, is that
             // application.
-            "m.hgl:37:20 the cpp target does not write the type `Wrap<i64?>` yet",
+            "m.hgl:40:20 the cpp target does not write the type `Wrap<i64?>` yet",
             // A nullable given a parameter an atomic holds: its delta's
             // property is the nullable whole.
-            "m.hgl:38:18 the cpp target does not write the type `delta<Snapshot<list<i64>?>>` yet",
+            "m.hgl:41:18 the cpp target does not write the type `delta<Snapshot<list<i64>?>>` yet",
         ]
     );
     assert_eq!(emitted.blocked("noded").as_deref(), Some(holds_itself));
