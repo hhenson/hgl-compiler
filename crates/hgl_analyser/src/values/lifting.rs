@@ -110,7 +110,7 @@ impl<'a> Typer<'a> {
                 operator: (module, declaration),
                 ..
             } => (*module, *declaration),
-            Callee::Unread => return,
+            Callee::Parameter { .. } | Callee::Unread => return,
         };
         let Some(Detail::Callable(signature)) =
             self.program.modules[module].details.get(declaration)
@@ -263,6 +263,7 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
                 {
                     Connection
                 }
+                Callee::Parameter { temporal: true, .. } => Connection,
                 Callee::Required { .. } => join(given, Unsettled),
                 _ => given,
             }

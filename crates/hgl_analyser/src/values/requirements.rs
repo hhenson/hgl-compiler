@@ -1478,6 +1478,7 @@ fn nesting<'t>(ty: &'t Type) -> usize {
                 inside(value);
                 inside(error);
             }
+            Type::Function(function) => function.types().for_each(&mut inside),
             Type::Scalar(_)
             | Type::Parameter { .. }
             | Type::Signal
@@ -2626,6 +2627,9 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
             struct_applications(value, found);
             struct_applications(error, found);
         }
+        Type::Function(function) => function
+            .types()
+            .for_each(|ty| struct_applications(ty, found)),
         Type::Scalar(_)
         | Type::Parameter { .. }
         | Type::Signal

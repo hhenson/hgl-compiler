@@ -68,6 +68,19 @@ impl Program {
         generics: &[Argument],
         requirements: &[Answer],
     ) -> Option<(Signature, Body)> {
+        self.instance_with_functions(module, declaration, generics, requirements, &[])
+    }
+
+    /// Instantiate a declaration with the compile-time functions supplied
+    /// at their original parameter slots (FN-17).
+    pub fn instance_with_functions(
+        &self,
+        module: usize,
+        declaration: usize,
+        generics: &[Argument],
+        requirements: &[Answer],
+        functions: &[(usize, Callee)],
+    ) -> Option<(Signature, Body)> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
             return None;
@@ -100,7 +113,7 @@ impl Program {
             local.ty = substitute_within(&local.ty, &map);
         }
         walk_statements_mut(&mut body.statements, &mut |expression| {
-            self.place(expression, &map, requirements);
+            self.place(expression, &map, requirements, functions);
         });
         // GEN-5: a call a membership authorises is the call of the
         // candidate it selects with these arguments in place, which is
@@ -110,7 +123,7 @@ impl Program {
             (module, declaration),
             generics,
             &mut body,
-            &|call| call.walk_mut(&mut |inner| self.place(inner, &map, requirements)),
+            &|call| call.walk_mut(&mut |inner| self.place(inner, &map, requirements, functions)),
         );
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
@@ -122,7 +135,13 @@ impl Program {
 
     /// Puts what `map` gives in place in one expression: in its type,
     /// in what it calls, and where it reads a generic value parameter.
-    fn place(&self, expression: &mut Expr, map: &Map, answers: &[Answer]) {
+    fn place(
+        &self,
+        expression: &mut Expr,
+        map: &Map,
+        answers: &[Answer],
+        functions: &[(usize, Callee)],
+    ) {
         expression.ty = substitute_within(&expression.ty, map);
         match &mut expression.kind {
             // GEN-13: a generic value parameter read as a value is the
@@ -138,7 +157,8 @@ impl Program {
                     expression.kind = kind;
                 }
             }
-            ExprKind::Call { callee, .. } => place_callee(callee, map, answers),
+            ExprKind::Call { callee, .. } => place_callee(callee, map, answers, functions),
+            ExprKind::StaticCallable(callee) => place_callee(callee, map, answers, functions),
             _ => {}
         }
     }
@@ -238,7 +258,14 @@ impl Program {
 /// operation the declaration requires becomes the call of the candidate
 /// that answers the requirement (GEN-16); one nothing answers is left
 /// as it is.
-fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer]) {
+fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &[(usize, Callee)]) {
+    if let Callee::Parameter { parameter, .. } = callee
+        && let Some((_, target)) = functions.iter().find(|(index, _)| index == parameter)
+    {
+        *callee = target.clone();
+        // The argument belongs to the caller's context, which was already placed.
+        return;
+    }
     if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } = callee {
         for pack in type_packs {
             for ty in &mut pack.types {
@@ -283,7 +310,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer]) {
                 };
             }
         }
-        Callee::Unread => {}
+        Callee::Parameter { .. } | Callee::Unread => {}
     }
 }
 

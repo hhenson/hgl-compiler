@@ -943,6 +943,14 @@ pub(super) fn infer(
         (Type::Parameter { at, .. }, actual) => {
             find(*at, Argument::Type(actual.clone()), generics, found);
         }
+        (Type::Function(pattern), Type::Function(actual)) => {
+            for ((_, pattern), (_, actual)) in pattern.parameters.iter().zip(&actual.parameters) {
+                infer(pattern, actual, generics, found);
+            }
+            if let (Some(pattern), Some(actual)) = (&pattern.result, &actual.result) {
+                infer(pattern, actual, generics, found);
+            }
+        }
         (Type::Nullable(pattern), Type::Nullable(actual)) => {
             infer(pattern, actual, generics, found)
         }

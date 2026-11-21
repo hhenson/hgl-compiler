@@ -454,6 +454,8 @@ impl Expr {
 pub enum ExprKind {
     /// A literal.
     Literal(Value),
+    /// A compile-time callable argument (FN-17). It is erased before emission.
+    StaticCallable(Box<Callee>),
     /// A constant of a module read by its name (UNIT-13): "The constant
     /// has that one value wherever it is read".
     Constant {
@@ -955,6 +957,14 @@ pub enum Callee {
         /// the declaration's `requires` does, in the order written.
         requirement: usize,
     },
+    /// A call of a function parameter, or that parameter forwarded as
+    /// a compile-time argument (FN-17).
+    Parameter {
+        /// The position of the callable in the enclosing signature.
+        parameter: usize,
+        /// Whether its template composes a temporal function.
+        temporal: bool,
+    },
     /// No callee: a name left for the prelude, a function that is
     /// itself an expression, or an operator of which no candidate is
     /// selected, by its name or by a symbol.
@@ -979,7 +989,7 @@ impl Callee {
                 declaration,
                 ..
             } => Some((*module, *declaration)),
-            Callee::Required { .. } | Callee::Unread => None,
+            Callee::Required { .. } | Callee::Parameter { .. } | Callee::Unread => None,
         }
     }
 
@@ -989,7 +999,7 @@ impl Callee {
     pub fn generics(&self) -> &[GenericArgument] {
         match self {
             Callee::Function { generics, .. } | Callee::Candidate { generics, .. } => generics,
-            Callee::Required { .. } | Callee::Unread => &[],
+            Callee::Required { .. } | Callee::Parameter { .. } | Callee::Unread => &[],
         }
     }
 
@@ -999,7 +1009,7 @@ impl Callee {
             Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } => {
                 type_packs
             }
-            Callee::Required { .. } | Callee::Unread => &[],
+            Callee::Required { .. } | Callee::Parameter { .. } | Callee::Unread => &[],
         }
     }
 }
@@ -1258,6 +1268,7 @@ impl Expr {
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
             | ExprKind::EnumMember { .. }
+            | ExprKind::StaticCallable(_)
             | ExprKind::Unread => {}
             ExprKind::Block { statements, value } => {
                 walk_statement_nodes(statements, visit);
@@ -1367,6 +1378,7 @@ impl Expr {
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
             | ExprKind::EnumMember { .. }
+            | ExprKind::StaticCallable(_)
             | ExprKind::Unread => {}
             ExprKind::Block { statements, value } => {
                 walk_statement_nodes_mut(statements, visit);

@@ -109,8 +109,8 @@ pub use program::{
 };
 pub use types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumOf, EnumType, Field,
-    FieldRef, GenericKind, GenericParameter, Member, MemberOf, NamedKind, Pack, Parameter, Scalar,
-    Signature, StructType, TraceStyle, Type, WrittenType,
+    FieldRef, FunctionType, GenericKind, GenericParameter, Member, MemberOf, NamedKind, Pack,
+    Parameter, Scalar, Signature, StructType, TraceStyle, Type, WrittenType,
 };
 
 /// The most instances of one generic declaration that one call is
