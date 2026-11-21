@@ -26,6 +26,7 @@ import re as _re
 import sys as _sys
 import zoneinfo as _zoneinfo
 from fractions import Fraction as _Fraction
+from typing import Any as _Any
 
 from hgraph import (
     EvaluationClock as _EvaluationClock,
@@ -494,7 +495,9 @@ def struct(name, fields, by_value=False):
 
     return _dataclasses.make_dataclass(
         name,
-        fields,
+        # Python 3.12 gives a bare field the forward reference "typing.Any".
+        # hgraph registers the struct in its generated module and needs the type.
+        [(field, _Any) for field in fields],
         frozen=True,
         slots=True,
         kw_only=True,
