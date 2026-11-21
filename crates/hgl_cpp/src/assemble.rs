@@ -10,7 +10,9 @@
 //! the pieces those name, has a form that is not written. A test that
 //! is not clear is listed with the first such form, which
 //! `hgl_lower::pieces::blocked` finds as it finds it for the hgraph
-//! target.
+//! target. An instance of a generic declaration is written only where a
+//! piece that is written reaches it: one that only a piece left out asks
+//! for, an eval that reaches a form not written, is left out with it.
 
 use std::collections::BTreeSet;
 
@@ -88,6 +90,39 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                 .collect(),
         })
         .collect();
+    // The instances a piece that is written reaches, through the pieces
+    // it names: each declaration, test and run statement that is clear
+    // reaches what it names. An instance that only a piece left out asks
+    // for is not written, so that it, which may not compile, does not stop
+    // its module's unit, or core's, from being built.
+    let mut reached: BTreeSet<Used> = BTreeSet::new();
+    let mut next: Vec<Used> = Vec::new();
+    for (index, module) in written.iter().enumerate() {
+        let roots = module
+            .declarations
+            .iter()
+            .zip(&blocks[index].declarations)
+            .chain(module.tests.iter().zip(&blocks[index].tests))
+            .chain(
+                module
+                    .application
+                    .iter()
+                    .zip(std::iter::once(&blocks[index].application)),
+            );
+        for (piece, blocked) in roots {
+            if blocked.is_none() {
+                next.extend(piece.reach.uses.iter().cloned());
+            }
+        }
+    }
+    while let Some(used) = next.pop() {
+        if !reached.contains(&used) {
+            for reach in pieces(&used) {
+                next.extend(reach.uses.iter().cloned());
+            }
+            reached.insert(used);
+        }
+    }
     let mut files = Vec::new();
     let mut units = Vec::new();
     // The unit of each module, as a position in `units`.
@@ -113,8 +148,11 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                 module
                     .instances
                     .iter()
-                    .map(|(_, _, piece)| piece)
-                    .zip(&blocks[index].instances),
+                    .zip(&blocks[index].instances)
+                    .filter(|((of, suffix, _), _)| {
+                        reached.contains(&(index, *of, Some(suffix.clone())))
+                    })
+                    .map(|((_, _, piece), blocked)| (piece, blocked)),
             )
             .filter(|(piece, blocked)| {
                 blocked.is_none()

@@ -203,9 +203,13 @@ struct nullable_delta {
 /// The hash of `value`, part by part: what `std::hash` gives a list (TYPE-8:
 /// equal values hash alike). A tuple and an optional are hashed through
 /// their parts, as the standard library hashes neither a tuple nor an
-/// optional of every type.
+/// optional of every type; a type whose `value_form` gives a `hash`, as it
+/// says.
 template <class T>
 std::size_t hash_of(const T& value);
+
+template <class T>
+struct value_form;
 
 namespace detail {
 
@@ -276,6 +280,8 @@ std::size_t hash_of(const T& value) {
             seed = detail::combined(seed, hash_of(position));
         }
         return detail::combined(seed, hash_of(value.size_modified));
+    } else if constexpr (requires { value_form<T>::hash(value); }) {
+        return value_form<T>::hash(value);
     } else {
         return std::hash<T>{}(value);
     }
@@ -284,9 +290,10 @@ std::size_t hash_of(const T& value) {
 /// What a header of this library says of a value type it declares that the
 /// chains of `type_name` and of `testing::text_of` (traces.h) do not know, a
 /// set's or a dictionary's (keyed.h) and a struct's (structs.h) among them: a
-/// specialization gives `name()`, the HGL name of the type, and `text(value)`,
-/// a value of it as the language writes it, or either. The primary says
-/// nothing.
+/// specialization gives `name()`, the HGL name of the type, `text(value)`,
+/// a value of it as the language writes it, and `hash(value)`, its hash
+/// where the standard library has none (`hash_of`), or any of them. The
+/// primary says nothing.
 template <class T>
 struct value_form {};
 
