@@ -3,8 +3,18 @@
 //! default. Part of lowering: a transpiler writes each call with these
 //! (UNIT-7, UNIT-8).
 
-use hgl_analyser::hir::Expr;
+use hgl_analyser::hir::{Argument, Expr, ExprKind};
 use hgl_analyser::{FieldRef, Parameter, Program, Type};
+
+/// The evaluated arguments of a call in written order, keeping their
+/// positions in the analysed argument list (EXPR-2). A function
+/// argument is a compile-time binding and has no runtime value (FN-17).
+pub fn runtime_arguments(arguments: &[Argument]) -> impl Iterator<Item = (usize, &Argument)> {
+    arguments
+        .iter()
+        .enumerate()
+        .filter(|(_, argument)| !matches!(argument.value.kind, ExprKind::StaticCallable(_)))
+}
 
 /// What a call that leaves a parameter out gives it (UNIT-8).
 pub enum LeftOut<'p> {

@@ -3,6 +3,7 @@
 //! node when a call gives it an input with a different physical
 //! schema. Its handlers and place types are those of the HGL node.
 
+use hgl_lower::calls::runtime_arguments;
 use std::collections::BTreeMap;
 
 use hgl_analyser::hir::{Body, Expr, ExprKind, Raise, walk_statements};
@@ -137,9 +138,8 @@ fn node_reads(
         None
     };
     let signature = instance.map_or(signature, |instance| &instance.signature);
-    let reads = arguments
-        .iter()
-        .filter_map(|argument| {
+    let reads = runtime_arguments(arguments)
+        .filter_map(|(_, argument)| {
             let parameter = instance.map_or_else(
                 || argument.parameter.filter(|_| argument.pack.is_none()),
                 |instance| instance.parameter(argument),

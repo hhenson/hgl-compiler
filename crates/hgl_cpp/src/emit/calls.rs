@@ -32,7 +32,7 @@ use hgl_analyser::{
     Role, Signature, Type,
 };
 use hgl_diagnostics::Location;
-use hgl_lower::calls::{LeftOut, left_out};
+use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 use hgl_lower::copies::place_of;
 
 use super::Emitter;
@@ -91,6 +91,7 @@ impl Emitter<'_> {
             Callee::Required { .. } => {
                 return self.missing(at, "an operation a generic declaration requires");
             }
+            Callee::Parameter { .. } => return self.missing(at, "an unresolved function argument"),
             Callee::Unread => return self.missing(at, "this call"),
         };
         let declared = &program.modules[module].declarations[declaration];
@@ -162,15 +163,19 @@ impl Emitter<'_> {
         }
         // The places the call gives its `var` parameters: an argument
         // read from one of them is a copy.
-        let given_places: Vec<usize> = arguments
-            .iter()
-            .filter(|argument| {
-                argument
-                    .parameter
+        let parameter_for = |argument: &Argument| {
+            concrete.map_or_else(
+                || argument.parameter.filter(|_| argument.pack.is_none()),
+                |instance| instance.parameter(argument),
+            )
+        };
+        let given_places: Vec<usize> = runtime_arguments(arguments)
+            .filter(|(_, argument)| {
+                parameter_for(argument)
                     .and_then(|index| signature.parameters.get(index))
                     .is_some_and(|parameter| parameter.var)
             })
-            .filter_map(|argument| place_of(&scope.body.locals, &argument.value))
+            .filter_map(|(_, argument)| place_of(&scope.body.locals, &argument.value))
             .collect();
         // FN-15: "a call with several gives each place its value in the
         // order of the parameters"; one place given to two of them would
@@ -192,12 +197,10 @@ impl Emitter<'_> {
         // position, what is written for it, whether it may fail, and how
         // it is held where it is evaluated before the call.
         let mut written: Vec<(usize, String, bool, Held)> = Vec::new();
-        for argument in arguments {
-            let index = concrete.map_or_else(
-                || argument.parameter.filter(|_| argument.pack.is_none()),
-                |instance| instance.parameter(argument),
-            );
-            let Some(index) = index.filter(|&index| index < signature.parameters.len()) else {
+        for (_, argument) in runtime_arguments(arguments) {
+            let Some(index) =
+                parameter_for(argument).filter(|&index| index < signature.parameters.len())
+            else {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let parameter = &signature.parameters[index];
@@ -267,18 +270,21 @@ impl Emitter<'_> {
         }
         let mut defaulted: Vec<(usize, String, bool, Held)> = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
-            if written.iter().any(|(given, ..)| *given == index) {
+            if matches!(parameter.ty, Type::Function(_))
+                || written.iter().any(|(given, ..)| *given == index)
+            {
                 continue;
             }
             if parameter.pack.is_some() {
                 return self.missing(at, "a call of a function with a pack");
             }
-            match left_out(program, (module, declaration), index, parameter) {
+            let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
+            match left_out(program, (module, declaration), declared, parameter) {
                 Some(LeftOut::Default(default)) => {
                     // A default that calls its own function with that
                     // same argument left out would be written inside
                     // itself without end.
-                    let key = (module, declaration, index);
+                    let key = (module, declaration, declared);
                     if self.expanding.contains(&key) {
                         return self.missing(default.at, "a default that leaves itself out");
                     }
@@ -327,13 +333,22 @@ impl Emitter<'_> {
         // order, before the call; a lambda called where the call is
         // gives them a block to be in.
         let mut given: Vec<String> = vec![String::new(); signature.parameters.len()];
+        let joined = |given: Vec<String>| {
+            given
+                .into_iter()
+                .zip(&signature.parameters)
+                .filter(|(_, parameter)| !matches!(parameter.ty, Type::Function(_)))
+                .map(|(argument, _)| argument)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let ordered: Vec<(usize, String, bool, Held)> =
             written.into_iter().chain(defaulted).collect();
         if !changing && ordered.iter().filter(|(_, _, fails, _)| *fails).count() <= 1 {
             for (index, value, _, _) in ordered {
                 given[index] = value;
             }
-            return format!("{called}({})", given.join(", "));
+            return format!("{called}({})", joined(given));
         }
         // A place is held by a reference to it, and what something else
         // holds by a `const` reference; any other value as it is, so that
@@ -360,7 +375,7 @@ impl Emitter<'_> {
             steps.push_str(&format!("{declared} {name} = {value}; "));
             given[index] = name;
         }
-        format!("[&] {{ {steps}return {called}({}); }}()", given.join(", "))
+        format!("[&] {{ {steps}return {called}({}); }}()", joined(given))
     }
 
     /// The runtime library's function for the native candidate

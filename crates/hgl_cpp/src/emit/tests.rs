@@ -29,7 +29,7 @@
 
 use hgl_analyser::hir::{Cell, Expr, ExprKind, Stmt};
 use hgl_analyser::{Argument as GenericArgument, Type};
-use hgl_lower::calls::{LeftOut, left_out};
+use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 use hgl_lower::instances::{core_function, run_wiring, trace_payload};
 
 use super::Emitter;
@@ -192,7 +192,7 @@ impl Emitter<'_> {
         // configuration held.
         let mut replayed: Vec<Given> = Vec::new();
         let mut context = Context::new(Kind::Entry, scope.body.locals.len());
-        for (position, argument) in arguments.iter().enumerate() {
+        for (position, argument) in runtime_arguments(arguments) {
             // A trace that is no trace written out, a `let` of one or an
             // eval's, is replayed from what it holds: not written yet.
             if matches!(argument.value.ty, Type::Trace { .. })

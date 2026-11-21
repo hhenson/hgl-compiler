@@ -22,7 +22,7 @@
 
 use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Stmt, ValueCategory};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Signature, Type};
-use hgl_lower::calls::{LeftOut, left_out};
+use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 
 use super::Emitter;
 use super::calls::{changes, may_fail};
@@ -275,7 +275,7 @@ impl Emitter<'_> {
         let mut order: Vec<usize> = Vec::new();
         let mut failing = 0;
         let mut changing = false;
-        for (position, argument) in arguments.iter().enumerate() {
+        for (position, argument) in runtime_arguments(arguments) {
             let Some(index) =
                 parameter_for(argument).filter(|&index| index < signature.parameters.len())
             else {
@@ -301,19 +301,20 @@ impl Emitter<'_> {
             changing |= changes(&argument.value);
         }
         for (index, parameter) in signature.parameters.iter().enumerate() {
-            if written[index].is_some() {
+            if matches!(parameter.ty, Type::Function(_)) || written[index].is_some() {
                 continue;
             }
             if !parameter.constant {
                 // UNIT-8: "an omitted temporal input is never valid".
                 return self.missing(value.at, "a call that leaves out a temporal input");
             }
-            if let Some((_, held)) = defaults.iter().find(|(at, _)| *at == index) {
+            let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
+            if let Some((_, held)) = defaults.iter().find(|(at, _)| *at == declared) {
                 written[index] = Some(held.clone());
                 continue;
             }
             written[index] = Some(
-                match left_out(program, (module, declaration), index, parameter) {
+                match left_out(program, (module, declaration), declared, parameter) {
                     Some(LeftOut::Default(default)) => {
                         // The analyser keeps a default as a value with no
                         // locals of its own, so a block in it that runs
@@ -358,7 +359,7 @@ impl Emitter<'_> {
         // statements, each is held first, in that order.
         if failing > 1 || changing {
             let rest: Vec<usize> = (0..written.len())
-                .filter(|index| !order.contains(index))
+                .filter(|index| written[*index].is_some() && !order.contains(index))
                 .collect();
             order.extend(rest);
             let mut steps = String::new();

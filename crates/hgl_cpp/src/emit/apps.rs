@@ -20,7 +20,7 @@
 //! (`hglrt/application_host.h`) writes it for the driver (`hgl_cli`).
 
 use hgl_analyser::hir::{Body, ExprKind, Stmt};
-use hgl_lower::calls::{LeftOut, left_out};
+use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 use hgl_lower::instances::run_result;
 
 use super::Emitter;
@@ -173,7 +173,7 @@ impl Emitter<'_> {
         let mut given: Vec<(usize, String)> = Vec::new();
         let mut defaults: Vec<(usize, String)> = Vec::new();
         if held {
-            for (position, argument) in arguments.iter().enumerate() {
+            for (position, argument) in runtime_arguments(arguments) {
                 let written = self.expression(&mut scope, &argument.value);
                 // As its HGL type, so that a later part does not change it
                 // through a proxy (`graphs::temporal_call`).
