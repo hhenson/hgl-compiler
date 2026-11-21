@@ -11,7 +11,7 @@ use hgl_source::FileId;
 
 use super::candidates::{AtInstance, Given, Wanted};
 use super::fit::{open, whole};
-use super::inference::{fixed, infer, mentions, placed, unsaid};
+use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, unreadable};
 use super::{REQUIRING, Typer};
 use crate::declared::{names_parameter, same_type, substitute_within};
@@ -1261,14 +1261,8 @@ impl<'a> Typer<'a> {
             // cannot redefine the generic type of an ordinary operand.
             let mut inferred = vec![None; public.generics.len()];
             from_place(public, result.as_ref(), &mut inferred);
-            for (parameter, operand) in public
-                .parameters
-                .iter()
-                .filter(|parameter| !parameter.configuration)
-                .zip(&operands)
-            {
-                infer(&parameter.ty, operand, &public.generics, &mut inferred);
-            }
+            let supplied = requirement_inputs(public, &operands);
+            self.infer_operator_inputs(public, &mut inferred, &supplied);
             for (argument, found) in operator_generics.iter_mut().zip(inferred) {
                 if let Some(found) = found {
                     *argument = found;
