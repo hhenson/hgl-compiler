@@ -150,6 +150,7 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
                 declaration,
                 generics,
                 requirements,
+                ..
             },
         arguments,
         ..
@@ -472,6 +473,7 @@ impl Instances {
             declaration,
             generics,
             requirements,
+            ..
         }
         | Callee::Candidate {
             module,

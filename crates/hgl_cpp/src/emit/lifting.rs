@@ -272,6 +272,7 @@ impl Emitter<'_> {
             };
             synthetic.push(Argument {
                 parameter: argument.parameter,
+                pack: argument.pack.clone(),
                 value: Expr {
                     kind: ExprKind::Local(locals.len()),
                     ty: read,
@@ -366,6 +367,7 @@ impl Emitter<'_> {
             labels.push(Some(parameter.name.clone()));
             synthetic.push(Argument {
                 parameter: Some(index),
+                pack: None,
                 value: Expr {
                     kind: ExprKind::Local(locals.len()),
                     ty: ty.clone(),

@@ -483,6 +483,7 @@ impl<'a> Typer<'a> {
             key: Key::Position(position),
             by_place,
             value,
+            explicit: None,
             retried,
             node,
         }
