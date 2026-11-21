@@ -10,7 +10,7 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use common::{check, example_modules, hgl_files};
+use common::{check, check_broken, example_modules, hgl_files};
 
 /// The module path and part name on a sample's `module` line.
 fn header(text: &str) -> (String, Option<String>) {
@@ -59,6 +59,40 @@ const STATED_IN_PROSE: &[(&str, &[(usize, &str)])] = &[(
     &[(8, "function-kind/call.role")],
 )];
 
+/// Named specification examples that still need pending syntax or analysis.
+const PENDING_MODULES: &[(&str, &str, &str)] = &[
+    (
+        "hgl_core/spec/mapping.md",
+        "examples.mapping",
+        "EXPR-10 (#363), MAP-1 and RED-1 (#369, #370)",
+    ),
+    (
+        "hgl_spec/spec/language/functions-and-phases.md",
+        "examples.configuration_parameters",
+        "FN-18 and EXPR-10 (#363)",
+    ),
+    (
+        "hgl_spec/spec/language/functions-and-phases.md",
+        "examples.pack_forms",
+        "LEX-29, EXPR-16, EXPR-17 and FN-19 (#368)",
+    ),
+    (
+        "hgl_spec/spec/language/functions-and-phases.md",
+        "examples.function_parameters",
+        "FN-17 (#362)",
+    ),
+    (
+        "hgl_spec/spec/language/generics-and-operators.md",
+        "examples.shapes",
+        "UNIT-3 and GEN-4 (#364)",
+    ),
+    (
+        "hgl_spec/spec/language/generics-and-operators.md",
+        "examples.rooms",
+        "TYPE-3 (hgl_spec#196), UNIT-3 and GEN-4 (#364)",
+    ),
+];
+
 /// The rejection cases of core the compiler does not yet reject, each as
 /// `(file, declaration)`, the file under `tests/conformance/`: the
 /// `[rejections]` of `crates/hgl_cpp/ci/unsupported_cases.toml`, which
@@ -103,7 +137,7 @@ fn declaration_lines(text: &str, name: &str) -> std::ops::Range<usize> {
 }
 
 /// Every complete module among the specification's examples is accepted,
-/// but for what the example itself says is rejected: the analyser
+/// except for named pending examples and the example's own rejections: the analyser
 /// reports each `expect-error` annotation's code on the line it applies
 /// to, and nothing else.
 ///
@@ -137,14 +171,35 @@ fn every_example_module_is_accepted_but_for_its_stated_rejections() {
     }
 
     let mut failures = Vec::new();
+    let mut met = vec![0; PENDING_MODULES.len()];
     let mut assembled = 0;
     let mut rejections = 0;
     for program in &programs {
-        let files: Vec<(&str, &str)> = program
+        let mut files: Vec<(&str, &str)> = program
             .iter()
             .map(|sample| (sample.origin.as_str(), sample.text.as_str()))
             .collect();
-        let checked = check(&files);
+        let (first_file, first_text) = files[0];
+        let path = first_file.rsplit_once(':').expect("example origin").0;
+        let (module, _) = header(first_text);
+        // The UNIT-3 example adds a candidate to an imported operator.
+        // Analyse its defining module beside it.
+        let with_import = path == "hgl_spec/spec/language/generics-and-operators.md"
+            && module == "examples.rooms";
+        if with_import {
+            let imported = samples
+                .iter()
+                .find(|sample| {
+                    sample
+                        .origin
+                        .rsplit_once(':')
+                        .is_some_and(|(file, _)| file == path)
+                        && header(&sample.text).0 == "examples.shapes"
+                })
+                .expect("the rooms example imports the shapes example");
+            files.push((&imported.origin, &imported.text));
+        }
+        let checked = check_broken(&files);
         // What each file says is rejected, as `file:line category/code`.
         let mut expected: Vec<String> = files
             .iter()
@@ -172,15 +227,33 @@ fn every_example_module_is_accepted_but_for_its_stated_rejections() {
             .collect();
         expected.sort();
         found.sort();
+        let accepted = checked.front_end_errors == 0 && found == expected;
+        if let Some((index, (_, _, reason))) = PENDING_MODULES
+            .iter()
+            .enumerate()
+            .find(|(_, (file, name, _))| *file == path && *name == module)
+        {
+            met[index] += 1;
+            assert!(
+                !accepted,
+                "{path}: {module} now passes: remove its pending entry ({reason})"
+            );
+            continue;
+        }
         rejections += expected.len();
-        if found != expected {
+        if !accepted {
             failures.push(format!(
                 "{}: expected {expected:?}, found {found:?}\n{}",
                 files[0].0, checked.report
             ));
         }
-        assert_eq!(checked.modules().len(), 1, "{} is one module", files[0].0);
-        assembled += usize::from(files.len() > 1);
+        assert_eq!(
+            checked.modules().len(),
+            1 + usize::from(with_import),
+            "{}",
+            files[0].0
+        );
+        assembled += usize::from(program.len() > 1);
     }
     assert!(
         failures.is_empty(),
@@ -188,6 +261,14 @@ fn every_example_module_is_accepted_but_for_its_stated_rejections() {
         failures.len(),
         programs.len(),
         failures.join("\n")
+    );
+    for ((file, module, reason), count) in PENDING_MODULES.iter().zip(&met) {
+        assert_eq!(*count, 1, "pending sample {file}: {module} ({reason})");
+    }
+    println!(
+        "{} of {} example programs pending",
+        met.len(),
+        programs.len()
     );
     assert!(assembled > 0, "no example shows a module in several files");
     // TYPE-11's `rolling_window.size_kind` illustration, for one.

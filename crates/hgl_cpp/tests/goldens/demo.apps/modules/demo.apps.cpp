@@ -132,7 +132,7 @@ struct impl_
         [[maybe_unused]] const ::hglrt::GlobalState global_state{capability_01_};
         // when, line 17 (TIME-3)
         {
-            if (::hglrt::le__T_T<::hgraph::Int>(::hglrt::checked_value(value), ::hglrt::get_GlobalState_str<::hgraph::Int>(global_state, ::hgraph::Str{"limit"})))
+            if (::hglrt::le__T_T<::hgraph::Int>(::hglrt::checked_value(value), ::hglrt::require_result(::hglrt::get_store_result<::hgraph::Int>(global_state, ::hgraph::Str{"limit"}), ::std::source_location::current())))
             {
                 out_.set(::hglrt::checked_value(value));
                 return;
@@ -159,7 +159,7 @@ struct impl_
     {
         [[maybe_unused]] const ::hglrt::GlobalState global_state{wiring_.global_state()};
         ::hglrt::put_GlobalState_str_V<::hgraph::Int>(global_state, ::hgraph::Str{"limit"}, limit);
-        [[maybe_unused]] const ::hgraph::Int seen = ::hglrt::get_GlobalState_str<::hgraph::Int>(global_state, ::hgraph::Str{"limit"});
+        [[maybe_unused]] const ::hgraph::Int seen = ::hglrt::require_result(::hglrt::get_store_result<::hgraph::Int>(global_state, ::hgraph::Str{"limit"}), ::std::source_location::current());
         return ::hgl::demo::apps::m_::w_::limited(wiring_, ::hgl::demo::apps::m_::w_::ticks(wiring_, values, ::hgl::core::m_::c_::mul_1_(seen, ::hgraph::TimeDelta{1000000})));
     }
 };

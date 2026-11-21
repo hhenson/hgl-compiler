@@ -1,0 +1,276 @@
+module demo.fallible
+
+fn checked(input: i64) -> result<i64, error> {
+    when {
+        if input < 0 { return err(error(message: "invalid input", code: "convert.invalid")) }
+        return ok(input)
+    }
+}
+
+fn require_output(input: i64) -> i64 => checked(input)
+fn nullable_output(input: i64) -> i64? => checked(input)
+
+fn relay<T>(take: bool, ref target: T) -> ref T {
+    when modified(take) { return target }
+}
+
+fn relay_whole(take: bool, input: i64) -> result<i64, error> => relay(take, checked(input))
+fn relay_value(take: bool, input: i64) -> i64 => relay(take, checked(input))
+
+fn designate_value(take: bool, value: i64) -> ref i64 {
+    when modified(take) { return value }
+}
+
+fn designate_held(take: bool, input: i64) -> i64 {
+    let held = checked(input)
+    return designate_value(take, held)
+}
+
+test forms {
+    assert eval checked(input: [1, -1]) ==
+        [ok(1), err(error(message: "invalid input", code: "convert.invalid"))]
+    assert eval require_output(input: [1, 2]) == [1, 2]
+    assert raises("convert.invalid") { eval require_output(input: [1, -1]) }
+    assert eval nullable_output(input: [1, -1, 2]) == [1, null, 2]
+    assert eval relay_whole(take: [true, _], input: [1, -1]) ==
+        [ok(1), err(error(message: "invalid input", code: "convert.invalid"))]
+    assert eval relay_value(take: [true, _], input: [1, 2]) == [1, 2]
+    assert raises("convert.invalid") { eval relay_value(take: [true, _], input: [1, -1]) }
+    assert eval designate_held(take: [true, _], input: [1, 2]) == [1, 2]
+}
+
+fn consuming(value: i64, enabled: bool) -> i64 {
+    when modified(enabled) && valid(value) {
+        if enabled { return value }
+        return 0
+    }
+}
+
+fn reading_outcome(input: i64, enabled: bool) -> i64 {
+    let held = checked(input)
+    return consuming(held, enabled)
+}
+
+fn reading_nullable(input: i64, enabled: bool) -> i64 {
+    let held: i64? = checked(input)
+    return consuming(held, enabled)
+}
+
+fn capture_reader(input: i64, enabled: bool) -> error {
+    let held = checked(input)
+    return capture(consuming, held, enabled).error
+}
+
+fn combine(first: i64, second: i64) -> i64 {
+    when { return first + second }
+}
+
+fn ordered_reads(input: i64) -> i64 {
+    let failure = checked(input)
+    let nullable: i64? = checked(input)
+    return combine(failure, nullable)
+}
+
+const fn checked_list(input: i64) -> result<list<i64>, error> {
+    if input < 0 { return err(error(message: "invalid input", code: "convert.invalid")) }
+    return ok([input])
+}
+
+const fn first_item(values: list<i64>) -> i64 => values[0]
+
+fn consuming_list(values: list<i64>) -> i64 {
+    when { return first_item(values) }
+}
+
+fn reading_list(input: i64) -> i64 {
+    let held = checked_list(input)
+    return consuming_list(held)
+}
+
+fn waiting_for_an_input(input: i64, delayed: i64) -> i64 {
+    let held = checked(input)
+    return combine(held, delayed)
+}
+
+const fn add_inputs(left: i64, right: i64) -> i64 => left + right
+
+fn lifted_waiting_for_an_input(input: i64, delayed: i64) -> i64 {
+    let held = checked(input)
+    return add_inputs(held, delayed)
+}
+
+fn when_present(value: i64?) -> i64 {
+    when {
+        if value != null { return value }
+        return 0
+    }
+}
+
+fn checking_for_null(input: i64) -> i64 {
+    let held = checked(input)
+    return when_present(held)
+}
+
+fn consume_pack(items: ...i64{2}) -> i64 {
+    when { return 7 }
+}
+
+fn capture_pack(input: i64, other: i64) -> error {
+    let held = checked(input)
+    return capture(consume_pack, other, held).error
+}
+
+test reads_in_the_consumer {
+    assert eval reading_outcome(input: [1, 7], enabled: [false, true]) == [0, 7]
+    assert eval reading_nullable(input: [1, 7], enabled: [false, true]) == [0, 7]
+    assert raises("convert.invalid") { eval reading_outcome(input: [-1], enabled: [true]) }
+    assert raises("value.null") { eval reading_nullable(input: [-1], enabled: [true]) }
+    assert eval capture_reader(input: [-1], enabled: [true]) ==
+        [error(message: "invalid input", code: "convert.invalid")]
+    assert eval ordered_reads(input: [2]) == [4]
+    assert raises("convert.invalid") { eval ordered_reads(input: [-1]) }
+    assert eval reading_list(input: [7]) == [7]
+    assert raises("convert.invalid") { eval reading_list(input: [-1]) }
+    # An Err fails its consumer on the publication cycle regardless of
+    # whether the handler would read the input (ERR-15, owner's ruling).
+    assert raises("convert.invalid") { eval reading_outcome(input: [-1], enabled: [false]) }
+    assert raises("convert.invalid") { eval reading_outcome(input: [-1], enabled: [_]) }
+    assert raises("convert.invalid") { eval waiting_for_an_input(input: [-1], delayed: [_]) }
+    assert raises("convert.invalid") { eval lifted_waiting_for_an_input(input: [-1], delayed: [_]) }
+    assert eval checking_for_null(input: [7, -1, 9]) == [7, 0, 9]
+    assert eval capture_pack(input: [-1], other: [_]) ==
+        [error(message: "invalid input", code: "convert.invalid")]
+}
+
+# ERR-5, ERR-12 and ERR-15: reading a failure runs where the expression
+# stands. Custom error types return from the enclosing function.
+const fn local_checked(input: i64) -> result<i64, error> {
+    if input < 0 { return err(error(message: "invalid input", code: "convert.invalid")) }
+    return ok(input)
+}
+
+const fn custom(input: i64) -> result<i64, str> {
+    if input < 0 { return err("negative input") }
+    return ok(input)
+}
+
+const fn nested(input: i64, enabled: bool) -> result<i64, str> {
+    if enabled { return ok(10 + custom(input)) }
+    return ok(0)
+}
+
+const fn ordered(input: i64, index: i64) -> result<i64, error> {
+    let items = [5]
+    return ok(items[index] + local_checked(input))
+}
+
+test contextual_returns {
+    let success = nested(2, true)
+    let failed = nested(-1, true)
+    let skipped = nested(-1, false)
+    assert is_ok(success) && is_err(failed) && is_ok(skipped)
+    if is_ok(success) { assert success.value == 12 }
+    if is_err(failed) { assert failed.error == "negative input" }
+    if is_ok(skipped) { assert skipped.value == 0 }
+    assert raises("convert.invalid") {
+        let required: i64 = local_checked(-1)
+    }
+    assert raises("value.index_out_of_range") { ordered(-1, 1) }
+}
+
+export fn from_source(const input: i64) -> i64 {
+    yield 0s: local_checked(input)
+}
+
+fn source_outcome(const input: i64) -> result<i64, error> {
+    yield 0s: local_checked(input)
+}
+
+fn require_source_outcome(const input: i64) -> i64 => source_outcome(input)
+
+fn from_start(value: i64, const input: i64) -> i64 {
+    start { let required: i64 = local_checked(input) }
+    when { return value }
+}
+
+fn from_stop(value: i64, const input: i64) -> i64 {
+    when { return value }
+    stop { let required: i64 = local_checked(input) }
+}
+
+fn from_build(const input: i64) -> i64 {
+    let required: i64 = local_checked(input)
+    return from_source(required)
+}
+
+test phase_failures {
+    assert eval from_source(input: 5) == [5]
+    assert raises("convert.invalid") { eval from_source(input: -1) }
+    assert eval require_source_outcome(input: 5) == [5]
+    assert raises("convert.invalid") { eval require_source_outcome(input: -1) }
+    assert raises("convert.invalid") { eval from_start(value: [1], input: -1) }
+    assert raises("convert.invalid") { eval from_stop(value: [1], input: -1) }
+    assert raises("convert.invalid") { eval from_build(input: -1) }
+}
+
+# SOURCE-2, ERR-12, ERR-15: a timestamp or delay is read before the payload.
+const fn checked_delay(admitted: bool) -> result<duration, error> {
+    if admitted { return ok(2us) }
+    return err(error(message: "invalid delay", code: "convert.invalid"))
+}
+
+fn yield_after(const admitted: bool, const divisor: i64) -> i64 {
+    yield checked_delay(admitted): 12 // divisor
+}
+
+fn yield_at(const target: datetime?) -> i64 {
+    yield target: 2
+}
+
+test contextual_yield_times {
+    let start_time = @2026-01-05T09:30:00Z
+    assert eval yield_after(admitted: true, divisor: 3) == [_, _, 4]
+    assert eval{start: start_time} yield_at(target: start_time) == [2]
+    assert raises("convert.invalid") { eval yield_after(admitted: false, divisor: 0) }
+    assert raises("value.null") { eval yield_at() }
+}
+
+# ERR-6: held null is an ok of null, missing is an err, and a
+# required read of a non-nullable dictionary value raises absence.
+test dictionary_forms {
+    let nullable: dict<str, i64?> = ["present": null]
+    let found: result<i64?, error> = get(nullable, "present")
+    let missing: result<i64?, error> = get(nullable, "missing")
+    assert is_ok(found)
+    if is_ok(found) { assert found.value == null }
+    assert is_err(missing)
+    if is_err(missing) { assert missing.error.code == "value.missing_key" }
+
+    let values: dict<str, i64> = ["present": 17]
+    let required: i64 = get(values, "present")
+    let optional: i64? = get(values, "missing")
+    assert required == 17
+    assert optional == null
+    assert raises("value.missing_key") {
+        let absent: i64 = get(values, "missing")
+    }
+}
+
+fn store_forms(value: i64) -> bool {
+    inject global_state
+    when {
+        put(global_state, "present", value)
+        let found = get<i64>(global_state, "present")
+        let missing = get<i64>(global_state, "missing")
+        let present: i64 = get(global_state, "present")
+        let nullable: i64? = get(global_state, "missing")
+        if is_ok(found) {
+            return found.value == value && is_err(missing) && present == value && nullable == null
+        }
+        return false
+    }
+}
+
+test store_result_forms {
+    assert eval store_forms(value: [7, 0]) == [true, true]
+}

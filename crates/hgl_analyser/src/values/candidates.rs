@@ -3,6 +3,8 @@
 //! (GEN-2, GEN-5, GEN-6). Part of the typing pass ([`super`]): a symbol
 //! and a call of an operator by its name both select here.
 
+use std::collections::VecDeque;
+
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
@@ -40,9 +42,14 @@ enum ArgumentForms {
     /// Also infer an open parameter from a payload when whole matching
     /// did not admit a candidate.
     Payload,
-    /// A fallible nullable payload can meet a non-nullable parameter
-    /// by reading its success and then reading the nullable (ERR-12).
-    RequiredPayload,
+}
+
+/// How an unresolved generic can bind from a result operand.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResultBinding {
+    Whole,
+    Success,
+    RequiredSuccess,
 }
 
 impl<'a> Typer<'a> {
@@ -79,7 +86,6 @@ impl<'a> Typer<'a> {
                 ArgumentForms::Contextual,
                 ArgumentForms::ConstrainedPayload,
                 ArgumentForms::Payload,
-                ArgumentForms::RequiredPayload,
             ][..]
         } else {
             &[ArgumentForms::Whole][..]
@@ -143,9 +149,7 @@ impl<'a> Typer<'a> {
             let clause = child(&candidate.syntax, SyntaxKind::RequiresClause);
             let payload_parameters = if matches!(
                 forms,
-                ArgumentForms::ConstrainedPayload
-                    | ArgumentForms::Payload
-                    | ArgumentForms::RequiredPayload
+                ArgumentForms::ConstrainedPayload | ArgumentForms::Payload
             ) {
                 // Only an occurrence elsewhere in the signature or a
                 // condition can make an open binding need another form.
@@ -187,11 +191,6 @@ impl<'a> Typer<'a> {
             } else {
                 Vec::new()
             };
-            // The candidate as this call takes it: its generic
-            // parameters resolved (GEN-2).
-            let widens = |decided: &Type, later: &Type| self.widens(decided, later);
-            let defaults = |generic: &GenericParameter| self.default_constant(candidate, generic);
-            let constant = |node: &SyntaxNode, ty: Option<&Type>| self.given_constant(node, ty);
             let condition = clause.and_then(|clause| clause.children().next());
             let rejects_form = |generic: &GenericParameter, ty: &Type| {
                 let Some(condition) = &condition else {
@@ -213,72 +212,153 @@ impl<'a> Typer<'a> {
                 };
                 holds(condition, &partial) == Some(false)
             };
-            let Some((taken, generics, type_packs, defaulted)) = instance(
-                signature,
-                (given, &bound),
-                wanted,
-                (
-                    &widens,
-                    &defaults,
-                    &constant,
-                    converting.then_some((self, forms, &payload_parameters, &rejects_form)),
-                ),
-            ) else {
-                continue;
-            };
-            // GEN-13: a generic value parameter has an ordinary
-            // type, and the default it takes is of that type as
-            // this call resolves it: the `2` of
-            // `<T, const fallback: T = 2>` is no `str`. A default
-            // that is not of the type as it is declared is reported
-            // there, and a call that takes it is not judged
-            // (ERR-9).
-            let unfit = defaulted.iter().find_map(|&index| {
-                let default = generic_default(&candidate.syntax, &signature.generics[index])?;
-                let (GenericKind::Value(resolved), GenericKind::Value(declared)) =
-                    (&taken.generics[index].kind, &signature.generics[index].kind)
-                else {
-                    return None;
+            // Each queued alternative chooses one more result read. Try
+            // lower bounds in order and stop once they exceed an admitted
+            // read count (ERR-15).
+            let mut trials = VecDeque::new();
+            let mut initial = Some((0, Vec::new()));
+            let mut best: Option<(Vec<usize>, Chosen)> = None;
+            let mut possible_reads = None;
+            while let Some((at_least, mut trial)) = initial.take().or_else(|| trials.pop_front()) {
+                if best
+                    .as_ref()
+                    .is_some_and(|(reads, _)| at_least > reads.len())
+                {
+                    break;
+                }
+                let mut position = 0;
+                let mut choose = |options: [Option<ResultBinding>; 3]| {
+                    let binding = if let Some(&binding) = trial.get(position) {
+                        binding
+                    } else {
+                        let mut available = options.into_iter().flatten();
+                        let first = available.next().expect("at least one form is available");
+                        if best
+                            .as_ref()
+                            .is_none_or(|(reads, _)| at_least < reads.len())
+                        {
+                            for alternative in available {
+                                let mut next = trial.clone();
+                                next.push(alternative);
+                                trials.push_back((at_least + 1, next));
+                            }
+                        }
+                        trial.push(first);
+                        first
+                    };
+                    position += 1;
+                    binding
                 };
-                // Read as a value of each type, as it would be read
-                // there (EXPR-5): `9007199254740993 + 0` of an
-                // `f64` is that `f64`.
-                let fits = |ty: &Type| {
-                    self.typed_in(candidate.at.file, &default, Some(ty))
-                        .and_then(|read| crate::constant::fit(read, Some(ty), program))
-                        .is_ok()
+                // The candidate as this call takes it: its generic
+                // parameters resolved (GEN-2).
+                let widens = |decided: &Type, later: &Type| self.widens(decided, later);
+                let defaults =
+                    |generic: &GenericParameter| self.default_constant(candidate, generic);
+                let constant = |node: &SyntaxNode, ty: Option<&Type>| self.given_constant(node, ty);
+                let Some((taken, generics, type_packs, defaulted)) = instance(
+                    signature,
+                    (given, &bound),
+                    wanted,
+                    (
+                        &widens,
+                        &defaults,
+                        &constant,
+                        converting.then_some((self, forms, &payload_parameters, &rejects_form)),
+                    ),
+                    &mut choose,
+                ) else {
+                    continue;
                 };
-                (whole(resolved) && !fits(resolved)).then(|| !fits(declared))
-            });
-            match unfit {
-                Some(true) => {
-                    untold = true;
+                // GEN-13: a generic value parameter has an ordinary
+                // type, and the default it takes is of that type as
+                // this call resolves it: the `2` of
+                // `<T, const fallback: T = 2>` is no `str`. A default
+                // that is not of the type as it is declared is reported
+                // there, and a call that takes it is not judged
+                // (ERR-9).
+                let unfit = defaulted.iter().find_map(|&index| {
+                    let default = generic_default(&candidate.syntax, &signature.generics[index])?;
+                    let (GenericKind::Value(resolved), GenericKind::Value(declared)) =
+                        (&taken.generics[index].kind, &signature.generics[index].kind)
+                    else {
+                        return None;
+                    };
+                    // Read as a value of each type, as it would be read
+                    // there (EXPR-5): `9007199254740993 + 0` of an
+                    // `f64` is that `f64`.
+                    let fits = |ty: &Type| {
+                        self.typed_in(candidate.at.file, &default, Some(ty))
+                            .and_then(|read| crate::constant::fit(read, Some(ty), program))
+                            .is_ok()
+                    };
+                    (whole(resolved) && !fits(resolved)).then(|| !fits(declared))
+                });
+                match unfit {
+                    Some(true) => {
+                        untold = true;
+                        continue;
+                    }
+                    Some(false) => continue,
+                    None => {}
+                }
+                let admits = self.admits_call(
+                    (candidate, &taken),
+                    (operator_declaration, public),
+                    (module, &generics, &type_packs),
+                    (given, &bound, wanted),
+                    widening,
+                    converting,
+                );
+                fits |= admits != Admits::Misfit;
+                if !matches!(admits, Admits::Yes | Admits::Unknown) {
                     continue;
                 }
-                Some(false) => continue,
-                None => {}
+                let reads: Vec<usize> = given
+                    .iter()
+                    .zip(&bound)
+                    .enumerate()
+                    .filter_map(|(position, (given, &place))| {
+                        let ty = parameter_type(&taken, &type_packs, place)?;
+                        (!given.by_place
+                            && given.explicit.is_none()
+                            && matches!(given.ty(), Type::Result { .. })
+                            && self.taken(ty, given.ty()).is_some())
+                        .then_some(position)
+                    })
+                    .collect();
+                let chosen = Chosen {
+                    module,
+                    declaration,
+                    declared: signature,
+                    taken,
+                    generics,
+                    type_packs,
+                    ambiguous_reads: false,
+                };
+                if admits == Admits::Unknown {
+                    if possible_reads
+                        .as_ref()
+                        .is_none_or(|(fewest, _)| reads.len() < *fewest)
+                    {
+                        possible_reads = Some((reads.len(), chosen));
+                    }
+                    continue;
+                }
+                match &mut best {
+                    Some((earlier, chosen)) if earlier.len() == reads.len() => {
+                        chosen.ambiguous_reads |= *earlier != reads;
+                    }
+                    Some((earlier, _)) if earlier.len() < reads.len() => {}
+                    _ => best = Some((reads, chosen)),
+                }
             }
-            let admits = self.admits_call(
-                (candidate, &taken),
-                (operator_declaration, public),
-                (module, &generics, &type_packs),
-                (given, &bound, wanted),
-                widening,
-                converting,
-            );
-            fits |= admits != Admits::Misfit;
-            let chosen = Chosen {
-                module,
-                declaration,
-                declared: signature,
-                taken,
-                generics,
-                type_packs,
-            };
-            match admits {
-                Admits::Yes => selected.push(chosen),
-                Admits::No | Admits::Misfit => {}
-                Admits::Unknown => not_told.push(chosen),
+            if let Some((fewest, possible)) = possible_reads
+                && best.as_ref().is_none_or(|(reads, _)| fewest <= reads.len())
+            {
+                not_told.push(possible);
+            }
+            if let Some((_, chosen)) = best {
+                selected.push(chosen);
             }
         }
         // GEN-5: "Select exactly one most-specific admitted candidate.
@@ -1156,6 +1236,9 @@ impl<'a> Typer<'a> {
         if selected.len() == 1
             && let Some(chosen) = selected.pop()
         {
+            if let Some(diagnostic) = self.ambiguous_result_reads(&chosen, selecting.name) {
+                return AtInstance::Rejected(diagnostic);
+            }
             return AtInstance::Selected(Box::new(chosen), given);
         }
         // Named as the operator is declared: a symbol stands for it.
@@ -1685,6 +1768,8 @@ pub(super) struct Chosen<'s> {
     pub(super) generics: Vec<Argument>,
     /// The ordered types of each heterogeneous pack (GEN-10).
     type_packs: Vec<hir::TypePackArgument>,
+    /// Equally preferred choices of which operands to read (ERR-15).
+    pub(super) ambiguous_reads: bool,
 }
 
 /// A candidate as a call takes it: itself where it has no generic
@@ -1718,6 +1803,7 @@ fn instance<'s>(
             &dyn Fn(&GenericParameter, &Type) -> bool,
         )>,
     ),
+    choose: &mut dyn FnMut([Option<ResultBinding>; 3]) -> ResultBinding,
 ) -> Option<(
     std::borrow::Cow<'s, Signature>,
     Vec<Argument>,
@@ -1800,7 +1886,12 @@ fn instance<'s>(
                         && found[index].is_none()
                         && payload_parameters.get(index) == Some(&true)
                     {
-                        infer_payload(actual, forms, |ty| rejects_form(&generics[index], ty))
+                        infer_payload(
+                            actual,
+                            forms,
+                            |ty| rejects_form(&generics[index], ty),
+                            choose,
+                        )
                     } else {
                         typer.inference_input(
                             &parameter.ty,
@@ -1899,28 +1990,47 @@ fn instance<'s>(
 /// ERR-12 and ERR-15: a result of a nullable value can supply the
 /// success or its required value. A candidate's condition can rule
 /// out one form for this binding independently of its other bindings.
-fn infer_payload(actual: &Type, forms: ArgumentForms, rejects: impl Fn(&Type) -> bool) -> &Type {
-    if forms == ArgumentForms::ConstrainedPayload && !rejects(actual) {
+fn infer_payload<'t>(
+    actual: &'t Type,
+    forms: ArgumentForms,
+    rejects: impl Fn(&Type) -> bool,
+    choose: &mut dyn FnMut([Option<ResultBinding>; 3]) -> ResultBinding,
+) -> &'t Type {
+    let keep = !rejects(actual);
+    if forms == ArgumentForms::ConstrainedPayload && keep {
         return actual;
     }
-    let (payload, required) = match actual {
-        Type::Result { value, .. } => match value.as_ref() {
-            Type::Nullable(required) => (value.as_ref(), Some(required.as_ref())),
-            payload => (payload, None),
-        },
-        Type::Nullable(value) => (value.as_ref(), None),
-        _ => return actual,
-    };
-    let attempts = if forms == ArgumentForms::RequiredPayload {
-        [required, Some(payload)]
-    } else {
-        [Some(payload), required]
-    };
-    attempts
-        .into_iter()
-        .flatten()
-        .find(|ty| !rejects(ty))
-        .unwrap_or(actual)
+    match actual {
+        Type::Result { value, .. } => {
+            let required = match value.as_ref() {
+                Type::Nullable(required) => Some(required.as_ref()),
+                _ => None,
+            };
+            let success = (!rejects(value)).then_some(value.as_ref());
+            let required = required.filter(|ty| !rejects(ty));
+            if forms == ArgumentForms::ConstrainedPayload {
+                return success.or(required).unwrap_or(actual);
+            }
+            let options = [
+                keep.then_some(ResultBinding::Whole),
+                success.map(|_| ResultBinding::Success),
+                required.map(|_| ResultBinding::RequiredSuccess),
+            ];
+            match options.into_iter().flatten().count() {
+                0 => actual,
+                1 => success.or(required).unwrap_or(actual),
+                _ => match choose(options) {
+                    ResultBinding::Whole => actual,
+                    ResultBinding::Success => value,
+                    ResultBinding::RequiredSuccess => {
+                        required.expect("required form was available")
+                    }
+                },
+            }
+        }
+        Type::Nullable(value) if !rejects(value) => value,
+        _ => actual,
+    }
 }
 
 /// How specific one type of a candidate's signature is beside another's

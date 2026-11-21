@@ -1,19 +1,15 @@
-//! The grammar the parser implements, against the pinned specification's.
+//! The pinned grammar and coverage of the syntax the parser implements.
 //!
 //! Productions carry no rule ID, so no rule test can stand for them. Two
 //! tests do:
 //!
-//! * `fixtures/grammar.ebnf` is a copy of every production the parser was
-//!   written against. The first test reads the productions out of the
-//!   pinned chapters and compares. Raising the pin shows at once which
-//!   productions moved, and so which grammar functions to revisit.
-//! * The second parses a file that uses every construct and checks that
-//!   every kind of node turns up, so no production is left without a test
-//!   that reaches it.
+//! * `fixtures/grammar.ebnf` records the pinned productions. The first
+//!   test compares it with the chapters. Pending grammar is tracked in
+//!   `docs/rules.md` and the specification corpus test.
+//! * The second test checks that the parser's syntax nodes are exercised.
 //!
-//! After revisiting the parser for a changed production, rewrite the copy
-//! by running this test with `HGL_UPDATE_GRAMMAR=1` set, and review the
-//! difference like any other change.
+//! When moving the pin, run this test with `HGL_UPDATE_GRAMMAR=1` to
+//! refresh the fixture and review the changes against the rule inventory.
 
 mod common;
 
@@ -122,7 +118,7 @@ fn pinned_grammar() -> String {
 }
 
 #[test]
-fn the_pinned_grammar_is_the_one_the_parser_was_written_against() {
+fn the_grammar_fixture_matches_the_pinned_chapters() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/grammar.ebnf");
     let pinned = pinned_grammar();
     if std::env::var_os("HGL_UPDATE_GRAMMAR").is_some() {
@@ -139,10 +135,10 @@ fn the_pinned_grammar_is_the_one_the_parser_was_written_against() {
     let gone: Vec<&&str> = recorded_lines.difference(&pinned_lines).collect();
     assert!(
         moved.is_empty() && gone.is_empty(),
-        "the pinned grammar differs from the one the parser was written against.\n\
-         In the specification, not in the parser's copy:\n{moved:#?}\n\
-         In the parser's copy, not in the specification:\n{gone:#?}\n\
-         Revisit the grammar functions for these, then run this test with \
+        "the pinned grammar differs from the fixture.\n\
+         In the specification, not in the fixture:\n{moved:#?}\n\
+         In the fixture, not in the specification:\n{gone:#?}\n\
+         Review these productions and their implementation status, then run with \
          HGL_UPDATE_GRAMMAR=1 to rewrite the copy."
     );
     // Same productions; the order is the chapters', kept for reading.
@@ -176,7 +172,7 @@ let a = 1;
     assert_eq!(name("a = \"x\", b | c ;"), "a");
 }
 
-/// A file that uses every construct of the grammar at least once.
+/// A file that reaches each of the parser's current language constructs.
 const TOUR: &str = r#"module tour.all part one
 
 use tour.other::{helper, const}

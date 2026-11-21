@@ -25,6 +25,7 @@
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace hglrt {
 
@@ -44,6 +45,8 @@ namespace codes {
 /// A read needs a value that is not there: a payload, a child that is not
 /// valid, a whole that is not all valid (TIME-1, ERR-14).
 inline constexpr std::string_view unset_read = "value.unset_read";
+/// A nullable value held null at a place requiring its payload (ERR-12).
+inline constexpr std::string_view null_read = "value.null";
 /// An index outside an ordinary list, below zero or at or past its size,
 /// where a read or an assignment evaluates it (EXPR-3, EXPR-7).
 inline constexpr std::string_view index_out_of_range = "value.index_out_of_range";
@@ -98,10 +101,67 @@ class Failure : public hgraph::ExecutionFailure {
 [[noreturn]] void fail_uncoded(std::string message,
                                std::source_location where = std::source_location::current());
 
-/// Fails with `failure` as it is, its context kept: `?` on an `err` in a
-/// `when` (ERR-5: "In when, only `result<T,error>` may propagate to node
-/// failure"), where a retained error keeps its first provenance (ERR-8).
+/// Fails with `failure` as it is, its context kept (ERR-5). A retained
+/// error keeps its first provenance (ERR-8).
 [[noreturn]] void raise(error failure, std::source_location where = std::source_location::current());
+
+/// The error returned from the enclosing fallible value function (ERR-5).
+/// A function catches only its own typed propagation, leaving execution
+/// failures and errors from the runtime to their surrounding phase.
+template <class E>
+struct return_error {
+    E value;
+};
+
+/// Read a result as its success value, returning the failure from the
+/// enclosing fallible value function (ERR-5 and ERR-15).
+template <class T, class E>
+T propagate(std::expected<T, E> held) {
+    if (!held) {
+        throw return_error<E>{std::move(held).error()};
+    }
+    return *std::move(held);
+}
+
+/// Read a result as its success value, raising its original error if
+/// the result is a failure (ERR-5 and ERR-15).
+template <class T>
+T require_result(result<T> held, std::source_location where = std::source_location::current()) {
+    if (!held) {
+        raise(std::move(held).error(), where);
+    }
+    return *std::move(held);
+}
+
+/// Take the nullable form of a result with a non-nullable success type
+/// (ERR-15). An already nullable success takes the result's value form.
+template <class T>
+std::optional<T> result_or_null(result<T> held) {
+    if (!held) {
+        return std::nullopt;
+    }
+    return *std::move(held);
+}
+
+/// Read a nullable value or raise `value.null` in the current phase (ERR-12).
+template <class T>
+T require_non_null(std::optional<T> held,
+                   std::source_location where = std::source_location::current()) {
+    if (!held) {
+        fail(codes::null_read, "a null value was read", where);
+    }
+    return *std::move(held);
+}
+
+/// Read a nullable value where a null returns a failure from a fallible
+/// value function (ERR-5 and ERR-12).
+template <class T>
+T propagate_non_null(std::optional<T> held) {
+    if (!held) {
+        throw return_error<error>{make_error("a null value was read", std::string{codes::null_read})};
+    }
+    return *std::move(held);
+}
 
 /// The HGL error that `failure` carries, where it is an HGL failure or
 /// nests one, as hgraph rethrows a node's failure inside an error of its

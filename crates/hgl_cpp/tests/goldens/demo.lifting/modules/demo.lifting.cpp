@@ -280,12 +280,7 @@ struct impl_
     {
         // when, line 56 (TIME-3)
         {
-            const auto propagated_00_ = ::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value));
-            if (!propagated_00_.has_value())
-            {
-                ::hglrt::raise(propagated_00_.error());
-            }
-            out_.set((*propagated_00_));
+            out_.set(::hglrt::require_result(::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value)), ::std::source_location::current()));
             return;
         }
     }
@@ -307,11 +302,29 @@ struct impl_
 {
     static constexpr auto name = "demo.lifting::returned";
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hglrt::result<::hgraph::Int>>> out_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::UnNamedTSB<::hgraph::Field<"whole", ::hgraph::TS<::hglrt::result<::hgraph::Int>>>, ::hgraph::Field<"success", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<"nullable", ::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>>> result_out_, [[maybe_unused]] ::hgraph::Scalar<"hgl.result.form", ::hgraph::Int> result_form_)
     {
+        [[maybe_unused]] const auto out_ = result_out_.field<"whole">();
         // when, line 60 (TIME-3)
         {
-            out_.set(::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value)));
+            const auto outcome_00_ = ::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value));
+            if (result_form_.value() == 1)
+            {
+                const auto published_01_ = ::hglrt::require_result(outcome_00_, ::std::source_location::current());
+                out_.set(outcome_00_);
+                result_out_.field<"success">().set(published_01_);
+            }
+            else
+            if (result_form_.value() == 2)
+            {
+                const auto published_02_ = ::hglrt::result_or_null(outcome_00_);
+                out_.set(outcome_00_);
+                ::hglrt::publish_nullable(result_out_.field<"nullable">(), published_02_);
+            }
+            else
+            {
+                out_.set(outcome_00_);
+            }
             return;
         }
     }
@@ -322,7 +335,23 @@ namespace w_
 // returned(value: i64) -> result<i64, error> (node), module demo.lifting, line 59
 ::hgraph::Port<::hgraph::TS<::hglrt::result<::hgraph::Int>>> returned(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
 {
-    return ::hgraph::wire<::hgl::demo::lifting::m_::n_::returned::impl_>(wiring_, value);
+    return ::hglrt::field_port<0>(::hgraph::wire<::hgl::demo::lifting::m_::n_::returned::impl_>(wiring_, value, ::hgraph::Int{0}));
+}
+}  // namespace w_
+namespace w_
+{
+// returned(value: i64) -> result<i64, error> (node), module demo.lifting, line 59
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> returned_result_value_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hglrt::field_port<1>(::hgraph::wire<::hgl::demo::lifting::m_::n_::returned::impl_>(wiring_, value, ::hgraph::Int{1}));
+}
+}  // namespace w_
+namespace w_
+{
+// returned(value: i64) -> result<i64, error> (node), module demo.lifting, line 59
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> returned_result_nullable_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
+{
+    return ::hglrt::field_port<2>(::hgraph::wire<::hgl::demo::lifting::m_::n_::returned::impl_>(wiring_, value, ::hgraph::Int{2}));
 }
 }  // namespace w_
 
@@ -388,12 +417,7 @@ struct impl_
     {
         // when, line 76 (TIME-3)
         {
-            const auto propagated_00_ = ::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value));
-            if (!propagated_00_.has_value())
-            {
-                ::hglrt::raise(propagated_00_.error());
-            }
-            out_.set(::hglrt::add__i64_i64((*propagated_00_), by.value()));
+            out_.set(::hglrt::add__i64_i64(::hglrt::require_result(::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value)), ::std::source_location::current()), by.value()));
             return;
         }
     }
@@ -503,12 +527,7 @@ struct impl_
         // when, line 96 (TIME-3)
         {
             out_.set(::hglrt::checked_value(value));
-            const auto propagated_00_ = ::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value));
-            if (!propagated_00_.has_value())
-            {
-                ::hglrt::raise(propagated_00_.error());
-            }
-            [[maybe_unused]] const ::hgraph::Int tenfold = (*propagated_00_);
+            [[maybe_unused]] const ::hgraph::Int tenfold = ::hglrt::require_result(::hgl::demo::lifting::m_::attempt(::hglrt::checked_value(value)), ::std::source_location::current());
             out_.set(tenfold);
         }
     }
@@ -574,12 +593,7 @@ struct impl_
         if (::hglrt::fn_modified(repeat))
         {
             [[maybe_unused]] const ::hglrt::result<::hglrt::error> failure = ::hglrt::result<::hglrt::error>{::std::unexpect, ::hglrt::checked_value(first)};
-            const auto propagated_00_ = failure;
-            if (!propagated_00_.has_value())
-            {
-                ::hglrt::raise(propagated_00_.error());
-            }
-            out_.set((*propagated_00_));
+            out_.set(::hglrt::require_result(failure, ::std::source_location::current()));
             return;
         }
     }

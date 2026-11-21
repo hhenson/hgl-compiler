@@ -17,7 +17,7 @@ use crate::program::{DeclarationKind, LocalKind, RUN_CONFIG};
 use crate::read::is_type;
 use crate::syntax::{child, tokens};
 use crate::types::{NamedKind, Type};
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 impl<'a> Typer<'a> {
     /// The body, or `None` for a function with none written.
@@ -291,13 +291,12 @@ impl<'a> Typer<'a> {
                 if value.is_some() && self.temporal.is_some() {
                     self.must_return = true;
                 }
-                // CTRL-15: in a loop that makes one child for each
-                // member "an assignment to a `var` declared outside it
-                // rejects (CTRL-8), and so does a `return`."
+                // Preserve the existing check on a return from a dynamic
+                // graph loop until CTRL-15's sequence check lands (#373).
                 if self.dynamic.is_some() {
-                    self.diagnostics.emit(error(
+                    self.diagnostics.emit(local_error(
                         Category::Phase,
-                        codes::LOOP_CARRIED,
+                        codes::local::LOOP_CARRIED,
                         at,
                         "this loop makes one child for each member, and a child does not \
                          return from the graph"
@@ -538,14 +537,13 @@ impl<'a> Typer<'a> {
             }
         };
         self.assigned[local] = true;
-        // CTRL-8: "Dynamic composition loops do not admit loop-carried
-        // accumulation". CTRL-15: "In such a loop an assignment to a
-        // `var` declared outside it rejects".
+        // Keep the existing checks for dynamic graph loops until the
+        // compiler can reject their sequence under CTRL-15 (#373).
         if self.dynamic.is_some_and(|outside| local < outside) {
             self.diagnostics.emit(
-                error(
+                local_error(
                     Category::Phase,
-                    codes::LOOP_CARRIED,
+                    codes::local::LOOP_CARRIED,
                     self.at(&place),
                     format!(
                         "`{}` is declared outside this loop, which makes one child for each \
@@ -755,14 +753,14 @@ impl<'a> Typer<'a> {
                 given
             }
         };
-        // EXPR-15: in a graph the `var` is rebound, so the assignment
-        // is one to the `var`. CTRL-15: "In such a loop an assignment
-        // to a `var` declared outside it rejects".
+        // EXPR-15: in a graph this assignment rebinds the `var`.
+        // The dynamic-loop check is retained until the compiler checks
+        // the sequence as CTRL-15 requires (#373).
         if self.graph && self.dynamic.is_some_and(|outside| local < outside) {
             self.diagnostics.emit(
-                error(
+                local_error(
                     Category::Phase,
-                    codes::LOOP_CARRIED,
+                    codes::local::LOOP_CARRIED,
                     self.at(place),
                     format!(
                         "`{}` is declared outside this loop, which makes one child for each \

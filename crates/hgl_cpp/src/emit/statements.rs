@@ -14,20 +14,18 @@
 //! | `switch selector { case a: ... default: ... }` | the selector held once, and an `if` for each label, compared by value (CTRL-6) |
 //! | A call that assigns places, a value dropped | `call(...);`, `static_cast<void>(value);` |
 //!
-//! A `?` inside a statement (ERR-5) is written before it: the result is
-//! held under a name of its own, and a failure leaves the function with
-//! it (`Scope::before`).
+//! Contextual reads are written at their expressions (`expressions`).
 
 use hgl_analyser::hir::{
     Body, Case, Expr, ExprKind, LabelValue, LocalId, Node, Stmt, walk_statement_nodes,
 };
-use hgl_analyser::{LocalKind, Program, Signature, Type};
+use hgl_analyser::{LocalKind, Program, Type};
 use hgl_lower::copies::Copies;
 use hgl_lower::graphs::may_return;
 
 use super::Emitter;
-use super::calls::{changes, may_fail};
-use super::expressions::{held_read, reads_an_element};
+use super::calls::changes;
+use super::expressions::reads_an_element;
 use super::names::{self, identifier};
 use super::types::{by_value, cpp_type};
 use super::values::INDENT;
@@ -38,27 +36,19 @@ pub(super) struct Scope<'b> {
     pub(super) body: &'b Body,
     /// What its `let`s and loops are bound to (the copy rule).
     pub(super) copies: Copies,
-    /// What the function gives, where it gives anything: a `?` leaves
-    /// the function with a failure of it (ERR-5).
-    pub(super) result: Option<Type>,
     /// True in a named test, where a statement is a test's (TST-3).
     pub(super) testing: bool,
-    /// What the statement being written needs run before it, each a
-    /// line: a `?`'s result held, and the function left where it is a
-    /// failure (ERR-5).
+    /// Declarations and assignments that prepare the statement's places.
     pub(super) before: Vec<String>,
     /// How many levels in what is written now is run only where
     /// something else decides it: the right of `&&` or `||`, a branch
-    /// of an `if` written as an expression. A `?` there cannot be
-    /// written before its statement.
+    /// of an `if` written as an expression.
     pub(super) conditional: usize,
     /// True once something that may fail or do anything has been
-    /// written of the statement being written: a `?` after it would be
-    /// run before it if it were written before the statement (EXPR-13).
+    /// written of the statement being written (EXPR-13).
     pub(super) acted: bool,
     /// True once a local, a constant or a place has been read of the
-    /// statement being written: a `?` after it would be run before the
-    /// read if it were written before the statement.
+    /// statement being written.
     pub(super) read: bool,
     /// True while the call that is the whole of a statement is written,
     /// until it starts: only it may assign places (FN-15).
@@ -76,31 +66,11 @@ pub(super) struct Scope<'b> {
 }
 
 impl<'b> Scope<'b> {
-    /// The scope of a function of `signature` whose body is `body`.
-    pub(super) fn of(program: &Program, body: &'b Body, signature: &Signature) -> Scope<'b> {
-        Scope {
-            body,
-            copies: Copies::of(program, body),
-            result: signature.result.clone(),
-            testing: false,
-            before: Vec::new(),
-            conditional: 0,
-            acted: false,
-            read: false,
-            statement_call: false,
-            read_as: None,
-            assigning: None,
-        }
-    }
-
-    /// The scope of what no function holds: a named test's block, a
-    /// default or a constant's value (UNIT-7, UNIT-13), read with no
-    /// local but its own in scope.
+    /// The scope for a body and its locally bound places.
     pub(super) fn cold(program: &Program, body: &'b Body) -> Scope<'b> {
         Scope {
             body,
             copies: Copies::of(program, body),
-            result: None,
             testing: false,
             before: Vec::new(),
             conditional: 0,
@@ -225,7 +195,7 @@ impl Emitter<'_> {
                     format!("{ty} {name} = {written};")
                 } else if by_value(self.program, &declared.ty)
                     || scope.copies.copied(*local)
-                    || !refers(value)
+                    || !self.refers(value)
                 {
                     // A copy, where what it reads could change while it
                     // is in scope; a value of its own, where it is made
@@ -275,7 +245,8 @@ impl Emitter<'_> {
             } => {
                 let holds = changes(value)
                     || changes(place)
-                    || (reads_an_element(place) && (may_fail(value) || indexed_may_fail(place)));
+                    || (reads_an_element(place)
+                        && (self.may_fail_here(value) || self.indexed_may_fail(place)));
                 scope.assigning = Some(operator.is_none());
                 let written = self.place_held(scope, place, holds);
                 scope.assigning = None;
@@ -421,7 +392,7 @@ impl Emitter<'_> {
                 // be part of a value that ends with the loop's first line,
                 // `rows()[0]`: it is held as a value of its own, as is one
                 // the loop could change.
-                let source = if copied || !refers(sequence) {
+                let source = if copied || !self.refers(sequence) {
                     let held = names::temporary("items", self.temporary());
                     text.push_str(&format!("{indent}const {list} {held} = {items};\n"));
                     held
@@ -648,7 +619,7 @@ impl Emitter<'_> {
                             .push(format!("const ::hgraph::Int {name} = {written};"));
                         return Some(format!("{item}({listed}, {name})"));
                     }
-                    if !holds && reads_an_element(base) && may_fail(index) {
+                    if !holds && reads_an_element(base) && self.may_fail_here(index) {
                         let ty = cpp_type(self.program, &place.ty)?;
                         let list = names::temporary("list", self.temporary());
                         let at = names::temporary("index", self.temporary());
@@ -674,14 +645,30 @@ impl Emitter<'_> {
             _ => None,
         }
     }
-}
 
-/// True where an index of the place `place`, at any depth, may fail.
-fn indexed_may_fail(place: &Expr) -> bool {
-    match &place.kind {
-        ExprKind::Index { base, index } => may_fail(index) || indexed_may_fail(base),
-        ExprKind::Field { base, .. } => indexed_may_fail(base),
-        _ => false,
+    /// True where an index of the place `place`, at any depth, may fail.
+    fn indexed_may_fail(&self, place: &Expr) -> bool {
+        match &place.kind {
+            ExprKind::Index { base, index } => {
+                self.may_fail_here(index) || self.indexed_may_fail(base)
+            }
+            ExprKind::Field { base, .. } => self.indexed_may_fail(base),
+            _ => false,
+        }
+    }
+
+    /// True where `value` refers to a local, constant, or part of one.
+    /// A contextual read or an ordered index expression yields a value.
+    pub(super) fn refers(&self, value: &Expr) -> bool {
+        match &value.kind {
+            ExprKind::Local(local) => self.input_reader(*local).is_none(),
+            ExprKind::Constant { .. } => true,
+            ExprKind::Index { base, index } => !self.held_read(base, index) && self.refers(base),
+            ExprKind::Field { base, member } => {
+                super::composites::field_refers(&base.ty, *member) && self.refers(base)
+            }
+            _ => false,
+        }
     }
 }
 
@@ -702,23 +689,6 @@ fn mentions(statements: &[Stmt], local: LocalId) -> usize {
         _ => {}
     });
     found
-}
-
-/// True where `value` reads what something else holds, as it is: a
-/// local, an element, an entry, a position or a field of one, a constant.
-/// A `let` of it may be a reference; any other value is made where it is
-/// read, an element whose list and index are held before it is read
-/// among them (`expressions::held_read`), and a list's delta's `updated`
-/// and `removed` (`composites::field_refers`).
-pub(super) fn refers(value: &Expr) -> bool {
-    match &value.kind {
-        ExprKind::Local(_) | ExprKind::Constant { .. } => true,
-        ExprKind::Index { base, index } => !held_read(base, index) && refers(base),
-        ExprKind::Field { base, member } => {
-            super::composites::field_refers(&base.ty, *member) && refers(base)
-        }
-        _ => false,
-    }
 }
 
 /// True where some path through `statements` returns from the function:

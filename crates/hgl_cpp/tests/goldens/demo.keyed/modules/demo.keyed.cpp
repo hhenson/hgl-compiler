@@ -396,7 +396,7 @@ namespace w_
 // price_of_a(book: dict<str, i64>) -> i64 (`const fn`), module demo.keyed, line 109
 ::hgraph::Int price_of_a([[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book)
 {
-    [[maybe_unused]] const ::std::optional<::hgraph::Int> found = ::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"A"});
+    [[maybe_unused]] const ::std::optional<::hgraph::Int> found = ::hglrt::result_or_null(::hglrt::get_dict_result<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"A"}));
     if ((!found.has_value()))
     {
         return ::hglrt::neg__i64(1);

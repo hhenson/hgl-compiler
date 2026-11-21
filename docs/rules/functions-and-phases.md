@@ -74,15 +74,16 @@ transpiler: planned
 
 ## FN-8
 
-parser: done
+parser: partial
 
-- Pack parameter forms
+- Reads pack parameters. The named pack declared for a function, including `without`, awaits #366.
 
 analyser: partial
 
 - Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration
 - Function and operator calls bind leftover positional and named arguments to their corresponding packs and check the known element type. The HIR keeps each argument's pack slot and position or source name.
-- Duplicate pack declarations await the pinned `pack.duplicate` diagnostic. [Compiler issue #336](https://github.com/hhenson/hgl-compiler/issues/336)
+- The analyser still accepts duplicate pack declarations. It does not yet report the pinned `pack.duplicate` code.
+- Binding a pack declared for a function awaits #366.
 
 transpiler: partial
 
@@ -148,7 +149,7 @@ analyser: partial
 - A value candidate of an operator may declare one too, and the candidate a call resolves to says which of its arguments are places (GEN-6); one of a temporal function, a temporal candidate or an operator, or of a capability's type or `endpoint<T>`, is `parameter.var`
 - It is not left out though its type is nullable (`argument.missing`)
 - A place is of the parameter's type exactly: one of a type the parameter's only admits, an `i64` place for an `i64?` parameter or a struct's for its abstract parent's, is `type.mismatch`
-- The call is held to what an assignment of the place is: a property of a native value or of a delta is `binding.immutable` (NATIVE-6, TYPE-16), and in a graph a `var` of an ordinary value in a branch selected at runtime is `binding.category` (CTRL-14) and one declared outside a loop that makes a child for each member `loop.carried` (CTRL-15)
+- The call is held to what an assignment of the place is: a property of a native value or of a delta is `binding.immutable` (NATIVE-6, TYPE-16), and in a graph a `var` of an ordinary value in a branch selected at runtime is `binding.category` (CTRL-14) and one declared outside a loop that still makes a child for each member local `loop.carried` (CTRL-15, #373)
 - Left: a native implementation part's `var` marks matched with its declaration's (NATIVE-2)
 
 transpiler: planned
@@ -169,5 +170,37 @@ analyser: partial
 - In a hook a `ref` parameter, a child of one and `out` of a `ref` result are endpoints: the endpoint operations take them, and a read of the value or the `delta_value` of any of them is `ref.read`, and so is the `removed_value` of a window that is a child of one; an atomic projection, an iteration, a comparison and a call that reads one among them
 - A `return` to a `ref` result, and `out =` of one, names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`, and so is a source's `yield` to a `ref` result: a source has no temporal input to name (TIME-7: "A `ref` result takes no value")
 - Left: a native implementation part's marks matched with its declaration's (NATIVE-2)
+
+transpiler: planned
+
+## FN-17
+
+parser: planned
+
+- #362 tracks function types in parameters and standalone references to generic functions. Named packs in function types await #366.
+
+analyser: planned
+
+- Callable argument checking, specialization and `function.argument` await #362.
+
+transpiler: planned
+
+## FN-18
+
+parser: planned
+
+- #363 tracks configuration parameter syntax, binding and writing.
+
+analyser: planned
+
+transpiler: planned
+
+## FN-19
+
+parser: planned
+
+- #368 tracks pack values read by key, built by loops and expanded at calls.
+
+analyser: planned
 
 transpiler: planned

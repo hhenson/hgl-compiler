@@ -41,7 +41,7 @@ use crate::runtime;
 
 /// The name of what says that the node's scheduler or alarm woke it in
 /// the evaluation, read as `eval` is entered (TIME-9).
-const TIMER_WOKE: &str = "timer_woke_";
+pub(super) const TIMER_WOKE: &str = "timer_woke_";
 
 /// The name of what says that one of the node's inputs woke it in the
 /// evaluation.

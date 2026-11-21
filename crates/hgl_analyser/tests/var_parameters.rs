@@ -360,7 +360,7 @@ fn a_call_that_assigns_a_place_is_held_to_what_an_assignment_is() {
             "m.hgl:17:10 name/binding.immutable TYPE-16",
             "m.hgl:32:14 type/binding.category CTRL-14",
             "m.hgl:33:14 type/binding.category CTRL-14",
-            "m.hgl:39:33 phase/loop.carried CTRL-15",
+            "m.hgl:39:33 local:phase/loop.carried CTRL-15",
         ]
     );
 }

@@ -27,7 +27,6 @@ use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind};
 use hgl_analyser::{ConstantValue, NamedKind, Type};
 
 use super::Emitter;
-use super::expressions::held_read;
 use super::forms::Family;
 use super::names;
 use super::nodes::{Kind, Role};
@@ -172,7 +171,7 @@ impl Emitter<'_> {
             // promises: where either runs statements, or both may fail, as
             // a list's element read has it (`expressions::held_read`), the
             // parent is held first.
-            Shape::Growing(_) | Shape::Fixed(..) if held_read(base, index) => {
+            Shape::Growing(_) | Shape::Fixed(..) if self.held_read(base, index) => {
                 let held = names::temporary("parent", self.temporary());
                 let at = names::temporary("index", self.temporary());
                 let index = self.expression(scope, index);
@@ -437,7 +436,7 @@ impl Family for Lists {
         // where either runs statements, or both may fail
         // (`expressions::held_read`), the port is held first, as C++
         // evaluates a call's arguments in no order it promises.
-        if held_read(base, index) {
+        if emitter.held_read(base, index) {
             let held = names::temporary("list", emitter.temporary());
             let at = names::temporary("index", emitter.temporary());
             let index = emitter.expression(scope, index);

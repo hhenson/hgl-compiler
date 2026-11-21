@@ -165,7 +165,7 @@ class Run {
     template <class V>
     [[nodiscard]] V get(std::string_view key) const {
         if (!executor_.has_value()) {
-            hglrt::detail::store_missing(key, std::source_location::current());
+            hglrt::raise(hglrt::detail::store_missing(key));
         }
         return get_GlobalState_str<V>(GlobalState{store()}, key);
     }

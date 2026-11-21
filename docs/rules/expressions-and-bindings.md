@@ -94,14 +94,15 @@ analyser: partial
 
 ## EXPR-10
 
-parser: done
+parser: partial
 
-- A named-entry brace directly after an operator is its configuration; an empty one rejected
+- A named-entry brace directly after a symbolic operator holds its configuration. The brace needs at least one entry.
+- Configuration after a callable name awaits #363.
 
 analyser: partial
 
 - In a value function, a hook and a graph, a symbol's configuration is bound as the named arguments of the call the symbol stands for: to the options its operator's candidates declare, a generic value parameter before a parameter; an unknown or a repeated entry, and one no candidate for the operands declares, rejected
-- Left: the Boolean connectives and `!`
+- Configuration on Boolean connectives and `!` is pending. Configuration after a callable name awaits #363.
 
 ## EXPR-11
 
@@ -139,6 +140,26 @@ transpiler: planned
 
 analyser: done
 
-- In a graph an assignment into a place of a `var` is read as one elsewhere is (EXPR-3), and is an assignment to the `var`: a connection stays one whatever its place is given, an ordinary value given a connection, indexed by one, or assigned in a branch selected at runtime is rejected (`binding.category`), and so is a `var` declared outside a loop that makes one child for each member (`loop.carried`)
+- In a graph an assignment into a place of a `var` is read as one elsewhere is (EXPR-3), and is an assignment to the `var`: a connection stays one whatever its place is given, an ordinary value given a connection, indexed by one, or assigned in a branch selected at runtime is rejected (`binding.category`), and so is a `var` declared outside a loop that makes one child for each member (local `loop.carried`, #373)
+
+transpiler: planned
+
+## EXPR-16
+
+parser: planned
+
+- #368 tracks ranges as a loop sequence in value code and in composition.
+
+analyser: planned
+
+transpiler: planned
+
+## EXPR-17
+
+parser: planned
+
+- #368 tracks lists built by loops in value code and in composition.
+
+analyser: planned
 
 transpiler: planned

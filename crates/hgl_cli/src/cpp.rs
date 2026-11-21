@@ -8,7 +8,7 @@
 //!    write all of as not run, with the first form it reaches that is
 //!    not written;
 //! 2. finds the toolchain (`sdk`): hgraph's C++ SDK and its
-//!    dependencies through `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS`, the
+//!    dependencies from the release bundle or `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS`, the
 //!    compiler, `ninja`; where one is missing every test that could run
 //!    is not run, with what is missing;
 //! 3. prepares the toolchain once and keeps it (`sdk`): the runtime

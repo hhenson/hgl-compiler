@@ -367,7 +367,10 @@ analyser: partial
 - A key written out is used with one type in a program: a `put` or a `get` of another type than an earlier use is `store.key_type` (TIME-8)
 - Left: the run's key, and a key, where it is a `const` parameter, which is known when the graph is built
 
-transpiler: planned
+transpiler: partial
+
+- C++ `get` returns the whole result to the recorded ERR-15 form.
+- Left: nullable store puts.
 
 ## CAP-7
 
@@ -507,3 +510,117 @@ runner: planned
 runner: planned
 
 - A failed run or a missing required recording fails the eval; neither is an empty result
+
+## MAP-1
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## MAP-2
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## MAP-3
+
+transpiler: planned
+
+- #369 and #370.
+
+## MAP-4
+
+transpiler: planned
+
+- #370.
+
+## MAP-5
+
+transpiler: planned
+
+- #370.
+
+## MAP-6
+
+transpiler: planned
+
+- #370.
+
+## MAP-7
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## MAP-8
+
+transpiler: planned
+
+- #370.
+
+## MAP-9
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## MAP-10
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## RED-1
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## RED-2
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## RED-3
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## RED-4
+
+transpiler: planned
+
+- #370.
+
+## RED-5
+
+transpiler: planned
+
+- #369 tracks fixed lists and #370 tracks native forms.
+
+## RED-6
+
+transpiler: planned
+
+- #369 and #370.
+
+## RED-7
+
+transpiler: planned
+
+- #367.
+
+## SET-1
+
+transpiler: planned
+
+- #370.
+
+## SET-2
+
+transpiler: planned
+
+- #370.

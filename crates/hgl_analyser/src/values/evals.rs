@@ -10,6 +10,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::expressions::written_null;
 use super::fit::open;
 use super::{BOOL, Called, Typer};
+use crate::declared::names_parameter;
 use crate::hir::{
     self, BinaryOperator, Body, Expr, ExprKind, Hook, LocalId, Run, Stmt, Value, ValueCategory,
 };
@@ -17,6 +18,32 @@ use crate::program::{DeclarationKind, LocalKind, RUN_CONFIG, Role, StoreStatemen
 use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{ConstantValue, Detail, NamedKind, Scalar, TraceStyle, Type};
 use crate::{codes, error};
+
+/// TST-5: an eval gives the publications of its input. A type that
+/// still names a generic parameter stands for its cells during inference.
+pub(super) fn trace_input_type(ty: Type) -> Type {
+    let cell = if names_parameter(&ty) || matches!(ty, Type::Unknown) {
+        ty
+    } else {
+        Type::trace_cell(ty)
+    };
+    Type::Trace {
+        cell: Box::new(cell),
+        style: None,
+    }
+}
+
+/// FN-8 and TST-5: a captured trace supplies a type for the pack element,
+/// while its cells supply the publications of that type (TYPE-16).
+pub(super) fn trace_pack_type(trace: &Type) -> Option<&Type> {
+    let Type::Trace { cell, .. } = trace else {
+        return None;
+    };
+    Some(match &**cell {
+        Type::Delta(payload) => payload,
+        publication => publication,
+    })
+}
 
 impl<'a> Typer<'a> {
     /// The block of a named test (TST-3): "A test is a block with

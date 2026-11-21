@@ -561,7 +561,7 @@ impl Emitter<'_> {
         // where either runs statements, or both may fail
         // (`expressions::held_read`), the port is held first, as C++
         // evaluates a call's arguments in no order it promises.
-        let held = super::expressions::held_read(base, index);
+        let held = self.held_read(base, index);
         let port = self.wiring_form(scope, base);
         let (steps, port) = if held {
             let kept = names::temporary("dictionary", self.temporary());

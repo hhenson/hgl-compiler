@@ -690,6 +690,12 @@ impl<'a> Typer<'a> {
                 }
                 Settled::Elsewhere => {}
                 Settled::Rejected(report) => {
+                    if report.code.as_str() == codes::OPERATOR_AMBIGUOUS
+                        && report.rule == Some("ERR-15")
+                    {
+                        self.diagnostics.emit(report);
+                        return (self.unselected(given, symbol.form), Type::Unknown);
+                    }
                     unsettled = report.notes;
                     selected.clear();
                 }
@@ -705,6 +711,10 @@ impl<'a> Typer<'a> {
         if selected.len() == 1
             && let Some(chosen) = selected.pop()
         {
+            if let Some(diagnostic) = self.ambiguous_result_reads(&chosen, symbol.at) {
+                self.diagnostics.emit(diagnostic);
+                return (self.unselected(given, symbol.form), Type::Unknown);
+            }
             return self.called(operator, chosen, given, (symbol.form, symbol.at));
         }
         // `i64` and `f64`, and after them what the configuration gives:

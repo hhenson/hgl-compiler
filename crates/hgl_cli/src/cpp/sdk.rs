@@ -4,11 +4,9 @@
 //! the runtime library, a description of how a generated unit is
 //! compiled and an executable linked, and a precompiled header.
 //!
-//! Where the SDK and its dependencies are is said by two environment
-//! variables and nothing else: no default could be any machine's but
-//! one. `HGL_HGRAPH_SDK` names the SDK's install prefix, the directory
-//! that holds `lib/cmake/hgraph`; `HGL_HGRAPH_DEPS` the prefix of the
-//! libraries the SDK was built against (fmt, spdlog and simdjson). The
+//! `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name the SDK's install
+//! prefix and its dependency prefix. Either can also come from the
+//! release's `libexec` alongside the resolved executable. The
 //! compiler is of the platform's family (`docs/cpp-target.md`): GCC 15
 //! or later on Linux, Apple clang 21 or later on macOS; the one `CXX`
 //! names, or else the first of the family's on the `PATH`. What the
@@ -268,17 +266,17 @@ pub(super) struct Description {
 }
 
 impl Toolchain {
-    /// The toolchain the environment names, or why there is none: a
-    /// variable missing or naming what is not there, or a program
-    /// that cannot be found.
+    /// The configured or bundled toolchain, or why it could not be used.
     pub(super) fn find() -> Result<Toolchain, String> {
         let sdk = prefix(
             SDK,
+            "hgraph-sdk",
             "the install prefix of hgraph's C++ SDK, the directory that holds `lib/cmake/hgraph`",
             &["lib/cmake/hgraph/hgraphConfig.cmake"],
         )?;
         let deps = prefix(
             DEPS,
+            "hgraph-deps",
             "the prefix of the libraries hgraph's C++ SDK was built against, which holds `include` and `lib`",
             &["include", "lib"],
         )?;
@@ -559,13 +557,28 @@ set_target_properties(hgl_probe PROPERTIES CXX_EXTENSIONS OFF)
 target_link_libraries(hgl_probe PRIVATE hglrt)
 "#;
 
-/// The directory a prefix variable `variable` names, which holds each
-/// of `holds`; or why it cannot be used, saying what it is to name.
-fn prefix(variable: &str, what: &str, holds: &[&str]) -> Result<PathBuf, String> {
-    let Some(named) = std::env::var_os(variable).filter(|named| !named.is_empty()) else {
-        return Err(format!("{variable} is not set: set it to {what}"));
+/// The prefix named by the variable or supplied beside the real executable.
+/// Each required file or directory in `holds` must be present.
+fn prefix(variable: &str, bundled: &str, what: &str, holds: &[&str]) -> Result<PathBuf, String> {
+    let valid = |path: &Path| holds.iter().all(|part| path.join(part).exists());
+    let Some(named) = std::env::var_os(variable) else {
+        return std::env::current_exe()
+            .and_then(fs::canonicalize)
+            .ok()
+            .and_then(|exe| Some(exe.parent()?.parent()?.join("libexec").join(bundled)))
+            .filter(|path| valid(path))
+            .ok_or_else(|| {
+                format!(
+                    "{variable} is not set and the executable has no bundled `../libexec/{bundled}`: set it to {what}"
+                )
+            });
     };
-    let path = PathBuf::from(&named);
+    if named.is_empty() {
+        return Err(format!(
+            "{variable} is empty: set it to {what} or unset it to use the bundle"
+        ));
+    }
+    let path = PathBuf::from(named);
     for part in holds {
         if !path.join(part).exists() {
             return Err(format!(
