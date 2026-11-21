@@ -77,6 +77,16 @@ impl Typer<'_> {
                     program.modules[module].declarations[index].kind
                         == crate::program::DeclarationKind::Operator
                 }) {
+                    if node.kind() == SyntaxKind::FunctionReference {
+                        self.diagnostics.emit(local_error(
+                            Category::Type,
+                            codes::local::FUNCTION_REFERENCE_UNREAD,
+                            self.at(node),
+                            "an operator with explicit generic arguments is not read as a function argument yet (compiler #362); give its bare name".to_string(),
+                            "FN-17",
+                        ));
+                        return None;
+                    }
                     return self.operator_target(
                         node,
                         &name,
@@ -330,10 +340,15 @@ impl Typer<'_> {
         };
         let graph = std::mem::replace(&mut self.graph, !template.value);
         let value_code = std::mem::replace(&mut self.value_code, false);
-        let hook = self.hook.take();
+        // A value callback written in a hook reads captures under that
+        // hook's admission. A temporal callback composes its own graph.
+        let outer_hook = self.hook;
+        if !template.value {
+            self.hook = None;
+        }
         let definition =
             self.anonymous_definition(node, parameters, result.as_ref(), !template.value);
-        self.hook = hook;
+        self.hook = outer_hook;
         self.value_code = value_code;
         self.graph = graph;
         let (mut body, captures) = definition?;

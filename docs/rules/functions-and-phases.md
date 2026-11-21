@@ -185,6 +185,7 @@ analyser: partial
 - Check the fixed template's phase, input names and input and result types. A value target may lift in a temporal template. An anonymous body's phase comes from the accepting template (FN-7).
 - Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on declared functions. Static parameters may be called or passed onward. They hold no runtime value.
 - The proposed restriction to plain fixed parameters is enforced. Parameter reflection and packs declared for a function await #366.
+- Operator references use the bare name. In the function body, named calls through a parameter use names the template writes. These readings await the owner's ruling in #362.
 
 transpiler: partial
 

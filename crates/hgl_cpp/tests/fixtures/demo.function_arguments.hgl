@@ -31,6 +31,16 @@ fn hooked(input: i64) -> i64 {
     }
 }
 
+fn guarded_hook(input: i64) -> i64 {
+    when valid([]) {
+        if valid(input) { return apply(fn(n) => n + input, 1) }
+    }
+}
+
+fn sample(f: const fn(i64) -> i64, const input: i64) -> i64 {
+    yield 1s: f(input)
+}
+
 fn map_graph(f: fn(i64) -> i64, input: i64) -> i64 => f(input)
 
 fn live_double(input: i64) -> i64 {
@@ -60,6 +70,19 @@ fn lifted_lambda(input: i64) -> i64 {
     return lift_value(fn(n) => n + offset, input)
 }
 
+const fn apply_optional(f: const fn(i64?) -> i64) -> i64 => f()
+
+fn apply_lifted(f: const fn(i64, i64?) -> i64, input: i64) -> i64 => f(input)
+
+fn apply_lifted_input(f: const fn(i64, i64?) -> i64, input: i64, extra: i64?) -> i64 =>
+    f(input, extra)
+
+fn optional_callbacks(input: i64) -> i64 =>
+    apply_lifted(fn(n, extra) => if extra == null { n + 1 } else { n + extra }, input)
+
+fn nullable_inputs(input: i64, extra: i64?) -> i64 =>
+    apply_lifted_input(fn(n, bias) => if bias == null { n + 1 } else { n + bias }, input, extra)
+
 test ordinary_callbacks {
     assert apply(increment) == 4
     assert apply(double<i64>, 4) == 8
@@ -69,6 +92,7 @@ test ordinary_callbacks {
     assert through_lambda(triple, 4) == 12
     assert via_capture(4) == 9
     assert transitive_capture(4) == 9
+    assert apply_optional(fn(n) => if n == null { 7 } else { n }) == 7
 }
 
 test temporal_callbacks {
@@ -77,8 +101,12 @@ test temporal_callbacks {
     assert eval map_graph(triple, input: [2, 3]) == [6, 9]
     assert eval apply(increment, input: [2, 3]) == [3, 4]
     assert eval hooked(input: [2, 3]) == [4, 5]
+    assert eval guarded_hook(input: [2, 3]) == [3, 4]
+    assert eval sample(increment, input: 10) == [1s: 11]
     assert eval live_lambda(input: [2, 3]) == [4, 6]
     assert eval live_capture(input: [2, 3], offset: [1, 2]) == [5, 8]
     assert eval conditional_capture(input: [2, 3], offset: [1, 2], choose: [true, false]) == [3, 3]
     assert eval lifted_lambda(input: [2, 3]) == [5, 6]
+    assert eval optional_callbacks(input: [2, 3]) == [3, 4]
+    assert eval nullable_inputs(input: [2, 3], extra: [_, 9]) == [3, 12]
 }

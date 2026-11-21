@@ -4429,6 +4429,11 @@ fn function_arguments_check_their_template() {
         "const fn wrong_lambda(x: i64) -> i64 => unnamed(fn(n) => temporal_callback(n), x)\n",
         "const fn plus_generic<const N: i64>(x: i64) -> i64 => x + N\n",
         "const fn unresolved_callback(x: i64) -> i64 => unnamed(plus_generic, x)\n",
+        "operator pick<T>(value: T) -> T\n",
+        "impl const fn pick(value: i64) -> i64 => value\n",
+        "impl const fn pick(value: str) -> str => value\n",
+        "const fn explicit_operator(x: i64) -> i64 => unnamed(pick<str>, x)\n",
+        "const fn missing_name(f: const fn(i64) -> i64) -> i64 => f(value: 4)\n",
     ));
     let codes: Vec<_> = checked
         .findings
@@ -4443,8 +4448,34 @@ fn function_arguments_check_their_template() {
             "type/type.mismatch",
             "type/function.argument",
             "function-kind/call.role",
-            "type/generic.unresolved"
+            "type/generic.unresolved",
+            "local:type/function.reference_unread",
+            "type/argument.missing",
+            "name/argument.unknown",
         ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FN-14 and TIME-4: a value callback reads the enclosing hook's
+/// input under the admission in effect where the callback is written.
+#[test]
+fn function_arguments_obey_node_admission() {
+    let checked = module(concat!(
+        "const fn one(f: const fn(i64) -> i64, n: i64) -> i64 => f(n)\n",
+        "fn unguarded(value: i64, probe: i64) -> i64 {\n",
+        "    when modified(probe) && valid([]) { return one(fn(n) => n + value, 0) }\n",
+        "}\n",
+        "fn guarded(value: i64) -> i64 {\n",
+        "    when valid([]) {\n",
+        "        if valid(value) { return one(fn(n) => n + value, 0) }\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:65 phase/payload.unguarded TIME-4"],
         "{}",
         checked.report,
     );
