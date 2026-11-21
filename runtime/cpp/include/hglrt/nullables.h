@@ -76,7 +76,6 @@ template <class T>
 struct hgraph::scalar_descriptor<std::optional<T>> {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta() {
-        static const std::string name = "hgl." + hglrt::type_name<std::optional<T>>();
-        return TypeRegistry::instance().register_scalar<std::optional<T>>(name);
+        return hglrt::detail::named_scalar_meta<std::optional<T>>();
     }
 };

@@ -29,7 +29,7 @@ using hglrt::i64;
 using hglrt::LogLevel;
 using namespace std::chrono_literals;
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
 // ---- The logger (CAP-2) ------------------------------------------------------
 

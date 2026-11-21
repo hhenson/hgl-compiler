@@ -7,6 +7,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdio>
 #include <cstdint>
 #include <exception>
 #include <string>
@@ -44,5 +45,11 @@ std::string described(const std::exception_ptr& failure);
 /// them: the runner ends a line at a line feed alone. The test host's and an
 /// application's host's (application.cpp) results are written so.
 std::string escaped(std::string_view text);
+
+/// Writes a full line, including any NUL in it, and flushes the result.
+inline bool write_results_line(std::FILE* results, std::string_view line) {
+    return std::fwrite(line.data(), 1, line.size(), results) == line.size() &&
+           std::fputc('\n', results) != EOF && std::fflush(results) == 0;
+}
 
 } // namespace hglrt::testing::detail

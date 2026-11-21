@@ -404,8 +404,7 @@ auto keyed_entry_delta_checked(const E& book, const keyed_detail::key_of_t<E>& k
     -> result<typename endpoint_read<keyed_detail::entry_schema_t<E>>::delta_type> {
     const auto entry = keyed_detail::entry_view(book, key);
     if (!entry.has_value()) {
-        return std::unexpected(make_error("the delta of an entry the dictionary does not hold is read",
-                                          std::string{codes::unset_read}));
+        return detail::unset_result("the delta of an entry the dictionary does not hold is read");
     }
     return fn_delta_value_checked(*entry);
 }
@@ -432,8 +431,7 @@ auto keyed_entry_result(const E& book, const keyed_detail::key_of_t<E>& key)
     -> result<typename keyed_form<keyed_detail::entry_schema_t<E>>::type> {
     const auto entry = keyed_detail::entry_view(book, key);
     if (!entry.has_value() || !entry->valid()) {
-        return std::unexpected(
-            make_error("an entry that is not valid is read", std::string{codes::unset_read}));
+        return detail::unset_result("an entry that is not valid is read");
     }
     return keyed_form<keyed_detail::entry_schema_t<E>>::read(*entry);
 }

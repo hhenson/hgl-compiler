@@ -23,7 +23,7 @@ using hglrt::list;
 using hglrt::testing::Dense;
 using namespace std::chrono_literals;
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
 /// `fn collect(reading: i64) -> rolling_window<i64, ...> { when { return
 /// reading } }`: each reading arrives at the window `W`.

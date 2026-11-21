@@ -31,11 +31,14 @@
 
 #include <hgraph/types/generated.h>
 
+#include <cstddef>
 #include <expected>
 #include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 namespace hglrt {
 
@@ -43,6 +46,39 @@ namespace hglrt {
 /// `In<"price", TS<i64>>` and for an `Out<TS<i64>>`.
 template <class E>
 using schema_of = typename std::remove_cvref_t<E>::schema;
+
+namespace detail {
+
+/// The child at `position`, as a connection with its own `schema` (TYPE-9,
+/// TIME-9). hgraph's equivalent projection lives in its full wiring front
+/// end; this needs only the generated-code interface.
+inline hgraph::WiringPortRef projected_child(const hgraph::WiringPortRef& whole, std::size_t position,
+                                            const hgraph::TSValueTypeMetaData* schema,
+                                            const char* unbound) {
+    const auto project = [position](std::vector<std::size_t> path) {
+        path.push_back(position);
+        return path;
+    };
+    switch (whole.source_kind()) {
+    case hgraph::WiringPortRef::SourceKind::Peered:
+        return hgraph::WiringPortRef::peered_source(whole.peered_node(), project(whole.peered_path()),
+                                                  schema, whole.peered_output_kind());
+    case hgraph::WiringPortRef::SourceKind::Structural:
+        return whole.structural_children().at(position);
+    case hgraph::WiringPortRef::SourceKind::Boundary:
+        return whole.projected_boundary_source(project(whole.boundary_path()), schema);
+    case hgraph::WiringPortRef::SourceKind::Delayed:
+        return whole.projected_delayed_source(project(whole.delayed_path()), schema);
+    case hgraph::WiringPortRef::SourceKind::Null:
+        return hgraph::WiringPortRef::null_source(schema);
+    case hgraph::WiringPortRef::SourceKind::Unbound:
+        break;
+    }
+    // ERR-1: an unbound connection is an internal fault.
+    throw std::logic_error(unbound);
+}
+
+} // namespace detail
 
 /// How an endpoint of the hgraph schema `Schema` is read where hgraph's own
 /// view does not say it as HGL has it: the extension point of the temporal
@@ -316,8 +352,7 @@ template <class E>
     requires requires(const E& endpoint) { endpoint_read<schema_of<E>>::delta(endpoint); }
 result<endpoint_delta_t<E>> fn_delta_value_checked(const E& endpoint) {
     if (!has_delta(endpoint)) {
-        return std::unexpected(make_error("the delta of an endpoint that has none in the cycle is read",
-                                          std::string{codes::unset_read}));
+        return detail::unset_result("the delta of an endpoint that has none in the cycle is read");
     }
     return endpoint_read<schema_of<E>>::delta(endpoint);
 }
