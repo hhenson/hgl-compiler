@@ -32,6 +32,7 @@ use hgl_lower::nodes::{Handler, Timer, is_input, is_out, required_inputs, subscr
 use super::Emitter;
 use super::forms::Family;
 use super::names::{self, identifier};
+use super::readers::{Reading, watches_failure};
 use super::statements::{Scope, statement_at};
 use super::values::INDENT;
 use crate::runtime;
@@ -44,6 +45,13 @@ pub(super) const IMPLEMENTATION: &str = "impl_";
 
 /// The name of the view of a node's result, `out` (TIME-7).
 pub(super) const OUT: &str = "out_";
+/// The bundle keeping a projected node's declared endpoint and its
+/// externally visible connection (ERR-15).
+pub(super) const RESULT_OUT: &str = "result_out_";
+/// The scalar that selects which connection the call takes (ERR-15).
+pub(super) const RESULT_FORM: &str = "result_form_";
+/// A scalar label that a source parameter name cannot match.
+const RESULT_FORM_LABEL: &str = "hgl.result.form";
 
 /// The name of the view of a node's state.
 pub(super) const STATE: &str = "state_";
@@ -64,6 +72,10 @@ pub(super) struct Context {
     /// The result of the node, where it has one: what a `return` and an
     /// `out =` publish (TIME-7).
     pub(super) result: Option<Type>,
+    /// A result published in one of the forms a call can take (ERR-15).
+    pub(super) result_forms: Option<ResultForms>,
+    /// Reads performed inside the handlers on physical input endpoints.
+    pub(super) input_reads: Vec<Reading>,
     /// The delta type when a source can yield both it and a whole value.
     pub(super) mixed_source_delta: Option<Type>,
     /// The nodes of a graph's lifted calls written so far, each a struct
@@ -89,11 +101,131 @@ impl Context {
             kind,
             roles: vec![Role::Plain; locals],
             result: None,
+            result_forms: None,
+            input_reads: Vec::new(),
             mixed_source_delta: None,
             lifted: Vec::new(),
             signature: None,
             timer: None,
             selected_empty: false,
+        }
+    }
+}
+
+/// The recorded form in which a temporal call exposes its result (ERR-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ResultForm {
+    /// Every outcome is published as data.
+    Whole,
+    /// Publish the success, or fail this node.
+    Value,
+    /// Publish the success, or publish a null for failure.
+    Nullable,
+}
+
+impl ResultForm {
+    /// The generated wiring function's distinguishing suffix.
+    pub(super) fn suffix(self) -> &'static str {
+        match self {
+            Self::Whole => "",
+            Self::Value => "_result_value_",
+            Self::Nullable => "_result_nullable_",
+        }
+    }
+
+    /// The bundle field exposed as the call's connection.
+    fn field(self) -> &'static str {
+        match self {
+            Self::Whole => "whole",
+            Self::Value => "success",
+            Self::Nullable => "nullable",
+        }
+    }
+
+    /// The mode held by the hgraph node's scalar configuration.
+    fn mode(self) -> u8 {
+        match self {
+            Self::Whole => 0,
+            Self::Value => 1,
+            Self::Nullable => 2,
+        }
+    }
+}
+
+/// The physical output bundle of a fallible node. The node reads its
+/// own `out` through the declared result endpoint, independent of the
+/// form the call exposes to its consumers.
+#[derive(Clone)]
+pub(super) struct ResultForms {
+    schema: String,
+    success: Option<Type>,
+    nullable: Option<Type>,
+}
+
+impl ResultForms {
+    /// Build the bundle for the forms supported by this target.
+    pub(super) fn of(emitter: &mut Emitter<'_>, result: &Type) -> Option<Self> {
+        let Type::Result { value, error } = result else {
+            return None;
+        };
+        if **error != Type::Error {
+            return None;
+        }
+        let whole = emitter.temporal_schema_of(result)?;
+        let success_schema = emitter.temporal_schema_of(value);
+        let nullable =
+            (!matches!(**value, Type::Nullable(_))).then(|| Type::Nullable(value.clone()));
+        let nullable_schema = nullable
+            .as_ref()
+            .and_then(|ty| emitter.temporal_schema_of(ty));
+        if success_schema.is_none() && nullable_schema.is_none() {
+            return None;
+        }
+        let fields = [
+            (ResultForm::Whole, Some(whole)),
+            (ResultForm::Value, success_schema.clone()),
+            (ResultForm::Nullable, nullable_schema.clone()),
+        ];
+        let fields = fields
+            .into_iter()
+            .filter_map(|(form, schema)| {
+                Some(format!(
+                    "::hgraph::Field<\"{}\", {}>",
+                    form.field(),
+                    schema?
+                ))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(Self {
+            schema: format!("::hgraph::UnNamedTSB<{fields}>"),
+            success: success_schema.map(|_| (**value).clone()),
+            nullable: nullable.filter(|_| nullable_schema.is_some()),
+        })
+    }
+
+    /// The output view for one projected form.
+    pub(super) fn view(form: ResultForm) -> String {
+        format!("{RESULT_OUT}.field<\"{}\">()", form.field())
+    }
+
+    /// The eval parameter carrying every result form.
+    pub(super) fn output_parameter(&self) -> String {
+        format!("::hgraph::Out<{}> {RESULT_OUT}", self.schema)
+    }
+
+    /// The eval parameter selecting the form this call takes.
+    pub(super) fn mode_parameter() -> String {
+        let label = names::string(RESULT_FORM_LABEL);
+        format!("::hgraph::Scalar<{label}, ::hgraph::Int> {RESULT_FORM}")
+    }
+
+    /// The wired field's position in the bundle schema.
+    fn index(&self, form: ResultForm) -> usize {
+        match form {
+            ResultForm::Whole => 0,
+            ResultForm::Value => 1,
+            ResultForm::Nullable => 1 + usize::from(self.success.is_some()),
         }
     }
 }
@@ -278,11 +410,63 @@ impl Emitter<'_> {
         body: &Body,
         shown: &str,
     ) {
+        self.node_with_inputs(index, instance, signature, body, shown, None);
+        let readers = self.readers;
+        for (number, reads) in readers
+            .declared(self.module, index, instance)
+            .iter()
+            .enumerate()
+        {
+            self.node_with_inputs(
+                index,
+                instance,
+                signature,
+                body,
+                shown,
+                Some((number, reads)),
+            );
+        }
+    }
+
+    /// Write the same node with its physical input schemas for one
+    /// call's recorded reader forms (ERR-12 and ERR-15).
+    fn node_with_inputs(
+        &mut self,
+        index: usize,
+        instance: Option<&str>,
+        signature: &Signature,
+        body: &Body,
+        shown: &str,
+        readers: Option<(usize, &[Reading])>,
+    ) {
         let program = self.program;
         let placed_at = program.modules[self.module].declarations[index].at;
         let mut context = Context::new(Kind::Hook(Hook::When), body.locals.len());
         context.result = signature.result.clone();
+        // FN-16: a reference result publishes a designation. Its
+        // contextual result form is read from the designated endpoint.
+        let forms = if signature.reference {
+            None
+        } else {
+            signature
+                .result
+                .as_ref()
+                .and_then(|ty| ResultForms::of(self, ty))
+        };
+        context.result_forms = forms.clone();
         context.signature = Some(signature.clone());
+        let mut physical = signature.clone();
+        let mut watched = Vec::new();
+        if let Some((_, reads)) = readers {
+            context.input_reads = reads.to_vec();
+            for read in reads {
+                physical.parameters[read.parameter].ty =
+                    super::lifting::reader_operand(&read.form).ty.clone();
+                if let Some(form) = watches_failure(&read.form) {
+                    watched.push((read.parameter, form));
+                }
+            }
+        }
         let mut inputs = Vec::new();
         for (local, role) in context.roles.iter_mut().enumerate() {
             if is_input(&body.locals, Some(signature), local) {
@@ -384,7 +568,9 @@ impl Emitter<'_> {
         // validity includes only requirements common to executable
         // handlers; other guards stay per-handler."
         let active = subscribed_inputs(&inputs, &running);
-        let valid = if running.is_empty() {
+        // ERR-15: a new Err can fail this node before any handler's
+        // admission is met. In these variants validity stays per handler.
+        let valid = if running.is_empty() || !watched.is_empty() {
             Vec::new()
         } else {
             required_inputs(&inputs, &running)
@@ -399,16 +585,37 @@ impl Emitter<'_> {
         // The node's parameters as hgraph's views, in the order of the
         // signature: the order `wire` gives them in; then the inputs it
         // follows the designations of.
-        let Some(mut parameters) = self.node_parameters(signature, body, &active, &valid) else {
+        let Some(mut parameters) = self.node_parameters(&physical, body, &active, &valid) else {
             return;
         };
         parameters.extend(designated.parameters());
-        let output = match &signature.result {
-            Some(result) => match self.endpoint_schema(result, signature.reference, placed_at) {
-                Some(schema) => Some(format!("::hgraph::Out<{schema}> {OUT}")),
-                None => return,
-            },
-            None => None,
+        let indent = INDENT.repeat(2);
+        let mut checks = String::new();
+        for &(local, form) in &watched {
+            let parameter = &physical.parameters[local];
+            let Some(schema) = self.temporal_schema(&parameter.ty, form.at) else {
+                return;
+            };
+            let view = format!("result_watch_{local}_");
+            // The extra subscription sees Err even if the HGL input is
+            // passive. A successful observation does not wake a handler.
+            parameters.push(format!(
+                "::hgraph::In<\"hgl.result.input.{local}\", {schema}, ::hgraph::InputValidity::Unchecked> {view}"
+            ));
+            checks.push_str(&self.check_result_tick(form, &view, &indent));
+        }
+        let output = if let Some(forms) = &forms {
+            Some(forms.output_parameter())
+        } else {
+            match &signature.result {
+                Some(result) => {
+                    match self.endpoint_schema(result, signature.reference, placed_at) {
+                        Some(schema) => Some(format!("::hgraph::Out<{schema}> {OUT}")),
+                        None => return,
+                    }
+                }
+                None => None,
+            }
         };
         // The one struct of the node's `state` and `cache` (TIME-6).
         let mut members = String::new();
@@ -424,7 +631,10 @@ impl Emitter<'_> {
         }
         members.push_str(&designated.members());
         let held = !states.is_empty() || designated.holds();
-        let placed = Placed::of(program, self.module, index, instance);
+        let mut placed = Placed::of(program, self.module, index, instance);
+        if let Some((number, _)) = readers {
+            placed.add_input_variant(number);
+        }
         let qualified = placed.qualified(program, self.module);
         let mut text = format!("// {shown}\nstruct {IMPLEMENTATION}\n{{\n");
         text.push_str(&format!(
@@ -494,7 +704,15 @@ impl Emitter<'_> {
         if let Some(output) = &output {
             hook.push(output.clone());
         }
-        let mut written = prologue(body, &states);
+        let mut written = checks;
+        written.push_str(&prologue(body, &states));
+        if forms.is_some() {
+            hook.push(ResultForms::mode_parameter());
+            let declared = ResultForms::view(ResultForm::Whole);
+            written.push_str(&format!(
+                "{INDENT}{INDENT}[[maybe_unused]] const auto {OUT} = {declared};\n"
+            ));
+        }
         let all: Vec<Stmt> = running
             .iter()
             .flat_map(|handler| {
@@ -516,8 +734,27 @@ impl Emitter<'_> {
             return;
         };
         written.push_str(&made);
-        written.push_str(&self.designation_prologue(&designated, body, &inputs, &active));
-        written.push_str(&super::scheduling::woken(&context, body, &inputs));
+        let woken = super::scheduling::woken(&context, body, &inputs);
+        let designation = self.designation_prologue(&designated, body, &inputs, &active);
+        if watched.is_empty() {
+            written.push_str(&designation);
+            written.push_str(&woken);
+        } else {
+            written.push_str(&woken);
+            let library = runtime::NAMESPACE;
+            let mut wakes = Vec::new();
+            if context.timer.is_some() {
+                wakes.push(super::scheduling::TIMER_WOKE.to_string());
+            }
+            for &local in &inputs {
+                let name = identifier(&body.locals[local].name);
+                wakes.push(format!(
+                    "(::{library}::fn_is_active({name}) && ::{library}::ticked({name}))"
+                ));
+            }
+            written.push_str(&format!("{indent}if (!({})) return;\n", wakes.join(" || ")));
+            written.push_str(&designation);
+        }
         context.kind = Kind::Hook(Hook::When);
         let mut handlers = String::new();
         for (handler, at) in running.iter().zip(&places) {
@@ -559,12 +796,19 @@ impl Emitter<'_> {
             if held {
                 hook.push(state_parameter.clone());
             }
+            let reads_output = reads_out(&context, statements);
             if let Some(output) = &output
-                && reads_out(&context, statements)
+                && reads_output
             {
                 hook.push(output.clone());
             }
             let mut written = prologue(body, &states);
+            if forms.is_some() && reads_output {
+                let declared = ResultForms::view(ResultForm::Whole);
+                written.push_str(&format!(
+                    "{INDENT}{INDENT}[[maybe_unused]] const auto {OUT} = {declared};\n"
+                ));
+            }
             let Some(made) =
                 self.capabilities(body, &injected, &[], statements, Hook::Stop, &mut hook)
             else {
@@ -584,25 +828,29 @@ impl Emitter<'_> {
         text.push_str("};\n");
         let mut whole = nested(&placed.structs, &text);
         if held {
+            let registered = match readers {
+                Some((number, _)) => format!(
+                    "{}.state.reader{number}",
+                    placed.display(program, self.module)
+                ),
+                None => format!("{}.state", placed.display(program, self.module)),
+            };
             whole.push_str(&registration(
                 program,
                 self.module,
                 &format!("{qualified}::state_type_"),
-                &format!("{}.state", placed.display(program, self.module)),
+                &registered,
             ));
         }
-        let Some((prototype, wiring)) = self.wiring_function(
-            signature,
-            &placed,
-            shown,
-            &format!("::hgraph::wire<{qualified}>"),
-            body,
-        ) else {
+        let watched: Vec<usize> = watched.iter().map(|&(local, _)| local).collect();
+        let Some((prototype, wiring)) =
+            self.node_wiring(&physical, &placed, shown, body, forms.as_ref(), &watched)
+        else {
             return;
         };
         whole.push_str(&wiring);
-        self.piece.declaration = prototype;
-        self.piece.text = whole;
+        self.piece.declaration.push_str(&prototype);
+        self.piece.text.push_str(&whole);
     }
 
     /// The parameters of a node's `eval`, in the order of `signature`:
@@ -839,6 +1087,70 @@ impl Emitter<'_> {
         wired: &str,
         body: &Body,
     ) -> Option<(String, String)> {
+        self.wiring_function_in_form(signature, placed, shown, body, (wired, None), &[])
+    }
+
+    /// Write the ordinary wiring function and the available result
+    /// projections for a node or a source (ERR-15).
+    pub(super) fn node_wiring(
+        &mut self,
+        signature: &Signature,
+        placed: &Placed,
+        shown: &str,
+        body: &Body,
+        forms: Option<&ResultForms>,
+        watched: &[usize],
+    ) -> Option<(String, String)> {
+        let qualified = placed.qualified(self.program, self.module);
+        let wired = format!("::hgraph::wire<{qualified}>");
+        let (mut declarations, mut definitions) = self.wiring_function_in_form(
+            signature,
+            placed,
+            shown,
+            body,
+            (&wired, forms.map(|forms| (forms, ResultForm::Whole))),
+            watched,
+        )?;
+        if let Some(forms) = forms {
+            for (form, ty) in [
+                (ResultForm::Value, &forms.success),
+                (ResultForm::Nullable, &forms.nullable),
+            ] {
+                let Some(ty) = ty else {
+                    continue;
+                };
+                let mut selected = placed.clone();
+                selected.name.push_str(form.suffix());
+                let signature = Signature {
+                    result: Some(ty.clone()),
+                    ..signature.clone()
+                };
+                let (declaration, definition) = self.wiring_function_in_form(
+                    &signature,
+                    &selected,
+                    shown,
+                    body,
+                    (&wired, Some((forms, form))),
+                    watched,
+                )?;
+                declarations.push_str(&declaration);
+                definitions.push_str(&definition);
+            }
+        }
+        Some((declarations, definitions))
+    }
+
+    /// The wiring function that selects an output field of a fallible
+    /// node, or wires a function with an ordinary output.
+    fn wiring_function_in_form(
+        &mut self,
+        signature: &Signature,
+        placed: &Placed,
+        shown: &str,
+        body: &Body,
+        (wired, form): (&str, Option<(&ResultForms, ResultForm)>),
+        watched: &[usize],
+    ) -> Option<(String, String)> {
         let program = self.program;
         let mut parameters = vec![format!("::hgraph::Wiring& {}", super::graphs::WIRING)];
         let mut given = vec![super::graphs::WIRING.to_string()];
@@ -874,6 +1186,16 @@ impl Emitter<'_> {
             wired_arguments.push((None, port.clone()));
             given.push(port);
         }
+        for &local in watched {
+            let port = identifier(&body.locals[local].name);
+            wired_arguments.push((None, port.clone()));
+            given.push(port);
+        }
+        if let Some((_, form)) = form {
+            let mode = format!("::hgraph::Int{{{}}}", form.mode());
+            wired_arguments.push((Some(RESULT_FORM_LABEL.to_string()), mode.clone()));
+            given.push(mode);
+        }
         let schema = match &signature.result {
             Some(result) => Some(self.temporal_schema(result, placed.at)?),
             None => None,
@@ -901,9 +1223,18 @@ impl Emitter<'_> {
             .and_then(|node| node.strip_suffix('>'))
         {
             Some(node) if configured.iter().any(|ty| holds_f64(program, ty, 0)) => {
-                unique(node, schema.as_deref(), &wired_arguments)
+                let node_schema =
+                    form.map_or(schema.as_deref(), |(forms, _)| Some(forms.schema.as_str()));
+                unique(node, node_schema, &wired_arguments)
             }
             _ => format!("{wired}({})", given.join(", ")),
+        };
+        let called = match form {
+            Some((forms, form)) => {
+                let index = forms.index(form);
+                format!("::{}::field_port<{index}>({called})", runtime::NAMESPACE)
+            }
+            None => called,
         };
         // FN-16: "a `ref` result is a connection of T to whoever reads it".
         let called = self.result_port(signature, schema.as_deref(), called);
@@ -913,6 +1244,75 @@ impl Emitter<'_> {
             &format!("// {shown}\n{prototype}\n{{\n{INDENT}{gives}{called};\n}}\n"),
         );
         Some((declaration, definition))
+    }
+
+    /// Publish one value in the form the call takes. A failure first
+    /// raises in this node, before any success output (ERR-5, ERR-15).
+    pub(super) fn publish_result(
+        &mut self,
+        ty: &Type,
+        value: &str,
+        at: Location,
+        indent: &str,
+    ) -> String {
+        let Some(forms) = self
+            .temporal
+            .as_ref()
+            .and_then(|context| context.result_forms.clone())
+        else {
+            return format!("{indent}{}\n", self.temporal_publish(ty, OUT, value, at));
+        };
+        let held = names::temporary("outcome", self.temporary());
+        let raw = self.temporal_publish(ty, OUT, &held, at);
+        let mut text = format!("{indent}const auto {held} = {value};\n");
+        for (form, ty) in [
+            (ResultForm::Value, forms.success),
+            (ResultForm::Nullable, forms.nullable),
+        ] {
+            let Some(ty) = ty else {
+                continue;
+            };
+            let value = match form {
+                ResultForm::Value => {
+                    self.result_value(hgl_analyser::hir::Raise::CallNode, &held, at)
+                }
+                ResultForm::Nullable => format!("::{}::result_or_null({held})", runtime::NAMESPACE),
+                ResultForm::Whole => unreachable!(),
+            };
+            let saved = names::temporary("published", self.temporary());
+            let view = ResultForms::view(form);
+            let publish = self.temporal_publish(&ty, &view, &saved, at);
+            let mode = form.mode();
+            text.push_str(&format!(
+                "{indent}if ({RESULT_FORM}.value() == {mode})\n{indent}{{\n\
+                 {indent}{INDENT}const auto {saved} = {value};\n\
+                 {indent}{INDENT}{raw}\n{indent}{INDENT}{publish}\n{indent}}}\n{indent}else\n"
+            ));
+        }
+        text.push_str(&format!("{indent}{{\n{indent}{INDENT}{raw}\n{indent}}}\n"));
+        text
+    }
+
+    /// Invalidate the declared output and the field exposed to the
+    /// consumer, when the output has contextual result forms (END-4).
+    pub(super) fn invalidate_result(&self) -> Option<String> {
+        let forms = self.temporal.as_ref()?.result_forms.as_ref()?;
+        let invalidate = format!("::{}::fn_invalidate", runtime::NAMESPACE);
+        let mut text = format!("[&] {{ {invalidate}({OUT});");
+        for (form, projected) in [
+            (ResultForm::Value, &forms.success),
+            (ResultForm::Nullable, &forms.nullable),
+        ] {
+            if projected.is_some() {
+                let view = ResultForms::view(form);
+                let mode = form.mode();
+                text.push_str(&format!(
+                    " if ({RESULT_FORM}.value() == {mode}) {{ {invalidate}({view}); }}"
+                ));
+            }
+        }
+        text.push_str(" }()");
+        Some(text)
     }
 }
 
@@ -1103,6 +1503,7 @@ pub(super) fn registration(
 /// Where a temporal function, or an instance of one, is written: its
 /// struct is [`IMPLEMENTATION`] in the namespace `structs` under the
 /// module's, and its wiring function `name` in `wiring`.
+#[derive(Clone)]
 pub(super) struct Placed {
     /// The namespace of its struct, under the module's, named as the
     /// function: `n_::count`, or `n_::i_::record::of_i64` for an
@@ -1122,6 +1523,14 @@ pub(super) struct Placed {
 }
 
 impl Placed {
+    /// Distinguish a physical reader variant without changing the
+    /// node identity that a failure reports (ERR-4, ERR-15).
+    pub(super) fn add_input_variant(&mut self, number: usize) {
+        let suffix = format!("_read_{number}_");
+        self.name.push_str(&suffix);
+        self.structs.push_str(&suffix);
+    }
+
     /// Where the temporal function `declaration` of `module`, or its
     /// instance `instance`, is written. `n_` and `w_` have the form the
     /// target's own names have, which no HGL name gives (`names`).
@@ -1214,8 +1623,8 @@ impl Family for Nodes {
                     return true;
                 };
                 let written = emitter.expression(scope, value);
-                let published = emitter.temporal_publish(&result, OUT, &written, *at);
-                text.push_str(&format!("{indent}{published}\n{indent}return;\n"));
+                text.push_str(&emitter.publish_result(&result, &written, *at, &indent));
+                text.push_str(&format!("{indent}return;\n"));
                 true
             }
             // TIME-7: `out = value` publishes, and the evaluation goes on.
@@ -1234,8 +1643,7 @@ impl Family for Nodes {
                     return true;
                 };
                 let written = emitter.expression(scope, value);
-                let published = emitter.temporal_publish(&result, OUT, &written, *at);
-                text.push_str(&format!("{indent}{published}\n"));
+                text.push_str(&emitter.publish_result(&result, &written, *at, &indent));
                 true
             }
             // TIME-7: "admitted piecewise mutation" of `out` is the

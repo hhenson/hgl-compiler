@@ -20,7 +20,10 @@ use hgl_analyser::{Signature, Type};
 use super::Emitter;
 use super::forms::Family;
 use super::names::{self, identifier};
-use super::nodes::{Context, IMPLEMENTATION, Kind, OUT, Placed, nested, registration};
+use super::nodes::{
+    Context, IMPLEMENTATION, Kind, OUT, Placed, RESULT_FORM, RESULT_OUT, ResultForm, ResultForms,
+    nested, registration,
+};
 use super::statements::Scope;
 use super::values::INDENT;
 use crate::runtime;
@@ -164,6 +167,8 @@ impl Emitter<'_> {
         }
         let mut context = Context::new(Kind::Source, body.locals.len());
         context.result = Some(result.clone());
+        let forms = ResultForms::of(self, result);
+        context.result_forms = forms.clone();
         context.mixed_source_delta = mixed.then_some(delta);
         let mut scope = Scope::cold(program, body);
         let mut statements = hooked.prologue.clone();
@@ -175,7 +180,15 @@ impl Emitter<'_> {
         let published = self.temporal_publish(result, OUT, "value_", at);
         // TIME-7: publish each yield in the form it had in the body. The
         // endpoint's normal whole/delta overloads apply the change.
-        let publish = if mixed {
+        let publish = if forms.is_some() {
+            let mut written = String::new();
+            self.in_context(&mut context, |emitter| {
+                written = emitter.publish_result(result, "value_", at, &INDENT.repeat(4));
+            });
+            format!(
+                "[&{OUT}, &{RESULT_OUT}, &{RESULT_FORM}]({payload} value_) {{\n{written}{INDENT}{INDENT}{INDENT}}}"
+            )
+        } else if mixed {
             format!(
                 "[&{OUT}]({payload} publication_) {{ \
                  ::std::visit([&{OUT}](const auto& value_) {{ {published} }}, publication_); }}"
@@ -195,7 +208,15 @@ impl Emitter<'_> {
         eval.push(state.clone());
         eval.push("::hgraph::DateTime now_".to_string());
         eval.push("::hgraph::NodeScheduler scheduler_".to_string());
-        eval.push(format!("::hgraph::Out<{schema}> {OUT}"));
+        let output = if let Some(forms) = &forms {
+            eval.push(forms.output_parameter());
+            eval.push(ResultForms::mode_parameter());
+            let declared = ResultForms::view(ResultForm::Whole);
+            format!("{INDENT}{INDENT}const auto {OUT} = {declared};\n")
+        } else {
+            eval.push(format!("::hgraph::Out<{schema}> {OUT}"));
+            String::new()
+        };
         eval.extend(hooked.eval_parameters.iter().cloned());
         let mut stop = vec![state.clone()];
         stop.extend(hooked.stop_parameters.iter().cloned());
@@ -231,6 +252,7 @@ impl Emitter<'_> {
              {INDENT}static void eval({eval})\n{INDENT}{{\n\
              {INDENT}{INDENT}state_type_& kept_ = state_.modify();\n\
              {eval_before}\
+             {output}\
              {INDENT}{INDENT}::{library}::resume(\n\
              {INDENT}{INDENT}{INDENT}kept_.source_, now_, scheduler_,\n\
              {INDENT}{INDENT}{INDENT}[&kept_]() -> ::std::optional<yielded_type_> {{\n\
@@ -278,13 +300,9 @@ impl Emitter<'_> {
             &format!("{qualified}::state_type_"),
             &format!("{}.state", placed.display(program, self.module)),
         ));
-        let Some((prototype, wiring)) = self.wiring_function(
-            signature,
-            &placed,
-            shown,
-            &format!("::hgraph::wire<{qualified}>"),
-            body,
-        ) else {
+        let Some((prototype, wiring)) =
+            self.node_wiring(signature, &placed, shown, body, forms.as_ref(), &[])
+        else {
             return;
         };
         whole.push_str(&wiring);

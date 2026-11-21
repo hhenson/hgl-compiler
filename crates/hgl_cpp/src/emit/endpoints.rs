@@ -310,7 +310,9 @@ fn endpoint(
             if views.len() == 1 && emitter.role(named[0]) == Role::Out =>
         {
             scope.acted = true;
-            native("fn_invalidate", &views[0])
+            emitter
+                .invalidate_result()
+                .unwrap_or_else(|| native("fn_invalidate", &views[0]))
         }
         _ => emitter.missing(value.at, &format!("`{}` here", operation.name())),
     }
@@ -343,6 +345,27 @@ impl Emitter<'_> {
             },
             _ => locals[local].ty.clone(),
         };
+        if let Some(form) = self.input_reader(local).cloned() {
+            let underlying = super::lifting::reader_operand(&form);
+            let value = self.temporal_read(&underlying.ty, &view, at);
+            let value = self.apply_reader_chain(&form, &value);
+            let delta = Type::delta(ty);
+            let Some(written) = self.written_type(&delta, at) else {
+                return "0".to_string();
+            };
+            let library = runtime::NAMESPACE;
+            let missing = "\"the delta of an endpoint that has none in the cycle is read\"";
+            let held = format!("{written}{{{value}}}");
+            return if checked {
+                format!(
+                    "[&]() -> ::{library}::result<{written}> {{ if (!::{library}::has_delta({view})) return ::std::unexpected(::{library}::make_error({missing}, ::std::string{{::{library}::codes::unset_read}})); return {held}; }}()"
+                )
+            } else {
+                format!(
+                    "[&]() -> {written} {{ if (!::{library}::has_delta({view})) ::{library}::unset_read({missing}); return {held}; }}()"
+                )
+            };
+        }
         self.temporal_delta(&ty, &view, checked, at)
     }
 }
