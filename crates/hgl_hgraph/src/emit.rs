@@ -1046,6 +1046,27 @@ impl<'a> Emitter<'a> {
                 _ => None,
             })
             .unwrap_or(&[]);
+        // UNIT-14: each statement "is evaluated once, in the order
+        // written". The configuration is given to the harness's run, and
+        // the store's statements run inside it: a `put` written before
+        // an `inject run_config{...}` would be evaluated after it, which
+        // this target does not write.
+        if let Some(body) = &module.store_body
+            && !config.is_empty()
+        {
+            let placed = body.statements.iter().position(|statement| {
+                matches!(statement, Stmt::Inject { local, .. }
+                    if body.locals[*local].name == RUN_CONFIG)
+            });
+            if let Some(placed) = placed
+                && let Some(Stmt::Inject { at, .. }) = body.statements.get(placed)
+                && body.statements[..placed]
+                    .iter()
+                    .any(|statement| !matches!(statement, Stmt::Inject { .. }))
+            {
+                self.unsupported(*at, "an `inject run_config{...}` after a `put`");
+            }
+        }
         // UNIT-14: "Between its declarations and its run statement it
         // may ... set the run's store: `inject global_state`, and then
         // calls of `put` on it. Each is evaluated once, in the order
