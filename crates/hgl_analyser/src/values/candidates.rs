@@ -24,6 +24,22 @@ use crate::types::{
 };
 use crate::{codes, error};
 
+/// The forms considered for operands at one literal precision (ERR-12,
+/// ERR-15, GEN-5).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArgumentForms {
+    /// Each argument as it is.
+    Whole,
+    /// Take a form when its parameter's type calls for one.
+    Contextual,
+    /// Also infer an open parameter from a payload when whole matching
+    /// did not admit a candidate.
+    Payload,
+    /// A fallible nullable payload can meet a non-nullable parameter
+    /// by reading its success and then reading the nullable (ERR-12).
+    RequiredPayload,
+}
+
 impl<'a> Typer<'a> {
     /// The candidates of `operator` that admit a call, the most
     /// specific of them (GEN-5), and whether one could not be told to
@@ -48,17 +64,39 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
     ) -> (Vec<Chosen<'a>>, bool) {
-        let (selected, untold, fits) = self.admitted_as(operator, candidates, given, wanted, false);
-        if fits
-            || !given.iter().any(|argument| {
-                !argument.by_place
-                    && matches!(argument.value.ty, Type::Result { .. } | Type::Nullable(_))
-            })
-        {
-            return (selected, untold);
+        let has_forms = given.iter().any(|argument| {
+            !argument.by_place
+                && matches!(argument.value.ty, Type::Result { .. } | Type::Nullable(_))
+        });
+        let forms = if has_forms {
+            &[
+                ArgumentForms::Whole,
+                ArgumentForms::Contextual,
+                ArgumentForms::Payload,
+                ArgumentForms::RequiredPayload,
+            ][..]
+        } else {
+            &[ArgumentForms::Whole][..]
+        };
+        let mut untold = false;
+        for widening in [false, true] {
+            let mut fits = false;
+            for &form in forms {
+                let (selected, unknown, takes_types) =
+                    self.admitted_as(operator, candidates, given, wanted, widening, form);
+                if !selected.is_empty() || unknown && takes_types {
+                    return (selected, unknown);
+                }
+                untold |= unknown;
+                fits |= takes_types;
+            }
+            // GEN-5: at this precision, a type fit decides whether to
+            // widen literals, even if the candidate's condition fails.
+            if fits {
+                break;
+            }
         }
-        let (selected, untold, _) = self.admitted_as(operator, candidates, given, wanted, true);
-        (selected, untold)
+        (Vec::new(), untold)
     }
 
     /// [`Typer::admitted`], with the arguments `given` of the types they
@@ -71,7 +109,8 @@ impl<'a> Typer<'a> {
         candidates: &[(usize, usize, &'a Signature)],
         given: &[Given],
         wanted: &Wanted,
-        converting: bool,
+        widening: bool,
+        forms: ArgumentForms,
     ) -> (Vec<Chosen<'a>>, bool, bool) {
         let program = self.program;
         let operator_declaration =
@@ -87,96 +126,81 @@ impl<'a> Typer<'a> {
         // The candidates whose condition is not told: one a candidate that
         // admits the call outranks leaves the selection as it is.
         let mut not_told: Vec<Chosen> = Vec::new();
-        // True when the candidates were tried with integer literals
-        // widened.
-        let mut widened = false;
-        // True when a candidate takes the call by its types.
-        let mut any_fits = false;
-        for widening in [false, true] {
-            // True when a candidate takes the call by its result and
-            // parameter types, whatever its condition says.
-            let mut fits = false;
-            for &(module, declaration, signature) in candidates {
-                let candidate = &program.modules[module].declarations[declaration];
-                // The candidate as this call takes it: its generic
-                // parameters resolved (GEN-2).
-                let widens = |decided: &Type, later: &Type| self.widens(decided, later);
-                let defaults =
-                    |generic: &GenericParameter| self.default_constant(candidate, generic);
-                let constant = |node: &SyntaxNode, ty: Option<&Type>| self.given_constant(node, ty);
-                let Some((taken, generics, defaulted)) = instance(
-                    signature,
-                    public,
-                    given,
-                    wanted,
-                    (&widens, &defaults, &constant, converting.then_some(self)),
-                ) else {
+        let converting = forms != ArgumentForms::Whole;
+        let mut fits = false;
+        for &(module, declaration, signature) in candidates {
+            let candidate = &program.modules[module].declarations[declaration];
+            // The candidate as this call takes it: its generic
+            // parameters resolved (GEN-2).
+            let widens = |decided: &Type, later: &Type| self.widens(decided, later);
+            let defaults = |generic: &GenericParameter| self.default_constant(candidate, generic);
+            let constant = |node: &SyntaxNode, ty: Option<&Type>| self.given_constant(node, ty);
+            let Some((taken, generics, defaulted)) = instance(
+                signature,
+                public,
+                given,
+                wanted,
+                (
+                    &widens,
+                    &defaults,
+                    &constant,
+                    converting.then_some((self, forms)),
+                ),
+            ) else {
+                continue;
+            };
+            // GEN-13: a generic value parameter has an ordinary
+            // type, and the default it takes is of that type as
+            // this call resolves it: the `2` of
+            // `<T, const fallback: T = 2>` is no `str`. A default
+            // that is not of the type as it is declared is reported
+            // there, and a call that takes it is not judged
+            // (ERR-9).
+            let unfit = defaulted.iter().find_map(|&index| {
+                let default = generic_default(&candidate.syntax, &signature.generics[index])?;
+                let (GenericKind::Value(resolved), GenericKind::Value(declared)) =
+                    (&taken.generics[index].kind, &signature.generics[index].kind)
+                else {
+                    return None;
+                };
+                // Read as a value of each type, as it would be read
+                // there (EXPR-5): `9007199254740993 + 0` of an
+                // `f64` is that `f64`.
+                let fits = |ty: &Type| {
+                    self.typed_in(candidate.at.file, &default, Some(ty))
+                        .and_then(|read| crate::constant::fit(read, Some(ty), program))
+                        .is_ok()
+                };
+                (whole(resolved) && !fits(resolved)).then(|| !fits(declared))
+            });
+            match unfit {
+                Some(true) => {
+                    untold = true;
                     continue;
-                };
-                // GEN-13: a generic value parameter has an ordinary
-                // type, and the default it takes is of that type as
-                // this call resolves it: the `2` of
-                // `<T, const fallback: T = 2>` is no `str`. A default
-                // that is not of the type as it is declared is reported
-                // there, and a call that takes it is not judged
-                // (ERR-9).
-                let unfit = defaulted.iter().find_map(|&index| {
-                    let default = generic_default(&candidate.syntax, &signature.generics[index])?;
-                    let (GenericKind::Value(resolved), GenericKind::Value(declared)) =
-                        (&taken.generics[index].kind, &signature.generics[index].kind)
-                    else {
-                        return None;
-                    };
-                    // Read as a value of each type, as it would be read
-                    // there (EXPR-5): `9007199254740993 + 0` of an
-                    // `f64` is that `f64`.
-                    let fits = |ty: &Type| {
-                        self.typed_in(candidate.at.file, &default, Some(ty))
-                            .and_then(|read| crate::constant::fit(read, Some(ty), program))
-                            .is_ok()
-                    };
-                    (whole(resolved) && !fits(resolved)).then(|| !fits(declared))
-                });
-                match unfit {
-                    Some(true) => {
-                        untold = true;
-                        continue;
-                    }
-                    Some(false) => continue,
-                    None => {}
                 }
-                let admits = self.admits_call(
-                    (candidate, &taken),
-                    (operator_declaration, public),
-                    (module, &generics),
-                    (given, wanted),
-                    widening,
-                    converting,
-                );
-                fits |= admits != Admits::Misfit;
-                let chosen = Chosen {
-                    module,
-                    declaration,
-                    declared: signature,
-                    taken,
-                    generics,
-                };
-                match admits {
-                    Admits::Yes => selected.push(chosen),
-                    Admits::No | Admits::Misfit => {}
-                    Admits::Unknown => not_told.push(chosen),
-                }
+                Some(false) => continue,
+                None => {}
             }
-            // GEN-5: "Whether a literal is widened is settled by the
-            // candidates' result and parameter types, before their
-            // conditions: where a candidate that gives the requested
-            // output takes every integer literal as an `i64`, none is
-            // widened, and the conditions select among the candidates
-            // that do. An option so does not change what a literal is."
-            if fits {
-                widened = widening;
-                any_fits = true;
-                break;
+            let admits = self.admits_call(
+                (candidate, &taken),
+                (operator_declaration, public),
+                (module, &generics),
+                (given, wanted),
+                widening,
+                converting,
+            );
+            fits |= admits != Admits::Misfit;
+            let chosen = Chosen {
+                module,
+                declaration,
+                declared: signature,
+                taken,
+                generics,
+            };
+            match admits {
+                Admits::Yes => selected.push(chosen),
+                Admits::No | Admits::Misfit => {}
+                Admits::Unknown => not_told.push(chosen),
             }
         }
         // GEN-5: "Select exactly one most-specific admitted candidate.
@@ -195,7 +219,7 @@ impl<'a> Typer<'a> {
                 .iter()
                 .any(|admitted| outranks(admitted, unknown, own))
         });
-        if widened && selected.len() > 1 {
+        if widening && selected.len() > 1 {
             Self::prefer_widened(&mut selected, public, given);
         }
         // GEN-5: in composition "a temporal candidate outranks a value
@@ -238,7 +262,7 @@ impl<'a> Typer<'a> {
                 !outranked[position - 1]
             });
         }
-        (selected, untold, any_fits)
+        (selected, untold, fits)
     }
 
     /// GEN-5: "Among candidates that tie and differ only in which
@@ -483,9 +507,11 @@ impl<'a> Typer<'a> {
             // keeps a `T` a value of a `T?` (TYPE-14). GEN-5: "A
             // candidate that gives `result<T, error>` meets a requested T
             // or `T?` as one that gives T does, and its call takes the
-            // form the place expects (ERR-15)".
+            // form the place expects (ERR-15)". A nullable result meets
+            // the requested payload under ERR-12 (hhenson/hgl_spec#182).
             (Some(wanted), Some(result)) => {
                 self.admits(wanted, result)
+                    || matches!(result, Type::Nullable(_)) && self.taken(wanted, result).is_some()
                     || matches!(result, Type::Result { error, .. } if **error == Type::Error)
                         && self.taken(wanted, result).is_some()
             }
@@ -1453,7 +1479,7 @@ pub(super) struct Wanted<'w> {
     pub(super) among: Option<Vec<Type>>,
     /// True where `place` is the type the call writes for an operator's
     /// result that is its type parameter and nothing more, which a
-    /// candidate is given whole (GEN-8; see `asked_of_result`).
+    /// candidate is given whole (GEN-8; see `infer_from_place`).
     pub(super) written: bool,
 }
 
@@ -1567,7 +1593,7 @@ fn instance<'s>(
         &dyn Fn(&Type, &Type) -> bool,
         &dyn Fn(&GenericParameter) -> Option<Constant>,
         &dyn Fn(&SyntaxNode, Option<&Type>) -> Result<ConstantValue, Fault>,
-        Option<&Typer<'_>>,
+        Option<(&Typer<'_>, ArgumentForms)>,
     ),
 ) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>, Vec<usize>)> {
     let generics = &signature.generics;
@@ -1603,10 +1629,15 @@ fn instance<'s>(
     // GEN-5: "Match candidates against the requested output before
     // inputs". The `V` of core's `get<V>(store: GlobalState, const key:
     // str) -> V` is the `i64?` that `get<i64?>(global_state, key)`
-    // writes (core's CAP-6): see `asked_of_result`.
-    if let (Some(place), Some(result)) = (wanted.place, &signature.result) {
-        infer_from_place(result, place, wanted.written, generics, &mut found);
-    }
+    // writes (core's CAP-6).
+    let result_fallback =
+        signature
+            .result
+            .as_ref()
+            .zip(wanted.place)
+            .and_then(|(result, place)| {
+                infer_from_place(result, place, wanted.written, generics, &mut found)
+            });
     // The generic parameters an argument decided: what the call writes,
     // or its place expects, is not widened (GEN-2).
     let mut by_argument = vec![false; generics.len()];
@@ -1619,8 +1650,30 @@ fn instance<'s>(
         };
         let actual = &given[position].value.ty;
         let actual = match converting {
-            Some(typer) if !given[position].by_place => {
-                typer.inference_input(&parameter.ty, actual, generics, &found)
+            Some((typer, forms)) if !given[position].by_place => {
+                // A bare parameter follows its first argument (GEN-2).
+                // After whole and contextual matching fail, its candidate
+                // can still bind from a payload that satisfies its condition.
+                if matches!(
+                    forms,
+                    ArgumentForms::Payload | ArgumentForms::RequiredPayload
+                ) && bare_parameter(&parameter.ty, generics)
+                    .is_some_and(|index| found[index].is_none())
+                    && whole(actual)
+                {
+                    match actual {
+                        Type::Result { value, .. } if forms == ArgumentForms::RequiredPayload => {
+                            match value.as_ref() {
+                                Type::Nullable(payload) => payload,
+                                _ => value,
+                            }
+                        }
+                        Type::Result { value, .. } | Type::Nullable(value) => value,
+                        _ => actual,
+                    }
+                } else {
+                    typer.inference_input(&parameter.ty, actual, generics, &found)
+                }
             }
             _ => actual,
         };
@@ -1659,6 +1712,9 @@ fn instance<'s>(
     // type says anything of takes its default (GEN-2). GEN-6: "a
     // candidate whose option has none is admitted only when the call
     // gives it."
+    if let Some((result, requested)) = result_fallback {
+        infer(result, requested, generics, &mut found);
+    }
     let mut defaulted = Vec::new();
     for (index, generic) in generics.iter().enumerate() {
         if found[index].is_some() || !matches!(generic.kind, GenericKind::Value(_)) {

@@ -20,6 +20,7 @@ analyser: partial
 
 - A generic type in a type position or constructor is given all its arguments; a type pack is no single type; a value function's generics resolved at a call from what the call writes, then the type its place expects, then its arguments in declared parameter order; an abstract struct a later argument has widens what an earlier argument decided
 - A nullable type the call writes for an operator's result that is a type parameter is given whole to a generic candidate whose result is one: `get<i64?>(...)` gives core's candidate an `i64?`
+- A nullable place leaves a bare result parameter for the inputs to decide. A fallible dictionary read resolves its success type from the dictionary. A store read can infer it from its place (CAP-6).
 - A generic value parameter takes its default where nothing else says what it is: a function's and a candidate's at a call, a struct's where it is named bare or constructed, an operator's in the output requested
 - Left: packs; solvable equalities; temporal bodies
 
@@ -55,6 +56,7 @@ analyser: partial
 
 - In a value function, a call of an operator, by name or by the symbol that stands for it, selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened, which the candidates' types settle before their conditions, and candidates that tie in which literals they widen give way to the one that widens every one; no candidate and a tie rejected
 - A generic candidate is admitted with its parameters resolved from the call, and the most specific admitted one is selected (GEN-12). A fallible candidate can meet a T or `T?` place. The selected candidate determines the result before its form is taken (ERR-15).
+- Operand forms are tried at integer precision before widening literals. A nullable candidate result can meet a place for its payload under ERR-12. [Specification decision #182](https://github.com/hhenson/hgl_spec/pull/182)
 - In a graph a call selects among temporal and value candidates, and a temporal candidate outranks a value one of the same parameter types
 - In value code, a test's outside an `eval` or a `run` and an application's statements, a call selects among both too, a value candidate outranking a temporal one of the same parameter types; a temporal candidate it selects is `call.role`, the code proposed (TST-3, UNIT-14)
 - Left: a candidate with a pack; an operator with a pack, and so the Boolean connectives and `!`; an argument that is itself a call only its requested output selects; composition, where a temporal candidate outranks a value one of the same parameter types, and runtime bodies

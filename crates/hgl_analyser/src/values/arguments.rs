@@ -206,6 +206,7 @@ impl<'a> Typer<'a> {
                     settled,
                     aside: &[],
                     values: &[],
+                    result_fallback: None,
                     // GEN-2: "a generic value parameter that nothing
                     // says anything of takes its default".
                     defaults: read

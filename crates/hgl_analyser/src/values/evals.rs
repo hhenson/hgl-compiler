@@ -227,6 +227,10 @@ impl<'a> Typer<'a> {
             return Stmt::AssertRaises { code, body, at };
         }
         let condition = self.expression(&asserted, Some(&BOOL));
+        let condition = match self.taken(&BOOL, &condition.ty) {
+            Some(form) => self.take(condition, form),
+            None => condition,
+        };
         // What is not known at all has been reported, or is for a later
         // part: an `eval`, and so a comparison with one (ERR-9). A type
         // known in part is known to be no `bool`: the list of `[]`.

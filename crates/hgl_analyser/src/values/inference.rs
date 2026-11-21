@@ -424,6 +424,7 @@ impl<'a> Typer<'a> {
             settled,
             aside,
             values: named,
+            result_fallback,
             defaults,
         } = places;
         // The parameters being resolved. A place's type that still
@@ -482,11 +483,7 @@ impl<'a> Typer<'a> {
             // What the argument's type says: a parameter not yet found,
             // or a wider one for a parameter an argument decided.
             let mut learn = |this: &Self, actual: &Type, found: &mut Vec<Option<Argument>>| {
-                let actual = if takes == Takes::Parameters {
-                    this.inference_input(pattern, actual, generics, found)
-                } else {
-                    actual
-                };
+                let actual = this.inference_input(pattern, actual, generics, found);
                 if let Some(generic) = widenable {
                     if let Some(Argument::Type(decided)) = &found[generic]
                         && this.widens(decided, actual)
@@ -583,6 +580,9 @@ impl<'a> Typer<'a> {
             let value = self.expression(node, Some(&Type::Unknown));
             infer(pattern, &value.ty, generics, &mut found);
             self.take_back(mark, false);
+        }
+        if let Some((result, requested)) = result_fallback {
+            infer(result, requested, generics, &mut found);
         }
         // GEN-8: "A generic value parameter the call does not give takes
         // its default, when it has one." Nothing has said what it is,
@@ -714,6 +714,8 @@ pub(super) struct Places<'s> {
     /// What the call gives those: each with the position of its
     /// parameter among `generics`.
     pub(super) values: &'s [(usize, SyntaxNode)],
+    /// A requested result type used only if the inputs leave a generic open.
+    pub(super) result_fallback: Option<(&'s Type, &'s Type)>,
     /// The default of each generic value parameter that has one (GEN-2):
     /// an entry for each of `generics`, or none at all.
     pub(super) defaults: Vec<Option<Constant>>,
@@ -898,56 +900,43 @@ pub(super) fn infer(
     }
 }
 
-/// What the output a call requests says of a callee's declared result
-/// `result`, for [`infer`] to match the result with. `requested` is the
-/// type the call's place expects, or the one the generic arguments the
-/// call writes make of an operator's result; `written` is true where it
-/// is the type the call writes for an operator's result that is its
-/// type parameter and nothing more.
-///
-/// A result that is nullable itself is matched with what is requested
-/// as it is. GEN-2: "What the call writes, or its place expects, is not
-/// widened ... What the call writes is taken whole: `same<i64?>(1, 2)`
-/// is an `i64?`."
-///
-/// Otherwise a `T` is a value of a `T?` (TYPE-14), and a result that is
-/// not nullable is asked to be what is under the `?` of a nullable
-/// place: `repeat(3)` given to a `list<str>?` is a `list<str>`. What a
-/// nullable place says of a result that is a type parameter and nothing
-/// more is taken here to be what is under the `?`.
-pub(super) fn asked_of_result<'t>(result: &Type, requested: &'t Type, written: bool) -> &'t Type {
-    match result {
-        Type::Nullable(_) => requested,
-        Type::Parameter { .. } if written => requested,
-        _ => not_null(Some(requested)).unwrap_or(requested),
-    }
-}
-
-/// [`infer`], for a callee's declared result `result` and the type
-/// `requested` of the call's place, as [`asked_of_result`] says what the
-/// place asks of it. GEN-2: a call resolves a generic "from the type its
-/// place expects of the result", and ERR-15: a `result<T, error>` "takes
-/// its form from its place": where the place expects no result, what it
-/// asks is of the T, in the form the place takes. A `T?` place, `T` not
-/// nullable, takes the `T?` form, so the `V` of core's
-/// `get<K, V>(store: dict<K, V>, key: K) -> result<V, error>` given to an
-/// `i64?` is an `i64`, as a `V` result's would be.
-pub(super) fn infer_from_place(
-    result: &Type,
-    requested: &Type,
+/// What a requested output decides about the result's type (GEN-2).
+/// A nullable place alone leaves a bare type parameter open. An
+/// explicit type argument decides it whole. A requested payload of a
+/// fallible result can also be read from a nullable success (ERR-12,
+/// ERR-15). In that case a bare success parameter can be decided by
+/// the inputs first, such as a dictionary's value type in `get`.
+/// The returned pair supplies that output if the inputs say nothing.
+pub(super) fn infer_from_place<'r, 'p>(
+    result: &'r Type,
+    requested: &'p Type,
     written: bool,
     generics: &[GenericParameter],
     found: &mut [Option<Argument>],
-) {
-    if let Type::Result { value, .. } = result
+) -> Option<(&'r Type, &'p Type)> {
+    let (result, fallible) = if let Type::Result { value, error } = result
         && !matches!(not_null(Some(requested)), Some(Type::Result { .. }))
     {
-        let place = asked_of_result(value, requested, written);
-        infer(value, place, generics, found);
-        return;
+        (value.as_ref(), **error == Type::Error)
+    } else {
+        (result, false)
+    };
+    if !written && matches!(result, Type::Parameter { .. }) {
+        if fallible {
+            // A store read's inputs say nothing of V (core CAP-6).
+            return Some((result, not_null(Some(requested)).unwrap_or(requested)));
+        }
+        if matches!(requested, Type::Nullable(_)) {
+            return None;
+        }
     }
-    let place = asked_of_result(result, requested, written);
+    let place = if written || matches!(result, Type::Nullable(_)) {
+        requested
+    } else {
+        not_null(Some(requested)).unwrap_or(requested)
+    };
     infer(result, place, generics, found);
+    None
 }
 
 /// [`infer`], for a size or a constant argument: a generic value

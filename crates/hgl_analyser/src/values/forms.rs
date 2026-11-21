@@ -67,11 +67,13 @@ impl<'a> Typer<'a> {
         }
         match ty {
             Type::Result { value, error } => {
-                let nullable_form = **error == Type::Error
-                    && !matches!(**value, Type::Nullable(_))
+                let nullable_success = matches!(**value, Type::Nullable(_));
+                let nullable_form = !nullable_success
                     && matches!(expected, Type::Nullable(inner) if self.admits(inner, value));
                 if nullable_form {
-                    Some(Taken::Nullable)
+                    // EXPR-5 lets another E raise where its T is expected.
+                    // ERR-15 gives only result<T, error> the T? form.
+                    (**error == Type::Error).then_some(Taken::Nullable)
                 } else if self.admits(expected, value) {
                     Some(Taken::Value)
                 } else if **error == Type::Error
