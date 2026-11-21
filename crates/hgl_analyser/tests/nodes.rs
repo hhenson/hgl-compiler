@@ -155,7 +155,7 @@ fn a_hook_rejects_what_its_phase_has_not() {
             "m.hgl:12:32 phase/endpoint.argument TIME-9",
             "m.hgl:13:34 phase/endpoint.argument TIME-9",
             "m.hgl:14:16 type/type.mismatch EXPR-5",
-            "m.hgl:17:29 local:phase/yield.outside_source SOURCE-1",
+            "m.hgl:17:29 phase/yield.outside_source SOURCE-1",
             "m.hgl:18:16 function-kind/call.role FN-3",
             "m.hgl:21:9 phase/out.lifecycle TIME-7",
             "m.hgl:22:9 phase/out.lifecycle TIME-7",

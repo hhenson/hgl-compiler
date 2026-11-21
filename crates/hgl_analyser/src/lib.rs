@@ -295,6 +295,9 @@ pub mod codes {
     /// A `yield` inside a block or an `if` whose value is used
     /// (proposed SOURCE-4).
     pub const YIELD_IN_VALUE: &str = "yield.in_value";
+    /// A `yield` in an anonymous body or a value function (SOURCE-1,
+    /// FN-1, FN-14).
+    pub const YIELD_OUTSIDE_SOURCE: &str = "yield.outside_source";
     /// A `yield` time of a type other than `duration` or `datetime` (SOURCE-2).
     pub const YIELD_TIME_TYPE: &str = "yield.time_type";
     /// `out` used in `start` or written in `stop`, or a `return` with a
@@ -569,18 +572,12 @@ pub mod codes {
         /// function argument awaits a ruling (FN-17, issue #362).
         pub const FUNCTION_REFERENCE_UNREAD: &str = "function.reference_unread";
 
-        /// A `yield` in an anonymous body or a value function (SOURCE-1,
-        /// FN-1, FN-2). The catalogue's `node.in_value_function` row
-        /// does not list `yield`.
-        pub const YIELD_OUTSIDE_SOURCE: &str = "yield.outside_source";
-
         /// Every local code of this stage.
-        pub const ALL: [&str; 5] = [
+        pub const ALL: [&str; 4] = [
             READING_LIMIT,
             LOOP_CARRIED,
             FUNCTION_VALUE,
             FUNCTION_REFERENCE_UNREAD,
-            YIELD_OUTSIDE_SOURCE,
         ];
     }
 }

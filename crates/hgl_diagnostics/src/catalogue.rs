@@ -199,6 +199,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "delta.overlap"),
     (Category::Phase, "test.statement_phase"),
     (Category::Phase, "yield.in_value"),
+    (Category::Phase, "yield.outside_source"),
 ];
 
 /// True when the catalogue has a row with this category and this code.
