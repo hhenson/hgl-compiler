@@ -1135,7 +1135,12 @@ fn function_parameters_run_on_the_sdk() {
         "demo.function_arguments.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.function_arguments.hgl"),
     );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let library = write(
+        &root,
+        "demo.callback_library.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.callback_library.hgl"),
+    );
+    let output = hgl_in(&["test", &file, &library, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),

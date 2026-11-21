@@ -1,5 +1,7 @@
 module demo.function_arguments
 
+use demo.callback_library as lib
+
 const fn apply(f: const fn(i64) -> i64, input: i64 = 3) -> i64 => f(input)
 
 const fn increment(input: i64) -> i64 => input + 1
@@ -121,6 +123,8 @@ test ordinary_callbacks {
     assert apply(increment) == 4
     assert apply(double<i64>, 4) == 8
     assert apply(double, 3) == 6
+    assert apply(lib::plus<2>, 3) == 5
+    assert apply(lib::with_default, 3) == 7
     assert relay(triple, 4) == 12
     assert through_lambda(increment, 4) == 5
     assert through_lambda(triple, 4) == 12

@@ -11,7 +11,7 @@ use super::inference::{ExplicitGenerics, infer};
 use crate::declared::agree;
 use crate::hir::{AnonymousFunction, Callee, Expr, ExprKind, Form, ValueCategory};
 use crate::program::{OperatorRef, Role};
-use crate::syntax::{name_token, ungrouped};
+use crate::syntax::{child, name_token, ungrouped};
 use crate::types::{Detail, FunctionType, Signature, Type};
 use crate::{codes, error, local_error};
 
@@ -145,7 +145,11 @@ impl Typer<'_> {
             self.marked_function(node, signature);
             return None;
         }
-        let written = self.calls.get(&(self.file, name.span().start)).copied();
+        // The read pass records explicit arguments at the start of
+        // the full name, including its module alias when present.
+        let start = child(node, SyntaxKind::QualifiedName)
+            .map_or(name.span().start, |qualified| qualified.span().start);
+        let written = self.calls.get(&(self.file, start)).copied();
         let ExplicitGenerics {
             fixed: mut found,
             faulty,
@@ -159,6 +163,24 @@ impl Typer<'_> {
         }
         for (pattern, (_, actual)) in signature.parameters.iter().zip(&template.parameters) {
             infer(&pattern.ty, actual, &signature.generics, &mut found);
+        }
+        // GEN-2 and GEN-8: a generic value parameter nothing says
+        // anything of takes the default declared by the callback.
+        let defaulted: Vec<_> = found
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| value.is_none().then_some(index))
+            .collect();
+        let reported = self.diagnostics.len();
+        self.generic_values(
+            name,
+            declared,
+            &signature.generics,
+            (&[], &defaulted),
+            &mut found,
+        );
+        if self.diagnostics.len() != reported {
+            return None;
         }
         let Some(generics) = found.into_iter().collect::<Option<Vec<_>>>() else {
             self.diagnostics.emit(
