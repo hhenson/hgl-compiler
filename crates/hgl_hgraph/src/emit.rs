@@ -1352,6 +1352,8 @@ impl<'a> Emitter<'a> {
                 };
                 if function.window_writes && function.is_out(*local) {
                     self.line(depth, &format!("_window.hold({value})"));
+                } else if function.is_out(*local) && self.applies_delta(function, assigned) {
+                    self.line(depth, &value);
                 } else {
                     let target = self.place(function, *local);
                     self.line(depth, &format!("{target} = {value}"));
