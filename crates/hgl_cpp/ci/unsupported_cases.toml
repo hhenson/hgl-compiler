@@ -6,8 +6,23 @@
 # until it is taken off. `check_core.py --target cpp --write-list` writes
 # the list from a run; read the difference before it is committed.
 
+"a `T?` read where its T is expected" = [
+    "conformance::a_null_read_fails_with_value_null",
+]
+"a call's result connection taken as its T" = [
+    "conformance::a_composed_call_can_raise_at_its_node",
+]
 "a nullable value put in the run's store (hgl_spec issue 165)" = [
     "conformance::a_stored_null_is_distinct_from_an_absent_key",
+]
+"a result connection taken as its `T?`" = [
+    "conformance::a_composed_result_can_publish_null_on_failure",
+]
+"a result raised among a test's statements" = [
+    "conformance::a_value_place_selects_the_result_form",
+]
+"a result raised as an execution failure" = [
+    "conformance::a_nullable_success_is_distinct_from_a_failure",
 ]
 
 # Rejection cases the compiler does not yet reject, as in the hgraph

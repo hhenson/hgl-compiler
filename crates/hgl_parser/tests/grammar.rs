@@ -267,7 +267,7 @@ fn body(
     let change = delta<list<f64>>(added: values)
     let text = str(x)
     let next = fn(v: i64) -> i64 => v + 1
-    let found = other::helper(x)[0].time?
+    let found = other::helper(x)[0].time
     let ratio = x /{zero: .error} y
     start { count = 0 }
     stop { count = 0 }

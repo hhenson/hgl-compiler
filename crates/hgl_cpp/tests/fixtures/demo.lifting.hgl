@@ -1,7 +1,7 @@
 module demo.lifting
 
 # The lifted calls and captures the cpp target writes, with the temporal
-# forms of `error` and `result` and a `?` in a `when`. Its goldens are
+# forms of `error` and `result` and raises in a `when`. Its goldens are
 # under `tests/goldens/demo.lifting`.
 
 # A value function with a default, lifted over its inputs (FN-6, FN-11).
@@ -45,7 +45,7 @@ fn checked_errors(value: i64) -> str {
     return describe(boundary.error, value)
 }
 
-# A node that fails on a negative input with `?` (ERR-5), and returns its
+# A node that fails on a negative input by taking a failed result's value (ERR-5), and returns its
 # outcome as data too.
 const fn attempt(value: i64) -> result<i64, error> {
     if value < 0 { return err(error(message: "negative input", code: "numeric.out_of_range")) }
@@ -53,7 +53,7 @@ const fn attempt(value: i64) -> result<i64, error> {
 }
 
 fn raised(value: i64) -> i64 {
-    when { return attempt(value)? }
+    when { return attempt(value) }
 }
 
 fn returned(value: i64) -> result<i64, error> {
@@ -73,7 +73,7 @@ fn outcomes(value: i64) -> str {
 
 # A capture of a node given configuration, and of a graph (ERR-7).
 fn shifted(value: i64, const by: i64) -> i64 {
-    when { return attempt(value)? + by }
+    when { return attempt(value) + by }
 }
 
 fn shifted_values(value: i64) -> i64 {
@@ -95,7 +95,7 @@ fn write_then_fail(value: i64) -> i64 {
     inject out
     when {
         out = value
-        let tenfold = attempt(value)?
+        let tenfold: i64 = attempt(value)
         out = tenfold
     }
 }
@@ -105,13 +105,13 @@ fn written_values(value: i64) -> i64 {
     return boundary.value
 }
 
-# ERR-8: a retained error raised again with `?` keeps where it first
+# ERR-8: a retained error raised again keeps where it first
 # failed: its node, phase and time.
 fn raise_again(first: error, repeat: bool) -> error {
     when modified(first) && valid(first) { return first }
     when modified(repeat) && valid(first) {
         let failure: result<error, error> = err(first)
-        return failure?
+        return failure
     }
 }
 

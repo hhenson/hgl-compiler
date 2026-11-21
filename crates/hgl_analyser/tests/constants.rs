@@ -193,18 +193,15 @@ fn a_constant_given_as_an_option_selects_as_its_value_does() {
             // `.fail` the one that gives the number.
             "const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: policy} b\n",
             "const fn failing(a: f64, b: f64) -> f64 => a /{zero: fail} b\n",
-            // So a number is not what `policy` gives, as it is not
-            // what `.error` written out gives.
+            // ERR-15: the f64 place takes the selected candidate's value
+            // and raises its error, for either spelling of the policy.
             "const fn plain(a: f64, b: f64) -> f64 => a /{zero: policy} b\n",
             "const fn written(a: f64, b: f64) -> f64 => a /{zero: .error} b\n",
         ),
     )]);
     assert_eq!(
         checked.summary(),
-        [
-            "m.hgl:6:44 operator/operator.no_candidate OPS-1",
-            "m.hgl:7:46 operator/operator.no_candidate OPS-1",
-        ],
+        Vec::<String>::new(),
         "{}",
         checked.report
     );

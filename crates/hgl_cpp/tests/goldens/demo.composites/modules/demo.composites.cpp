@@ -30,6 +30,7 @@
 #undef a_nullable_delta_is_no_nullable
 #undef a_struct_holding_nan_is_not_equal_to_itself
 #undef a_var_place_is_taken_where_the_call_is_made
+#undef absent
 #undef an_empty_default_of_an_optional_collection_is_the_collection
 #undef arguments_are_evaluated_in_the_order_written
 #undef arrived
@@ -66,6 +67,7 @@
 #undef first
 #undef first_price
 #undef first_x
+#undef found
 #undef generic_and_abstract_structs
 #undef held
 #undef holder
@@ -490,7 +492,7 @@ void bump([[maybe_unused]] ::hgraph::Int& count, [[maybe_unused]] ::hgraph::Int 
     return ::hglrt::parent_list<::hgl::demo::composites::m_::Shape>(rounds);
 }
 
-// failing() -> i64 (`const fn`), module demo.composites, line 413
+// failing() -> i64 (`const fn`), module demo.composites, line 414
 ::hgraph::Int failing()
 {
     return ::hglrt::item(::hglrt::list<::hgraph::Int>{1}, 5);
@@ -628,11 +630,17 @@ void dictionaries_read_add_and_loop()
     ::hglrt::testing::statement();
     ::hglrt::testing::check((!(::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"c"})).has_value()));
     ::hglrt::testing::statement();
-    ::hglrt::testing::check((::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"b"}) == 2));
+    [[maybe_unused]] const ::std::optional<::hgraph::Int> found = ::hglrt::get_dict_K__T__K<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"b"});
+    ::hglrt::testing::statement();
+    ::hglrt::testing::check((found == 2));
     ::hglrt::testing::statement();
     [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::std::optional<::hgraph::Int>> maybes = ::hglrt::dict_of<::hgraph::Str, ::std::optional<::hgraph::Int>>({{::hgraph::Str{"a"}, ::std::nullopt}, {::hgraph::Str{"b"}, 2}});
     ::hglrt::testing::statement();
-    ::hglrt::testing::check((((!(::hglrt::get_dict_K__T__K<::hgraph::Str, ::std::optional<::hgraph::Int>>(maybes, ::hgraph::Str{"a"})).has_value()) && (::hglrt::get_dict_K__T__K<::hgraph::Str, ::std::optional<::hgraph::Int>>(maybes, ::hgraph::Str{"b"}) == 2)) && (!(::hglrt::get_dict_K__T__K<::hgraph::Str, ::std::optional<::hgraph::Int>>(maybes, ::hgraph::Str{"c"})).has_value())));
+    ::hglrt::testing::check(((!(::hglrt::entry_at(maybes, ::hgraph::Str{"a"})).has_value()) && (::hglrt::entry_at(maybes, ::hgraph::Str{"b"}) == 2)));
+    ::hglrt::testing::statement();
+    ::hglrt::testing::raises("value.missing_key", [&] {
+        [[maybe_unused]] const ::std::optional<::hgraph::Int> absent = ::hglrt::entry_at(maybes, ::hgraph::Str{"c"});
+    });
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__i64_i64_f64_f64(::hgl::demo::composites::m_::total(book), 3, 0.0, 0.0));
     ::hglrt::testing::statement();

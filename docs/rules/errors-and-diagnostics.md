@@ -45,7 +45,7 @@ analyser: partial
 analyser: done
 
 - `error(message: text, code: optional_code)`: each by its name, `message` a `str` and required, `code` a `str?`; `.message` is a `str` and `.code` a `str?`
-- `.context` is an `error context?`, a type of this compiler's, whose `.node` and `.phase` are a `str` and `.evaluation_time` a `datetime`, read where a null test proves it present (`nullable.required_presence`) and never assigned (`binding.immutable`)
+- `.context` is an `error context?`, a type of this compiler's, whose `.node` and `.phase` are a `str` and `.evaluation_time` a `datetime`, read under ERR-12 and never assigned (`binding.immutable`)
 
 transpiler: partial
 
@@ -57,29 +57,22 @@ transpiler: partial
 
 analyser: partial
 
-- `value?` has the T of a `result<T, E>`
-- In a value function the enclosing result is a `result<U, E>` of the same E, and in a `when` the E is `error` (`result.propagation_type`, which what is no result, a nullable included, is too); in a graph, `start`, `stop`, a node's declarations and a source it is `result.propagation_phase`
-- Left: an anonymous function
+- A place that needs the value of a result records where a failure goes. A value function returning a result requires the same error type. In other phases only `error` can be raised (`result.propagation_type`).
 
-transpiler: done
+transpiler: partial
 
-- hgraph: `?` evaluates its operand once and gives a success's value
-- In a value function a failure leaves it and is returned as it is; in a `when` it fails the node with the error's message and code
+- C++ writes a raise in a value function returning a result or in a `when`. Other places are reported as unsupported.
 
 ## ERR-6
 
 analyser: partial
 
-- A list is indexed by an `i64` and a dictionary by its key, for the element or the value
-- `get(book, key)` is core's candidate, a `V?`
-- Left: `at`, and `get` with a fallback (`lookup.default_type`, `nullable.required_presence`)
+- Brackets read an ordinary dictionary by its key. Core's two-argument `get` gives `result<V, error>` and the place selects its form (ERR-15).
+- Left: a fallback (`lookup.default_type`).
 
 transpiler: partial
 
-- hgraph: a dictionary's brackets fail with `value.missing_key` for a key that is not there, and core's `get` gives null
-- A temporal dictionary's key selected in a graph is a child that is not valid while the key is absent (EXPR-7, TIME-1), and is no strict read
-- A whole read checked when it runs, `rows[i]`, gives `err` or fails where a required part of the child is not valid, as a child's read does
-- Left: `at`; `get` with a fallback
+- C++ brackets perform a strict read. A temporal dictionary child is an endpoint read (ERR-14).
 
 ## ERR-7
 
@@ -103,7 +96,7 @@ transpiler: done
 - hgraph: `try_except` catches an evaluation failure once, at the nearest boundary, and the child is evaluated again on its next input; start and stop failures escape, those of a `switch_` branch the evaluation starts or stops too, raised again by `_core.captured` through every capture
 - Each capture sees its own call's failures, two of one call each
 - A failed keyed child stays live for its key, and a capture in a keyed child is that child's
-- A retained error propagated by `?` keeps its first provenance
+- A retained error raised again keeps its first provenance
 - A node's write to `out` and a source's publication made before the failure in its pass stand
 
 ## ERR-9
@@ -141,13 +134,13 @@ transpiler: done
 analyser: done
 
 - In a value function, a hook and a graph a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns
-- A nullable where its payload is required, as an operand no candidate takes, or read for a member or an element of its payload, is `nullable.required_presence`
+- A nullable read in a place that expects its payload records a possible `value.null` failure and its phase. A written null still needs a nullable type (TYPE-14).
 
 ## ERR-13
 
 parser: done
 
-- The result forms are calls of a name, and `?` a postfix suffix: `ok(value)`, `is_err(value)`, `capture(callable, args)`, `value?`
+- The result forms use calls: `ok(value)`, `is_err(value)`, and `capture(callable, args)` among them.
 
 analyser: done
 
@@ -168,3 +161,14 @@ transpiler: partial
 - A window's value read there before it is all valid gives that `err` too (`_core.window_result`, and `_core.checked_child_result` of a window child known when it runs)
 - `delta_value` of a direct input or `out` read there is `ok` of the delta (`_core.Ok`) where the endpoint is modified and valid, as `modified` is written, and that `err` where it has not ticked or was invalidated, for every endpoint but a window of a duration, core's `record` among them
 - Left, reported: `delta_value` of a child, of a window of a duration or of a value that holds one, and `removed_value`, read there
+
+## ERR-15
+
+analyser: partial
+
+- A call or held result keeps its tag in a result place, gives its success or raises in a T place, and gives its success or null in a `T?` place. An unannotated `let` keeps the result. A nullable success type is itself the T form.
+- In composition the analyser records whether a conversion belongs to the call's node or to a reader of a held connection.
+
+transpiler: partial
+
+- C++ preserves result data and writes raises in the phases listed under ERR-5. Other conversions are reported as unsupported.

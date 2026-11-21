@@ -21,7 +21,7 @@ const RESULTS: &str = concat!(
     "    return ok(value)\n",
     "}\n",
     "const fn doubled(value: i64) -> result<i64, error> {\n",
-    "    let price = checked(value)?\n",
+    "    let price: i64 = checked(value)\n",
     "    return ok(price * 2)\n",
     "}\n",
     "const fn recovered(value: i64) -> i64 {\n",
@@ -34,7 +34,7 @@ const RESULTS: &str = concat!(
     "    return outcome.error.message\n",
     "}\n",
     "fn required(value: i64) -> i64 {\n",
-    "    when { return checked(value)? }\n",
+    "    when { return checked(value) }\n",
     "}\n",
     "fn tagged(value: i64) -> result<i64, error> {\n",
     "    when { return checked(value) }\n",
@@ -57,7 +57,7 @@ fn the_chapters_results_are_read() {
     assert_eq!(
         locals(&checked, "doubled"),
         ["value: i64", "price: i64"],
-        "`?` gives the T of a success"
+        "the place takes a success as its T"
     );
     assert_eq!(
         locals(&checked, "recovered"),
@@ -218,7 +218,7 @@ fn a_guard_proves_a_results_tag() {
             "m.hgl:13:36 type/result.required_variant ERR-3",
             "m.hgl:14:28 type/result.required_variant ERR-3",
             "m.hgl:16:43 type/result.required_variant ERR-3",
-            "m.hgl:31:43 name/member.unknown ERR-3",
+            "m.hgl:31:35 type/result.propagation_type ERR-5",
             "m.hgl:32:18 type/type.mismatch ERR-3",
         ]
     );
@@ -300,57 +300,37 @@ fn an_error_owns_a_message_and_a_code() {
     );
 }
 
-/// ERR-5: "Success yields T. In a value function returning
-/// `result<U,E>`, failure returns the same E as Err. In when, only
-/// `result<T,error>` may propagate to node failure ... Composition,
-/// lifecycle, and generator uses reject (`result.propagation_phase`),
-/// and an operand or an enclosing result of another type rejects
-/// (`result.propagation_type`) ... It does not unwrap null (ERR-12)."
+/// ERR-5 and ERR-15: a place asking for T raises an error in its
+/// own phase. A value function that returns a result needs the same
+/// failure type, and elsewhere only an `error` can be raised.
 #[test]
-fn propagation_needs_a_result_and_a_place_to_leave_by() {
+fn a_result_raises_only_where_its_failure_type_is_admitted() {
     let checked = module(concat!(
         "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
         "const fn texted(value: i64) -> result<i64, str> => ok(value)\n",
-        // The same E, whatever the T.
         "const fn doubled(value: i64) -> result<f64, error> {\n",
-        "    let price = checked(value)?\n",
+        "    let price: i64 = checked(value)\n",
         "    return ok(2.0)\n",
         "}\n",
-        // An enclosing result of another E, and no result at all.
         "const fn crossed(value: i64) -> result<i64, error> {\n",
-        "    return ok(texted(value)?)\n",
+        "    return ok(texted(value))\n",
         "}\n",
-        "const fn plain(value: i64) -> i64 {\n",
-        "    return checked(value)?\n",
-        "}\n",
-        // What is no result, a nullable included.
-        "const fn numbers(value: i64, maybe: i64?) -> result<i64, error> {\n",
-        "    let one = value?\n",
-        "    let two = maybe?\n",
-        "    return ok(0)\n",
-        "}\n",
+        "const fn plain(value: i64) -> i64 => checked(value)\n",
         "fn node(value: i64) -> i64 {\n",
-        "    inject out\n",
-        "    start { let early = checked(1)? }\n",
+        "    start { let early: i64 = checked(1) }\n",
         "    when {\n",
-        "        let texts = texted(value)?\n",
-        "        return checked(value)?\n",
+        "        let texts: i64 = texted(value)\n",
+        "        return checked(value)\n",
         "    }\n",
-        "    stop { let late = checked(2)? }\n",
+        "    stop { let late: i64 = checked(2) }\n",
         "}\n",
-        "fn graph(value: result<i64, error>) -> i64 => value?\n",
+        "fn graph(value: result<i64, error>) -> i64 => value\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:9:28 type/result.propagation_type ERR-5",
-            "m.hgl:12:26 type/result.propagation_type ERR-5",
-            "m.hgl:15:20 type/result.propagation_type ERR-5",
-            "m.hgl:16:20 type/result.propagation_type ERR-5",
-            "m.hgl:21:35 phase/result.propagation_phase ERR-5",
-            "m.hgl:23:34 type/result.propagation_type ERR-5",
-            "m.hgl:26:33 phase/result.propagation_phase ERR-5",
-            "m.hgl:28:52 phase/result.propagation_phase ERR-5",
+            "m.hgl:9:15 type/result.propagation_type ERR-5",
+            "m.hgl:15:26 type/result.propagation_type ERR-5",
         ]
     );
     assert_eq!(locals(&checked, "doubled"), ["value: i64", "price: i64"]);
@@ -363,7 +343,7 @@ const CAPTURE: &str = concat!(
     "    return ok(value)\n",
     "}\n",
     "fn required(value: i64) -> i64 {\n",
-    "    when { return checked(value)? }\n",
+    "    when { return checked(value) }\n",
     "}\n",
     "fn forward(value: i64) -> i64 {\n",
     "    when { return value }\n",
@@ -472,7 +452,7 @@ fn a_capture_covers_a_temporal_call_in_a_graph() {
     let checked = module(concat!(
         "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
         "fn required(value: i64) -> i64 {\n",
-        "    when { return checked(value)? }\n",
+        "    when { return checked(value) }\n",
         "}\n",
         "fn sink(value: i64) {\n",
         "    when { }\n",
@@ -578,6 +558,131 @@ fn nothing_takes_the_name_of_a_result_form() {
             "m.hgl:4:8 name/name.duplicate ERR-13",
             "m.hgl:5:16 name/name.duplicate ERR-13",
             "m.hgl:6:9 name/name.duplicate ERR-13",
+        ]
+    );
+}
+
+/// ERR-5, ERR-12, ERR-15: an inferred local keeps its result. A place
+/// that expects the result keeps it too. A place expecting the value or
+/// its nullable form records which conversion it requires.
+#[test]
+fn value_code_records_each_form_of_a_result() {
+    use hgl_analyser::hir::{NULL_READ_CODE, Raise, walk_statements};
+
+    let checked = module(concat!(
+        "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
+        "const fn forms(value: i64, nullable: i64?) -> result<i64, error> {\n",
+        "    let held = checked(value)\n",
+        "    let whole: result<i64, error> = held\n",
+        "    let raised: i64 = held\n",
+        "    let optional: i64? = held\n",
+        "    let read: i64 = nullable\n",
+        "    return ok(raised + read)\n",
+        "}\n",
+        "const fn nullable_value(value: i64?) -> result<i64?, error> => ok(value)\n",
+        "const fn take_nullable(value: i64?) -> i64? => nullable_value(value)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    assert_eq!(
+        locals(&checked, "forms"),
+        [
+            "value: i64",
+            "nullable: i64?",
+            "held: result<i64, error>",
+            "whole: result<i64, error>",
+            "raised: i64",
+            "optional: i64?",
+            "read: i64",
+        ],
+    );
+    let mut observed = Vec::new();
+    walk_statements(
+        &body(&checked, "forms").statements,
+        &mut |expr| match expr.kind {
+            ExprKind::Raised {
+                raise: Raise::Return,
+                ..
+            } => observed.push("value"),
+            ExprKind::OrNull { reader: false, .. } => observed.push("nullable"),
+            ExprKind::NullRead {
+                raise: Raise::Return,
+                code: NULL_READ_CODE,
+                ..
+            } => {
+                observed.push("null read");
+            }
+            _ => {}
+        },
+    );
+    assert_eq!(observed, ["value", "nullable", "null read"]);
+
+    let mut raised = 0;
+    walk_statements(&body(&checked, "take_nullable").statements, &mut |expr| {
+        if matches!(
+            expr.kind,
+            ExprKind::Raised {
+                raise: Raise::Execution,
+                ..
+            }
+        ) {
+            assert_eq!(expr.ty.to_string(), "i64?");
+            raised += 1;
+        }
+    });
+    assert_eq!(raised, 1);
+}
+
+/// ERR-12 and ERR-15: the lifted call can publish its result unchanged,
+/// raise at its own node, or publish null on failure. A held connection's
+/// conversions and a nullable connection read happen at the reader.
+#[test]
+fn composition_records_each_form_of_a_result() {
+    use hgl_analyser::hir::{NULL_READ_CODE, Raise, ValueCategory, walk_statements};
+
+    let checked = module(concat!(
+        "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
+        "fn forms(value: i64, nullable: i64?) -> i64 {\n",
+        "    let whole: result<i64, error> = checked(value)\n",
+        "    let raised: i64 = checked(value)\n",
+        "    let optional: i64? = checked(value)\n",
+        "    let held_raised: i64 = whole\n",
+        "    let held_optional: i64? = whole\n",
+        "    let read: i64 = nullable\n",
+        "    return raised\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let mut observed = Vec::new();
+    walk_statements(&body(&checked, "forms").statements, &mut |expr| {
+        let form = match expr.kind {
+            ExprKind::Raised {
+                raise: Raise::CallNode,
+                ..
+            } => "call value",
+            ExprKind::Raised {
+                raise: Raise::Reader,
+                ..
+            } => "held value",
+            ExprKind::OrNull { reader: false, .. } => "call nullable",
+            ExprKind::OrNull { reader: true, .. } => "held nullable",
+            ExprKind::NullRead {
+                raise: Raise::Reader,
+                code: NULL_READ_CODE,
+                ..
+            } => "null read",
+            _ => return,
+        };
+        assert_eq!(expr.category, ValueCategory::Connection);
+        observed.push(form);
+    });
+    assert_eq!(
+        observed,
+        [
+            "call value",
+            "call nullable",
+            "held value",
+            "held nullable",
+            "null read"
         ]
     );
 }

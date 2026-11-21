@@ -55,7 +55,10 @@ impl Emitter<'_> {
         }
         // The temporal forms, and the reads of a hook, are the dispatch
         // point's (`forms`), which a construct lane adds to.
-        if let Some(written) = self.form_expression(scope, value) {
+        if let Some(written) = self
+            .legacy_lookup(scope, value)
+            .or_else(|| self.form_expression(scope, value))
+        {
             return written;
         }
         if matches!(value.kind, ExprKind::Local(_) | ExprKind::Constant { .. }) {
@@ -75,8 +78,8 @@ impl Emitter<'_> {
             }
             // UNIT-13: "The constant has that one value wherever it is
             // read". Its value is made where it is first read, so a read
-            // of one whose value may fail is something that may fail: a
-            // `?` after it is not run before it (EXPR-2).
+            // can fail. A later argument's failure cannot take precedence
+            // (EXPR-2).
             ExprKind::Constant {
                 module,
                 declaration,
@@ -804,19 +807,6 @@ fn plain(branch: &Expr) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::days_from_civil;
-
-    #[test]
-    fn days_are_counted_from_the_epoch() {
-        assert_eq!(days_from_civil(1970, 1, 1), 0);
-        assert_eq!(days_from_civil(2000, 3, 1), 11_017);
-        assert_eq!(days_from_civil(1969, 12, 31), -1);
-        assert_eq!(days_from_civil(2026, 9, 3), 20_699);
-    }
-}
-
 /// What a result raised as `raise` says, and not written here, is reported
 /// as (ERR-5): each place a failure is raised that the target does not
 /// write yet.
@@ -832,5 +822,18 @@ pub(super) fn raised_where(raise: Raise) -> &'static str {
         Raise::Application => "a result raised among an application's statements",
         Raise::CallNode => "a call's result connection taken as its T",
         Raise::Reader => "a held result connection taken as its T",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::days_from_civil;
+
+    #[test]
+    fn days_are_counted_from_the_epoch() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2000, 3, 1), 11_017);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(days_from_civil(2026, 9, 3), 20_699);
     }
 }

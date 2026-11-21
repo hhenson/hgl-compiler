@@ -1412,7 +1412,6 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:14:21 type/nullable.required_presence ERR-12",
             "m.hgl:15:33 type/type.mismatch CTRL-10",
             "m.hgl:16:21 type/type.mismatch CTRL-10",
             "m.hgl:17:17 type/type.mismatch CTRL-10",
@@ -1424,7 +1423,6 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
     assert_eq!(
         messages(&checked),
         [
-            "this is `i64?`, and the type written for it is `i64`: it may be null here",
             "this branch is `str`, and the other is `i64`",
             "this is `i64`, and a condition is a `bool`",
             "this has no value: a block's value is its last statement, when that is an expression",
@@ -2963,13 +2961,12 @@ fn a_null_test_refines_an_immutable_nullable_binding() {
     assert_eq!(call_of(&checked, sum).0, "add_(lhs: f64, rhs: f64) -> f64");
 }
 
-/// ERR-12: "Using it where T is required without that proof rejects
-/// with `nullable.required_presence`." ERR-3: "A saved bool, alias,
-/// fresh expression, or mutable var supplies no retained fact."
+/// ERR-12: a nullable value is read where T is required. When no
+/// presence fact holds, the read can fail with `value.null`.
 #[test]
-fn a_nullable_is_no_payload_without_a_null_test() {
+fn an_unproved_nullable_payload_records_a_checked_read() {
     let checked = module(concat!(
-        // The errors chapter's deliberate rejection.
+        // The errors chapter's example of an unguarded read.
         "const fn unchecked(value: f64?) -> f64 => value\n",
         "const fn uses(value: f64?, other: f64?) -> f64 {\n",
         // An operand that may be null.
@@ -3006,29 +3003,25 @@ fn a_nullable_is_no_payload_without_a_null_test() {
         "    return value\n",
         "}\n",
     ));
-    assert_eq!(
-        checked.summary(),
-        [
-            "m.hgl:2:43 type/nullable.required_presence ERR-12",
-            "m.hgl:4:15 type/nullable.required_presence ERR-12",
-            "m.hgl:5:18 type/nullable.required_presence ERR-12",
-            "m.hgl:7:30 type/nullable.required_presence ERR-12",
-            "m.hgl:9:25 type/nullable.required_presence ERR-12",
-            "m.hgl:10:48 type/nullable.required_presence ERR-12",
-            "m.hgl:12:12 type/nullable.required_presence ERR-12",
-            "m.hgl:18:12 type/nullable.required_presence ERR-12",
-            "m.hgl:25:20 type/nullable.required_presence ERR-12",
-            "m.hgl:27:12 type/nullable.required_presence ERR-12",
-        ]
-    );
-    assert_eq!(
-        messages(&checked)[0],
-        "this is `f64?`, and the function's result is `f64`: it may be null here"
-    );
-    assert_eq!(
-        messages(&checked)[1],
-        "this is `f64?`, and `+` takes no `f64?` and `f64`: it may be null here"
-    );
+    use hgl_analyser::hir::{NULL_READ_CODE, Raise, walk_statements};
+
+    assert_eq!(checked.summary(), NONE);
+    for (name, expected) in [
+        ("unchecked", 1),
+        ("uses", 6),
+        ("looped", 1),
+        ("switched", 2),
+    ] {
+        let mut reads = 0;
+        walk_statements(&body(&checked, name).statements, &mut |expr| {
+            if let ExprKind::NullRead { code, raise, .. } = expr.kind {
+                assert_eq!(code, NULL_READ_CODE);
+                assert_eq!(raise, Raise::Execution);
+                reads += 1;
+            }
+        });
+        assert_eq!(reads, expected, "{name}");
+    }
 }
 
 // ---- A function's generic value parameters ----

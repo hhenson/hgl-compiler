@@ -140,7 +140,7 @@ const fn member_of(x: i64, members: set<i64>) -> bool {
 fn checked(x: i64) -> bool => member_of(x, [1, 2])
 
 const fn looked(x: str, book: dict<str, i64>) -> i64 {
-    let found = get(book, x)
+    let found: i64? = get(book, x)
     if found == null { return -1 }
     return found
 }

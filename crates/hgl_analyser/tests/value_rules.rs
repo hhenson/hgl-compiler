@@ -443,7 +443,6 @@ fn a_conversions_options_and_the_result_its_policy_returns() {
             "m.hgl:10:16 operator/operator.no_candidate GEN-5",
             "m.hgl:11:16 operator/operator.no_candidate GEN-5",
             "m.hgl:12:16 operator/operator.no_candidate GEN-5",
-            "m.hgl:14:38 operator/operator.no_candidate GEN-5",
         ]
     );
     assert_eq!(
