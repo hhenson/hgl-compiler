@@ -88,3 +88,43 @@ test a_designated_input_is_followed_through_its_rebinding {
         high: [  100, _,    _,  _,   _, 101, _,   102,   _],
     )) ==     [    1, 2,   10, 11, 100, 101, _,     _,   4]
 }
+
+# A position of a fixed list designated, known when the `return` runs:
+# its reader follows the element named, and a re-binding of the list,
+# which runs no handler of the node.
+fn route(idx: i64, items: list<i64, 2>) -> ref i64 {
+    when modified(idx) { return items[idx] }
+}
+
+fn set_item(slot: i64, reading: i64) -> list<i64, 2> {
+    when { return delta<list<i64, 2>>(updated: [slot: reading]) }
+}
+
+fn pick_list(flag: bool, ref low: list<i64, 2>, ref high: list<i64, 2>) -> ref list<i64, 2> {
+    when modified(flag) {
+        if flag { return high }
+        return low
+    }
+}
+
+fn routed(idx: i64, flag: bool, low_slot: i64, low: i64, high_slot: i64, high: i64) -> i64 =>
+    follow(route(idx, pick_list(flag, set_item(low_slot, low), set_item(high_slot, high))))
+
+test a_designated_position_is_followed_through_its_rebinding {
+    assert eval(routed(
+        idx:       [    1,  _,    _,  0,  _],
+        flag:      [false,  _, true,  _,  _],
+        low_slot:  [    1,  0,    _,  _,  0],
+        low:       [   10, 11,    _,  _, 12],
+        high_slot: [    1,  _,    0,  _,  _],
+        high:      [   20,  _,   21,  _,  _],
+    )) ==          [   10,  _,   20, 21,  _]
+}
+
+# EXPR-3: "An index outside a list ... fails where it is evaluated", as
+# the child at it does.
+test a_designated_position_outside_the_list_fails {
+    assert raises("value.index_out_of_range") {
+        eval(route(idx: [2], items: [[1, 2]]))
+    }
+}

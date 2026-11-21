@@ -969,14 +969,21 @@ fn references_are_written() {
         "(wiring_, flag, low, high, low, high).as<::hgraph::TS<::hgraph::Int>>()",
         "::hgraph::In<\"designated:low\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_",
         "if (designates_ == 0 && designated_01_.modified())",
+        // FN-16: a position of a fixed list designated, `items[idx]`: each
+        // position given again, the index checked, and the one it names
+        // published.
+        "(wiring_, idx, items, ::hglrt::element_port(items, 0), ::hglrt::element_port(items, 1))",
+        "::hgraph::In<\"designated:items[1]\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_1_",
+        "= ::hglrt::designated_position(::hglrt::checked_value(idx), 2);",
+        "out_.set(::hglrt::designation_of(position_00_, designated_01_0_, designated_01_1_));",
     ] {
         assert!(unit.contains(written), "{written} in\n{unit}");
     }
 }
 
-/// FN-16: a designation of a position of a list is reported, after the
-/// list's own temporal form (`lists`), so that a case is listed for the
-/// first form it reaches.
+/// FN-16: a designation the target does not write yet is reported, a
+/// child of a `ref` parameter; a list designated whole, and one by a
+/// position, are written.
 #[test]
 fn a_designation_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -985,7 +992,15 @@ fn a_designation_not_written_yet_is_reported() {
             concat!(
                 "module m\n",
                 "\n",
-                "fn route(idx: i64, items: list<i64, 3>) -> ref i64 {\n",
+                "fn route(idx: i64, ref items: list<i64, 3>) -> ref i64 {\n",
+                "    when modified(idx) { return items[idx] }\n",
+                "}\n",
+                "\n",
+                "fn both(idx: i64, items: list<i64, 3>) -> ref list<i64, 3> {\n",
+                "    when modified(idx) { return items }\n",
+                "}\n",
+                "\n",
+                "fn mixed(idx: i64, items: list<i64, 3>) -> ref i64 {\n",
                 "    when modified(idx) { return items[idx] }\n",
                 "}\n",
             ),
@@ -994,7 +1009,7 @@ fn a_designation_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.reported,
-        ["m.hgl:4:33 the cpp target does not write a designation of a position of a list yet"]
+        ["m.hgl:4:33 the cpp target does not write a designation of this child yet"]
     );
 }
 

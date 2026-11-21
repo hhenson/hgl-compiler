@@ -5,6 +5,8 @@
 // Names this file writes, which no macro of a header above takes.
 #undef a
 #undef a_designated_input_is_followed_through_its_rebinding
+#undef a_designated_position_is_followed_through_its_rebinding
+#undef a_designated_position_outside_the_list_fails
 #undef a_reader_observes_the_input_designated
 #undef a_ref_parameter_is_present_and_wakes_once
 #undef a_relay_keeps_what_it_sampled
@@ -17,19 +19,29 @@
 #undef flag
 #undef follow
 #undef high
+#undef high_slot
+#undef idx
 #undef item
+#undef items
 #undef low
+#undef low_slot
 #undef modified
 #undef pick
+#undef pick_list
 #undef picked
 #undef present
 #undef probe
+#undef reading
 #undef record
 #undef references
 #undef replay
+#undef route
+#undef routed
 #undef sample_picked
 #undef sampled
 #undef sel
+#undef set_item
+#undef slot
 #undef start
 #undef take
 #undef target
@@ -214,8 +226,8 @@ struct impl_
     // The node's `state` and `cache` (TIME-6).
     struct state_type_
     {
-        // FN-16: the input the `ref` result follows, by its place among
-        // those it designates, or -1 for none.
+        // FN-16: the input or position the `ref` result follows, by its
+        // place among those it designates, or -1 for none.
         ::hgraph::Int designates_{-1};
     };
 
@@ -306,6 +318,157 @@ namespace w_
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> chosen(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> sel, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> a, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> b, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
 {
     return ::hgl::demo::references::m_::n_::chosen::impl_::compose(wiring_, flag, sel, a, b, high);
+}
+}  // namespace w_
+
+namespace n_::route
+{
+// route(idx: i64, items: list<i64, 2>) -> ref i64 (node), module demo.references, line 95
+struct impl_
+{
+    static constexpr auto name = "demo.references::route";
+
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
+    {
+        // FN-16: the input or position the `ref` result follows, by its
+        // place among those it designates, or -1 for none.
+        ::hgraph::Int designates_{-1};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
+    {
+        state_.set(state_type_{});
+    }
+
+    static void eval([[maybe_unused]] ::hgraph::In<"idx", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> idx, [[maybe_unused]] ::hgraph::In<"items", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> items, [[maybe_unused]] ::hgraph::In<"designated:items[0]", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_0_, [[maybe_unused]] ::hgraph::In<"designated:items[1]", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_1_, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TS<::hgraph::Int>>> out_)
+    {
+        // FN-16: the input the `ref` result follows, kept in the node's state.
+        ::hgraph::Int& designates_ = state_.modify().designates_;
+        // FN-16: "Readers follow a later rebinding of that endpoint without
+        // waking the node for it".
+        if (designates_ == 0 && designated_01_0_.modified())
+        {
+            out_.set(::hglrt::designation(designated_01_0_));
+        }
+        if (designates_ == 1 && designated_01_1_.modified())
+        {
+            out_.set(::hglrt::designation(designated_01_1_));
+        }
+        if (!(idx.modified() || idx.invalidated()))
+        {
+            return;
+        }
+        // when, line 96 (TIME-3)
+        if (::hglrt::fn_valid(idx) && ::hglrt::fn_valid(items) && ::hglrt::fn_modified(idx))
+        {
+            const ::hgraph::Int position_00_ = ::hglrt::designated_position(::hglrt::checked_value(idx), 2);
+            designates_ = 0 + position_00_;
+            out_.set(::hglrt::designation_of(position_00_, designated_01_0_, designated_01_1_));
+            return;
+        }
+    }
+};
+}  // namespace n_::route
+}  // namespace hgl::demo::references::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::references::m_::n_::route::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::references::m_::n_::route::impl_::state_type_>("hgl:demo.references::route.state");
+    }
+};
+
+namespace hgl::demo::references::m_
+{
+namespace w_
+{
+// route(idx: i64, items: list<i64, 2>) -> ref i64 (node), module demo.references, line 95
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> route(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> idx, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> items)
+{
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::route::impl_>(wiring_, idx, items, ::hglrt::element_port(items, 0), ::hglrt::element_port(items, 1)).as<::hgraph::TS<::hgraph::Int>>();
+}
+}  // namespace w_
+
+namespace n_::set_item
+{
+// set_item(slot: i64, reading: i64) -> list<i64, 2> (node), module demo.references, line 99
+struct impl_
+{
+    static constexpr auto name = "demo.references::set_item";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"slot", ::hgraph::TS<::hgraph::Int>> slot, [[maybe_unused]] ::hgraph::In<"reading", ::hgraph::TS<::hgraph::Int>> reading, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> out_)
+    {
+        // when, line 100 (TIME-3)
+        {
+            ::hglrt::publish(out_, ::hglrt::list_delta_of<std::array<::hgraph::Int, 2>>(::hglrt::dict_of<::hgraph::Int, ::hgraph::Int>({{::hglrt::checked_value(slot), ::hglrt::checked_value(reading)}}), ::hglrt::set<::hgraph::Int>{}, std::nullopt));
+            return;
+        }
+    }
+};
+}  // namespace n_::set_item
+namespace w_
+{
+// set_item(slot: i64, reading: i64) -> list<i64, 2> (node), module demo.references, line 99
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> set_item(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+{
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::set_item::impl_>(wiring_, slot, reading);
+}
+}  // namespace w_
+
+namespace n_::pick_list
+{
+// pick_list(flag: bool, ref low: list<i64, 2>, ref high: list<i64, 2>) -> ref list<i64, 2> (node), module demo.references, line 103
+struct impl_
+{
+    static constexpr auto name = "demo.references::pick_list";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"flag", ::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::In<"low", ::hgraph::REF<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>>, ::hgraph::InputActivity::Passive> low, [[maybe_unused]] ::hgraph::In<"high", ::hgraph::REF<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>>, ::hgraph::InputActivity::Passive> high, [[maybe_unused]] ::hgraph::Out<::hgraph::REF<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>>> out_)
+    {
+        // when, line 104 (TIME-3)
+        if (::hglrt::fn_modified(flag))
+        {
+            if (::hglrt::checked_value(flag))
+            {
+                out_.set(::hglrt::designation(high));
+                return;
+            }
+            out_.set(::hglrt::designation(low));
+            return;
+        }
+    }
+};
+}  // namespace n_::pick_list
+namespace w_
+{
+// pick_list(flag: bool, ref low: list<i64, 2>, ref high: list<i64, 2>) -> ref list<i64, 2> (node), module demo.references, line 103
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> pick_list(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> low, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> high)
+{
+    return ::hgraph::wire<::hgl::demo::references::m_::n_::pick_list::impl_>(wiring_, flag, low, high).as<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>>();
+}
+}  // namespace w_
+
+namespace n_::routed
+{
+// routed(idx: i64, flag: bool, low_slot: i64, low: i64, high_slot: i64, high: i64) -> i64 (graph), module demo.references, line 110
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> idx, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low_slot, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high_slot, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
+    {
+        return ::hgl::demo::references::m_::w_::follow(wiring_, ::hgl::demo::references::m_::w_::route(wiring_, idx, [&] { const auto argument_00_ = flag; const auto argument_01_ = ::hgl::demo::references::m_::w_::set_item(wiring_, low_slot, low); const auto argument_02_ = ::hgl::demo::references::m_::w_::set_item(wiring_, high_slot, high); return ::hgl::demo::references::m_::w_::pick_list(wiring_, argument_00_, argument_01_, argument_02_); }()));
+    }
+};
+}  // namespace n_::routed
+namespace w_
+{
+// routed(idx: i64, flag: bool, low_slot: i64, low: i64, high_slot: i64, high: i64) -> i64 (graph), module demo.references, line 110
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> routed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> idx, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low_slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high_slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high)
+{
+    return ::hgl::demo::references::m_::n_::routed::impl_::compose(wiring_, idx, flag, low_slot, low, high_slot, high);
 }
 }  // namespace w_
 
@@ -443,6 +606,48 @@ void a_designated_input_is_followed_through_its_rebinding()
         const auto right_016_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 10, 11, 100, 101, std::nullopt, std::nullopt, 4};
         ::hglrt::testing::expect_same(left_015_, right_016_);
     }();
+}
+
+void a_designated_position_is_followed_through_its_rebinding()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_018_ = [&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, std::nullopt, 0, std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, std::nullopt, true, std::nullopt, std::nullopt};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 0, std::nullopt, std::nullopt, 0};
+        const auto trace_06_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 11, std::nullopt, std::nullopt, 12};
+        const auto trace_08_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 0, std::nullopt, std::nullopt};
+        const auto trace_010_ = ::hglrt::testing::Dense<::hgraph::Int>{20, std::nullopt, 21, std::nullopt, std::nullopt};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_04_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_07_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_06_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_08_, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_011_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_010_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_012_ = input_01_; const auto argument_013_ = input_03_; const auto argument_014_ = input_05_; const auto argument_015_ = input_07_; const auto argument_016_ = input_09_; const auto argument_017_ = input_011_; return ::hgl::demo::references::m_::w_::routed(wiring_, argument_012_, argument_013_, argument_014_, argument_015_, argument_016_, argument_017_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }();
+        const auto right_019_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, 20, 21, std::nullopt};
+        ::hglrt::testing::expect_same(left_018_, right_019_);
+    }();
+}
+
+void a_designated_position_outside_the_list_fails()
+{
+    ::hglrt::testing::statement();
+    ::hglrt::testing::raises("value.index_out_of_range", [&] {
+        static_cast<void>([&]() {
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{2};
+        const auto trace_02_ = ::hglrt::testing::Dense<std::array<::hgraph::Int, 2>>{::hglrt::testing::Cell<std::array<::hgraph::Int, 2>>{::hglrt::testing::Whole<std::array<::hgraph::Int, 2>>{std::array<::hgraph::Int, 2>{1, 2}}}};
+        return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
+        const ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_1list_1i64_1_12_1_(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::references::m_::w_::route(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+    }());
+    });
 }
 
 }  // namespace hgl::demo::references::m_::t_

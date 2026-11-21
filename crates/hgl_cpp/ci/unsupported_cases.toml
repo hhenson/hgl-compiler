@@ -9,9 +9,6 @@
 "a child of a connection" = [
     "conformance::switching_keys_follows_the_new_child",
 ]
-"a designation of a position of a list" = [
-    "conformance::a_ref_result_follows_the_element_it_designates",
-]
 "a nullable value put in the run's store (hgl_spec issue 165)" = [
     "conformance::a_stored_null_is_distinct_from_an_absent_key",
 ]

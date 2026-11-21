@@ -13,6 +13,7 @@
 
 #include <chrono>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace {
@@ -122,6 +123,49 @@ TEST_CASE("a `ref` parameter given a result that designates nothing designates n
     CHECK(present_seen.size() == 2);
     for (const Seen& seen : present_seen) {
         CHECK_FALSE(seen.designates);
+    }
+}
+
+/// `fn route(idx: i64, items: list<i64, 2>) -> ref i64 { when modified(idx)
+/// { return items[idx] } }`, each position followed through a `REF` input
+/// of its own.
+struct Route {
+    static constexpr auto name = "test::route";
+
+    static void eval(hgraph::In<"idx", hgraph::TS<i64>> idx,
+                     hgraph::In<"first", hgraph::REF<hgraph::TS<i64>>, hgraph::InputActivity::Passive,
+                                hgraph::InputValidity::Unchecked>
+                         first,
+                     hgraph::In<"second", hgraph::REF<hgraph::TS<i64>>, hgraph::InputActivity::Passive,
+                                hgraph::InputValidity::Unchecked>
+                         second,
+                     hgraph::Out<hgraph::REF<hgraph::TS<i64>>> out) {
+        const i64 position = hglrt::designated_position(idx.value(), 2);
+        out.set(hglrt::designation_of(position, first, second));
+    }
+};
+
+TEST_CASE("a position designated names its own input, and one outside the list fails (FN-16, EXPR-3)") {
+    const hglrt::testing::Recording<i64> recorded =
+        hglrt::testing::evaluate<i64>([](hgraph::Wiring& wiring, datetime) {
+            auto routed = hgraph::wire<Route>(wiring, replayed(wiring, Dense<i64>{1, std::nullopt, 0}),
+                                              replayed(wiring, Dense<i64>{10, 11, std::nullopt}),
+                                              replayed(wiring, Dense<i64>{20, 21, std::nullopt}));
+            hgraph::wire<hglrt_test::Record>(wiring, routed.as<hgraph::TS<i64>>(),
+                                             hglrt::str{hglrt::testing::run_output});
+        });
+    // The reader observes the second position, then the first, which it
+    // ticks with the value it holds (TIME-10).
+    CHECK(hglrt::testing::same(recorded, Dense<i64>{20, 21, 11}));
+    CHECK(hglrt::designated_position(1, 2) == 1);
+    for (const i64 outside : {i64{2}, i64{-1}}) {
+        std::optional<std::string> code;
+        try {
+            (void)hglrt::designated_position(outside, 2);
+        } catch (const hglrt::Failure& failure) {
+            code = failure.error().code;
+        }
+        CHECK(code == "value.index_out_of_range");
     }
 }
 

@@ -12,9 +12,14 @@
 // it never reads the endpoint designated through it.
 #pragma once
 
+#include <hglrt/checked.h>
+#include <hglrt/values.h>
+
 #include <hgraph/types/generated.h>
 
 #include <concepts>
+#include <cstddef>
+#include <source_location>
 
 namespace hglrt {
 
@@ -32,6 +37,31 @@ template <class In>
     } ::hgraph::TimeSeriesReference
 designation(const In& input) {
     return input.valid() ? input.value() : ::hgraph::TimeSeriesReference::empty();
+}
+
+/// `index`, the position of a fixed list of `size` elements that a `ref`
+/// result is made to designate, `return items[idx]` (FN-16: "Returning
+/// ... a child path such as `items[idx]` designates that logical
+/// endpoint"). An index outside the list fails with
+/// `value.index_out_of_range`, as the child at it does (EXPR-3: "An index
+/// outside a list, below zero or at or past its size, fails where it is
+/// evaluated").
+inline i64 designated_position(i64 index, std::size_t size,
+                               std::source_location where = std::source_location::current()) {
+    detail::check_index(index, size, where);
+    return index;
+}
+
+/// What the `REF` input among `inputs` at `position` designates
+/// (`designation`): each position of a fixed list a `ref` result may
+/// designate is followed through a `REF` input of its own, in order, and
+/// `position` is one of them, as `designated_position` gives it.
+template <class... In>
+::hgraph::TimeSeriesReference designation_of(i64 position, const In&... inputs) {
+    ::hgraph::TimeSeriesReference found = ::hgraph::TimeSeriesReference::empty();
+    i64 at = 0;
+    static_cast<void>(((at++ == position ? (found = designation(inputs), true) : false) || ...));
+    return found;
 }
 
 } // namespace hglrt

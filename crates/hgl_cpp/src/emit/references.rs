@@ -15,16 +15,18 @@
 //! | `-> ref i64`, a `ref` result | hgraph's `REF` output, `::hgraph::Out<::hgraph::REF<...>>`; the wiring function gives it as a connection of T, `.as<::hgraph::TS<...>>()`, to which an ordinary reader is bound as hgraph binds a reader of a `REF` |
 //! | `return low` of a whole `ref` parameter | `out_.set(::hglrt::designation(low));`: what it designates as the `return` runs, which the result keeps until the node writes it again |
 //! | `return price` of an input that is no `ref` parameter | the input is given to the node again, as a `REF` input it is active on (`designated_00_`); the node keeps which it designates in its state (`designates_`), publishes what that `REF` holds, and, where it ticks while the result designates it, publishes it again and runs no handler for that wake |
+//! | `return items[idx]` of a position of a fixed list that is no `ref` parameter | each position given to the node again, `::hglrt::element_port(items, 0)`, as a `REF` input it follows as it follows an input (`designated_01_0_`); the index checked (`::hglrt::designated_position`), and the position it names published (`::hglrt::designation_of`) |
 //! | `out = ...` of a `ref` result | as the `return`, and the evaluation goes on |
 //! | `invalidate(out)` of a `ref` result that follows an input | the result follows none, then is invalidated |
 //!
-//! Not written yet, and reported: a designation of a child of an input,
-//! `return items[idx]`; a `ref` result of a source; and a designation of
-//! an input that is no `ref` parameter in a node that injects a scheduler
-//! or an alarm.
+//! Not written yet, and reported: a designation of any other child, of a
+//! `ref` parameter's (`xs[i]`), of a field, of a growing list's position;
+//! an input designated whole and by a position in one node; a `ref` result
+//! of a source; and a designation of an input that is no `ref` parameter
+//! in a node that injects a scheduler or an alarm.
 
 use hgl_analyser::hir::{Body, EndpointOperation, Expr, ExprKind, Hook, Stmt};
-use hgl_analyser::{Phase, Signature, Type};
+use hgl_analyser::{ConstantValue, Phase, Signature, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::nodes::{
     Designated, Timer, designated, designates, designations, is_out, is_reference,
@@ -39,9 +41,9 @@ use super::values::INDENT;
 use crate::runtime;
 
 /// The name of the node's state member, and of the local bound to it in
-/// `eval`, that says which input the result follows: its place among
-/// those [`followed`] gives, or -1 for none. A name no HGL name gives
-/// (`names`).
+/// `eval`, that says which input or position the result follows: its
+/// place among those [`followed`] gives, or -1 for none. A name no HGL
+/// name gives (`names`).
 const DESIGNATES: &str = "designates_";
 
 /// The references' family: the statements of a hook that designate.
@@ -76,7 +78,7 @@ impl Family for References {
             Stmt::Return {
                 value: Some(value), ..
             } if designates(value) => {
-                if let Some(written) = emitter.designation(&signature, body, value, depth) {
+                if let Some(written) = emitter.designation(scope, &signature, value, depth) {
                     text.push_str(&format!("{written}{indent}return;\n"));
                 }
                 true
@@ -89,7 +91,7 @@ impl Family for References {
                 value,
                 ..
             } if is_out(&body.locals, *local) && designates(value) => {
-                if let Some(written) = emitter.designation(&signature, body, value, depth) {
+                if let Some(written) = emitter.designation(scope, &signature, value, depth) {
                     text.push_str(&written);
                 }
                 true
@@ -117,29 +119,79 @@ impl Family for References {
     }
 }
 
-/// The inputs that are no `ref` parameter which the `ref` result of the
-/// node of `signature`, whose body is `body`, designates whole, each once,
-/// in the order first designated: the node follows each (FN-16: "Readers
-/// follow a later rebinding of that endpoint without waking the node for
-/// it"). None for a node whose result is not `ref`.
-fn followed(signature: &Signature, body: &Body) -> Vec<usize> {
+/// What a node follows of an input that is no `ref` parameter, which its
+/// `ref` result designates (FN-16): the input whole, or one position of
+/// it, a fixed list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Place {
+    /// The input, by its place among the body's locals.
+    local: usize,
+    /// The position, where it is one of a fixed list.
+    position: Option<i64>,
+}
+
+impl Place {
+    /// The C++ name of the `REF` input the node follows it through: of
+    /// the target's own form (`names::temporary`), the position after the
+    /// input's place, `designated_01_0_`, and no `__` in it, which C++
+    /// keeps for itself.
+    fn follower(self) -> String {
+        let input = names::temporary("designated", self.local);
+        match self.position {
+            None => input,
+            Some(position) => format!("{input}{position}_"),
+        }
+    }
+}
+
+/// The size of `ty`, where it is a fixed list of a positive size.
+fn fixed_size(ty: &Type) -> Option<i64> {
+    match ty {
+        Type::List {
+            size: Some(size), ..
+        } => match size.value {
+            ConstantValue::Int(count) if count > 0 => Some(count),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// What the `ref` result of the node of `signature`, whose body is `body`,
+/// designates of its inputs that are no `ref` parameter, each once, in
+/// the order first designated: an input designated whole, and each
+/// position of a fixed list one of whose positions is designated
+/// (`items[idx]`), which is known only when it runs. The node follows each
+/// (FN-16: "Readers follow a later rebinding of that endpoint without
+/// waking the node for it"). None for a node whose result is not `ref`.
+fn followed(signature: &Signature, body: &Body) -> Vec<Place> {
     if !signature.reference {
         return Vec::new();
     }
-    let mut found: Vec<usize> = Vec::new();
+    let mut found: Vec<Place> = Vec::new();
     for (local, how, _) in designations(&body.locals, Some(signature), &body.statements) {
-        let reference = is_reference(&body.locals, Some(signature), local);
-        if how == Designated::Whole && !reference && !found.contains(&local) {
-            found.push(local);
+        if is_reference(&body.locals, Some(signature), local) {
+            continue;
+        }
+        let places: Vec<Place> = match how {
+            Designated::Whole => vec![Place {
+                local,
+                position: None,
+            }],
+            Designated::Position => (0..fixed_size(&body.locals[local].ty).unwrap_or(0))
+                .map(|position| Place {
+                    local,
+                    position: Some(position),
+                })
+                .collect(),
+        };
+        for place in places {
+            if !found.contains(&place) {
+                found.push(place);
+            }
         }
     }
     found
-}
-
-/// The C++ name of the `REF` input through which a node follows the
-/// input `local`, of its locals.
-fn follower(local: usize) -> String {
-    names::temporary("designated", local)
 }
 
 /// What a node adds for the inputs that are no `ref` parameter which its
@@ -148,9 +200,9 @@ fn follower(local: usize) -> String {
 /// result follows.
 #[derive(Default)]
 pub(super) struct Designations {
-    /// Each input followed, in the order of [`followed`]: its local, and
+    /// Each input or position followed, in the order of [`followed`], and
     /// the `eval` parameter it is followed through.
-    followed: Vec<(usize, String)>,
+    followed: Vec<(Place, String)>,
 }
 
 impl Designations {
@@ -181,8 +233,8 @@ impl Designations {
             return String::new();
         }
         format!(
-            "{INDENT}{INDENT}// FN-16: the input the `ref` result follows, by its place among\n\
-             {INDENT}{INDENT}// those it designates, or -1 for none.\n\
+            "{INDENT}{INDENT}// FN-16: the input or position the `ref` result follows, by its\n\
+             {INDENT}{INDENT}// place among those it designates, or -1 for none.\n\
              {INDENT}{INDENT}::hgraph::Int {DESIGNATES}{{-1}};\n"
         )
     }
@@ -260,12 +312,21 @@ impl Emitter<'_> {
         if !signature.reference {
             return Some(Designations::default());
         }
-        for (local, how, at) in designations(&body.locals, Some(signature), &body.statements) {
+        let found = designations(&body.locals, Some(signature), &body.statements);
+        for &(local, how, at) in &found {
+            // The list's own form first, so that a list not written yet is
+            // reported as that.
             if how == Designated::Position {
-                // The list's own form first, so that a list not written
-                // yet is reported as that.
                 self.temporal_schema(&body.locals[local].ty, at)?;
-                self.unsupported(at, "a designation of a position of a list");
+            }
+            if found
+                .iter()
+                .any(|&(other, again, _)| other == local && again != how)
+            {
+                self.unsupported(
+                    at,
+                    "an input designated whole and by a position in one node",
+                );
                 return None;
             }
         }
@@ -284,17 +345,29 @@ impl Emitter<'_> {
             return None;
         }
         let mut following = Vec::new();
-        for local in followed {
-            let declared = &body.locals[local];
-            let schema = self.temporal_schema(&declared.ty, declared.at)?;
+        for place in followed {
+            let declared = &body.locals[place.local];
+            // A position is of the list's element's form.
+            let (ty, label) = match (place.position, &declared.ty) {
+                (None, ty) => (ty, format!("designated:{}", declared.name)),
+                (Some(position), Type::List { element, .. }) => (
+                    &**element,
+                    format!("designated:{}[{position}]", declared.name),
+                ),
+                (Some(_), _) => {
+                    self.unsupported(declared.at, "a designation of a position of this");
+                    return None;
+                }
+            };
+            let schema = self.temporal_schema(ty, declared.at)?;
             // A label no HGL name is: hgraph names the node's inputs by
             // their labels.
-            let label = names::string(&format!("designated:{}", declared.name));
+            let label = names::string(&label);
             following.push((
-                local,
+                place,
                 format!(
                     "::hgraph::In<{label}, ::hgraph::REF<{schema}>, ::hgraph::InputValidity::Unchecked> {}",
-                    follower(local)
+                    place.follower()
                 ),
             ));
         }
@@ -329,8 +402,8 @@ impl Emitter<'_> {
              {indent}// FN-16: \"Readers follow a later rebinding of that endpoint without\n\
              {indent}// waking the node for it\".\n"
         );
-        for (place, (local, _)) in designated.followed.iter().enumerate() {
-            let view = follower(*local);
+        for (place, (followed, _)) in designated.followed.iter().enumerate() {
+            let view = followed.follower();
             text.push_str(&format!(
                 "{indent}if ({DESIGNATES} == {place} && {view}.modified())\n{indent}{{\n\
                  {inner}{OUT}.set(::{}::designation({view}));\n{indent}}}\n",
@@ -376,11 +449,21 @@ impl Emitter<'_> {
 
     /// The ports the wiring function of the node of `signature`, whose
     /// body is `body`, gives a second time, after its parameters: each
-    /// input it follows, named as the wiring function's parameter is.
+    /// input it follows, named as the wiring function's parameter is, and
+    /// each position it follows, that position's connection (TIME-9: "a
+    /// child of one, `parts[1]`").
     pub(super) fn designated_ports(&self, signature: &Signature, body: &Body) -> Vec<String> {
         followed(signature, body)
             .into_iter()
-            .map(|local| identifier(&body.locals[local].name))
+            .map(|place| {
+                let port = identifier(&body.locals[place.local].name);
+                match place.position {
+                    None => port,
+                    Some(position) => {
+                        format!("::{}::element_port({port}, {position})", runtime::NAMESPACE)
+                    }
+                }
+            })
             .collect()
     }
 
@@ -402,24 +485,22 @@ impl Emitter<'_> {
     }
 
     /// The statements, `depth` levels in, that make the result of the node
-    /// of `signature`, whose body is `body`, designate `value`, what a
-    /// `return` or an `out =` names (FN-16). `None` where it is not
+    /// of `signature` designate `value`, what a `return` or an `out =`
+    /// names (FN-16), in `scope`, the node's hook. `None` where it is not
     /// written yet, which is reported.
     fn designation(
         &mut self,
+        scope: &mut Scope,
         signature: &Signature,
-        body: &Body,
         value: &Expr,
         depth: usize,
     ) -> Option<String> {
+        let body = scope.body;
         let indent = INDENT.repeat(depth);
         let following = followed(signature, body);
-        let published = |view: &str| {
-            format!(
-                "{indent}{OUT}.set(::{}::designation({view}));\n",
-                runtime::NAMESPACE
-            )
-        };
+        let namespace = runtime::NAMESPACE;
+        let published =
+            |view: &str| format!("{indent}{OUT}.set(::{namespace}::designation({view}));\n");
         match designated(&body.locals, Some(signature), value) {
             Some((local, Designated::Whole)) => {
                 if is_reference(&body.locals, Some(signature), local) {
@@ -437,18 +518,60 @@ impl Emitter<'_> {
                 // FN-16: "Returning an ordinary input ... designates the
                 // logical endpoint named by the path", which the node
                 // follows.
-                let Some(place) = following.iter().position(|&followed| followed == local) else {
+                let whole = Place {
+                    local,
+                    position: None,
+                };
+                let Some(place) = following.iter().position(|&followed| followed == whole) else {
                     self.unsupported(value.at, "this designation");
                     return None;
                 };
                 Some(format!(
                     "{indent}{DESIGNATES} = {place};\n{}",
-                    published(&follower(local))
+                    published(&whole.follower())
                 ))
             }
-            Some((_, Designated::Position)) => {
-                self.unsupported(value.at, "a designation of a position of a list");
-                None
+            // FN-16: "Returning ... a child path such as `items[idx]`
+            // designates that logical endpoint": the position is known
+            // when the `return` runs, and the node follows each.
+            Some((local, Designated::Position)) => {
+                let (ExprKind::ChildEndpointOf(child), Some(size)) =
+                    (&value.kind, fixed_size(&body.locals[local].ty))
+                else {
+                    self.unsupported(value.at, "a designation of a position of a list");
+                    return None;
+                };
+                let ExprKind::Index { index, .. } = &child.kind else {
+                    self.unsupported(value.at, "a designation of a position of a list");
+                    return None;
+                };
+                let first = Place {
+                    local,
+                    position: Some(0),
+                };
+                let Some(base) = following.iter().position(|&followed| followed == first) else {
+                    self.unsupported(value.at, "this designation");
+                    return None;
+                };
+                let views: Vec<String> = (0..size)
+                    .map(|position| {
+                        Place {
+                            local,
+                            position: Some(position),
+                        }
+                        .follower()
+                    })
+                    .collect();
+                let held = names::temporary("position", self.temporary());
+                let index = self.expression(scope, index);
+                // EXPR-3: "An index outside a list ... fails where it is
+                // evaluated", as the child at it does (`hglrt::child`).
+                Some(format!(
+                    "{indent}const ::hgraph::Int {held} = ::{namespace}::designated_position({index}, {size});\n\
+                     {indent}{DESIGNATES} = {base} + {held};\n\
+                     {indent}{OUT}.set(::{namespace}::designation_of({held}, {}));\n",
+                    views.join(", ")
+                ))
             }
             None => {
                 self.unsupported(value.at, "a designation of this child");

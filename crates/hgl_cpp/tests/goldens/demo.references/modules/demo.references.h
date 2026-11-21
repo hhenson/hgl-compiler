@@ -12,16 +12,26 @@
 #undef flag
 #undef follow
 #undef high
+#undef high_slot
+#undef idx
 #undef item
+#undef items
 #undef low
+#undef low_slot
 #undef pick
+#undef pick_list
 #undef picked
 #undef present
 #undef probe
+#undef reading
 #undef references
+#undef route
+#undef routed
 #undef sample_picked
 #undef sampled
 #undef sel
+#undef set_item
+#undef slot
 #undef take
 #undef target
 
@@ -68,6 +78,30 @@ namespace w_
 {
 // chosen(flag: i64, sel: bool, a: i64, b: i64, high: i64) -> i64 (graph), module demo.references, line 79
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> chosen(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> sel, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> a, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> b, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high);
+}  // namespace w_
+
+namespace w_
+{
+// route(idx: i64, items: list<i64, 2>) -> ref i64 (node), module demo.references, line 95
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> route(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> idx, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> items);
+}  // namespace w_
+
+namespace w_
+{
+// set_item(slot: i64, reading: i64) -> list<i64, 2> (node), module demo.references, line 99
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> set_item(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading);
+}  // namespace w_
+
+namespace w_
+{
+// pick_list(flag: bool, ref low: list<i64, 2>, ref high: list<i64, 2>) -> ref list<i64, 2> (node), module demo.references, line 103
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> pick_list(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> low, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>, 2>> high);
+}  // namespace w_
+
+namespace w_
+{
+// routed(idx: i64, flag: bool, low_slot: i64, low: i64, high_slot: i64, high: i64) -> i64 (graph), module demo.references, line 110
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> routed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> idx, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low_slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high_slot, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> high);
 }  // namespace w_
 
 namespace w_::i_::sampled
