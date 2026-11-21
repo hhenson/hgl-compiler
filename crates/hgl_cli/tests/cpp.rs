@@ -1078,8 +1078,8 @@ fn pack_parameters_run_on_the_sdk() {
     );
 }
 
-/// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code
-/// and temporal nodes, including an application-phase failure.
+/// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code and
+/// temporal nodes, including SOURCE-2 yield times and an application failure.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn contextual_result_reads_run_on_the_sdk() {
@@ -1101,7 +1101,7 @@ fn contextual_result_reads_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 
