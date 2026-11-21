@@ -72,26 +72,13 @@ void fn_log(const Logger& logger, LogLevel level, std::string_view message) {
 
 // ---- The scheduler -------------------------------------------------------------
 
-Scheduler::Scheduler(hgraph::NodeScheduler view, Hook hook) : view_(view), hook_(hook) {
-    if (hook_ != Hook::evaluation) {
-        return;
-    }
-    due_now_ = view_.is_scheduled_now();
-    // Older SDKs include a wake being delivered in the pending queue (CAP-4).
-    while (due_now_ && view_.is_scheduled() && view_.next_scheduled_time() == view_.now()) {
-        view_.un_schedule();
-    }
-}
+Scheduler::Scheduler(hgraph::NodeScheduler view, Hook hook) : view_(view), hook_(hook) {}
 
 std::optional<datetime> Scheduler::next_scheduled_time() const noexcept {
     if (!view_.is_scheduled()) {
         return std::nullopt;
     }
     return view_.next_scheduled_time();
-}
-
-bool Scheduler::is_scheduled_now() const noexcept {
-    return hook_ == Hook::evaluation ? due_now_ : view_.is_scheduled_now();
 }
 
 void schedule_Scheduler_duration_str__bool(const Scheduler& capability, duration at,

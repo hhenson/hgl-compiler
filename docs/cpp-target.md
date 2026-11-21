@@ -52,18 +52,18 @@ one executable for each test module or application
 | Scalars | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `ZonedDateTime` and `Tenor`. Tenor literals keep their calendar or business-day form |
 | Struct | A generated struct with HGL's equality. As a temporal value, a nominal bundle whose whole value is the struct |
 | Enum, tuple, optional, list, fixed list, result | `enum class`, `std::tuple`, `std::optional`, `std::vector`, `std::array`, `std::expected` |
-| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key is told apart by `==` of its type. As a temporal value, hgraph's `TSS` and `TSD`, published through hgraph's own whole write and delta write, whose ticks on hgraph 0.9.13 are TIME-7's; a temporal one's order is hgraph's |
+| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key is told apart by `==` of its type. As a temporal value, hgraph's `TSS` and `TSD`, published through hgraph's own whole write and delta write, whose ticks on hgraph 0.9.23 are TIME-7's; a temporal one's order is hgraph's |
 | Abstract struct | A class that holds any struct that inherits from it, read through a function of each field's name |
 | `delta<T>` | As a value: `hglrt::nullable_delta`, a type of its own and no optional, `hglrt::list_delta`, `set_delta`, `dict_delta`, a struct's own delta struct, a tuple. Converting to and from hgraph's delta value is each temporal form's: a struct's and a tuple's are read from and published to hgraph's bundle field by field (`hglrt/structs.h`), a set's and a dictionary's are in `hglrt/keyed.h`, a list's in `hglrt/list_endpoints.h` |
 | Temporal struct, tuple, nullable | A struct is hgraph's `NativeTSB<S>` (an `hgraph::native_bundle<S>` written beside the aggregate), or its `NominalTSB` of each field's own form where a field is optional; a tuple an `UnNamedTSB` of its positions; `atomic<S>` a `TS<S>`; a nullable `TS<Optional<T>>`. A field is a child endpoint, in a hook and in a graph (EXPR-7) |
 | Temporal list, fixed list | hgraph's `TSL<S>` and `TSL<S, N>`, built on as they are |
 | Node | A struct with `eval`, `start` and `stop`, in its module's unit, and a wiring function, in its header, that wires it: other units call the wiring function and instantiate none of hgraph's templates of the node. A handler header is the input's declared activity and validity; handlers are tested in source order. State and cache are one generated struct for each node |
 | Graph | A struct with static `compose` over `Wiring&` and typed ports, calling the wiring functions of what it wires, and a wiring function as a node has. Identical value nodes are interned by hgraph, but where a node's configuration holds an `f64` ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866): `0.0 == -0.0`) |
-| `if`, `switch`, `for` over connections | hgraph's `switch_` and `map_` wiring of compiled children (`types/subgraph_wiring.h`), each child a compiled sub-graph with its captures |
+| `if`, `switch`, `for` over connections | hgraph's `compiled::switch_` and `compiled::map_` wiring of compiled children (`types/compiled_subgraph.h`), each child a compiled sub-graph with its captures |
 | Lifted call | A generated node that calls the instance |
 | Source | A node with no input that schedules itself. The body is a C++23 coroutine, an `hglrt::generator` of a time and a payload (`<hglrt/generator.h>`: `std::generator`'s shape, written once for every platform because Apple clang 21's standard library has no `std::generator`), held in the node's state, made in `start` and destroyed in `stop`: `yield` inside loops and branches is written as it reads, with the body's locals in the coroutine's frame. A trial ran one on hgraph: the trace was right, a failure inside the body was the node's failure, and the frame was freed after a finished and after a failed run |
 | `ref` parameter and result | hgraph's `REF` input and output. Returning a whole `ref` parameter publishes the reference that input holds when the `return` runs, and no more: a `REF` output keeps what it was given, which is the specification's rule since hhenson/hgl_spec#147. Returning an ordinary input or a child of one designates that endpoint, which is followed through a re-binding: the node is active on that binding, publishes the new designation there and runs no handler for it (FN-16). A designation the result holds already is not published again (TIME-10) |
-| Failure | Thrown as hgraph's `ExecutionFailure` carrying `CanonicalError` (code, message, node, phase, time). `capture` is `try_except_node` with canonical errors. `assert raises` finds the failure in the exception it catches |
+| Failure | Thrown as hgraph's `ExecutionFailure` carrying `CanonicalError` (code, message, node, phase, time). `capture` is hgraph's `compiled::try_except_` of a compiled child, with canonical errors, a node of its own. `assert raises` finds the failure in the exception it catches |
 | Test | Core's `replay` and `record` are compiled like any module. The compiler writes each eval's entry graph, runs the executor in simulation and reads the recording from the run's store |
 | Application | The same, in an executable of its own whose host is `libhglrt`'s, in simulation or in real time; a run in real time its host asks to stop is stopped through the engine's control |
 
@@ -119,18 +119,28 @@ SDK and the driver's own commands, beside the same on Linux (GCC 15):
 
 ## What hgraph is asked for
 
-The SDK is hgraph 0.9.13. Nothing is asked of hgraph now. What was asked
-is in it, and each is taken up where the order of work reaches it:
+The SDK is hgraph 0.9.23. One request is open:
+[1866](https://github.com/hhenson/hgraph/issues/1866), hgraph's interning
+takes two nodes whose configurations are `0.0` and `-0.0` for one, so a
+node whose configuration holds an `f64` is wired as a node of its own.
+What else was asked is in it, and each is taken up where the order of
+work reaches it:
 
 | Issue | In hgraph | Here |
 | --- | --- | --- |
 | [1833](https://github.com/hhenson/hgraph/issues/1833) | `switch_` and `map_` wiring of compiled children with no operator registration (`types/subgraph_wiring.h`) | The control-flow work wires with them; `libhglrt` carries no glue |
-| [1822](https://github.com/hhenson/hgraph/issues/1822), [1827](https://github.com/hhenson/hgraph/issues/1827) | The growing list's first empty publication and its validity, a shrink under a map or an index, invalidation emptying a collection, and tuple deltas | The temporal list and tuple are built on 0.9.13 as it is: core's list and tuple cases need no adaptation |
+| [1822](https://github.com/hhenson/hgraph/issues/1822), [1827](https://github.com/hhenson/hgraph/issues/1827) | The growing list's first empty publication and its validity, a shrink under a map or an index, invalidation emptying a collection, and tuple deltas | The temporal list and tuple are built on hgraph as it is: core's list and tuple cases need no adaptation |
 | [1848](https://github.com/hhenson/hgraph/issues/1848) | A generator that yields a time already past skips it and goes on | That is hgraph's Python generator; a C++ node's `NodeScheduler` drops a wake at a past time, so the source driver of `libhglrt` keeps its own skip (SOURCE-3) |
 | [1834](https://github.com/hhenson/hgraph/issues/1834) | A C++ aggregate as a nominal bundle's whole value | A struct is written and read whole |
 | [1838](https://github.com/hhenson/hgraph/issues/1838) | A lighter front end for generated code (`types/generated.h`) | `libhglrt`'s headers, and so generated units, include it; the precompiled header still pays |
 | [1839](https://github.com/hhenson/hgraph/issues/1839) | A runtime and wiring library without Arrow (`HGRAPH_WITH_ARROW=OFF`) | The SDK is built so: 14 MB where it was 54, its prefix fmt, spdlog and simdjson; a test of `libhglrt` fails where Arrow or hgraph's standard library is included or linked |
 | [1837](https://github.com/hhenson/hgraph/issues/1837), [1835](https://github.com/hhenson/hgraph/issues/1835), [1836](https://github.com/hhenson/hgraph/issues/1836) | `add_node` keeps a builder's own scalars; `try_except_<G>` takes options for canonical errors; a `tenor` scalar | In use |
+| [1871](https://github.com/hhenson/hgraph/issues/1871) | `compiled::try_except_` in the front end for generated code | `capture` wires it; no header of `libhglrt` takes `graph_wiring.h`, which a test checks |
+| [1874](https://github.com/hhenson/hgraph/issues/1874) | A `std::optional<U>` member of a mapped aggregate for an `Optional<U>` field | An atomic struct that holds an optional field is written |
+| [1880](https://github.com/hhenson/hgraph/issues/1880) | `CanonicalError` hashes, so a node may be configured with one | An `error` configuration is held as `hglrt::configured<error>`, as any value hgraph has no scalar of its own for |
+| [1881](https://github.com/hhenson/hgraph/issues/1881) | A `REF<TS<Optional<T>>>` input bound to a `TS<T>` output through the widening | A connection of T given to a `ref` parameter of `T?` is written |
+| [1884](https://github.com/hhenson/hgraph/issues/1884) | In the evaluation a wake brings about, that wake is no longer pending | `libhglrt`'s scheduler is hgraph's, with no adaptation (CAP-4) |
+| [1885](https://github.com/hhenson/hgraph/issues/1885) | A switch's output is withdrawn when the selected branch has published nothing | Nothing here adapted it |
 
 Nothing is asked on references: a `REF` output holds the reference it
 was given, which is the specification's rule for a returned `ref`
@@ -138,11 +148,11 @@ parameter. Where the pinned specification and hgraph differ, this target
 builds the specification's rule, and the difference goes to the
 specification's issue tracker to be decided there, not here.
 
-The scheduler is such a case (CAP-4), and `libhglrt` builds core's rule
-over hgraph's `NodeScheduler`, as the Python-writing target does: hgraph
-keeps the wake it delivers until the node has run, so in that evaluation
-it counts as pending, `un_schedule()` cancels it, and `is_scheduled_now`
-is false after `reset`; and it keeps no wake under the empty tag. The
+The scheduler was such a case (CAP-4), and hgraph 0.9.23 has core's
+rule: in the evaluation a wake brings about, that wake is due and no
+longer pending, so `un_schedule()` cancels the next one, and
+`is_scheduled_now` holds after `reset`. hgraph keeps no wake under the
+empty tag, so a tag is given to it after a mark of its own. The
 wall-clock option is hgraph's own, as CAP-4 has it since the owner's
 ruling: in real time a wake of it already due comes in the next cycle, and
 in simulation the option changes nothing. The alarm keeps its one wake

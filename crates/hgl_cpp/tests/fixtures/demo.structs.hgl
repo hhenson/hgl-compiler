@@ -371,6 +371,59 @@ test an_atomic_struct_is_replayed_whole {
     ]) == [1, _, 3]
 }
 
+# An atomic struct that holds an optional field, at any depth (TYPE-9,
+# TYPE-15): one endpoint of the whole struct, published, read whole and
+# replayed, a null field among it, and its field's connection.
+fn whole_noted(bid: i64) -> atomic<NotedQuote> {
+    when {
+        if bid > 1 { return NotedQuote(bid: bid, note: "high") }
+        return NotedQuote(bid: bid)
+    }
+}
+
+fn note_or_none(quote: atomic<NotedQuote>) -> str {
+    when {
+        let note = quote.note
+        if note == null { return "none" }
+        return note
+    }
+}
+
+fn noted_note(bid: i64) -> str? => whole_noted(bid).note
+
+fn whole_wrapped(bid: i64) -> atomic<Wrapped> {
+    when { return Wrapped(noted: NotedQuote(bid: bid), count: bid) }
+}
+
+fn wrapped_note(wrapped: atomic<Wrapped>) -> bool {
+    when { return note_is_null(wrapped.noted) }
+}
+
+# A struct with an atomic field that holds an optional field: the field
+# is one endpoint of the whole struct, read whole with its struct.
+struct Holding {
+    quote: atomic<NotedQuote>
+    count: i64
+}
+
+fn held_count(holding: Holding) -> i64 {
+    when all_valid(holding) {
+        let whole = holding
+        return whole.count
+    }
+}
+
+test an_atomic_struct_with_an_optional_field_is_one_endpoint {
+    assert eval held_count(holding: [_]) == [_]
+    assert eval whole_noted(bid: [1, 2]) == [NotedQuote(bid: 1), NotedQuote(bid: 2, note: "high")]
+    assert eval note_or_none(quote: [NotedQuote(bid: 1), _, NotedQuote(bid: 3, note: "n")]) ==
+        ["none", _, "n"]
+    assert eval noted_note(bid: [1, 2]) == [null, "high"]
+    assert eval whole_wrapped(bid: [1]) == [Wrapped(noted: NotedQuote(bid: 1), count: 1)]
+    assert eval wrapped_note(wrapped: [Wrapped(noted: NotedQuote(bid: 1, note: "n"), count: 1)]) ==
+        [false]
+}
+
 test an_atomic_eval_kept_in_a_let_is_compared {
     let seen = eval whole_quote(bid: [10, 11], ask: [12, _])
     assert seen == [MarketQuote(bid: 10, ask: 12), MarketQuote(bid: 11, ask: 12)]
