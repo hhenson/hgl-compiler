@@ -872,3 +872,76 @@ fn typed_places_and_conditions_read_nullable_success_payloads() {
         assert_eq!(reads, 1, "{name}");
     }
 }
+
+/// ERR-15: when one candidate fits with either operand's payload, the
+/// two arrangements are ambiguous. When only one fits, take that one.
+#[test]
+fn candidate_cannot_choose_between_equally_few_result_reads() {
+    let checked = module(concat!(
+        "operator read_one<X, Y>(left: X, right: Y) -> i64
+",
+        "impl const fn read_one<T, U>(left: T, right: U) -> i64
+",
+        "    requires (T in {result<i64, error>} && U in {i64})
+",
+        "          || (T in {i64} && U in {result<i64, error>}) => 0
+",
+        "const fn ambiguous(l: result<i64, error>, r: result<i64, error>) -> i64 => read_one(l, r)
+",
+        "const fn read_left(l: result<i64, error>) -> i64 => read_one(l, 3)
+",
+        "const fn read_right(r: result<i64, error>) -> i64 => read_one(3, r)
+",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:76 operator/operator.ambiguous ERR-15"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// ERR-15: a whole result wins over taking its value. Among non-whole
+/// arrangements, taking one value wins over taking two.
+#[test]
+fn candidate_uses_the_arrangement_with_fewest_result_reads() {
+    let checked = module(concat!(
+        "operator keep<X>(item: X) -> i64
+",
+        "impl const fn keep<T>(item: T) -> i64 requires T in {i64, result<i64, error>} => 0
+",
+        "operator prefer<X, Y, Z>(a: X, b: Y, c: Z) -> i64
+",
+        "impl const fn prefer<T, U, V>(a: T, b: U, c: V) -> i64
+",
+        "    requires (T in {i64} && U in {result<i64, error>} && V in {result<i64, error>})
+",
+        "          || (T in {result<i64, error>} && U in {i64} && V in {i64}) => 0
+",
+        "const fn whole(x: result<i64, error>) -> i64 => keep(x)
+",
+        "const fn one(a: result<i64, error>, b: result<i64, error>, c: result<i64, error>) -> i64
+",
+        "    => prefer(a, b, c)
+",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for (name, raised) in [("whole", &[false][..]), ("one", &[true, false, false][..])] {
+        let [
+            Stmt::Return {
+                value: Some(call), ..
+            },
+        ] = body(&checked, name).statements.as_slice()
+        else {
+            panic!("expected a return of an operator call");
+        };
+        let ExprKind::Call { arguments, .. } = &call.kind else {
+            panic!("expected an operator call, got {:?}", call.kind);
+        };
+        let reads: Vec<bool> = arguments
+            .iter()
+            .map(|arg| matches!(arg.value.kind, ExprKind::Raised { .. }))
+            .collect();
+        assert_eq!(reads, raised, "{name}");
+    }
+}
