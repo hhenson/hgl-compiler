@@ -347,6 +347,8 @@ analyser: done
 
 transpiler: planned
 
+- C++: hgraph 0.9.23's own `NodeScheduler` has it so, with no adapter: in the evaluation a wake brings about, `is_scheduled`, `next_scheduled_time` and `un_schedule` with no tag see only the wakes to come, and `is_scheduled_now` holds through the evaluation, after `un_schedule` or `reset` too
+
 ## CAP-5
 
 analyser: done

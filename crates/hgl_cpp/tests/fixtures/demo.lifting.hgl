@@ -246,6 +246,19 @@ fn captured_shown(x: i64) -> str {
     return boundary.value
 }
 
+# A connection of `i64` given to a `ref` parameter of `i64?` (FN-16): the
+# node designates the producer's endpoint, whose values, invalidation and
+# recovery its reader then follows.
+fn pick(flag: bool, ref low: i64?) -> ref i64? {
+    when modified(flag) { return low }
+}
+
+fn picked(flag: bool, low: i64) -> i64? => pick(flag, low)
+
+fn picked_validity(flag: bool, command: i64) -> bool => validity(pick(flag, produced(command)))
+
+fn captured_pick(flag: bool, low: i64) -> str => shown(capture(pick, flag, low).value)
+
 test a_connection_of_i64_is_one_of_i64_nullable {
     assert eval or_zero_of(a: [1, _, 2], b: [_, 10, _]) == [1, 11, 12]
     assert eval shown_of(x: [1, 2]) == ["1", "2"]
@@ -255,6 +268,9 @@ test a_connection_of_i64_is_one_of_i64_nullable {
     assert eval widened_validity(command: [1, 0, 2]) == [true, false, true]
     assert eval branch_widened(flag: [true, false], x: [1, _], y: [2, _]) == [1, 2]
     assert eval captured_shown(x: [3]) == ["3"]
+    assert eval picked(flag: [true], low: [1, 2]) == [1, 2]
+    assert eval picked_validity(flag: [true], command: [1, 0, 2]) == [true, false, true]
+    assert eval captured_pick(flag: [true], low: [1, 2]) == ["1", "2"]
 }
 
 test a_raised_error_keeps_its_provenance {

@@ -13,7 +13,7 @@
 //! | A call of a temporal function | its wiring function, `w_::f(wiring_, a)`; a generic one's instance's |
 //! | A lifted call, `value + 1` (FN-6); `capture` (ERR-7) | the lifting family's (`lifting`) |
 //! | An ordinary value where a connection is expected (FN-3) | its temporal form's constant, `::hglrt::constant<T>(wiring_, value)` |
-//! | A connection of T where one of `T?` is taken (TYPE-14) | hgraph's widening of its port, `(x).as<TS<Optional<T>>>()`; one given to a `ref` parameter of `T?` is reported, as hgraph binds no `REF` of a `T?` to an output of T |
+//! | A connection of T where one of `T?` is taken (TYPE-14) | hgraph's widening of its port, `(x).as<TS<Optional<T>>>()`; given to a `ref` parameter of `T?`, the node's `REF` input designates that widened view of the producer's endpoint (FN-16) |
 //!
 //! Not written yet, and reported: `if`, `switch` and `for` over
 //! connections (CTRL-7), a `var` connection, and a call that leaves out a
@@ -227,18 +227,6 @@ impl Emitter<'_> {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let parameter = &signature.parameters[index];
-            // TYPE-14 and FN-16: hgraph binds no `REF` of a `T?` to an
-            // output of T, neither as it is nor widened (`Port::as`): "TSOutput
-            // alternative binding requires dereference-compatible schemas".
-            if parameter.reference && widened_from(&argument.value.ty, &parameter.ty).is_some() {
-                return self.missing(
-                    argument.value.at,
-                    &format!(
-                        "a connection of `{}` given to a `ref` parameter of `{}`",
-                        argument.value.ty, parameter.ty
-                    ),
-                );
-            }
             let port = given
                 .iter()
                 .find(|(at, _)| *at == position)

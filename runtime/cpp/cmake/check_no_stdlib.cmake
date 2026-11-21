@@ -1,5 +1,6 @@
 # Fails where libhglrt takes anything of hgraph's standard library or of
-# Arrow, which the C++ target takes nothing from (docs/cpp-target.md): the
+# Arrow, which the C++ target takes nothing from (docs/cpp-target.md), or
+# where its public headers bring in hgraph's full wiring front end: the
 # test `hglrt_takes_no_stdlib` runs it, with
 #
 #   PREPROCESSED  the include set of the library's public headers,
@@ -15,10 +16,13 @@
 #
 # Arrow's headers are under `arrow/`, hgraph's standard library's under
 # `hgraph/lib/`, and their shared objects are `libarrow*`, `libparquet*` and
-# `libhgraph_stdlib*`.
+# `libhgraph_stdlib*`. The public headers take hgraph's front end for
+# generated code (`hgraph/types/generated.h`) and not its full wiring front
+# end, `graph_wiring.h`, which `subgraph_wiring.h` brings in: a unit pays
+# for what it includes, and generated code uses neither.
 file(STRINGS "${PREPROCESSED}" markers REGEX "^# [0-9]+ \"")
 foreach(marker IN LISTS markers)
-    if(marker MATCHES "\"[^\"]*(hgraph/lib/|/arrow/)[^\"]*\"")
+    if(marker MATCHES "\"[^\"]*(hgraph/lib/|/arrow/|hgraph/types/graph_wiring\\.h|hgraph/types/subgraph_wiring\\.h)[^\"]*\"")
         message(FATAL_ERROR "libhglrt's public headers bring in ${CMAKE_MATCH_0}")
     endif()
 endforeach()

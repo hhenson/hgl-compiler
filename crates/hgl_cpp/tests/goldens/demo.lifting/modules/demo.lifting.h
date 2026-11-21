@@ -9,6 +9,7 @@
 #undef b
 #undef branch_widened
 #undef by
+#undef captured_pick
 #undef captured_shown
 #undef check
 #undef checked
@@ -27,12 +28,16 @@
 #undef handled
 #undef kept_time
 #undef lifting
+#undef low
 #undef multiplied
 #undef offset
 #undef or_zero
 #undef or_zero_of
 #undef outcome
 #undef outcomes
+#undef pick
+#undef picked
+#undef picked_validity
 #undef produced
 #undef provenance
 #undef raise_again
@@ -262,6 +267,30 @@ namespace w_
 {
 // captured_shown(x: i64) -> str (graph), module demo.lifting, line 244
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> captured_shown(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x);
+}  // namespace w_
+
+namespace w_
+{
+// pick(flag: bool, ref low: i64?) -> ref i64? (node), module demo.lifting, line 252
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> pick(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> low);
+}  // namespace w_
+
+namespace w_
+{
+// picked(flag: bool, low: i64) -> i64? (graph), module demo.lifting, line 256
+::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> picked(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low);
+}  // namespace w_
+
+namespace w_
+{
+// picked_validity(flag: bool, command: i64) -> bool (graph), module demo.lifting, line 258
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> picked_validity(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> command);
+}  // namespace w_
+
+namespace w_
+{
+// captured_pick(flag: bool, low: i64) -> str (graph), module demo.lifting, line 260
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> captured_pick(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low);
 }  // namespace w_
 
 }  // namespace hgl::demo::lifting::m_

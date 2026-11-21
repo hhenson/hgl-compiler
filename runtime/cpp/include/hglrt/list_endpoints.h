@@ -7,7 +7,7 @@
 // a child for each position, S the temporal form of V; a `list<V, N>` is
 // `TSL<S, N>`. A tuple's form is structs.h's.
 //
-// hgraph 0.9.13's `TSL` gives what TIME-7, TIME-9 and TYPE-16 say of a list,
+// hgraph 0.9.23's `TSL` gives what TIME-7, TIME-9 and TYPE-16 say of a list,
 // and this library builds on it with no adaptation: an empty list published
 // first, or a delta that names no change published to a list that is not
 // valid, makes it valid and ticks; an empty list given to a valid empty one,

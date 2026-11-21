@@ -10,7 +10,7 @@
 // (END-4). A publication is
 // hgraph's own: a value given whole is hgraph's whole write of it
 // (`apply_current_value`), and a delta is hgraph's write of that change
-// (`apply_delta`), each converted to hgraph's value first. On hgraph 0.9.13
+// (`apply_delta`), each converted to hgraph's value first. On hgraph 0.9.23
 // these are TIME-7's rules as they stand: a set given the members it holds,
 // and an empty dictionary given to a valid empty one, is no tick; each entry
 // of a dictionary given whole is published, the same value again included; a

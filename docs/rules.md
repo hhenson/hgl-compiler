@@ -149,20 +149,16 @@ generic or an abstract struct as a temporal value, a struct or a tuple
 with a part of a form the library does not read whole, a list with a part
 that is no scalar, enum, nullable, list, struct or tuple, a child of a list
 of structs or tuples named in a hook, a dictionary whose value is no
-scalar, set, dictionary or tuple of such, an atomic struct that holds an
-optional field (hgraph issue 1874), a set's element or a dictionary's key
-of any but a scalar, a constant connection of a set or a dictionary, an
+scalar, set, dictionary or tuple of such, a set's element or a
+dictionary's key of any but a scalar, a constant connection of a set or a dictionary, an
 entry of a dictionary's entry, a nullable put in the run's store (hgl_spec issue 165), a
 designation of a child that is no position of a fixed list input (FN-16), `all_valid` of a set, a
 change of an input's activity in `stop` (END-5), a `for` over a connection of a set (CTRL-15), in a branch or a
 loop's body the store or an ordinary value that may fail (FN-9: hgraph
 builds each child as the graph around it is built), a `return` under a
 branch selected at runtime in a loop unrolled where the graph is built,
-branches that assign two `var`s (CTRL-14), a `capture` given an `f64`
-configuration (ERR-7, hgraph issue 1866), a lifted call that leaves out a
-`T?` whose default may fail (FN-6), and a connection of T given to a `ref`
-parameter of `T?` (TYPE-14: hgraph binds no `REF` of a `T?` to an output
-of T). A call
+branches that assign two `var`s (CTRL-14), and a lifted call that leaves
+out a `T?` whose default may fail (FN-6). A call
 of a function with a pack, core's `all_` and `any_`, has no callee the
 analyser reads.
 

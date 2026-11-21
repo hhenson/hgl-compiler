@@ -24,15 +24,16 @@
 //! | A cell of a trace of one (TST-5) | a `hglrt::testing::Cell<T>`: its delta, or its whole value (`Whole<T>`); a trace of an atomic struct one of `hglrt::atomic_trace<S>`, whose cell, the whole struct, is its delta |
 //! | A list field, `counts: list<i64>`, a list position (TYPE-9) | the list's own form, the `lists` family's `TSL`, asked of the dispatch point; the struct's nominal bundle holds the field as the value hgraph holds that `TSL` as, `::hglrt::list_value<::hgraph::Int>`; read and published through the list's own form (endpoints.h, `whole` and `publisher`) |
 //!
+//! An atomic struct that holds an optional field, at any depth, is one
+//! endpoint of the whole struct as any other is: hgraph maps the C++
+//! optional of the field to its `Optional`, a null to a published null.
+//!
 //! Not this family's, and reported: a generic struct and an abstract
 //! one as a temporal value, a struct with no field, a tuple with an
 //! atomic position, a struct or a tuple
 //! with a part whose form is not a scalar's, an enum's, a nullable's, a
-//! list's or another of this family's (a set, a dictionary, a window), an
-//! atomic struct that holds an optional field (hgraph's own conversion of
-//! a struct does not map a C++ optional to its `Optional`: hgraph issue
-//! 1874), a constant
-//! connection of one (FN-3), and a read of a part of `out`.
+//! list's or another of this family's (a set, a dictionary, a window), a
+//! constant connection of one (FN-3), and a read of a part of `out`.
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook, Stmt, Value};
 use hgl_analyser::{DeclarationKind, Detail, NamedKind, Program, Scalar, Type};
@@ -156,44 +157,6 @@ fn enumeration(program: &Program, ty: &Type) -> bool {
         && matches!(declared.details.get(*declaration), Some(Detail::Enum(read)) if !read.members.is_empty())
 }
 
-/// True where a value of `ty` holds an optional field, at any depth of the
-/// structs it holds: hgraph's own conversion of such a struct to and from
-/// its value does not compile, as `native_bundle` maps no C++ optional to
-/// hgraph's `Optional`.
-fn holds_optional(program: &Program, ty: &Type, depth: usize) -> bool {
-    if depth > 32 {
-        return true;
-    }
-    match ty {
-        Type::Nullable(_) => true,
-        Type::Atomic(payload) => holds_optional(program, payload, depth + 1),
-        Type::Named { .. } => fields_of(program, ty).is_some_and(|fields| {
-            fields
-                .iter()
-                .any(|(_, field)| holds_optional(program, field, depth + 1))
-        }),
-        _ => false,
-    }
-}
-
-/// What is reported where a temporal value of `ty` is a struct this
-/// family does not write for a reason hgraph gives: an atomic struct, or
-/// a struct with an atomic field, that holds an optional field, which
-/// hgraph's own conversion of a mapped aggregate does not take, as
-/// `native_bundle` maps no C++ optional member to its `Optional` (hgraph
-/// issue 1874). `None` for any other.
-pub(super) fn unwritten(program: &Program, ty: &Type) -> Option<&'static str> {
-    let atomic_optional = |ty: &Type| {
-        matches!(ty, Type::Atomic(payload) if bundled(program, payload).is_some())
-            && holds_optional(program, ty, 0)
-    };
-    let fields = || fields_of(program, ty).unwrap_or_default();
-    (atomic_optional(ty)
-        || (bundled(program, ty).is_some()
-            && fields().iter().any(|(_, field)| atomic_optional(field))))
-    .then_some("an atomic struct that holds an optional field (hgraph issue 1874)")
-}
-
 /// The form of a part of a struct or a tuple, a field or a position, of
 /// type `ty`: hgraph's schema of it, where it is one whose value the
 /// library reads and publishes whole or part by part (structs.h): a
@@ -250,9 +213,6 @@ fn form(emitter: &mut Emitter, ty: &Type) -> Option<Form> {
         }
         Type::Atomic(payload) => {
             bundled(program, payload)?;
-            if holds_optional(program, payload, 0) {
-                return None;
-            }
             Some(Form::Atomic(emitter.named_type(payload)?))
         }
         _ => None,
@@ -271,11 +231,6 @@ impl Family for Structs {
                 // field's C++ type, or a struct's `NativeTSB`.
                 let mut native = true;
                 for (member, field) in &fields {
-                    // An atomic field holds its struct whole, which hgraph
-                    // reads through its own mapping (`holds_optional`).
-                    if matches!(field, Type::Atomic(_)) && holds_optional(program, field, 0) {
-                        return None;
-                    }
                     let schema = part_schema(emitter, field)?;
                     let whole = cpp_type(program, field)
                         .is_some_and(|written| schema == format!("::hgraph::TS<{written}>"));
