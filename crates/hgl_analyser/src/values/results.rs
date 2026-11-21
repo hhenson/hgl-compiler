@@ -206,6 +206,16 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// The lexical fact a direct field projection needs on this binding.
+    pub(super) fn payload_proven(&self, base: &Expr, name: &str) -> bool {
+        let fact = match (name, &base.kind) {
+            ("value", ExprKind::Local(local)) => Fact::Success(*local),
+            ("error", ExprKind::Local(local)) => Fact::Failure(*local),
+            _ => return false,
+        };
+        self.present.contains(&fact)
+    }
+
     /// `binding.value` or `binding.error` (ERR-3): "`binding.value` is
     /// the T and `binding.error` the E; `.value`/`.error` requires the
     /// matching fact, and without it, or on what is no such binding,
@@ -216,6 +226,7 @@ impl<'a> Typer<'a> {
         name: &str,
         at: Location,
         (value, failure): (Type, Type),
+        variant_proven: bool,
     ) -> (ExprKind, Type) {
         let success = match name {
             "value" => true,
@@ -234,12 +245,7 @@ impl<'a> Typer<'a> {
                 return (ExprKind::Unread, Type::Unknown);
             }
         };
-        let fact = match base.kind {
-            ExprKind::Local(local) if success => Some(Fact::Success(local)),
-            ExprKind::Local(local) => Some(Fact::Failure(local)),
-            _ => None,
-        };
-        if !fact.is_some_and(|fact| self.present.contains(&fact)) {
+        if !variant_proven {
             let (test, tag) = if success {
                 ("is_ok", "a success")
             } else {

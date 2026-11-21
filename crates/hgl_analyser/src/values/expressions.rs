@@ -506,6 +506,14 @@ impl<'a> Typer<'a> {
                     matches!(**inner, Type::Result { .. })
                         && (self.present.contains(&present) || known.contains(&present))
                 }
+                // Save the same lexical fact for a deferred member.
+                // It qualifies as proof only once the base settles to
+                // an ordinary result binding.
+                Type::Unknown => {
+                    return self.graph
+                        && immutable(local)
+                        && self.locals[local].category != ValueCategory::Connection;
+                }
                 _ => false,
             };
             immutable(local) && result && self.locals[local].category == ValueCategory::Value

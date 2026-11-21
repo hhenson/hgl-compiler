@@ -551,13 +551,22 @@ pub(super) fn record_with(
                     return;
                 }
                 NodeMut::Expression(value) if composition && !whole(&value.ty) => {
-                    if let ExprKind::DeferredMember { base, name, at } = &value.kind
+                    if let ExprKind::DeferredMember {
+                        base,
+                        name,
+                        at,
+                        variant_proven,
+                    } = &value.kind
                         && let Some(typer) = typer.as_deref_mut()
-                        && let Some((kind, ty)) = typer.settle_member(base, name, *at)
                     {
-                        value.kind = kind;
-                        value.ty = ty;
-                        settling = true;
+                        std::mem::swap(&mut typer.locals, locals);
+                        let member = typer.settle_member(base, name, *at, *variant_proven);
+                        std::mem::swap(&mut typer.locals, locals);
+                        if let Some((kind, ty)) = member {
+                            value.kind = kind;
+                            value.ty = ty;
+                            settling = true;
+                        }
                         return;
                     }
                     if let Some(ty) = settled_type(program, locals, value, typer.as_deref_mut()) {

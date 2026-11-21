@@ -12,7 +12,7 @@ use super::forms::received_type;
 use super::inference::{fixed, placed};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
-use crate::hir::ExprKind;
+use crate::hir::{Expr, ExprKind, ValueCategory};
 use crate::program::DeclarationKind;
 use crate::syntax::{name_token, tokens};
 use crate::types::{Argument, ConstantValue, Detail, NamedKind, Scalar, Type};
@@ -51,6 +51,7 @@ impl<'a> Typer<'a> {
             return self.captured(base, &name, output);
         }
         let at = Location::new(self.file, name.span());
+        let variant_proven = self.payload_proven(&base, name.text());
         if self.graph
             && matches!(not_null(Some(&base.ty)), Some(Type::Unknown))
             && !matches!(base.kind, ExprKind::Unread)
@@ -60,37 +61,43 @@ impl<'a> Typer<'a> {
                     base: Box::new(base),
                     name: name.text().to_owned(),
                     at,
+                    variant_proven,
                 },
                 Type::Unknown,
             );
         }
-        self.member_value(base, name.text(), at)
+        self.member_value(base, name.text(), at, variant_proven)
     }
 
-    /// Replay a projection when its input becomes concrete. The two
-    /// result variant accesses also need control-flow evidence (ERR-3),
-    /// which the member's stored type alone cannot establish.
+    /// Replay a projection when its input becomes concrete. A saved
+    /// ERR-3 guard can prove a variant only of an ordinary result.
     pub(super) fn settle_member(
         &mut self,
-        base: &crate::hir::Expr,
+        base: &Expr,
         name: &str,
         at: Location,
+        mut variant_proven: bool,
     ) -> Option<(ExprKind, Type)> {
-        if !whole(&base.ty)
-            || (matches!(name, "value" | "error")
-                && matches!(not_null(Some(&base.ty)), Some(Type::Result { .. })))
-        {
+        if !whole(&base.ty) {
             return None;
         }
-        Some(self.member_value(base.clone(), name, at))
+        if variant_proven && matches!(base.ty, Type::Result { .. }) {
+            match self.category(base) {
+                ValueCategory::Unsettled => return None,
+                ValueCategory::Connection => variant_proven = false,
+                ValueCategory::Value => {}
+            }
+        }
+        Some(self.member_value(base.clone(), name, at, variant_proven))
     }
 
     /// Resolve a member against a known value, retaining its implicit reads.
-    pub(super) fn member_value(
+    fn member_value(
         &mut self,
-        mut base: crate::hir::Expr,
+        mut base: Expr,
         name: &str,
         at: Location,
+        variant_proven: bool,
     ) -> (ExprKind, Type) {
         let program = self.program;
         // What the member is read from, in the form that place takes it:
@@ -101,7 +108,9 @@ impl<'a> Typer<'a> {
                 // are the result's own".
                 Type::Result { value, error } if matches!(name, "value" | "error") => {
                     let sides = ((**value).clone(), (**error).clone());
-                    return self.payload(base, name, at, sides);
+                    // An implicit read cannot transfer a binding's fact.
+                    let variant_proven = variant_proven && matches!(base.kind, ExprKind::Local(_));
+                    return self.payload(base, name, at, sides, variant_proven);
                 }
                 // ERR-15: "What a member or an index is read from ...
                 // expect[s] the T too": `checked(quote).bid` is the bid of

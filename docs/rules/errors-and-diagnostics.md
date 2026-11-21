@@ -38,7 +38,8 @@ analyser: partial
 - `is_ok` and `is_err` take one result by position and give a `bool`. A graph instance checks the argument when its type first settles (GEN-7).
 - A direct guard on an immutable result binding proves its tag: in the branch it holds for, across `!` and the Boolean connectives, and after a branch that returns
 - `binding.value` and `binding.error` need the matching fact (`result.required_variant`), and have the T and the E
-- In a graph a test of a connection gives no fact
+- In a graph a test of a connection gives no fact. A deferred projection checks its
+  saved lexical fact against the settled category of the result (GEN-7).
 - Left: a fact carried through a `switch` or a loop
 
 ## ERR-4

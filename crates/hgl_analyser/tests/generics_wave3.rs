@@ -1915,6 +1915,65 @@ fn graph_instances_check_settled_tag_tests() {
     assert_eq!(value.category, ValueCategory::Connection);
 }
 
+/// GEN-7 and ERR-3: an instance resolves a deferred result projection
+/// with the fact at that read, and a temporal tag test gives no fact.
+#[test]
+fn graph_instances_recheck_deferred_result_projections() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn sample() -> result<i64, error> => ok(1)\n",
+        "fn unguarded<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { sample() }\n",
+        "    return chosen.value\n",
+        "}\n",
+        "fn temporal_guard<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { sample() }\n",
+        "    let answer = if is_ok(chosen) { chosen.value } else { 0 }\n",
+        "    return answer\n",
+        "}\n",
+        "fn guarded<T>(const input: T) -> i64 {\n",
+        "    let samples = if predicate(input) { [sample()] }\n",
+        "    let chosen = samples[0]\n",
+        "    if is_err(chosen) { return 0 }\n",
+        "    return chosen.value\n",
+        "}\n",
+        "fn wrong_side<T>(const input: T) -> str {\n",
+        "    let samples = if predicate(input) { [sample()] }\n",
+        "    let chosen = samples[0]\n",
+        "    if is_ok(chosen) { return chosen.error.message }\n",
+        "    return \"\"\n",
+        "}\n",
+        "fn temporal_unguarded() -> i64 => unguarded(1)\n",
+        "fn temporal_guarded() -> i64 => temporal_guard(1)\n",
+        "fn ordinary_guarded() -> i64 => guarded(\"s\")\n",
+        "fn ordinary_wrong_side() -> str => wrong_side(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:27:35 type/result.required_variant ERR-3",
+            "m.hgl:28:33 type/result.required_variant ERR-3",
+            "m.hgl:30:36 type/result.required_variant ERR-3",
+        ],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "ordinary_guarded"));
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns the guarded payload");
+    };
+    assert_eq!(value.ty.to_string(), "i64");
+    assert!(matches!(
+        value.kind,
+        ExprKind::Payload { success: true, .. }
+    ));
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

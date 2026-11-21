@@ -729,6 +729,9 @@ pub enum ExprKind {
         name: String,
         /// Where the member name is written.
         at: Location,
+        /// Whether the matching ERR-3 guard holds here if the base
+        /// settles to an ordinary result binding.
+        variant_proven: bool,
     },
     /// A delta that is a type of its own made from its properties:
     /// `delta<set<i64>>(added: [1, 2], removed: [3])`, `delta<i64?>()`,

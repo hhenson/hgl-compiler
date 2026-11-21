@@ -373,3 +373,23 @@ test deferred_error_fields {
     assert eval deferred_error(value: "s", ready: true, coded: true) == [2]
     assert raises("value.null") { eval deferred_error(value: "s", ready: false, coded: true) }
 }
+
+# ERR-3: the ordinary result's lexical tag fact applies after its
+# type settles, on the taken branch and after a terminating branch.
+const fn projection_sample(const passed: bool) -> result<i64, error> {
+    if passed { return ok(7) }
+    return err(error(message: "problem"))
+}
+
+fn deferred_result_projection<T>(const value: T, const passed: bool) -> i64 {
+    let samples = if live_helper(value) > 0 { [projection_sample(passed)] }
+    let chosen = samples[0]
+    if is_ok(chosen) { return chosen.value }
+    if chosen.error.message == "problem" { return 8 }
+    return 0
+}
+
+test deferred_result_variants {
+    assert eval deferred_result_projection(value: "s", passed: true) == [7]
+    assert eval deferred_result_projection(value: "s", passed: false) == [8]
+}
