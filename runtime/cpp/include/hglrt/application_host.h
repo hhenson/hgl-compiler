@@ -39,7 +39,6 @@
 // and so does a second interrupt of a run in real time.
 #pragma once
 
-#include <iosfwd>
 #include <optional>
 #include <string>
 #include <vector>
@@ -73,13 +72,5 @@ using Body = Output (*)();
 /// object is destroyed as it ends: a thread may still be reading standard
 /// input.
 [[noreturn]] void main(int argc, char** argv, bool real_time, Body body);
-
-namespace detail {
-/// `main`, which gives the status in place of ending the process: the
-/// host's requests to stop are read from `requests` (none where it is null),
-/// and the process's interrupts are taken only where `signals`. For the
-/// library's own tests.
-int main_with(int argc, char** argv, bool real_time, Body body, std::istream* requests, bool signals);
-} // namespace detail
 
 } // namespace hglrt::application

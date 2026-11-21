@@ -33,12 +33,10 @@
 #include <cstddef>
 #include <optional>
 #include <source_location>
-#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace hglrt {
 
@@ -133,31 +131,10 @@ auto child(const E& view) {
 template <std::size_t I, class S>
 hgraph::Port<typename detail::field_of<I, S>::schema> field_port(const hgraph::Port<S>& port) {
     using Field = typename detail::field_of<I, S>::schema;
-    const hgraph::WiringPortRef whole = port.erased();
     const hgraph::TSValueTypeMetaData* schema = hgraph::schema_descriptor<Field>::ts_meta();
-    const auto within = [](std::vector<std::size_t> path) {
-        path.push_back(I);
-        return path;
-    };
-    switch (whole.source_kind()) {
-    case hgraph::WiringPortRef::SourceKind::Peered:
-        return hgraph::Port<Field>{port.wiring(),
-                                   hgraph::WiringPortRef::peered_source(whole.peered_node(), within(whole.peered_path()),
-                                                                        schema, whole.peered_output_kind())};
-    case hgraph::WiringPortRef::SourceKind::Structural:
-        return hgraph::Port<Field>{port.wiring(), whole.structural_children()[I]};
-    case hgraph::WiringPortRef::SourceKind::Boundary:
-        return hgraph::Port<Field>{port.wiring(),
-                                   whole.projected_boundary_source(within(whole.boundary_path()), schema)};
-    case hgraph::WiringPortRef::SourceKind::Delayed:
-        return hgraph::Port<Field>{port.wiring(),
-                                   whole.projected_delayed_source(within(whole.delayed_path()), schema)};
-    case hgraph::WiringPortRef::SourceKind::Null:
-        return hgraph::Port<Field>{port.wiring(), hgraph::WiringPortRef::null_source(schema)};
-    case hgraph::WiringPortRef::SourceKind::Unbound:
-        break;
-    }
-    throw std::logic_error("hglrt::field_port: the connection is not bound");
+    return hgraph::Port<Field>{
+        port.wiring(),
+        detail::projected_child(port.erased(), I, schema, "hglrt::field_port: the connection is not bound")};
 }
 
 /// The endpoint of a struct, `NativeTSB<T>`: hgraph's nominal bundle whose
@@ -438,10 +415,6 @@ hgraph::Port<Field> atomic_field(hgraph::Wiring& wiring, const hgraph::Port<hgra
 }
 
 } // namespace hglrt
-
-namespace hglrt::testing {
-
-} // namespace hglrt::testing
 
 namespace hglrt {
 

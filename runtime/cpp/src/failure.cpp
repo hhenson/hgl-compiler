@@ -1,9 +1,9 @@
 // HGL's execution failures (failure.h).
+#include "instant_text.h"
 #include "nested.h"
 
 #include <hglrt/failure.h>
 
-#include <chrono>
 #include <format>
 #include <string_view>
 #include <utility>
@@ -64,8 +64,8 @@ std::string describe(const std::exception& failure) {
         carried->code.has_value() ? *carried->code + ": " + carried->message : carried->message;
     if (carried->context.has_value()) {
         const hgraph::ErrorContext& context = *carried->context;
-        text += std::format(" (in {}, {}, at {:%Y-%m-%dT%H:%M:%S})", context.node, context.phase,
-                            context.evaluation_time);
+        text += std::format(" (in {}, {}, at {})", context.node, context.phase,
+                            detail::instant_text(context.evaluation_time, detail::InstantFormat::failure));
     }
     // The place is an HGL file's where the generated code set one with
     // `#line`; one in this library or in a test's body, which the test host

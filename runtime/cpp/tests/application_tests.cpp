@@ -32,7 +32,7 @@ using hglrt::testing::Dense;
 using hglrt::testing::Mode;
 using namespace std::chrono_literals;
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
 /// `fn limited(value: i64) -> i64 { inject global_state; when { if value <=
 /// get<i64>(global_state, "limit") { return value } } }`

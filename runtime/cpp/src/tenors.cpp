@@ -28,25 +28,16 @@ void same_form(const tenor& lhs, const tenor& rhs, std::string_view what, std::s
     fail(codes::out_of_range, "a count of a tenor is outside the signed 64-bit range", where);
 }
 
-/// `computed`, a count made with checked arithmetic, where it is one, and
-/// otherwise a failure at `where`.
-i64 in_range(std::optional<i64> computed, std::source_location where) {
-    if (!computed.has_value()) {
-        count_out_of_range(where);
-    }
-    return *computed;
-}
-
 i64 summed(i64 lhs, i64 rhs, std::source_location where) {
-    return in_range(detail::checked_add(lhs, rhs), where);
+    return detail::in_range(detail::checked_add(lhs, rhs), count_out_of_range, where);
 }
 
 i64 subtracted(i64 lhs, i64 rhs, std::source_location where) {
-    return in_range(detail::checked_sub(lhs, rhs), where);
+    return detail::in_range(detail::checked_sub(lhs, rhs), count_out_of_range, where);
 }
 
 i64 scaled(i64 lhs, i64 rhs, std::source_location where) {
-    return in_range(detail::checked_mul(lhs, rhs), where);
+    return detail::in_range(detail::checked_mul(lhs, rhs), count_out_of_range, where);
 }
 
 /// The text of one unit pair of a tenor (TEN-9): `count` in `larger` units

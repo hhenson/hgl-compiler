@@ -218,8 +218,7 @@ int detail::main_with_grace(int argc, char** argv, long grace_milliseconds) {
     // it is written, so that what was recorded is there however the process
     // ends.
     const auto say = [&](const std::string& line) {
-        written = std::fwrite(line.data(), 1, line.size(), results) == line.size() &&
-                  std::fputc('\n', results) != EOF && std::fflush(results) == 0 && written;
+        written = detail::write_results_line(results, line) && written;
     };
     for (std::size_t number = 0; number < tests.size(); ++number) {
         const Named& test = tests[number];
