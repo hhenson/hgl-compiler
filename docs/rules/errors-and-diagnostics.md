@@ -129,4 +129,3 @@ analyser: done
 - So is `delta_value` of any endpoint, an input, `out` or a child, where the place expects `result<delta<T>, error>`, and core's `removed_value` of a window where it expects `result<V, error>` (`CheckedDelta`), the place saying what V is; where the place takes no `result` a window of a duration's delta and any `removed_value` are `payload.unguarded` (TYPE-11)
 
 transpiler: planned
-

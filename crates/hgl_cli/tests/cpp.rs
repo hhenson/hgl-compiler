@@ -1635,6 +1635,27 @@ fn names_a_platform_takes_are_built() {
     );
 }
 
+/// A valid application that cannot be built because no SDK is named
+/// exits with status 2 and reports why it was not run.
+#[test]
+fn an_application_is_not_run_without_an_sdk() {
+    let root = scratch("application_no_sdk");
+    write(&root, "ticks.hgl", TICKS);
+    write(&root, "backtest.hgl", BACKTEST);
+    let output = hgl_in(
+        &["run", &argument(&root), "--target", "cpp"],
+        &[],
+        &["HGL_HGRAPH_SDK", "HGL_HGRAPH_DEPS"],
+    );
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(text(&output.stdout), "");
+    assert!(
+        stderr.starts_with("hgl: demo.ticks.backtest was not run: HGL_HGRAPH_SDK is not set"),
+        "{stderr}"
+    );
+}
+
 /// UNIT-14, RUN-1: an application runs on the SDK, and its output is
 /// printed: a line for each publication of its entry's result, in time
 /// order, its instant and then what was published (core's CRUN-8). The

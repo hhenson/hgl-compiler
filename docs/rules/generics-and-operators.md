@@ -181,4 +181,3 @@ analyser: partial
 - Left: a predicate, and the arrow rejected on one; a requirement supplied with a value or a set; a requirement checked where it is declared
 
 transpiler: planned
-

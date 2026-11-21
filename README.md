@@ -86,15 +86,17 @@ if the application had written it. Exit status is 0 when the source is
 accepted and every selected case passed or the application's run ended,
 1 when the source is rejected, a case failed or the run failed, 2 when
 the command could not run or a selected test or the application was not
-run.
+run. `hgl run` prints a run failure to standard error. On the C++ target,
+a real-time run that stops cleanly after an interrupt exits with status 0
+and prints the publications recorded before it stopped.
 
 `--target cpp` is the one target, and what `hgl emit` and `hgl run`
 use when none is named. It builds against hgraph's C++ SDK, whose
 install prefix `HGL_HGRAPH_SDK` names and whose dependency prefix
 `HGL_HGRAPH_DEPS` names, with GCC 15 or later on Linux or Apple clang 21
 or later on macOS, and `ninja`; see [docs/architecture.md](docs/architecture.md#cpp).
-`--target` takes no other value: `--target hgraph`, say, is refused
-before anything is read, with `error: invalid value 'hgraph' for
+`--target` takes no other value. `--target unknown` is refused
+before anything is read, with `error: invalid value 'unknown' for
 '--target <TARGET>'` and the values it takes, and status 2.
 
 Before upgrading to an hgraph scheduler that excludes the current delivery from

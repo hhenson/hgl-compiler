@@ -163,4 +163,3 @@ analyser: partial
 - Left: a native implementation part's marks matched with its declaration's (NATIVE-2)
 
 transpiler: planned
-

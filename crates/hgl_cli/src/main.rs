@@ -30,6 +30,10 @@
 //! | 1      | The source was rejected, a case failed, or the application's run failed; the reasons are on standard error. |
 //! | 2      | The command could not run: bad arguments, unreadable file, a selected test or an application that was not run. |
 //!
+//! On the C++ target, a real-time application run that stops cleanly after
+//! an interrupt exits with status 0 and prints the publications recorded
+//! before it stopped.
+//!
 //! A file that is not UTF-8 is source the language rejects (LEX-16), so it
 //! exits with status 1 and a diagnostic like any other rejection.
 

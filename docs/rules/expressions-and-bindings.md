@@ -142,4 +142,3 @@ analyser: done
 - In a graph an assignment into a place of a `var` is read as one elsewhere is (EXPR-3), and is an assignment to the `var`: a connection stays one whatever its place is given, an ordinary value given a connection, indexed by one, or assigned in a branch selected at runtime is rejected (`binding.category`), and so is a `var` declared outside a loop that makes one child for each member (`loop.carried`)
 
 transpiler: planned
-

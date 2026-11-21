@@ -195,4 +195,3 @@ analyser: done
 - Its operators are core's (TEN-1)
 
 transpiler: planned
-

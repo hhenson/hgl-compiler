@@ -147,4 +147,3 @@ analyser: done
 - A source's `return` with a value, and a `yield` in a block or an `if` whose value is used, rejected: the local `source.return_value` and `yield.in_value`
 
 transpiler: planned
-

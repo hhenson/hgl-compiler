@@ -132,4 +132,3 @@ analyser: done
 - Its path is no other file's: the first file of the path is the unit and each later one is reported (`application.duplicate_path`)
 
 transpiler: planned
-

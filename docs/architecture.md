@@ -1662,8 +1662,8 @@ lowering crate and the diagnostics crate, and on no other transpiler. `hgl emit 
 --out DIR` selects one by name and writes what it gives. The front end
 does not change, and no stage before a transpiler knows a target. There
 is one, `cpp`, which `hgl emit` and `hgl run` use where `--target` names
-none. `--target` takes no other value: one that names another,
-`--target hgraph` say, is a usage error, `error: invalid value 'hgraph'
+none. `--target` takes no other value. `--target unknown` is a usage
+error, `error: invalid value 'unknown'
 for '--target <TARGET>'` with the values it takes, status 2, and nothing
 is read.
 
@@ -2046,9 +2046,9 @@ from its entry unit and the units its module's reaches, and runs it as
 `EXECUTABLE RESULTS` (`cpp/application.rs`). The executable's host
 (`hglrt/application_host.h`) runs the run statement once and writes
 RESULTS (`start`, `published TIME TEXT`, `stopped`, `stopped none`,
-`host`, `failed TEXT`); `hgl` reads it and prints the output, and gives
-the exit status and the reason for a failure ("Running an application"
-above). TIME is the
+`host`, `failed TEXT`). `hgl` reads it and reports the outcome. A failed
+run prints its failure to standard error and exits with status 1. If the
+application could not be run, `hgl` exits with status 2. TIME is the
 instant in UTC, `1970-01-01T00:00:01.000001Z`, and TEXT the value as the
 library's `text_of` writes it, as a trace's text is. What the program
 and hgraph print goes to standard error. An interrupt of `hgl`, or a
@@ -2056,7 +2056,8 @@ request for it to end, is passed to the executable down its standard
 input, `stop`; an interrupt from a terminal reaches it as well. A run in
 real time asked to stop is stopped through hgraph's executor, as a test
 past its time limit is (one asked before it starts is stopped as it
-starts), and ends as at its end, with what it recorded; a simulation
+starts). When the run stops cleanly, `hgl` exits with status 0 and prints
+the publications recorded up to the stop. A simulation
 asked to stop, and a run interrupted a second time, end the executable
 at once, `failed interrupted`, and a second interrupt of `hgl` ends it
 too. The executable's standard input closed is such a request: what

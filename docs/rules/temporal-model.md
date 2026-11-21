@@ -126,4 +126,3 @@ analyser: done
 - A `ref` parameter's `valid`, `modified` and `last_modified` are endpoint operations as any input's are (FN-16)
 
 transpiler: planned
-
