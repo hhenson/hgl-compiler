@@ -24,19 +24,31 @@ use crate::hir::{
 use crate::program::{Program, Role};
 use crate::types::{Detail, Signature, Type};
 
-/// Expression types whose source checks deferred for lack of a type.
-pub(crate) struct GraphDestinations(HashSet<Location>);
+/// Source checks awaiting concrete types and categories in a graph instance.
+pub(crate) struct GraphDestinations {
+    expressions: HashSet<Location>,
+    captures: HashSet<Location>,
+}
 
 impl GraphDestinations {
-    /// Remembers what the generic body could not type before selection.
+    /// Remembers what the generic body could not check before selection.
     pub(crate) fn pending(body: &Body) -> Self {
-        let mut pending = HashSet::new();
+        let mut expressions = HashSet::new();
+        let mut captures = HashSet::new();
         hir::walk_statements(&body.statements, &mut |value| {
             if !whole(&value.ty) {
-                pending.insert(value.at);
+                expressions.insert(value.at);
+            }
+            if let ExprKind::Capture(call) = &value.kind
+                && call.category == ValueCategory::Unsettled
+            {
+                captures.insert(call.at);
             }
         });
-        Self(pending)
+        Self {
+            expressions,
+            captures,
+        }
     }
 
     /// Record the concrete categories and recover the types that turn on
@@ -82,11 +94,20 @@ impl GraphDestinations {
         typer.graph = true;
         record_with(program, body, true, Some(&mut typer));
         typer.locals.clone_from(&body.locals);
-        if !self.0.is_empty() {
+        if !self.expressions.is_empty() {
             hir::walk_statement_nodes_mut(&mut body.statements, &mut |node| {
                 self.fit_destination(&mut typer, node);
             });
             record(program, body, true);
+        }
+        if !self.captures.is_empty() {
+            hir::walk_statements(&body.statements, &mut |value| {
+                if let ExprKind::Capture(call) = &value.kind
+                    && self.captures.contains(&call.at)
+                {
+                    typer.check_capture_phase(call, call.category, None);
+                }
+            });
         }
         check_control(&mut typer, &body.statements);
     }
@@ -257,7 +278,7 @@ impl GraphDestinations {
                 ..
             }) if whole(element) => {
                 for entry in entries {
-                    if self.0.contains(at) {
+                    if self.expressions.contains(at) {
                         // A newly inferred type constrains earlier known
                         // entries as well as the one that just settled.
                         if matches!(entry.kind, ExprKind::Literal(Value::Null))
@@ -322,7 +343,7 @@ impl GraphDestinations {
     }
 
     fn known(&self, value: &Expr) -> bool {
-        self.0.contains(&value.at) && whole(&value.ty)
+        self.expressions.contains(&value.at) && whole(&value.ty)
     }
 
     fn fit_condition(&self, typer: &mut Typer<'_>, value: &mut Expr) {
@@ -393,7 +414,7 @@ impl GraphDestinations {
         infer_types: bool,
         at: Location,
     ) {
-        let completed = self.0.contains(&at) && whole(ty);
+        let completed = self.expressions.contains(&at) && whole(ty);
         if !completed && !arguments.iter().any(|argument| self.known(&argument.value)) {
             return;
         }

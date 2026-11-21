@@ -539,27 +539,50 @@ impl<'a> Typer<'a> {
             ));
             return (ExprKind::Unread, Type::Unknown);
         }
-        // "Capture of wiring-time scalar work rejects": a call that
-        // composes nothing, all its arguments ordinary values.
-        if matches!(call.kind, ExprKind::Call { .. })
-            && self.category(&call) == ValueCategory::Value
-        {
-            self.diagnostics.emit(
-                error(
-                    Category::Phase,
-                    codes::CAPTURE_PHASE,
-                    at,
-                    format!(
-                        "`{}` is ordinary work here, done while the graph is built: there is \
-                         no temporal call for `capture` to cover",
-                        callee.text()
-                    ),
-                    "ERR-7",
-                )
-                .with_note("a value function is lifted, and may be captured, where it is given a connection"),
-            );
-        }
+        self.check_capture_phase(&call, self.category(&call), Some(callee.text()));
         (ExprKind::Capture(Box::new(call)), Type::Unknown)
+    }
+
+    /// ERR-7: capture cannot cover a call that does only wiring-time work.
+    /// The call's category may become known only after instance selection.
+    pub(super) fn check_capture_phase(
+        &mut self,
+        call: &Expr,
+        category: ValueCategory,
+        name: Option<&str>,
+    ) {
+        if !matches!(call.kind, ExprKind::Call { .. }) || category != ValueCategory::Value {
+            return;
+        }
+        let callable = name
+            .map(str::to_owned)
+            .or_else(|| self.capture_name(call))
+            .map_or_else(
+                || "the captured call".to_string(),
+                |name| format!("`{name}`"),
+            );
+        self.diagnostics.emit(
+            error(
+                Category::Phase,
+                codes::CAPTURE_PHASE,
+                call.at,
+                format!(
+                    "{callable} is ordinary work here, done while the graph is built: there is \
+                     no temporal call for `capture` to cover"
+                ),
+                "ERR-7",
+            )
+            .with_note(
+                "a value function is lifted, and may be captured, where it is given a connection",
+            ),
+        );
+    }
+
+    /// The callable named by a capture whose phase is checked in an instance.
+    fn capture_name(&self, call: &Expr) -> Option<String> {
+        let list = child(&self.syntax_of(call)?, SyntaxKind::ArgList)?;
+        let (_, callable) = arguments_of(&list).into_iter().next()?;
+        Some(name_token(&callable)?.text().to_owned())
     }
 
     /// What the `.value` of a capture of `call` is (ERR-7): "`.value`

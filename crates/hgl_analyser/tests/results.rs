@@ -945,3 +945,27 @@ fn candidate_uses_the_arrangement_with_fewest_result_reads() {
         assert_eq!(reads, raised, "{name}");
     }
 }
+
+/// ERR-7 and GEN-5: a capture's phase is checked against the candidate
+/// the graph instance selects, including when it selects ordinary work.
+#[test]
+fn a_graph_instance_checks_the_phase_of_a_deferred_capture() {
+    let checked = module(concat!(
+        "operator helper<T>(input: T) -> i64\n",
+        "impl const fn helper<T>(input: T) -> i64 => 5\n",
+        "impl fn helper(input: i64) -> i64 { when { return input } }\n",
+        "fn wraps<T>(const input: T) -> i64 {\n",
+        "    let seen = capture(helper, input)\n",
+        "    return seen.value\n",
+        "}\n",
+        "fn temporal_impl() -> i64 => wraps(3)\n",
+        "fn wiring_impl() -> i64 => wraps(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:10:28 phase/capture.phase ERR-7"],
+        "{}",
+        checked.report
+    );
+    assert!(checked.report.contains("`helper` is ordinary work here"));
+}
