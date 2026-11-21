@@ -314,3 +314,44 @@ fn value_phase_choice<T>(const value: T) -> i64 {
     let chosen = if value_predicate(value) { 1 }
     return chosen_or_skip(graph_identity(chosen))
 }
+
+# EXPR-6 and ERR-12: a present false is still false, and the right
+# operand of either connective is read only when needed.
+fn deferred_not<T>(const value: T) -> bool {
+    let flag = if live_helper(value) > 0 { false }
+    return !flag
+}
+
+fn deferred_logic<T>(const value: T) -> bool {
+    let flag = if live_helper(value) > 0 { false }
+    return (flag && true) || (flag || false)
+}
+
+fn deferred_short_circuit<T>(const value: T) -> bool {
+    let missing = if live_helper(value) < 0 { false }
+    return (false && missing) || (true || missing)
+}
+
+const fn score_result(outcome: result<i64, str>) -> i64 {
+    if is_ok(outcome) { return outcome.value }
+    if outcome.error == "problem" { return 7 }
+    return 0
+}
+
+# ERR-2 and ERR-12: each tag reads the nullable payload for its side.
+fn deferred_payload<T>(const value: T, const success: bool, const ready: bool) -> i64 {
+    let chosen = if live_helper(value) > 0 && ready { 2 }
+    let message = if live_helper(value) > 0 && ready { "problem" }
+    let outcome: result<i64, str> = if success { ok(chosen) } else { err(message) }
+    return score_result(outcome)
+}
+
+test deferred_boolean_and_result_forms {
+    assert eval deferred_not(value: "s") == [true]
+    assert eval deferred_logic(value: "s") == [false]
+    assert eval deferred_short_circuit(value: "s") == [true]
+    assert eval deferred_payload(value: "s", success: true, ready: true) == [2]
+    assert eval deferred_payload(value: "s", success: false, ready: true) == [7]
+    assert raises("value.null") { eval deferred_payload(value: "s", success: true, ready: false) }
+    assert raises("value.null") { eval deferred_payload(value: "s", success: false, ready: false) }
+}

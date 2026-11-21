@@ -14,6 +14,19 @@ use crate::syntax::{child, name_token, tokens};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error};
 
+/// ERR-2: `ok` fits its value to the success type and `err` to the failure type.
+pub(super) fn tagged_side<'a>(
+    success: bool,
+    value: &'a Type,
+    failure: &'a Type,
+) -> (&'a Type, &'static str) {
+    if success {
+        (value, "the type of a success")
+    } else {
+        (failure, "the type of a failure")
+    }
+}
+
 impl<'a> Typer<'a> {
     // ---- Result forms (ERR-2 to ERR-5) ----
 
@@ -137,13 +150,8 @@ impl<'a> Typer<'a> {
         let Some(argument) = argument else {
             return (ExprKind::Unread, result);
         };
-        let side = if success { &value } else { &failure };
+        let (side, what) = tagged_side(success, &value, &failure);
         let payload = self.expression(&argument, Some(side));
-        let what = if success {
-            "the type of a success"
-        } else {
-            "the type of a failure"
-        };
         let payload = self.fit(payload, side, what);
         let kind = ExprKind::Tagged {
             success,

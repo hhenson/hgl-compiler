@@ -13,11 +13,13 @@ use super::fit::{open, whole};
 use super::inference::type_pack;
 use super::lifting::{assignment_category, record, record_with};
 use super::members::{index_collection, index_operand, indexed_payload};
+use super::results::tagged_side;
 use super::statements::{child_loop_return, child_loop_write, place_assignment_category};
-use super::{Selected, Tables, Typer};
+use super::{BOOL, Selected, Tables, Typer};
 use crate::declared::substitute_within;
 use crate::hir::{
-    self, Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Stmt, Value, ValueCategory,
+    self, BinaryOperator, Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Stmt,
+    UnaryOperator, Value, ValueCategory,
 };
 use crate::program::{Program, Role};
 use crate::types::{Detail, Signature, Type};
@@ -167,6 +169,38 @@ impl GraphDestinations {
             }) => {
                 self.fit_arguments(typer, callee, arguments);
                 return;
+            }
+            // EXPR-6: keep both operand reads inside the intrinsic
+            // expression, so the right operand remains short-circuited.
+            NodeMut::Expression(Expr {
+                kind:
+                    ExprKind::Unary {
+                        operator: UnaryOperator::Not,
+                        operand,
+                    },
+                ..
+            }) => (operand.as_mut(), BOOL, "the operand of `!`", false),
+            NodeMut::Expression(Expr {
+                kind:
+                    ExprKind::Binary {
+                        operator: operator @ (BinaryOperator::And | BinaryOperator::Or),
+                        left,
+                        right,
+                    },
+                ..
+            }) => {
+                let place = format!("an operand of `{}`", operator.symbol());
+                self.fit(typer, left, &BOOL, &place, false);
+                self.fit(typer, right, &BOOL, &place, false);
+                return;
+            }
+            NodeMut::Expression(Expr {
+                kind: ExprKind::Tagged { success, payload },
+                ty: Type::Result { value, error },
+                ..
+            }) => {
+                let (side, place) = tagged_side(*success, value, error);
+                (payload.as_mut(), side.clone(), place, false)
             }
             NodeMut::Expression(Expr {
                 kind:

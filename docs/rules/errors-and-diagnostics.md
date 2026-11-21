@@ -18,7 +18,7 @@ transpiler: done
 analyser: partial
 
 - `ok(value)` and `err(value)` take one value by position and no generic argument (`generic.argument_count`), and both types from the complete `result<T, E>` the place expects, a nullable one included; with none it is `result.context_type`
-- The payload is read as its side's type
+- The payload is read as its side's type, including when its type first settles in a graph instance (GEN-7).
 - Left: a result expected through a generic parameter still being inferred; equality
 
 transpiler: done

@@ -1722,6 +1722,103 @@ fn graph_instances_resolve_members_of_deferred_bases() {
     }
 }
 
+/// GEN-7, EXPR-6 and ERR-12: specialization refits intrinsic boolean
+/// operands without changing the expression's short-circuit structure.
+#[test]
+fn graph_instances_fit_settled_boolean_operands() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn logic<T>(const input: T) -> bool {\n",
+        "    let flag = if predicate(input) { false }\n",
+        "    return !flag && (flag || true)\n",
+        "}\n",
+        "fn wrong<T>(const input: T) -> bool {\n",
+        "    let number = if predicate(input) { 1 }\n",
+        "    return !number || number && number\n",
+        "}\n",
+        "fn ordinary() -> bool => logic(\"s\")\n",
+        "fn connected() -> bool => logic(1)\n",
+        "fn rejected() -> bool => wrong(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:15:26 type/type.mismatch EXPR-5"; 3],
+        "{}",
+        checked.report
+    );
+    for (name, expected) in [("ordinary", 2), ("connected", 0)] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        let mut reads = 0;
+        walk_statements(&instance.statements, &mut |expr| {
+            if matches!(expr.kind, ExprKind::NullRead { .. }) {
+                reads += 1;
+                assert_eq!(expr.ty.to_string(), "bool");
+            }
+        });
+        assert_eq!(reads, expected, "{name}");
+    }
+}
+
+/// GEN-7, ERR-2 and EXPR-5: each result tag constrains its payload even
+/// when the payload's type first becomes known in the instance.
+#[test]
+fn graph_instances_fit_settled_result_payloads() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn success<T>(const input: T) -> result<i64, str> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return ok(chosen)\n",
+        "}\n",
+        "fn failure<T>(const input: T) -> result<i64, str> {\n",
+        "    let chosen = if predicate(input) { \"problem\" }\n",
+        "    return err(chosen)\n",
+        "}\n",
+        "fn wrong_success<T>(const input: T) -> result<str, error> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return ok(chosen)\n",
+        "}\n",
+        "fn wrong_failure<T>(const input: T) -> result<i64, str> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return err(chosen)\n",
+        "}\n",
+        "fn reads_success() -> result<i64, str> => success(\"s\")\n",
+        "fn reads_failure() -> result<i64, str> => failure(\"s\")\n",
+        "fn bad_success() -> result<str, error> => wrong_success(1)\n",
+        "fn bad_failure() -> result<i64, str> => wrong_failure(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:23:43 type/type.mismatch EXPR-5",
+            "m.hgl:24:41 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+    for (name, expected_success, ty) in [
+        ("reads_success", true, "i64"),
+        ("reads_failure", false, "str"),
+    ] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        let Some(Stmt::Return {
+            value: Some(value), ..
+        }) = instance.statements.last()
+        else {
+            panic!("the graph returns a result");
+        };
+        let ExprKind::Tagged { success, payload } = &value.kind else {
+            panic!("the result is tagged");
+        };
+        assert_eq!(*success, expected_success);
+        assert_eq!(payload.ty.to_string(), ty);
+        assert!(matches!(payload.kind, ExprKind::NullRead { .. }));
+    }
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another
