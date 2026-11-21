@@ -13,16 +13,27 @@ provides the SDK and its libraries. Set `HGL_HGRAPH_SDK` or
 
 ## Cut a release
 
-Set the workspace version in `Cargo.toml` and update `Cargo.lock`. Run the
-**macOS release bundle** workflow by hand to rehearse building and using
-the archive. When `HGL_SELF_HOSTED_MACOS` is true, the release runner
-builds the bundle and tests its C++ target from a different unpack path
-with an empty build cache. A GitHub-hosted macOS runner independently
-runs `hgl --version` and `hgl check`. The rehearsal uploads an artifact.
-Push a tag that is the workspace version, bare, such as `0.1.0`, to
-publish the archive and its SHA-256 file to GitHub Releases after those
-checks pass. A tag of any other form starts nothing, and one that is not
-the workspace version fails the build.
+Set the workspace version in `Cargo.toml` and update `Cargo.lock`. A push to
+`main` builds and verifies the bundle and keeps its archive and SHA-256
+file as a workflow artifact for 30 days. When `HGL_SELF_HOSTED_MACOS` is
+true, the release runner executes the C++ target from a different
+unpack path with an empty build cache. A GitHub-hosted macOS runner
+independently runs `hgl --version` and `hgl check`. Run the **macOS release
+bundle** workflow by hand to rehearse these steps without publishing.
+
+Push the bare workspace version as a tag, such as `0.1.0`. The tag run
+checks the version and publishes the original archive and checksum
+from the successful `main` run for that commit. If the main run is
+missing or its artifact has expired, the tag run builds and verifies a
+fresh bundle before publishing.
+
+After publishing, use the release's version and published archive checksum
+to open one update PR in the tap (set `version` and `sha256` first).
+
+```sh
+brew bump-formula-pr hhenson/hgraph/hgl --version="$version" --sha256="$sha256" \
+  --url="https://github.com/hhenson/hgl-compiler/releases/download/$version/hgl-$version-macos-arm64.tar.gz"
+```
 
 ## Build an archive locally
 
@@ -33,8 +44,15 @@ Apple clang 21 or later, CMake, Ninja, Git and Python 3.11 or later:
 scripts/package-release.sh
 ```
 
+Before fetching sources, the script compiles and runs a C++23 probe with the configured macOS toolchain.
+
 It fetches the pinned sources, builds the SDK and `hgl`, and prints the
 path and SHA-256 of the archive in `target/release-bundles`. Pass an
 output directory as the first argument and optionally a version tag as
 the second. The script checks a supplied tag against the workspace
 version. Set `HGL_BUILD_JOBS` to limit parallel builds.
+
+For repeated local builds, set `HGL_RELEASE_NATIVE_CACHE` to a directory
+to keep the verified SDK, dependency prefix and native license notices.
+An unpacked release bundle can also supply that prebuilt tree. The
+workflow keeps its native and Rust caches in the runner's tool cache.

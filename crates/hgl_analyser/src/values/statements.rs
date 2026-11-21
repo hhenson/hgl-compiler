@@ -515,7 +515,7 @@ impl<'a> Typer<'a> {
                 let left = self.read_local(local, &place);
                 let left = Given::read(0, place.clone(), left);
                 let right = self.operand(1, value.clone());
-                let identity = self.symbol_operator(operator.identity());
+                let identity = self.symbol_operator(operator.identity(), operator_at);
                 // What the sum is given to says what it is to be.
                 let (kind, result) = self.symbol(
                     (operator, operator_at),
@@ -735,7 +735,7 @@ impl<'a> Typer<'a> {
                 // place is the left operand, and has been read.
                 let left = Given::read(0, place.clone(), target.clone());
                 let right = self.operand(1, value.clone());
-                let identity = self.symbol_operator(operator.identity());
+                let identity = self.symbol_operator(operator.identity(), operator_at);
                 let (kind, result) = self.symbol(
                     (operator, operator_at),
                     identity,

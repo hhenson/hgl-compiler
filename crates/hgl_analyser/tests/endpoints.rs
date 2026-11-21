@@ -26,7 +26,7 @@ const CORE: &str = concat!(
     "export native const fn activate<T>(input: endpoint<T>)\n",
     "export native const fn passivate<T>(input: endpoint<T>)\n",
     "export native const fn is_active<T>(input: endpoint<T>) -> bool\n",
-    "operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
+    "export operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
     "native impl const fn add_(lhs: i64, rhs: i64) -> i64\n",
 );
 

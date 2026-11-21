@@ -462,7 +462,7 @@ fn a_constant_whose_value_depends_on_itself_is_reported() {
             "ops.hgl",
             concat!(
                 "module ops\n",
-                "operator choose<T>(value: T) -> T\n",
+                "export operator choose<T>(value: T) -> T\n",
                 "export const fn through() -> i64 => choose(1)\n",
                 // Read by `m` and reading nothing of it: no cycle.
                 "export const base: i64 = 1\n",
@@ -472,7 +472,7 @@ fn a_constant_whose_value_depends_on_itself_is_reported() {
             "m.hgl",
             concat!(
                 "module m\n",
-                // UNIT-3: an operator is public, and GEN-4: a candidate
+                // UNIT-3: an exported operator is public, and GEN-4: a candidate
                 // binds it through a selective import.
                 "use ops::{base, choose, through}\n",
                 "impl const fn choose(value: i64) -> i64 => answer\n",

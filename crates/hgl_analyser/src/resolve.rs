@@ -1044,7 +1044,7 @@ impl Resolver<'_> {
                     "UNIT-2",
                 )
                 .with_note(
-                    "a function, a type or a constant is private unless marked `export` (UNIT-3)",
+                    "a function, a type, a constant or an operator is private unless marked `export` (UNIT-3)",
                 ),
             );
             return None;

@@ -39,7 +39,7 @@ const CORE: &str = concat!(
     "export native type GlobalState\n",
     "native const fn log(logger: Logger, level: LogLevel, message: str)\n",
     // `+`, as core declares it.
-    "operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
+    "export operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
     "export const fn log_info(logger: Logger, message: str) {\n",
     "    log(logger, .info, message)\n",
     "}\n",

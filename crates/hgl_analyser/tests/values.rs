@@ -2925,7 +2925,7 @@ fn a_default_is_read_where_its_candidate_is_declared() {
             concat!(
                 "module lib\n",
                 "export enum Zero { ieee, nan, error }\n",
-                "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+                "export operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
                 "impl const fn ratio<const zero: Zero = (Zero.ieee)>(lhs: f64, rhs: f64) -> f64\n",
                 "    requires zero == .ieee => lhs\n",
                 // An option that is a parameter, under a name of its
@@ -4053,7 +4053,7 @@ fn an_enum_is_constructed_from_a_number_or_a_name() {
                 "module lib\n",
                 "export enum Side { buy, sell }\n",
                 "const fn choose(code: i64) -> Side => Side.sell\n",
-                "operator quoted<L, O>(lhs: L) -> O\n",
+                "export operator quoted<L, O>(lhs: L) -> O\n",
                 "impl const fn quoted(lhs: f64, side: Side = Side(0)) -> str\n",
                 "    requires side == .buy => \"bid\"\n",
                 "impl const fn quoted(lhs: i64, side: Side = choose(0)) -> str\n",
