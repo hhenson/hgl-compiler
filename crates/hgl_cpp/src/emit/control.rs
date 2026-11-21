@@ -244,6 +244,7 @@ impl Family for Control {
             condition,
             then,
             otherwise,
+            ..
         } = &value.kind
         else {
             return None;
@@ -346,6 +347,7 @@ impl Emitter<'_> {
                         condition,
                         then,
                         otherwise,
+                        ..
                     },
                 at,
                 ..
@@ -448,6 +450,7 @@ impl Emitter<'_> {
                                 condition,
                                 then,
                                 otherwise,
+                                ..
                             },
                         at,
                         ..
@@ -482,6 +485,7 @@ impl Emitter<'_> {
                             condition,
                             then,
                             otherwise,
+                            ..
                         },
                     ..
                 },
@@ -507,6 +511,7 @@ impl Emitter<'_> {
                         condition: condition.clone(),
                         then: block(then),
                         otherwise: Some(block(other)),
+                        join_branches: false,
                     },
                     ..whole.clone()
                 });

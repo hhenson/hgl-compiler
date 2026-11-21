@@ -460,6 +460,16 @@ fn lifts(program: &Program, callee: &Callee) -> bool {
 /// category or fills a hole in an inferred type. In a graph this
 /// includes a no-else `if` whose type depends on the categories (CTRL-13).
 pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
+    record_with(program, body, composition, |_, _| Type::Unknown);
+}
+
+/// Settle a concrete graph with the source branch-typing check available.
+pub(super) fn record_with(
+    program: &Program,
+    body: &mut Body,
+    composition: bool,
+    mut join: impl FnMut(&mut Expr, &mut Expr) -> Type,
+) {
     use ValueCategory::{Connection, Unsettled};
     let Body { locals, statements } = body;
     let first_values = first_values(locals, statements);
@@ -500,7 +510,7 @@ pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
                     return;
                 }
                 NodeMut::Expression(value) if composition && !whole(&value.ty) => {
-                    if let Some(ty) = settled_type(program, locals, value) {
+                    if let Some(ty) = settled_type(program, locals, value, &mut join) {
                         settling |= fill_type(&mut value.ty, ty);
                     }
                     return;
@@ -569,12 +579,24 @@ fn fill_type(current: &mut Type, inferred: Type) -> bool {
 /// CTRL-13: decide a no-else expression's type once its categories
 /// settle. A block tail or a read of an inferred local also takes its
 /// type from the value once that type is known.
-fn settled_type(program: &Program, locals: &[Local], value: &Expr) -> Option<Type> {
-    let ty = match &value.kind {
+fn settled_type(
+    program: &Program,
+    locals: &[Local],
+    value: &mut Expr,
+    join: &mut dyn FnMut(&mut Expr, &mut Expr) -> Type,
+) -> Option<Type> {
+    let ty = match &mut value.kind {
+        ExprKind::If {
+            then,
+            otherwise: Some(otherwise),
+            join_branches: true,
+            ..
+        } if whole(&then.ty) && whole(&otherwise.ty) => join(then, otherwise),
         ExprKind::If {
             condition,
             then,
             otherwise: None,
+            ..
         } if gives_a_value(then) => no_else_type(
             then.ty.clone(),
             category(program, locals, condition),

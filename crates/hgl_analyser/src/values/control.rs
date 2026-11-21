@@ -480,10 +480,17 @@ impl<'a> Typer<'a> {
             Outcome::Value(ty) => ty.clone(),
             Outcome::Nothing | Outcome::Returns | Outcome::Null => Type::Unknown,
         };
+        let join_branches = used
+            && !told
+            && matches!(
+                (&then.outcome, other.as_ref().map(|other| &other.outcome)),
+                (Outcome::Value(_), Some(Outcome::Value(_)))
+            );
         let kind = ExprKind::If {
             condition: Box::new(condition),
             then: Box::new(then.value),
             otherwise: other.map(|other| Box::new(other.value)),
+            join_branches,
         };
         (
             Expr {
@@ -500,7 +507,7 @@ impl<'a> Typer<'a> {
     /// expected of them: the type of both; the wider of a `T` and a
     /// `T?`; an `f64` for an integer literal and an `f64`, the literal
     /// widened (EXPR-5). Two types are reported at the second branch.
-    fn one_type(&mut self, then: &mut Expr, other: &mut Expr) -> Type {
+    pub(super) fn one_type(&mut self, then: &mut Expr, other: &mut Expr) -> Type {
         let (first, second) = (then.ty.clone(), other.ty.clone());
         if open(&first) || open(&second) {
             return Type::Unknown;

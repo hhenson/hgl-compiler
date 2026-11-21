@@ -3,7 +3,7 @@
 //! Part of the typing pass ([`super`]); `if`, the loops and `switch` are
 //! read in [`super::control`].
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Typer;
@@ -290,15 +290,7 @@ impl<'a> Typer<'a> {
                 // Preserve the existing check on a return from a dynamic
                 // graph loop until CTRL-15's sequence check lands (#373).
                 if self.dynamic.is_some() {
-                    self.diagnostics.emit(local_error(
-                        Category::Phase,
-                        codes::local::LOOP_CARRIED,
-                        at,
-                        "this loop makes one child for each member, and a child does not \
-                         return from the graph"
-                            .to_string(),
-                        "CTRL-15",
-                    ));
+                    self.diagnostics.emit(child_loop_return(at));
                 }
                 // CTRL-5: "Return targets the enclosing HGL function."
                 self.returned = true;
@@ -536,20 +528,8 @@ impl<'a> Typer<'a> {
         // Keep the existing checks for dynamic graph loops until the
         // compiler can reject their sequence under CTRL-15 (#373).
         if self.dynamic.is_some_and(|outside| local < outside) {
-            self.diagnostics.emit(
-                local_error(
-                    Category::Phase,
-                    codes::local::LOOP_CARRIED,
-                    self.at(&place),
-                    format!(
-                        "`{}` is declared outside this loop, which makes one child for each \
-                         member: nothing is carried from one child to the next",
-                        self.locals[local].name
-                    ),
-                    "CTRL-15",
-                )
-                .with_related(self.locals[local].at, "declared here"),
-            );
+            self.diagnostics
+                .emit(child_loop_write(&self.locals[local], self.at(&place)));
         } else if self.graph {
             let given = (self.category(&value), value.at);
             self.assigned_category(local, given, false);
@@ -753,20 +733,8 @@ impl<'a> Typer<'a> {
         // The dynamic-loop check is retained until the compiler checks
         // the sequence as CTRL-15 requires (#373).
         if self.graph && self.dynamic.is_some_and(|outside| local < outside) {
-            self.diagnostics.emit(
-                local_error(
-                    Category::Phase,
-                    codes::local::LOOP_CARRIED,
-                    self.at(place),
-                    format!(
-                        "`{}` is declared outside this loop, which makes one child for each \
-                         member: nothing is carried from one child to the next",
-                        self.locals[local].name
-                    ),
-                    "CTRL-15",
-                )
-                .with_related(self.locals[local].at, "declared here"),
-            );
+            self.diagnostics
+                .emit(child_loop_write(&self.locals[local], self.at(place)));
         } else if self.graph {
             // What the `var` becomes turns on the value and on every
             // index of the place: `row[index] = 3.0` with `index` a
@@ -867,6 +835,34 @@ impl<'a> Typer<'a> {
         );
         true
     }
+}
+
+/// The existing CTRL-15 restriction on writing an outer binding from a child.
+pub(super) fn child_loop_write(binding: &Local, at: Location) -> Diagnostic {
+    local_error(
+        Category::Phase,
+        codes::local::LOOP_CARRIED,
+        at,
+        format!(
+            "`{}` is declared outside this loop, which makes one child for each member: \
+             nothing is carried from one child to the next",
+            binding.name
+        ),
+        "CTRL-15",
+    )
+    .with_related(binding.at, "declared here")
+}
+
+/// The existing CTRL-15 restriction on returning from a child loop.
+pub(super) fn child_loop_return(at: Location) -> Diagnostic {
+    local_error(
+        Category::Phase,
+        codes::local::LOOP_CARRIED,
+        at,
+        "this loop makes one child for each member, and a child does not return from the graph"
+            .to_string(),
+        "CTRL-15",
+    )
 }
 
 /// The place `place` with its root, a local, of the type the local is

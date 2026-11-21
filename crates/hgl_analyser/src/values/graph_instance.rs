@@ -5,15 +5,19 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Diagnostics, Location};
+use hgl_source::Span;
 
 use super::arguments::Takes;
+use super::control::bound_by_loop;
 use super::fit::whole;
 use super::inference::{fixed, type_pack};
-use super::lifting::{assignment_category, record};
-use super::statements::place_assignment_category;
-use super::{Tables, Typer};
+use super::lifting::{assignment_category, record, record_with};
+use super::statements::{child_loop_return, child_loop_write, place_assignment_category};
+use super::{Selected, Tables, Typer};
 use crate::declared::substitute_within;
-use crate::hir::{self, Body, Callee, Expr, ExprKind, LocalId, Node, NodeMut, Stmt, ValueCategory};
+use crate::hir::{
+    self, Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Stmt, ValueCategory,
+};
 use crate::program::{Program, Role};
 use crate::types::{Detail, Signature, Type};
 
@@ -56,32 +60,34 @@ impl GraphDestinations {
             }
             _ => {}
         });
-        record(program, body, true);
+        let owner = &program.modules[module];
+        let (bindings, written, calls) = (HashMap::new(), HashMap::new(), HashMap::new());
+        let selecting = RefCell::new(Vec::new());
+        let mut typer = Typer::bare(
+            program,
+            owner,
+            &owner.declarations[declaration],
+            signature,
+            Tables {
+                bindings: &bindings,
+                written: &written,
+                calls: &calls,
+                selecting: &selecting,
+            },
+            diagnostics,
+        );
+        typer.graph = true;
+        record_with(program, body, true, |then, otherwise| {
+            typer.one_type(then, otherwise)
+        });
+        typer.locals.clone_from(&body.locals);
         if !self.0.is_empty() {
-            let owner = &program.modules[module];
-            let (bindings, written, calls) = (HashMap::new(), HashMap::new(), HashMap::new());
-            let selecting = RefCell::new(Vec::new());
-            let mut typer = Typer::bare(
-                program,
-                owner,
-                &owner.declarations[declaration],
-                signature,
-                Tables {
-                    bindings: &bindings,
-                    written: &written,
-                    calls: &calls,
-                    selecting: &selecting,
-                },
-                diagnostics,
-            );
-            typer.graph = true;
-            typer.locals.clone_from(&body.locals);
             hir::walk_statement_nodes_mut(&mut body.statements, &mut |node| {
                 self.fit_destination(&mut typer, node);
             });
             record(program, body, true);
         }
-        check_assignments(body, diagnostics);
+        check_control(&mut typer, &body.statements);
     }
 
     fn fit_destination(&self, typer: &mut Typer<'_>, node: NodeMut<'_>) {
@@ -120,10 +126,23 @@ impl GraphDestinations {
                 return;
             }
             NodeMut::Expression(Expr {
-                kind: ExprKind::If { condition, .. },
+                kind:
+                    ExprKind::If {
+                        condition,
+                        then,
+                        otherwise,
+                        join_branches,
+                    },
+                ty,
                 ..
             }) => {
                 self.fit_condition(typer, condition);
+                if !*join_branches && whole(ty) {
+                    self.fit_branch(typer, then, ty);
+                    if let Some(otherwise) = otherwise {
+                        self.fit_branch(typer, otherwise, ty);
+                    }
+                }
                 return;
             }
             NodeMut::Expression(Expr {
@@ -198,6 +217,19 @@ impl GraphDestinations {
     fn fit_condition(&self, typer: &mut Typer<'_>, value: &mut Expr) {
         if self.known(value) {
             *value = typer.fit_condition(value.clone());
+        }
+    }
+
+    /// CTRL-10: a block tail gives the branch its value, which must fit
+    /// the type the source or the now-settled branches established.
+    fn fit_branch(&self, typer: &mut Typer<'_>, branch: &mut Expr, ty: &Type) {
+        if let ExprKind::Block {
+            value: Some(tail), ..
+        } = &mut branch.kind
+            && self.known(tail)
+        {
+            self.fit(typer, tail, ty, "the value of this block", true);
+            branch.ty = tail.ty.clone();
         }
     }
 
@@ -325,22 +357,31 @@ impl GraphDestinations {
     }
 }
 
-/// CTRL-14 and CTRL-15: assignment to an ordinary binding outside a
-/// branch selected at runtime is invalid, and every assignment keeps
-/// the binding's category. Use lexical branches, excluding selectors.
-fn check_assignments(body: &Body, diagnostics: &mut Diagnostics) {
-    let mut runtime = HashSet::new();
-    hir::walk_statement_nodes(&body.statements, &mut |node| match node {
+/// The nearest runtime branch and child loop enclosing a typed node.
+/// The selectors and loop sequences are outside their own boundaries.
+#[derive(Default)]
+struct Boundaries {
+    runtime: HashMap<Location, Location>,
+    children: HashMap<Location, Location>,
+}
+
+/// CTRL-14 and CTRL-15: a deferred selector can move writes or returns
+/// into a runtime branch or a child graph. Recheck whole and nested
+/// assignments, including ordinary values written by FN-15 calls.
+fn check_control(typer: &mut Typer<'_>, statements: &[Stmt]) {
+    let mut scopes = Boundaries::default();
+    hir::walk_statement_nodes(statements, &mut |node| match node {
         Node::Expression(Expr {
             kind:
                 ExprKind::If {
                     condition,
                     then,
                     otherwise,
+                    ..
                 },
             ..
         }) if condition.category == ValueCategory::Connection => {
-            let mut mark = |node| mark_outer_assignment(body, condition.at, node, &mut runtime);
+            let mut mark = |node| mark_boundary(&mut scopes.runtime, condition.at, node);
             then.walk_nodes(&mut mark);
             if let Some(otherwise) = otherwise {
                 otherwise.walk_nodes(&mut mark);
@@ -352,59 +393,127 @@ fn check_assignments(body: &Body, diagnostics: &mut Diagnostics) {
             default,
             ..
         }) if selector.category == ValueCategory::Connection => {
-            let mut mark = |node| mark_outer_assignment(body, selector.at, node, &mut runtime);
+            let mut mark = |node| mark_boundary(&mut scopes.runtime, selector.at, node);
             for statements in cases.iter().map(|case| &case.body).chain(default) {
                 hir::walk_statement_nodes(statements, &mut mark);
             }
         }
+        Node::Statement(Stmt::For {
+            names,
+            sequence,
+            body,
+            at,
+        }) if bound_by_loop(sequence.category, &sequence.ty, names.len()).1 => {
+            hir::walk_statement_nodes(body, &mut |node| {
+                mark_boundary(&mut scopes.children, *at, node)
+            });
+        }
         _ => {}
     });
-    hir::walk_statement_nodes(&body.statements, &mut |node| {
-        let Some((local, value, place, at)) = assignment(node) else {
-            return;
-        };
-        let given = place.map_or((value.category, value.at), |place| {
-            place_assignment_category(place, value, |part| part.category)
-        });
-        if let Some(report) = assignment_category(
-            &body.locals[local],
-            given,
-            place.is_some(),
-            runtime.contains(&at),
-        ) {
-            diagnostics.emit(report);
+    hir::walk_statement_nodes(statements, &mut |node| {
+        match node {
+            Node::Expression(Expr { kind, at, .. }) => {
+                if let Some(selected) = Selected::of(typer.program, kind) {
+                    for (local, written, inside) in typer.places_given(&selected) {
+                        scopes.check_write(
+                            typer,
+                            local,
+                            *at,
+                            (ValueCategory::Value, written),
+                            inside,
+                            written,
+                        );
+                    }
+                }
+            }
+            Node::Statement(Stmt::Return { at, .. }) => {
+                if scopes.children.contains_key(at) {
+                    typer.diagnostics.emit(child_loop_return(*at));
+                }
+            }
+            Node::Statement(Stmt::Assign {
+                local, value, at, ..
+            }) => {
+                // This statement starts at its local name (the same
+                // span the declaration check reports for a child write).
+                let end = at.span.start + typer.locals[*local].name.len() as u32;
+                let written =
+                    Location::new(at.file, Span::new(at.span.start, end.min(at.span.end)));
+                scopes.check_write(
+                    typer,
+                    *local,
+                    *at,
+                    (value.category, value.at),
+                    false,
+                    written,
+                );
+            }
+            Node::Statement(Stmt::AssignPlace {
+                place, value, at, ..
+            }) => {
+                if let ExprKind::Local(local) = place.place_root().kind {
+                    let given = place_assignment_category(place, value, |part| part.category);
+                    scopes.check_write(typer, local, *at, given, true, place.at);
+                }
+            }
+            _ => {}
         }
     });
 }
 
-fn mark_outer_assignment(
-    body: &Body,
-    selector: Location,
-    node: Node<'_>,
-    runtime: &mut HashSet<Location>,
-) {
-    if let Some((local, _, _, at)) = assignment(node)
-        && let binding = body.locals[local].at
-        && binding.file == selector.file
-        && binding.span.end <= selector.span.start
-    {
-        runtime.insert(at);
+impl Boundaries {
+    fn check_write(
+        &self,
+        typer: &mut Typer<'_>,
+        local: LocalId,
+        at: Location,
+        given: (ValueCategory, Location),
+        inside: bool,
+        written: Location,
+    ) {
+        let binding = &typer.locals[local];
+        let report = if outside(binding, self.children.get(&at)) {
+            Some(child_loop_write(binding, written))
+        } else {
+            assignment_category(
+                binding,
+                given,
+                inside,
+                outside(binding, self.runtime.get(&at)),
+            )
+        };
+        if let Some(report) = report {
+            typer.diagnostics.emit(report);
+        }
     }
 }
 
-fn assignment(node: Node<'_>) -> Option<(LocalId, &Expr, Option<&Expr>, Location)> {
-    match node {
-        Node::Statement(Stmt::Assign {
-            local, value, at, ..
-        }) => Some((*local, value, None, *at)),
-        Node::Statement(Stmt::AssignPlace {
-            place, value, at, ..
-        }) => {
-            let ExprKind::Local(local) = place.place_root().kind else {
-                return None;
-            };
-            Some((local, value, Some(place), *at))
-        }
-        _ => None,
-    }
+fn outside(binding: &Local, boundary: Option<&Location>) -> bool {
+    boundary.is_some_and(|boundary| {
+        binding.at.file == boundary.file && binding.at.span.end <= boundary.span.start
+    })
+}
+
+fn mark_boundary(scopes: &mut HashMap<Location, Location>, boundary: Location, node: Node<'_>) {
+    let at = match node {
+        Node::Statement(
+            Stmt::Assign { at, .. } | Stmt::AssignPlace { at, .. } | Stmt::Return { at, .. },
+        )
+        | Node::Expression(Expr {
+            kind: ExprKind::Call { .. },
+            at,
+            ..
+        }) => *at,
+        _ => return,
+    };
+    // For nested scopes the inner boundary applies, including to locals
+    // declared in the outer scope before entering the inner one.
+    scopes
+        .entry(at)
+        .and_modify(|outer| {
+            if boundary.span.start > outer.span.start {
+                *outer = boundary;
+            }
+        })
+        .or_insert(boundary);
 }

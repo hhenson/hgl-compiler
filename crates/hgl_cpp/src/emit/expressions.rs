@@ -291,6 +291,7 @@ impl Emitter<'_> {
                 condition,
                 then,
                 otherwise,
+                ..
             } if plain(then) && otherwise.as_deref().is_none_or(plain) => {
                 let Some(ty) = self.written_type(&value.ty, value.at) else {
                     return "0".to_string();
@@ -784,6 +785,7 @@ fn returning(value: &Expr) -> Option<Vec<Stmt>> {
             condition,
             then,
             otherwise: Some(otherwise),
+            ..
         } => {
             let branch = |branch: &Expr| -> Option<Box<Expr>> {
                 Some(Box::new(Expr {
@@ -801,6 +803,7 @@ fn returning(value: &Expr) -> Option<Vec<Stmt>> {
                     condition: condition.clone(),
                     then: branch(then)?,
                     otherwise: Some(branch(otherwise)?),
+                    join_branches: false,
                 },
                 ty: value.ty.clone(),
                 at: value.at,

@@ -1130,6 +1130,131 @@ fn graph_instances_propagate_inferred_tuple_types() {
     assert_eq!(returned.ty.to_string(), "tuple<tuple<i64?, i64>, i64>");
 }
 
+/// GEN-7, CTRL-14 and FN-15: passing an outer ordinary variable to a
+/// mutable parameter is an assignment in the selected branch.
+#[test]
+fn graph_instances_check_mutable_calls_under_temporal_selectors() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn bump(var output: i64) { output = 1 }\n",
+        "fn conditional<T>(const input: T) -> i64 {\n",
+        "    var output = 0\n",
+        "    if predicate(input) { bump(output) }\n",
+        "    return output\n",
+        "}\n",
+        "fn selected<T>(const input: T) -> i64 {\n",
+        "    var output = 0\n",
+        "    switch predicate(input) { case true: bump(output) }\n",
+        "    return output\n",
+        "}\n",
+        "fn local_to_branch<T>(const input: T) -> i64 {\n",
+        "    if predicate(input) {\n",
+        "        var output = 0\n",
+        "        bump(output)\n",
+        "    }\n",
+        "    return 0\n",
+        "}\n",
+        "fn ordinary() -> i64 => conditional(\"s\") + selected(\"s\")\n",
+        "fn bad_if() -> i64 => conditional(1)\n",
+        "fn bad_switch() -> i64 => selected(1)\n",
+        "fn valid_inner() -> i64 => local_to_branch(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:24:23 type/binding.category CTRL-14",
+            "m.hgl:25:27 type/binding.category CTRL-14",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7 and CTRL-15: once the sequence is temporal, the loop body is
+/// a child which cannot carry outer variables or return from the graph.
+#[test]
+fn graph_instances_recheck_child_loop_writes_and_returns() {
+    let checked = module(concat!(
+        "operator items<T>(input: T) -> list<i64>\n",
+        "impl const fn items<T>(input: T) -> list<i64> => [1]\n",
+        "impl fn items(input: i64) -> list<i64> { when { return [input] } }\n",
+        "const fn bump(var output: i64) { output = 1 }\n",
+        "fn writes<T>(const input: T) -> i64 {\n",
+        "    var output = 0\n",
+        "    var row = [0]\n",
+        "    for item in items(input) {\n",
+        "        output = 1\n",
+        "        row[0] = 2\n",
+        "        bump(output)\n",
+        "        var inside = 0\n",
+        "        bump(inside)\n",
+        "    }\n",
+        "    return output\n",
+        "}\n",
+        "fn early<T>(const input: T) -> i64 {\n",
+        "    for item in items(input) { return 1 }\n",
+        "    return 0\n",
+        "}\n",
+        "fn ordinary() -> i64 => writes(\"s\") + early(\"s\")\n",
+        "fn bad_write() -> i64 => writes(1)\n",
+        "fn bad_return() -> i64 => early(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:23:26 local:phase/loop.carried CTRL-15",
+            "m.hgl:23:26 local:phase/loop.carried CTRL-15",
+            "m.hgl:23:26 local:phase/loop.carried CTRL-15",
+            "m.hgl:24:27 local:phase/loop.carried CTRL-15",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7 and CTRL-13: the two branches of a consumed conditional
+/// agree after settlement. A dropped conditional still needs no type.
+#[test]
+fn graph_instances_join_deferred_branches_only_when_consumed() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "fn good<T>(const input: T) -> i64? {\n",
+        "    let chosen = if true { if predicate(input) { 1 } } else { 0 }\n",
+        "    return chosen\n",
+        "}\n",
+        "fn mismatch<T>(const input: T) -> i64? {\n",
+        "    let chosen = if true { if predicate(input) { 1 } } else { \"s\" }\n",
+        "    return chosen\n",
+        "}\n",
+        "fn dropped<T>(const input: T) -> i64 {\n",
+        "    if true { if predicate(input) { 1 } } else { \"s\" }\n",
+        "    return 0\n",
+        "}\n",
+        "fn accepted() -> i64? => good(1)\n",
+        "fn rejected() -> i64? => mismatch(1)\n",
+        "fn unused() -> i64 => dropped(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:17:26 type/type.mismatch CTRL-13"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    assert_eq!(instance.locals[1].ty.to_string(), "i64?");
+    let Some(Stmt::Return {
+        value: Some(returned),
+        ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns the conditional");
+    };
+    assert_eq!(returned.ty.to_string(), "i64?");
+}
+
 /// GEN-7: a generic body "is judged once, where it is declared, by what
 /// its `requires` states, and never again for the generic arguments a
 /// call of it gives". hhenson/hgl_spec#144: a call in it of another

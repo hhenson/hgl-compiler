@@ -553,6 +553,9 @@ pub enum ExprKind {
         then: Box<Expr>,
         /// What is done when it does not.
         otherwise: Option<Box<Expr>>,
+        /// Whether source typing needs the common type of two valued branches.
+        /// A dropped `if` never needs its branch types to agree (CTRL-10).
+        join_branches: bool,
     },
     /// A generic value parameter of the declaration: the `N` of
     /// `const fn width<const N: i64>() -> i64 => N`.
@@ -1326,6 +1329,7 @@ impl Expr {
                 condition,
                 then,
                 otherwise,
+                ..
             } => {
                 condition.walk_nodes(visit);
                 then.walk_nodes(visit);
@@ -1436,6 +1440,7 @@ impl Expr {
                 condition,
                 then,
                 otherwise,
+                ..
             } => {
                 condition.walk_nodes_mut(visit);
                 then.walk_nodes_mut(visit);

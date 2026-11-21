@@ -12,12 +12,36 @@ use super::arguments::Takes;
 use super::evals::holds_trace;
 use super::fit::whole;
 use super::inference::placed;
+use super::statements::child_loop_write;
 use super::{Selected, Typer};
 use crate::declared::substitute_within;
 use crate::hir::{Expr, ExprKind, Form, Hook, LocalId, Value, ValueCategory};
-use crate::program::{LocalKind, Role};
+use crate::program::{LocalKind, Program, Role};
 use crate::types::{Argument, ConstantValue, Detail, Scalar, Type};
-use crate::{codes, error, local_error};
+use crate::{codes, error};
+
+impl<'e> Selected<'e> {
+    /// The selected callee and the argument slots the call gives it.
+    pub(super) fn of(program: &'e Program, kind: &'e ExprKind) -> Option<Self> {
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = kind
+        else {
+            return None;
+        };
+        let (module, declaration) = callee.declaration()?;
+        Some(Self {
+            module,
+            declaration,
+            generics: callee.generics(),
+            signature: match program.modules[module].details.get(declaration) {
+                Some(Detail::Callable(signature)) => Some(signature),
+                _ => None,
+            },
+            arguments,
+        })
+    }
+}
 
 impl<'a> Typer<'a> {
     /// What every call is held to once it is built, with each argument
@@ -29,26 +53,23 @@ impl<'a> Typer<'a> {
         // A call of a function or a candidate: an operation a
         // declaration requires has no candidate here, and a call that
         // is not read no parameters to judge.
-        let selected = match kind {
-            ExprKind::Call {
-                callee, arguments, ..
-            } => callee.declaration().map(|(module, declaration)| Selected {
-                module,
-                declaration,
-                generics: callee.generics(),
-                signature: match self.program.modules[module].details.get(declaration) {
-                    Some(Detail::Callable(signature)) => Some(signature),
-                    _ => None,
-                },
-                arguments,
-            }),
-            _ => None,
-        };
-        let Some(selected) = selected else {
+        let Some(selected) = Selected::of(self.program, kind) else {
             self.store_call(kind);
             return;
         };
-        self.places_given(&selected);
+        let assigned = self.places_given(&selected);
+        // A `var` call assigns ordinary values (FN-15). Its writes in
+        // a graph are held to CTRL-14 and CTRL-15, like other assignments.
+        if self.graph {
+            for (local, at, inside) in assigned {
+                if self.dynamic.is_some_and(|outside| local < outside) {
+                    self.diagnostics
+                        .emit(child_loop_write(&self.locals[local], at));
+                } else {
+                    self.assigned_category(local, (ValueCategory::Value, at), inside);
+                }
+            }
+        }
         self.store_call(kind);
         self.capabilities_given(&selected);
         self.fixed_arguments(&selected);
@@ -204,7 +225,7 @@ impl<'a> Typer<'a> {
     /// (`argument.place`)." And "A function that declares one is not
     /// lifted (FN-6) ... No argument of such a call is a connection
     /// (`connection.as_constant`)".
-    fn places_given(&mut self, selected: &Selected) {
+    pub(super) fn places_given(&mut self, selected: &Selected) -> Vec<(LocalId, Location, bool)> {
         let &Selected {
             module,
             declaration,
@@ -214,10 +235,10 @@ impl<'a> Typer<'a> {
         } = selected;
         let program = self.program;
         let Some(signature) = selected.signature else {
-            return;
+            return Vec::new();
         };
         if !signature.parameters.iter().any(|parameter| parameter.var) {
-            return;
+            return Vec::new();
         }
         let callee = &program.modules[module].declarations[declaration].name;
         // What a parameter's type is at this call, the callee's generic
@@ -352,34 +373,7 @@ impl<'a> Typer<'a> {
         for report in reports {
             self.diagnostics.emit(report);
         }
-        // In a graph an assignment is held to more (CTRL-14, CTRL-15),
-        // and so is a call that assigns: a `var` declared outside a
-        // loop that makes a child for each member is not carried, and
-        // one that holds an ordinary value is not assigned in a branch
-        // selected at runtime. What the call gives the place is an
-        // ordinary value: the function is not lifted.
-        if !self.graph {
-            return;
-        }
-        for (local, at, inside) in assigned {
-            if self.dynamic.is_some_and(|outside| local < outside) {
-                self.diagnostics.emit(
-                    local_error(
-                        Category::Phase,
-                        codes::local::LOOP_CARRIED,
-                        at,
-                        format!(
-                            "`{}` is declared outside this loop, which makes one child for each member: nothing is carried from one child to the next",
-                            self.locals[local].name
-                        ),
-                        "CTRL-15",
-                    )
-                    .with_related(self.locals[local].at, "declared here"),
-                );
-            } else {
-                self.assigned_category(local, (ValueCategory::Value, at), inside);
-            }
-        }
+        assigned
     }
 
     /// The global store: "The key `"run.output"` is the run's own,
