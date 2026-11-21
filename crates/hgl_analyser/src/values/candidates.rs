@@ -53,6 +53,36 @@ enum ResultBinding {
     RequiredSuccess,
 }
 
+#[derive(Default)]
+struct Admissions<'s> {
+    known: Vec<(Vec<usize>, Chosen<'s>)>,
+    possible: Vec<(usize, Chosen<'s>)>,
+    untold: bool,
+    fits: bool,
+}
+
+impl<'s> Admissions<'s> {
+    /// Keep each candidate's best arrangement across inference passes.
+    fn include(&mut self, next: Self) {
+        for (reads, candidate) in next.known {
+            let earlier = self.known.iter_mut().find(|(_, earlier)| {
+                (earlier.module, earlier.declaration) == (candidate.module, candidate.declaration)
+            });
+            match earlier {
+                Some((previous, chosen)) if previous.len() == reads.len() => {
+                    chosen.ambiguous_reads |= *previous != reads || candidate.ambiguous_reads;
+                }
+                Some((previous, _)) if previous.len() < reads.len() => {}
+                Some(earlier) => *earlier = (reads, candidate),
+                None => self.known.push((reads, candidate)),
+            }
+        }
+        self.possible.extend(next.possible);
+        self.untold |= next.untold;
+        self.fits |= next.fits;
+    }
+}
+
 impl<'a> Typer<'a> {
     /// The candidates of `operator` that admit a call, the most
     /// specific of them (GEN-5), and whether one could not be told to
@@ -77,6 +107,9 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
     ) -> (Vec<Chosen<'a>>, bool) {
+        let has_results = given
+            .iter()
+            .any(|argument| !argument.by_place && matches!(argument.value.ty, Type::Result { .. }));
         let has_forms = given.iter().any(|argument| {
             !argument.by_place
                 && matches!(argument.value.ty, Type::Result { .. } | Type::Nullable(_))
@@ -94,15 +127,34 @@ impl<'a> Typer<'a> {
         let mut untold = false;
         for widening in [false, true] {
             let mut fits = false;
+            let mut converting = Admissions::default();
             for &form in forms {
-                let (selected, unknown, takes_types) =
+                let admitted =
                     self.admitted_as(operator, candidates, given, wanted, widening, form);
+                fits |= admitted.fits;
+                if has_results && form != ArgumentForms::Whole {
+                    // A more general inference pass can find an admitted
+                    // candidate that reads fewer operands (ERR-15).
+                    let keeps_results = admitted.known.iter().any(|(reads, _)| reads.is_empty());
+                    converting.include(admitted);
+                    if keeps_results {
+                        break;
+                    }
+                    continue;
+                }
+                let takes_types = admitted.fits;
+                let (selected, unknown) = self.rank_admitted(operator, given, widening, admitted);
                 if !selected.is_empty() || unknown && takes_types {
                     return (selected, unknown);
                 }
                 untold |= unknown;
-                fits |= takes_types;
             }
+            let takes_types = converting.fits;
+            let (selected, unknown) = self.rank_admitted(operator, given, widening, converting);
+            if !selected.is_empty() || unknown && takes_types {
+                return (selected, unknown);
+            }
+            untold |= unknown;
             // GEN-5: at this precision, a type fit decides whether to
             // widen literals, even if the candidate's condition fails.
             if fits {
@@ -112,10 +164,8 @@ impl<'a> Typer<'a> {
         (Vec::new(), untold)
     }
 
-    /// [`Typer::admitted`], with the arguments `given` of the types they
-    /// have: the candidates selected, whether one could not be told to
-    /// admit the call, and whether any candidate takes the call by its
-    /// result and parameter types, whatever its condition says.
+    /// Find candidates and their best arrangements with these possible
+    /// argument forms. Rank them after gathering the applicable forms.
     fn admitted_as(
         &mut self,
         operator: OperatorRef,
@@ -124,7 +174,7 @@ impl<'a> Typer<'a> {
         wanted: &Wanted,
         widening: bool,
         forms: ArgumentForms,
-    ) -> (Vec<Chosen<'a>>, bool, bool) {
+    ) -> Admissions<'a> {
         let program = self.program;
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
@@ -132,15 +182,10 @@ impl<'a> Typer<'a> {
             .details
             .get(operator.declaration)
         else {
-            return (Vec::new(), false, false);
+            return Admissions::default();
         };
-        let mut selected: Vec<Chosen> = Vec::new();
-        let mut untold = false;
-        // The candidates whose condition is not told: one a candidate that
-        // admits the call outranks leaves the selection as it is.
-        let mut not_told: Vec<Chosen> = Vec::new();
+        let mut admitted = Admissions::default();
         let converting = forms != ArgumentForms::Whole;
-        let mut fits = false;
         for &(module, declaration, signature) in candidates {
             let declared_in = &program.modules[module];
             let candidate = &declared_in.declarations[declaration];
@@ -304,7 +349,7 @@ impl<'a> Typer<'a> {
                 });
                 match unfit {
                     Some(true) => {
-                        untold = true;
+                        admitted.untold = true;
                         continue;
                     }
                     Some(false) => continue,
@@ -318,7 +363,7 @@ impl<'a> Typer<'a> {
                     widening,
                     converting,
                 );
-                fits |= admits != Admits::Misfit;
+                admitted.fits |= admits != Admits::Misfit;
                 if !matches!(admits, Admits::Yes | Admits::Unknown) {
                     continue;
                 }
@@ -365,12 +410,42 @@ impl<'a> Typer<'a> {
             if let Some((fewest, possible)) = possible_reads
                 && best.as_ref().is_none_or(|(reads, _)| fewest <= reads.len())
             {
-                not_told.push(possible);
+                admitted.possible.push((fewest, possible));
             }
-            if let Some((_, chosen)) = best {
-                selected.push(chosen);
+            if let Some((reads, chosen)) = best {
+                admitted.known.push((reads, chosen));
             }
         }
+        admitted
+    }
+
+    /// ERR-15 ranks result reads before GEN-5's specificity and phase rules.
+    fn rank_admitted(
+        &self,
+        operator: OperatorRef,
+        given: &[Given],
+        widening: bool,
+        admitted: Admissions<'a>,
+    ) -> (Vec<Chosen<'a>>, bool) {
+        let program = self.program;
+        let Some(Detail::Callable(public)) = program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return (Vec::new(), false);
+        };
+        let Admissions {
+            known,
+            possible,
+            mut untold,
+            ..
+        } = admitted;
+        // ERR-15: rank only candidates taking the fewest result payloads.
+        let fewest = known.iter().map(|(reads, _)| reads.len()).min();
+        let mut selected = known
+            .into_iter()
+            .filter_map(|(reads, chosen)| (Some(reads.len()) == fewest).then_some(chosen))
+            .collect::<Vec<_>>();
         // GEN-5: "Select exactly one most-specific admitted candidate.
         // Concrete types outrank variables; structurally constrained
         // variables outrank unconstrained ones."
@@ -381,10 +456,14 @@ impl<'a> Typer<'a> {
         // nothing whatever its condition comes to; any other leaves which
         // is selected not told. GEN-7: so a candidate that takes every
         // generic argument is known where nothing else can outrank it.
-        untold |= not_told.iter().any(|unknown| {
-            !selected
-                .iter()
-                .any(|admitted| outranks(admitted, unknown, public))
+        untold |= possible.iter().any(|(reads, unknown)| {
+            fewest.is_none_or(|fewest| {
+                *reads < fewest
+                    || *reads == fewest
+                        && !selected
+                            .iter()
+                            .any(|admitted| outranks(admitted, unknown, public))
+            })
         });
         if widening && selected.len() > 1 {
             Self::prefer_widened(&mut selected, public, given);
@@ -429,7 +508,7 @@ impl<'a> Typer<'a> {
                 !outranked[position - 1]
             });
         }
-        (selected, untold, fits)
+        (selected, untold)
     }
 
     /// GEN-5: "Among candidates that tie and differ only in which
