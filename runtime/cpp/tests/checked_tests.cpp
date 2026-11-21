@@ -73,16 +73,6 @@ TEST_CASE("a read of what is not there fails with value.unset_read (TIME-1, ERR-
     }
 }
 
-TEST_CASE("a checked read where its place takes a result gives one (ERR-14)") {
-    const hglrt::result<hglrt::i64> held = hglrt::checked_result(Endpoint{true, 5});
-    REQUIRE(held.has_value());
-    CHECK(*held == 5);
-    const hglrt::result<hglrt::i64> none = hglrt::checked_result(Endpoint{false, 5});
-    REQUIRE_FALSE(none.has_value());
-    CHECK(none.error().code == "value.unset_read");
-    CHECK_FALSE(none.error().context.has_value());
-}
-
 TEST_CASE(
     "an index outside a list fails where it is evaluated, coded value.index_out_of_range (EXPR-3, EXPR-7)") {
     hglrt::list<hglrt::i64> values{10, 20, 30};

@@ -23,12 +23,9 @@ using hglrt::i64;
 using hglrt::testing::Dense;
 using namespace std::chrono_literals;
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
-/// The connection core's `replay` makes of `trace`.
-hgraph::Port<hgraph::TS<i64>> replayed(hgraph::Wiring& wiring, const Dense<i64>& trace) {
-    return hgraph::wire<hglrt_test::Replay>(wiring, hglrt::testing::replay_items(trace, start));
-}
+using hglrt_test::replayed;
 
 /// What a node saw of its `ref` parameter in one evaluation.
 struct Seen {

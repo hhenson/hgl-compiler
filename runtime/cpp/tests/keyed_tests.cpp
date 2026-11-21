@@ -32,12 +32,9 @@ using BookDelta = hglrt::dict_delta<str, i64>;
 using MembersSchema = hgraph::TSS<i64>;
 using BookSchema = hgraph::TSD<str, hgraph::TS<i64>>;
 
-const datetime start = hglrt::testing::earliest_start();
+using hglrt_test::start;
 
-/// The connection core's `replay` makes of the commands `trace`.
-hgraph::Port<hgraph::TS<i64>> replayed(hgraph::Wiring& wiring, const Dense<i64>& trace) {
-    return hgraph::wire<hglrt_test::Replay>(wiring, hglrt::testing::replay_items(trace, start));
-}
+using hglrt_test::replayed;
 
 /// What a reader saw in one evaluation: its time, `valid`, `modified`, the
 /// value read whole where it is valid, and the delta where it has one.

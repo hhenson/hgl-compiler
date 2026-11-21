@@ -133,6 +133,7 @@ if(BUILD_TESTING)
         tests/endpoint_tests.cpp
         tests/failure_tests.cpp
         tests/generator_tests.cpp
+        tests/host_tests.cpp
         tests/keyed_tests.cpp
         tests/list_endpoints_tests.cpp
         tests/references_tests.cpp
