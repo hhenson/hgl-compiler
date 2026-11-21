@@ -75,6 +75,26 @@ const fn rejected() -> i64 => forward(false)",
 }
 
 #[test]
+fn an_inherited_default_reports_its_required_calls_configuration_error() {
+    // GEN-16, FN-18: after the operator's requirement is answered,
+    // the call inside its default checks the selected configuration type.
+    let checked = module(
+        "operator make<T>{flag: bool = false}() -> T
+impl const fn make{flag: i64}() -> i64 => flag
+operator pick<T>{fallback: T = make<T>{flag: true}()}(input: T) -> T requires make() -> T
+impl const fn pick{fallback: i64}(input: i64) -> i64 => fallback
+const fn first() -> i64 => pick(1)
+const fn second() -> i64 => pick(2)",
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:46 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+}
+
+#[test]
 fn a_required_configuration_literal_can_widen_but_a_binding_cannot() {
     // FN-18, EXPR-5: the integer literal fits a float place, but an
     // integer binding is never implicitly converted to a float.
