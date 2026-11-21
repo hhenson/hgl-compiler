@@ -284,27 +284,16 @@ pub(super) fn emptied_shape(program: &Program, ty: &Type) -> Option<String> {
     within(program, ty, 0)
 }
 
-/// Where a temporal value of `ty` holds a dictionary or a set, itself
-/// among them, through dictionaries' values, structs' fields, tuples'
-/// positions and fixed lists' elements: the provider's shape of it for
-/// `entries_published`, `"entries"` for one whose own parts hold none,
-/// `("entries", part)` for a dictionary whose values hold one,
-/// `("fields", {name: part})` for a struct, `("positions", (part, ...))`
-/// for a tuple and `("list", part)` for a fixed list, `None` for a part
-/// that holds none. `None` where `ty` holds none so: hgraph's `TSD`
-/// fails the run for a `REMOVE` of a key it does not hold, and neither
-/// it nor the `TSS` is made valid by a delta that names no change. An
-/// unsized list's is published by its size (`list_parts_shape`), and one
-/// in it is not looked for.
+/// The fixed composites and keyed collections in a published delta. A
+/// struct or tuple with children needs its shape even when none of its
+/// children is keyed. An empty sparse native bundle can publish, while
+/// TIME-7 makes an HGL fixed patch that names no child silent.
 ///
-/// Within a dictionary's values a struct, a tuple and a fixed list are
-/// each written out whether or not they hold one, `("fields", {})` for a
-/// struct of fields that publish whole: TIME-7, "A struct, a tuple and
-/// a `list<V, N>` are valid where a child is (TIME-9), and such a delta
-/// of one, `delta<Quote>()`, sets no child: it changes no validity, and
-/// is never a tick". hgraph's `TSD` ticks for a key given one, where its
-/// bundle and its `TSL` do not, and the provider leaves it out of the
-/// dictionary's delta (`_pruned`).
+/// `"entries"` marks a dictionary or set, `("entries", part)` a
+/// dictionary with structured values. Fields, tuple positions and fixed
+/// list positions carry their children's shapes. A fixed list within a
+/// dictionary is marked even for scalar elements so an empty patch
+/// cannot insert a key (TYPE-16). Unsized lists use `list_parts_shape`.
 pub(super) fn entries_shape(program: &Program, ty: &Type) -> Option<String> {
     /// `entry` is true within a dictionary's value.
     fn within(program: &Program, ty: &Type, depth: usize, entry: bool) -> Option<String> {
@@ -328,7 +317,7 @@ pub(super) fn entries_shape(program: &Program, ty: &Type) -> Option<String> {
             },
             Type::Tuple(elements) => {
                 let parts: Vec<Option<String>> = elements.iter().map(part).collect();
-                if !entry && parts.iter().all(Option::is_none) {
+                if parts.is_empty() {
                     return None;
                 }
                 let parts: Vec<String> = parts.into_iter().map(written).collect();
@@ -345,7 +334,7 @@ pub(super) fn entries_shape(program: &Program, ty: &Type) -> Option<String> {
                         Some(format!("{}: {inner}", string(&name(&member.name))))
                     })
                     .collect();
-                (entry || !fields.is_empty())
+                (!empty_struct(program, ty))
                     .then(|| format!("(\"fields\", {{{}}})", fields.join(", ")))
             }
             _ => None,

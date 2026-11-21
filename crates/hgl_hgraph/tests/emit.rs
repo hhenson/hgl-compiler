@@ -2799,7 +2799,7 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
             "-> _hg.TSS[_py.int]:\n",
         ),
         concat!(
-            "    _output.value = _core.entries_published(_output, _hg.set_delta(added=_py.frozenset((2, 3)), ",
+            "    _core.entries_published(_output, _hg.set_delta(added=_py.frozenset((2, 3)), ",
             "removed=_py.frozenset(), tp=_py.int), \"entries\")\n",
         ),
         "    return _core.entries_published(_output, input.delta_value, \"entries\")\n",
@@ -4920,7 +4920,7 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
     python.assert_writes(&[
         format!("def quoted(bid: _hg.TS[_py.int], ask: _hg.TS[_py.int]) -> {quote}:"),
         "    return _core.bundled(Quote(bid=bid.value, ask=ask.value))".to_string(),
-        "        return _core.struct_delta(bid=price.value)".to_string(),
+        "        return _core.entries_published(_output, _core.struct_delta(bid=price.value), (\"fields\", {}))".to_string(),
         format!(
             "_output: _hg.TSB_OUT[{}] = None",
             &quote["_hg.TSB[".len()..quote.len() - 1]
@@ -5380,9 +5380,9 @@ fn a_growing_lists_position_is_an_endpoint_of_its_own() {
         "_core.list_position(values, 1).valid".to_string(),
         "_core.child_modified(_core.list_position(values, 1))".to_string(),
         "_core.checked_child_result(_core.list_position(values, index.value), lambda _port: ".to_string(),
-        "        return _core.published_into(_output, (None, _core.list_delta(size_modified=_core.neg__i64(value=1)),), (None, \"list\",))\n".to_string(),
-        "_core.published_into(_output, _core.struct_delta(items=_core.list_delta(size_modified=_core.neg__i64(value=command.value))), {\"items\": \"list\"})".to_string(),
-        "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, {\"items\": \"list\"})\n".to_string(),
+        "        return _core.published_into(_output, (None, _core.list_delta(size_modified=_core.neg__i64(value=1)),), (None, \"list\",), entries=(\"positions\", (None, None,)))\n".to_string(),
+        "_core.published_into(_output, _core.struct_delta(items=_core.list_delta(size_modified=_core.neg__i64(value=command.value))), {\"items\": \"list\"}, entries=(\"fields\", {}))".to_string(),
+        "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, {\"items\": \"list\"}, entries=(\"fields\", {}))\n".to_string(),
         "_core.bundled(Basket(owner=\"b\", items=[]), {\"owner\": None, \"items\": \"list\"}, _core.DEFERRED)".to_string(),
         "        _core.invalidated(_output, \"list\")\n".to_string(),
         "        _core.invalidated(_output, {\"items\": \"list\"})\n".to_string(),
@@ -6400,7 +6400,7 @@ fn a_delta_beside_an_unsized_list_is_told_where_its_dictionaries_are() {
     let python = emitted.text("_hgl/_m_m/__init__.py");
     for expected in [
         "(\"list\", None,), entries=(\"positions\", (None, (\"entries\", \"entries\"),)))\n",
-        "return _core.published_into(_output, (None, _core.list_delta(),), (None, \"list\",))\n",
+        "return _core.published_into(_output, (None, _core.list_delta(),), (None, \"list\",), entries=(\"positions\", (None, None,)))\n",
     ] {
         assert!(python.contains(expected), "{expected}\nnot in\n{python}");
     }

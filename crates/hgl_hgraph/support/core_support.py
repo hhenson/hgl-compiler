@@ -849,15 +849,10 @@ def _validated_parts(port, change, shape):
 
 def entries_published(port, change, shape):
     """Publishes `change`, a delta (TYPE-16) of a value of `shape` that
-    holds a dictionary or a set, to `port`, the node's own output
-    (`_published_through`), and gives what the node then publishes as its
-    value: nothing more, an empty delta of its kind."""
-    change = _published_through(port, change, None, shape)
-    if isinstance(change, dict):
-        return {}
-    if isinstance(change, tuple):
-        return tuple(None for _ in change)
-    return _set_delta(added=frozenset(), removed=frozenset(), tp=object)
+    has fixed children or holds a dictionary or a set, to `port`, the node's output
+    (`_published_through`). A node returning from here has already applied
+    the change to its output."""
+    _published_through(port, change, None, shape)
 
 
 def list_delta(updated=None, removed=(), size_modified=None):
@@ -1055,8 +1050,7 @@ def published_into(port, value, shape, entries=None):
 
 def _published_through(port, value, shape, entries):
     """Publishes `value`, a delta (TYPE-16) or a whole value, to `port`,
-    the output of the node that publishes it, and gives what was
-    published, each tuple in it still a tuple: each unsized list in it as
+    the output of the node that publishes it: each unsized list in it as
     `published_into` has it for `shape`, and each dictionary and set,
     `entries` saying where (`_entries_change`). The one place the
     provider holds a node's delta of what holds a dictionary or a set, a
@@ -1072,10 +1066,19 @@ def _published_through(port, value, shape, entries):
     it ticks only where the members change, or where it makes the set
     valid, as TIME-7 has it ("a set given the members it holds ... is no
     tick")."""
+    # A record of plain fields already has the sparse dictionary the output
+    # accepts. Avoid accessing each child just to write the same fields.
+    if shape is None and entries == ("fields", {}) and isinstance(value, dict):
+        if value:
+            port.value = value
+        return
     published = _pruned(port, _entries_change(_published_parts(port, value, shape), entries), entries)
+    # TIME-7, END-3: writing an empty sparse bundle can wake native readers.
+    # A fixed HGL shape publishes only when a child receives a change.
+    if _structured(entries) and _names_nothing(published):
+        return
     port.value = _by_position(published, shape, entries)
     _validated_parts(port, published, entries)
-    return published
 
 
 def _published_parts(port, value, shape):
