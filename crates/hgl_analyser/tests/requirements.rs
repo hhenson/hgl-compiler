@@ -29,9 +29,10 @@ fn callees(checked: &Checked, name: &str) -> Vec<String> {
                     .clone(),
                 Callee::Candidate { .. } => "candidate".to_string(),
                 Callee::Function { .. } => "function".to_string(),
-                Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {
-                    "none".to_string()
-                }
+                Callee::Parameter { .. }
+                | Callee::Anonymous(_)
+                | Callee::DeferredValue
+                | Callee::Unread => "none".to_string(),
             });
         }
     }
@@ -650,9 +651,10 @@ fn answers_in(checked: &Checked, body: &Body) -> Vec<String> {
             Callee::Required { requirement, .. } => {
                 found.push(format!("requirement {requirement}"))
             }
-            Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {
-                found.push("none".to_string())
-            }
+            Callee::Parameter { .. }
+            | Callee::Anonymous(_)
+            | Callee::DeferredValue
+            | Callee::Unread => found.push("none".to_string()),
         }
     });
     found

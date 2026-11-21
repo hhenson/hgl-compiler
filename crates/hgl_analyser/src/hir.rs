@@ -1020,6 +1020,8 @@ pub enum Callee {
     },
     /// A statically selected anonymous function, with explicit lexical captures.
     Anonymous(Box<AnonymousFunction>),
+    /// A deferred operator call whose candidates are all value functions.
+    DeferredValue,
     /// No callee: a name left for the prelude, a function that is
     /// itself an expression, or an operator of which no candidate is
     /// selected, by its name or by a symbol.
@@ -1047,6 +1049,7 @@ impl Callee {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredValue
             | Callee::Unread => None,
         }
     }
@@ -1060,6 +1063,7 @@ impl Callee {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredValue
             | Callee::Unread => &[],
         }
     }
@@ -1073,6 +1077,7 @@ impl Callee {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredValue
             | Callee::Unread => &[],
         }
     }

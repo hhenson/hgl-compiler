@@ -705,8 +705,26 @@ impl<'a> Typer<'a> {
             if self.diagnostics.len() == reported {
                 self.selecting.borrow_mut().push(*selecting);
             }
+            // GEN-5 and FN-6: a value-only operator keeps its call's
+            // phase even when GEN-7 defers candidate selection.
+            let value_only = self.graph
+                && self
+                    .value_candidates(operator)
+                    .iter()
+                    .all(|&(module, declaration, _)| {
+                        matches!(
+                            program.modules[module].declarations[declaration]
+                                .kind
+                                .candidate(),
+                            Some((Role::Value, _))
+                        )
+                    });
             ExprKind::Call {
-                callee: Callee::Unread,
+                callee: if value_only {
+                    Callee::DeferredValue
+                } else {
+                    Callee::Unread
+                },
                 form,
                 arguments,
                 lifted: false,
@@ -1602,7 +1620,7 @@ pub(crate) fn select_in_instance(
     typer.use_instance_locals(body.locals.clone());
     hir::walk_statements_mut(&mut body.statements, &mut |expression| {
         let ExprKind::Call {
-            callee: Callee::Unread,
+            callee: Callee::Unread | Callee::DeferredValue,
             arguments,
             ..
         } = &expression.kind

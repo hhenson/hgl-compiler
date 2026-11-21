@@ -184,6 +184,8 @@ test an_instance_settles_its_graph_conditions {
     assert eval dictionary_entries(value: 3) == [4]
     assert raises("value.null") { eval dictionary_entries(value: "s") }
     assert eval selected_case(value: 3) == [4]
+    assert eval value_phase_choice(value: 3) == [1]
+    assert eval value_phase_choice(value: "s") == [-1]
 }
 
 struct Counter { count: i64 }
@@ -240,4 +242,17 @@ const fn into_inferred_local<T>(value: T) -> i64 {
 test instance_preserves_the_inferred_result_type {
     assert into_inferred_local(3) == 5
     assert get_value(3) == "other output"
+}
+
+# FN-6, GEN-7: a value-only operator keeps its phase while its candidate
+# is selected for the instance. The conditional's i64? types the helper.
+operator value_predicate<T>(value: T) -> bool
+impl const fn value_predicate<T>(value: T) -> bool => true
+impl const fn value_predicate(value: str) -> bool => false
+
+const fn graph_identity<T>(value: T) -> T => value
+
+fn value_phase_choice<T>(const value: T) -> i64 {
+    let chosen = if value_predicate(value) { 1 }
+    return chosen_or_skip(graph_identity(chosen))
 }

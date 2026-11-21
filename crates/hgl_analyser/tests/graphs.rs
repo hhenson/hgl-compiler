@@ -129,6 +129,7 @@ fn composition_takes_the_temporal_definition_and_candidate() {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredValue
             | Callee::Unread => {
                 panic!("a callee")
             }

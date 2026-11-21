@@ -181,7 +181,12 @@ fn check_const_arguments(
             operator: (module, declaration),
             ..
         } => (*module, *declaration),
-        Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => return,
+        Callee::Parameter { .. }
+        | Callee::Anonymous(_)
+        | Callee::DeferredValue
+        | Callee::Unread => {
+            return;
+        }
     };
     let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration) else {
         return;

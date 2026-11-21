@@ -246,9 +246,9 @@ pub struct Module {
     /// The calls in each declaration's body that a membership its
     /// `requires` states authorises, whose candidate each instance of
     /// it selects for itself (GEN-3, GEN-7, GEN-5): one entry
-    /// for each of `declarations`, in the same order. The body has each
-    /// as a call with no callee ([`crate::hir::Callee::Unread`]);
-    /// [`Program::instance`] gives the instance's.
+    /// for each of `declarations`, in the same order. The body defers
+    /// each callee and retains its value phase where known.
+    /// [`Program::instance`] selects the candidate.
     pub(crate) selecting: Vec<Vec<crate::values::Selecting>>,
 }
 

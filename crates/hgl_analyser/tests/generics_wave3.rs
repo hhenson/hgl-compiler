@@ -41,7 +41,10 @@ fn called(checked: &Checked, body: &Body) -> Vec<String> {
                 found.push("required".to_string());
                 return;
             }
-            Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {
+            Callee::Parameter { .. }
+            | Callee::Anonymous(_)
+            | Callee::DeferredValue
+            | Callee::Unread => {
                 found.push("none".to_string());
                 return;
             }
@@ -962,6 +965,7 @@ fn graph_instances_fit_aggregate_members() {
     let checked = module(concat!(
         "operator predicate<T>(input: T) -> bool\n",
         "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: f64) -> bool { when { return input > 0.0 } }\n",
         "struct Label<T> { value: T }\n",
         "fn label<T>(const input: T) -> Label<str> {\n",
         "    let chosen = if predicate(input) { 1 }\n",
@@ -982,9 +986,9 @@ fn graph_instances_fit_aggregate_members() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:17:33 type/type.mismatch EXPR-5",
-            "m.hgl:18:38 type/type.mismatch EXPR-5",
-            "m.hgl:19:31 type/type.mismatch EXPR-5",
+            "m.hgl:18:33 type/type.mismatch EXPR-5",
+            "m.hgl:19:38 type/type.mismatch EXPR-5",
+            "m.hgl:20:31 type/type.mismatch EXPR-5",
         ],
         "{}",
         checked.report
@@ -1095,6 +1099,7 @@ fn graph_instances_propagate_inferred_tuple_types() {
     let checked = module(concat!(
         "operator predicate<T>(input: T) -> bool\n",
         "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: f64) -> bool { when { return input > 0.0 } }\n",
         "fn good<T>(const input: T) -> tuple<tuple<i64?, i64>, i64> {\n",
         "    let pair = ((if predicate(input) { 1 }, 0), 2)\n",
         "    let alias = { pair }\n",
@@ -1112,7 +1117,7 @@ fn graph_instances_propagate_inferred_tuple_types() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:17:37 type/type.mismatch EXPR-5"],
+        ["m.hgl:18:37 type/type.mismatch EXPR-5"],
         "{}",
         checked.report
     );
@@ -1221,6 +1226,7 @@ fn graph_instances_join_deferred_branches_only_when_consumed() {
     let checked = module(concat!(
         "operator predicate<T>(input: T) -> bool\n",
         "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: f64) -> bool { when { return input > 0.0 } }\n",
         "fn good<T>(const input: T) -> i64? {\n",
         "    let chosen = if true { if predicate(input) { 1 } } else { 0 }\n",
         "    return chosen\n",
@@ -1239,7 +1245,7 @@ fn graph_instances_join_deferred_branches_only_when_consumed() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:17:26 type/type.mismatch CTRL-13"],
+        ["m.hgl:18:26 type/type.mismatch CTRL-13"],
         "{}",
         checked.report
     );
@@ -1262,6 +1268,7 @@ fn graph_instances_propagate_inferred_list_types() {
     let checked = module(concat!(
         "operator predicate<T>(input: T) -> bool\n",
         "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: f64) -> bool { when { return input > 0.0 } }\n",
         "fn good<T>(const input: T) -> list<list<i64?>> {\n",
         "    let values = [[if predicate(input) { 1 }, null]]\n",
         "    let alias = { values }\n",
@@ -1282,8 +1289,8 @@ fn graph_instances_propagate_inferred_list_types() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:18:35 type/type.mismatch EXPR-5",
             "m.hgl:19:35 type/type.mismatch EXPR-5",
+            "m.hgl:20:35 type/type.mismatch EXPR-5",
         ],
         "{}",
         checked.report
@@ -1339,6 +1346,7 @@ fn graph_instances_fit_dictionary_and_set_entries() {
     let checked = module(concat!(
         "operator predicate<T>(input: T) -> bool\n",
         "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: f64) -> bool { when { return input > 0.0 } }\n",
         "fn wrong_value<T>(const input: T) -> dict<str, str> {\n",
         "    let chosen = if predicate(input) { 1 }\n",
         "    return [\"key\": chosen]\n",
@@ -1364,9 +1372,9 @@ fn graph_instances_fit_dictionary_and_set_entries() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:21:37 type/type.mismatch EXPR-5",
-            "m.hgl:22:35 type/type.mismatch EXPR-5",
-            "m.hgl:23:29 type/type.mismatch EXPR-5",
+            "m.hgl:22:37 type/type.mismatch EXPR-5",
+            "m.hgl:23:35 type/type.mismatch EXPR-5",
+            "m.hgl:24:29 type/type.mismatch EXPR-5",
         ],
         "{}",
         checked.report
@@ -1398,6 +1406,7 @@ fn graph_instances_propagate_indexed_types_and_reads() {
     let checked = module(concat!(
         "operator predicate<T>(input: T) -> bool\n",
         "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: f64) -> bool { when { return input > 0.0 } }\n",
         "fn list_item<T>(const input: T) -> i64? {\n",
         "    let values = [if predicate(input) { 1 }]\n",
         "    let item = values[0]\n",
@@ -1428,7 +1437,7 @@ fn graph_instances_propagate_indexed_types_and_reads() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:30:25 type/type.mismatch EXPR-5"],
+        ["m.hgl:31:25 type/type.mismatch EXPR-5"],
         "{}",
         checked.report
     );
