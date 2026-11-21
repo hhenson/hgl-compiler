@@ -6,6 +6,7 @@
 #include "core_nodes.h"
 
 #include <hglrt/list_endpoints.h>
+#include <hglrt/structs.h>
 
 #include <doctest/doctest.h>
 #include <hgraph/types/generated.h>
@@ -529,6 +530,66 @@ TEST_CASE("an eval keeps the value a list result holds for a cell written whole 
     CHECK(hglrt::testing::same(
         recorded, Dense<std::array<i64, 2>>{Cell{D{.updated = {{0, 3}}}},
                                             Cell{hglrt::testing::Whole<std::array<i64, 2>>{{3, 8}}}}));
+}
+
+// ---- A list of tuples: TYPE-9, each part through its own form -----------
+
+using Named = std::tuple<i64, hglrt::str>;
+using NamedTS = hgraph::UnNamedTSB<hgraph::Field<"0", hgraph::TS<i64>>, hgraph::Field<"1", hgraph::TS<hglrt::str>>>;
+using Names = hgraph::TSL<NamedTS>;
+
+std::vector<std::optional<list<Named>>> names_read;
+std::vector<list_delta<list<Named>>> names_changed;
+
+/// `fn names(step: i64) -> list<tuple<i64, str>>`: a list published whole,
+/// then a delta that adds a tuple, then one that renames the first.
+struct NamesWritten {
+    static constexpr auto name = "test::names_written";
+    static void eval(hgraph::In<"step", hgraph::TS<i64>> step, hgraph::Out<Names> out_) {
+        if (step.value() == 0) {
+            hglrt::publish(out_, list<Named>{Named{1, "a"}});
+        } else if (step.value() == 1) {
+            hglrt::publish(out_, list_delta<list<Named>>{.updated = {{1, {2, hglrt::str{"b"}}}}});
+        } else {
+            hglrt::publish(out_, list_delta<list<Named>>{.updated = {{0, {std::nullopt, hglrt::str{"c"}}}}});
+        }
+    }
+};
+
+struct NamesRead {
+    static constexpr auto name = "test::names_read";
+    static void eval(hgraph::In<"names", Names> names) {
+        const hglrt::result<list<Named>> read = hglrt::checked_whole_result(names);
+        names_read.push_back(read.has_value() ? std::optional{*read} : std::nullopt);
+        names_changed.push_back(hglrt::fn_delta_value(names));
+    }
+};
+
+TEST_CASE("a list of tuples is published, read and read as its delta through the tuple's form (TYPE-9)") {
+    names_read.clear();
+    names_changed.clear();
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        hgraph::wire<NamesRead>(wiring, hgraph::wire<NamesWritten>(wiring, replayed(wiring, Dense<i64>{0, 1, 2})));
+    });
+    CHECK(names_read == std::vector<std::optional<list<Named>>>{list<Named>{Named{1, "a"}},
+                                                                list<Named>{Named{1, "a"}, Named{2, "b"}},
+                                                                list<Named>{Named{1, "c"}, Named{2, "b"}}});
+    using D = list_delta<list<Named>>;
+    CHECK(names_changed == std::vector<D>{D{.updated = {{0, {1, hglrt::str{"a"}}}}, .size_modified = 1},
+                                          D{.updated = {{1, {2, hglrt::str{"b"}}}}, .size_modified = 2},
+                                          D{.updated = {{0, {std::nullopt, hglrt::str{"c"}}}}}});
+}
+
+/// TST-9: a whole cell of a list of tuples publishes each position as its
+/// whole tuple's delta, and a whole tuple of a list its list with its size.
+TEST_CASE("a whole cell publishes each part as its own whole value records it (TST-9)") {
+    using hglrt::testing::detail::whole_delta;
+    const auto names = whole_delta(list<Named>{Named{1, "a"}}, 2);
+    CHECK(names == list_delta<list<Named>>{.updated = {{0, {1, hglrt::str{"a"}}}}, .removed = {1}, .size_modified = 1});
+    using Tagged = std::tuple<list<i64>, bool>;
+    const auto tagged = whole_delta(Tagged{list<i64>{}, true}, 0);
+    CHECK(std::get<0>(tagged) == list_delta<list<i64>>{.size_modified = 0});
+    CHECK(std::get<1>(tagged) == std::optional<bool>{true});
 }
 
 } // namespace

@@ -76,34 +76,6 @@ inline constexpr auto& members_of = fields<T>::members;
 template <class T>
 inline constexpr auto& delta_members_of = fields<delta_t<T>>::members;
 
-/// The value a temporal value of the schema `S` holds, as HGL has it: a
-/// scalar's or an enum's `T`, a nullable's optional, a struct's aggregate,
-/// a tuple's `std::tuple`.
-template <class S>
-struct value_of_schema;
-template <class T>
-struct value_of_schema<hgraph::TS<T>> {
-    using type = T;
-};
-template <class T>
-struct value_of_schema<hgraph::TS<hgraph::Optional<T>>> {
-    using type = std::optional<T>;
-};
-template <class T, class... F>
-struct value_of_schema<hgraph::NominalTSB<T, F...>> {
-    using type = T;
-};
-template <class... F>
-struct value_of_schema<hgraph::UnNamedTSB<F...>> {
-    using type = std::tuple<typename value_of_schema<typename F::schema>::type...>;
-};
-
-/// True where `S` is a nullable's schema, `TS<Optional<T>>`.
-template <class S>
-struct nullable_schema : std::false_type {};
-template <class T>
-struct nullable_schema<hgraph::TS<hgraph::Optional<T>>> : std::true_type {};
-
 /// Whether `all_valid` asks the child endpoint `view` (TIME-9: "one level
 /// deep, an optional child aside: one whose type is `T?` ... is not
 /// asked"): whether it is valid, or true for an optional one.
@@ -113,7 +85,8 @@ bool asked_valid(const E& view) {
 }
 
 /// Whether the child endpoint `view` can be read whole: a struct or a tuple
-/// whose every part can, and any other that is valid.
+/// whose every part can, a nullable always (null where it is not valid), and
+/// any other as its own form reads it whole (`whole`).
 template <class E>
 bool readable(const E& view);
 
@@ -126,6 +99,17 @@ template <class E, class V>
 void publish_part(const E& view, const V& value);
 
 } // namespace detail
+
+/// A struct's value is its aggregate, and a tuple's a `std::tuple` of its
+/// positions' values (TYPE-9).
+template <class T, class... F>
+struct schema_value<hgraph::NominalTSB<T, F...>> {
+    using type = T;
+};
+template <class... F>
+struct schema_value<hgraph::UnNamedTSB<F...>> {
+    using type = std::tuple<schema_value_t<typename F::schema>...>;
+};
 
 /// The view of the `I`-th field of `view`, an input or an output of a
 /// struct or a tuple (TIME-1: "A child of a collection ... a field ... is an
@@ -250,7 +234,7 @@ struct endpoint_read<hgraph::NominalTSB<T, F...>> {
 template <class... F>
 struct endpoint_read<hgraph::UnNamedTSB<F...>> {
     using schema = hgraph::UnNamedTSB<F...>;
-    using value_type = typename detail::value_of_schema<schema>::type;
+    using value_type = schema_value_t<schema>;
     using delta_type = delta_t<value_type>;
 
     /// TIME-9, as a struct's: every position valid by its own `valid`.
@@ -360,6 +344,34 @@ void publish(const E& out, const V& value) {
     }
 }
 
+/// A struct or a tuple read whole as a part of another form, a list's
+/// element or a dictionary's entry (TIME-1: "So does one of a child that is
+/// a struct, a tuple or a fixed list ... requires `all_valid`"): its value
+/// where it can be read whole, and none otherwise.
+template <class S>
+    requires detail::bundle<S>
+struct whole<S> {
+    template <class E>
+    static std::optional<schema_value_t<S>> read(const E& view) {
+        return endpoint_read<S>::held(view);
+    }
+};
+
+/// A struct or a tuple published as a part of another form, as `publish`
+/// publishes one (TIME-7).
+template <class S>
+    requires detail::bundle<S>
+struct publisher<S> {
+    template <class O>
+    static void whole(const O& out, const schema_value_t<S>& value, std::source_location) {
+        hglrt::publish(out, value);
+    }
+    template <class O>
+    static void change(const O& out, const delta_t<schema_value_t<S>>& delta, std::source_location) {
+        hglrt::publish(out, delta);
+    }
+};
+
 namespace detail {
 
 template <class E>
@@ -367,8 +379,10 @@ bool readable(const E& view) {
     using S = schema_of<E>;
     if constexpr (bundle<S>) {
         return endpoint_read<S>::complete(view);
+    } else if constexpr (nullable_schema<S>::value) {
+        return true;
     } else {
-        return asked_valid(view);
+        return ::hglrt::whole<S>::read(view).has_value();
     }
 }
 
@@ -382,21 +396,18 @@ auto value_of(const E& view) {
         // not valid is null".
         return view.valid() ? endpoint_read<S>::delta(view) : endpoint_delta_t<E>{};
     } else {
-        // A scalar, an enum and a nullable publish whole: the delta they
-        // read is the value they hold (endpoints.h).
-        return endpoint_read<S>::delta(view);
+        // A scalar's, an enum's and a list's whole value, as its form reads
+        // it (`whole`), which `readable` has said it can.
+        return *::hglrt::whole<S>::read(view);
     }
 }
 
 template <class E, class V>
 void publish_part(const E& view, const V& value) {
-    using S = schema_of<E>;
-    if constexpr (bundle<S>) {
+    if constexpr (bundle<schema_of<E>>) {
         hglrt::publish(view, value);
-    } else if constexpr (nullable_schema<S>::value) {
-        publish_nullable(view, value);
     } else {
-        view.set(value);
+        publish_as_form(view, value, std::source_location::current());
     }
 }
 
@@ -498,14 +509,14 @@ std::optional<std::string> difference(const Left& left, const Recording<atomic_t
 
 namespace detail {
 /// The delta of type `D` that publishing the part `part` whole records:
-/// the part itself where `D` is its own type, a part that publishes whole,
-/// and otherwise its whole value's delta (`whole_delta`).
+/// the part itself where `D` is its own type, an atomic field's payload, and
+/// otherwise its whole value's delta as a part (`whole_part_delta`).
 template <class D, class P>
 D whole_part(const P& part) {
     if constexpr (std::is_same_v<D, P>) {
         return part;
     } else {
-        return whole_delta(part, 0);
+        return whole_part_delta(part);
     }
 }
 } // namespace detail
@@ -532,20 +543,6 @@ struct whole_publication<T> {
                 ...);
         }(std::make_index_sequence<count>{});
         return change;
-    }
-};
-
-/// What publishing a whole tuple whose positions do not all publish whole
-/// records (TST-9): each position's delta, a struct's and a tuple's as its
-/// own whole value records it (TYPE-16: "each position's delta").
-template <class... P>
-    requires(!(publishes_whole<P> && ...))
-struct whole_publication<std::tuple<P...>> {
-    static delta_t<std::tuple<P...>> delta(const std::tuple<P...>& value) {
-        using Delta = delta_t<std::tuple<P...>>;
-        return [&]<std::size_t... I>(std::index_sequence<I...>) {
-            return Delta{detail::whole_part<typename std::tuple_element_t<I, Delta>::value_type>(std::get<I>(value))...};
-        }(std::index_sequence_for<P...>{});
     }
 };
 
@@ -599,3 +596,29 @@ struct value_form<T> {
 };
 
 } // namespace hglrt
+
+namespace hglrt {
+
+/// The value schema of a list field in a struct's nominal bundle (TYPE-9):
+/// the one hgraph holds the field's temporal form, the `lists` family's
+/// `TSL` of the element's form, as, which a bundle's held field must be
+/// (hgraph's `TypeRegistry::tsb`): its list of the element's value schema
+/// `E`, of `N` positions where it is fixed. Only a schema: the struct's
+/// value is read and published field by field (`endpoint_read`, `publish`),
+/// a list field as its own form does.
+template <class E, std::size_t N = 0>
+struct list_value {};
+
+} // namespace hglrt
+
+template <class E, std::size_t N>
+struct hgraph::scalar_descriptor<hglrt::list_value<E, N>> {
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return scalar_descriptor<E>::is_concrete(); }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta() {
+        if constexpr (N == 0) {
+            return TypeRegistry::instance().list(scalar_descriptor<E>::value_meta());
+        } else {
+            return TypeRegistry::instance().fixed_list(scalar_descriptor<E>::value_meta(), N);
+        }
+    }
+};

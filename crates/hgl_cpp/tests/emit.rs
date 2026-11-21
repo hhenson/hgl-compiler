@@ -1206,6 +1206,106 @@ fn a_capture_given_an_f64_configuration_is_reported() {
     );
 }
 
+/// TYPE-9: "Temporalization recursively maps tuples/structs to child
+/// fields, lists to child positions, dictionaries to keyed children": a
+/// form made of another family's forms, each part's form asked of its own
+/// family through the dispatch point (`temporal_schema_of`) and read and
+/// published through it (endpoints.h's `whole` and `publisher`). A list of
+/// tuples, growing and fixed; a tuple of a list; a dictionary of tuples; a
+/// struct with a list field: each as a node's input and result, and as a
+/// trace's cells, whole and as deltas. Everything is written.
+#[test]
+fn nested_forms_are_written() {
+    let emitted = emit_with(
+        &[("demo.nested.hgl", include_str!("fixtures/demo.nested.hgl"))],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_goldens("demo.nested", &emitted.output);
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.nested.cpp")
+        .unwrap()
+        .text;
+    let pair = "::hgraph::UnNamedTSB<::hgraph::Field<\"0\", ::hgraph::TS<::hgraph::Int>>, ::hgraph::Field<\"1\", ::hgraph::TS<::hgraph::Str>>>";
+    for written in [
+        // A list's element is the tuple's own form (`structs`).
+        format!("::hgraph::TSL<{pair}>"),
+        format!("::hgraph::TSL<{pair}, 2>"),
+        // A tuple's position is the list's own form (`lists`).
+        "::hgraph::UnNamedTSB<::hgraph::Field<\"0\", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>, ::hgraph::Field<\"1\", ::hgraph::TS<::hgraph::Bool>>>".to_string(),
+        // A dictionary's entry is the tuple's own form.
+        format!("::hgraph::TSD<::hgraph::Str, {pair}>"),
+        // A struct's list field is the list's own form.
+        "::hgraph::Field<\"counts\", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>".to_string(),
+    ] {
+        assert!(unit.contains(&written), "{written} in\n{unit}");
+    }
+    // The struct's nominal bundle holds the list field as the value hgraph
+    // holds that `TSL` as (structs.h, `list_value`).
+    let types = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/demo.nested.types.h")
+        .unwrap()
+        .text;
+    assert!(
+        types.contains("::hgraph::Field<\"counts\", ::hglrt::list_value<::hgraph::Int>>"),
+        "{types}"
+    );
+}
+
+/// A form made of others that the library does not read or publish as a
+/// part yet is reported by name, and nothing is miswritten: a list of
+/// sets, a dictionary of lists, a dictionary of structs, a tuple of a set,
+/// and a child of a list of tuples named in a hook, whose library `Child`
+/// is no view a tuple's own reads take.
+#[test]
+fn nested_forms_not_written_yet_are_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Quote {\n",
+            "    bid: i64\n",
+            "}\n",
+            "fn sets(values: list<set<i64>>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn lists(book: dict<str, list<i64>>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn quotes(book: dict<str, Quote>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn tagged(tag: tuple<set<i64>, i64>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn first(pairs: list<tuple<i64, str>>) -> tuple<i64, str> {\n",
+            "    when valid(pairs[0]) && all_valid(pairs[0]) { return pairs[0] }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:5:9 the cpp target does not write a temporal value of `list<set<i64>>` yet",
+            "m.hgl:8:10 the cpp target does not write a temporal value of `dict<str, list<i64>>` yet",
+            "m.hgl:11:11 the cpp target does not write a temporal value of `dict<str, Quote>` yet",
+            "m.hgl:14:11 the cpp target does not write a temporal value of `tuple<set<i64>, i64>` yet",
+            "m.hgl:18:16 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
+            "m.hgl:18:39 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
+            "m.hgl:18:58 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
+        ]
+    );
+}
+
 /// The temporal forms of a list and of a tuple (`lists`): published whole
 /// and by delta, read whole and by child, a child wired, a list replayed
 /// and recorded, and the value an eval's result holds kept for a cell
@@ -2222,7 +2322,7 @@ fn temporal_structs_and_nullables_are_written() {
 
 /// What the target does not write of temporal structs, tuples and
 /// nullables yet is reported, and nothing is miswritten: a struct whose
-/// field has a form the library does not read whole (a list), a generic
+/// field has a form the library does not read as a part (a set), a generic
 /// struct, an abstract one, a nullable put in the run's store (a `get`
 /// through a nullable place has the payload's type: hgl_spec issue 165),
 /// an atomic struct that holds an optional field (hgraph issue 1874), and
@@ -2234,7 +2334,7 @@ fn temporal_structs_not_written_yet_are_reported() {
         concat!(
             "module m\n",
             "struct Listed {\n",
-            "    values: list<i64>\n",
+            "    values: set<i64>\n",
             "}\n",
             "struct Box<T> {\n",
             "    value: T\n",

@@ -52,12 +52,9 @@ auto nullable_payload(const E& input, std::source_location where = std::source_l
 /// value, a T or the optional that is its delta, ticks the output: a held T
 /// as that T, and an optional that holds nothing as hgraph's published null.
 template <class E>
-void publish_nullable(const E& out, const endpoint_delta_t<E>& value) {
-    if (value.has_value()) {
-        out.set(*value);
-    } else {
-        out.set(hgraph::Null);
-    }
+void publish_nullable(const E& out, const endpoint_delta_t<E>& value,
+                      std::source_location where = std::source_location::current()) {
+    publisher<schema_of<E>>::whole(out, value, where);
 }
 
 } // namespace hglrt

@@ -477,31 +477,51 @@ std::size_t size_after(std::size_t size, const list_delta<L>& delta) {
     return std::max(size, static_cast<std::size_t>(delta.updated.rbegin()->first) + 1);
 }
 
+template <class T>
+delta_t<T> whole_delta(const T& value, std::size_t size);
+
+/// The delta that publishing `part` whole records where it is a part of
+/// another value, a list's element, a struct's field or a tuple's position,
+/// whatever that part held before (TST-9: "a T whole, which replaces what
+/// the input held"): the part itself where it publishes whole; an unsized
+/// list's, each position and its size, which shrinks one that held more
+/// (TYPE-16: "A delta written with a smaller `size_modified` and no `removed`
+/// shrinks the list"); and any other's as its whole value records it.
+template <class P>
+delta_t<P> whole_part_delta(const P& part) {
+    if constexpr (publishes_whole<P>) {
+        return part;
+    } else if constexpr (hglrt::detail::is_list<P>::value) {
+        delta_t<P> delta;
+        for (std::size_t position = 0; position < part.size(); ++position) {
+            const typename P::value_type element = part[position];
+            delta.updated.emplace(static_cast<i64>(position), whole_part_delta(element));
+        }
+        delta.size_modified = static_cast<i64>(part.size());
+        return delta;
+    } else {
+        return whole_delta(part, 0);
+    }
+}
+
 /// The delta that publishing `value` whole records, to a value that held
 /// `size` positions, where it is a list (TST-9: "a T whole, which replaces
 /// what the input held"; TST-16: "A T published whole is held as its delta
 /// too"): a tuple's, each position; a fixed list's, each position; an
 /// unsized list's, each position, the tail past them removed, and the new
 /// size where it moves (TYPE-16: "on a shrink names the tail positions it
-/// drops in `removed`"). Each part publishes whole.
+/// drops in `removed`"). Each part is published whole (`whole_part_delta`).
 template <class T>
 delta_t<T> whole_delta(const T& value, std::size_t size) {
     if constexpr (requires { whole_publication<T>::delta(value); }) {
         return whole_publication<T>::delta(value);
     } else if constexpr (hglrt::detail::is_tuple<T>::value) {
-        return std::apply(
-            [](const auto&... part) {
-                static_assert((publishes_whole<std::remove_cvref_t<decltype(part)>> && ...),
-                              "hglrt: a whole tuple cell of parts that publish whole");
-                return delta_t<T>{part...};
-            },
-            value);
+        return std::apply([](const auto&... part) { return delta_t<T>{whole_part_delta(part)...}; }, value);
     } else {
-        using Element = typename T::value_type;
-        static_assert(publishes_whole<Element>, "hglrt: a whole list cell of elements that publish whole");
         delta_t<T> delta;
         for (std::size_t position = 0; position < value.size(); ++position) {
-            delta.updated.emplace(static_cast<i64>(position), value[position]);
+            const typename T::value_type element = value[position];
+            delta.updated.emplace(static_cast<i64>(position), whole_part_delta(element));
         }
         if constexpr (hglrt::detail::is_list<T>::value) {
             for (std::size_t position = value.size(); position < size; ++position) {

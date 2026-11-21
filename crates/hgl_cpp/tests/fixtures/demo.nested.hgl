@@ -1,0 +1,174 @@
+module demo.nested
+
+# A form made of parts of other families' forms (TYPE-9), each part read and
+# published through its own: a list of tuples, growing and fixed; a tuple of
+# a list and a bool; a dictionary of tuples; a struct with a list field.
+# Each as a node's input and its result, and as a trace's cells, whole and
+# as deltas.
+
+fn relay_pairs(pairs: list<tuple<i64, str>>) -> list<tuple<i64, str>> {
+    when { return pairs }
+}
+
+fn grow_pairs(step: i64) -> list<tuple<i64, str>> {
+    when {
+        if step == 0 { return [(1, "a")] }
+        if step == 1 { return delta<list<tuple<i64, str>>>(updated: [1: (2, "b")]) }
+        let renamed: delta<tuple<i64, str>> = (null, "c")
+        return delta<list<tuple<i64, str>>>(updated: [0: renamed])
+    }
+}
+
+test a_list_of_tuples_is_relayed_whole {
+    assert eval(relay_pairs(pairs: [[(1, "a"), (2, "b")], [(3, "c")]])) ==
+        [[(1, "a"), (2, "b")], [(3, "c")]]
+}
+
+test a_list_of_tuples_is_published_by_a_delta {
+    let renamed: delta<tuple<i64, str>> = (null, "c")
+    assert eval(grow_pairs(step: [0, 1, 2])) == [
+        [(1, "a")],
+        delta<list<tuple<i64, str>>>(updated: [1: (2, "b")], size_modified: 2),
+        delta<list<tuple<i64, str>>>(updated: [0: renamed]),
+    ]
+}
+
+test a_list_of_tuples_replays_its_deltas {
+    let renamed: delta<tuple<i64, str>> = (null, "c")
+    assert eval(relay_pairs(pairs: [
+        [(1, "a"), (2, "b")],
+        delta<list<tuple<i64, str>>>(updated: [0: renamed]),
+        [(5, "e")],
+    ])) == [[(1, "a"), (2, "b")], [(1, "c"), (2, "b")], [(5, "e")]]
+}
+
+fn relay_fixed_pairs(pairs: list<tuple<i64, str>, 2>) -> list<tuple<i64, str>, 2> {
+    when all_valid(pairs) { return pairs }
+}
+
+fn set_fixed_pair(slot: i64, value: i64) -> list<tuple<i64, str>, 2> {
+    when { return delta<list<tuple<i64, str>, 2>>(updated: [slot: (value, "x")]) }
+}
+
+test a_fixed_list_of_tuples_is_relayed_whole {
+    assert eval(relay_fixed_pairs(pairs: [[(1, "a"), (2, "b")]])) == [[(1, "a"), (2, "b")]]
+}
+
+test a_fixed_list_of_tuples_is_published_by_a_delta {
+    assert eval(set_fixed_pair(slot: [0, 1], value: [5, 6])) == [
+        delta<list<tuple<i64, str>, 2>>(updated: [0: (5, "x")]),
+        [(5, "x"), (6, "x")],
+    ]
+}
+
+fn relay_tagged(tagged: tuple<list<i64>, bool>) -> tuple<list<i64>, bool> {
+    when all_valid(tagged) { return tagged }
+}
+
+fn retag(step: i64) -> tuple<list<i64>, bool> {
+    when {
+        if step == 0 { return ([1, 2], true) }
+        let longer: delta<tuple<list<i64>, bool>> = (delta<list<i64>>(updated: [2: 7]), null)
+        if step == 1 { return longer }
+        return ([], false)
+    }
+}
+
+test a_tuple_of_a_list_is_relayed_whole {
+    assert eval(relay_tagged(tagged: [([1, 2], true), ([3], false)])) == [([1, 2], true), ([3], false)]
+}
+
+test a_tuple_of_a_list_is_published_by_a_delta {
+    assert eval(retag(step: [0, 1, 2])) == [([1, 2], true), ([1, 2, 7], true), ([], false)]
+}
+
+test a_tuple_of_a_list_replays_its_cells {
+    let longer: delta<tuple<list<i64>, bool>> = (delta<list<i64>>(updated: [1: 9]), null)
+    assert eval(relay_tagged(tagged: [([1, 2, 3], true), longer, ([], false)])) ==
+        [([1, 2, 3], true), ([1, 9, 3], true), ([], false)]
+}
+
+fn relay_book(book: dict<str, tuple<i64, str>>) -> dict<str, tuple<i64, str>> {
+    when { return book }
+}
+
+fn edit_book(step: i64) -> dict<str, tuple<i64, str>> {
+    when {
+        if step == 0 { return ["x": (1, "a"), "y": (2, "b")] }
+        let renamed: delta<tuple<i64, str>> = (null, "c")
+        if step == 1 { return delta<dict<str, tuple<i64, str>>>(updated: ["x": renamed]) }
+        return delta<dict<str, tuple<i64, str>>>(removed: ["y"])
+    }
+}
+
+test a_dictionary_of_tuples_is_relayed_whole {
+    assert eval(relay_book(book: [["x": (1, "a")], ["x": (1, "a"), "y": (2, "b")], ["y": (3, "c")]])) ==
+        [["x": (1, "a")], ["x": (1, "a"), "y": (2, "b")], ["y": (3, "c")]]
+}
+
+test a_dictionary_of_tuples_is_published_by_a_delta {
+    let renamed: delta<tuple<i64, str>> = (null, "c")
+    assert eval(edit_book(step: [0, 1, 2])) == [
+        ["x": (1, "a"), "y": (2, "b")],
+        delta<dict<str, tuple<i64, str>>>(updated: ["x": renamed]),
+        ["x": (1, "c")],
+    ]
+}
+
+test a_dictionary_of_tuples_replays_its_deltas {
+    let renamed: delta<tuple<i64, str>> = (null, "c")
+    assert eval(relay_book(book: [
+        ["x": (1, "a"), "y": (2, "b")],
+        delta<dict<str, tuple<i64, str>>>(updated: ["x": renamed], removed: ["y"]),
+    ])) == [["x": (1, "a"), "y": (2, "b")], ["x": (1, "c")]]
+}
+
+struct Basket {
+    name: str
+    counts: list<i64>
+}
+
+fn relay_basket(basket: Basket) -> Basket {
+    when all_valid(basket) { return basket }
+}
+
+fn fill(step: i64) -> Basket {
+    when {
+        if step == 0 { return Basket(name: "b", counts: [1, 2]) }
+        if step == 1 { return delta<Basket>(counts: delta<list<i64>>(updated: [2: 3])) }
+        return delta<Basket>(counts: delta<list<i64>>(size_modified: 0))
+    }
+}
+
+const fn total(basket: Basket) -> i64 {
+    var sum = 0
+    for count in basket.counts {
+        sum = sum + count
+    }
+    return sum
+}
+
+fn summed(basket: Basket) -> i64 {
+    when all_valid(basket) { return total(basket) }
+}
+
+test a_struct_with_a_list_field_is_relayed_whole {
+    assert eval(relay_basket(basket: [Basket(name: "b", counts: [1, 2]), Basket(name: "c", counts: [])])) ==
+        [Basket(name: "b", counts: [1, 2]), Basket(name: "c", counts: [])]
+}
+
+test a_struct_with_a_list_field_is_published_by_a_delta {
+    assert eval(fill(step: [0, 1, 2])) == [
+        Basket(name: "b", counts: [1, 2]),
+        delta<Basket>(counts: delta<list<i64>>(updated: [2: 3], size_modified: 3)),
+        Basket(name: "b", counts: []),
+    ]
+}
+
+test a_struct_with_a_list_field_replays_its_cells {
+    assert eval(summed(basket: [
+        Basket(name: "b", counts: [1, 2]),
+        delta<Basket>(counts: delta<list<i64>>(updated: [0: 5])),
+        Basket(name: "b", counts: [4]),
+    ])) == [3, 7, 4]
+}

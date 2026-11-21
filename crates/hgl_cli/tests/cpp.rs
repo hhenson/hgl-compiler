@@ -658,6 +658,36 @@ fn list_code_runs_on_the_sdk() {
     );
 }
 
+/// Forms made of other families' forms on the SDK (`demo.nested`): a list
+/// of tuples, growing and fixed, a tuple of a list, a dictionary of tuples
+/// and a struct with a list field, each relayed, published by a delta and
+/// replayed, each part through its own form (TYPE-9).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn nested_forms_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nested");
+    let file = write(
+        &root,
+        "src/demo.nested.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.nested.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 14 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The temporal code of scalars on the SDK: a graph with lifted calls, a
 /// constant connection, nodes with state, handlers in order and
 /// capabilities, a source, and the evals of them (`demo.temporal`), each
