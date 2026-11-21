@@ -14,11 +14,25 @@ impl const fn with_generic{offset: i64}() -> i64 => offset
 
 const fn forwarded<const amount: i64>() -> i64 => with_generic<amount>()
 
+const fn offset_from<const amount: i64>() -> i64 => amount + offset_default
+
+operator with_helper<const amount: i64 = 2>{offset: i64 = offset_from<amount>()}() -> i64
+impl const fn with_helper{offset: i64}() -> i64 => offset
+
+operator add_config<const amount: i64>{const offset: i64 = amount}(value: i64) -> i64
+impl fn add_config{const offset: i64}(value: i64) -> i64 {
+    when { return value + offset }
+}
+
+fn with_temporal_default(value: i64) -> i64 => add_config<4>(value)
+
 test a_configuration_default_reads_the_operators_generics {
     assert with_generic() == 11
     assert with_generic<7>() == 16
     assert with_generic{amount: 8}() == 17
     assert forwarded<4>() == 13
+    assert with_helper<3>() == 12
+    assert eval with_temporal_default(value: [1, 2]) == [5, 6]
 }
 
 struct Digit { value: i64 }
