@@ -104,7 +104,11 @@ impl<'a> Typer<'a> {
             let Some(name) = name else {
                 continue;
             };
-            if signature.parameters.iter().any(|parameter| parameter.configuration && parameter.name == name.text()) {
+            if signature
+                .parameters
+                .iter()
+                .any(|parameter| parameter.configuration && parameter.name == name.text())
+            {
                 continue;
             }
             let index = generics.iter().position(|generic| {

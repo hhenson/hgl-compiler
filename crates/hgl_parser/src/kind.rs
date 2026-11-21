@@ -127,9 +127,10 @@ define_syntax_kinds! {
         WarningAnnotation,
         /// `@timeout(5s)` before an integration test
         TimeoutAnnotation,
+        /// A declaration's braced configuration parameters (FN-18).
+        ConfigParamList,
         /// `(value: f64, const factor: f64 = 2.0)`, of a declaration or of
         /// a function expression
-        ConfigParamList,
         ParamList,
         /// `const factor: f64 = 2.0` or `items: ...T`
         Param,

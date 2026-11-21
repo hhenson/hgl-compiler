@@ -531,7 +531,12 @@ pub(crate) fn is_const(parameter: &SyntaxNode) -> bool {
 pub(crate) fn parameters(declaration: &SyntaxNode) -> Vec<SyntaxNode> {
     declaration
         .children()
-        .filter(|list| matches!(list.kind(), SyntaxKind::ConfigParamList | SyntaxKind::ParamList))
+        .filter(|list| {
+            matches!(
+                list.kind(),
+                SyntaxKind::ConfigParamList | SyntaxKind::ParamList
+            )
+        })
         .flat_map(|list| list.children())
         .filter(|parameter| parameter.kind() == SyntaxKind::Param)
         .collect()

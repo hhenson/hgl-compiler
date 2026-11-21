@@ -394,7 +394,9 @@ impl<'a> Typer<'a> {
                     if !configuration && aside.contains(&name.text()) {
                         continue;
                     }
-                    let found = found.filter(|_| (!configuration || brace) && !(brace && takes == Takes::Fields));
+                    let found = found.filter(|_| {
+                        (!configuration || brace) && !(brace && takes == Takes::Fields)
+                    });
                     match found {
                         Some(index) if filled[index] => {
                             self.diagnostics.emit(error(
@@ -478,7 +480,11 @@ impl<'a> Typer<'a> {
                     codes::ARGUMENT_MISSING,
                     callee_at,
                     missing,
-                    if slot.configuration { "FN-18" } else { "EXPR-2" },
+                    if slot.configuration {
+                        "FN-18"
+                    } else {
+                        "EXPR-2"
+                    },
                 ));
             }
         }

@@ -314,7 +314,8 @@ impl Resolver<'_> {
         // The result type, the constraints, the body.
         for part in node.children() {
             match part.kind() {
-                SyntaxKind::GenericParams | SyntaxKind::ConfigParamList | SyntaxKind::ParamList => {}
+                SyntaxKind::GenericParams | SyntaxKind::ConfigParamList | SyntaxKind::ParamList => {
+                }
                 // A native contract's `inject` names stand in the
                 // declaration's own scope: it has no block.
                 SyntaxKind::NativeContractBody => self.children(&part),

@@ -411,8 +411,14 @@ impl<'a> Typer<'a> {
             .into_iter()
             .flat_map(|braces| braces.children())
             .filter(|entry| entry.kind() == SyntaxKind::ConfigArg)
-            .filter_map(|entry| Some((true, Some(tokens(&entry).next()?), entry.children().next()?)))
-            .chain(self.call_arguments(list).into_iter().map(|(name, value)| (false, name, value)))
+            .filter_map(|entry| {
+                Some((true, Some(tokens(&entry).next()?), entry.children().next()?))
+            })
+            .chain(
+                self.call_arguments(list)
+                    .into_iter()
+                    .map(|(name, value)| (false, name, value)),
+            )
             .collect()
     }
 

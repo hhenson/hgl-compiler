@@ -404,6 +404,7 @@ fn hidden_captures(
             local.kind = LocalKind::Parameter;
             *capture = signature.parameters.len();
             signature.parameters.push(Parameter {
+                configuration: false,
                 name,
                 at: local.at,
                 constant: temporal && local.category == ValueCategory::Value,

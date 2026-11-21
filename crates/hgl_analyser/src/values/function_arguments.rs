@@ -408,6 +408,7 @@ impl Typer<'_> {
             .parameters
             .iter()
             .map(|(name, ty)| Slot {
+                configuration: false,
                 name: name.as_deref().unwrap_or(""),
                 ty: ty.clone(),
                 required: !matches!(ty, Type::Nullable(_)),
