@@ -413,22 +413,9 @@ impl Emitter<'_> {
             }
             written[index] = Some(match left_out(program, callee, declared, parameter) {
                 Some(LeftOut::Default(default)) => {
-                    // The analyser keeps a default as a value with no
-                    // locals of its own, so a block in it that runs
-                    // statements cannot be written, as a value call's
-                    // cannot (`calls`).
-                    if changes(&default) {
-                        return self.missing(default.at, "a default that runs statements");
-                    }
-                    let cold = Body {
-                        locals: Vec::new(),
-                        statements: Vec::new(),
+                    let Some(written) = self.write_default(&default) else {
+                        return "0".to_string();
                     };
-                    let mut defaults = Scope::cold(program, &cold);
-                    let written = self.expression(&mut defaults, &default);
-                    if !defaults.before.is_empty() {
-                        return self.missing(default.at, "a default that propagates a failure");
-                    }
                     // EXPR-2: a default is evaluated after the
                     // arguments written, in the order of the
                     // parameters, and counts in what is held.

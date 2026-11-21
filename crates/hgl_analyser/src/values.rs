@@ -310,8 +310,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         if let Some(run) = &mut run_body {
             lifting::record_run(program, run);
         }
-        for value in defaults.iter_mut().flatten().flatten() {
-            lifting::record_value(program, value);
+        for slot in defaults.iter_mut().flatten() {
+            if let Some(default) = slot.take() {
+                let mut body = default.into_body();
+                lifting::record(program, &mut body, false);
+                *slot = Some(hir::DefaultExpr::from_body(body));
+            }
         }
         program.modules[index].bodies = bodies;
         program.modules[index].test_bodies = test_bodies;
@@ -323,8 +327,8 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
     operators::inherit_configuration_defaults(program);
-    operator_defaults::check(program, diagnostics);
-    requirements::instances_hold(program, diagnostics);
+    let default_calls = operator_defaults::check(program, diagnostics);
+    requirements::instances_hold(program, default_calls, diagnostics);
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.
     sizes::applied_sizes(program, diagnostics);

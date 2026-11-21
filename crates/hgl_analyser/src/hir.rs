@@ -65,6 +65,36 @@ pub struct Body {
     pub statements: Vec<Stmt>,
 }
 
+/// A checked default and the local bindings declared inside it (UNIT-7).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefaultExpr {
+    /// The value computed in the declaration's enclosing scope.
+    pub value: Expr,
+    /// Locals introduced by blocks in the expression, in local ID order.
+    pub locals: Vec<Local>,
+}
+
+impl DefaultExpr {
+    /// Treat the expression as a body for specialization and analysis of its locals.
+    pub fn into_body(self) -> Body {
+        Body {
+            locals: self.locals,
+            statements: vec![Stmt::Expr(self.value)],
+        }
+    }
+
+    /// Recover a default after processing the body made by `into_body`.
+    pub(crate) fn from_body(mut body: Body) -> Self {
+        let Some(Stmt::Expr(value)) = body.statements.pop() else {
+            unreachable!("the default is a single expression");
+        };
+        Self {
+            value,
+            locals: body.locals,
+        }
+    }
+}
+
 /// A hook of a node (TIME-3, TIME-5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hook {

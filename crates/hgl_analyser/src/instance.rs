@@ -38,7 +38,7 @@ use hgl_diagnostics::{Diagnostics, Location};
 
 use crate::declared::substitute_within;
 use crate::hir::{
-    AnonymousFunction, Answer, Body, Callee, ConfigurationRead, Expr, ExprKind, Stmt,
+    AnonymousFunction, Answer, Body, Callee, ConfigurationRead, DefaultExpr, Expr, ExprKind,
     ValueCategory, walk_statements, walk_statements_mut,
 };
 use crate::program::{LocalKind, Phase, Program, Role};
@@ -61,7 +61,11 @@ struct InstanceArguments<'a> {
 impl Program {
     /// The operator's configuration default inherited by a candidate's parameter
     /// at `slot` (GEN-6). Candidate-only configuration has its own default.
-    pub fn inherited_configuration_default(&self, callee: &Callee, slot: usize) -> Option<&Expr> {
+    pub fn inherited_configuration_default(
+        &self,
+        callee: &Callee,
+        slot: usize,
+    ) -> Option<&DefaultExpr> {
         let Callee::Candidate {
             operator,
             module,
@@ -93,12 +97,12 @@ impl Program {
     /// The selected configuration parameter gives the default its type (UNIT-8).
     pub fn specialize_operator_default(
         &self,
-        default: &Expr,
+        default: &DefaultExpr,
         operator: (usize, usize),
         generics: &[Argument],
         parameter: &Parameter,
         diagnostics: &mut Diagnostics,
-    ) -> Expr {
+    ) -> DefaultExpr {
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
             return default.clone();
         };
@@ -109,14 +113,10 @@ impl Program {
             .zip(generics)
             .collect();
         let mut uses = Vec::new();
-        default.walk(&mut |value| {
-            if let ExprKind::Call {
-                callee: Callee::Required { requirement, .. },
-                ..
-            } = &value.kind
-            {
-                uses.push((*requirement, value.at));
-            }
+        default.value.walk(&mut |value| match &value.kind {
+            ExprKind::Call { callee, .. } => required_uses(callee, value.at, &mut uses),
+            ExprKind::StaticCallable(callee) => required_uses(callee, value.at, &mut uses),
+            _ => {}
         });
         let reports = RefCell::new(Diagnostics::new());
         let requirements = if uses.is_empty() {
@@ -139,24 +139,26 @@ impl Program {
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
-        let mut body = Body {
-            locals: Vec::new(),
-            statements: vec![Stmt::Expr(default.clone())],
-        };
+        let mut body = default.clone().into_body();
         self.place_body(&mut body, &instance, &[]);
-        let Some(Stmt::Expr(default)) = body.statements.pop() else {
-            unreachable!("the default is a single expression");
-        };
+        crate::values::record(self, &mut body, false);
+        let mut default = DefaultExpr::from_body(body);
         let reports = reports.into_inner();
         for report in reports.as_slice() {
             if !diagnostics.as_slice().contains(report) {
                 diagnostics.emit(report.clone());
             }
         }
-        if reports.has_errors() {
-            return default;
+        if !reports.has_errors() {
+            default.value = crate::values::fit_operator_default(
+                self,
+                operator,
+                default.value,
+                parameter,
+                diagnostics,
+            );
         }
-        crate::values::fit_operator_default(self, operator, default, parameter, diagnostics)
+        default
     }
 
     /// The signature and the body of `declaration` of `module` as one
@@ -647,6 +649,33 @@ fn hidden_captures(
         body.locals.splice(original..original, locals);
     }
     functions
+}
+
+/// What an expression calls by requiring it directly or passing evidence on.
+fn required_uses(callee: &Callee, at: Location, uses: &mut Vec<(usize, Location)>) {
+    fn forwarded(answers: &[Answer], at: Location, uses: &mut Vec<(usize, Location)>) {
+        for answer in answers {
+            match answer {
+                Answer::Stated(index) => uses.push((*index, at)),
+                Answer::Candidate { requirements, .. } => forwarded(requirements, at, uses),
+                Answer::Unread => {}
+            }
+        }
+    }
+    match callee {
+        Callee::Required { requirement, .. } => uses.push((*requirement, at)),
+        Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
+            forwarded(requirements, at, uses);
+        }
+        Callee::Anonymous(function) => {
+            walk_statements(&function.body.statements, &mut |value| match &value.kind {
+                ExprKind::Call { callee, .. } => required_uses(callee, value.at, uses),
+                ExprKind::StaticCallable(callee) => required_uses(callee, value.at, uses),
+                _ => {}
+            })
+        }
+        _ => {}
+    }
 }
 
 /// Puts what `map` gives in place in what a call calls. A call of an

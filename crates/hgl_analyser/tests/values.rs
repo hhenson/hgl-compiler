@@ -4324,13 +4324,13 @@ fn a_default_is_a_value_of_its_parameters_type() {
         .map(|default| {
             default
                 .as_ref()
-                .map_or("none".to_string(), |value| value.ty.to_string())
+                .map_or("none".to_string(), |value| value.value.ty.to_string())
         })
         .collect();
     assert_eq!(types, ["none", "f64", "Side", "i64?", "i64"]);
     assert!(
         matches!(
-            defaults[1].as_ref().map(|value| &value.kind),
+            defaults[1].as_ref().map(|value| &value.value.kind),
             Some(ExprKind::Widen(_))
         ),
         "the `2` of `factor: f64 = 2` is widened"

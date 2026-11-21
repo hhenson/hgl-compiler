@@ -140,3 +140,41 @@ test specialized_inherited_defaults {
     assert member_default(0) == 42
     assert member_default(false)
 }
+
+# UNIT-7 and CTRL-10: each default has its own block-local scope.
+operator local_member<T>(input: i64) -> T
+impl const fn local_member(input: i64) -> i64 => input
+impl const fn local_member(input: i64) -> bool => input > 0
+operator local_defaults<T>{
+    left: T = {
+        let saved = 20
+        local_member<T>(saved)
+    },
+    right: T = {
+        let saved = 22
+        local_member<T>(saved)
+    }
+}(input: T) -> T requires T in {i64, bool}
+impl const fn local_defaults{left: i64, right: i64}(input: i64) -> i64 => left + right
+impl const fn local_defaults{left: bool, right: bool}(input: bool) -> bool => left && right
+
+# GEN-16: the operator's default forwards evidence to a generic helper.
+const fn default_helper<T>() -> T requires inner_default() -> T => inner_default<T>()
+operator forwarded_default<T>{value: T = default_helper<T>()}(input: T) -> T
+    requires inner_default() -> T
+impl const fn forwarded_default{value: i64}(input: i64) -> i64 => value
+
+fn lifted_defaults(input: i64) -> i64 => local_defaults(input)
+
+# Cold block locals belong to the default even while a node hook is written.
+fn hook_defaults(input: i64) -> i64 {
+    when { return local_defaults(input) }
+}
+
+test inherited_defaults_keep_locals_and_forward_evidence {
+    assert local_defaults(0) == 42
+    assert local_defaults(false)
+    assert forwarded_default(0) == 41
+    assert eval lifted_defaults(input: [1, 2]) == [42, 42]
+    assert eval hook_defaults(input: [1, 2]) == [42, 42]
+}

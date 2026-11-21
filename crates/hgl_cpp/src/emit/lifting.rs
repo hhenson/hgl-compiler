@@ -388,28 +388,9 @@ impl Emitter<'_> {
                             };
                             let fallback = match fallback {
                                 LeftOut::Default(default) => {
-                                    // The analyser keeps a default as a
-                                    // value with no locals of its own, so a
-                                    // block in it that runs statements
-                                    // cannot be written (`calls`).
-                                    if changes(&default) {
-                                        return self
-                                            .missing(default.at, "a default that runs statements");
-                                    }
-                                    // UNIT-7: a default is read with no
-                                    // local in scope.
-                                    let cold = Body {
-                                        locals: Vec::new(),
-                                        statements: Vec::new(),
+                                    let Some(written) = self.write_default(&default) else {
+                                        return "0".to_string();
                                     };
-                                    let mut defaults = Scope::cold(program, &cold);
-                                    let written = self.expression(&mut defaults, &default);
-                                    if !defaults.before.is_empty() {
-                                        return self.missing(
-                                            default.at,
-                                            "a default that propagates a failure",
-                                        );
-                                    }
                                     written
                                 }
                                 LeftOut::Null => "::std::nullopt".to_string(),
@@ -520,19 +501,9 @@ impl Emitter<'_> {
                     let configured = match defaults.iter().find(|(at, _)| *at == declared) {
                         Some((_, held)) => held.clone(),
                         None => {
-                            if changes(&default) {
-                                return self.missing(default.at, "a default that runs statements");
-                            }
-                            let cold = Body {
-                                locals: Vec::new(),
-                                statements: Vec::new(),
+                            let Some(written) = self.write_default(&default) else {
+                                return "0".to_string();
                             };
-                            let mut defaults = Scope::cold(program, &cold);
-                            let written = self.expression(&mut defaults, &default);
-                            if !defaults.before.is_empty() {
-                                return self
-                                    .missing(default.at, "a default that propagates a failure");
-                            }
                             omitted_failing += usize::from(may_fail(&default));
                             written
                         }

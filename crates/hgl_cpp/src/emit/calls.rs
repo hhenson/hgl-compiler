@@ -41,7 +41,7 @@ use hgl_analyser::{
     Role, Signature, Type,
 };
 use hgl_diagnostics::Location;
-use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
+use hgl_lower::calls::{DefaultValue, LeftOut, left_out, runtime_arguments};
 use hgl_lower::copies::place_of;
 
 use super::Emitter;
@@ -50,7 +50,6 @@ use super::expressions::integer_literal;
 use super::names::{self, identifier};
 use super::statements::Scope;
 use super::types::enum_name;
-use hgl_analyser::hir::Body;
 
 /// The concrete signature and C++ name at a value call site.
 struct ValueTarget<'a> {
@@ -369,23 +368,12 @@ impl Emitter<'_> {
                     if self.expanding.contains(&key) {
                         return self.missing(default.at, "a default that leaves itself out");
                     }
-                    // The analyser keeps a default as a value with no
-                    // locals of its own, so a block in it that runs
-                    // statements cannot be written.
-                    if changes(&default) {
-                        return self.missing(default.at, "a default that runs statements");
-                    }
-                    let cold = Body {
-                        locals: Vec::new(),
-                        statements: Vec::new(),
-                    };
-                    let mut defaults = Scope::cold(program, &cold);
                     self.expanding.push(key);
-                    let value = self.expression(&mut defaults, &default);
+                    let value = self.write_default(&default);
                     self.expanding.pop();
-                    if !defaults.before.is_empty() {
-                        return self.missing(default.at, "a default that propagates a failure");
-                    }
+                    let Some(value) = value else {
+                        return "0".to_string();
+                    };
                     let Some(ty) = self.named_type(&default.ty) else {
                         return self.missing(default.at, &format!("the type `{}`", default.ty));
                     };
@@ -652,6 +640,29 @@ fn told_apart_by_result(program: &Program, operator: OperatorRef) -> bool {
         read.push((takes, gives));
     }
     false
+}
+
+impl Emitter<'_> {
+    /// Write the omitted parameter's expression in its own lexical scope (UNIT-7).
+    pub(super) fn write_default(&mut self, default: &DefaultValue<'_>) -> Option<String> {
+        // Statement blocks are supported for specialized operator defaults.
+        // Other declaration defaults still have their existing target limit.
+        if matches!(default, DefaultValue::Declared(_)) && changes(default) {
+            self.unsupported(default.at, "a default that runs statements");
+            return None;
+        }
+        let body = default.body();
+        let mut scope = Scope::cold(self.program, &body);
+        // A default's local IDs do not index the caller's temporal readers.
+        let temporal = self.temporal.take();
+        let value = self.expression(&mut scope, default);
+        self.temporal = temporal;
+        if !scope.before.is_empty() {
+            self.unsupported(default.at, "a default that propagates a failure");
+            return None;
+        }
+        Some(value)
+    }
 }
 
 /// True where evaluating `value` runs statements of its own, a block's

@@ -1581,7 +1581,7 @@ fn result_sets(node: &SyntaxNode, name: &str, sets: &mut Vec<SyntaxNode>) {
 /// A call, in a typed body, of a function or a struct with generic
 /// parameters: what it calls, what it gives those parameters, and where
 /// it is written.
-struct Made {
+pub(super) struct Made {
     callee: (usize, usize),
     generics: Vec<Argument>,
     /// What answers each requirement the callee states at this call
@@ -1672,7 +1672,11 @@ fn nesting<'t>(ty: &'t Type) -> usize {
 /// argument, through calls at any depth, and is reported at that call.
 /// Not told is never taken to hold: one still not told for a constant
 /// this compiler does not work out is reported too.
-pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
+pub(super) fn instances_hold(
+    program: &Program,
+    mut given: Vec<Made>,
+    diagnostics: &mut Diagnostics,
+) {
     // The generic parameters of `(module, declaration)`, by where each
     // is declared.
     let own = |(module, declaration): (usize, usize)| -> Vec<Location> {
@@ -1686,7 +1690,6 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     // declaration it is the body of; and what every body makes that
     // gives every argument.
     let mut passed: HashMap<(usize, usize), Vec<Made>> = HashMap::new();
-    let mut given: Vec<Made> = Vec::new();
     // The declarations whose body gives a callee a generic argument it
     // works out from its own generic parameters.
     let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
@@ -1704,7 +1707,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 .flatten()
                 .flatten()
             {
-                made_by(default, &mut made);
+                made_by(&default.value, &mut made);
             }
             // A struct a type written in it applies, a field's or a
             // parameter's (GEN-3: "an application of a struct whose
@@ -1850,12 +1853,14 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 past_the_limit(&from, made.callee, program, diagnostics);
                 break;
             }
+            let mut defaults = Vec::new();
             if configured.contains(&made.callee) {
-                let _ = super::operator_defaults::check_instance(
+                super::operator_defaults::check_instance(
                     program,
                     made.callee,
                     &made.generics,
                     &made.answers,
+                    &mut defaults,
                     diagnostics,
                 );
             }
@@ -1865,7 +1870,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     .get(made.callee.1)
                     .map_or(&[][..], Vec::as_slice)
             });
-            if inner.is_empty() && selecting.is_empty() {
+            if inner.is_empty() && selecting.is_empty() && defaults.is_empty() {
                 continue;
             }
             let declared = own(made.callee);
@@ -1874,7 +1879,15 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             // What each call of the instance calls, with what it gives
             // the callee's generic parameters and what answers the
             // callee's requirements there, and where it is written.
-            let mut calls: Vec<Resolved> = Vec::new();
+            let mut calls: Vec<Resolved> = defaults
+                .into_iter()
+                .map(|call| Resolved {
+                    callee: call.callee,
+                    generics: call.generics,
+                    answers: call.answers,
+                    at: call.at,
+                })
+                .collect();
             for call in inner {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
@@ -2449,6 +2462,31 @@ fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
 /// The calls of generic declarations `expression` makes, at any depth.
 fn made_by(expression: &Expr, made: &mut Vec<Made>) {
     expression.walk(&mut |expression| made_at(expression, made));
+}
+
+/// The calls an omitted, specialized default makes with resolved arguments
+/// and evidence. Follow these as ordinary instances, including helper bodies
+/// that can themselves omit an inherited default (GEN-16, UNIT-8).
+pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
+    fn concrete(answer: &hir::Answer) -> bool {
+        match answer {
+            hir::Answer::Candidate {
+                generics,
+                requirements,
+                ..
+            } => {
+                generics.iter().all(resolved_default_argument) && requirements.iter().all(concrete)
+            }
+            hir::Answer::Stated(_) | hir::Answer::Unread => false,
+        }
+    }
+    let mut calls = Vec::new();
+    made_by(expression, &mut calls);
+    made.extend(calls.into_iter().filter(|call| {
+        call.required.is_none()
+            && call.generics.iter().all(resolved_default_argument)
+            && call.answers.iter().all(concrete)
+    }));
 }
 
 /// The call `expression` is, where it is one of a function, an
