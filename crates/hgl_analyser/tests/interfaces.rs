@@ -172,9 +172,9 @@ fn a_key_that_names_nothing_is_rejected() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:7:5 local:name/doc.unknown_key SDOC-3",
-            "m.hgl:10:5 local:name/doc.unknown_key SDOC-3",
-            "m.hgl:17:9 local:name/doc.unknown_key SDOC-3",
+            "m.hgl:7:5 name/doc.unknown_key SDOC-3",
+            "m.hgl:10:5 name/doc.unknown_key SDOC-3",
+            "m.hgl:17:9 name/doc.unknown_key SDOC-3",
         ]
     );
 }

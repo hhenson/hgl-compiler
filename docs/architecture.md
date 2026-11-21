@@ -492,7 +492,7 @@ else".
 | `state`, `cache`, `start`, `when` or `stop` in a `const fn` | `node.in_value_function` | FN-1 |
 | `inject` in a `const fn`, or in the contract of a native one | `node.in_value_function` | FN-9, NATIVE-3 |
 | `inject`, `state`, `cache` or a hook in an anonymous function written in a node | `node.in_value_function` | FN-9, FN-3 |
-| A temporal input read in a `cache`'s initialiser | local `cache.input_read` | TIME-1 |
+| A temporal input read in a `cache`'s initialiser | `cache.input_read` | TIME-5, TIME-6 |
 | A connection in a graph given to a value candidate's option by a symbol's configuration, `a =={abs: tolerance} b` | `connection.as_constant` | EXPR-14 |
 
 A value function injects no capability (owner's decision of 2026-11-16
@@ -622,8 +622,8 @@ statement is read as value code, with three things of a source's own:
 | In a source | Read as | Rule |
 | --- | --- | --- |
 | `yield time: value` | `Stmt::Yield`: the value is of the result's type, and is not a capability. What the time may be is proposed, and is not judged | SOURCE-1, SOURCE-2 |
-| `return` with no value | Ends the source. One with a value is the local `source.return_value` | SOURCE-4 |
-| A `yield` inside a block or an `if` whose value is used | The local `yield.in_value`: it stands inside a value expression | SOURCE-4 |
+| `return` with no value | Ends the source. One with a value is `source.return_value` | SOURCE-4 |
+| A `yield` inside a block or an `if` whose value is used | `yield.in_value` | SOURCE-4 |
 | `while { }` with no condition | A loop with none | CTRL-15 |
 
 A temporal function called there is `call.role`, and a `capture` is
@@ -661,7 +661,7 @@ What is rejected there:
 | `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
 | A temporal function called in a hook | `call.role` | FN-3 |
 | `scheduled()` in a node that injects neither `scheduler` nor `alarm`: in a hook, a `state`'s or a `cache`'s initialiser, or a source's body | `inject.no_scheduler` | TIME-9, SOURCE-1 |
-| `scheduled()` in a value function, a graph or a test, which is no node | local `scheduled.outside_node` | FN-9 |
+| `scheduled()` in a value function, a graph or a test, which is no node | `scheduled.outside_node` | FN-9, TIME-9 |
 | A capability retained: the value of a `state` or a `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published: `(clock, value)`, `return clock` | `capability.as_value` | TIME-8 |
 | `alarm` and `scheduler` injected in one node | `inject.alarm_and_scheduler` | TIME-8 |
 | `scheduled()` in `start` or `stop` | `scheduled.lifecycle` | TIME-9 |
@@ -853,7 +853,7 @@ A `switch` and the loops of a graph are told apart the same way
 | `switch` over an ordinary value | One case is composed: read as in a value function |
 | `switch` over a connection | Each case is a child graph selected at runtime: an assignment or a `return` in a case follows the rules of a branch selected at runtime |
 | A label that is a connection | `connection.as_constant` |
-| A label that is no compile-time constant: a `let`, a `const` parameter, a call (UNIT-13, GEN-8), here and in a value function or a hook | local `switch.label_constant` |
+| A label that is no compile-time constant: a `let`, a `const` parameter, a call (UNIT-13, GEN-8), here and in a value function or a hook | `switch.label_constant` |
 | `for item in items`, `items` an ordinary list, set or dictionary | Unrolled while the graph is built: ordinary values bound, and a `var` may be carried from pass to pass |
 | `items` a connection of `list<T, N>` | Composed `N` times: `item` is a connection of `T` |
 | `items` a connection of `list<T>`, `set<T>` or `dict<K, V>` | One child for each member. `item` is a connection of `T` for a list and the member, an ordinary `T`, for a set; `key` is an ordinary `K` and `value` a connection of `V`. An assignment to a `var` declared outside the loop, and a `return`, are `loop.carried` |
@@ -906,7 +906,7 @@ is the text a target keys an instance by, one for each constant.
 | A field's conflict, a parent's argument | `declared::may_be_one`: not known to differ | No conflict |
 | `requires` | `holds`: `equals` of the option's value and each operand | Not told for a generic parameter the call passes on: told for each instance a call that gives every argument makes (`requirements::instances_hold`). Not told for a constant not worked out: `requires.unmet` |
 | A call's generic value argument | GEN-8 | `generic.argument_constant`: what is no constant, and one not worked out |
-| A `switch` label | CTRL-6: `equals` of two labels | No constant: local `switch.label_constant`. One not worked out is a label whose repeat is not judged |
+| A `switch` label | CTRL-6: `equals` of two labels | No constant: `switch.label_constant`. One not worked out is a label whose repeat is not judged |
 | A delta's key, a tuple's index | TYPE-16: `equals` of two keys; EXPR-7 | No overlap, and the element's type not known |
 
 Not done: an operation the reader does not work out (one given
@@ -1598,14 +1598,11 @@ reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
 the limit is the compiler's, not the language's. The analyser's codes
-are catalogued (`hgl_analyser::codes`), one of them a warning, but for
-the local ones in `codes::local`, for rejections the catalogue has no
-row for: `cache.input_read` (TIME-1), `doc.unknown_key` (SDOC-3),
-`source.return_value` and `yield.in_value` (SOURCE-4), and
-`scheduled.outside_node` (FN-9), and `reading.limit` (EXPR-5), whose
-limit is the compiler's: an expression that takes its type from its
-place is read again as each candidate's parameter it is tried as, and
-those readings nest. Each statement read where no expression is, each
+are catalogued (`hgl_analyser::codes`), one of them a warning. Its local
+codes are `loop.carried` (CTRL-15) and `reading.limit` (EXPR-5).
+An expression that takes its type from its place is read again as
+each candidate's parameter it is tried as, and those readings nest.
+Each statement read where no expression is, each
 declaration of a node and each body written as one expression may read
 10,000 expressions again, and 16 more for each node of its syntax; one
 that needs more is rejected, and what is read before it changes

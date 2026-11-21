@@ -738,8 +738,8 @@ fn scheduled_is_a_selector_of_a_node_alone() {
         checked.summary(),
         [
             "m.hgl:3:15 injectable/inject.no_scheduler TIME-9",
-            "m.hgl:5:41 local:phase/scheduled.outside_node FN-9",
-            "m.hgl:6:36 local:phase/scheduled.outside_node FN-9",
+            "m.hgl:5:41 phase/scheduled.outside_node FN-9",
+            "m.hgl:6:36 phase/scheduled.outside_node FN-9",
             "m.hgl:8:25 injectable/inject.no_scheduler TIME-9",
             "m.hgl:12:19 injectable/inject.no_scheduler TIME-9",
         ]

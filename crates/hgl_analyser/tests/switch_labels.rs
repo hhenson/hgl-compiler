@@ -152,9 +152,9 @@ fn a_label_is_a_compile_time_constant() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:6:14 local:type/switch.label_constant CTRL-12",
-            "m.hgl:12:14 local:type/switch.label_constant CTRL-15",
-            "m.hgl:18:14 local:type/switch.label_constant CTRL-12",
+            "m.hgl:6:14 type/switch.label_constant CTRL-12",
+            "m.hgl:12:14 type/switch.label_constant CTRL-12",
+            "m.hgl:18:14 type/switch.label_constant CTRL-12",
             "m.hgl:24:14 phase/connection.as_constant FN-3",
         ]
     );

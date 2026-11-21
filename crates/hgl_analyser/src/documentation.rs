@@ -19,7 +19,7 @@ use hgl_source::{FileId, Span};
 
 use crate::program::Program;
 use crate::types::Detail;
-use crate::{codes, local_error};
+use crate::{codes, error};
 
 /// The section headings SDOC-3's table lists. "Unknown headings remain
 /// prose."
@@ -157,9 +157,9 @@ fn documented(node: &SyntaxNode, file: FileId, keys: &Keys, diagnostics: &mut Di
             continue;
         }
         diagnostics.emit(
-            local_error(
+            error(
                 Category::Name,
-                codes::local::DOC_UNKNOWN_KEY,
+                codes::DOC_UNKNOWN_KEY,
                 Location::new(file, at),
                 format!("`{heading}` names `{key}`, and what it documents has no {what} `{key}`"),
                 "SDOC-3",

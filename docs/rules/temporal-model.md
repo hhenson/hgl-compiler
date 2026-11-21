@@ -6,7 +6,7 @@
 
 analyser: partial
 
-- A temporal input's payload is read where its `when` header or a guard proves it valid, and nowhere else: unguarded in a `when` or in `stop` (`payload.unguarded`, TIME-4, TIME-5), in `start` (`input.lifecycle`), in a `state`'s initialiser (`state.input_read`) and in a `cache`'s, which runs on every start (local `cache.input_read`)
+- A temporal input's payload is read where its `when` header or a guard proves it valid, and nowhere else: unguarded in a `when` or in `stop` (`payload.unguarded`, TIME-4, TIME-5), in `start` (`input.lifecycle`), in a `state`'s initialiser (`state.input_read`) and in a `cache`'s, which runs on every start (`cache.input_read`, TIME-5 and TIME-6)
 - A read in an anonymous function is held to the admission where the function is written (FN-14), the callee of a call among them, which is read as any expression is
 - An endpoint operation observes an invalid endpoint with no guard
 - A collection's child, an element, a field or an entry at any depth, is an endpoint (`ChildEndpoint`); its value or `delta_value` is read where `all_valid` of its collection or `valid` of the child holds, and at a constant index, a module's constant or a field one that is not is `payload.unguarded`; at an index known when it runs the read is `CheckedChild`, checked then
@@ -64,7 +64,7 @@ analyser: done
 - A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`; a source is held to the same
 - A state's initialiser reads no temporal input (`state.input_read`)
 - `start` reads no temporal input and gives none to an endpoint operation (`input.lifecycle`); `stop` reads one under manual admission, each read under a guard (`payload.unguarded`), a struct's, a tuple's or a fixed list's whole read under its `all_valid` (TIME-4)
-- A cache's initialiser reads none either (TIME-1)
+- A cache's initialiser reads no temporal input (`cache.input_read`, TIME-6).
 - A read in an anonymous function written in any of them is held to the same
 
 transpiler: planned
@@ -109,7 +109,7 @@ analyser: partial
 - An `endpoint<T>` parameter of a native value function is given an input by its name, a child of one, or `out`, in a hook, and its payload is not read; anything else, and any argument in a graph or a value function, is `endpoint.argument`
 - Core declares the endpoint operations, including `delta_value` (UNIT-12)
 - `scheduled()` in a node that injects neither `scheduler` nor `alarm` is `inject.no_scheduler`: in a hook, a `state`'s or a `cache`'s initialiser, and a source's body (SOURCE-1)
-- `scheduled()` in a value function, a graph or a test, which is no node, is local `scheduled.outside_node` (FN-9): the catalogue has no row for it
+- `scheduled()` in a value function, a graph or a test, which is no node, is `scheduled.outside_node` (FN-9)
 - `scheduled()` in `start` or `stop` is `scheduled.lifecycle`, wherever it stands in the hook, beside `inject.no_scheduler` in a node that injects neither
 - `scheduled()` in an anonymous function is judged where the function is written, each of the above (FN-14), wherever it is called; so is every endpoint operation in one, by what it is given (`endpoint.argument`: the function's own parameter or `let` is no input), how many arguments and generic arguments it takes, and the type its generic argument names
 - `scheduled<T>()` is the selector and is judged as `scheduled()` is, and takes no generic argument (`generic.argument_count`): core declares no function of the name

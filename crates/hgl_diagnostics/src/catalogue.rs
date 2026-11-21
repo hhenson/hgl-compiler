@@ -42,6 +42,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Module, "module.duplicate_part"),
     (Category::Module, "import.misplaced"),
     (Category::Module, "import.unknown_module"),
+    (Category::Name, "doc.unknown_key"),
     (Category::Name, "import.unknown_name"),
     (Category::Module, "import.private"),
     (Category::Module, "import.cycle"),
@@ -50,7 +51,9 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Module, "application.export"),
     (Category::Module, "application.run_count"),
     (Category::Phase, "application.statement"),
+    (Category::Phase, "cache.input_read"),
     (Category::Phase, "run.position"),
+    (Category::Type, "constant.failure"),
     (Category::Type, "run.entry"),
     (Category::Phase, "run.configuration"),
     (Category::Name, "name.duplicate"),
@@ -86,6 +89,8 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Phase, "node.declaration_order"),
     (Category::Phase, "node.duplicate_hook"),
     (Category::Phase, "node.statement"),
+    (Category::Phase, "scheduled.outside_node"),
+    (Category::Phase, "source.return_value"),
     (Category::Phase, "source.statement"),
     (Category::Phase, "source.when"),
     (Category::Phase, "source.input"),
@@ -108,6 +113,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "pack.name"),
     (Category::Type, "pack.duplicate"),
     (Category::Type, "pack.cardinality"),
+    (Category::Type, "switch.label_constant"),
     (Category::Type, "type.not_a_type"),
     (Category::Type, "type.not_ordinary"),
     (Category::Type, "signal.position"),
@@ -192,6 +198,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "delta.index_bounds"),
     (Category::Type, "delta.overlap"),
     (Category::Phase, "test.statement_phase"),
+    (Category::Phase, "yield.in_value"),
 ];
 
 /// True when the catalogue has a row with this category and this code.

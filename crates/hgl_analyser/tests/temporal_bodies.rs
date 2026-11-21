@@ -96,7 +96,7 @@ fn a_payload_read_needs_admission() {
         checked.summary(),
         [
             "m.hgl:3:23 phase/state.input_read TIME-5",
-            "m.hgl:4:23 local:phase/cache.input_read TIME-1",
+            "m.hgl:4:23 phase/cache.input_read TIME-5",
             "m.hgl:6:23 phase/input.lifecycle TIME-5",
             "m.hgl:7:29 phase/payload.unguarded TIME-4",
             "m.hgl:8:19 phase/payload.unguarded TIME-5",
@@ -163,7 +163,7 @@ fn an_anonymous_function_reads_where_it_is_written() {
             "m.hgl:7:35 phase/input.lifecycle TIME-5",
             "m.hgl:13:28 phase/payload.unguarded TIME-5",
             "m.hgl:16:32 phase/state.input_read TIME-5",
-            "m.hgl:17:32 local:phase/cache.input_read TIME-1",
+            "m.hgl:17:32 phase/cache.input_read TIME-5",
             "m.hgl:21:56 phase/payload.unguarded TIME-4",
         ]
     );
