@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <format>
+#include <string_view>
 #include <utility>
 
 namespace hglrt {
@@ -66,7 +67,11 @@ std::string describe(const std::exception& failure) {
         text += std::format(" (in {}, {}, at {:%Y-%m-%dT%H:%M:%S})", context.node, context.phase,
                             context.evaluation_time);
     }
-    if (const std::optional<std::source_location> where = raised_at(failure); where.has_value()) {
+    // The place is an HGL file's where the generated code set one with
+    // `#line`; one in this library or in a test's body, which the test host
+    // names by its statement, is no place of the program's, and is not said.
+    if (const std::optional<std::source_location> where = raised_at(failure);
+        where.has_value() && std::string_view{where->file_name()}.ends_with(".hgl")) {
         text += std::format(", raised at {}:{}", where->file_name(), where->line());
     }
     return text;

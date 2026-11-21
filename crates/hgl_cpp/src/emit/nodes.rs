@@ -763,6 +763,13 @@ impl Emitter<'_> {
         }
         let line = self.line_of(at);
         text.push_str(&format!("{indent}// when, line {line} (TIME-3)\n"));
+        // The HGL file and line of the handler, which a failure of its
+        // condition names.
+        if !guards.is_empty()
+            && let Some(directive) = self.line_directive(at)
+        {
+            text.push_str(&directive);
+        }
         if guards.is_empty() {
             text.push_str(&format!("{indent}{{\n{written}{indent}}}\n"));
         } else {

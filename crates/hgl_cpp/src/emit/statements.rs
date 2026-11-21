@@ -132,7 +132,10 @@ impl Emitter<'_> {
     }
 
     /// Writes `statement` into `text`, `depth` levels in, after what it
-    /// needs run before it (`Scope::before`).
+    /// needs run before it (`Scope::before`). Outside a test, the HGL file
+    /// and line of the statement are set first, so that a failure raised
+    /// in it names them (`Emitter::line_directive`); a test's statements
+    /// tell the test host their own lines instead (`tests`).
     pub(super) fn statement(
         &mut self,
         scope: &mut Scope,
@@ -140,6 +143,12 @@ impl Emitter<'_> {
         depth: usize,
         text: &mut String,
     ) {
+        if !scope.testing
+            && let Some(directive) =
+                self.line_directive(statement_at(statement, &scope.body.locals))
+        {
+            text.push_str(&directive);
+        }
         let indent = INDENT.repeat(depth);
         let mut written = String::new();
         let outer_before = std::mem::take(&mut scope.before);

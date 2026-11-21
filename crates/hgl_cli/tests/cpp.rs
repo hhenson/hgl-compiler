@@ -1452,3 +1452,114 @@ fn an_interrupt_of_hgl_alone_stops_a_run_in_real_time() {
         "{printed}"
     );
 }
+
+/// CAP-6 on the SDK: every ordinary value put in the run's store is got
+/// back as itself, a struct, a tuple, a dictionary, a set and a delta among
+/// them, in a node, where a graph is built and by an application. A failure
+/// where a graph is built or in an application's store statements names the
+/// HGL file and line it was raised at, which the generated code sets with
+/// `#line`, and no place of the generated C++.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn store_values_and_failure_places_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("store_values");
+    let module = write(
+        &root,
+        "demo.store.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.hgl"),
+    );
+    for (name, application) in [
+        (
+            "demo.store.quotes.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.store.quotes.hgl"),
+        ),
+        (
+            "demo.store.failing.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.store.failing.hgl"),
+        ),
+        (
+            "demo.store.unbuilt.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.store.unbuilt.hgl"),
+        ),
+    ] {
+        write(&root, name, application);
+    }
+    let kept = root.join("build");
+    let output = hgl_in(
+        &[
+            "test",
+            &argument(&root),
+            "--target",
+            "cpp",
+            "--keep",
+            &argument(&kept),
+        ],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+    let run = |application: &str| {
+        hgl_in(
+            &[
+                "run",
+                &argument(&root),
+                "--target",
+                "cpp",
+                "--application",
+                application,
+                "--keep",
+                &argument(&kept),
+            ],
+            &[],
+            &[],
+        )
+    };
+    let output = run("demo.store.quotes");
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:01.000001Z  delta<demo.store::Quote>(bid: 11, ask: 12)\n",
+            "1970-01-01T00:00:02.000001Z  delta<demo.store::Quote>(bid: 12, ask: 13)\n",
+            "ran demo.store.quotes on cpp: 2 publications\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    // The failing `l[3]` is on line 7 of the application's file; the `get`
+    // of a key put nowhere on line 80 of the module's, in the graph.
+    let failing = root.join("demo.store.failing.hgl").display().to_string();
+    for (application, said) in [
+        (
+            "demo.store.failing",
+            format!(
+                "hgl: demo.store.failing failed: value.index_out_of_range: the index 3 is \
+                 outside a list of 1, raised at {failing}:7"
+            ),
+        ),
+        (
+            "demo.store.unbuilt",
+            format!(
+                "hgl: demo.store.unbuilt failed: the global store holds nothing under 'by', \
+                 raised at {module}:80"
+            ),
+        ),
+    ] {
+        let output = run(application);
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = text(&output.stderr);
+        assert_eq!(stderr.lines().last(), Some(said.as_str()), "{stderr}");
+    }
+}
