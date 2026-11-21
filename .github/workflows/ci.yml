@@ -27,7 +27,7 @@ jobs:
     steps:
       # `hgl` is built with core's module from the pinned hgl_core
       # submodule, so the build needs the submodules too.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
       # rust-toolchain.toml selects the compiler; rustup installs it on the
@@ -46,7 +46,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       # The corpus test reads HGL from the pinned specification submodules.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
       # Installs the pinned toolchain and keeps its version for the cache
@@ -60,7 +60,7 @@ jobs:
       # saved for this system, toolchain and Cargo.lock. With them a run
       # compiles only the workspace's own crates.
       - id: cache
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # `&cache-paths` names this list; the save step below reuses it
           # as `*cache-paths`, so the two cannot drift apart.
@@ -86,7 +86,7 @@ jobs:
         run: cargo clean --workspace
       # Saves the downloaded crates and the built dependencies.
       - if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: *cache-paths
           key: ${{ steps.cache.outputs.cache-primary-key }}
@@ -107,7 +107,7 @@ jobs:
       HGL_HGRAPH_DEPS: ${{ github.workspace }}/.hgraph/deps
       HGL_HGRAPH_SDK: ${{ github.workspace }}/.hgraph/sdk
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # `hgl`, which the C++ target's steps below build, is built with
         # core's module from the pinned hgl_core submodule.
         with:
@@ -124,7 +124,7 @@ jobs:
       # only with the tag, the script or the image, and a pull request that
       # changes the script then builds them once and not on each push.
       - id: cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .hgraph/deps
@@ -133,7 +133,7 @@ jobs:
       # micromamba makes the dependency prefix from conda-forge: what hgraph
       # needs without Arrow, fmt, spdlog and simdjson, with CMake and Ninja.
       - if: steps.cache.outputs.cache-hit != 'true'
-        uses: mamba-org/setup-micromamba@v3
+        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
           micromamba-version: "2.10.0-0"
       - if: steps.cache.outputs.cache-hit != 'true'

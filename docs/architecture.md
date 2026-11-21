@@ -2088,10 +2088,10 @@ SDK, the whole route, that a failed build runs no older executable,
 that `demo.values`, `demo.composites`, `demo.temporal`, `demo.windows`, `demo.references`, `demo.timing`, `demo.activity`, `demo.lifting`, `demo.control`, `demo.structs`, `demo.keyed`, `demo.lists` and `demo.nested` pass, where a failure is
 reported, applications run with their output, the store and a failure,
 and a run in real time stopped by an interrupt of `hgl` alone, with `cargo
-test -p hgl_cli --test cpp -- --ignored`, which the `cpp` job of the CI
-workflow runs, with `check_core.py` (below), and then both again
-with `HGL_CPP_FLAGS` naming the address and undefined-behaviour
-sanitizers. The generated code compiles with `-Wall -Wextra -Werror`.
+test -p hgl_cli --test cpp -- --ignored`. The Linux and macOS C++ jobs
+run it with `check_core.py` (below), then run both again with
+`HGL_CPP_FLAGS` naming the address and undefined-behaviour sanitizers.
+The generated code compiles with `-Wall -Wextra -Werror`.
 
 The target's progress is counted in cases: core's runtime cases, and
 later the fixture programs' tests. Each case the target does not run is
@@ -2119,6 +2119,26 @@ that passes, is rejected or disappears fails the check. `--write-list`
 writes the list from a run in place of checking it; read the difference
 before it is committed. Its own tests are
 `python3 -m unittest discover -s crates/hgl_cpp/ci`.
+
+### Pull request checks
+
+| Platform | Automatic pull request checks | C++ check before merge |
+| --- | --- | --- |
+| Linux | Hosted formatting, Clippy and Rust workspace tests | Hosted C++ job runs runtime CTests, SDK tests and pinned core cases, plain and sanitized |
+| macOS | Hosted Rust workspace tests | A maintainer dispatches **macOS C++ target** on the reviewed repository branch. It adds the workspace tests and the same C++ checks on Apple silicon |
+| Windows | Hosted Rust workspace tests | C++ build and execution remain outside CI |
+
+The macOS C++ workflow runs on pushes to `main` and on manual dispatches
+of branches in this repository, when `HGL_SELF_HOSTED_MACOS` is `true`.
+Once the workflow is on `main` and the reviewed branch contains it, a
+maintainer with write access can dispatch that branch.
+
+```sh
+gh workflow run cpp-macos.yml --repo hhenson/hgl-compiler --ref BRANCH
+```
+
+Check the dispatch result for the commit being merged. Pull request events
+use hosted runners only.
 
 ### The C++ runtime library
 
@@ -2287,11 +2307,14 @@ re-exports the system's libc++abi, so exceptions and type information
 have one runtime, and an exception thrown in fmt is caught by type
 elsewhere.
 
-CI's job `cpp` makes the prefix and the SDK with the script and caches
-both with `actions/cache`, under a key of the tag, the script and the
-runner's image, so that a run with that key builds neither. It then builds
-`runtime/cpp` and runs its unit tests, and does both again under the
-sanitizers. The test `hglrt_takes_no_stdlib` fails where the library takes
+The Linux C++ job makes the prefix and SDK with the provisioner and
+caches both by tag, provisioning inputs and runner image. The macOS job
+uses the runner's configured Apple Clang and SDK and keys the cache by
+the tag, provisioning inputs, toolchain and workspace path. The cached
+SDK retains absolute dependency paths. The macOS job keeps Rust and
+Python tooling in the runner's tool cache and builds in the job's
+workspace. Both C++ jobs build `runtime/cpp` and run its unit tests,
+then repeat both with sanitizers. The test `hglrt_takes_no_stdlib` fails where the library takes
 anything of hgraph's standard library or of Arrow: a header of either that
 the public headers bring in at any depth (their include set, preprocessed),
 a source that includes one, or a library that `libhglrt`, its tests or
