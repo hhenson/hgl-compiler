@@ -26,6 +26,14 @@ impl fn add_config{const offset: i64}(value: i64) -> i64 {
 
 fn with_temporal_default(value: i64) -> i64 => add_config<4>(value)
 
+# GEN-16: an inherited default calls an operation required by the
+# operator itself, with the operator's concrete type argument.
+operator make_default<T>() -> T
+impl const fn make_default() -> i64 => 28
+operator with_required_default<T>{value: T = make_default<T>()}(input: T) -> T
+    requires make_default() -> T
+impl const fn with_required_default{value: i64}(input: i64) -> i64 => value
+
 test a_configuration_default_reads_the_operators_generics {
     assert with_generic() == 11
     assert with_generic<7>() == 16
@@ -33,6 +41,7 @@ test a_configuration_default_reads_the_operators_generics {
     assert forwarded<4>() == 13
     assert with_helper<3>() == 12
     assert eval with_temporal_default(value: [1, 2]) == [5, 6]
+    assert with_required_default(1) == 28
 }
 
 # GEN-16 requires the ordinary operand. FN-18 configuration occupies
