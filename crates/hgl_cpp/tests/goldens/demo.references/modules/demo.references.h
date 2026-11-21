@@ -8,19 +8,29 @@
 #undef b
 #undef changed_key
 #undef choose
+#undef chooses
 #undef chosen
 #undef demo
 #undef entry_a
 #undef flag
 #undef follow
+#undef handed
+#undef handed_doubled
+#undef handed_if_valid
+#undef handed_on
+#undef handed_on_if_valid
+#undef handed_or_low
 #undef high
 #undef high_slot
+#undef holds_one
+#undef holds_withdrawn
 #undef idx
 #undef item
 #undef items
 #undef key
 #undef low
 #undef low_slot
+#undef on
 #undef pick
 #undef pick_list
 #undef picked
@@ -41,6 +51,7 @@
 #undef slot
 #undef take
 #undef target
+#undef withdrawn
 #undef write_entry
 
 namespace hgl::demo::references::m_
@@ -140,6 +151,60 @@ namespace w_
 {
 // entry_a(changed_key: str, price: i64?) -> i64 (graph), module demo.references, line 171
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_a(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> changed_key, ::hgraph::Port<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>> price);
+}  // namespace w_
+
+namespace w_
+{
+// withdrawn(on: bool, ref low: i64) -> ref i64 (node), module demo.references, line 182
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> withdrawn(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low);
+}  // namespace w_
+
+namespace w_
+{
+// handed(take: bool, ref target: i64) -> ref i64 (node), module demo.references, line 190
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> target);
+}  // namespace w_
+
+namespace w_
+{
+// handed_on(take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 194
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed_on(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low);
+}  // namespace w_
+
+namespace w_
+{
+// handed_if_valid(take: bool, ref target: i64) -> ref i64 (node), module demo.references, line 204
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed_if_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> target);
+}  // namespace w_
+
+namespace w_
+{
+// handed_on_if_valid(take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 208
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed_on_if_valid(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low);
+}  // namespace w_
+
+namespace w_
+{
+// holds_one(take: bool, ref target: i64) -> bool (node), module demo.references, line 219
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> holds_one(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> target);
+}  // namespace w_
+
+namespace w_
+{
+// holds_withdrawn(take: bool, on: bool, low: i64) -> bool (graph), module demo.references, line 223
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> holds_withdrawn(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low);
+}  // namespace w_
+
+namespace w_
+{
+// handed_doubled(take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 235
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed_doubled(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low);
+}  // namespace w_
+
+namespace w_
+{
+// handed_or_low(chooses: bool, take: bool, on: bool, low: i64) -> i64 (graph), module demo.references, line 245
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> handed_or_low(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> chooses, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> take, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> on, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> low);
 }  // namespace w_
 
 namespace w_::i_::sampled

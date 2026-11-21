@@ -348,7 +348,10 @@ impl Emitter<'_> {
                     body: statements,
                     at,
                 } => {
-                    let handler = Handler::of(header, condition.as_ref(), statements);
+                    let mut handler = Handler::of(header, condition.as_ref(), statements);
+                    // FN-16: what a handler requires of a `ref` parameter
+                    // (`references`).
+                    super::references::admission(&mut handler, &body.locals, signature);
                     if let Some(at) = handler.beside {
                         // The specification does not say what the two ask
                         // together (TIME-3).
