@@ -241,3 +241,44 @@ test a_list_input_replays_its_cells {
         delta<list<i64>>(updated: [0: 5], removed: [1, 2], size_modified: 1),
     ]
 }
+
+# TIME-1: a child of a growing list's connection, of an input and of a
+# node's result, wired before the list holds it, and not valid while the
+# list does not reach it.
+fn first_reading(values: list<i64>) -> i64 => values[0]
+
+fn third_relayed(values: list<i64>) -> i64 => relay(values)[2]
+
+test a_growing_list_child_is_wired {
+    assert eval first_reading(values: [[1], [2, 3], [], [4]]) == [1, 2, _, 4]
+    assert eval third_relayed(values: [[1, 2, 3], [1], [5, 6, 7]]) == [3, _, 7]
+}
+
+# TST-9: a list of lists replayed from cells written whole and as deltas,
+# each position from what it held.
+fn relay_rows(rows: list<list<i64>>) -> list<list<i64>> {
+    when { return rows }
+}
+
+const fn total_rows(rows: list<list<i64>>) -> i64 {
+    var running: i64 = 0
+    for row in rows {
+        for value in row { running += value }
+    }
+    return running
+}
+
+fn rows_total(rows: list<list<i64>>) -> i64 => total_rows(rows)
+
+test a_list_of_lists_is_replayed {
+    assert eval rows_total(rows: [[[1], [2, 3]], [[4]]]) == [6, 4]
+    assert eval relay_rows(rows: [
+        [[1], [2, 3]],
+        delta<list<list<i64>>>(updated: [1: delta<list<i64>>(updated: [2: 9])]),
+        [[4]],
+    ]) == [
+        [[1], [2, 3]],
+        [[1], [2, 3, 9]],
+        delta<list<list<i64>>>(updated: [0: delta<list<i64>>(updated: [0: 4])], removed: [1], size_modified: 1),
+    ]
+}

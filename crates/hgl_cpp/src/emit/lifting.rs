@@ -11,12 +11,13 @@
 //! | --- | --- |
 //! | A lifted call, `scaled(value, factor: 2)` (FN-6) | a node of its own, a struct `lifted_00_` in the graph's struct, wired with `::hgraph::wire<lifted_00_>(wiring_, value, ::hgraph::Int{2})`: each argument that is a connection an input, and each other configuration, an `hgraph::Scalar`; its `eval` calls the function and publishes what it gives, each time it is evaluated; one that gives nothing is a sink |
 //! | An input that must be valid (FN-11) | `hgraph::In<"value", S>`, which hgraph evaluates the node only once valid, and read checked (TIME-1) |
-//! | An input whose parameter has a default, or admits null (FN-11) | `hgraph::In<"factor", S, InputValidity::Unchecked>` under a name of its own, `input_00_`, and the value bound to the parameter's name at the top of `eval`: `::hglrt::fn_valid(input_00_) ? T{read} : T{default}` |
+//! | An input whose parameter has a default, or admits null (FN-11) | `hgraph::In<"factor", S, InputValidity::Unchecked>` under a name of its own, `input_00_`, and the value bound to the parameter's name at the top of `eval`: `::hglrt::fn_valid(input_00_) ? T{read} : T{default}`; T the parameter's `T?` where the input is a connection of T (TYPE-14) |
 //! | A struct, a tuple, a fixed list or a window given to one (FN-11, FN-12) | the helper is not called where it is valid and not all valid: `if (!::hglrt::fn_all_valid(view)) return;` |
 //! | `eval scale(value: [1, _, 3])` of a value function (TST-8) | the same node, given the replays of the traces as its inputs, at the scope of the test's namespace ahead of the test |
 //! | `let seen = capture(attempt, value)` (ERR-7) | a graph of its own for the call, a struct `captured_00_` in the graph's struct, wired by hgraph's `try_except_` with canonical errors, `::hglrt::capture<captured_00_>(wiring_, value)` (`<hglrt/capture.h>`) |
 //! | `seen.value`, `seen.error` (ERR-7) | `::hglrt::captured_value(seen)`, `::hglrt::captured_error(seen)` |
 //! | A temporal value of `error`, of `result<T, error>` | `TS<::hglrt::error>`, which is hgraph's `CanonicalError`; `TS<::hglrt::result<T>>`, a `std::expected` registered with hgraph as an atomic (`<hglrt/capture.h>`) |
+//! | A cell of a trace of either (TST-5) | the value, `::hglrt::result<::hgraph::Int>{...}`, compared by its own equality, which excludes an error's provenance |
 //! | `value?` in a `when` (ERR-5, ERR-8) | the result held before the statement, and the node failed with its error as it is, `::hglrt::raise(held.error())`, which keeps the context a retained error has |
 //! | `failure.context`, and its `.node`, `.phase`, `.evaluation_time` (ERR-4) | `(failure).context`, a `std::optional` of hgraph's `ErrorContext`; its members of those names |
 //!
@@ -143,7 +144,7 @@ impl Emitter<'_> {
                     let Some(schema) = self.temporal_schema(&ty, at) else {
                         return "0".to_string();
                     };
-                    let read = self.read_type(&ty);
+                    let mut read = self.read_type(&ty);
                     // FN-11: "A struct, a tuple, a fixed list or a window
                     // is supplied only where it is `all_valid` as well".
                     let whole = read_whole_all_valid(program, &ty)
@@ -181,6 +182,15 @@ impl Emitter<'_> {
                                 "::hgraph::In<{label}, {schema}, ::hgraph::InputValidity::Unchecked> {view}"
                             ));
                             roles.push(Role::Plain);
+                            // TYPE-14: "A T is a value where a `T?` is
+                            // expected": a connection of T given to a
+                            // parameter written `T?` binds a `T?`, the value
+                            // read or its fallback.
+                            let nullable =
+                                matches!(parameter.ty.omission_removed(), Type::Nullable(_));
+                            if nullable && !matches!(read, Type::Nullable(_)) {
+                                read = Type::Nullable(Box::new(read));
+                            }
                             local = read.clone();
                             let Some(cpp) = self.written_type(&read, at) else {
                                 return "0".to_string();
@@ -212,7 +222,7 @@ impl Emitter<'_> {
                                     }
                                     written
                                 }
-                                LeftOut::Null => "std::nullopt".to_string(),
+                                LeftOut::Null => "::std::nullopt".to_string(),
                             };
                             // "one that is valid and not all valid binds no
                             // fallback, its default included, and the
@@ -239,7 +249,10 @@ impl Emitter<'_> {
                     let Some(cpp) = self.written_type(&ty, at) else {
                         return "0".to_string();
                     };
-                    parameters.push(format!("::hgraph::Scalar<{label}, {cpp}> {name}"));
+                    // FN-1: as hgraph holds a configuration
+                    // (`configuration`).
+                    let held = super::configuration::held(program, &ty, &cpp);
+                    parameters.push(format!("::hgraph::Scalar<{label}, {held}> {name}"));
                     roles.push(Role::Config);
                     // The configuration is given as the type its scalar
                     // is, a literal among it.
@@ -248,7 +261,12 @@ impl Emitter<'_> {
                         None => self.expression(scope, &argument.value),
                     };
                     unique |= super::nodes::holds_f64(program, &ty, 0);
-                    wired.push(format!("static_cast<{cpp}>({configured})"));
+                    wired.push(super::configuration::given(
+                        program,
+                        &ty,
+                        &cpp,
+                        &format!("static_cast<{cpp}>({configured})"),
+                    ));
                     labels.push(Some(parameter.name.clone()));
                     (ty.clone(), ty)
                 }
@@ -336,10 +354,16 @@ impl Emitter<'_> {
             };
             let label = names::string(&parameter.name);
             let name = identifier(&parameter.name);
-            parameters.push(format!("::hgraph::Scalar<{label}, {cpp}> {name}"));
+            let held = super::configuration::held(program, &ty, &cpp);
+            parameters.push(format!("::hgraph::Scalar<{label}, {held}> {name}"));
             roles.push(Role::Config);
             unique |= super::nodes::holds_f64(program, &ty, 0);
-            wired.push(format!("static_cast<{cpp}>({configured})"));
+            wired.push(super::configuration::given(
+                program,
+                &ty,
+                &cpp,
+                &format!("static_cast<{cpp}>({configured})"),
+            ));
             labels.push(Some(parameter.name.clone()));
             synthetic.push(Argument {
                 parameter: Some(index),
@@ -519,12 +543,18 @@ impl Emitter<'_> {
             let parameter = &signature.parameters[index];
             let name = names::temporary("input", self.temporary());
             if argument.value.is_connection() {
-                let ty = argument.value.ty.clone();
+                // TYPE-14: a connection of T given to a temporal parameter
+                // written `T?` is widened where the boundary is given it
+                // (`graphs::widened_from`); a lifted call's input binds it.
+                let ty = match super::graphs::widened_from(&argument.value.ty, &parameter.ty) {
+                    Some(_) if !lifted => parameter.ty.clone(),
+                    _ => argument.value.ty.clone(),
+                };
                 let Some(schema) = self.temporal_schema(&ty, argument.value.at) else {
                     return "0".to_string();
                 };
                 parameters.push(format!("[[maybe_unused]] ::hgraph::Port<{schema}> {name}"));
-                outer.push(self.wiring_form(scope, &argument.value));
+                outer.push(self.connection(scope, &argument.value, &ty));
                 given.push(Given {
                     position,
                     written: name,
@@ -563,14 +593,21 @@ impl Emitter<'_> {
                     return "0".to_string();
                 };
                 let label = names::string(&parameter.name);
+                // FN-1: as hgraph holds a configuration (`configuration`).
+                let held = super::configuration::held(program, &ty, &cpp);
                 parameters.push(format!(
-                    "[[maybe_unused]] ::hgraph::Scalar<{label}, {cpp}> {name}"
+                    "[[maybe_unused]] ::hgraph::Scalar<{label}, {held}> {name}"
                 ));
                 let configured = self.expression(scope, &argument.value);
-                outer.push(format!("static_cast<{cpp}>({configured})"));
+                outer.push(super::configuration::given(
+                    program,
+                    &ty,
+                    &cpp,
+                    &format!("static_cast<{cpp}>({configured})"),
+                ));
                 given.push(Given {
                     position,
-                    written: format!("{name}.value()"),
+                    written: super::configuration::read(program, &ty, &name),
                     input: None,
                 });
             }
@@ -754,6 +791,22 @@ impl Family for Lifting {
             "::{}::constant<{written}>({WIRING}, {value})",
             runtime::NAMESPACE
         ))
+    }
+
+    // TST-5: a cell is "written as a `return` is": an `error` and a
+    // `result` publish whole, and a cell is the value, `ok(2)` or
+    // `err(error(message: "m"))`, compared by its own equality, which
+    // excludes an error's provenance (ERR-2, ERR-4).
+    fn cell(
+        &self,
+        emitter: &mut Emitter<'_>,
+        scope: &mut Scope<'_>,
+        ty: &Type,
+        value: &Expr,
+    ) -> Option<String> {
+        let written = atomic(emitter, ty)?;
+        let value = emitter.expression(scope, value);
+        Some(format!("{written}{{{value}}}"))
     }
 
     // ERR-7: "What it gives is bound with `let`": the boundary's port,

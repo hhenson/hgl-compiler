@@ -6,6 +6,7 @@
 #include "core_nodes.h"
 
 #include <hglrt/list_endpoints.h>
+#include <hglrt/structs.h>
 
 #include <doctest/doctest.h>
 #include <hgraph/types/generated.h>
@@ -418,6 +419,39 @@ TEST_CASE("a child of a fixed list is wired as a connection of its own (TIME-9, 
           }) == "value.index_out_of_range");
 }
 
+/// What a reader of a growing list's position saw: each publication of it.
+std::vector<std::pair<datetime, i64>> positions_seen;
+
+struct PositionReader {
+    static constexpr auto name = "test::position_reader";
+    static void eval(hgraph::In<"position", hgraph::TS<i64>, hgraph::InputValidity::Unchecked> position,
+                     hgraph::DateTime now) {
+        if (hglrt::fn_modified(position)) {
+            positions_seen.emplace_back(now, hglrt::checked_value(position));
+        }
+    }
+};
+
+TEST_CASE("a position of a growing list is wired before the list holds it (TIME-1, TIME-9)") {
+    positions_seen.clear();
+    // [], [1, 2], [1], [1, 2], then position 3 updated: the reader of
+    // position 1 sees its publications, and nothing while the list does not
+    // reach it.
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        const hgraph::Port<Growing> values =
+            hgraph::wire<WriteReadings>(wiring, replayed(wiring, Dense<i64>{5, 1, 4, 1, 2}));
+        hgraph::wire<PositionReader>(wiring, hglrt::element_port(values, 1));
+    });
+    CHECK(positions_seen == std::vector<std::pair<datetime, i64>>{{start + 1us, 2}, {start + 3us, 2}});
+    CHECK(code_raised([] {
+              (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+                  const hgraph::Port<Growing> values =
+                      hgraph::wire<WriteReadings>(wiring, replayed(wiring, Dense<i64>{1}));
+                  (void)hglrt::element_port(values, -1);
+              });
+          }) == "value.index_out_of_range");
+}
+
 struct Yields {
     static constexpr auto name = "test::yields";
     static void eval(hgraph::In<"step", hgraph::TS<i64>> step, hgraph::Out<Growing> out_) {
@@ -460,6 +494,26 @@ TEST_CASE("a growing list of bool is published and read whole (TIME-7, TIME-1)")
         hgraph::wire<ReadFlags>(wiring, hgraph::wire<Flags>(wiring, replayed(wiring, Dense<i64>{0, 1})));
     });
     CHECK(flags_read == std::vector<list<bool>>{list<bool>{true, false}, list<bool>{true, true, false}});
+}
+
+TEST_CASE("a trace of a list of lists replays a whole cell from what each position held (TST-9)") {
+    using Rows = list<list<i64>>;
+    using Inner = list_delta<list<i64>>;
+    using Cell = hglrt::testing::Cell<Rows>;
+    const auto items = hglrt::testing::replay_items(
+        Dense<Rows>{Cell{hglrt::testing::Whole<Rows>{Rows{{1}, {2, 3}}}},
+                    Cell{list_delta<Rows>{.updated = {{1, Inner{.updated = {{2, 9}}}}}}},
+                    Cell{hglrt::testing::Whole<Rows>{Rows{{4}}}}},
+        start);
+    REQUIRE(items.size() == 3);
+    CHECK(std::get<1>(items[0]) ==
+          list_delta<Rows>{.updated = {{0, Inner{.updated = {{0, 1}}, .size_modified = 1}},
+                                       {1, Inner{.updated = {{0, 2}, {1, 3}}, .size_modified = 2}}},
+                           .size_modified = 2});
+    // The third cell is published from what each position then held: the
+    // first row keeps its size, and the second, which grew to three, goes.
+    CHECK(std::get<1>(items[2]) ==
+          list_delta<Rows>{.updated = {{0, Inner{.updated = {{0, 4}}}}}, .removed = {1}, .size_modified = 1});
 }
 
 TEST_CASE("a source's yield publishes a whole list or a delta of one (SOURCE-1, TIME-7)") {
@@ -529,6 +583,83 @@ TEST_CASE("an eval keeps the value a list result holds for a cell written whole 
     CHECK(hglrt::testing::same(
         recorded, Dense<std::array<i64, 2>>{Cell{D{.updated = {{0, 3}}}},
                                             Cell{hglrt::testing::Whole<std::array<i64, 2>>{{3, 8}}}}));
+}
+
+// ---- A list of tuples: TYPE-9, each part through its own form -----------
+
+using Named = std::tuple<i64, hglrt::str>;
+using NamedTS = hgraph::UnNamedTSB<hgraph::Field<"0", hgraph::TS<i64>>, hgraph::Field<"1", hgraph::TS<hglrt::str>>>;
+using Names = hgraph::TSL<NamedTS>;
+
+std::vector<std::optional<list<Named>>> names_read;
+std::vector<list_delta<list<Named>>> names_changed;
+
+/// `fn names(step: i64) -> list<tuple<i64, str>>`: a list published whole,
+/// then a delta that adds a tuple, then one that renames the first.
+struct NamesWritten {
+    static constexpr auto name = "test::names_written";
+    static void eval(hgraph::In<"step", hgraph::TS<i64>> step, hgraph::Out<Names> out_) {
+        if (step.value() == 0) {
+            hglrt::publish(out_, list<Named>{Named{1, "a"}});
+        } else if (step.value() == 1) {
+            hglrt::publish(out_, list_delta<list<Named>>{.updated = {{1, {2, hglrt::str{"b"}}}}});
+        } else {
+            hglrt::publish(out_, list_delta<list<Named>>{.updated = {{0, {std::nullopt, hglrt::str{"c"}}}}});
+        }
+    }
+};
+
+struct NamesRead {
+    static constexpr auto name = "test::names_read";
+    static void eval(hgraph::In<"names", Names> names) {
+        const hglrt::result<list<Named>> read = hglrt::checked_whole_result(names);
+        names_read.push_back(read.has_value() ? std::optional{*read} : std::nullopt);
+        names_changed.push_back(hglrt::fn_delta_value(names));
+    }
+};
+
+TEST_CASE("a list of tuples is published, read and read as its delta through the tuple's form (TYPE-9)") {
+    names_read.clear();
+    names_changed.clear();
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        hgraph::wire<NamesRead>(wiring, hgraph::wire<NamesWritten>(wiring, replayed(wiring, Dense<i64>{0, 1, 2})));
+    });
+    CHECK(names_read == std::vector<std::optional<list<Named>>>{list<Named>{Named{1, "a"}},
+                                                                list<Named>{Named{1, "a"}, Named{2, "b"}},
+                                                                list<Named>{Named{1, "c"}, Named{2, "b"}}});
+    using D = list_delta<list<Named>>;
+    CHECK(names_changed == std::vector<D>{D{.updated = {{0, {1, hglrt::str{"a"}}}}, .size_modified = 1},
+                                          D{.updated = {{1, {2, hglrt::str{"b"}}}}, .size_modified = 2},
+                                          D{.updated = {{0, {std::nullopt, hglrt::str{"c"}}}}}});
+}
+
+/// TST-9: a cell written whole publishes its change from what the cells
+/// before it left, each part followed by its own publisher: a list of tuples
+/// gives each position published and the tail it drops; a tuple's list does
+/// as a list does, and moves its size only where it moves (TYPE-16).
+TEST_CASE("a whole cell publishes each part as its change from what it held (TST-9, TYPE-16)") {
+    using hglrt::testing::detail::Publisher;
+    // A cell of `value` written whole, published by `publisher`.
+    const auto whole = [](auto& publisher, const auto& value) {
+        using V = std::remove_cvref_t<decltype(value)>;
+        return publisher(hglrt::testing::Cell<V>{hglrt::testing::Whole<V>{value}});
+    };
+    Publisher<list<Named>> names;
+    static_cast<void>(whole(names, list<Named>{Named{1, "a"}, Named{2, "b"}}));
+    CHECK(whole(names, list<Named>{Named{1, "a"}}) ==
+          list_delta<list<Named>>{.updated = {{0, {1, hglrt::str{"a"}}}}, .removed = {1}, .size_modified = 1});
+    using Tagged = std::tuple<list<i64>, bool>;
+    Publisher<Tagged> tagged;
+    static_cast<void>(whole(tagged, Tagged{list<i64>{1, 2}, true}));
+    const auto shrunk = whole(tagged, Tagged{list<i64>{3}, false});
+    CHECK(std::get<0>(shrunk) == list_delta<list<i64>>{.updated = {{0, 3}}, .removed = {1}, .size_modified = 1});
+    CHECK(std::get<1>(shrunk) == std::optional<bool>{false});
+    // A list given its own size moves none; a delta followed moves it.
+    CHECK(std::get<0>(whole(tagged, Tagged{list<i64>{4}, false})) == list_delta<list<i64>>{.updated = {{0, 4}}});
+    static_cast<void>(tagged(hglrt::testing::Cell<Tagged>{
+        std::in_place_index<0>, hglrt::delta_t<Tagged>{list_delta<list<i64>>{.updated = {{1, 5}}}, std::nullopt}}));
+    CHECK(std::get<0>(whole(tagged, Tagged{list<i64>{}, false})) ==
+          list_delta<list<i64>>{.removed = {0, 1}, .size_modified = 0});
 }
 
 } // namespace

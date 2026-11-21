@@ -219,7 +219,9 @@ entry_place<K, V> entry(dict<K, V>& book, const std::type_identity_t<K>& key) {
 /// `get<K, T>(store: dict<K, T>, key: K) -> T?` (core's capabilities.hgl,
 /// ERR-6): the value the dictionary has for the key, or null where it has
 /// none. A `T` that is a nullable already gives itself: `T?` of an `i64?`
-/// is an `i64?` (TYPE-14), and a null held is null.
+/// is an `i64?` (TYPE-14), and a null held is null. A nullable's delta is
+/// no nullable (TYPE-16, `nullable_delta`): one held, a published null
+/// among them, is no null.
 template <class K, class T>
 nullable_t<T> get_dict_K__T__K(const dict<K, T>& store, const std::type_identity_t<K>& key) {
     const auto found = store.find(key);
@@ -423,6 +425,8 @@ std::size_t key_hash_of(const T& value) {
         return std::hash<T>{}(value == 0 ? T{0} : value);
     } else if constexpr (detail::is_optional<T>::value) {
         return value.has_value() ? detail::combined(1, key_hash_of(*value)) : 0;
+    } else if constexpr (detail::is_nullable_delta<T>::value) {
+        return detail::combined(2, key_hash_of(value.value));
     } else if constexpr (detail::is_tuple<T>::value) {
         std::size_t seed = std::tuple_size_v<T>;
         std::apply([&](const auto&... part) { ((seed = detail::combined(seed, key_hash_of(part))), ...); },

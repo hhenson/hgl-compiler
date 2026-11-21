@@ -174,6 +174,89 @@ test an_earlier_write_stands {
     assert eval written_values(value: [1, -2, 3]) == [10, -2, 30]
 }
 
+# A trace of `result` and of `error` (TST-5): each cell compared by its own
+# equality, which excludes an error's provenance (ERR-2, ERR-4).
+fn errors_of(value: i64) -> error {
+    let boundary = capture(raised, value)
+    return boundary.error
+}
+
+test results_and_errors_are_traces {
+    assert eval returned(value: [1, -1]) ==
+        [ok(10), err(error(message: "negative input", code: "numeric.out_of_range"))]
+    assert eval errors_of(value: [1, -1]) ==
+        [_, error(message: "negative input", code: "numeric.out_of_range")]
+}
+
+# TYPE-14: "A T is a value where a `T?` is expected": a connection of
+# `i64` given where one of `i64?` is taken, to a lifted call's parameter,
+# to a node's input, and as a graph's result.
+const fn or_zero(a: i64, b: i64?) -> i64 {
+    let x = b
+    if x == null { return a }
+    return a + x
+}
+
+fn or_zero_of(a: i64, b: i64) -> i64 => or_zero(a, b)
+
+fn shown(x: i64?) -> str {
+    when {
+        let v = x
+        if v == null { return "null" }
+        return convert<str>(v)
+    }
+}
+
+fn relayed(x: i64) -> i64 {
+    when { return x }
+}
+
+fn shown_of(x: i64) -> str => shown(relayed(x))
+
+fn shown_five(flag: bool) -> str => shown(5)
+
+fn widened_result(x: i64) -> i64? => x
+
+fn widened_node_result(x: i64) -> i64? {
+    let y = relayed(x)
+    return y
+}
+
+fn produced(command: i64) -> i64 {
+    inject out
+    when {
+        if command != 0 { return command }
+        invalidate(out)
+    }
+}
+
+fn validity(x: i64?) -> bool {
+    when valid([]) { return valid(x) }
+}
+
+fn widened_validity(command: i64) -> bool => validity(produced(command))
+
+fn branch_widened(flag: bool, x: i64, y: i64) -> i64? {
+    if flag { return x }
+    return y
+}
+
+fn captured_shown(x: i64) -> str {
+    let boundary = capture(shown, x)
+    return boundary.value
+}
+
+test a_connection_of_i64_is_one_of_i64_nullable {
+    assert eval or_zero_of(a: [1, _, 2], b: [_, 10, _]) == [1, 11, 12]
+    assert eval shown_of(x: [1, 2]) == ["1", "2"]
+    assert eval shown_five(flag: [true]) == ["5"]
+    assert eval widened_result(x: [1, 2]) == [1, 2]
+    assert eval widened_node_result(x: [1, 2]) == [1, 2]
+    assert eval widened_validity(command: [1, 0, 2]) == [true, false, true]
+    assert eval branch_widened(flag: [true, false], x: [1, _], y: [2, _]) == [1, 2]
+    assert eval captured_shown(x: [3]) == ["3"]
+}
+
 test a_raised_error_keeps_its_provenance {
     let first = earliest_start + 1us
     assert eval provenance(value: [8, -1], repeat: [_, _, _, true]) == [_, _, _, first]

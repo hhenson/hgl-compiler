@@ -18,7 +18,9 @@
 #include <hglrt/scalar.h>
 #include <hglrt/values.h>
 
+#include <cstdint>
 #include <source_location>
+#include <string_view>
 
 namespace hglrt {
 
@@ -180,6 +182,34 @@ zoned_datetime add__zoned_datetime_duration(const zoned_datetime& lhs, duration 
 /// instant `rhs` before, in the same zone.
 zoned_datetime sub__zoned_datetime_duration(const zoned_datetime& lhs, duration rhs,
                                             std::source_location where = std::source_location::current());
+
+// ---- Zones (LEX-12) ---------------------------------------------------------
+//
+// LEX-12: "The selected run provider checks exact catalog membership and
+// offset consistency." The provider is hgraph's time-zone provider for the
+// process, as `add__zoned_datetime_duration` reads one. A literal that fails
+// its check fails where it is evaluated, with no code: the catalogue has
+// none for it.
+
+/// `@[Europe/London]`, a `timezone` literal: the zone `name`, where the
+/// provider's catalogue has it.
+hgraph::ZoneId zone_literal(std::string_view name,
+                            std::source_location where = std::source_location::current());
+
+/// `@09:30[Europe/London]`, a `zoned_time` literal: the time `at` in the zone
+/// `name`, checked as `zone_literal` checks it. It is on no date, so it has
+/// no offset to check.
+hgraph::ZonedTime zoned_time_literal(time at, std::string_view name,
+                                     std::source_location where = std::source_location::current());
+
+/// `@2026-09-03T09:30+01:00[Europe/London]`, a `zoned_datetime` literal: the
+/// instant `at`, written `offset_seconds` east of UTC, in the zone `name`,
+/// checked as `zone_literal` checks it. The offset written is the zone's own
+/// at the instant, or the literal fails: "A time a change of offset repeats
+/// is one instant at each of its two offsets, and a time it skips is at
+/// none", as the hgraph target checks it.
+zoned_datetime zoned_datetime_literal(datetime at, std::int32_t offset_seconds, std::string_view name,
+                                      std::source_location where = std::source_location::current());
 
 /// `eq_(lhs: zoned_datetime, rhs: zoned_datetime, utc: bool = false) -> bool`
 /// (OPS-2, TYPE-2): "equal when their instants and their zone names both

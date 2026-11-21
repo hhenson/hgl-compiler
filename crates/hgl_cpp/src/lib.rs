@@ -231,9 +231,15 @@ pub fn application_path(path: &str) -> String {
 /// files are then no whole program; each test says whether it can still
 /// be run. Core is written as any module is; what core holds that the
 /// target does not write is reported only where the program reaches it.
-pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
-    transpile_for(program, &runtime::provides, diagnostics)
+pub fn transpile(program: &Program, file_name: FileName, diagnostics: &mut Diagnostics) -> Output {
+    transpile_for(program, &runtime::provides, Some(file_name), diagnostics)
 }
+
+/// The name of the file a place of the program is in, as the driver
+/// prints a place: what the generated code's `#line` directives name, so
+/// that a failure the C++ raises names the HGL file and line it was
+/// written at (`emit`, `Emitter::line_directive`).
+pub type FileName<'a> = &'a dyn Fn(Location) -> String;
 
 /// [`transpile`], for a runtime library that defines the native
 /// functions for which `provides` is true, each by the name it gives
@@ -241,10 +247,13 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
 /// not define is a form not written yet. The library `hgl` carries
 /// defines those [`runtime::provides`] says it does; a test of the
 /// emitter names its own, so that what it checks does not hang on the
-/// library's progress.
+/// library's progress. Where `file_name` is given, each statement the
+/// target writes outside a test is preceded by a `#line` directive of its
+/// HGL file and line; with none, by nothing.
 pub fn transpile_for(
     program: &Program,
     provides: &dyn Fn(&str) -> bool,
+    file_name: Option<FileName>,
     diagnostics: &mut Diagnostics,
 ) -> Output {
     let core = program.core();
@@ -255,9 +264,16 @@ pub fn transpile_for(
     let written: Vec<emit::Written> = (0..program.modules.len())
         .map(|index| {
             if Some(index) == core {
-                emit::module(program, index, provides, &instances, &mut unwritten_in_core)
+                emit::module(
+                    program,
+                    index,
+                    provides,
+                    file_name,
+                    &instances,
+                    &mut unwritten_in_core,
+                )
             } else {
-                emit::module(program, index, provides, &instances, diagnostics)
+                emit::module(program, index, provides, file_name, &instances, diagnostics)
             }
         })
         .collect();

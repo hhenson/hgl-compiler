@@ -1,0 +1,14 @@
+application demo.store.failing
+
+use demo.store::{quotes, Quote}
+
+const fn bad() -> i64 {
+    let l: list<i64> = [1]
+    return l[3]
+}
+
+# UNIT-14: a store statement whose value fails, before the run.
+inject global_state
+put(global_state, "base", Quote(bid: bad(), ask: 1))
+
+eval quotes(values: [1, 2])

@@ -277,3 +277,42 @@ TEST_CASE("zoned datetimes are equal by instant and zone, or as UTC by instant (
     const hglrt::zoned_datetime later = hglrt::add__zoned_datetime_duration(london, 1us);
     CHECK_FALSE(hglrt::eq__zoned_datetime_zoned_datetime_bool(london, later, true));
 }
+
+namespace {
+/// The message of the HGL failure `call` raises, and whether it has a code.
+template <class Call>
+std::optional<std::string> uncoded_message(Call&& call) {
+    try {
+        call();
+    } catch (const hglrt::Failure& failure) {
+        CHECK_FALSE(failure.error().code.has_value());
+        return failure.error().message;
+    }
+    return std::nullopt;
+}
+} // namespace
+
+TEST_CASE("a zone literal is checked by the provider's catalogue, and its offset by the zone (LEX-12)") {
+    const std::string absent = "the zone `Nowhere/Atlantis` is not in the run provider's zone catalogue";
+    CHECK(uncoded_message([] { (void)hglrt::zone_literal("Nowhere/Atlantis"); }) == absent);
+    CHECK(uncoded_message([] {
+              (void)hglrt::zoned_time_literal(hgraph::time_of_day(9, 30), "Nowhere/Atlantis");
+          }) == absent);
+    const hglrt::datetime instant = sys_days{year{2026} / 9 / 3} + 8h + 30min;
+    CHECK(uncoded_message([&] { (void)hglrt::zoned_datetime_literal(instant, 3600, "Nowhere/Atlantis"); }) ==
+          absent);
+    // `@2026-09-03T09:30+01:00[Europe/London]` is the zone's own offset;
+    // `@2026-09-03T08:30+00:00[Europe/London]` is not.
+    const hglrt::zoned_datetime london = hglrt::zoned_datetime_literal(instant, 3600, "Europe/London");
+    CHECK(london ==
+          hgraph::at_zone(instant, hgraph::ZoneId{"Europe/London"}, *hgraph::make_time_zone_provider()));
+    CHECK(uncoded_message([&] { (void)hglrt::zoned_datetime_literal(instant, 0, "Europe/London"); }) ==
+          "the offset of `2026-09-03T08:30:00` is not the offset of the zone `Europe/London` at that time");
+    CHECK(uncoded_message([&] { (void)hglrt::zoned_datetime_literal(instant + 7us, 0, "Europe/London"); }) ==
+          "the offset of `2026-09-03T08:30:00.000007` is not the offset of the zone `Europe/London` at that "
+          "time");
+    CHECK(hglrt::zone_literal("Europe/London") == hgraph::ZoneId{"Europe/London"});
+    // An alias the catalogue has is a zone of its own name.
+    CHECK(hglrt::zone_literal("GB") == hgraph::ZoneId{"GB"});
+    CHECK(hglrt::zoned_time_literal(hgraph::time_of_day(9, 30), "UTC").zone() == hgraph::ZoneId{"UTC"});
+}

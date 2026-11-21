@@ -833,7 +833,9 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
             )
         }
         Target::Cpp => {
-            let files = hgl_cpp::transpile(&program, &mut diagnostics).files;
+            let file_name =
+                |at: hgl_diagnostics::Location| sources.file(at.file).name().to_string();
+            let files = hgl_cpp::transpile(&program, &file_name, &mut diagnostics).files;
             (
                 hgl_cpp::TARGET,
                 Box::new(move |out| cpp::write(&files, out).map(|()| files.len())),

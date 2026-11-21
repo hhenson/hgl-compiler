@@ -115,8 +115,8 @@ struct impl_
         }
         ::hgraph::NodeBuilder builder_;
         builder_.implementation<lifted_00_>();
-        const std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
-        return ::hgraph::Port<::hgraph::TS<::hgraph::Float>>{wiring_, wiring_.add_unique_node(typeid(lifted_00_), std::move(builder_), std::span<const ::hgraph::WiringPortRef>{inputs_}, std::move(scalars_))};
+        const ::std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
+        return ::hgraph::Port<::hgraph::TS<::hgraph::Float>>{wiring_, wiring_.add_unique_node(typeid(lifted_00_), ::std::move(builder_), ::std::span<const ::hgraph::WiringPortRef>{inputs_}, ::std::move(scalars_))};
     }();
     }
 };
@@ -246,8 +246,8 @@ struct impl_
     struct state_type_
     {
         ::hglrt::Source<::hgraph::Int> source_{};
-        std::optional<body_type_> frame_{};
-        std::optional<body_type_::iterator> at_{};
+        ::std::optional<body_type_> frame_{};
+        ::std::optional<body_type_::iterator> at_{};
     };
 
     static void start(::hgraph::Scalar<"values", ::hglrt::list<::hgraph::Int>> values, ::hgraph::State<state_type_> state_)
@@ -264,7 +264,7 @@ struct impl_
         state_type_& kept_ = state_.modify();
         ::hglrt::resume(
             kept_.source_, now_, scheduler_,
-            [&kept_]() -> std::optional<yielded_type_> {
+            [&kept_]() -> ::std::optional<yielded_type_> {
                 if (!kept_.at_.has_value())
                 {
                     kept_.at_.emplace(kept_.frame_->begin());
@@ -273,11 +273,11 @@ struct impl_
                 {
                     ++*kept_.at_;
                 }
-                if (*kept_.at_ == std::default_sentinel)
+                if (*kept_.at_ == ::std::default_sentinel)
                 {
-                    return std::nullopt;
+                    return ::std::nullopt;
                 }
-                return std::optional<yielded_type_>{**kept_.at_};
+                return ::std::optional<yielded_type_>{**kept_.at_};
             },
             [&out_](::hgraph::Int value_) { out_.set(value_); });
     }
@@ -525,10 +525,10 @@ void adds_one()
     ::hglrt::testing::statement();
     [&] {
         const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 3}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, 3}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::temporal::m_::w_::add_one(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{2, std::nullopt, 4};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{2, ::std::nullopt, 4};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
     ::hglrt::testing::statement();
@@ -556,15 +556,15 @@ void handlers_run_in_order()
     ::hglrt::testing::statement();
     [&] {
         const auto left_06_ = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{1, std::nullopt, 3};
-        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 2, 4};
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{1, ::std::nullopt, 3};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 2, 4};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::temporal::m_::w_::first_of(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 20, 3};
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 20, 3};
         ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
@@ -606,7 +606,7 @@ void an_outputless_target_runs()
 void a_run_is_bounded()
 {
     ::hglrt::testing::statement();
-    [[maybe_unused]] const ::hgraph::DateTime opening = ::hgraph::DateTime{std::chrono::microseconds{1767605400000000}};
+    [[maybe_unused]] const ::hgraph::DateTime opening = ::hgraph::DateTime{::std::chrono::microseconds{1767605400000000}};
     ::hglrt::testing::statement();
     [[maybe_unused]] const auto seen = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3}, start_));

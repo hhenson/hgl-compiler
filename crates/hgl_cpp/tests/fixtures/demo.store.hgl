@@ -1,0 +1,114 @@
+module demo.store
+
+# What the run's store holds (CAP-6): a struct, a tuple, a dictionary, a set
+# and a delta, put and got back in a node, where a graph is built (FN-9) and
+# by an application (demo.store.*.hgl). Its goldens are under
+# `tests/goldens/demo.store`.
+
+export struct Quote {
+    bid: i64
+    ask: i64
+}
+
+# A struct put in the store and got back in a node's hook (CAP-6).
+fn quoted(value: i64) -> i64 {
+    inject global_state
+    when {
+        put(global_state, "quote", Quote(bid: value, ask: value + 1))
+        return get<Quote>(global_state, "quote").ask
+    }
+}
+
+# A tuple, a dictionary, a set and a delta.
+fn paired(value: i64) -> i64 {
+    inject global_state
+    when {
+        put(global_state, "pair", (value, "x"))
+        return get<tuple<i64, str>>(global_state, "pair")[0]
+    }
+}
+
+fn booked(value: i64) -> i64 {
+    inject global_state
+    when {
+        let given: dict<str, i64> = ["a": value]
+        put(global_state, "book", given)
+        let book = get<dict<str, i64>>(global_state, "book")
+        let found = get(book, "a")
+        if found == null { return -1 }
+        return found
+    }
+}
+
+fn counted_members(value: i64) -> i64 {
+    inject global_state
+    when {
+        let members: set<i64> = [value, value + 1]
+        put(global_state, "members", members)
+        var n = 0
+        for member in get<set<i64>>(global_state, "members") { n += member }
+        return n
+    }
+}
+
+fn changed(value: i64) -> i64 {
+    inject global_state
+    when {
+        put(global_state, "change", delta<set<i64>>(added: [value]))
+        var n = 0
+        for member in get<delta<set<i64>>>(global_state, "change").added { n += member }
+        return n
+    }
+}
+
+# A struct put and got where a graph is built (FN-9).
+fn bid_plus(x: i64, const extra: i64) -> i64 {
+    when { return x + extra }
+}
+
+fn seeded(x: i64) -> i64 {
+    inject global_state
+    put(global_state, "q", Quote(bid: 5, ask: 6))
+    let q = get<Quote>(global_state, "q")
+    return bid_plus(x, q.bid)
+}
+
+# A graph that reads the store where it is built: one whose store has no
+# "by" fails there.
+export fn read_at_build(const values: list<i64>) -> i64 {
+    inject global_state
+    let by = get<i64>(global_state, "by")
+    return bid_plus(ticks(values), by)
+}
+
+# An entry that reads a struct an application put (UNIT-14).
+export fn ticks(const values: list<i64>) -> i64 {
+    for value in values {
+        yield 1s: value
+    }
+}
+
+fn based(value: i64) -> Quote {
+    inject global_state
+    when {
+        let q = get<Quote>(global_state, "base")
+        return Quote(bid: q.bid + value, ask: q.ask + value)
+    }
+}
+
+export fn quotes(const values: list<i64>) -> Quote => based(ticks(values))
+
+test a_struct_is_got_back_in_a_node {
+    assert eval quoted(value: [1, 2]) == [2, 3]
+}
+
+test a_tuple_a_dictionary_a_set_and_a_delta_are_got_back {
+    assert eval paired(value: [1, 2]) == [1, 2]
+    assert eval booked(value: [1, 2]) == [1, 2]
+    assert eval counted_members(value: [1, 2]) == [3, 5]
+    assert eval changed(value: [1, 2]) == [1, 2]
+}
+
+test a_struct_is_got_back_where_a_graph_is_built {
+    assert eval seeded(x: [1]) == [6]
+}

@@ -11,6 +11,7 @@
 #undef a_window_is_recorded_and_replayed
 #undef a_window_of_a_duration_falls_back_and_stays_valid
 #undef arrival
+#undef arrived_twice
 #undef checked_total
 #undef code
 #undef collect
@@ -19,10 +20,14 @@
 #undef collect_spanned
 #undef core
 #undef demo
+#undef departed_by_two
+#undef departed_twice
 #undef departure
 #undef early_total
 #undef error
 #undef held
+#undef held_by_two
+#undef held_twice
 #undef lifted_total
 #undef observe_arrival
 #undef observe_checked
@@ -36,6 +41,9 @@
 #undef observe_total
 #undef observe_validity
 #undef outcome
+#undef pair_arrival
+#undef pair_departure
+#undef pair_held
 #undef probe
 #undef read_or_code
 #undef readiness
@@ -50,14 +58,18 @@
 #undef replay
 #undef spanned_readiness
 #undef sum
+#undef the_last_write_of_a_cycle_arrives
 #undef total
 #undef total_at_tick
 #undef total_when_ready
 #undef total_when_valid
+#undef two_handlers_write_one_arrival
 #undef valid_before_all_valid
 #undef validity
 #undef value_or_code
 #undef windows
+#undef written_by_two
+#undef written_twice
 
 namespace hgl::demo::windows::m_
 {
@@ -80,7 +92,7 @@ namespace hgl::demo::windows::m_
     {
         return ::hglrt::convert_i64<::hgraph::Str>((*outcome));
     }
-    [[maybe_unused]] const std::optional<::hgraph::Str> code = ((outcome).error()).code;
+    [[maybe_unused]] const ::std::optional<::hgraph::Str> code = ((outcome).error()).code;
     if ((!code.has_value()))
     {
         return ::hgraph::Str{"no code"};
@@ -95,7 +107,7 @@ namespace hgl::demo::windows::m_
     {
         return ::hglrt::convert_i64<::hgraph::Str>(::hgl::demo::windows::m_::total((*outcome)));
     }
-    [[maybe_unused]] const std::optional<::hgraph::Str> code = ((outcome).error()).code;
+    [[maybe_unused]] const ::std::optional<::hgraph::Str> code = ((outcome).error()).code;
     if ((!code.has_value()))
     {
         return ::hgraph::Str{"no code"};
@@ -112,11 +124,17 @@ struct impl_
 
     static void eval([[maybe_unused]] ::hgraph::In<"reading", ::hgraph::TS<::hgraph::Int>> reading, [[maybe_unused]] ::hgraph::Out<::hgraph::TSW<::hgraph::Int, 3, 2>> out_)
     {
-        // when, line 34 (TIME-3)
-        {
-            ::hglrt::window_push(out_, ::hglrt::checked_value(reading));
-            return;
-        }
+        // The cycle's one arrival at the window (TYPE-11, END-5): each write holds
+        // its value in place of the one before, and the last arrives when the
+        // handlers have run.
+        ::hglrt::WindowArrival<decltype(out_)> arrival_{out_};
+        arrival_.run([&] {
+            // when, line 34 (TIME-3)
+            {
+                arrival_.hold(::hglrt::checked_value(reading));
+                return;
+            }
+        });
     }
 };
 }  // namespace n_::collect
@@ -138,11 +156,17 @@ struct impl_
 
     static void eval([[maybe_unused]] ::hgraph::In<"reading", ::hgraph::TS<::hgraph::Int>> reading, [[maybe_unused]] ::hgraph::Out<::hgraph::TSWDuration<::hgraph::Int, 3, 1>> out_)
     {
-        // when, line 39 (TIME-3)
-        {
-            ::hglrt::window_push(out_, ::hglrt::checked_value(reading));
-            return;
-        }
+        // The cycle's one arrival at the window (TYPE-11, END-5): each write holds
+        // its value in place of the one before, and the last arrives when the
+        // handlers have run.
+        ::hglrt::WindowArrival<decltype(out_)> arrival_{out_};
+        arrival_.run([&] {
+            // when, line 39 (TIME-3)
+            {
+                arrival_.hold(::hglrt::checked_value(reading));
+                return;
+            }
+        });
     }
 };
 }  // namespace n_::collect_recent
@@ -164,11 +188,17 @@ struct impl_
 
     static void eval([[maybe_unused]] ::hgraph::In<"reading", ::hgraph::TS<::hgraph::Int>> reading, [[maybe_unused]] ::hgraph::Out<::hgraph::TSWDuration<::hgraph::Int, 3, 0>> out_)
     {
-        // when, line 44 (TIME-3)
-        {
-            ::hglrt::window_push(out_, ::hglrt::checked_value(reading));
-            return;
-        }
+        // The cycle's one arrival at the window (TYPE-11, END-5): each write holds
+        // its value in place of the one before, and the last arrives when the
+        // handlers have run.
+        ::hglrt::WindowArrival<decltype(out_)> arrival_{out_};
+        arrival_.run([&] {
+            // when, line 44 (TIME-3)
+            {
+                arrival_.hold(::hglrt::checked_value(reading));
+                return;
+            }
+        });
     }
 };
 }  // namespace n_::collect_any
@@ -694,11 +724,17 @@ struct impl_
 
     static void eval([[maybe_unused]] ::hgraph::In<"reading", ::hgraph::TS<::hgraph::Int>> reading, [[maybe_unused]] ::hgraph::Out<::hgraph::TSWDuration<::hgraph::Int, 4, 2>> out_)
     {
-        // when, line 164 (TIME-3)
-        {
-            ::hglrt::window_push(out_, ::hglrt::checked_value(reading));
-            return;
-        }
+        // The cycle's one arrival at the window (TYPE-11, END-5): each write holds
+        // its value in place of the one before, and the last arrives when the
+        // handlers have run.
+        ::hglrt::WindowArrival<decltype(out_)> arrival_{out_};
+        arrival_.run([&] {
+            // when, line 164 (TIME-3)
+            {
+                arrival_.hold(::hglrt::checked_value(reading));
+                return;
+            }
+        });
     }
 };
 }  // namespace n_::collect_spanned
@@ -857,6 +893,256 @@ namespace w_
 }
 }  // namespace w_
 
+namespace n_::written_twice
+{
+// written_twice(reading: i64) -> rolling_window<i64, 2> (node), module demo.windows, line 210
+struct impl_
+{
+    static constexpr auto name = "demo.windows::written_twice";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"reading", ::hgraph::TS<::hgraph::Int>> reading, [[maybe_unused]] ::hgraph::Out<::hgraph::TSW<::hgraph::Int, 2, 2>> out_)
+    {
+        // The cycle's one arrival at the window (TYPE-11, END-5): each write holds
+        // its value in place of the one before, and the last arrives when the
+        // handlers have run.
+        ::hglrt::WindowArrival<decltype(out_)> arrival_{out_};
+        arrival_.run([&] {
+            // when, line 212 (TIME-3)
+            {
+                arrival_.hold(::hglrt::checked_value(reading));
+                arrival_.hold(::hglrt::add__i64_i64(::hglrt::checked_value(reading), 10));
+            }
+        });
+    }
+};
+}  // namespace n_::written_twice
+namespace w_
+{
+// written_twice(reading: i64) -> rolling_window<i64, 2> (node), module demo.windows, line 210
+::hgraph::Port<::hgraph::TSW<::hgraph::Int, 2, 2>> written_twice(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+{
+    return ::hgraph::wire<::hgl::demo::windows::m_::n_::written_twice::impl_>(wiring_, reading);
+}
+}  // namespace w_
+
+namespace n_::written_by_two
+{
+// written_by_two(reading: i64) -> rolling_window<i64, 2> (node), module demo.windows, line 219
+struct impl_
+{
+    static constexpr auto name = "demo.windows::written_by_two";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"reading", ::hgraph::TS<::hgraph::Int>> reading, [[maybe_unused]] ::hgraph::Out<::hgraph::TSW<::hgraph::Int, 2, 2>> out_)
+    {
+        // The cycle's one arrival at the window (TYPE-11, END-5): each write holds
+        // its value in place of the one before, and the last arrives when the
+        // handlers have run.
+        ::hglrt::WindowArrival<decltype(out_)> arrival_{out_};
+        arrival_.run([&] {
+            // when, line 221 (TIME-3)
+            {
+                arrival_.hold(::hglrt::checked_value(reading));
+            }
+            // when, line 222 (TIME-3)
+            if (::hglrt::fn_modified(reading))
+            {
+                arrival_.hold(::hglrt::add__i64_i64(::hglrt::checked_value(reading), 10));
+                return;
+            }
+        });
+    }
+};
+}  // namespace n_::written_by_two
+namespace w_
+{
+// written_by_two(reading: i64) -> rolling_window<i64, 2> (node), module demo.windows, line 219
+::hgraph::Port<::hgraph::TSW<::hgraph::Int, 2, 2>> written_by_two(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+{
+    return ::hgraph::wire<::hgl::demo::windows::m_::n_::written_by_two::impl_>(wiring_, reading);
+}
+}  // namespace w_
+
+namespace n_::pair_held
+{
+// pair_held(readings: rolling_window<i64, 2>) -> list<i64> (node), module demo.windows, line 225
+struct impl_
+{
+    static constexpr auto name = "demo.windows::pair_held";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"readings", ::hgraph::TSW<::hgraph::Int, 2, 2>> readings, [[maybe_unused]] ::hgraph::Out<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> out_)
+    {
+        // when, line 226 (TIME-3)
+        if (::hglrt::fn_all_valid(readings))
+        {
+            ::hglrt::publish(out_, ::hglrt::window_value(readings));
+            return;
+        }
+    }
+};
+}  // namespace n_::pair_held
+namespace w_
+{
+// pair_held(readings: rolling_window<i64, 2>) -> list<i64> (node), module demo.windows, line 225
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> pair_held(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSW<::hgraph::Int, 2, 2>> readings)
+{
+    return ::hgraph::wire<::hgl::demo::windows::m_::n_::pair_held::impl_>(wiring_, readings);
+}
+}  // namespace w_
+
+namespace n_::pair_arrival
+{
+// pair_arrival(readings: rolling_window<i64, 2>) -> i64 (node), module demo.windows, line 229
+struct impl_
+{
+    static constexpr auto name = "demo.windows::pair_arrival";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"readings", ::hgraph::TSW<::hgraph::Int, 2, 2>> readings, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
+    {
+        // when, line 230 (TIME-3)
+        if (::hglrt::fn_modified(readings))
+        {
+            out_.set(::hglrt::fn_delta_value(readings));
+            return;
+        }
+    }
+};
+}  // namespace n_::pair_arrival
+namespace w_
+{
+// pair_arrival(readings: rolling_window<i64, 2>) -> i64 (node), module demo.windows, line 229
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> pair_arrival(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSW<::hgraph::Int, 2, 2>> readings)
+{
+    return ::hgraph::wire<::hgl::demo::windows::m_::n_::pair_arrival::impl_>(wiring_, readings);
+}
+}  // namespace w_
+
+namespace n_::pair_departure
+{
+// pair_departure(readings: rolling_window<i64, 2>) -> str (node), module demo.windows, line 233
+struct impl_
+{
+    static constexpr auto name = "demo.windows::pair_departure";
+
+    static void eval([[maybe_unused]] ::hgraph::In<"readings", ::hgraph::TSW<::hgraph::Int, 2, 2>> readings, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_)
+    {
+        // when, line 234 (TIME-3)
+        if (::hglrt::fn_modified(readings))
+        {
+            out_.set(::hgl::demo::windows::m_::value_or_code(::hglrt::fn_removed_value_checked(readings)));
+            return;
+        }
+    }
+};
+}  // namespace n_::pair_departure
+namespace w_
+{
+// pair_departure(readings: rolling_window<i64, 2>) -> str (node), module demo.windows, line 233
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> pair_departure(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSW<::hgraph::Int, 2, 2>> readings)
+{
+    return ::hgraph::wire<::hgl::demo::windows::m_::n_::pair_departure::impl_>(wiring_, readings);
+}
+}  // namespace w_
+
+namespace n_::held_twice
+{
+// held_twice(reading: i64) -> list<i64> (graph), module demo.windows, line 237
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+    {
+        return ::hgl::demo::windows::m_::w_::pair_held(wiring_, ::hgl::demo::windows::m_::w_::written_twice(wiring_, reading));
+    }
+};
+}  // namespace n_::held_twice
+namespace w_
+{
+// held_twice(reading: i64) -> list<i64> (graph), module demo.windows, line 237
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> held_twice(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+{
+    return ::hgl::demo::windows::m_::n_::held_twice::impl_::compose(wiring_, reading);
+}
+}  // namespace w_
+
+namespace n_::arrived_twice
+{
+// arrived_twice(reading: i64) -> i64 (graph), module demo.windows, line 239
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+    {
+        return ::hgl::demo::windows::m_::w_::pair_arrival(wiring_, ::hgl::demo::windows::m_::w_::written_twice(wiring_, reading));
+    }
+};
+}  // namespace n_::arrived_twice
+namespace w_
+{
+// arrived_twice(reading: i64) -> i64 (graph), module demo.windows, line 239
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> arrived_twice(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+{
+    return ::hgl::demo::windows::m_::n_::arrived_twice::impl_::compose(wiring_, reading);
+}
+}  // namespace w_
+
+namespace n_::departed_twice
+{
+// departed_twice(reading: i64) -> str (graph), module demo.windows, line 241
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Str>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+    {
+        return ::hgl::demo::windows::m_::w_::pair_departure(wiring_, ::hgl::demo::windows::m_::w_::written_twice(wiring_, reading));
+    }
+};
+}  // namespace n_::departed_twice
+namespace w_
+{
+// departed_twice(reading: i64) -> str (graph), module demo.windows, line 241
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> departed_twice(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+{
+    return ::hgl::demo::windows::m_::n_::departed_twice::impl_::compose(wiring_, reading);
+}
+}  // namespace w_
+
+namespace n_::held_by_two
+{
+// held_by_two(reading: i64) -> list<i64> (graph), module demo.windows, line 243
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+    {
+        return ::hgl::demo::windows::m_::w_::pair_held(wiring_, ::hgl::demo::windows::m_::w_::written_by_two(wiring_, reading));
+    }
+};
+}  // namespace n_::held_by_two
+namespace w_
+{
+// held_by_two(reading: i64) -> list<i64> (graph), module demo.windows, line 243
+::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> held_by_two(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+{
+    return ::hgl::demo::windows::m_::n_::held_by_two::impl_::compose(wiring_, reading);
+}
+}  // namespace w_
+
+namespace n_::departed_by_two
+{
+// departed_by_two(reading: i64) -> str (graph), module demo.windows, line 245
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Str>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+    {
+        return ::hgl::demo::windows::m_::w_::pair_departure(wiring_, ::hgl::demo::windows::m_::w_::written_by_two(wiring_, reading));
+    }
+};
+}  // namespace n_::departed_by_two
+namespace w_
+{
+// departed_by_two(reading: i64) -> str (graph), module demo.windows, line 245
+::hgraph::Port<::hgraph::TS<::hgraph::Str>> departed_by_two(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> reading)
+{
+    return ::hgl::demo::windows::m_::n_::departed_by_two::impl_::compose(wiring_, reading);
+}
+}  // namespace w_
+
 }  // namespace hgl::demo::windows::m_
 
 namespace hgl::demo::windows::m_::t_
@@ -868,7 +1154,7 @@ void valid_before_all_valid()
     [&] {
         const auto left_06_ = [&]() {
         const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true};
-        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 1, 2};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 1, 2};
         return ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
@@ -882,7 +1168,7 @@ void valid_before_all_valid()
     [&] {
         const auto left_014_ = [&]() {
         const auto trace_08_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true};
-        const auto trace_010_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 1, 2};
+        const auto trace_010_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 1, 2};
         return ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_08_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_011_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_010_, start_));
@@ -902,7 +1188,7 @@ void a_read_before_all_valid_fails()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, 4}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::windows::m_::w_::ready_total(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 3, 6, 9};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 3, 6, 9};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
     ::hglrt::testing::statement();
@@ -935,7 +1221,7 @@ void a_lifted_helper_waits_for_all_valid()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, 4}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::windows::m_::w_::lifted_total(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 3, 6, 9};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 3, 6, 9};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
 }
@@ -970,34 +1256,34 @@ void a_value_leaves_a_window_of_a_duration()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::windows::m_::w_::observe_recent_readiness(wiring_, input_00_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, true, std::nullopt, std::nullopt, false, false};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, true, ::std::nullopt, ::std::nullopt, false, false};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
     ::hglrt::testing::statement();
     [&] {
         const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, std::nullopt, std::nullopt, 3}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, ::std::nullopt, ::std::nullopt, ::std::nullopt, 3}, start_));
         ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::windows::m_::w_::observe_recent_arrival(wiring_, input_03_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"1"}, ::hgraph::Str{"2"}, std::nullopt, std::nullopt, ::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"3"}, std::nullopt, std::nullopt, std::nullopt, ::hgraph::Str{"value.unset_read"}};
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"1"}, ::hgraph::Str{"2"}, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"3"}, ::std::nullopt, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"value.unset_read"}};
         ::hglrt::testing::expect_same(left_04_, right_05_);
     }();
     ::hglrt::testing::statement();
     [&] {
         const auto left_07_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_06_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, std::nullopt, std::nullopt, 3}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_06_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, ::std::nullopt, ::std::nullopt, ::std::nullopt, 3}, start_));
         ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::windows::m_::w_::observe_recent_departure(wiring_, input_06_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"value.unset_read"}, std::nullopt, std::nullopt, ::hgraph::Str{"1"}, ::hgraph::Str{"2"}, std::nullopt, std::nullopt, std::nullopt, ::hgraph::Str{"3"}};
+        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"value.unset_read"}, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"1"}, ::hgraph::Str{"2"}, ::std::nullopt, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"3"}};
         ::hglrt::testing::expect_same(left_07_, right_08_);
     }();
     ::hglrt::testing::statement();
     [&] {
         const auto left_010_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, std::nullopt, std::nullopt, 3}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, ::std::nullopt, ::std::nullopt, ::std::nullopt, 3}, start_));
         ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::windows::m_::w_::observe_recent_departure(wiring_, input_09_), ::hgraph::Str{::hglrt::testing::run_output});
     }, ::hglrt::testing::Bounds{.length = ::hgraph::TimeDelta{6}});
-        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"value.unset_read"}, std::nullopt, std::nullopt, ::hgraph::Str{"1"}, ::hgraph::Str{"2"}};
+        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"value.unset_read"}, ::std::nullopt, ::std::nullopt, ::hgraph::Str{"1"}, ::hgraph::Str{"2"}};
         ::hglrt::testing::expect_same(left_010_, right_011_);
     }();
 }
@@ -1008,7 +1294,7 @@ void a_window_of_a_duration_falls_back_and_stays_valid()
     [&] {
         const auto left_06_ = [&]() {
         const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, true, true, true, true};
-        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, std::nullopt, std::nullopt, std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, ::std::nullopt, ::std::nullopt, ::std::nullopt};
         return ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
@@ -1024,7 +1310,7 @@ void a_window_of_a_duration_falls_back_and_stays_valid()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_08_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1}, start_));
         ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::windows::m_::w_::observe_recent_validity(wiring_, input_08_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt, std::nullopt, std::nullopt, true};
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, ::std::nullopt, ::std::nullopt, true};
         ::hglrt::testing::expect_same(left_09_, right_010_);
     }();
 }
@@ -1046,7 +1332,7 @@ void a_window_is_recorded_and_replayed()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::windows::m_::w_::observe_total(wiring_, input_03_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 3, std::nullopt, std::nullopt, 2, ::hglrt::neg__i64(1)};
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 3, ::std::nullopt, ::std::nullopt, 2, ::hglrt::neg__i64(1)};
         ::hglrt::testing::expect_same(left_04_, right_05_);
     }();
     ::hglrt::testing::statement();
@@ -1055,8 +1341,103 @@ void a_window_is_recorded_and_replayed()
         const ::hgraph::Port<::hgraph::TSWDuration<::hgraph::Int, 3, 0>> input_06_ = ::hgl::core::m_::w_::i_::replay::of_1rolling_1window_1i64_1_13us_1_10us_1_(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::windows::m_::w_::total_at_tick(wiring_, input_06_), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 3, std::nullopt, std::nullopt, 2, ::hglrt::neg__i64(1)};
+        const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 3, ::std::nullopt, ::std::nullopt, 2, ::hglrt::neg__i64(1)};
         ::hglrt::testing::expect_same(left_07_, right_08_);
+    }();
+}
+
+void the_last_write_of_a_cycle_arrives()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_03_ = ::hglrt::testing::evaluate<::hglrt::list<::hgraph::Int>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3}, start_));
+        struct held_01_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::hglrt::list<::hgraph::Int>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::checked_whole(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::hglrt::list<::hgraph::Int>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_02_ = ::hgl::demo::windows::m_::w_::held_twice(wiring_, input_00_);
+        ::hgraph::wire<held_01_>(wiring_, result_02_);
+        ::hgl::core::m_::w_::i_::record::of_1list_1i64_1_(wiring_, result_02_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_04_ = ::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::std::nullopt, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{11, 12}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{12, 13}}}};
+        ::hglrt::testing::expect_same(left_03_, right_04_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_06_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3}, start_));
+        ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::windows::m_::w_::arrived_twice(wiring_, input_05_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{11, 12, 13};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_09_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_08_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::windows::m_::w_::departed_twice(wiring_, input_08_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_010_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"11"}};
+        ::hglrt::testing::expect_same(left_09_, right_010_);
+    }();
+}
+
+void two_handlers_write_one_arrival()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_03_ = ::hglrt::testing::evaluate<::hglrt::list<::hgraph::Int>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3}, start_));
+        struct held_01_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::hglrt::list<::hgraph::Int>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::checked_whole(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::hglrt::list<::hgraph::Int>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_02_ = ::hgl::demo::windows::m_::w_::held_by_two(wiring_, input_00_);
+        ::hgraph::wire<held_01_>(wiring_, result_02_);
+        ::hgl::core::m_::w_::i_::record::of_1list_1i64_1_(wiring_, result_02_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_04_ = ::hglrt::testing::Dense<::hglrt::list<::hgraph::Int>>{::std::nullopt, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{11, 12}}}, ::hglrt::testing::Cell<::hglrt::list<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::list<::hgraph::Int>>{::hglrt::list<::hgraph::Int>{12, 13}}}};
+        ::hglrt::testing::expect_same(left_03_, right_04_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_06_ = ::hglrt::testing::evaluate<::hgraph::Str>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3}, start_));
+        ::hgl::core::m_::w_::i_::record::of_str(wiring_, ::hgl::demo::windows::m_::w_::departed_by_two(wiring_, input_05_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"value.unset_read"}, ::hgraph::Str{"11"}};
+        ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
 

@@ -256,11 +256,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -310,11 +310,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> count)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{count.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{count.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -365,11 +365,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Float>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Float>> divisor)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{divisor.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Float>>();
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{divisor.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Float>>();
         }
     };
 
@@ -432,11 +432,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> fallback, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> selected)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Str>(::hgraph::Str{"left"})}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Str>(::hgraph::Str{"right"})}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 4> inputs_{left.erased(), right.erased(), fallback.erased(), selected.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_), ::hgraph::SwitchBranchGraph{{}, ::hgraph::compile_subgraph<branch_02_>(wiring_)})}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 4> inputs_{left.erased(), right.erased(), fallback.erased(), selected.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_), ::hgraph::SwitchBranchGraph{{}, ::hgraph::compile_subgraph<branch_02_>(wiring_)})}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -488,11 +488,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> left, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> right)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 2> inputs_{left.erased(), right.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 2> inputs_{left.erased(), right.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -542,11 +542,11 @@ struct impl_
     
         static void wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
-            ::hgraph::compiled::switch_sink_(wiring_, key_.erased(), inputs_, std::move(branches_));
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
+            ::hgraph::compiled::switch_sink_(wiring_, key_.erased(), inputs_, ::std::move(branches_));
         }
     };
 
@@ -597,11 +597,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> z)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 2> inputs_{y.erased(), z.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 2> inputs_{y.erased(), z.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -631,11 +631,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> b, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> y, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> z)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 4> inputs_{b.erased(), x.erased(), y.erased(), z.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 4> inputs_{b.erased(), x.erased(), y.erased(), z.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -707,11 +707,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Int factor, [[maybe_unused]] ::hgraph::Int offset)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_, factor, offset)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_, factor, offset)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -763,11 +763,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> chosen)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 2> inputs_{price.erased(), chosen.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 2> inputs_{price.erased(), chosen.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -845,11 +845,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> price)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{price.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{price.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -924,11 +924,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Int>(1)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Int>(2)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_), ::hgraph::SwitchBranchGraph{{}, ::hgraph::compile_subgraph<branch_02_>(wiring_)})}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_), ::hgraph::SwitchBranchGraph{{}, ::hgraph::compile_subgraph<branch_02_>(wiring_)})}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -978,11 +978,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -1054,11 +1054,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -1149,11 +1149,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -1237,11 +1237,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> out)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Str>(::hgraph::Str{"a"})}, ::hgraph::compile_subgraph<branch_00_>(wiring_)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Str>(::hgraph::Str{"b"})}, ::hgraph::compile_subgraph<branch_01_>(wiring_)});
-            const std::array<::hgraph::WiringPortRef, 2> inputs_{value.erased(), out.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_), ::hgraph::SwitchBranchGraph{{}, ::hgraph::compile_subgraph<branch_02_>(wiring_), true})}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 2> inputs_{value.erased(), out.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_), ::hgraph::SwitchBranchGraph{{}, ::hgraph::compile_subgraph<branch_02_>(wiring_), true})}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -1305,11 +1305,11 @@ struct impl_
     
         static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> wire_(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> key_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> running, [[maybe_unused]] ::hgraph::Int factor)
         {
-            std::vector<::hgraph::SwitchBranchGraph> branches_;
+            ::std::vector<::hgraph::SwitchBranchGraph> branches_;
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(true)}, ::hgraph::compile_subgraph<branch_00_>(wiring_, factor)});
             branches_.push_back(::hgraph::SwitchBranchGraph{::hgraph::Value{static_cast<::hgraph::Bool>(false)}, ::hgraph::compile_subgraph<branch_01_>(wiring_, factor)});
-            const std::array<::hgraph::WiringPortRef, 1> inputs_{running.erased()};
-            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
+            const ::std::array<::hgraph::WiringPortRef, 1> inputs_{running.erased()};
+            return ::hgraph::Port<void>{wiring_, ::hgraph::compiled::switch_(wiring_, key_.erased(), inputs_, ::std::move(branches_))}.as<::hgraph::TS<::hgraph::Int>>();
         }
     };
 
@@ -1432,7 +1432,7 @@ void a_conditional_child_restarts_only_after_leaving_its_branch()
     ::hglrt::testing::statement();
     [&] {
         const auto left_06_ = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, false, std::nullopt, true, std::nullopt};
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, false, ::std::nullopt, true, ::std::nullopt};
         const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 20, 30, 40, 50, 60};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
@@ -1440,7 +1440,7 @@ void a_conditional_child_restarts_only_after_leaving_its_branch()
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::control::m_::w_::count_inside_branch(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, std::nullopt, 1, 2};
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, ::std::nullopt, ::std::nullopt, 1, 2};
         ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
@@ -1451,14 +1451,14 @@ void a_branch_runs_once_with_the_values_held_when_it_starts()
     [&] {
         const auto left_06_ = [&]() {
         const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, true, false, true};
-        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{10, std::nullopt, std::nullopt, std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{10, ::std::nullopt, ::std::nullopt, ::std::nullopt};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::control::m_::w_::count_inside_branch(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, 1, std::nullopt, 1};
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, 1, ::std::nullopt, 1};
         ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
@@ -1468,7 +1468,7 @@ void an_outer_producer_keeps_its_lifetime_across_branches()
     ::hglrt::testing::statement();
     [&] {
         const auto left_06_ = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, false, std::nullopt, true, std::nullopt};
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, false, ::std::nullopt, true, ::std::nullopt};
         const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 20, 30, 40, 50, 60};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
@@ -1476,7 +1476,7 @@ void an_outer_producer_keeps_its_lifetime_across_branches()
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_04_ = input_01_; const auto argument_05_ = input_03_; return ::hgl::demo::control::m_::w_::count_outside_branch(wiring_, argument_04_, argument_05_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, std::nullopt, 5, 6};
+        const auto right_07_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, ::std::nullopt, ::std::nullopt, 5, 6};
         ::hglrt::testing::expect_same(left_06_, right_07_);
     }();
 }
@@ -1504,9 +1504,9 @@ void a_switch_forwards_the_selected_connection()
     ::hglrt::testing::statement();
     [&] {
         const auto left_012_ = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"left"}, ::hgraph::Str{"right"}, std::nullopt, ::hgraph::Str{"other"}, std::nullopt, ::hgraph::Str{"left"}};
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"left"}, ::hgraph::Str{"right"}, ::std::nullopt, ::hgraph::Str{"other"}, ::std::nullopt, ::hgraph::Str{"left"}};
         const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, 4, 5, 6};
-        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 20, std::nullopt, 40, 50, 60};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 20, ::std::nullopt, 40, 50, 60};
         const auto trace_06_ = ::hglrt::testing::Dense<::hgraph::Int>{100, 200, 300, 400, 500, 600};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Str>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_str(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
@@ -1516,7 +1516,7 @@ void a_switch_forwards_the_selected_connection()
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_08_ = input_01_; const auto argument_09_ = input_03_; const auto argument_010_ = input_05_; const auto argument_011_ = input_07_; return ::hgl::demo::control::m_::w_::switch_input(wiring_, argument_08_, argument_09_, argument_010_, argument_011_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_013_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 20, std::nullopt, 400, 500, 6};
+        const auto right_013_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 20, ::std::nullopt, 400, 500, 6};
         ::hglrt::testing::expect_same(left_012_, right_013_);
     }();
 }
@@ -1526,10 +1526,10 @@ void a_probe_reads_a_selected_producer_that_stayed_quiet()
     ::hglrt::testing::statement();
     [&] {
         const auto left_012_ = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, false, std::nullopt, std::nullopt, true, std::nullopt};
-        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{7, std::nullopt, std::nullopt, 9, std::nullopt, std::nullopt};
-        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{20, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt};
-        const auto trace_06_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, std::nullopt, true, std::nullopt, std::nullopt, true};
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, false, ::std::nullopt, ::std::nullopt, true, ::std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{7, ::std::nullopt, ::std::nullopt, 9, ::std::nullopt, ::std::nullopt};
+        const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{20, ::std::nullopt, ::std::nullopt, ::std::nullopt, ::std::nullopt, ::std::nullopt};
+        const auto trace_06_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, true, ::std::nullopt, ::std::nullopt, true};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_02_, start_));
@@ -1538,7 +1538,7 @@ void a_probe_reads_a_selected_producer_that_stayed_quiet()
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_08_ = input_01_; const auto argument_09_ = input_03_; const auto argument_010_ = input_05_; const auto argument_011_ = input_07_; return ::hgl::demo::control::m_::w_::sample_selection(wiring_, argument_08_, argument_09_, argument_010_, argument_011_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_013_ = ::hglrt::testing::Dense<::hgraph::Int>{7, std::nullopt, 20, std::nullopt, std::nullopt, 9};
+        const auto right_013_ = ::hglrt::testing::Dense<::hgraph::Int>{7, ::std::nullopt, 20, ::std::nullopt, ::std::nullopt, 9};
         ::hglrt::testing::expect_same(left_012_, right_013_);
     }();
 }
@@ -1583,7 +1583,7 @@ void an_else_if_chain_selects_in_order()
     [&] {
         const auto left_015_ = [&]() {
         const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, false, false, true};
-        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, false, std::nullopt};
+        const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, true, false, ::std::nullopt};
         const auto trace_04_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, 4};
         const auto trace_06_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 20, 30, 40};
         const auto trace_08_ = ::hglrt::testing::Dense<::hgraph::Int>{100, 200, 300, 400};
@@ -1615,7 +1615,7 @@ void a_branch_reads_ordinary_values()
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, [&] { const auto argument_05_ = input_01_; const auto argument_06_ = input_03_; const ::hgraph::Int argument_07_ = argument_04_; return ::hgl::demo::control::m_::w_::scaled(wiring_, argument_05_, argument_06_, argument_07_); }(), ::hgraph::Str{::hglrt::testing::run_output});
     });
     }();
-        const auto right_09_ = ::hglrt::testing::Dense<::hgraph::Int>{7, 10, std::nullopt, 16};
+        const auto right_09_ = ::hglrt::testing::Dense<::hgraph::Int>{7, 10, ::std::nullopt, 16};
         ::hglrt::testing::expect_same(left_08_, right_09_);
     }();
 }
@@ -1625,7 +1625,7 @@ void a_var_keeps_its_binding_where_the_branch_does_not_assign_it()
     ::hglrt::testing::statement();
     [&] {
         const auto left_06_ = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, true, std::nullopt, false, true};
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{false, true, ::std::nullopt, false, true};
         const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 20, 30, 40, 50};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
@@ -1643,7 +1643,7 @@ void a_var_with_no_value_is_given_one_by_each_branch()
     ::hglrt::testing::statement();
     [&] {
         const auto left_06_ = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, false, std::nullopt};
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, false, ::std::nullopt};
         const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 20, 30};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
@@ -1661,7 +1661,7 @@ void a_switch_returns_from_a_case_or_goes_on()
     ::hglrt::testing::statement();
     [&] {
         const auto left_06_ = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, 3, 2};
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, ::std::nullopt, 3, 2};
         const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{5, 6, 7, 8, 9};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
@@ -1726,7 +1726,7 @@ void a_let_of_a_returning_if_returns_or_goes_on()
     ::hglrt::testing::statement();
     [&] {
         const auto left_06_ = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, false, std::nullopt, true};
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, false, ::std::nullopt, true};
         const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3, 4};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_bool(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
@@ -1744,7 +1744,7 @@ void a_switch_with_no_default_runs_a_case_each_value_has()
     ::hglrt::testing::statement();
     [&] {
         const auto left_06_ = [&]() {
-        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"a"}, ::hgraph::Str{"b"}, std::nullopt};
+        const auto trace_00_ = ::hglrt::testing::Dense<::hgraph::Str>{::hgraph::Str{"a"}, ::hgraph::Str{"b"}, ::std::nullopt};
         const auto trace_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, 3};
         return ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Str>> input_01_ = ::hgl::core::m_::w_::i_::replay::of_str(wiring_, ::hglrt::testing::replay_items(trace_00_, start_));
@@ -1781,19 +1781,19 @@ void a_wiring_time_if_composes_one_branch()
     ::hglrt::testing::statement();
     [&] {
         const auto left_01_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, 20, std::nullopt, 30}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, 20, ::std::nullopt, 30}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::control::m_::w_::sized(wiring_, input_00_, true), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, std::nullopt, 3};
+        const auto right_02_ = ::hglrt::testing::Dense<::hgraph::Int>{1, 2, ::std::nullopt, 3};
         ::hglrt::testing::expect_same(left_01_, right_02_);
     }();
     ::hglrt::testing::statement();
     [&] {
         const auto left_04_ = ::hglrt::testing::evaluate<::hgraph::Int>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
-        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, 20, std::nullopt, 30}, start_));
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_03_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, 20, ::std::nullopt, 30}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::control::m_::w_::sized(wiring_, input_03_, false), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 20, std::nullopt, 30};
+        const auto right_05_ = ::hglrt::testing::Dense<::hgraph::Int>{10, 20, ::std::nullopt, 30};
         ::hglrt::testing::expect_same(left_04_, right_05_);
     }();
     ::hglrt::testing::statement();
@@ -1811,7 +1811,7 @@ void a_wiring_time_if_composes_one_branch()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, 20}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::control::m_::w_::gated_by_config(wiring_, input_09_, false), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Int>{std::nullopt, std::nullopt};
+        const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Int>{::std::nullopt, ::std::nullopt};
         ::hglrt::testing::expect_same(left_010_, right_011_);
     }();
     ::hglrt::testing::statement();
@@ -1829,7 +1829,7 @@ void a_wiring_time_if_composes_one_branch()
         const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_015_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{10, 20}, start_));
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::control::m_::w_::mixed(wiring_, input_015_, false), ::hgraph::Str{::hglrt::testing::run_output});
     });
-        const auto right_017_ = ::hglrt::testing::Dense<::hgraph::Int>{5, std::nullopt};
+        const auto right_017_ = ::hglrt::testing::Dense<::hgraph::Int>{5, ::std::nullopt};
         ::hglrt::testing::expect_same(left_016_, right_017_);
     }();
 }

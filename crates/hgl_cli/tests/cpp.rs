@@ -680,7 +680,40 @@ fn list_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// Forms made of other families' forms on the SDK (`demo.nested`): a list
+/// of tuples, growing and fixed, a tuple of a list, a dictionary of tuples
+/// and a struct with a list field, each relayed, published by a delta and
+/// replayed, each part through its own form (TYPE-9); a child of a list of
+/// tuples and a key's child of a dictionary of tuples as connections of a
+/// graph (TIME-9, EXPR-7); a struct with a list field, and a list of them,
+/// as a node's configuration (FN-1), and one in the run's store (CAP-6).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn nested_forms_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nested");
+    let file = write(
+        &root,
+        "src/demo.nested.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.nested.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 18 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -715,9 +748,43 @@ fn temporal_code_runs_on_the_sdk() {
     );
 }
 
+/// `const` parameters of every kind of ordinary value on the SDK
+/// (`demo.configurations`, FN-1): a set, a dictionary, a tuple, a struct
+/// that holds a list, one that holds a set, one with an optional field,
+/// nullables and lists of them, and a nullable tested
+/// against null (ERR-12), given to sources, nodes, lifted calls and a
+/// branch; and two nodes of one input whose configurations differ, by a
+/// value or by the sign of a zero (hgraph issue 1866), which stay two.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn configurations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("configurations");
+    let file = write(
+        &root,
+        "src/demo.configurations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.configurations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// Windows on the SDK (`demo.windows`): of a tick count and of a
 /// duration, values leaving one by age, their reads checked when they
-/// run, a lifted helper given one, and a window recorded and replayed
+/// run, a lifted helper given one, a window recorded and replayed, and two
+/// writes of a window result in one evaluation, the last of which arrives
 /// (TYPE-11; core's END-9).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -740,7 +807,7 @@ fn windows_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -777,12 +844,13 @@ fn references_run_on_the_sdk() {
 
 /// The timing of nodes and sources on the SDK (`demo.timing`): nodes woken
 /// by a scheduler or an alarm, alone or with an input's tick, `scheduled()`
-/// and `modified([])` read as values, a wake dropped and one that fails
-/// (CAP-4, CAP-5, TIME-3, TIME-8, TIME-9), and sources that read their
-/// clock, keep a `cache` or a `state` and have `start` and `stop`
-/// (SOURCE-1 to SOURCE-4), and runs whose configuration's entries are
-/// held, made by a function or chosen by an `if` (RUN-6). Every test of it
-/// passes.
+/// and `modified([])` read as values, a wake dropped and one that fails,
+/// an alarm's wake kept through an input's tick before it and the earliest
+/// asked for kept (CAP-4, CAP-5, TIME-3, TIME-8, TIME-9), and sources that
+/// read their clock, keep a `cache` or a `state` and have `start` and
+/// `stop` (SOURCE-1 to SOURCE-4), and runs whose configuration's entries
+/// are held, made by a function or chosen by an `if` (RUN-6). Every test of
+/// it passes.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn timing_runs_on_the_sdk() {
@@ -804,7 +872,7 @@ fn timing_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 13 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -924,7 +992,7 @@ fn lifting_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1087,7 +1155,7 @@ fn composite_values_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 14 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 16 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1135,6 +1203,228 @@ fn a_struct_that_holds_another_modules_is_built() {
     );
     assert!(
         stdout.contains("passed   executable  demo.outer::each_names_the_other"),
+        "{stdout}"
+    );
+}
+
+/// UNIT-12: "A member name is not a binding and may match any name", and
+/// GEN-1's parameters are named as any declaration is. A module whose
+/// path has a part named `std`, a struct with a field of its own name,
+/// and generic parameters named as what a struct's C++ declares (a
+/// hash's argument, the list of its fields, a comparison's operands)
+/// and as a field: each is built, and its tests pass.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn names_the_generated_cpp_declares_are_built() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("declared-names");
+    write(
+        &root,
+        "src/demo.named.hgl",
+        concat!(
+            "module demo.named\n",
+            "struct value {\n",
+            "    value: i64\n",
+            "}\n",
+            "test a_field_named_as_its_struct {\n",
+            "    assert value(value: 1).value == 1\n",
+            "    assert delta<value>(value: 2).value == 2\n",
+            "}\n",
+        ),
+    );
+    write(
+        &root,
+        "src/demo.std.hgl",
+        concat!(
+            "module demo.std\n",
+            "struct Point {\n",
+            "    x: f64\n",
+            "    note: str? = null\n",
+            "}\n",
+            "struct Limited<const value: i64> {\n",
+            "    n: i64\n",
+            "}\n",
+            "struct Group<const members: i64> {\n",
+            "    n: i64\n",
+            "}\n",
+            "abstract struct Compared<const lhs: i64> {\n",
+            "    n: i64\n",
+            "}\n",
+            "struct One : Compared<1> {}\n",
+            "abstract struct Capped<const value: i64> {\n",
+            "    n: i64\n",
+            "}\n",
+            "struct Ten : Capped<10> {}\n",
+            "struct Counted<const count: i64> {\n",
+            "    count: i64\n",
+            "}\n",
+            "struct Carton<item> {\n",
+            "    item: item\n",
+            "}\n",
+            "const fn read(capped: Capped<10>) -> i64 => capped.n\n",
+            "const fn same(a: Compared<1>, b: Compared<1>) -> bool => a == b\n",
+            "test each_is_built {\n",
+            "    assert Point(x: 1.0).note == null\n",
+            "    assert Limited<10>(n: 1).n == 1\n",
+            "    assert Group<3>(n: 1).n == 1\n",
+            "    assert same(One(n: 1), One(n: 1))\n",
+            "    assert read(Ten(n: 1)) == 1\n",
+            "    assert Counted<3>(count: 2).count == 2\n",
+            "    assert Carton<i64>(item: 2).item == 2\n",
+            "}\n",
+        ),
+    );
+    let source = argument(&root.join("src"));
+    let output = hgl_in(&["test", &source, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    for test in [
+        "demo.named::a_field_named_as_its_struct",
+        "demo.std::each_is_built",
+    ] {
+        assert!(
+            stdout.contains(&format!("passed   executable  {test}")),
+            "{stdout}"
+        );
+    }
+}
+
+/// TYPE-16: a nullable's delta is a type of its own, which holds what was
+/// published, a null among them. A temporal `i64?` read by its delta,
+/// published by one, and relayed, its trace's cells written as values and
+/// as deltas (TST-5), and a temporal `list<i64?>` relayed and read by its
+/// delta, a published null at a position among it: each runs, and its
+/// tests pass.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_nullables_delta_is_read_and_published() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nullable-deltas");
+    let file = write(
+        &root,
+        "src/demo.deltas.hgl",
+        concat!(
+            "module demo.deltas\n",
+            "fn relay(value: i64?) -> i64? {\n",
+            "    when { return value }\n",
+            "}\n",
+            "fn read(value: i64?) -> i64? {\n",
+            "    when { return delta_value(value) }\n",
+            "}\n",
+            "fn published(step: i64) -> i64? {\n",
+            "    when {\n",
+            "        if step == 0 { return delta<i64?>() }\n",
+            "        if step == 1 { return delta<i64?>(value: 7) }\n",
+            "        return null\n",
+            "    }\n",
+            "}\n",
+            "fn relay_list(values: list<i64?>) -> list<i64?> {\n",
+            "    when { return values }\n",
+            "}\n",
+            "fn read_list(values: list<i64?>) -> list<i64?> {\n",
+            "    when { return delta_value(values) }\n",
+            "}\n",
+            "test a_nullable_publishes_its_delta {\n",
+            "    assert eval relay(value: [1, null, 2]) == [1, null, 2]\n",
+            "    assert eval read(value: [1, null, 2]) == [1, null, 2]\n",
+            "    assert eval published(step: [0, 1, 2]) == [null, 7, null]\n",
+            "    # A cell written as the delta it publishes, a published null among them.\n",
+            "    assert eval relay(value: [delta<i64?>(), delta<i64?>(value: 3), 4]) ==\n",
+            "        [null, delta<i64?>(value: 3), delta<i64?>(value: 4)]\n",
+            "    assert eval read(value: [delta<i64?>(), 5]) == [delta<i64?>(), 5]\n",
+            "}\n",
+            "test a_list_of_nullables_publishes_its_delta {\n",
+            "    assert eval relay_list(values: [[1, null], [null, 2]]) == [[1, null], [null, 2]]\n",
+            "    assert eval read_list(values: [[1, null], delta<list<i64?>>(updated: [0: delta<i64?>()])]) ==\n",
+            "        [[1, null], delta<list<i64?>>(updated: [0: delta<i64?>()])]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// LEX-12: "The selected run provider checks exact catalog membership and
+/// offset consistency." A zone the provider's catalogue does not have,
+/// of a `timezone`, a `zoned_time` and a `zoned_datetime`, and an offset
+/// that is not the zone's at the instant written, fail where the literal
+/// is evaluated, as the hgraph target's do; an offset that is the zone's
+/// does not.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_zone_literal_is_checked_by_the_run_provider() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("zones");
+    let file = write(
+        &root,
+        "src/demo.zones.hgl",
+        concat!(
+            "module demo.zones\n",
+            "test a_zone_not_in_the_catalogue {\n",
+            "    let zone = @[Nowhere/Atlantis]\n",
+            "    assert zone == zone\n",
+            "}\n",
+            "test a_time_in_a_zone_not_in_the_catalogue {\n",
+            "    let opening = @09:30[Nowhere/Atlantis]\n",
+            "    assert opening == opening\n",
+            "}\n",
+            "test an_instant_in_a_zone_not_in_the_catalogue {\n",
+            "    let at = @2026-09-03T09:30+01:00[Nowhere/Atlantis]\n",
+            "    assert at == at\n",
+            "}\n",
+            "test an_offset_the_zone_does_not_have {\n",
+            "    let at = @2026-09-03T08:30+00:00[Europe/London]\n",
+            "    assert at == at\n",
+            "}\n",
+            "test an_offset_the_zone_has {\n",
+            "    let at = @2026-09-03T09:30+01:00[Europe/London]\n",
+            "    assert at == @2026-09-03T09:30+01:00[Europe/London]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let absent = "the zone `Nowhere/Atlantis` is not in the run provider's zone catalogue";
+    for (test, line, message) in [
+        ("a_zone_not_in_the_catalogue", 3, absent),
+        ("a_time_in_a_zone_not_in_the_catalogue", 7, absent),
+        ("an_instant_in_a_zone_not_in_the_catalogue", 11, absent),
+        (
+            "an_offset_the_zone_does_not_have",
+            15,
+            "the offset of `2026-09-03T08:30:00` is not the offset of the zone `Europe/London` at that time",
+        ),
+    ] {
+        let row = format!("FAILED   executable  demo.zones::{test}\n    {file}:{line}:");
+        let at = stdout
+            .find(&row)
+            .unwrap_or_else(|| panic!("{row}\n{stdout}"));
+        let reason = stdout[at + row.len()..].lines().next().unwrap_or_default();
+        assert!(reason.contains(message), "{stdout}");
+    }
+    assert!(
+        stdout.contains("passed   executable  demo.zones::an_offset_the_zone_has"),
         "{stdout}"
     );
 }
@@ -1574,5 +1864,254 @@ fn an_interrupt_of_hgl_alone_stops_a_run_in_real_time() {
     assert!(
         summary.starts_with("ran demo.ticks.endless on cpp until it was stopped: "),
         "{printed}"
+    );
+}
+
+/// CAP-6 on the SDK: every ordinary value put in the run's store is got
+/// back as itself, a struct, a tuple, a dictionary, a set and a delta among
+/// them, in a node, where a graph is built and by an application. A failure
+/// where a graph is built or in an application's store statements names the
+/// HGL file and line it was raised at, which the generated code sets with
+/// `#line`, and no place of the generated C++.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn store_values_and_failure_places_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("store_values");
+    let module = write(
+        &root,
+        "demo.store.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.hgl"),
+    );
+    for (name, application) in [
+        (
+            "demo.store.quotes.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.store.quotes.hgl"),
+        ),
+        (
+            "demo.store.failing.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.store.failing.hgl"),
+        ),
+        (
+            "demo.store.unbuilt.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.store.unbuilt.hgl"),
+        ),
+    ] {
+        write(&root, name, application);
+    }
+    let kept = root.join("build");
+    let output = hgl_in(
+        &[
+            "test",
+            &argument(&root),
+            "--target",
+            "cpp",
+            "--keep",
+            &argument(&kept),
+        ],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+    let run = |application: &str| {
+        hgl_in(
+            &[
+                "run",
+                &argument(&root),
+                "--target",
+                "cpp",
+                "--application",
+                application,
+                "--keep",
+                &argument(&kept),
+            ],
+            &[],
+            &[],
+        )
+    };
+    let output = run("demo.store.quotes");
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:01.000001Z  delta<demo.store::Quote>(bid: 11, ask: 12)\n",
+            "1970-01-01T00:00:02.000001Z  delta<demo.store::Quote>(bid: 12, ask: 13)\n",
+            "ran demo.store.quotes on cpp: 2 publications\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    // The failing `l[3]` is on line 7 of the application's file; the `get`
+    // of a key put nowhere on line 80 of the module's, in the graph.
+    let failing = root.join("demo.store.failing.hgl").display().to_string();
+    for (application, said) in [
+        (
+            "demo.store.failing",
+            format!(
+                "hgl: demo.store.failing failed: value.index_out_of_range: the index 3 is \
+                 outside a list of 1, raised at {failing}:7"
+            ),
+        ),
+        (
+            "demo.store.unbuilt",
+            format!(
+                "hgl: demo.store.unbuilt failed: the global store holds nothing under 'by', \
+                 raised at {module}:80"
+            ),
+        ),
+    ] {
+        let output = run(application);
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = text(&output.stderr);
+        assert_eq!(stderr.lines().last(), Some(said.as_str()), "{stderr}");
+    }
+}
+
+/// A failure names the HGL line of the statement it is raised in, though
+/// the target writes more than one line of C++ for it: `xs[i] = ys[j]`
+/// holds its index and checks its place first (EXPR-2), and its value
+/// fails; and a block's last statement, after such a statement, fails in
+/// turn. Each is raised in a value function an application's store
+/// statement calls (UNIT-14).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn failure_places_of_statements_written_on_several_lines_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("failure_places");
+    write(
+        &root,
+        "demo.places.hgl",
+        concat!(
+            "module demo.places\n",
+            "\n",
+            "export fn ticks(const values: list<i64>) -> i64 {\n",
+            "    for value in values {\n",
+            "        yield 1s: value\n",
+            "    }\n",
+            "}\n",
+        ),
+    );
+    let preludes = write(
+        &root,
+        "demo.places.preludes.hgl",
+        concat!(
+            "application demo.places.preludes\n",
+            "\n",
+            "use demo.places::{ticks}\n",
+            "\n",
+            "const fn moved(i: i64, j: i64) -> i64 {\n",
+            "    var xs = [1, 2]\n",
+            "    let ys = [3, 4]\n",
+            "    xs[i] = ys[j]\n",
+            "    return xs[0]\n",
+            "}\n",
+            "\n",
+            "inject global_state\n",
+            "put(global_state, \"moved\", moved(0, 5))\n",
+            "\n",
+            "eval ticks(values: [1])\n",
+        ),
+    );
+    let block = write(
+        &root,
+        "demo.places.block.hgl",
+        concat!(
+            "application demo.places.block\n",
+            "\n",
+            "use demo.places::{ticks}\n",
+            "\n",
+            "const fn read_after(i: i64, j: i64) -> i64 {\n",
+            "    var xs = [1, 2]\n",
+            "    let ys = [3, 4]\n",
+            "    if i >= 0 {\n",
+            "        xs[i] = ys[j - 5]\n",
+            "        return xs[j]\n",
+            "    }\n",
+            "    return 0\n",
+            "}\n",
+            "\n",
+            "inject global_state\n",
+            "put(global_state, \"read\", read_after(0, 5))\n",
+            "\n",
+            "eval ticks(values: [1])\n",
+        ),
+    );
+    let kept = root.join("build");
+    // The assignment is on line 8 of its file; the block's last statement
+    // on line 10 of its.
+    for (application, file, line) in [
+        ("demo.places.preludes", &preludes, 8),
+        ("demo.places.block", &block, 10),
+    ] {
+        let output = hgl_in(
+            &[
+                "run",
+                &argument(&root),
+                "--target",
+                "cpp",
+                "--application",
+                application,
+                "--keep",
+                &argument(&kept),
+            ],
+            &[],
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+        let stderr = text(&output.stderr);
+        let said = format!(
+            "hgl: {application} failed: value.index_out_of_range: the index 5 is outside a list \
+             of 2, raised at {file}:{line}"
+        );
+        assert_eq!(stderr.lines().last(), Some(said.as_str()), "{stderr}");
+    }
+}
+
+/// A test's failing statement is still named in HGL after a node the test
+/// writes ahead of itself, whose statements set their own HGL lines: an
+/// eval's lifted call of a value function (TST-8).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_tests_failure_is_named_after_a_node_written_ahead_of_it() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("ahead");
+    let file = write(
+        &root,
+        "demo.ahead.hgl",
+        concat!(
+            "module demo.ahead\n",
+            "const fn scale(value: i64) -> i64 => value * 2\n",
+            "test a_failure_after_an_eval_of_a_value_function {\n",
+            "    assert eval scale(value: [1]) == [2]\n",
+            "    assert scale(1) == 3\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains(&format!("    {file}:5:5: the assertion does not hold\n")),
+        "{stdout}"
     );
 }

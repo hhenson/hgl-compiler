@@ -11,6 +11,7 @@
 #undef demo
 #undef first
 #undef first_of
+#undef first_reading
 #undef first_slot
 #undef head
 #undef high
@@ -37,6 +38,9 @@
 #undef reading
 #undef readings
 #undef relay
+#undef relay_rows
+#undef rows
+#undef rows_total
 #undef second_changed
 #undef second_delta
 #undef set_part
@@ -48,7 +52,9 @@
 #undef span_of
 #undef sum
 #undef sum_of_parts
+#undef third_relayed
 #undef total
+#undef total_rows
 #undef trigger
 #undef value
 #undef values
@@ -247,6 +253,33 @@ namespace w_
 {
 // relay(values: list<i64>) -> list<i64> (node), module demo.lists, line 189
 ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> relay(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values);
+}  // namespace w_
+
+namespace w_
+{
+// first_reading(values: list<i64>) -> i64 (graph), module demo.lists, line 248
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> first_reading(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values);
+}  // namespace w_
+
+namespace w_
+{
+// third_relayed(values: list<i64>) -> i64 (graph), module demo.lists, line 250
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> third_relayed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>> values);
+}  // namespace w_
+
+namespace w_
+{
+// relay_rows(rows: list<list<i64>>) -> list<list<i64>> (node), module demo.lists, line 259
+::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> relay_rows(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows);
+}  // namespace w_
+
+// total_rows(rows: list<list<i64>>) -> i64 (`const fn`), module demo.lists, line 263
+::hgraph::Int total_rows(const ::hglrt::list<::hglrt::list<::hgraph::Int>>& rows);
+
+namespace w_
+{
+// rows_total(rows: list<list<i64>>) -> i64 (graph), module demo.lists, line 271
+::hgraph::Port<::hgraph::TS<::hgraph::Int>> rows_total(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSL<::hgraph::TSL<::hgraph::TS<::hgraph::Int>>>> rows);
 }  // namespace w_
 
 }  // namespace hgl::demo::lists::m_
