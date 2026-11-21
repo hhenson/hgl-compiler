@@ -1577,6 +1577,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     // The declarations whose body gives a callee a generic argument it
     // works out from its own generic parameters.
     let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    let mut configured = std::collections::HashSet::new();
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
@@ -1606,6 +1607,11 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 }
             }
             let declared = own((index, position));
+            if !declared.is_empty()
+                && super::operator_defaults::selects_configuration(program, module, position)
+            {
+                configured.insert((index, position));
+            }
             for call in made {
                 // ERR-9: a generic argument the body works out from its
                 // own parameters, `times<(M * 2)>`, may fail where an
@@ -1659,6 +1665,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
         })
         .chain(passed.keys().copied())
         .chain(computing)
+        .chain(configured.iter().copied())
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -1729,6 +1736,15 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             if *count > INSTANCES {
                 past_the_limit(&from, made.callee, program, diagnostics);
                 break;
+            }
+            if configured.contains(&made.callee) {
+                super::operator_defaults::check_instance(
+                    program,
+                    made.callee,
+                    &made.generics,
+                    &made.answers,
+                    diagnostics,
+                );
             }
             let inner = passed.get(&made.callee).map_or(&[][..], Vec::as_slice);
             let selecting = program.modules.get(made.callee.0).map_or(&[][..], |unit| {

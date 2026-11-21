@@ -34,6 +34,46 @@ const fn given() -> bool => pick{fallback: false}(true)",
 }
 
 #[test]
+fn a_default_on_a_required_operator_is_checked_in_the_instance() {
+    // GEN-16, UNIT-8: the candidate only becomes known in the instance.
+    let checked = module(
+        "operator pick<T>{fallback: T = 1}(value: T) -> T
+impl const fn pick{fallback: bool}(value: bool) -> bool => fallback
+impl const fn pick{fallback: i64}(value: i64) -> i64 => fallback
+const fn forward<T>(value: T) -> T requires pick(T) -> T => pick(value)
+const fn given<T>(value: T) -> T requires pick(T) -> T => pick{fallback: value}(value)
+const fn from_integer() -> i64 => forward(5)
+const fn explicit() -> bool => given(false)
+const fn invalid() -> bool => forward(false)",
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:32 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+}
+
+#[test]
+fn a_default_is_checked_when_a_candidate_type_is_specialized() {
+    // GEN-7, UNIT-8: the candidate is known in the body, and its
+    // configuration type becomes concrete in each instance.
+    let checked = module(
+        "operator pick<T>{fallback: T = 1}(value: T) -> T
+impl const fn pick<T>{fallback: T}(value: T) -> T => fallback
+const fn forward<T>(value: T) -> T => pick(value)
+const fn from_integer() -> i64 => forward(5)
+const fn invalid() -> bool => forward(false)",
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:32 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+}
+
+#[test]
 fn a_fixed_public_default_is_also_checked_against_the_candidate() {
     // UNIT-8: the public annotation accepting the default does not
     // make that value fit a different type at the selected slot.

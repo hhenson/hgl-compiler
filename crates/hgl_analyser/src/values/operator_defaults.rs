@@ -13,8 +13,8 @@ use hgl_parser::HasSpan;
 use super::fit::{open, whole};
 use super::{Tables, Typer, lifting};
 use crate::declared::{names_parameter, substitute_within};
-use crate::hir::{self, Callee, Expr, ExprKind, Value};
-use crate::program::Program;
+use crate::hir::{self, Body, Callee, Expr, ExprKind, Value};
+use crate::program::{Module, Program};
 use crate::types::{Argument, Detail, Parameter, Type};
 use crate::{codes, error};
 
@@ -74,6 +74,68 @@ fn check_expression(program: &Program, value: &Expr, diagnostics: &mut Diagnosti
             });
         }
         _ => {}
+    }
+}
+
+/// True where an instance can resolve the selected type of an inherited default.
+pub(super) fn selects_configuration(program: &Program, unit: &Module, declaration: usize) -> bool {
+    let has_default = |operator: (usize, usize)| {
+        matches!(program.modules[operator.0].details.get(operator.1),
+            Some(Detail::Callable(signature)) if signature.parameters.iter().any(configuration_default))
+    };
+    if unit.selecting.get(declaration).is_some_and(|calls| {
+        calls
+            .iter()
+            .any(|call| has_default((call.operator.module, call.operator.declaration)))
+    }) {
+        return true;
+    }
+    let Some(Some(body)) = unit.bodies.get(declaration) else {
+        return false;
+    };
+    fn in_body(body: &Body, has_default: &dyn Fn((usize, usize)) -> bool) -> bool {
+        let mut found = false;
+        hir::walk_statements(&body.statements, &mut |value| {
+            if found {
+                return;
+            }
+            match &value.kind {
+                ExprKind::Call {
+                    callee: Callee::Required { operator, .. } | Callee::Candidate { operator, .. },
+                    ..
+                } => found = has_default(*operator),
+                ExprKind::StaticCallable(callee)
+                    if let Callee::Anonymous(function) = callee.as_ref() =>
+                {
+                    found = in_body(&function.body, has_default);
+                }
+                _ => {}
+            }
+        });
+        found
+    }
+    in_body(body, &has_default)
+}
+
+/// UNIT-8: uses the specialized body's actual candidate and argument slots.
+pub(super) fn check_instance(
+    program: &Program,
+    callee: (usize, usize),
+    generics: &[Argument],
+    requirements: &[hir::Answer],
+    diagnostics: &mut Diagnostics,
+) {
+    let Some((_, body)) = program.instance(callee.0, callee.1, generics, requirements) else {
+        return;
+    };
+    let mut reports = Diagnostics::new();
+    hir::walk_statements(&body.statements, &mut |value| {
+        check_expression(program, value, &mut reports)
+    });
+    for report in reports.as_slice() {
+        if !diagnostics.as_slice().contains(report) {
+            diagnostics.emit(report.clone());
+        }
     }
 }
 
