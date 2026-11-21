@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -28,15 +27,6 @@ constexpr i64 least_i64 = std::numeric_limits<i64>::min();
 
 [[noreturn]] void out_of_range(std::source_location where) {
     fail(codes::out_of_range, "an i64 result is outside the signed 64-bit range", where);
-}
-
-/// `computed`, the result of checked `i64` arithmetic, where it is one, and
-/// otherwise fails at `where` (NUM-2).
-i64 in_range(std::optional<i64> computed, std::source_location where) {
-    if (!computed.has_value()) {
-        out_of_range(where);
-    }
-    return *computed;
 }
 
 // ---- Exact arithmetic for numeric closeness (NUM-4, NUM-5) ---------------
@@ -228,12 +218,10 @@ std::partial_ordering compare_exactly(i64 lhs, f64 rhs) {
     if (std::isnan(rhs)) {
         return std::partial_ordering::unordered;
     }
-    // 2^63, the least f64 above every i64; -2^63 is the least i64.
-    constexpr f64 beyond = 9223372036854775808.0;
-    if (rhs >= beyond) {
+    if (rhs >= detail::i64_upper_bound) {
         return std::partial_ordering::less;
     }
-    if (rhs < -beyond) {
+    if (rhs < -detail::i64_upper_bound) {
         return std::partial_ordering::greater;
     }
     // `rhs` is now in [-2^63, 2^63), so its whole part is an i64.
@@ -257,19 +245,19 @@ std::partial_ordering compare_exactly(i64 lhs, f64 rhs) {
 // ---- i64 arithmetic ------------------------------------------------------
 
 i64 add__i64_i64(i64 lhs, i64 rhs, std::source_location where) {
-    return in_range(detail::checked_add(lhs, rhs), where);
+    return detail::in_range(detail::checked_add(lhs, rhs), out_of_range, where);
 }
 
 i64 sub__i64_i64(i64 lhs, i64 rhs, std::source_location where) {
-    return in_range(detail::checked_sub(lhs, rhs), where);
+    return detail::in_range(detail::checked_sub(lhs, rhs), out_of_range, where);
 }
 
 i64 mul__i64_i64(i64 lhs, i64 rhs, std::source_location where) {
-    return in_range(detail::checked_mul(lhs, rhs), where);
+    return detail::in_range(detail::checked_mul(lhs, rhs), out_of_range, where);
 }
 
 i64 neg__i64(i64 value, std::source_location where) {
-    return in_range(detail::checked_neg(value), where);
+    return detail::in_range(detail::checked_neg(value), out_of_range, where);
 }
 
 // ---- Division --------------------------------------------------------------
