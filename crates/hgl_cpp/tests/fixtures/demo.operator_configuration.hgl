@@ -35,6 +35,21 @@ test a_configuration_default_reads_the_operators_generics {
     assert eval with_temporal_default(value: [1, 2]) == [5, 6]
 }
 
+# GEN-16 requires the ordinary operand. FN-18 configuration occupies
+# distinct slots, and a candidate may have an extra defaulted option.
+operator pick<T>{flag: bool = false}(value: T) -> T
+impl const fn pick{extra: i64 = 100, flag: bool}(value: i64) -> i64 =>
+    if flag { 0 } else { value + extra }
+impl const fn pick{flag: bool}(value: bool) -> bool => if flag { false } else { value }
+
+const fn required_pick<T>(value: T) -> T requires pick(T) -> T => pick(value)
+const fn required_named_pick<T>(value: T) -> T requires pick(T) -> T => pick<T>(value: value)
+
+test a_required_operator_keeps_ordinary_argument_slots {
+    assert required_pick(7) == 107
+    assert required_named_pick(true)
+}
+
 struct Digit { value: i64 }
 
 # A candidate-only configuration option takes a separate brace entry.

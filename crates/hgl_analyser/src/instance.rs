@@ -216,9 +216,48 @@ impl Program {
                     expression.kind = kind;
                 }
             }
-            ExprKind::Call { callee, .. } => self.place_target(callee, instance, functions),
+            ExprKind::Call {
+                callee, arguments, ..
+            } => {
+                let required = matches!(callee, Callee::Required { .. });
+                self.place_target(callee, instance, functions);
+                if required
+                    && let Callee::Candidate {
+                        operator,
+                        module,
+                        declaration,
+                        ..
+                    } = callee
+                {
+                    self.place_required_arguments(*operator, (*module, *declaration), arguments);
+                }
+            }
             ExprKind::StaticCallable(callee) => self.place_target(callee, instance, functions),
             _ => {}
+        }
+    }
+
+    /// A GEN-16 call records public parameter indices. The chosen
+    /// candidate may arrange or add configuration slots (FN-18).
+    fn place_required_arguments(
+        &self,
+        operator: (usize, usize),
+        candidate: (usize, usize),
+        arguments: &mut [crate::hir::Argument],
+    ) {
+        let Some(Detail::Callable(public)) = self.modules[operator.0].details.get(operator.1)
+        else {
+            return;
+        };
+        let Some(Detail::Callable(candidate)) = self.modules[candidate.0].details.get(candidate.1)
+        else {
+            return;
+        };
+        let slots: Vec<_> = public.candidate_parameters(candidate).collect();
+        for argument in arguments {
+            argument.parameter = argument
+                .parameter
+                .and_then(|index| slots.get(index).copied().flatten());
         }
     }
 

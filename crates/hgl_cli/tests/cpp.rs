@@ -2726,6 +2726,7 @@ fn a_tests_failure_is_named_after_a_node_written_ahead_of_it() {
 /// FN-18, GEN-6, EXPR-10, EXPR-13: a named or symbol operator gives
 /// the selected candidate its configuration in written evaluation order.
 /// An inherited default keeps the operator's generic environment (UNIT-7).
+/// A requirement describes the ordinary operands (GEN-16).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn operator_configuration_runs_on_the_sdk() {
@@ -2747,7 +2748,7 @@ fn operator_configuration_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
