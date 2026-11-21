@@ -957,6 +957,34 @@ fn timing_runs_on_the_sdk() {
     );
 }
 
+/// SOURCE-2, GEN-7. A generic yield time uses its instance's duration
+/// or datetime, including when the source is wired from another graph.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_yield_times_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-yield-time");
+    let file = write(
+        &root,
+        "src/demo.generic_yield_time.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.generic_yield_time.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// TIME-7 and SOURCE-1: whole yields replace a list and delta yields
 /// change it. An empty delta on a valid list wakes no reader.
 #[test]

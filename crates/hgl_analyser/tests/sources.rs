@@ -147,6 +147,43 @@ fn a_yield_time_is_a_duration_or_datetime() {
     }
 }
 
+/// SOURCE-2 and GEN-7. The body's requirement must prove that the type
+/// of this yield's time is a duration or a datetime. The body keeps
+/// the parameter so that each instance uses its actual time type.
+#[test]
+fn a_generic_yield_time_needs_a_type_bound() {
+    let checked = module(
+        "fn equal<T>(const t: T) -> i64 requires T == duration { yield t: 1 }\n\
+         fn either<T>(const t: T) -> i64 requires T in {duration, datetime} { yield t: 1 }\n\
+         fn unbounded<T>(const t: T) -> i64 { yield t: 1 }\n\
+         fn mixed<T>(const t: T) -> i64 requires T in {duration, i64} { yield t: 1 }\n\
+         fn other<T, U>(const t: T, const u: U) -> i64 requires U == duration { yield t: 1 }\n\
+         fn alternate<T>(const t: T) -> i64 requires T == duration || T == i64 { yield t: 1 }\n\
+         fn both<T>(const t: T) -> i64 requires T in {duration, i64} && T in {duration, datetime} { yield t: 1 }\n\
+         fn narrowed<T>(const t: T) -> i64 requires T in {duration, i64} && T == duration { yield t: 1 }\n\
+         fn disjoined<T>(const t: T) -> i64 requires T == duration || T == datetime { yield t: 1 }\n\
+         fn guarded<T, U>(const t: T, const u: U) -> i64 requires T == duration || U == datetime { yield t: 1 }\n",
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:44 type/yield.time_type SOURCE-2",
+            "m.hgl:5:70 type/yield.time_type SOURCE-2",
+            "m.hgl:6:78 type/yield.time_type SOURCE-2",
+            "m.hgl:7:79 type/yield.time_type SOURCE-2",
+            "m.hgl:11:97 type/yield.time_type SOURCE-2",
+        ],
+        "{}",
+        checked.report
+    );
+    for name in ["equal", "either", "both", "narrowed", "disjoined"] {
+        let [Stmt::Yield { time, .. }] = body(&checked, name).statements.as_slice() else {
+            panic!("expected a yield");
+        };
+        assert!(matches!(&time.ty, Type::Parameter { name, .. } if name == "T"));
+    }
+}
+
 /// SOURCE-2, ERR-12, ERR-15: the time takes a result's successful
 /// payload and reads a nullable value. Neither form changes where a
 /// failure is raised (ERR-5).

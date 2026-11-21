@@ -1,0 +1,27 @@
+module demo.generic_yield_time
+
+# SOURCE-2 and GEN-7. A source's declared bound admits the generic
+# time. Each instance chooses the concrete relative or absolute form.
+fn delay<T>(const t: T) -> i64 requires T == duration {
+    yield t: 11
+}
+
+fn timed<T>(const t: T) -> i64 requires T in {duration, datetime} {
+    yield t: 21
+}
+
+fn increment(value: i64) -> i64 {
+    when { return value + 1 }
+}
+
+const fn doubled(value: i64) -> i64 => value * 2
+
+# Wire the absolute instance to a node and lift a value call over its output.
+fn after_opening() -> i64 => doubled(increment(timed(t: @2026-11-21T12:00:00.000004Z)))
+
+test generic_yield_time {
+    let opening = @2026-11-21T12:00:00Z
+    assert eval{start: opening} delay(t: 1us) == [_, 11]
+    assert eval{start: opening} timed(t: 2us) == [_, _, 21]
+    assert eval{start: opening} after_opening() == [_, _, _, _, 44]
+}
