@@ -2,7 +2,7 @@
 //! while the graph is built, and the places that take no connection
 //! (FN-3, FN-6, CTRL-14, EXPR-14). Part of the typing pass ([`super`]).
 
-use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 
 use super::Typer;
 use super::control::{no_else_type, while_connection};
@@ -41,39 +41,16 @@ impl<'a> Typer<'a> {
         (given, at): (ValueCategory, Location),
         inside: bool,
     ) {
-        use ValueCategory::{Connection, Unsettled, Value};
-        if self.locals[local].category == Unsettled && !inside {
+        if self.locals[local].category == ValueCategory::Unsettled && !inside {
             self.locals[local].category = given;
         }
-        let held = self.locals[local].category;
         // Declared before the nearest `if` selected at runtime.
         let chosen_at_runtime = self.temporal.is_some_and(|outside| local < outside);
-        let name = self.locals[local].name.clone();
-        let message = match (held, given) {
-            (Value, Connection) => format!(
-                "`{name}` holds an ordinary value, and this is a connection: a `var` keeps \
-                 the category of its first value"
-            ),
-            (Connection, Value) if !inside => format!(
-                "`{name}` is a connection, and this is an ordinary value: a `var` keeps the \
-                 category of its first value"
-            ),
-            (Value, Value) if chosen_at_runtime => format!(
-                "`{name}` holds an ordinary value, and this branch is selected at runtime: \
-                 its value would not be known while the graph is built"
-            ),
-            _ => return,
-        };
-        self.diagnostics.emit(
-            error(
-                Category::Type,
-                codes::BINDING_CATEGORY,
-                at,
-                message,
-                "CTRL-14",
-            )
-            .with_related(self.locals[local].at, "declared here"),
-        );
+        if let Some(report) =
+            assignment_category(&self.locals[local], (given, at), inside, chosen_at_runtime)
+        {
+            self.diagnostics.emit(report);
+        }
     }
 
     /// What a value read in a graph is (FN-3), as [`category`] says,
@@ -132,6 +109,42 @@ impl<'a> Typer<'a> {
             && self.hook.is_none()
             && self.category(value) == ValueCategory::Connection
     }
+}
+
+/// The same CTRL-14 comparison, once the categories of both sides are known.
+pub(super) fn assignment_category(
+    binding: &Local,
+    (given, at): (ValueCategory, Location),
+    inside: bool,
+    chosen_at_runtime: bool,
+) -> Option<Diagnostic> {
+    use ValueCategory::{Connection, Value};
+    let name = &binding.name;
+    let message = match (binding.category, given) {
+        (Value, Connection) => format!(
+            "`{name}` holds an ordinary value, and this is a connection: a `var` keeps \
+             the category of its first value"
+        ),
+        (Connection, Value) if !inside => format!(
+            "`{name}` is a connection, and this is an ordinary value: a `var` keeps the \
+             category of its first value"
+        ),
+        (Value, Value) if chosen_at_runtime => format!(
+            "`{name}` holds an ordinary value, and this branch is selected at runtime: \
+             its value would not be known while the graph is built"
+        ),
+        _ => return None,
+    };
+    Some(
+        error(
+            Category::Type,
+            codes::BINDING_CATEGORY,
+            at,
+            message,
+            "CTRL-14",
+        )
+        .with_related(binding.at, "declared here"),
+    )
 }
 
 /// FN-3: checks the const inputs of a call using its current graph categories.
@@ -220,15 +233,26 @@ pub(super) fn check_instance_constants(
         }
         _ => {}
     });
+    report_instance_checks(
+        &reports,
+        from,
+        diagnostics,
+        "this place in the generic body needs a value",
+    );
+}
+
+pub(super) fn report_instance_checks(
+    reports: &Diagnostics,
+    from: &[Location],
+    diagnostics: &mut Diagnostics,
+    message: &str,
+) {
     for report in reports.as_slice() {
         if diagnostics.as_slice().contains(report) {
             continue;
         }
         for &root in from {
-            let mut here = report.clone().with_related(
-                report.primary,
-                "this place in the generic body needs a value",
-            );
+            let mut here = report.clone().with_related(report.primary, message);
             here.primary = root;
             if !diagnostics.as_slice().contains(&here) {
                 diagnostics.emit(here);

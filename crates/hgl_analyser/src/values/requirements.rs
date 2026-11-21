@@ -3,6 +3,7 @@
 //! body may call because its requirements name them (GEN-3, GEN-7,
 //! GEN-15, GEN-16). Part of the typing pass ([`super`]).
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Code, Diagnostics, Location};
@@ -1828,7 +1829,8 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             });
             let graph = program.modules[made.callee.0].phases.get(made.callee.1)
                 == Some(&Some(Phase::Graph));
-            let recheck_constants = graph && !selecting.is_empty();
+            let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
+            let mut graph_reports = Diagnostics::new();
             let instance = if configured.contains(&made.callee) {
                 super::operator_defaults::check_instance(
                     program,
@@ -1836,14 +1838,28 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     &made.generics,
                     &made.answers,
                     diagnostics,
+                    &mut graph_reports,
                 )
-            } else if recheck_constants {
-                program.instance(made.callee.0, made.callee.1, &made.generics, &made.answers)
+            } else if recheck_graph {
+                program.checked_instance(
+                    made.callee,
+                    &made.generics,
+                    &made.answers,
+                    &[],
+                    &RefCell::new(Diagnostics::new()),
+                    &mut graph_reports,
+                )
             } else {
                 None
             };
-            if recheck_constants && let Some((_, body)) = instance {
+            if recheck_graph && let Some((_, body)) = instance {
                 super::lifting::check_instance_constants(program, &body, &from, diagnostics);
+                super::lifting::report_instance_checks(
+                    &graph_reports,
+                    &from,
+                    diagnostics,
+                    "this destination in the generic graph is checked for this instance",
+                );
             }
             if inner.is_empty() && selecting.is_empty() {
                 continue;

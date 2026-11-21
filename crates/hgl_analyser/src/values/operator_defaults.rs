@@ -133,10 +133,17 @@ pub(super) fn check_instance(
     generics: &[Argument],
     requirements: &[hir::Answer],
     diagnostics: &mut Diagnostics,
+    graph_diagnostics: &mut Diagnostics,
 ) -> Option<(Signature, Body)> {
     let reports = RefCell::new(Diagnostics::new());
-    let (signature, body) =
-        program.checked_instance(callee, generics, requirements, &[], &reports)?;
+    let (signature, body) = program.checked_instance(
+        callee,
+        generics,
+        requirements,
+        &[],
+        &reports,
+        graph_diagnostics,
+    )?;
     let mut reports = reports.into_inner();
     hir::walk_statements(&body.statements, &mut |value| {
         check_expression(program, value, &mut reports)

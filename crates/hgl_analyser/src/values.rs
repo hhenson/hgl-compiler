@@ -84,6 +84,9 @@ mod fit;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
 mod function_arguments;
+// Fits destinations whose graph values become known only in an instance (GEN-7).
+mod graph_instance;
+pub(crate) use graph_instance::GraphDestinations;
 // What a call's generic parameters stand for (GEN-2, GEN-8, GEN-12).
 mod inference;
 // What a value is in a graph: a connection or an ordinary value (FN-3, FN-6).

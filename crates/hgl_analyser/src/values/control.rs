@@ -244,6 +244,11 @@ impl<'a> Typer<'a> {
     /// condition takes the `bool?` and then reads it.
     pub(super) fn condition(&mut self, node: &SyntaxNode) -> Expr {
         let value = self.expression(node, Some(&BOOL));
+        self.fit_condition(value)
+    }
+
+    /// Checks the condition's type and takes the reads required by CTRL-13.
+    pub(super) fn fit_condition(&mut self, value: Expr) -> Expr {
         if let Some(taken) = self.taken(&BOOL, &value.ty) {
             return self.take(value, taken);
         }

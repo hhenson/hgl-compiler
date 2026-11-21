@@ -179,11 +179,13 @@ impl Program {
             requirements,
             functions,
             &RefCell::new(Diagnostics::new()),
+            &mut Diagnostics::new(),
         )
     }
 
     /// Instantiate a body and report any configuration that fails to fit
-    /// the concrete candidate selected for a requirement (FN-18, GEN-16).
+    /// the selected candidate (FN-18, GEN-16). Collect new graph reports
+    /// separately so the instance walk can point them at its caller (GEN-7).
     pub(crate) fn checked_instance(
         &self,
         (module, declaration): (usize, usize),
@@ -191,6 +193,7 @@ impl Program {
         requirements: &[Answer],
         functions: &[(usize, Callee)],
         diagnostics: &RefCell<Diagnostics>,
+        graph_diagnostics: &mut Diagnostics,
     ) -> Option<(Signature, Body)> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
@@ -229,12 +232,25 @@ impl Program {
             requirements,
             diagnostics,
         };
+        let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
+        let recheck =
+            graph && (!declared.selecting[declaration].is_empty() || !requirements.is_empty());
+        let destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
         self.place_body(&mut body, &arguments, &functions);
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
         // could not say of an operation it requires.
-        let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
-        crate::values::record(self, &mut body, graph);
+        if let Some(destinations) = destinations {
+            destinations.settle(
+                self,
+                (module, declaration),
+                &taken,
+                &mut body,
+                graph_diagnostics,
+            );
+        } else {
+            crate::values::record(self, &mut body, graph);
+        }
         Some((taken, body))
     }
 

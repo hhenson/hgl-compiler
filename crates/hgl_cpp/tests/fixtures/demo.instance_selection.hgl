@@ -93,12 +93,21 @@ fn connection_if<T>(const value: T) -> i64 {
     return chosen
 }
 
+# ERR-12: if selection settles the condition as an ordinary value,
+# the graph's result reads the nullable value left by the conditional.
+fn required_choice<T>(const value: T) -> i64 {
+    let chosen = if positive(value) { 2 }
+    return chosen
+}
+
 test an_instance_settles_its_graph_conditions {
     assert eval loop_scalar(value: "s") == [5]
     assert eval wiring_if(value: 3) == [1]
     assert eval wiring_if(value: "s") == [-1]
     assert eval connection_if(value: 3) == [1]
     assert eval connection_if(value: 0) == []
+    assert eval required_choice(value: 3) == [2]
+    assert raises("value.null") { eval required_choice(value: "s") }
 }
 
 struct Counter { count: i64 }
