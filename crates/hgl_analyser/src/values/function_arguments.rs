@@ -5,7 +5,10 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
-use super::candidates::{CallbackOption, CallbackRequest, Given, Wanted, in_instance};
+use super::candidates::{
+    CallbackOption, CallbackOptionSource, CallbackRequest, Given, Wanted, in_instance,
+};
+use super::constants::generic_default;
 use super::fit::whole;
 use super::inference::{ExplicitGenerics, infer};
 use crate::declared::{agree, names_parameter, substitute_within};
@@ -129,7 +132,7 @@ impl<'a> Typer<'a> {
             self.marked_function(node, signature);
             return None;
         }
-        let (generics, pack) =
+        let ReferenceArguments { generics, pack, .. } =
             self.reference_arguments(node, name, (declared, signature), template)?;
         let map = signature
             .generics
@@ -204,6 +207,8 @@ impl<'a> Typer<'a> {
             && let Detail::Callable(public) =
                 &self.program.modules[operator.module].details[operator.declaration]
         {
+            let declared =
+                &self.program.modules[operator.module].declarations[operator.declaration];
             let written = self.reference_written(node, name);
             let map: Vec<_> = public
                 .generics
@@ -219,13 +224,26 @@ impl<'a> Typer<'a> {
                 else {
                     continue;
                 };
+                let source = if let Some(node) = written
+                    .and_then(|arguments| arguments.arguments.get(index))
+                    .and_then(|(at, _)| self.node_at(*at))
+                {
+                    CallbackOptionSource::Written(node)
+                } else if explicit.defaulted.contains(&index)
+                    && let Some(node) = generic_default(&declared.syntax, parameter)
+                {
+                    CallbackOptionSource::Default {
+                        file: declared.at.file,
+                        node,
+                    }
+                } else {
+                    CallbackOptionSource::Resolved
+                };
                 requested_values.push(CallbackOption {
                     name: &parameter.name,
                     value,
                     ty: substitute_within(ty, &map),
-                    written: written
-                        .and_then(|arguments| arguments.arguments.get(index))
-                        .and_then(|(at, _)| self.node_at(*at)),
+                    source,
                 });
             }
         }
@@ -313,7 +331,11 @@ impl<'a> Typer<'a> {
             self.template_mismatch(self.at(node), template, &signature);
             return None;
         }
-        let (generics, _) = self.reference_arguments(
+        let ReferenceArguments {
+            generics,
+            defaulted,
+            ..
+        } = self.reference_arguments(
             node,
             name,
             (&module.declarations[operator.declaration], public),
@@ -337,6 +359,7 @@ impl<'a> Typer<'a> {
         Some(OperatorReference {
             signature,
             generics,
+            defaulted,
             among,
         })
     }
@@ -349,7 +372,7 @@ impl<'a> Typer<'a> {
         name: &SyntaxToken,
         (declared, signature): (&Declaration, &Signature),
         template: &FunctionType,
-    ) -> Option<(Vec<Argument>, Option<TypePackArgument>)> {
+    ) -> Option<ReferenceArguments> {
         let written = self.reference_written(node, name);
         let ExplicitGenerics {
             fixed: mut found,
@@ -411,7 +434,11 @@ impl<'a> Typer<'a> {
             self.unresolved_reference(node, name);
             return None;
         };
-        Some((generics, pack))
+        Some(ReferenceArguments {
+            generics,
+            pack,
+            defaulted,
+        })
     }
 
     fn reference_written(
@@ -598,7 +625,15 @@ impl<'a> Typer<'a> {
 struct OperatorReference {
     signature: FunctionType,
     generics: Vec<Argument>,
+    defaulted: Vec<usize>,
     among: Option<Vec<Type>>,
+}
+
+/// Generic arguments from a function reference before candidate selection (FN-17).
+struct ReferenceArguments {
+    generics: Vec<Argument>,
+    pack: Option<TypePackArgument>,
+    defaulted: Vec<usize>,
 }
 
 fn plain_parameters(signature: &Signature) -> bool {

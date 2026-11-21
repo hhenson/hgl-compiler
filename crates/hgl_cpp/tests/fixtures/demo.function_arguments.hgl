@@ -182,9 +182,10 @@ impl const fn signed<const positive: bool = true>(value: i64) -> i64
 impl const fn signed<const positive: bool = true>(value: i64) -> i64
     requires positive == false => -value
 
-# GEN-8 and EXPR-5: a written integer literal takes the selected option's f64 type.
-operator option_bias<const amount: i64>(value: i64) -> f64
-impl const fn option_bias<const amount: f64>(value: i64) -> f64 => amount
+# FN-17, GEN-8 and EXPR-5: a written or defaulted integer literal
+# takes the selected option's f64 type.
+operator option_bias<const enabled: bool, const amount: i64 = 3>(value: i64) -> f64
+impl const fn option_bias<T, const enabled: T, const amount: f64 = 3.0>(value: i64) -> f64 => amount
 
 operator option_infers<const enabled: bool>(value: i64) -> i64
 impl const fn option_infers<T, const enabled: T>(value: i64) -> i64 => value
@@ -208,7 +209,8 @@ test explicit_operator_callbacks {
     assert widened(exact_result<f64>, 8) == 18.0
     assert apply(signed<false>, 8) == -8
     assert apply(signed, 8) == 8
-    assert widened(option_bias<3>, 8) == 3.0
+    assert widened(option_bias<true>, 8) == 3.0
+    assert widened(option_bias<true, 3>, 8) == 3.0
     assert apply(option_infers<true>, 8) == 8
     assert eval lifted_convert(value: [2, 3]) == [2.0, 3.0]
     assert eval composed_operator(value: [2, 3]) == [12, 13]

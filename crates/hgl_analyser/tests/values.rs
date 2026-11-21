@@ -4514,6 +4514,29 @@ fn explicit_operator_references_check_candidate_option_types() {
     );
 }
 
+/// EXPR-5 widens integer literals, while a constant of declared type i64
+/// remains i64 when given directly or through a default (FN-17, GEN-8).
+#[test]
+fn explicit_operator_reference_defaults_preserve_typed_constants() {
+    let checked = module(concat!(
+        "const fn apply(f: const fn(i64) -> f64) -> f64 => f(0)\n",
+        "const Three: i64 = 3\n",
+        "operator bias<const enabled: bool, const amount: i64 = Three>(x: i64) -> f64\n",
+        "impl const fn bias<T, const enabled: T, const amount: f64 = 3.0>(x: i64) -> f64 => amount\n",
+        "const fn omitted() -> f64 => apply(bias<true>)\n",
+        "const fn written() -> f64 => apply(bias<true, Three>)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:36 type/type.mismatch FN-17",
+            "m.hgl:7:36 type/type.mismatch FN-17",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-13: a supplied callback option can resolve a type parameter
 /// mentioned only in the option's candidate type.
 #[test]

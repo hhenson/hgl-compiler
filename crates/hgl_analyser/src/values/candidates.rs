@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
+use hgl_source::FileId;
 
 use super::Typer;
 use super::constants::{constant_text, default_at, generic_default};
@@ -263,16 +264,14 @@ impl<'a> Typer<'a> {
                 let widens = |decided: &Type, later: &Type| self.widens(decided, later);
                 let defaults =
                     |generic: &GenericParameter| self.default_constant(candidate, generic);
-                let constant = |node: &SyntaxNode, ty: Option<&Type>| self.given_constant(node, ty);
                 let Some((taken, generics, type_packs, defaulted)) = instance(
-                    program,
+                    self,
                     signature,
                     (given, &bound),
                     wanted,
                     (
                         &widens,
                         &defaults,
-                        &constant,
                         converting.then_some((self, forms, &payload_parameters, &rejects_form)),
                     ),
                     &mut choose,
@@ -1821,8 +1820,42 @@ pub(super) struct CallbackOption<'w> {
     pub(super) value: &'w Constant,
     /// The resolved type of the operator's value parameter.
     pub(super) ty: Type,
-    /// The expression of a supplied option, whose place can give a literal its type.
-    pub(super) written: Option<SyntaxNode>,
+    /// The expression, if available, that gave the public option its value.
+    pub(super) source: CallbackOptionSource,
+}
+
+/// Where an explicit callback's public option gets its value (GEN-8).
+pub(super) enum CallbackOptionSource {
+    /// A value written at the reference.
+    Written(SyntaxNode),
+    /// The operator's default, read in the file that declares it.
+    Default { file: FileId, node: SyntaxNode },
+    /// A value inferred from the callback's template.
+    Resolved,
+}
+
+impl CallbackOption<'_> {
+    fn fit(&self, typer: &Typer<'_>, expected: &Type) -> Result<ConstantValue, Fault> {
+        if let CallbackOptionSource::Written(node) = &self.source {
+            return typer.given_constant(node, Some(expected));
+        }
+        let read = crate::constant::Typed::of(self.value.value.clone(), Some(self.ty.clone()));
+        crate::constant::fit(read, Some(expected), typer.program).or_else(|fault| {
+            // EXPR-5 gives an integer literal the candidate's f64 type.
+            // Read the default in its definition scope so a named i64
+            // constant still has its own type.
+            if let CallbackOptionSource::Default { file, node } = &self.source
+                && matches!(self.value.value, ConstantValue::Int(_))
+                && accepts_float(expected)
+                && let Ok(value @ ConstantValue::Float(_)) =
+                    typer.read_in(*file, node, Some(expected))
+            {
+                Ok(value)
+            } else {
+                Err(fault)
+            }
+        })
+    }
 }
 
 impl CallbackRequest<'_> {
@@ -2039,20 +2072,19 @@ impl Chosen<'_> {
 /// all the way down, `null`, `.member` or `[]`, says nothing.
 ///
 /// `defaults` gives the constant a generic value parameter's default
-/// comes to (GEN-2), and `constant` what a constant the call gives an
-/// option comes to as a value of the type given (`crate::constant`).
+/// comes to (GEN-2). The typer reads the constants the call supplies
+/// or takes from an operator default (GEN-8).
 /// `converting` supplies the typer in the pass that tries the forms a
 /// parameter can take of an argument (ERR-12, ERR-15).
 #[allow(clippy::type_complexity)]
 fn instance<'s>(
-    program: &crate::program::Program,
+    typer: &Typer<'_>,
     signature: &'s Signature,
     (given, bound): (&[Given], &[Place]),
     wanted: &Wanted,
-    (widens, defaults, constant, converting): (
+    (widens, defaults, converting): (
         &dyn Fn(&Type, &Type) -> bool,
         &dyn Fn(&GenericParameter) -> Option<Constant>,
-        &dyn Fn(&SyntaxNode, Option<&Type>) -> Result<ConstantValue, Fault>,
         Option<(
             &Typer<'_>,
             ArgumentForms,
@@ -2102,7 +2134,9 @@ fn instance<'s>(
                 GenericKind::Value(ty) if !names_parameter(ty) => Some(ty),
                 _ => None,
             };
-            let value = constant(&given.node, expected).unwrap_or(ConstantValue::Unknown);
+            let value = typer
+                .given_constant(&given.node, expected)
+                .unwrap_or(ConstantValue::Unknown);
             found[index] = Some(Argument::Constant(Constant {
                 text: constant_text(&given.node),
                 value,
@@ -2258,13 +2292,7 @@ fn instance<'s>(
                 continue;
             };
             let expected = placed(substitute_within(ty, &map), &own);
-            let value = if let Some(written) = &option.written {
-                constant(written, Some(&expected)).ok()?
-            } else {
-                let read =
-                    crate::constant::Typed::of(option.value.value.clone(), Some(option.ty.clone()));
-                crate::constant::fit(read, Some(&expected), program).ok()?
-            };
+            let value = option.fit(typer, &expected).ok()?;
             fitted.push((
                 index,
                 Constant {
