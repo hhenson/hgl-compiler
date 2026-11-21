@@ -24,17 +24,39 @@ source scripts/hgraph-dependencies.sh
 
 export CXX=${CXX:-/usr/bin/clang++}
 export MACOSX_DEPLOYMENT_TARGET=26.0
-compiler=$("$CXX" --version)
-[[ $compiler =~ Apple[[:space:]]clang[[:space:]]version[[:space:]]([0-9]+) ]] &&
-    [[ ${BASH_REMATCH[1]} -ge 21 ]] || fail "requires Apple clang 21 or later"
-printf '%s\n' "$compiler" >&2
-git submodule update --init --recursive
-
-# All build paths are disposable. The SDK and libraries are linked with
-# relative install names from the start, so no dylib is changed afterwards.
+# All build paths are disposable, including the compiler probe.
 work=$(mktemp -d "${TMPDIR:-/tmp}/hgl-release.XXXXXX")
 work=$(cd -- "$work" && pwd -P)
 trap 'rm -rf -- "$work"' EXIT
+
+probe_toolchain() {
+    local compiler_path compiler
+    compiler_path=$(command -v "$CXX") || compiler_path=$CXX
+    compiler=$("$CXX" --version 2>/dev/null) || compiler=
+    cat >"$work/toolchain-probe.cpp" <<'CPP'
+#include <algorithm>
+#include <type_traits>
+int main() { static_assert(std::is_same_v<decltype(std::max(1, 2)), const int&>); return std::max(1, 2) != 2; }
+CPP
+    if [[ $compiler =~ Apple[[:space:]]clang[[:space:]]version[[:space:]]([0-9]+) ]] &&
+        [[ ${BASH_REMATCH[1]} -ge 21 ]] &&
+        "$CXX" -std=c++23 -arch arm64 "-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
+            "$work/toolchain-probe.cpp" -o "$work/toolchain-probe" >/dev/null 2>&1 &&
+        "$work/toolchain-probe" >/dev/null 2>&1; then
+        printf '%s\n' "$compiler" >&2
+        return 0
+    fi
+    compiler=${compiler%%$'\n'*}
+    fail "C++23 toolchain check failed with $compiler_path (${compiler:-version unavailable}).
+Apple clang 21 or later and usable C++ standard library headers are required.
+DEVELOPER_DIR=${DEVELOPER_DIR-<unset>} SDKROOT=${SDKROOT-<unset>} CC=${CC-<unset>} CXX=$CXX
+These settings must name one macOS toolchain."
+}
+
+probe_toolchain
+git submodule update --init --recursive
+
+# The SDK and libraries use relative install names from the start.
 bundle=$work/$name
 deps=$bundle/libexec/hgraph-deps
 sdk=$bundle/libexec/hgraph-sdk

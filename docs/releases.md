@@ -33,6 +33,8 @@ Apple clang 21 or later, CMake, Ninja, Git and Python 3.11 or later:
 scripts/package-release.sh
 ```
 
+Before fetching sources, the script compiles and runs a C++23 probe with the configured macOS toolchain.
+
 It fetches the pinned sources, builds the SDK and `hgl`, and prints the
 path and SHA-256 of the archive in `target/release-bundles`. Pass an
 output directory as the first argument and optionally a version tag as
