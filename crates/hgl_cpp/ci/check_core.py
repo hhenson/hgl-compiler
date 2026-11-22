@@ -1,5 +1,8 @@
 """Run the pinned core suites on the cpp target and check its known gaps (TST-14, TST-15).
 
+Pass the core checkout pinned by this compiler. Each run has only its suite
+as a source root. The compiler supplies core.
+
 The suites run on the C++ target, `hgl test --target cpp`, and are checked
 against `unsupported_cases.toml` beside this file; the build needs the SDK
 `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name only for a case it can run.
@@ -186,7 +189,9 @@ def write_list(path, gaps, unrejected):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("hgl", type=Path, help="built HGL compiler")
-    parser.add_argument("core", type=Path, help="core checkout containing hgl/ and tests/")
+    parser.add_argument(
+        "core", type=Path, help="the compiler's pinned core checkout containing tests/"
+    )
     parser.add_argument("--target", choices=[TARGET], default=TARGET,
                         help="the target to run the cases on, the one there is")
     parser.add_argument("--write-list", action="store_true",
@@ -197,7 +202,7 @@ def main():
     found = {}
     target = ["--target", args.target]
     for suite, module in SUITES.items():
-        command = [args.hgl.resolve(), "test", args.core / "hgl", args.core / "tests" / suite, "--integration"]
+        command = [args.hgl.resolve(), "test", args.core / "tests" / suite, "--integration"]
         print(f"Running {suite}", flush=True)
         discovered = subprocess.run(command, stdout=subprocess.PIPE, text=True)
         result = subprocess.run(command + target, stdout=subprocess.PIPE, text=True)
