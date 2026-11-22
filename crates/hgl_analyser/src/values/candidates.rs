@@ -785,7 +785,8 @@ impl<'a> Typer<'a> {
     /// The call of the candidate `chosen` of `operator` with the
     /// arguments `given`, written as `form` says. Each argument is of
     /// the type the candidate's parameter has: the candidate was
-    /// admitted, so each is given to one of its parameters.
+    /// admitted, so each is given to one of its parameters. An omitted
+    /// ordinary argument follows this candidate's defaults (UNIT-8).
     pub(super) fn called(
         &mut self,
         operator: OperatorRef,
@@ -877,6 +878,12 @@ impl<'a> Typer<'a> {
         // takes no part in selecting the candidate, which admits a call
         // that leaves a `T?` out (UNIT-8): it is asked for here, of the
         // candidate the call resolved to.
+        let value_candidate = matches!(
+            program.modules[module].declarations[declaration]
+                .kind
+                .candidate(),
+            Some((Role::Value, _))
+        );
         for (index, parameter) in signature.parameters.iter().enumerate() {
             if parameter.var && !bound.contains(&Place::Parameter(index)) {
                 self.diagnostics.emit(error(
@@ -889,6 +896,42 @@ impl<'a> Typer<'a> {
                     ),
                     "FN-15",
                 ));
+            } else if value_candidate
+                && !parameter.configuration
+                && parameter.pack.is_none()
+                && !parameter.has_default
+                && !matches!(parameter.ty, Type::Nullable(_))
+                && !bound.contains(&Place::Parameter(index))
+            {
+                // GEN-6, UNIT-8: an ordinary public default does not
+                // supply a selected candidate's required argument. Check
+                // after selection, as for `var`; RED-5 depends on this.
+                let operator_name =
+                    &program.modules[operator.module].declarations[operator.declaration].name;
+                let public_name =
+                    match &program.modules[operator.module].details[operator.declaration] {
+                        Detail::Callable(public) => public
+                            .parameters
+                            .iter()
+                            .zip(public.candidate_parameters(signature))
+                            .find_map(|(parameter, slot)| {
+                                (slot == Some(index)).then_some(parameter.name.as_str())
+                            }),
+                        _ => None,
+                    }
+                    .unwrap_or(&parameter.name);
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::ARGUMENT_MISSING,
+                        at,
+                        format!(
+                            "the selected candidate of `{operator_name}` is given no `{public_name}`,                              a required parameter with no default"
+                        ),
+                        "UNIT-8",
+                    )
+                    .with_related(parameter.at, "this candidate parameter has no default"),
+                );
             }
         }
         let mut braced = Vec::new();

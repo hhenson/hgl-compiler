@@ -72,10 +72,11 @@ analyser: partial
 - Known required-constant failures reject at the parameter default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
 - Using the proposed `constant.failure` catalogue code for parameter and field defaults is planned (hhenson/hgl_spec#228).
 - Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
+- A selected value candidate with an omitted ordinary nonnullable parameter and no own default reports `argument.missing` at the call, even when the operator has a public default (GEN-6, RED-5). Configuration default inheritance remains separate (FN-18).
 
 transpiler: partial
 
-- Binds omitted defaults or null after explicit arguments. Wires an omitted temporal
+- Binds omitted defaults or null after explicit arguments. A literal null default is held as the selected nullable parameter type, including when its declaration names a generic. Wires an omitted temporal
   default as a constant or leaves an optional input silent.
 - An inherited operator configuration default can run a block in its own lexical scope.
 - Left: blocks with statements in callable and field defaults, and nonempty field defaults whose type depends on a generic struct argument. A graph call leaving out a nullable temporal input is reported (#399). The target also reports a recursively omitted default and retains a defensive report for defaults whose emitted evaluation needs failure-handling statements.

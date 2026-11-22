@@ -1066,6 +1066,15 @@ places none of its own before or after them.
 Its rejection is `default.order`, and a tuple's index that is no
 constant or is outside the tuple is `tuple.index`.
 
+A selected value candidate is checked for any omitted ordinary parameter
+that has neither its own default nor a nullable type (GEN-6, UNIT-8).
+`Typer::called` reports `argument.missing` at the call, with the candidate
+parameter as a related location. A public ordinary default does not supply
+a required candidate argument; default availability does not select a
+less-specific fallback. Configuration defaults retain FN-18 inheritance.
+The C++ target writes a literal null default using the selected nullable
+parameter's concrete type, rather than its unresolved generic source type.
+
 Control flow in a value function is read as it is written (CTRL-10 to
 CTRL-12, FN-7). A block has the value of its last statement when that is
 an expression, and so has the function's body, which returns it. An `if`
