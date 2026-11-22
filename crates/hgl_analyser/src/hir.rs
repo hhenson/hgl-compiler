@@ -1264,8 +1264,21 @@ pub struct AnonymousFunction {
     pub body: Body,
     /// The bindings in the expression's enclosing body that supply those captures.
     pub captures: Vec<LocalId>,
-    /// Type and value arguments of the enclosing specialization, if any.
-    pub specialization: Vec<GenericArgument>,
+    /// A capture index and its entry key when its binding is an enclosing pack.
+    pub pack_captures: Vec<(usize, PackKey)>,
+    /// The concrete arguments of the enclosing specialization, if any.
+    pub specialization: AnonymousSpecialization,
+}
+
+/// The enclosing call inputs that can determine an anonymous body's code.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AnonymousSpecialization {
+    /// The enclosing declaration's non-pack generic arguments.
+    pub generics: Vec<GenericArgument>,
+    /// Its type packs, with their keys (GEN-17).
+    pub type_packs: Vec<TypePackArgument>,
+    /// The shape of its value packs used in forwarding (FN-19).
+    pub pack_inputs: Vec<PackInput>,
 }
 
 impl AnonymousFunction {
@@ -1274,17 +1287,31 @@ impl AnonymousFunction {
         &self.body.locals[self.template.parameters.len() + index].ty
     }
 
+    /// The captured entry key, if the enclosing binding is a pack.
+    pub fn capture_pack_key(&self, index: usize) -> Option<&PackKey> {
+        self.pack_captures
+            .iter()
+            .find_map(|(capture, key)| (*capture == index).then_some(key))
+    }
+
     /// What a caller passes for this lexical capture (FN-14). A child
     /// selected in the helper still needs its parent's endpoint (ERR-14).
     pub fn capture_value(&self, index: usize, binding: &Local, at: Location) -> Expr {
         let capture = self.captures[index];
         let ty = self.capture_type(index);
-        let (kind, ty) =
-            if matches!(ty, Type::Endpoint(_)) && !matches!(binding.ty, Type::Endpoint(_)) {
-                (ExprKind::EndpointOf(capture), ty.clone())
-            } else {
-                (ExprKind::Local(capture), binding.ty.clone())
-            };
+        let (kind, ty) = if let Some(key) = self.capture_pack_key(index) {
+            (
+                ExprKind::PackEntry {
+                    pack: capture,
+                    key: key.clone(),
+                },
+                ty.clone(),
+            )
+        } else if matches!(ty, Type::Endpoint(_)) && !matches!(binding.ty, Type::Endpoint(_)) {
+            (ExprKind::EndpointOf(capture), ty.clone())
+        } else {
+            (ExprKind::Local(capture), binding.ty.clone())
+        };
         Expr {
             kind,
             ty,

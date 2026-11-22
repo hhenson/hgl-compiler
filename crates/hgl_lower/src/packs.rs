@@ -203,26 +203,38 @@ impl Captures {
                 _ => {}
             },
             NodeMut::Expression(expression) => {
-                let mut read = |local: &mut LocalId| {
+                // Each runtime slot and its input local were added together.
+                let entry = |pack, key: &PackKey| {
+                    slots
+                        .iter()
+                        .position(|slot| slot.parameter == pack && slot.pack.as_ref() == Some(key))
+                };
+                let read = |local: &mut LocalId, unsupported: &mut Option<Location>| {
                     if packed.get(*local) == Some(&true) {
                         unsupported.get_or_insert(expression.at);
                     }
                     change(local);
                 };
-                let remap_captures = |callee: &mut Callee| {
+                let mut remap_captures = |callee: &mut Callee| {
                     if let Callee::Anonymous(function) = callee {
-                        function.captures.iter_mut().for_each(change);
+                        for index in 0..function.captures.len() {
+                            let capture = function.captures[index];
+                            function.captures[index] = match function.capture_pack_key(index) {
+                                Some(key) => entry(capture, key).unwrap_or_else(|| {
+                                    unsupported.get_or_insert(expression.at);
+                                    remapped[capture]
+                                }),
+                                None => remapped[capture],
+                            };
+                        }
+                        function.pack_captures.clear();
                     }
                 };
                 match &mut expression.kind {
                     ExprKind::Call { callee, .. } => remap_captures(callee),
                     ExprKind::StaticCallable(callee) => remap_captures(callee),
                     ExprKind::PackEntry { pack, key } => {
-                        // Each runtime slot and its input local were added
-                        // together, so their indices are the same.
-                        if let Some(local) = slots.iter().position(|slot| {
-                            slot.parameter == *pack && slot.pack.as_ref() == Some(key)
-                        }) {
+                        if let Some(local) = entry(*pack, key) {
                             expression.kind = ExprKind::Local(local);
                         } else {
                             unsupported.get_or_insert(expression.at);
@@ -230,11 +242,17 @@ impl Captures {
                     }
                     ExprKind::Local(local)
                     | ExprKind::EndpointOf(local)
-                    | ExprKind::BoundChild(local) => read(local),
+                    | ExprKind::BoundChild(local) => {
+                        read(local, &mut unsupported);
+                    }
                     ExprKind::Endpoint {
                         inputs: Some(locals),
                         ..
-                    } => locals.iter_mut().for_each(read),
+                    } => {
+                        locals
+                            .iter_mut()
+                            .for_each(|local| read(local, &mut unsupported));
+                    }
                     ExprKind::Eval {
                         inherited: Some(local),
                         ..

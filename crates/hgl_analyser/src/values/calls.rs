@@ -271,9 +271,7 @@ impl<'a> Typer<'a> {
             .copied()
             .find(|&declaration| kind_of(declaration) == DeclarationKind::Enum);
         if let Some(declaration) = enumeration {
-            return self
-                .unread_pack_call(list)
-                .unwrap_or_else(|| self.enum_from(name, list, module, declaration));
+            return self.enum_from(name, list, module, declaration);
         }
         let operator = declarations
             .iter()
@@ -367,6 +365,19 @@ impl<'a> Typer<'a> {
             arguments: Vec::new(),
             kind: NamedKind::Enum,
         };
+        if let Some(spread) = super::forwarded_packs::spread_operands(list).next() {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_UNEXPECTED,
+                self.at(&spread),
+                format!(
+                    "the constructor of `{}` takes one written value, with no pack spread",
+                    name.text()
+                ),
+                "TYPE-7",
+            ));
+            return (self.unread_call(list).0, ty);
+        }
         let Some(argument) = self.one_argument(name, list, "TYPE-7") else {
             return (ExprKind::Unread, ty);
         };

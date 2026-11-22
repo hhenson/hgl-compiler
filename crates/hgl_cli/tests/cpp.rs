@@ -1555,7 +1555,8 @@ fn dependent_call_packs_run_on_the_sdk() {
 }
 
 /// FN-19: value, operator and callback calls forward a pack; graph
-/// calls forward the individual connections.
+/// calls forward the individual connections. Constructors, defaults and
+/// lexical captures retain the concrete shape (FN-8, FN-14, TYPE-5).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn forwarded_packs_run_on_the_sdk() {
@@ -1577,7 +1578,7 @@ fn forwarded_packs_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

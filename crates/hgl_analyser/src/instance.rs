@@ -68,6 +68,8 @@ struct InstanceArguments<'a> {
     generics: &'a [Argument],
     types: &'a Map<'a>,
     packs: &'a PackTypes<'a>,
+    type_packs: &'a [TypePackArgument],
+    pack_inputs: &'a [PackInput],
     requirements: &'a [Answer],
     diagnostics: &'a RefCell<Diagnostics>,
 }
@@ -168,6 +170,8 @@ impl Program {
             generics,
             types: &types,
             packs: &PackTypes::new(&[], &[]),
+            type_packs: &[],
+            pack_inputs: &[],
             requirements: &requirements,
             diagnostics: &reports,
         };
@@ -322,18 +326,20 @@ impl Program {
         let mut body = body.clone();
         let temporal = declared.declarations[declaration].kind.role() == Some(Role::Temporal);
         let functions = hidden_captures(inputs.functions, &mut taken, &mut body, temporal);
+        let pending_forwards = inputs
+            .pack_inputs
+            .filter(|_| crate::values::has_forwarded_calls(&body));
         let arguments = InstanceArguments {
             declaration: (module, declaration),
             generics,
             types: &map,
             packs: &packs,
+            type_packs: inputs.type_packs,
+            pack_inputs: pending_forwards.unwrap_or_default(),
             requirements,
             diagnostics,
         };
         let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
-        let pending_forwards = inputs
-            .pack_inputs
-            .filter(|_| crate::values::has_forwarded_calls(&body));
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
         if (recheck_endpoints || pending_forwards.is_some())
@@ -579,9 +585,30 @@ impl Program {
             if let Type::Function(template) = instance.project(&template) {
                 function.template = *template;
             }
-            function
-                .specialization
-                .extend(instance.types.iter().map(|(_, value)| (*value).clone()));
+            let specialization = &mut function.specialization;
+            specialization
+                .generics
+                .extend(
+                    instance
+                        .types
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, (_, value))| {
+                            // A type pack's slot holds a placeholder, while its
+                            // concrete type sequence and keys are separate.
+                            (!instance
+                                .type_packs
+                                .iter()
+                                .any(|pack| pack.parameter == index))
+                            .then(|| (*value).clone())
+                        }),
+                );
+            specialization
+                .type_packs
+                .extend_from_slice(instance.type_packs);
+            specialization
+                .pack_inputs
+                .extend_from_slice(instance.pack_inputs);
             self.place_body(&mut function.body, instance, &functions);
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {
@@ -733,16 +760,28 @@ fn inherited_functions(
             continue;
         };
         let target_inputs = target.template.parameters.len();
-        for (index, captured) in target.captures.iter_mut().enumerate() {
-            let position = function.captures.iter().position(|outer| outer == captured);
+        for index in 0..target.captures.len() {
+            let captured = target.captures[index];
+            let key = target.capture_pack_key(index);
+            let position = function
+                .captures
+                .iter()
+                .enumerate()
+                .position(|(index, outer)| {
+                    *outer == captured && function.capture_pack_key(index) == key
+                });
             let offset = position.unwrap_or_else(|| {
                 let offset = function.captures.len();
-                function.captures.push(*captured);
+                function.captures.push(captured);
+                if let Some(key) = key {
+                    function.pack_captures.push((offset, key.clone()));
+                }
                 added.push(target.body.locals[target_inputs + index].clone());
                 offset
             });
-            *captured = inputs + offset;
+            target.captures[index] = inputs + offset;
         }
+        target.pack_captures.clear();
     }
     if !added.is_empty() {
         let remapped: Vec<_> = (0..function.body.locals.len())
@@ -818,6 +857,7 @@ fn hidden_captures(
             });
             locals.push(local);
         }
+        function.pack_captures.clear();
     }
     if !locals.is_empty() {
         let added = locals.len();

@@ -407,10 +407,30 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
             Some(result) => Some(canonical(program, result)?),
             None => None,
         };
-        let specialization = function
+        let generic_arguments = function
             .specialization
+            .generics
             .iter()
             .map(|argument| canonical_argument(program, argument))
+            .collect::<Option<Vec<_>>>()?;
+        let type_packs = function
+            .specialization
+            .type_packs
+            .iter()
+            .map(|pack| {
+                let types = pack
+                    .types
+                    .iter()
+                    .map(|ty| canonical(program, trace_payload(ty).as_ref().unwrap_or(ty)))
+                    .collect::<Option<Vec<_>>>()?;
+                Some((pack.parameter, &pack.keys, types))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let pack_inputs = function
+            .specialization
+            .pack_inputs
+            .iter()
+            .map(|entry| Some((entry.parameter, &entry.key, canonical(program, &entry.ty)?)))
             .collect::<Option<Vec<_>>>()?;
         // The same source lambda may close over different static
         // functions when its enclosing function is specialized.
@@ -427,7 +447,7 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
         });
         let targets = targets.into_iter().collect::<Option<Vec<_>>>()?;
         return Some(format!(
-            "anonymous:{}:{}:{}:{types:?}:{result:?}:{specialization:?}:{targets:?}",
+            "anonymous:{}:{}:{}:{types:?}:{result:?}:{generic_arguments:?}:{type_packs:?}:{pack_inputs:?}:{targets:?}",
             function.at.file.index(),
             function.at.span.start,
             function.template.value,

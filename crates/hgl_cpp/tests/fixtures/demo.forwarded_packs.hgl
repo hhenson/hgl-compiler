@@ -116,3 +116,81 @@ fn node_context<...Args>(values: ...Args) -> i64 {
 test forward_hook_inference {
     assert eval node_context([2, 3]) == [3, 4]
 }
+
+# FN-14, FN-19: an anonymous body may forward its enclosing pack,
+# including when only a more deeply nested function reads the entries.
+const fn apply_one(f: const fn(i64) -> i64) -> i64 => f(1)
+const fn captured<...A>(values: ...A) -> i64 =>
+    apply_one(fn(x) => receive(x, ...values))
+const fn nested_capture<...A>(values: ...A) -> i64 =>
+    apply_one(fn(x) => apply_one(fn(y) => receive(x + y, ...values)))
+const fn named_capture<...A>(offset: i64, fields: ...{A}) -> i64 =>
+    apply_one(fn(x) => receive(x + offset, ...fields))
+
+test forwarded_anonymous_captures {
+    assert captured(2, 3) == 123
+    assert captured(4, 5) == 145
+    assert nested_capture(2, 3) == 223
+    assert named_capture(0, b: 2, c: 3) == 123
+    assert named_capture(2, c: 4, b: 6) == 364
+}
+
+# FN-17: the written names of a callback template bind the spread.
+const fn pair(a: i64, b: i64) -> i64 => a * 10 + b
+const fn named_template<...F>(f: const fn(a: i64, b: i64) -> i64, fields: ...{F}) -> i64 =>
+    f(...fields)
+
+test forwarded_named_template {
+    assert named_template(pair, b: 2, a: 1) == 12
+}
+
+# FN-19, TYPE-5: named entries bind struct fields. An explicit field and
+# inferred or written generic arguments use ordinary construction rules.
+struct Point {
+    x: i64
+    y: i64
+}
+struct Box<T> { value: T }
+
+const fn make_point<...F>(fields: ...{F}) -> Point => Point(...fields)
+const fn make_with_x<...F>(fields: ...{F}) -> Point => Point(...fields, x: 3)
+const fn make_string_box<...F>(fields: ...{F}) -> Box<str> => Box<str>(...fields)
+const fn infer_box<...F>(fields: ...{F}) -> str {
+    let boxed = Box(...fields)
+    return boxed.value
+}
+
+test forwarded_named_fields {
+    assert make_point(y: 2, x: 1).x == 1
+    assert make_with_x(y: 2).y == 2
+    assert make_string_box(value: "text").value == "text"
+    assert infer_box(value: "inferred") == "inferred"
+}
+
+# UNIT-7, FN-19: defaults can supply concrete forwarding calls.
+const fn parameter_default(value: i64 = relay(1, c: 3)) -> i64 => value
+struct FieldDefault { value: i64 = relay(4, c: 5) }
+
+test default_forwarding_roots {
+    assert parameter_default() == 123
+    assert FieldDefault().value == 425
+}
+
+# FN-8: a homogeneous pack supplies the same declared entry type to
+# both the forwarded call and its lowered input slots.
+const fn receives_nullable(value: i64?) -> bool => value == null
+const fn relay_nullable(values: ...i64?) -> bool => receives_nullable(...values)
+
+test forwarded_homogeneous_shape {
+    assert relay_nullable(null)
+    assert !relay_nullable(2)
+}
+
+# FN-14, FN-19: the held entry of a temporal callback stays a connection.
+fn apply_connection(callback: fn(f64) -> f64, input: f64) -> f64 => callback(input)
+fn captured_connection<...A>(input: f64, values: ...A) -> f64 =>
+    apply_connection(fn(x) => multiply(x, ...values), input)
+
+test forwarded_connection_capture {
+    assert eval captured_connection([2.0], [3.0]) == [6.0]
+}

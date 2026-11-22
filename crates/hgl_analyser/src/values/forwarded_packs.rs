@@ -125,7 +125,7 @@ pub(super) fn spread_operands(list: &SyntaxNode) -> impl Iterator<Item = SyntaxN
 /// Whether the shape of a parameter pack still needs to be applied.
 pub(crate) fn has_forwarded_calls(body: &crate::hir::Body) -> bool {
     let mut pending = false;
-    crate::hir::walk_statements(&body.statements, &mut |value| {
+    walk_nested_calls(&body.statements, &mut |value| {
         pending |= is_forwarded_call(value);
     });
     pending

@@ -10,7 +10,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::Typer;
 use super::arguments::{Slot, Takes};
 use crate::hir::{
-    Body, Callee, ExprKind, Form, LocalId, Node, NodeMut, Stmt, ValueCategory,
+    Body, Callee, ExprKind, Form, LocalId, Node, NodeMut, PackKey, Stmt, ValueCategory,
     walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::LocalKind;
@@ -24,6 +24,12 @@ pub(super) struct Anonymous {
     pub(super) result: Type,
     /// The first of its own locals. Earlier locals would be captures.
     pub(super) first_local: LocalId,
+}
+
+pub(super) struct AnonymousDefinition {
+    pub(super) body: Body,
+    pub(super) captures: Vec<LocalId>,
+    pub(super) pack_captures: Vec<(usize, PackKey)>,
 }
 
 impl Typer<'_> {
@@ -90,7 +96,7 @@ impl Typer<'_> {
         parameters: Vec<(SyntaxToken, Option<Type>)>,
         result: Option<&Type>,
         temporal: bool,
-    ) -> Option<(Body, Vec<LocalId>)> {
+    ) -> Option<AnonymousDefinition> {
         self.checked_anonymous(function, parameters, result, Some(temporal))
     }
 
@@ -100,7 +106,7 @@ impl Typer<'_> {
         parameters: Vec<(SyntaxToken, Option<Type>)>,
         result: Option<&Type>,
         specialization: Option<bool>,
-    ) -> Option<(Body, Vec<LocalId>)> {
+    ) -> Option<AnonymousDefinition> {
         // CTRL-5: a return belongs to this function alone.
         self.check_capability_captures(function);
         let mut mark = self.mark();
@@ -219,8 +225,18 @@ impl Typer<'_> {
 
 /// Put the anonymous function's inputs and captures first in its own
 /// local table. Every outer reference then has an explicit input.
-fn close(mut body: Body, first: LocalId, parameters: usize, value: bool) -> (Body, Vec<LocalId>) {
+fn close(mut body: Body, first: LocalId, parameters: usize, value: bool) -> AnonymousDefinition {
     let mut captures = Vec::new();
+    let mut packed = Vec::new();
+    let mut capture_entry = |pack: LocalId, key: &PackKey, ty: &Type| {
+        if pack < first
+            && !packed
+                .iter()
+                .any(|(outer, entry, _)| *outer == pack && entry == key)
+        {
+            packed.push((pack, key.clone(), ty.clone()));
+        }
+    };
     let mut endpoints = HashSet::new();
     let mut captured = |local: LocalId| {
         if local < first && !captures.contains(&local) {
@@ -235,6 +251,7 @@ fn close(mut body: Body, first: LocalId, parameters: usize, value: bool) -> (Bod
             ExprKind::Local(local) | ExprKind::EndpointOf(local) | ExprKind::BoundChild(local) => {
                 captured(*local)
             }
+            ExprKind::PackEntry { pack, key } => capture_entry(*pack, key, &expression.ty),
             ExprKind::Endpoint {
                 inputs: Some(locals),
                 ..
@@ -259,6 +276,10 @@ fn close(mut body: Body, first: LocalId, parameters: usize, value: bool) -> (Bod
         };
         if let Some(Callee::Anonymous(function)) = target {
             for (index, &local) in function.captures.iter().enumerate() {
+                if let Some(key) = function.capture_pack_key(index) {
+                    capture_entry(local, key, function.capture_type(index));
+                    continue;
+                }
                 captured(local);
                 if value
                     && local < first
@@ -279,10 +300,14 @@ fn close(mut body: Body, first: LocalId, parameters: usize, value: bool) -> (Bod
             }
         });
     }
+    let ordinary_locals = body.locals.len();
+    let ordinary_captures = captures.len();
+    let pack_captures = materialize_pack_captures(&mut body, &mut captures, &packed);
     let mut remapped = vec![0; body.locals.len()];
     let order = (first..first + parameters)
-        .chain(captures.iter().copied())
-        .chain(first + parameters..body.locals.len());
+        .chain(captures[..ordinary_captures].iter().copied())
+        .chain(ordinary_locals..body.locals.len())
+        .chain(first + parameters..ordinary_locals);
     body.locals = order
         .enumerate()
         .map(|(new, old)| {
@@ -295,7 +320,70 @@ fn close(mut body: Body, first: LocalId, parameters: usize, value: bool) -> (Bod
         })
         .collect();
     remap_locals(&mut body, &remapped);
-    (body, captures)
+    AnonymousDefinition {
+        body,
+        captures,
+        pack_captures,
+    }
+}
+
+/// Give each captured entry its own local inside the closed function, including
+/// where the entry is only captured by a more deeply nested anonymous body.
+fn materialize_pack_captures(
+    body: &mut Body,
+    captures: &mut Vec<LocalId>,
+    packed: &[(LocalId, PackKey, Type)],
+) -> Vec<(usize, PackKey)> {
+    if packed.is_empty() {
+        return Vec::new();
+    }
+    let start = body.locals.len();
+    let mut pack_captures = Vec::new();
+    for (pack, key, ty) in packed {
+        let mut name = format!("pack_capture_{}", pack_captures.len());
+        while body.locals.iter().any(|local| local.name == name) {
+            name.push('_');
+        }
+        let binding = crate::hir::Local {
+            ty: ty.clone(),
+            name,
+            ..body.locals[*pack].clone()
+        };
+        body.locals.push(binding);
+        pack_captures.push((captures.len(), key.clone()));
+        captures.push(*pack);
+    }
+    let entry = |pack, key: &PackKey| {
+        packed
+            .iter()
+            .position(|(outer, captured, _)| *outer == pack && captured == key)
+            .map(|offset| start + offset)
+    };
+    walk_statements_mut(&mut body.statements, &mut |expression| {
+        let callee = match &mut expression.kind {
+            ExprKind::PackEntry { pack, key } => {
+                if let Some(local) = entry(*pack, key) {
+                    expression.kind = ExprKind::Local(local);
+                }
+                return;
+            }
+            ExprKind::Call { callee, .. } => callee,
+            ExprKind::StaticCallable(callee) => callee,
+            _ => return,
+        };
+        if let Callee::Anonymous(function) = callee {
+            function.pack_captures.retain(|(index, key)| {
+                let local = &mut function.captures[*index];
+                if let Some(slot) = entry(*local, key) {
+                    *local = slot;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+    });
+    pack_captures
 }
 
 /// Remap the local references of a body. A nested anonymous target has
@@ -326,6 +414,7 @@ pub(crate) fn remap_locals(body: &mut Body, slots: &[LocalId]) {
             ExprKind::Local(local) | ExprKind::EndpointOf(local) | ExprKind::BoundChild(local) => {
                 change(local)
             }
+            ExprKind::PackEntry { pack, .. } => change(pack),
             ExprKind::Endpoint {
                 inputs: Some(locals),
                 ..

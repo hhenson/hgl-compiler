@@ -764,14 +764,19 @@ impl<'a> Typer<'a> {
         self.hook = outer_hook;
         self.value_code = value_code;
         self.graph = graph;
-        let (mut body, captures) = definition?;
+        let super::anonymous::AnonymousDefinition {
+            mut body,
+            captures,
+            pack_captures,
+        } = definition?;
         super::record(self.program, &mut body, !template.value);
         let callee = Callee::Anonymous(Box::new(AnonymousFunction {
             at: self.at(node),
             template: actual.clone(),
             body,
             captures,
-            specialization: Vec::new(),
+            pack_captures,
+            specialization: Default::default(),
         }));
         Some((callee, actual))
     }
