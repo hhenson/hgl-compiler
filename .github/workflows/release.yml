@@ -1,4 +1,4 @@
-name: macOS release bundle
+name: Release bundles
 
 on:
   push:
@@ -29,6 +29,7 @@ jobs:
       commit: ${{ steps.find.outputs.commit }}
       run-id: ${{ steps.find.outputs.run-id }}
       artifact-id: ${{ steps.find.outputs.artifact-id }}
+      linux-artifact-id: ${{ steps.find.outputs.linux-artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -196,16 +197,89 @@ jobs:
           test "$("$hgl" --version)" = "hgl $version (hgraph $(cat HGRAPH_TAG))"
           "$hgl" check crates/hgl_cpp/tests/fixtures/demo.apps.hgl
 
+  bundle-linux:
+    needs: reuse-build
+    if: needs.reuse-build.outputs.linux-artifact-id == ''
+    runs-on: ubuntu-26.04
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    env:
+      CC: gcc-15
+      CXX: g++-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - &linux-tools
+        name: Install the Ubuntu C++ tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc g++-15 cmake ninja-build
+      - env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: scripts/package-release.sh target/release-bundles "$RELEASE_TAG"
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hgl-linux-x86_64-${{ github.run_attempt }}
+          path: |
+            target/release-bundles/hgl-${{ needs.reuse-build.outputs.version }}-linux-x86_64.tar.gz
+            target/release-bundles/hgl-${{ needs.reuse-build.outputs.version }}-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  verify-linux:
+    needs: bundle-linux
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - *linux-tools
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.bundle-linux.outputs.artifact-id }}
+          path: ${{ runner.temp }}/artifact
+      - shell: bash
+        run: |
+          test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.43'
+          version=$(python3 scripts/release-bundle.py version)
+          name=hgl-$version-linux-x86_64
+          scratch=$(mktemp -d "$RUNNER_TEMP/hgl-verify.XXXXXX")
+          trap 'rm -rf -- "$scratch"' EXIT
+          extracted="$scratch/unpacked release"
+          mkdir -p "$extracted"
+          (
+            cd "$RUNNER_TEMP/artifact"
+            sha256sum -c "$name.tar.gz.sha256"
+            tar -xzf "$name.tar.gz" -C "$extracted"
+          )
+          bundle="$extracted/$name"
+          python3 scripts/release-bundle.py verify --target x86_64-unknown-linux-gnu "$bundle"
+          ln -s "$bundle/bin/hgl" "$extracted/hgl"
+          unset HGL_HGRAPH_SDK HGL_HGRAPH_DEPS HGL_CPP_FLAGS LD_LIBRARY_PATH
+          export CXX=/usr/bin/g++-15 HGL_NATIVE_CACHE="$scratch/native"
+          hgl="$extracted/hgl"
+          test "$("$hgl" --version)" = "hgl $version (hgraph $(cat HGRAPH_TAG))"
+          fixtures=crates/hgl_cpp/tests/fixtures
+          "$hgl" check "$fixtures/demo.apps.hgl"
+          tests=$("$hgl" test "$fixtures/demo.apps.hgl" --target cpp)
+          printf '%s\n' "$tests"
+          grep -x 'executable cases: 1 passed, 0 failed, 0 not run' <<<"$tests"
+          app=$("$hgl" run "$fixtures/demo.apps.hgl" "$fixtures/demo.apps.backtest.hgl")
+          printf '%s\n' "$app"
+          grep -x 'ran demo.apps.backtest on cpp: 2 publications' <<<"$app"
+
   publish:
     if: >-
       !cancelled() &&
       github.event_name == 'push' && github.ref_type == 'tag' &&
       needs.reuse-build.result == 'success' &&
       (
-        needs.reuse-build.outputs.artifact-id != '' ||
-        (needs.verify.result == 'success' && needs.hosted-check.result == 'success')
+        (needs.reuse-build.outputs.artifact-id != '' && needs.reuse-build.outputs.linux-artifact-id != '') ||
+        (needs.verify.result == 'success' && needs.hosted-check.result == 'success' && needs.verify-linux.result == 'success')
       )
-    needs: [reuse-build, bundle, verify, hosted-check]
+    needs: [reuse-build, bundle, verify, hosted-check, bundle-linux, verify-linux]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -213,10 +287,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          artifact-ids: ${{ needs.reuse-build.outputs.artifact-id || needs.bundle.outputs.artifact-id }}
+          artifact-ids: >-
+            ${{ needs.reuse-build.outputs.artifact-id || needs.bundle.outputs.artifact-id }},${{ needs.reuse-build.outputs.linux-artifact-id || needs.bundle-linux.outputs.artifact-id }}
           github-token: ${{ github.token }}
           run-id: ${{ needs.reuse-build.outputs.run-id || github.run_id }}
           path: ${{ runner.temp }}/artifact
+          merge-multiple: true
       - env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
@@ -224,11 +300,12 @@ jobs:
           RELEASE_COMMIT: ${{ needs.reuse-build.outputs.commit }}
         run: |
           cd "$RUNNER_TEMP/artifact"
-          name=hgl-$RELEASE_VERSION-macos-arm64.tar.gz
-          shasum -a 256 -c "$name.sha256"
+          macos=hgl-$RELEASE_VERSION-macos-arm64.tar.gz
+          linux=hgl-$RELEASE_VERSION-linux-x86_64.tar.gz
+          sha256sum -c "$macos.sha256" "$linux.sha256"
           if [[ "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" != "$RELEASE_COMMIT" ]]; then
             echo "Tag $RELEASE_TAG no longer points to the verified commit" >&2
             exit 1
           fi
           gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
-            "$name" "$name.sha256"
+            "$macos" "$macos.sha256" "$linux" "$linux.sha256"

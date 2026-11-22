@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a relocatable release on Apple silicon. See docs/releases.md.
+# Build a relocatable release on a supported target. See docs/releases.md.
 set -euo pipefail
 
 fail() {
@@ -8,7 +8,29 @@ fail() {
 }
 
 [[ $# -le 2 ]] || fail "usage: $0 [output-directory [version-tag]]"
-[[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || fail "requires Apple silicon macOS"
+case "$(uname -s)-$(uname -m)" in
+    Darwin-arm64)
+        platform=macos-arm64
+        target=aarch64-apple-darwin
+        export CXX=${CXX:-/usr/bin/clang++}
+        export MACOSX_DEPLOYMENT_TARGET=26.0
+        library_origin=@loader_path
+        install_name=(-DCMAKE_INSTALL_NAME_DIR=@rpath)
+        checksum=(shasum -a 256)
+        ;;
+    Linux-x86_64)
+        grep -qx 'ID=ubuntu' /etc/os-release && grep -qx 'VERSION_ID="26.04"' /etc/os-release ||
+            fail "build the Linux release on Ubuntu 26.04"
+        [[ $(getconf GNU_LIBC_VERSION) == 'glibc 2.43' ]] || fail "requires glibc 2.43"
+        platform=linux-x86_64
+        target=x86_64-unknown-linux-gnu
+        export CC=${CC:-gcc-15} CXX=${CXX:-g++-15}
+        library_origin='$ORIGIN'
+        install_name=()
+        checksum=(sha256sum)
+        ;;
+    *) fail "requires Apple silicon macOS or x86-64 Ubuntu 26.04" ;;
+esac
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 destination=${1:-$root/target/release-bundles}
 version_tag=${2:-}
@@ -21,12 +43,10 @@ cd -- "$root"
 version=$(python3 scripts/release-bundle.py version)
 [[ -z $version_tag || $version_tag == "$version" ]] ||
     fail "tag $version_tag does not match workspace version $version"
-name=hgl-$version-macos-arm64
+name=hgl-$version-$platform
 read -r hgraph_tag < HGRAPH_TAG
 source scripts/hgraph-dependencies.sh
 
-export CXX=${CXX:-/usr/bin/clang++}
-export MACOSX_DEPLOYMENT_TARGET=26.0
 # All build paths are disposable, including the compiler probe.
 work=$(mktemp -d "${TMPDIR:-/tmp}/hgl-release.XXXXXX")
 work=$(cd -- "$work" && pwd -P)
@@ -41,6 +61,15 @@ probe_toolchain() {
 #include <type_traits>
 int main() { static_assert(std::is_same_v<decltype(std::max(1, 2)), const int&>); return std::max(1, 2) != 2; }
 CPP
+    if [[ $platform == linux-x86_64 ]]; then
+        local version defines
+        version=$("$CXX" -dumpversion 2>/dev/null) || version=
+        defines=$("$CXX" -dM -E -x c++ /dev/null 2>/dev/null) || defines=
+        [[ ${version%%.*} == 15 && $defines == *__GNUC__* && $defines != *__clang__* ]] &&
+            "$CXX" -std=c++23 "$work/toolchain-probe.cpp" -o "$work/toolchain-probe" &&
+            "$work/toolchain-probe" || fail "requires the Ubuntu 26.04 GCC 15 toolchain"
+        return
+    fi
     if [[ $compiler =~ Apple[[:space:]]clang[[:space:]]version[[:space:]]([0-9]+) ]] &&
         [[ ${BASH_REMATCH[1]} -ge 21 ]] &&
         "$CXX" -std=c++23 -arch arm64 "-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
@@ -60,7 +89,7 @@ probe_toolchain
 git submodule update --init --recursive
 [[ -z $(git status --porcelain) ]] || fail "requires clean submodules"
 
-# The SDK and libraries use relative install names from the start.
+# The SDK and libraries use load paths relative to their installed location.
 bundle=$work/$name
 deps=$bundle/libexec/hgraph-deps
 sdk=$bundle/libexec/hgraph-sdk
@@ -77,8 +106,8 @@ build_dependency() {
     git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$tag" "$repository" "$work/$name"
     cmake -S "$work/$name" -B "$work/$name-build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$deps" -DCMAKE_INSTALL_LIBDIR=lib \
-        -DCMAKE_PREFIX_PATH="$deps" -DCMAKE_INSTALL_NAME_DIR=@rpath \
-        -DCMAKE_INSTALL_RPATH=@loader_path -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF "$@"
+        -DCMAKE_PREFIX_PATH="$deps" ${install_name[@]+"${install_name[@]}"} \
+        -DCMAKE_INSTALL_RPATH="$library_origin" -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF "$@"
     cmake --build "$work/$name-build" --parallel "$jobs"
     cmake --install "$work/$name-build"
     mkdir -p -- "$bundle/licenses/$name"
@@ -90,16 +119,15 @@ build_dependency() {
 
 build_native() (
     export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-ffile-prefix-map=$work=/hgl-release"
-    # Build the same library versions as the SDK provisioner with the system's
-    # libc++. A conda prefix would add its own libc++ to the bundle's dependencies.
+    # Build the pinned libraries against the system's C++ runtime.
     build_dependency fmt https://github.com/fmtlib/fmt.git "$FMT_VERSION" -DFMT_TEST=OFF -DFMT_DOC=OFF
     build_dependency spdlog https://github.com/gabime/spdlog.git "v$SPDLOG_VERSION" \
         -DSPDLOG_FMT_EXTERNAL=ON -DSPDLOG_BUILD_SHARED=ON -DSPDLOG_BUILD_TESTS=OFF
     build_dependency simdjson https://github.com/simdjson/simdjson.git "v$SIMDJSON_VERSION" \
         -DSIMDJSON_DEVELOPER_MODE=OFF
-    # Keep only headers, dylibs and CMake packages from the native dependencies.
+    # Keep only headers, shared libraries and CMake packages from the dependencies.
     rm -rf -- "$deps/lib/pkgconfig" "$deps/share"
-    TMPDIR=$work HGL_HGRAPH_DEPS=$deps HGL_HGRAPH_INSTALL_RPATH=@loader_path/../../hgraph-deps/lib \
+    TMPDIR=$work HGL_HGRAPH_DEPS=$deps HGL_HGRAPH_INSTALL_RPATH="$library_origin/../../hgraph-deps/lib" \
         HGL_BUILD_JOBS=$jobs scripts/provision-hgraph-sdk.sh "$hgraph_tag" "$sdk"
     sed 's|^dependencies=.*|dependencies=../hgraph-deps|' "$sdk/hgl-sdk.txt" >"$work/sdk-stamp"
     mv -- "$work/sdk-stamp" "$sdk/hgl-sdk.txt"
@@ -126,17 +154,17 @@ CARGO_ENCODED_RUSTFLAGS=$(printf '%s\037%s\037%s' \
     "--remap-path-prefix=$root=." "--remap-path-prefix=$cargo_home=/cargo" \
     "--remap-path-prefix=$cargo_target=/cargo-target")
 export CARGO_PROFILE_RELEASE_STRIP=symbols
-cargo build --locked --release --package hgl_cli --target aarch64-apple-darwin \
+cargo build --locked --release --package hgl_cli --target "$target" \
     --target-dir "$cargo_target" --jobs "$jobs"
-cp -- "$cargo_target/aarch64-apple-darwin/release/hgl" "$bundle/bin/hgl"
+cp -- "$cargo_target/$target/release/hgl" "$bundle/bin/hgl"
 cp -- LICENSE "$bundle/licenses/hgl-compiler.txt"
 cp -- spec/hgl_core/LICENSE "$bundle/licenses/hgl-core.txt"
-python3 scripts/release-bundle.py licenses "$bundle/licenses"
+python3 scripts/release-bundle.py licenses --target "$target" "$bundle/licenses"
 audit=(--forbid "$root" --forbid "$work" --forbid "$HOME" --forbid "$cargo_target")
 if [[ -n $native_cache ]]; then
     audit+=(--forbid "$native_cache")
 fi
-python3 scripts/release-bundle.py verify "$bundle" "${audit[@]}"
+python3 scripts/release-bundle.py verify --target "$target" "$bundle" "${audit[@]}"
 if [[ -n $native_cache && ! -d $native_cache/libexec ]]; then
     python3 scripts/release-bundle.py save-native "$bundle" "$native_cache"
 fi
@@ -147,7 +175,7 @@ COPYFILE_DISABLE=1 tar -czf "$work/$name.tar.gz" -C "$work" "$name"
 mv -- "$work/$name.tar.gz" "$destination/"
 (
     cd -- "$destination"
-    shasum -a 256 "$name.tar.gz" >"$name.tar.gz.sha256"
+    "${checksum[@]}" "$name.tar.gz" >"$name.tar.gz.sha256"
     printf 'Archive: %s\n' "$destination/$name.tar.gz"
     cat "$name.tar.gz.sha256"
 )
