@@ -43,6 +43,9 @@ impl<'a> Typer<'a> {
         what: &str,
         context: Option<&ConfigurationRead>,
     ) -> Expr {
+        if context.is_none() && matches!(expected, Type::Nullable(_)) {
+            self.record_result_read(&value, Some((expected, what)));
+        }
         let value = self.endpoint_read_form(value, expected);
         if is_integer_literal(&value) && accepts_float(expected) {
             let at = value.at;

@@ -14,27 +14,13 @@
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::ast::AstNode;
-use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
-use hgl_source::{FileId, Span};
+use hgl_parser::documentation::{Comment, attached};
+use hgl_parser::{SyntaxKind, SyntaxNode};
+use hgl_source::FileId;
 
 use crate::program::Program;
 use crate::types::Detail;
 use crate::{codes, error};
-
-/// The section headings SDOC-3's table lists. "Unknown headings remain
-/// prose."
-const HEADINGS: [&str; 10] = [
-    "Args:",
-    "Type Args:",
-    "Returns:",
-    "Raises:",
-    "Ticks:",
-    "Validity:",
-    "Properties:",
-    "Requires:",
-    "Notes:",
-    "Examples:",
-];
 
 /// The names a declaration's documentation may key its sections by.
 /// `None` where this pass does not check that section.
@@ -132,143 +118,39 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
 /// Checks the documentation comment of `node`, when it has one, against
 /// what `keys` says the declaration has.
 fn documented(node: &SyntaxNode, file: FileId, keys: &Keys, diagnostics: &mut Diagnostics) {
-    // SDOC-1: the comment is the declaration's first token.
-    let Some(comment) = node
-        .children_with_tokens()
-        .next()
-        .and_then(|element| element.into_token())
-        .filter(|token| token.kind() == SyntaxKind::DocComment)
-    else {
+    let Some(comment) = attached(node) else {
         return;
     };
-    for (heading, key, at) in structured_keys(&comment) {
-        let (names, what) = match heading {
-            "Args:" => (&keys.parameters, "parameter"),
-            "Type Args:" => (&keys.generics, "generic parameter"),
-            // SDOC-3 has `Requires:` and `Properties:` keyed "by
-            // declared contracts", and does not say how a key names a
-            // requirement or a property domain: they are not checked.
+    for section in Comment::read(&comment).sections() {
+        let (heading, names, what) = match section.heading() {
+            Some(heading @ "Args:") => (heading, &keys.parameters, "parameter"),
+            Some(heading @ "Type Args:") => (heading, &keys.generics, "generic parameter"),
+            // The spelling of requirement and property keys is unspecified.
             _ => continue,
         };
         let Some(names) = names else {
             continue;
         };
-        if names.contains(&key.as_str()) {
-            continue;
-        }
-        diagnostics.emit(
-            error(
-                Category::Name,
-                codes::DOC_UNKNOWN_KEY,
-                Location::new(file, at),
-                format!("`{heading}` names `{key}`, and what it documents has no {what} `{key}`"),
-                "SDOC-3",
-            )
-            .with_note(
-                "a structured key names a real parameter, generic parameter, requirement or \
-                 property domain of the declaration",
-            ),
-        );
-    }
-}
-
-/// The keys of the sections of a documentation comment, each with the
-/// heading of its section and the bytes it covers in the file.
-///
-/// SDOC-2: "Remove delimiters, outer blank lines, and common
-/// indentation ... A same-line summary does not set subsequent
-/// indentation." SDOC-3: "Section headings start at column zero after
-/// common-indent removal; contents are indented four spaces." A key is
-/// a name and a `:` at the start of a line of contents; what follows is
-/// its description, which may be missing ("Missing descriptions are
-/// permitted"). A line deeper than four spaces continues a description.
-fn structured_keys(comment: &SyntaxToken) -> Vec<(&'static str, String, Span)> {
-    let text = comment.text();
-    let start = comment.span().start;
-    // The delimiters: `/**` and, where the comment is closed, `*/`.
-    let inner_end = if text.len() >= 5 && text.ends_with("*/") {
-        text.len() - 2
-    } else {
-        text.len()
-    };
-    let inner = text.get(3..inner_end).unwrap_or("");
-    // Each line with its offset in the file. LEX-15: `\r\n`, `\r` and
-    // `\n` each end a line.
-    let mut lines: Vec<(u32, &str)> = Vec::new();
-    let mut from = 0;
-    let bytes = inner.as_bytes();
-    let mut at = 0;
-    while at < bytes.len() {
-        match bytes[at] {
-            b'\n' => {
-                lines.push((from as u32, &inner[from..at]));
-                at += 1;
-                from = at;
+        for entry in section.entries() {
+            let key = entry.name;
+            if names.contains(&key) {
+                continue;
             }
-            b'\r' => {
-                lines.push((from as u32, &inner[from..at]));
-                at += if bytes.get(at + 1) == Some(&b'\n') {
-                    2
-                } else {
-                    1
-                };
-                from = at;
-            }
-            _ => at += 1,
+            diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::DOC_UNKNOWN_KEY,
+                    Location::new(file, entry.span),
+                    format!(
+                        "`{heading}` names `{key}`, and what it documents has no {what} `{key}`"
+                    ),
+                    "SDOC-3",
+                )
+                .with_note(
+                    "a structured key names a real parameter, generic parameter, requirement or \
+                     property domain of the declaration",
+                ),
+            );
         }
     }
-    lines.push((from as u32, &inner[from..]));
-    // The first line is the one `/**` stands on: a summary written
-    // there sets no indentation and is no heading.
-    let body = &lines[1..];
-    let indent = |line: &str| line.len() - line.trim_start_matches([' ', '\t']).len();
-    let common = body
-        .iter()
-        .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(_, line)| indent(line))
-        .min()
-        .unwrap_or(0);
-    let mut keys = Vec::new();
-    let mut section: Option<&'static str> = None;
-    for &(offset, line) in body {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let column = indent(line) - common;
-        let content = &line[indent(line)..];
-        if column == 0 {
-            // A line at column zero is a heading when it is one SDOC-3
-            // lists, and otherwise prose, which ends the section.
-            section = HEADINGS
-                .iter()
-                .copied()
-                .find(|heading| content.trim_end() == *heading);
-            continue;
-        }
-        let Some(heading) = section else {
-            continue;
-        };
-        if column != 4 {
-            continue;
-        }
-        // The name: a letter or `_`, then letters, digits and `_`
-        // (LEX-9), up to its `:`.
-        let length = content
-            .find(|letter: char| !(letter.is_alphanumeric() || letter == '_'))
-            .unwrap_or(content.len());
-        let named = content
-            .chars()
-            .next()
-            .is_some_and(|first| first.is_alphabetic() || first == '_');
-        if !named || !content[length..].starts_with(':') {
-            continue;
-        }
-        let key_start = start + 3 + offset + indent(line) as u32;
-        keys.push((
-            heading,
-            content[..length].to_string(),
-            Span::new(key_start, key_start + length as u32),
-        ));
-    }
-    keys
 }

@@ -9,7 +9,7 @@ mod common;
 
 use common::{Checked, body, locals, module};
 use hgl_analyser::Detail;
-use hgl_analyser::hir::{Answer, Callee, Expr, ExprKind, Stmt, ValueCategory};
+use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, ValueCategory};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -29,9 +29,11 @@ fn callees(checked: &Checked, name: &str) -> Vec<String> {
                     .clone(),
                 Callee::Candidate { .. } => "candidate".to_string(),
                 Callee::Function { .. } => "function".to_string(),
-                Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {
-                    "none".to_string()
-                }
+                Callee::Parameter { .. }
+                | Callee::Anonymous(_)
+                | Callee::DeferredOperator(_)
+                | Callee::DeferredValue
+                | Callee::Unread => "none".to_string(),
             });
         }
     }
@@ -500,8 +502,8 @@ fn a_requirement_is_met_by_the_callers_own() {
         checked.summary(),
         ["m.hgl:5:36 operator/operator.no_candidate GEN-5"]
     );
-    assert_eq!(callees(&checked, "stated"), ["candidate"]);
-    assert_eq!(callees(&checked, "compared"), ["candidate"]);
+    assert_eq!(callees(&checked, "stated"), ["none"]);
+    assert_eq!(callees(&checked, "compared"), ["none"]);
     assert_eq!(callees(&checked, "uses"), ["candidate", "candidate"]);
 }
 
@@ -630,8 +632,12 @@ fn answer(checked: &Checked, answer: &Answer) -> String {
 /// in the order the calls are met; and for a call of what the
 /// declaration requires, `requirement N`.
 fn answers(checked: &Checked, name: &str) -> Vec<String> {
+    answers_in(checked, body(checked, name))
+}
+
+fn answers_in(checked: &Checked, body: &Body) -> Vec<String> {
     let mut found = Vec::new();
-    hgl_analyser::hir::walk_statements(&body(checked, name).statements, &mut |value| {
+    hgl_analyser::hir::walk_statements(&body.statements, &mut |value| {
         let ExprKind::Call { callee, .. } = &value.kind else {
             return;
         };
@@ -646,9 +652,11 @@ fn answers(checked: &Checked, name: &str) -> Vec<String> {
             Callee::Required { requirement, .. } => {
                 found.push(format!("requirement {requirement}"))
             }
-            Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {
-                found.push("none".to_string())
-            }
+            Callee::Parameter { .. }
+            | Callee::Anonymous(_)
+            | Callee::DeferredOperator(_)
+            | Callee::DeferredValue
+            | Callee::Unread => found.push("none".to_string()),
         }
     });
     found
@@ -763,9 +771,35 @@ fn a_graph_answers_a_temporal_candidates_requirement() {
         "fn texts(a: str, b: str) -> str => identity_sum(a, b)\n",
     ));
     assert_eq!(checked.summary(), NONE);
-    assert_eq!(answers(&checked, "identity_sum"), ["stated 0"]);
-    assert_eq!(answers(&checked, "wired"), ["add_(f64, f64)"]);
-    assert_eq!(answers(&checked, "texts"), ["add_(str, str)"]);
+    assert_eq!(answers(&checked, "identity_sum"), ["none"]);
+    for (caller, expected) in [("wired", "add_(f64, f64)"), ("texts", "add_(str, str)")] {
+        let Some(Stmt::Return {
+            value: Some(value), ..
+        }) = body(&checked, caller).statements.last()
+        else {
+            panic!("a return with a call");
+        };
+        let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    generics,
+                    requirements,
+                    ..
+                },
+            ..
+        } = &value.kind
+        else {
+            panic!("a call of identity_sum");
+        };
+        assert_eq!(answers(&checked, caller), [expected]);
+        let (_, instance) = checked
+            .program
+            .instance(*module, *declaration, generics, requirements)
+            .expect("identity_sum has a body");
+        assert_eq!(answers_in(&checked, &instance), [expected]);
+    }
 }
 
 /// GEN-3: "A call of a function whose `requires` does not hold with

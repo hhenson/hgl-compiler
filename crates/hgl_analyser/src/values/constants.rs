@@ -12,12 +12,14 @@ use super::Typer;
 use super::fit::{not_null, whole};
 use super::inference::placed;
 use crate::constant::{Fault, Scope, Typed};
-use crate::declared::names_parameter;
+use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{DefaultExpr, Expr, ExprKind, Value};
 use crate::program::Declaration;
 use crate::read::{default_of, parameters};
 use crate::syntax::{child, tokens};
-use crate::types::{Constant, ConstantValue, GenericKind, GenericParameter, StructType, Type};
+use crate::types::{
+    Argument, Constant, ConstantValue, GenericKind, GenericParameter, StructType, Type,
+};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -187,9 +189,6 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
     ) -> Result<Typed, Fault> {
-        // Closures: functions written in place, which may use what is in
-        // scope around them; here, `self`.
-        let binding = |file: FileId, offset: u32| self.binding_at(file, offset);
         let parameter = |at: Location| {
             self.signature
                 .generics
@@ -200,11 +199,22 @@ impl<'a> Typer<'a> {
                     _ => None,
                 })
         };
+        self.typed_in_scope(file, node, expected, &parameter)
+    }
+
+    fn typed_in_scope(
+        &self,
+        file: FileId,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        parameter: &dyn Fn(Location) -> Option<Type>,
+    ) -> Result<Typed, Fault> {
+        let binding = |file: FileId, offset: u32| self.binding_at(file, offset);
         let scope = Scope {
             program: self.program,
             file,
             binding: &binding,
-            parameter: &parameter,
+            parameter,
             constants: &self.constants,
         };
         crate::constant::typed(node, expected, &scope)
@@ -221,6 +231,40 @@ impl<'a> Typer<'a> {
         let expected = expected.filter(|expected| whole(expected));
         self.typed_in(file, node, expected)
             .and_then(|read| crate::constant::fit(read, expected, self.program))
+    }
+
+    /// Read a public operator default in its definition scope, with the
+    /// types and values the reference gives its generic parameters (GEN-8).
+    /// Each parameter keeps its own type while the candidate provides the
+    /// expected type of the default expression (EXPR-5).
+    pub(super) fn read_instance_default(
+        &self,
+        file: FileId,
+        node: &SyntaxNode,
+        expected: &Type,
+        (generics, arguments): (&[GenericParameter], &[Argument]),
+    ) -> Result<ConstantValue, Fault> {
+        let map: Vec<_> = generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(arguments)
+            .collect();
+        let parameter = |at: Location| {
+            let generic = generics.iter().find(|generic| generic.at == at)?;
+            match &generic.kind {
+                GenericKind::Value(ty) => Some(substitute_within(ty, &map)),
+                _ => None,
+            }
+        };
+        let expected = whole(expected).then_some(expected);
+        let read = self.typed_in_scope(file, node, expected, &parameter)?;
+        let value = crate::constant::fit(read, expected, self.program)?;
+        Ok(value.substituted(
+            &|at| match map.iter().find(|(declared, _)| *declared == at)?.1 {
+                Argument::Constant(given) => Some(given.value.clone()),
+                Argument::Type(_) => None,
+            },
+        ))
     }
 
     /// [`Typer::read_in`], for a constant written in the file being read.

@@ -1,0 +1,8 @@
+/** A part that contains candidates. */
+module examples.apidoc part shifts
+
+/** An integer candidate's text. */
+impl const fn shifted{offset: i64}(input: i64) -> i64 => input + offset
+
+/** A native floating candidate's text. */
+native impl const fn shifted{offset: i64}(input: f64) -> f64

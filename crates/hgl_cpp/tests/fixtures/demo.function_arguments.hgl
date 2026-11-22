@@ -236,3 +236,76 @@ test bound_child_captures {
         inspect: [true, _, false],
     ) == [4, -1, -1]
 }
+
+# FN-17, GEN-8: the specification's explicit generic operator reference.
+const fn widened(f: const fn(i64) -> f64, x: i64) -> f64 => f(x)
+const fn eight() -> f64 => widened(convert<f64>, 8)
+
+operator classify_text<R, V>(value: V) -> R
+impl const fn classify_text(value: i64) -> str => "integer"
+impl const fn classify_text(value: f64) -> str => "float"
+
+const fn describe<V>(f: const fn(V) -> str, value: V) -> str => f(value)
+const fn describe_named(f: const fn(value: i64) -> str, value: i64) -> str => f(value: value)
+
+# GEN-5 and FN-17: a result read at an ordinary call would allow both
+# candidates, but the callback's declared result itself must fit.
+operator exact_result<R, V>(value: V) -> R
+impl const fn exact_result(value: i64) -> f64 => 18.0
+impl const fn exact_result(value: i64) -> f64? => 19.0
+
+operator signed<const positive: bool = true, T>(value: T) -> T
+impl const fn signed<const positive: bool = true>(value: i64) -> i64
+    requires positive == true => value
+impl const fn signed<const positive: bool = true>(value: i64) -> i64
+    requires positive == false => -value
+
+# FN-17, GEN-8 and EXPR-5: a written or defaulted integer literal
+# takes the selected option's f64 type.
+operator option_bias<const enabled: bool, const amount: i64 = 3>(value: i64) -> f64
+impl const fn option_bias<T, const enabled: T, const amount: f64 = 3.0>(value: i64) -> f64 => amount
+
+operator list_bias<const enabled: bool, const amounts: list<i64> = [3]>(value: i64) -> f64
+impl const fn list_bias<T, const enabled: T, const amounts: list<f64> = [3.0]>(value: i64) -> f64 => amounts[0]
+
+operator nested_bias<const enabled: bool, const amounts: list<list<i64>> = [[3]]>(value: i64) -> f64
+impl const fn nested_bias<T, const enabled: T, const amounts: list<list<f64>> = [[3.0]]>(value: i64) -> f64 => amounts[0][0]
+
+operator pair_bias<const First: i64, const Pair: tuple<i64, i64> = (First, 3)>(value: i64) -> f64
+impl const fn pair_bias<const First: i64, const Pair: tuple<i64, f64> = (First, 3.0)>(value: i64) -> f64 =>
+    convert<f64>(Pair[0]) + Pair[1]
+
+operator option_infers<const enabled: bool>(value: i64) -> i64
+impl const fn option_infers<T, const enabled: T>(value: i64) -> i64 => value
+
+operator selected_live<R, V>(value: V) -> R
+impl fn selected_live(value: i64) -> i64 {
+    when { return value + 10 }
+}
+impl const fn selected_live(value: i64) -> i64 => value + 100
+
+fn map_widened(f: fn(i64) -> f64, value: i64) -> f64 => f(value)
+fn lifted_convert(value: i64) -> f64 => map_widened(convert<f64>, value)
+fn composed_operator(value: i64) -> i64 => map_graph(selected_live<i64>, value)
+
+test explicit_operator_callbacks {
+    assert eight() == 8.0
+    assert describe(classify_text<str>, 8) == "integer"
+    assert describe(classify_text<str>, 8.5) == "float"
+    assert describe(classify_text, 8) == "integer"
+    assert describe_named(classify_text<str>, 8) == "integer"
+    assert widened(exact_result<f64>, 8) == 18.0
+    assert apply(signed<false>, 8) == -8
+    assert apply(signed, 8) == 8
+    assert widened(option_bias<true>, 8) == 3.0
+    assert widened(option_bias<true, 3>, 8) == 3.0
+    assert widened(list_bias<true>, 8) == 3.0
+    assert widened(list_bias<true, [3]>, 8) == 3.0
+    assert widened(nested_bias<true>, 8) == 3.0
+    assert widened(nested_bias<true, [[3]]>, 8) == 3.0
+    assert widened(pair_bias<5>, 8) == 8.0
+    assert widened(pair_bias<5, (5, 3)>, 8) == 8.0
+    assert apply(option_infers<true>, 8) == 8
+    assert eval lifted_convert(value: [2, 3]) == [2.0, 3.0]
+    assert eval composed_operator(value: [2, 3]) == [12, 13]
+}

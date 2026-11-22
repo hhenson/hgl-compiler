@@ -482,6 +482,7 @@ fn fresh_defaults(program: &Program, value: &Expr) -> bool {
         module,
         declaration,
         arguments,
+        ..
     } = &value.kind
     else {
         return false;
@@ -578,6 +579,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
             condition,
             then,
             otherwise,
+            ..
         } => {
             into.push(condition);
             into.push(then);
@@ -587,7 +589,9 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::Widen(inner)
         | ExprKind::ParentList(inner)
         | ExprKind::EnumFrom { value: inner, .. }
+        | ExprKind::DeferredEnumFrom(inner)
         | ExprKind::Field { base: inner, .. }
+        | ExprKind::DeferredMember { base: inner, .. }
         | ExprKind::Tagged { payload: inner, .. }
         | ExprKind::TagTest { value: inner, .. }
         | ExprKind::Payload { result: inner, .. }
@@ -612,6 +616,32 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         }
         | ExprKind::TraceCompare { left, right, .. } => {
             into.push(left);
+            into.push(right);
+        }
+        ExprKind::DeferredNegation {
+            configuration,
+            operand,
+            ..
+        } => {
+            into.extend(
+                configuration
+                    .iter()
+                    .filter_map(|entry| entry.value.as_ref()),
+            );
+            into.push(operand);
+        }
+        ExprKind::DeferredBinary {
+            left,
+            configuration,
+            right,
+            ..
+        } => {
+            into.push(left);
+            into.extend(
+                configuration
+                    .iter()
+                    .filter_map(|entry| entry.value.as_ref()),
+            );
             into.push(right);
         }
         ExprKind::Call { arguments, .. }
@@ -645,6 +675,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::Endpoint { .. }
         | ExprKind::Local(_)
         | ExprKind::BoundChild(_)
+        | ExprKind::DeferredPresent(_)
         | ExprKind::EndpointOf(_)
         | ExprKind::GenericValue { .. }
         | ExprKind::EnumMember { .. }

@@ -2,15 +2,25 @@
 //! while the graph is built, and the places that take no connection
 //! (FN-3, FN-6, CTRL-14, EXPR-14). Part of the typing pass ([`super`]).
 
-use hgl_diagnostics::{Category, Location};
+use std::collections::HashMap;
 
-use super::Typer;
+use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
+use hgl_parser::{SyntaxKind, SyntaxNode};
+
+use super::calls::pending_function_inference;
+use super::control::{bound_by_loop, iterates, iteration_types, no_else_type, while_connection};
+use super::expressions::sequence_element;
+use super::fit::{open, whole};
+use super::forms::received_type;
+use super::members::{index_result, indexed_payload};
+use super::results::{captured_binding, captured_output};
+use super::{CapturedOutput, Typer};
 use crate::hir::{
-    Body, Callee, Expr, ExprKind, Local, LocalId, Node, Run, Stmt, ValueCategory,
-    walk_statement_nodes, walk_statements_mut,
+    Body, Callee, Expr, ExprKind, Form, IfInference, Local, LocalId, Node, NodeMut, Run, Stmt,
+    Value, ValueCategory, walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
-use crate::program::{DeclarationKind, Program, Role};
-use crate::types::Detail;
+use crate::program::{DeclarationKind, OperatorRef, Program, Role};
+use crate::types::{Argument, Detail, Parameter, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -40,39 +50,16 @@ impl<'a> Typer<'a> {
         (given, at): (ValueCategory, Location),
         inside: bool,
     ) {
-        use ValueCategory::{Connection, Unsettled, Value};
-        if self.locals[local].category == Unsettled && !inside {
+        if self.locals[local].category == ValueCategory::Unsettled && !inside {
             self.locals[local].category = given;
         }
-        let held = self.locals[local].category;
         // Declared before the nearest `if` selected at runtime.
         let chosen_at_runtime = self.temporal.is_some_and(|outside| local < outside);
-        let name = self.locals[local].name.clone();
-        let message = match (held, given) {
-            (Value, Connection) => format!(
-                "`{name}` holds an ordinary value, and this is a connection: a `var` keeps \
-                 the category of its first value"
-            ),
-            (Connection, Value) if !inside => format!(
-                "`{name}` is a connection, and this is an ordinary value: a `var` keeps the \
-                 category of its first value"
-            ),
-            (Value, Value) if chosen_at_runtime => format!(
-                "`{name}` holds an ordinary value, and this branch is selected at runtime: \
-                 its value would not be known while the graph is built"
-            ),
-            _ => return,
-        };
-        self.diagnostics.emit(
-            error(
-                Category::Type,
-                codes::BINDING_CATEGORY,
-                at,
-                message,
-                "CTRL-14",
-            )
-            .with_related(self.locals[local].at, "declared here"),
-        );
+        if let Some(report) =
+            assignment_category(&self.locals[local], (given, at), inside, chosen_at_runtime)
+        {
+            self.diagnostics.emit(report);
+        }
     }
 
     /// What a value read in a graph is (FN-3), as [`category`] says,
@@ -86,59 +73,7 @@ impl<'a> Typer<'a> {
     /// while the graph is built. TIME-2: "Composition describes a typed
     /// graph without reading live payloads."
     pub(super) fn constants_of(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            // An operation the body requires: the operator's own
-            // signature says which of its parameters is `const`
-            // (GEN-4).
-            Callee::Required {
-                operator: (module, declaration),
-                ..
-            } => (*module, *declaration),
-            Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => return,
-        };
-        let Some(Detail::Callable(signature)) =
-            self.program.modules[module].details.get(declaration)
-        else {
-            return;
-        };
-        for argument in arguments {
-            let parameter = argument
-                .parameter
-                .and_then(|index| signature.parameters.get(index));
-            let Some(parameter) = parameter else {
-                continue;
-            };
-            // What is not settled is not judged: it may be a value.
-            if parameter.constant && self.category(&argument.value) == ValueCategory::Connection {
-                self.diagnostics.emit(error(
-                    Category::Phase,
-                    codes::CONNECTION_AS_CONSTANT,
-                    argument.value.at,
-                    format!(
-                        "`{}` is a `const` parameter, and this is a connection: it has no \
-                         value while the graph is built",
-                        parameter.name
-                    ),
-                    "FN-3",
-                ));
-            }
-        }
+        check_const_arguments(self.program, &self.locals, kind, self.diagnostics);
     }
 
     /// An entry of the configuration of the symbol written `form` in a
@@ -156,10 +91,34 @@ impl<'a> Typer<'a> {
     /// TIME-2: "Composition describes a typed graph without reading
     /// live payloads." So the entry is given what is known where the
     /// graph is built (`connection.as_constant`).
-    pub(super) fn configuration_input(&mut self, operator: &str, option: &str, value: &Expr) {
-        if self.category(value) != ValueCategory::Connection {
+    pub(super) fn configuration_input(
+        &mut self,
+        (operator, form): (OperatorRef, Form),
+        (module, declaration): (usize, usize),
+        parameter: &Parameter,
+        value: &Expr,
+        category: ValueCategory,
+    ) {
+        if !self.graph
+            || parameter.constant
+            || category != ValueCategory::Connection
+            || !matches!(
+                self.program.modules[module].declarations[declaration]
+                    .kind
+                    .candidate(),
+                Some((Role::Value, _))
+            )
+        {
             return;
         }
+        let operator = match form {
+            Form::Named => self.program.modules[operator.module].declarations[operator.declaration]
+                .name
+                .as_str(),
+            Form::Binary(operator) => operator.symbol(),
+            Form::Unary(operator) => operator.symbol(),
+        };
+        let option = &parameter.name;
         self.diagnostics.emit(
             error(
                 Category::Phase,
@@ -182,6 +141,162 @@ impl<'a> Typer<'a> {
             && !self.testing
             && self.hook.is_none()
             && self.category(value) == ValueCategory::Connection
+    }
+}
+
+/// The same CTRL-14 comparison, once the categories of both sides are known.
+pub(super) fn assignment_category(
+    binding: &Local,
+    (given, at): (ValueCategory, Location),
+    inside: bool,
+    chosen_at_runtime: bool,
+) -> Option<Diagnostic> {
+    use ValueCategory::{Connection, Value};
+    let name = &binding.name;
+    let message = match (binding.category, given) {
+        (Value, Connection) => format!(
+            "`{name}` holds an ordinary value, and this is a connection: a `var` keeps \
+             the category of its first value"
+        ),
+        (Connection, Value) if !inside => format!(
+            "`{name}` is a connection, and this is an ordinary value: a `var` keeps the \
+             category of its first value"
+        ),
+        (Value, Value) if chosen_at_runtime => format!(
+            "`{name}` holds an ordinary value, and this branch is selected at runtime: \
+             its value would not be known while the graph is built"
+        ),
+        _ => return None,
+    };
+    Some(
+        error(
+            Category::Type,
+            codes::BINDING_CATEGORY,
+            at,
+            message,
+            "CTRL-14",
+        )
+        .with_related(binding.at, "declared here"),
+    )
+}
+
+/// FN-3: checks the const inputs of a call using its current graph categories.
+fn check_const_arguments(
+    program: &Program,
+    locals: &[Local],
+    kind: &ExprKind,
+    diagnostics: &mut Diagnostics,
+) {
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = kind
+    else {
+        return;
+    };
+    let (module, declaration) = match callee {
+        Callee::Function {
+            module,
+            declaration,
+            ..
+        }
+        | Callee::Candidate {
+            module,
+            declaration,
+            ..
+        } => (*module, *declaration),
+        // An operation the body requires: the operator's own
+        // signature says which of its parameters is `const`
+        // (GEN-4).
+        Callee::Required {
+            operator: (module, declaration),
+            ..
+        } => (*module, *declaration),
+        Callee::Parameter { .. }
+        | Callee::Anonymous(_)
+        | Callee::DeferredOperator(_)
+        | Callee::DeferredValue
+        | Callee::Unread => {
+            return;
+        }
+    };
+    let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration) else {
+        return;
+    };
+    for argument in arguments {
+        let parameter = argument
+            .parameter
+            .and_then(|index| signature.parameters.get(index));
+        let Some(parameter) = parameter else {
+            continue;
+        };
+        // What is not settled is not judged: it may be a value.
+        if parameter.constant
+            && category(program, locals, &argument.value) == ValueCategory::Connection
+        {
+            diagnostics.emit(error(
+                Category::Phase,
+                codes::CONNECTION_AS_CONSTANT,
+                argument.value.at,
+                format!(
+                    "`{}` is a `const` parameter, and this is a connection: it has no \
+                     value while the graph is built",
+                    parameter.name
+                ),
+                "FN-3",
+            ));
+        }
+    }
+}
+
+/// GEN-7: a selected temporal candidate can make a formerly unsettled
+/// argument or a loop condition a connection. Check the graph's
+/// constant places after recording the instance.
+pub(super) fn check_instance_constants(
+    program: &Program,
+    body: &Body,
+    from: &[Location],
+    diagnostics: &mut Diagnostics,
+) {
+    let mut reports = Diagnostics::new();
+    walk_statement_nodes(&body.statements, &mut |node| match node {
+        Node::Expression(value) => {
+            check_const_arguments(program, &body.locals, &value.kind, &mut reports);
+        }
+        Node::Statement(Stmt::While {
+            condition: Some(condition),
+            ..
+        }) => {
+            if let Some(report) = while_connection(condition, condition.category) {
+                reports.emit(report);
+            }
+        }
+        _ => {}
+    });
+    report_instance_checks(
+        &reports,
+        from,
+        diagnostics,
+        "this place in the generic body needs a value",
+    );
+}
+
+pub(super) fn report_instance_checks(
+    reports: &Diagnostics,
+    from: &[Location],
+    diagnostics: &mut Diagnostics,
+    message: &str,
+) {
+    for report in reports.as_slice() {
+        if diagnostics.as_slice().contains(report) {
+            continue;
+        }
+        for &root in from {
+            let mut here = report.clone().with_related(report.primary, message);
+            here.primary = root;
+            if !diagnostics.as_slice().contains(&here) {
+                diagnostics.emit(here);
+            }
+        }
     }
 }
 
@@ -227,7 +342,9 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
     match &value.kind {
         // A default and a constant are read with no local in scope
         // (UNIT-7, UNIT-13).
-        ExprKind::Local(local) => locals.get(*local).map_or(Value, |local| local.category),
+        ExprKind::Local(local) | ExprKind::DeferredPresent(local) => {
+            locals.get(*local).map_or(Value, |local| local.category)
+        }
         ExprKind::StaticCallable(callee) => match &**callee {
             Callee::Anonymous(function) => function
                 .captures
@@ -273,9 +390,13 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
                     .map(|&local| locals[local].category)
                     .fold(given, join),
                 Callee::Parameter { temporal: true, .. } => Connection,
-                // A value callback may capture a connection. Its
-                // specialized body determines whether FN-6 lifts it.
-                Callee::Parameter { .. } | Callee::Required { .. } => join(given, Unsettled),
+                // A callback may capture a connection. A call awaiting
+                // instance selection may choose a temporal candidate
+                // (GEN-7), even with only ordinary arguments.
+                Callee::Parameter { .. }
+                | Callee::Required { .. }
+                | Callee::DeferredOperator(_)
+                | Callee::Unread => join(given, Unsettled),
                 _ => given,
             }
         }
@@ -283,14 +404,38 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
             all(&mut arguments.iter().map(|argument| &argument.value))
         }
         ExprKind::Unary { operand, .. } => category(operand),
+        ExprKind::DeferredNegation {
+            configuration,
+            operand,
+            ..
+        } => {
+            let given = all(&mut configuration
+                .iter()
+                .filter_map(|entry| entry.value.as_ref()));
+            join(join(given, category(operand)), Unsettled)
+        }
         ExprKind::Binary { left, right, .. } => join(category(left), category(right)),
+        ExprKind::DeferredBinary {
+            left,
+            configuration,
+            right,
+            ..
+        } => {
+            let given = all(&mut configuration
+                .iter()
+                .filter_map(|entry| entry.value.as_ref()));
+            join(
+                join(join(category(left), given), category(right)),
+                Unsettled,
+            )
+        }
         ExprKind::Widen(inner) => category(inner),
         // OPS-6: the list converted is what it is given, lifted
         // over a connection as a conversion is (FN-6).
         ExprKind::ParentList(inner) => category(inner),
-        ExprKind::Field { base, .. } => category(base),
+        ExprKind::Field { base, .. } | ExprKind::DeferredMember { base, .. } => category(base),
         // An enum constructed from a connection is lifted (FN-6).
-        ExprKind::EnumFrom { value, .. } => category(value),
+        ExprKind::EnumFrom { value, .. } | ExprKind::DeferredEnumFrom(value) => category(value),
         // A result form over a connection is lifted, as a value
         // function's call is (FN-6, ERR-3): what it gives is what it
         // is given.
@@ -370,44 +515,558 @@ fn lifts(program: &Program, callee: &Callee) -> bool {
 /// lifted". A node's hooks, a value function and a test lift nothing
 /// (a test's eval wires its target itself, TST-8).
 ///
-/// A local that is not settled takes what the first of its values that
-/// is settled is (EXPR-3: "Initialization fixes a binding's
-/// value/connection category"), as the typing pass has it. That changes
-/// nothing in a body as it was read, and settles an instance's
-/// ([`Program::instance`]): there each operation the declaration
+/// A local that is not settled waits for its first value (EXPR-3), or
+/// for the sequence of the `for` that binds it (CTRL-15). In an
+/// instance ([`Program::instance`]), each operation the declaration
 /// requires is the call of the candidate that answers it, a temporal
 /// one or a value one, so what it gives is known. A value may read a
 /// local declared inside it, `let s = { let t = add_(k, k); t }`, which
 /// a walk meets after the declaration it is in, so the walk is made
 /// again until it settles no more: each walk but the last settles one
-/// at least.
+/// category or fills a hole in an inferred type. In a graph this
+/// includes a no-else `if` whose type depends on the categories (CTRL-13).
 pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
-    use ValueCategory::Unsettled;
+    record_with(program, body, composition, None, None);
+}
+
+/// Settle a concrete graph with source branch and field inference available.
+pub(super) fn record_with(
+    program: &Program,
+    body: &mut Body,
+    composition: bool,
+    mut typer: Option<&mut Typer<'_>>,
+    place_required: Option<&dyn Fn(&mut Expr)>,
+) {
+    use ValueCategory::{Connection, Unsettled};
     let Body { locals, statements } = body;
+    let mut first = first_values(locals, statements);
+    let mut capture_types = HashMap::new();
     let mut settling = true;
     while settling {
         settling = false;
-        walk_statement_nodes(statements, &mut |node| {
-            let (local, value) = match node {
-                Node::Statement(Stmt::Declare {
+        walk_statement_nodes_mut(statements, &mut |node| {
+            let (local, value, at, declares) = match node {
+                NodeMut::Statement(Stmt::Declare {
                     local,
                     value: Some(value),
-                })
-                | Node::Statement(Stmt::Assign { local, value, .. }) => (*local, value),
+                }) => (*local, value, locals[*local].at, true),
+                NodeMut::Statement(Stmt::Assign {
+                    local, value, at, ..
+                }) => (*local, value, *at, false),
+                NodeMut::Statement(Stmt::For {
+                    names, sequence, ..
+                }) if composition => {
+                    let ty = received_type(&sequence.ty, iterates);
+                    if let Some(types) = iteration_types(ty, names.len()) {
+                        for (&local, given) in names.iter().zip(types) {
+                            if !whole(&locals[local].ty) {
+                                settling |= fill_type(&mut locals[local].ty, given.clone());
+                            }
+                        }
+                    }
+                    if names
+                        .iter()
+                        .all(|&local| locals[local].category != Unsettled)
+                    {
+                        return;
+                    }
+                    let over = category(program, locals, sequence);
+                    // A connection still needs its collection kind to
+                    // decide whether each iteration binding is one.
+                    if over == Unsettled || over == Connection && open(ty) {
+                        return;
+                    }
+                    let (categories, _) = bound_by_loop(over, ty, names.len());
+                    for (&local, given) in names.iter().zip(categories) {
+                        if locals[local].category == Unsettled && given != Unsettled {
+                            locals[local].category = given;
+                            settling = true;
+                        }
+                    }
+                    return;
+                }
+                NodeMut::Expression(value)
+                    if composition
+                        && matches!(
+                            value.kind,
+                            ExprKind::DeferredBinary { .. } | ExprKind::DeferredNegation { .. }
+                        ) =>
+                {
+                    if let Some(typer) = typer.as_deref_mut() {
+                        // The normal call checks read the concrete local
+                        // scope, including iteration bindings settled here.
+                        std::mem::swap(&mut typer.locals, locals);
+                        let selected = typer.settle_symbol(&value.kind);
+                        std::mem::swap(&mut typer.locals, locals);
+                        if let Some((kind, ty)) = selected {
+                            value.kind = kind;
+                            value.ty = ty;
+                            settling = true;
+                        }
+                    }
+                    return;
+                }
+                NodeMut::Expression(Expr { kind, ty, .. })
+                    if composition && matches!(kind, ExprKind::DeferredEnumFrom(_)) =>
+                {
+                    if let ExprKind::DeferredEnumFrom(value) = kind
+                        && let Some(typer) = typer.as_deref_mut()
+                        && let Some(constructor) = typer.settle_enum_from(ty, value)
+                    {
+                        *kind = constructor;
+                        settling = true;
+                    }
+                    return;
+                }
+                NodeMut::Expression(value)
+                    if composition && pending_function_inference(&value.kind) =>
+                {
+                    if let Some(typer) = typer.as_deref_mut() {
+                        // Inference and admission use the concrete locals
+                        // of the graph, as ordinary call checking does.
+                        std::mem::swap(&mut typer.locals, locals);
+                        settling |= typer.settle_function_call(value);
+                        std::mem::swap(&mut typer.locals, locals);
+                    }
+                    return;
+                }
+                NodeMut::Expression(value)
+                    if composition
+                        && matches!(
+                            value.kind,
+                            ExprKind::Call {
+                                callee: Callee::DeferredOperator(_),
+                                ..
+                            }
+                        ) =>
+                {
+                    if let Some(typer) = typer.as_deref_mut() {
+                        std::mem::swap(&mut typer.locals, locals);
+                        let selected = typer.settle_operator(value);
+                        std::mem::swap(&mut typer.locals, locals);
+                        if let Some((kind, ty)) = selected {
+                            value.kind = kind;
+                            value.ty = ty;
+                            // GEN-16: a requirement found on replay uses
+                            // the evidence supplied to the enclosing instance.
+                            if let Some(place) = place_required
+                                && matches!(
+                                    value.kind,
+                                    ExprKind::Call {
+                                        callee: Callee::Required { .. },
+                                        ..
+                                    }
+                                )
+                            {
+                                place(value);
+                            }
+                            settling = true;
+                        }
+                    }
+                    return;
+                }
+                NodeMut::Expression(value) if composition && !whole(&value.ty) => {
+                    if let ExprKind::DeferredPresent(local) = value.kind {
+                        let binding = &locals[local];
+                        if binding.category != Unsettled && whole(&binding.ty) {
+                            value.ty = match (&binding.ty, binding.category) {
+                                (Type::Nullable(payload), ValueCategory::Value) => {
+                                    (**payload).clone()
+                                }
+                                (ty, _) => ty.clone(),
+                            };
+                            value.kind = ExprKind::Local(local);
+                            settling = true;
+                        }
+                        return;
+                    }
+                    if let ExprKind::DeferredMember {
+                        base,
+                        name,
+                        at,
+                        variant_proven,
+                    } = &value.kind
+                        && let Some(typer) = typer.as_deref_mut()
+                    {
+                        std::mem::swap(&mut typer.locals, locals);
+                        let member = typer.settle_member(base, name, *at, *variant_proven);
+                        std::mem::swap(&mut typer.locals, locals);
+                        if let Some((kind, ty)) = member {
+                            value.kind = kind;
+                            value.ty = ty;
+                            settling = true;
+                        }
+                        return;
+                    }
+                    if let Some(ty) =
+                        settled_type(program, locals, &capture_types, value, typer.as_deref_mut())
+                    {
+                        settling |= fill_type(&mut value.ty, ty);
+                    }
+                    return;
+                }
                 _ => return,
             };
-            if locals[local].category == Unsettled {
+            if first.get(local).copied().flatten() == Some(at)
+                && locals[local].category == Unsettled
+            {
                 let given = category(program, locals, value);
                 if given != Unsettled {
                     locals[local].category = given;
                     settling = true;
                 }
             }
+            if composition && declares && !whole(&locals[local].ty) {
+                settling |= fill_type(&mut locals[local].ty, value.ty.clone());
+            }
+            // ERR-7: the boundary stays separate from its output. Keep
+            // the output only for the definite capture bindings source recognizes.
+            if composition
+                && declares
+                && let Some(call) = captured_binding(locals[local].kind, value)
+                && let CapturedOutput::Of(ty) = captured_output(program, call)
+                && whole(&ty)
+                && capture_types.get(&local) != Some(&ty)
+            {
+                capture_types.insert(local, ty);
+                settling = true;
+            }
         });
+        // A contextual symbol option can introduce locals in its block
+        // when its candidate is selected. Include them in the next pass.
+        if first.len() != locals.len() {
+            first = first_values(locals, statements);
+        }
     }
     walk_statements_mut(statements, &mut |value| {
         recorded(program, locals, composition, value);
     });
+}
+
+/// EXPR-3: the initializer takes precedence, or the first assignment
+/// of a `var` with no initializer. A write inside an assignment's
+/// right-hand side completes before the enclosing write.
+fn first_values(locals: &[Local], statements: &[Stmt]) -> Vec<Option<Location>> {
+    let mut first: Vec<Option<Location>> = vec![None; locals.len()];
+    walk_statement_nodes(statements, &mut |node| match node {
+        Node::Statement(Stmt::Declare {
+            local,
+            value: Some(_),
+        }) => {
+            first[*local] = Some(locals[*local].at);
+        }
+        Node::Statement(Stmt::Assign { local, at, .. })
+            if first[*local].is_none_or(|before| at.span.end < before.span.end) =>
+        {
+            first[*local] = Some(*at);
+        }
+        _ => {}
+    });
+    first
+}
+
+/// EXPR-3 and EXPR-9: each pass fills holes in a type, preserving all
+/// previously known positions, including members typed by an annotation.
+pub(super) fn fill_type(current: &mut Type, inferred: Type) -> bool {
+    match (current, inferred) {
+        (current @ Type::Unknown, inferred) if inferred != Type::Unknown => {
+            *current = inferred;
+            true
+        }
+        (Type::Nullable(current), Type::Nullable(inferred))
+        | (Type::Set(current), Type::Set(inferred))
+        | (Type::Atomic(current), Type::Atomic(inferred))
+        | (Type::Delta(current), Type::Delta(inferred)) => fill_type(current, *inferred),
+        // TYPE-9: a payload that settles to a whole publication can
+        // lose its provisional atomic wrapper.
+        (current @ Type::Atomic(_), inferred) => {
+            let Type::Atomic(payload) = current else {
+                unreachable!();
+            };
+            if !fill_type(payload, inferred) {
+                return false;
+            }
+            *current = Type::atomic((**payload).clone());
+            true
+        }
+        (
+            Type::Result { value, error },
+            Type::Result {
+                value: inferred_value,
+                error: inferred_error,
+            },
+        ) => {
+            let value_changed = fill_type(value, *inferred_value);
+            let error_changed = fill_type(error, *inferred_error);
+            value_changed || error_changed
+        }
+        (
+            Type::Dict { key, value },
+            Type::Dict {
+                key: inferred_key,
+                value: inferred_value,
+            },
+        ) => {
+            let key_changed = fill_type(key, *inferred_key);
+            let value_changed = fill_type(value, *inferred_value);
+            key_changed || value_changed
+        }
+        (
+            Type::List {
+                element: current,
+                size,
+            },
+            Type::List {
+                element: inferred,
+                size: inferred_size,
+            },
+        ) if *size == inferred_size => fill_type(current, *inferred),
+        (Type::Tuple(current), Type::Tuple(inferred)) if current.len() == inferred.len() => {
+            let mut changed = false;
+            for (current, inferred) in current.iter_mut().zip(inferred) {
+                changed |= fill_type(current, inferred);
+            }
+            changed
+        }
+        (
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                ..
+            },
+            Type::Named {
+                module: new_module,
+                declaration: new_declaration,
+                arguments: inferred,
+                ..
+            },
+        ) if (*module, *declaration) == (new_module, new_declaration)
+            && arguments.len() == inferred.len() =>
+        {
+            let mut changed = false;
+            for (current, inferred) in arguments.iter_mut().zip(inferred) {
+                if let (Argument::Type(current), Argument::Type(inferred)) = (current, inferred) {
+                    changed |= fill_type(current, inferred);
+                }
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
+/// True when a contextual operand's children have more type information
+/// than its stored type. Settlement visits the outer call before these
+/// children, so its replay must wait for the next type update.
+pub(super) fn contextual_type_is_pending(typer: &Typer<'_>, value: &Expr) -> bool {
+    if whole(&value.ty) {
+        return false;
+    }
+    let Some(inferred) = contextual_type(value, Some(typer)) else {
+        return false;
+    };
+    fill_type(&mut value.ty.clone(), inferred)
+}
+
+fn contextual_type(value: &Expr, typer: Option<&Typer<'_>>) -> Option<Type> {
+    let inferred = match &value.kind {
+        ExprKind::Block {
+            value: Some(tail), ..
+        } => tail.ty.clone(),
+        // Tuple entries each have their own position and type (EXPR-9).
+        ExprKind::Tuple(entries) => {
+            Type::Tuple(entries.iter().map(|entry| entry.ty.clone()).collect())
+        }
+        ExprKind::Sequence(entries) => {
+            let Type::List { element, size } = &value.ty else {
+                return None;
+            };
+            let typed: Vec<&Type> = entries
+                .iter()
+                .filter(|entry| {
+                    let tail = block_tail(entry);
+                    !matches!(tail.kind, ExprKind::Literal(Value::Null))
+                        && !typer.is_some_and(|typer| contextual_member(typer, tail).is_some())
+                })
+                .map(|entry| &entry.ty)
+                .collect();
+            // Another unsettled entry could change even the first known
+            // element's type (for instance by numeric widening).
+            if !typed.iter().all(|ty| whole(ty)) {
+                return None;
+            }
+            let inferred = sequence_element(&typed, matches!(**element, Type::Nullable(_)))?;
+            Type::List {
+                element: Box::new(inferred),
+                size: size.clone(),
+            }
+        }
+        _ => return None,
+    };
+    Some(inferred)
+}
+
+/// CTRL-10: nested blocks take their value and type from their tail.
+fn block_tail(mut entry: &Expr) -> &Expr {
+    while let ExprKind::Block {
+        value: Some(tail), ..
+    } = &entry.kind
+    {
+        entry = tail;
+    }
+    entry
+}
+
+/// TYPE-7: an unread `.member` takes its type from the list. Other
+/// unread expressions may still need to settle before the list has a type.
+fn contextual_member(typer: &Typer<'_>, tail: &Expr) -> Option<SyntaxNode> {
+    if !matches!(tail.kind, ExprKind::Unread) || whole(&tail.ty) {
+        return None;
+    }
+    let node = typer.syntax_of(tail)?;
+    // A block's tail and its expression statement share a span.
+    let expression = if node.kind() == SyntaxKind::ExprStmt {
+        node.children().next()?
+    } else {
+        node
+    };
+    (expression.kind() == SyntaxKind::ImpliedMember).then_some(expression)
+}
+
+/// Replace only the contextual tail, keeping any statements already
+/// checked in the block's own scope.
+fn resolve_contextual_tail(entry: &mut Expr, resolved: (ExprKind, Type)) {
+    if let ExprKind::Block {
+        value: Some(tail), ..
+    } = &mut entry.kind
+    {
+        resolve_contextual_tail(tail, resolved);
+        entry.ty = tail.ty.clone();
+    } else {
+        (entry.kind, entry.ty) = resolved;
+    }
+}
+
+/// CTRL-13: decide a no-else expression's type once its categories
+/// settle. A block tail or a read of an inferred local also takes its
+/// type from the value once that type is known.
+fn settled_type(
+    program: &Program,
+    locals: &[Local],
+    capture_types: &HashMap<LocalId, Type>,
+    value: &mut Expr,
+    typer: Option<&mut Typer<'_>>,
+) -> Option<Type> {
+    let ty = match &mut value.kind {
+        ExprKind::If {
+            then,
+            otherwise: Some(otherwise),
+            inference: IfInference::Both,
+            ..
+        } if whole(&then.ty) && whole(&otherwise.ty) => typer?.one_type(then, otherwise),
+        ExprKind::If {
+            then,
+            inference: IfInference::Then,
+            ..
+        } => then.ty.clone(),
+        ExprKind::If {
+            otherwise: Some(otherwise),
+            inference: IfInference::Otherwise,
+            ..
+        } => otherwise.ty.clone(),
+        ExprKind::If {
+            condition,
+            then,
+            otherwise: None,
+            ..
+        } if gives_a_value(then) => no_else_type(
+            then.ty.clone(),
+            category(program, locals, condition),
+            category(program, locals, then),
+        ),
+        ExprKind::Sequence(_) => {
+            let mut typer = typer;
+            let inferred = contextual_type(value, typer.as_deref())?;
+            if let (Type::List { element, .. }, ExprKind::Sequence(entries)) =
+                (&inferred, &mut value.kind)
+            {
+                for entry in entries {
+                    let tail = block_tail(entry);
+                    if matches!(tail.kind, ExprKind::Literal(Value::Null))
+                        && matches!(**element, Type::Nullable(_))
+                    {
+                        // EXPR-9 and TYPE-14: a null takes the list's
+                        // inferred nullable element type through its blocks.
+                        resolve_contextual_tail(
+                            entry,
+                            (ExprKind::Literal(Value::Null), (**element).clone()),
+                        );
+                    } else if let Some(typer) = typer.as_deref_mut()
+                        && let Some(node) = contextual_member(typer, tail)
+                    {
+                        resolve_contextual_tail(entry, typer.implied_member(&node, Some(element)));
+                    }
+                }
+            }
+            inferred
+        }
+        ExprKind::Block { .. } | ExprKind::Tuple(_) => contextual_type(value, None)?,
+        ExprKind::Local(local) => locals.get(*local)?.ty.clone(),
+        // ERR-12: a read keeps the operand's payload type as it settles,
+        // with its original null failure still recorded on the read.
+        ExprKind::NullRead { value, .. } => match &value.ty {
+            Type::Nullable(payload) => (**payload).clone(),
+            _ => return None,
+        },
+        // ERR-7: capture already checked the field. The call's output
+        // may have settled after that read, directly or through a `let`.
+        ExprKind::Captured {
+            capture,
+            error: false,
+        } => match &capture.kind {
+            ExprKind::Local(local) | ExprKind::DeferredPresent(local) => {
+                capture_types.get(local)?.clone()
+            }
+            ExprKind::Capture(call) => match captured_output(program, call) {
+                CapturedOutput::Of(ty) => ty,
+                CapturedOutput::None => return None,
+            },
+            _ => return None,
+        },
+        // The base may have acquired an element type after a conditional
+        // inside a list or tuple settled. Keep the existing projection.
+        ExprKind::Index { base, index } => {
+            let ty = indexed_payload(&base.ty);
+            if matches!(ty, Type::Tuple(_))
+                && whole(&index.ty)
+                && let Some(typer) = typer
+            {
+                typer.tuple_index(ty, index, None, false)
+            } else {
+                let position = match index.kind {
+                    ExprKind::Literal(Value::Int(position)) => Some(position),
+                    _ => None,
+                };
+                index_result(ty, position)?.clone()
+            }
+        }
+        ExprKind::Construct {
+            arguments,
+            infer_types: true,
+            ..
+        } => typer?.infer_settled_fields(value.ty.clone(), arguments)?,
+        // EXPR-7: the member's position was checked where it was read.
+        // Recover its type using the settled base, keeping TYPE-9's
+        // atomic normalization and TYPE-16's delta properties.
+        ExprKind::Field { base, member } => match &base.ty {
+            Type::Atomic(of) => Type::atomic(program.field_types(of)?.get(*member)?.clone()),
+            Type::Delta(of) => program.delta_properties(of)?.into_iter().nth(*member)?.1,
+            ty => program.field_types(ty)?.get(*member)?.clone(),
+        },
+        _ => return None,
+    };
+    (ty != Type::Unknown).then_some(ty)
 }
 
 /// Records what `value` is and, for a call, whether it is lifted, as

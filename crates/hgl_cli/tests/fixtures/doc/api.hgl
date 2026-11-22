@@ -1,0 +1,79 @@
+/** The application programming interface. */
+module examples.apidoc
+
+/** A typed box.
+    Type Args:
+        T: Payload type.
+*/
+export struct Box<T> {
+    /** The payload. */
+    value: T
+    /** An optional label. */
+    label: str = "café"
+}
+
+/** Named sides. */
+export enum Side {
+    /** A buyer. */
+    buy = 2,
+    /** A seller. */
+    sell,
+}
+
+/** A native handle. */
+export native type Handle {
+    name: str
+}
+
+/** A host function. */
+export native const fn identify(label: str = "host") -> i64
+
+/** First public callable.
+
+Args:
+    input: A café value with  two spaces.
+        A continuation that keeps its indent.
+    count:
+Type Args:
+    T: Its type.
+    N: Its maximum.
+
+Unknown:
+    A heading that stays prose.
+
+Returns:
+    The same value, `input`.
+Requires:
+    N: The constraint is prose until key spelling is specified.
+Notes:
+    |x|     |y|
+    | ----- | - |
+    | café  | \\ |
+Examples:
+    ~~~hgl
+    assert false
+    ~~~
+*/
+export const fn identity<T, const N: i64 = 3>(input: T, count: i64 = 2) -> T
+    requires N == 3
+    => input
+
+/** The temporal callable with the same canonical name. */
+export fn identity(input: i64) -> i64 {
+    when { return input }
+}
+
+/** A public operator's own documentation.
+    Args:
+        offset: Configuration, supplied by name.
+        input: Value to offset.
+*/
+export operator shifted<T>{offset: i64 = 2}(input: T) -> T
+
+/** A private function. */
+const fn internal() -> bool => true
+
+/** A named test. */
+test works { assert true }
+
+export const meaning: i64 = 42

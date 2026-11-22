@@ -18,12 +18,15 @@ repository = "https://github.com/hhenson/hgl-compiler"
 # One place for dependency versions. A crate opts in with
 # `name.workspace = true`.
 [workspace.dependencies]
+pulldown-cmark = { version = "0.13.6", default-features = false }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hgl_source = { path = "crates/hgl_source" }
 hgl_diagnostics = { path = "crates/hgl_diagnostics" }
 hgl_lexer = { path = "crates/hgl_lexer" }
 hgl_parser = { path = "crates/hgl_parser" }
 hgl_analyser = { path = "crates/hgl_analyser" }
+hgl_doc = { path = "crates/hgl_doc" }
 hgl_lower = { path = "crates/hgl_lower" }
 hgl_runner = { path = "crates/hgl_runner" }
 hgl_cpp = { path = "crates/hgl_cpp" }

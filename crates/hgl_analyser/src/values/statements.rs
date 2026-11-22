@@ -3,13 +3,15 @@
 //! Part of the typing pass ([`super`]); `if`, the loops and `switch` are
 //! read in [`super::control`].
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Typer;
 use super::candidates::Given;
 use super::control::Outcome;
 use super::fit::open;
+use super::graph_instance::GraphReturnCheck;
+use super::results::{captured_binding, captured_output};
 use crate::hir::{
     BinaryOperator, Body, ErrorPart, Expr, ExprKind, Hook, Local, Stmt, ValueCategory,
 };
@@ -18,6 +20,17 @@ use crate::read::is_type;
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{NamedKind, Type};
 use crate::{codes, error, local_error};
+
+/// FN-7: a function with a required result can reach its end with none.
+pub(super) fn missing_return(at: Location, name: &str, result: &Type) -> Diagnostic {
+    error(
+        Category::Type,
+        codes::RETURN_MISSING,
+        at,
+        format!("{name} declares a result of `{result}`, and can reach its end with no value"),
+        "FN-7",
+    )
+}
 
 impl<'a> Typer<'a> {
     /// The body, or `None` for a function with none written.
@@ -39,7 +52,7 @@ impl<'a> Typer<'a> {
     /// Read so far: locals, calls and symbols, and what is returned. A
     /// conditional and a loop in composition are for a later part
     /// (CTRL-1 to CTRL-8), and are not read.
-    pub(super) fn graph(mut self) -> Option<Body> {
+    pub(super) fn graph(mut self) -> (Option<Body>, Option<GraphReturnCheck>) {
         self.graph = true;
         for (local, parameter) in self.signature.parameters.iter().enumerate() {
             self.locals[local].category =
@@ -49,17 +62,41 @@ impl<'a> Typer<'a> {
                     ValueCategory::Connection
                 };
         }
-        self.body()
+        let body = self.function_body();
+        // CTRL-14: retain the source flow result for a graph where the
+        // continuation would be needed if a return becomes temporal.
+        let check_return = body
+            .as_ref()
+            .filter(|_| {
+                self.signature
+                    .result
+                    .as_ref()
+                    .is_some_and(|result| !open(result))
+                    && !self.returned
+                    && !self.unsure
+                    && !self.must_return
+            })
+            .map(|body| {
+                self.returning_statement(body.statements.last())
+                    .map_or(GraphReturnCheck::Fallthrough, |switches| {
+                        GraphReturnCheck::TailSwitches(switches.to_vec())
+                    })
+            });
+        (body, check_return)
     }
 
     pub(super) fn body(mut self) -> Option<Body> {
+        self.function_body()
+    }
+
+    fn function_body(&mut self) -> Option<Body> {
         let syntax = &self.declaration.syntax;
         let result = self.signature.result.clone();
         let at = self.declaration.at;
         let name = format!("`{}`", self.declaration.name);
         let statements = self.check_body(syntax, result.as_ref(), at, &name)?;
         Some(Body {
-            locals: self.locals,
+            locals: std::mem::take(&mut self.locals),
             statements,
         })
     }
@@ -96,15 +133,7 @@ impl<'a> Typer<'a> {
             && !self.unsure
             && (self.anonymous.is_some() || !self.graph || self.must_return)
         {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::RETURN_MISSING,
-                at,
-                format!(
-                    "{name} declares a result of `{result}`, and can reach its end with no value"
-                ),
-                "FN-7",
-            ));
+            self.diagnostics.emit(missing_return(at, name, result));
         }
         Some(statements)
     }
@@ -121,7 +150,7 @@ impl<'a> Typer<'a> {
         let (value, outcome) = self.flow(node, Some(result), true);
         match outcome {
             Outcome::Value(_) => {
-                let value = self.fit_input(value, result, "the function's result");
+                let value = self.fit_return(value, result);
                 self.returned = true;
                 Stmt::Return {
                     value: Some(value),
@@ -290,15 +319,7 @@ impl<'a> Typer<'a> {
                 // Preserve the existing check on a return from a dynamic
                 // graph loop until CTRL-15's sequence check lands (#373).
                 if self.dynamic.is_some() {
-                    self.diagnostics.emit(local_error(
-                        Category::Phase,
-                        codes::local::LOOP_CARRIED,
-                        at,
-                        "this loop makes one child for each member, and a child does not \
-                         return from the graph"
-                            .to_string(),
-                        "CTRL-15",
-                    ));
+                    self.diagnostics.emit(child_loop_return(at));
                 }
                 // CTRL-5: "Return targets the enclosing HGL function."
                 self.returned = true;
@@ -345,9 +366,29 @@ impl<'a> Typer<'a> {
         }
         let value = self.expression(node, result.as_ref());
         match &result {
-            Some(result) => self.fit_input(value, result, "the function's result"),
+            Some(result) => self.fit_return(value, result),
             None => value,
         }
+    }
+
+    fn fit_return(&mut self, value: Expr, result: &Type) -> Expr {
+        let place = "the function's result";
+        // A graph may already admit the provisional connection, while
+        // a nullable result still decides how it reads the selected call.
+        if self.graph && matches!(result, Type::Nullable(_)) {
+            self.record_result_read(&value, Some((result, place)));
+        }
+        // A projected field can be known nullable before its inferred
+        // constructor arguments decide the payload. The graph instance
+        // fits that result once the payload and category settle (EXPR-5).
+        if self.graph
+            && self.hook.is_none()
+            && matches!(&value.ty, Type::Nullable(payload) if **payload == Type::Unknown)
+            && self.category(&value) == ValueCategory::Unsettled
+        {
+            return value;
+        }
+        self.fit_input(value, result, place)
     }
 
     /// EXPR-3: "Initialization fixes a binding's value/connection
@@ -426,13 +467,11 @@ impl<'a> Typer<'a> {
             self.aliases.insert(local, capability);
         }
         // ERR-7: "What it gives is bound with `let`".
-        if kind == LocalKind::Let
-            && let Some(Expr {
-                kind: ExprKind::Capture(call),
-                ..
-            }) = &value
+        if let Some(call) = value
+            .as_ref()
+            .and_then(|value| captured_binding(kind, value))
         {
-            let output = self.captured_output(call);
+            let output = captured_output(self.program, call);
             self.captures.insert(local, output);
         }
         // EXPR-3: "Initialization fixes a binding's value/connection
@@ -564,20 +603,8 @@ impl<'a> Typer<'a> {
         // Keep the existing checks for dynamic graph loops until the
         // compiler can reject their sequence under CTRL-15 (#373).
         if self.dynamic.is_some_and(|outside| local < outside) {
-            self.diagnostics.emit(
-                local_error(
-                    Category::Phase,
-                    codes::local::LOOP_CARRIED,
-                    self.at(&place),
-                    format!(
-                        "`{}` is declared outside this loop, which makes one child for each \
-                         member: nothing is carried from one child to the next",
-                        self.locals[local].name
-                    ),
-                    "CTRL-15",
-                )
-                .with_related(self.locals[local].at, "declared here"),
-            );
+            self.diagnostics
+                .emit(child_loop_write(&self.locals[local], self.at(&place)));
         } else if self.graph {
             let given = (self.category(&value), value.at);
             self.assigned_category(local, given, false);
@@ -781,40 +808,13 @@ impl<'a> Typer<'a> {
         // The dynamic-loop check is retained until the compiler checks
         // the sequence as CTRL-15 requires (#373).
         if self.graph && self.dynamic.is_some_and(|outside| local < outside) {
-            self.diagnostics.emit(
-                local_error(
-                    Category::Phase,
-                    codes::local::LOOP_CARRIED,
-                    self.at(place),
-                    format!(
-                        "`{}` is declared outside this loop, which makes one child for each \
-                         member: nothing is carried from one child to the next",
-                        self.locals[local].name
-                    ),
-                    "CTRL-15",
-                )
-                .with_related(self.locals[local].at, "declared here"),
-            );
+            self.diagnostics
+                .emit(child_loop_write(&self.locals[local], self.at(place)));
         } else if self.graph {
             // What the `var` becomes turns on the value and on every
             // index of the place: `row[index] = 3.0` with `index` a
             // connection selects the element as the graph runs.
-            let mut parts = vec![&value];
-            place_indices(&target, &mut parts);
-            let categories: Vec<(ValueCategory, Location)> = parts
-                .iter()
-                .map(|part| (self.category(part), part.at))
-                .collect();
-            let given = categories
-                .iter()
-                .find(|(category, _)| *category == ValueCategory::Connection)
-                .or_else(|| {
-                    categories
-                        .iter()
-                        .find(|(category, _)| *category == ValueCategory::Unsettled)
-                })
-                .copied()
-                .unwrap_or((ValueCategory::Value, value.at));
+            let given = place_assignment_category(&target, &value, |part| self.category(part));
             self.assigned_category(local, given, true);
         }
         Stmt::AssignPlace {
@@ -912,6 +912,34 @@ impl<'a> Typer<'a> {
     }
 }
 
+/// The existing CTRL-15 restriction on writing an outer binding from a child.
+pub(super) fn child_loop_write(binding: &Local, at: Location) -> Diagnostic {
+    local_error(
+        Category::Phase,
+        codes::local::LOOP_CARRIED,
+        at,
+        format!(
+            "`{}` is declared outside this loop, which makes one child for each member: \
+             nothing is carried from one child to the next",
+            binding.name
+        ),
+        "CTRL-15",
+    )
+    .with_related(binding.at, "declared here")
+}
+
+/// The existing CTRL-15 restriction on returning from a child loop.
+pub(super) fn child_loop_return(at: Location) -> Diagnostic {
+    local_error(
+        Category::Phase,
+        codes::local::LOOP_CARRIED,
+        at,
+        "this loop makes one child for each member, and a child does not return from the graph"
+            .to_string(),
+        "CTRL-15",
+    )
+}
+
 /// The place `place` with its root, a local, of the type the local is
 /// declared with, and not of the type a hook reads it as: an atomic's
 /// V (TYPE-9), or the type under a `?` that marks omission (TYPE-14).
@@ -923,6 +951,26 @@ fn root_as_declared(place: &mut Expr, locals: &[Local]) {
     if let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &mut place.kind {
         root_as_declared(base, locals);
     }
+}
+
+/// The value and all indices can turn a place assignment into a connection.
+pub(super) fn place_assignment_category(
+    place: &Expr,
+    value: &Expr,
+    category: impl Fn(&Expr) -> ValueCategory,
+) -> (ValueCategory, Location) {
+    use ValueCategory::{Connection, Unsettled, Value};
+    let mut parts = vec![value];
+    place_indices(place, &mut parts);
+    let mut given = (Value, value.at);
+    for part in parts {
+        match category(part) {
+            Connection => return (Connection, part.at),
+            Unsettled if given.0 == Value => given = (Unsettled, part.at),
+            _ => {}
+        }
+    }
+    given
 }
 
 /// Adds to `indices` each index of the place `place`, from the

@@ -207,6 +207,7 @@ impl Typer<'_> {
             callee: Callee::Unread,
             arguments,
             form: Form::Named,
+            braced: Vec::new(),
             lifted: false,
         };
         (kind, result)

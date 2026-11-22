@@ -7,7 +7,7 @@
 analyser: partial
 
 - A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded; a value function holds no `state`, `cache`, `inject`, `start`, `when` or `stop`
-- A value function cannot `yield` (FN-2, SOURCE-1). The catalogue gives `yield.outside_source` for that placement.
+- A value function cannot `yield` (FN-2, SOURCE-1), with `yield.outside_source`.
 - A parameter of a capability's type, and `endpoint<T>` in a native value function, are admitted (TIME-8, TYPE-12)
 - A `const fn` parameter marked `ref` is `ref.position` (FN-16)
 - A generic parameter of a value function that a call's place, or what the call writes, binds to a type that holds a window is `type.not_ordinary`; one given a window binds to the `list<V>` it holds (GEN-1, TYPE-11)
@@ -118,7 +118,7 @@ analyser: partial
 
 - An `inject` in a `const fn`, a value candidate, the contract of a native value function, or an anonymous function written in a node is rejected (`node.in_value_function`); a value function is given a capability by a parameter of its type (TIME-8)
 - An application injects `global_state`, for the statements before its run statement (UNIT-14), and `run_config` (RUN-6), and no other
-- A graph injects it alone too, and a call on it there is given no connection (`connection.as_constant`)
+- A graph injects it alone too, and a call on it there is given no connection (`connection.as_constant`). An instance checks arguments whose categories were unsettled at the declaration (GEN-7).
 - `scheduled()` in a value function or a graph, which has no schedule of its own (TIME-9), is `scheduled.outside_node`; so is one in an anonymous function written there, and `scheduled<T>()`
 - Left: an anonymous function written in a graph; a capability used outside a hook or a source's body
 
@@ -237,9 +237,9 @@ parser: partial
 analyser: partial
 
 - Check the fixed template's phase, input names and input and result types. A value target may lift in a temporal template. An anonymous body's phase comes from the accepting template (FN-7).
-- Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on declared functions. Static parameters may be called or passed onward. They hold no runtime value.
+- Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on function and operator references. An operator reference uses the public signature, with the written arguments and the template together resolving its generic parameters. Static parameters may be called or passed onward. They hold no runtime value.
 - The proposed restriction to plain fixed parameters is enforced. Parameter reflection and packs declared for a function await #366.
-- Operator references use the bare name. In the function body, named calls through a parameter use names the template writes. These readings await the owner's ruling in #362.
+- A call through a function parameter gives arguments by position or by a name written in its template (FN-17).
 
 transpiler: partial
 

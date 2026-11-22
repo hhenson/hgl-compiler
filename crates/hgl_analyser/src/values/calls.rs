@@ -8,21 +8,25 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
-use super::Typer;
 use super::arguments::{Slot, Takes};
+use super::constants::generic_default;
 use super::evals::{trace_input_type, trace_pack_type};
 use super::fit::{not_null, open, whole};
 use super::inference::{
-    ExplicitGenerics, Inferred, Places, infer_from_place, mentions, pack_bounds, placed, type_pack,
+    ExplicitGenerics, Inferred, Places, bare_parameter, infer, infer_from_place, mentions,
+    pack_bounds, placed, type_pack,
 };
+use super::lifting::fill_type;
 use super::node::RefRead;
 use super::sizes;
+use super::{Fact, Typer};
 use crate::declared::{names_parameter, substitute_within};
-use crate::hir::{self, Callee, EndpointOperation, ExprKind, Form, Hook};
+use crate::hir::{self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, ValueCategory};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
-    Argument, CallArguments, ConstantValue, Detail, GenericKind, NamedKind, Parameter, Scalar, Type,
+    Argument, CallArguments, ConstantValue, Detail, GenericKind, NamedKind, Parameter, Scalar,
+    Signature, Type,
 };
 use crate::{codes, error};
 
@@ -335,9 +339,45 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, ty);
         };
         let value = self.expression(&argument, None);
-        let number = value.ty == Type::Scalar(Scalar::I64);
-        let text = value.ty == Type::Scalar(Scalar::Str);
-        if !number && !text {
+        let kind = if self.graph
+            && matches!(value.ty, Type::Unknown)
+            && !matches!(value.kind, ExprKind::Unread)
+        {
+            ExprKind::DeferredEnumFrom(Box::new(value))
+        } else {
+            self.enum_from_value(&ty, value, Some(&argument))
+        };
+        (kind, ty)
+    }
+
+    /// TYPE-7: a deferred constructor already names its enum. Complete
+    /// the ordinary constructor check once its operand has a type.
+    pub(super) fn settle_enum_from(&mut self, ty: &Type, value: &hir::Expr) -> Option<ExprKind> {
+        if !whole(&value.ty) {
+            return None;
+        }
+        let argument = self.syntax_of(value);
+        Some(self.enum_from_value(ty, value.clone(), argument.as_ref()))
+    }
+
+    fn enum_from_value(
+        &mut self,
+        ty: &Type,
+        value: hir::Expr,
+        argument: Option<&SyntaxNode>,
+    ) -> ExprKind {
+        let Type::Named {
+            name,
+            module,
+            declaration,
+            kind: NamedKind::Enum,
+            ..
+        } = ty
+        else {
+            return ExprKind::Unread;
+        };
+        let (module, declaration) = (*module, *declaration);
+        if !matches!(value.ty, Type::Scalar(Scalar::I64 | Scalar::Str)) {
             // What is not known has been reported (ERR-9).
             if !open(&value.ty) {
                 self.diagnostics.emit(error(
@@ -347,15 +387,14 @@ impl<'a> Typer<'a> {
                     format!(
                         "`{}` is constructed from a member's number, an `i64`, or its name, \
                          a `str`, and this is `{}`",
-                        name.text(),
-                        value.ty
+                        name, value.ty
                     ),
                     "TYPE-7",
                 ));
             }
-            return (ExprKind::Unread, ty);
+            return ExprKind::Unread;
         }
-        let kind = match self.member_constructed(module, declaration, &argument) {
+        match argument.and_then(|argument| self.member_constructed(module, declaration, argument)) {
             // A constant that names a member is that member: `Side(0)`
             // is `Side.buy`, wherever a member is looked for, a `switch`
             // label and a `const` argument among them.
@@ -370,7 +409,7 @@ impl<'a> Typer<'a> {
                         Category::Name,
                         codes::MEMBER_UNKNOWN,
                         value.at,
-                        format!("`{}` has {missing}", name.text()),
+                        format!("`{name}` has {missing}"),
                         "TYPE-7",
                     )
                     .with_note("a member's name is matched exactly"),
@@ -382,8 +421,7 @@ impl<'a> Typer<'a> {
                 declaration,
                 value: Box::new(value),
             },
-        };
-        (kind, ty)
+        }
     }
 
     /// The arguments of the call `list` is the list of. For the call a
@@ -457,6 +495,7 @@ impl<'a> Typer<'a> {
             callee: Callee::Unread,
             arguments,
             form: Form::Named,
+            braced: Vec::new(),
             lifted: false,
         };
         (kind, Type::Unknown)
@@ -705,11 +744,13 @@ impl<'a> Typer<'a> {
                 generics: Vec::new(),
                 type_packs: Vec::new(),
                 requirements,
+                contextual: Vec::new(),
             };
             let kind = ExprKind::Call {
                 callee,
                 arguments,
                 form: Form::Named,
+                braced: Vec::new(),
                 lifted: false,
             };
             self.finished_call(&kind, evaluating);
@@ -779,37 +820,46 @@ impl<'a> Typer<'a> {
             mut found,
             unknown,
             defaulted,
+            contextual,
+            missing_pack_context,
         } = self.infer_arguments(name, list, &places, found, Takes::Parameters);
-        let mut inferred_packs = vec![None; generics.len()];
+        let mut type_packs = vec![None; generics.len()];
         // FN-8 and GEN-10: collect the individual types in capture order.
         for (slot, parameter) in slots.iter().enumerate() {
             if let Some(index) = parameter.type_pack {
-                inferred_packs[index].get_or_insert_with(|| {
-                    arguments
+                type_packs[index].get_or_insert_with(|| {
+                    let written = written_pack.as_ref().filter(|pack| pack.parameter == index);
+                    let types: Vec<_> = arguments
                         .iter()
                         .filter(|argument| argument.parameter == Some(slot))
                         .enumerate()
                         .map(|(position, argument)| {
-                            written_pack
-                                .as_ref()
-                                .filter(|pack| pack.parameter == index)
-                                .and_then(|pack| pack.types.get(position))
-                                .cloned()
-                                .unwrap_or_else(|| {
-                                    if evaluating {
-                                        return trace_pack_type(&argument.value.ty)
-                                            .cloned()
-                                            .unwrap_or(Type::Unknown);
-                                    }
-                                    self.inferred_from(listed, &argument.value, Takes::Parameters)
-                                })
+                            if let Some(ty) = written.and_then(|pack| pack.types.get(position)) {
+                                return ty.clone();
+                            }
+                            if evaluating {
+                                return trace_pack_type(&argument.value.ty)
+                                    .cloned()
+                                    .unwrap_or(Type::Unknown);
+                            }
+                            self.inferred_from(listed, &argument.value, Takes::Parameters)
                         })
-                        .collect::<Vec<_>>()
+                        .collect();
+                    hir::TypePackArgument {
+                        parameter: index,
+                        infer_from_arguments: self.graph
+                            && !self.signature.generics.is_empty()
+                            && !evaluating
+                            && written.is_none()
+                            && !missing_pack_context.contains(&index)
+                            && types.iter().any(|ty| !whole(ty)),
+                        types,
+                    }
                 });
             }
         }
         if let Some(pack) = &written_pack {
-            inferred_packs[pack.parameter].get_or_insert_with(|| pack.types.clone());
+            type_packs[pack.parameter].get_or_insert_with(|| pack.clone());
         }
         self.generic_values(name, callee, generics, (&named, &defaulted), &mut found);
 
@@ -828,12 +878,12 @@ impl<'a> Typer<'a> {
         let unresolved: Vec<&str> = generics
             .iter()
             .zip(&found)
-            .zip(&inferred_packs)
+            .zip(&type_packs)
             .filter(|((_, found), pack)| {
                 found.is_none()
-                    && pack
-                        .as_ref()
-                        .is_none_or(|types| types.iter().any(|ty| !whole(ty)))
+                    && pack.as_ref().is_none_or(|pack| {
+                        !pack.infer_from_arguments && pack.types.iter().any(|ty| !whole(ty))
+                    })
             })
             .map(|((generic, _), _)| generic)
             .filter(|generic| {
@@ -868,57 +918,13 @@ impl<'a> Typer<'a> {
             );
         }
 
-        // FN-1: a value function's "parameter and result types are
-        // ordinary value types", and GEN-1: "ordinary positions require
-        // value types", which a window is not (TYPE-12). A window given
-        // to a value function binds its generic parameters to the list
-        // it holds (`inferred_from`); one that the call's place, or what
-        // the call writes, binds to a type that holds a window rejects.
-        // FN-1's exception, "in a native value function, one of
-        // `endpoint<T>` (TIME-9)", takes the endpoint and not its
-        // payload, and is the whole type of its parameter (TYPE-12): a
-        // generic that stands only there is in no ordinary position.
-        let ordinary = |at: Location| {
-            signature
-                .result
-                .as_ref()
-                .is_some_and(|result| mentions(result, &[at]))
-                || signature.parameters.iter().any(|parameter| {
-                    !matches!(parameter.ty, Type::Endpoint(_)) && mentions(&parameter.ty, &[at])
-                })
-        };
         if listed && judged {
-            for (generic, found) in generics.iter().zip(&found) {
-                let Some(Argument::Type(ty)) = found else {
-                    continue;
-                };
-                if !ordinary(generic.at) {
-                    continue;
-                }
-                if !ty.any_part(&|part| matches!(part, Type::RollingWindow { .. }), &|_| {
-                    false
-                }) {
-                    continue;
-                }
-                self.diagnostics.emit(
-                    error(
-                        Category::Type,
-                        codes::TYPE_NOT_ORDINARY,
-                        Location::new(self.file, name.span()),
-                        format!(
-                            "`{ty}` is not an ordinary value type, and the `{}` of the value \
-                             function `{}` stands for it here",
-                            generic.name,
-                            name.text()
-                        ),
-                        "FN-1",
-                    )
-                    .with_note(
-                        "a value function's parameters and result are ordinary values; a window \
-                         given to one is the `list<V>` it holds (TYPE-11)",
-                    ),
-                );
-            }
+            self.check_value_type_arguments(
+                name.text(),
+                Location::new(self.file, name.span()),
+                signature,
+                found.iter().map(Option::as_ref),
+            );
         }
 
         // The result, with what was found in place. One that still
@@ -943,20 +949,14 @@ impl<'a> Typer<'a> {
             (&own, &resolved),
             self.diagnostics,
         );
-        let type_packs: Vec<_> = inferred_packs
-            .into_iter()
-            .enumerate()
-            .filter_map(|(parameter, types)| {
-                Some(hir::TypePackArgument {
-                    parameter,
-                    types: types?,
-                })
-            })
-            .collect();
+        let type_packs: Vec<_> = type_packs.into_iter().flatten().collect();
         // GEN-3 and GEN-10: the callee's `requires` holds with what was
         // resolved, including the separate sequence in each type pack.
         // Not where something else was reported of the call (ERR-9).
-        if judged && unresolved.is_empty() {
+        if judged
+            && unresolved.is_empty()
+            && type_packs.iter().all(|pack| !pack.infer_from_arguments)
+        {
             if first_pack.is_none() {
                 self.requires_met(at, (module, declaration), &resolved);
             } else {
@@ -976,15 +976,436 @@ impl<'a> Typer<'a> {
             generics: resolved,
             type_packs,
             requirements,
+            contextual: if !faulty && self.diagnostics.len() == reported {
+                contextual
+            } else {
+                Vec::new()
+            },
         };
         let kind = ExprKind::Call {
             callee,
             arguments,
             form: Form::Named,
+            braced: Vec::new(),
             lifted: false,
         };
         self.finished_call(&kind, evaluating);
         (kind, ty)
+    }
+
+    /// FN-1 and TYPE-12: an ordinary position of a value function
+    /// cannot contain a window. A native endpoint's payload is exempt.
+    fn check_value_type_arguments<'g>(
+        &mut self,
+        name: &str,
+        at: Location,
+        signature: &Signature,
+        arguments: impl Iterator<Item = Option<&'g Argument>>,
+    ) {
+        let ordinary = |at: Location| {
+            signature
+                .result
+                .as_ref()
+                .is_some_and(|result| mentions(result, &[at]))
+                || signature.parameters.iter().any(|parameter| {
+                    !matches!(parameter.ty, Type::Endpoint(_)) && mentions(&parameter.ty, &[at])
+                })
+        };
+        for (generic, found) in signature.generics.iter().zip(arguments) {
+            let Some(Argument::Type(ty)) = found else {
+                continue;
+            };
+            if !ordinary(generic.at) {
+                continue;
+            }
+            if !ty.any_part(&|part| matches!(part, Type::RollingWindow { .. }), &|_| {
+                false
+            }) {
+                continue;
+            }
+            self.diagnostics.emit(
+                error(
+                    Category::Type,
+                    codes::TYPE_NOT_ORDINARY,
+                    at,
+                    format!(
+                        "`{ty}` is not an ordinary value type, and the `{}` of the value \
+                         function `{}` stands for it here",
+                        generic.name, name
+                    ),
+                    "FN-1",
+                )
+                .with_note(
+                    "a value function's parameters and result are ordinary values; a window \
+                     given to one is the `list<V>` it holds (TYPE-11)",
+                ),
+            );
+        }
+    }
+
+    /// GEN-2 and GEN-12: settled argument types can complete a named
+    /// call that the source pass could not infer. Keep arguments already
+    /// decided by the source and apply the usual checks when all are known.
+    pub(super) fn settle_function_call(&mut self, call: &mut Expr) -> bool {
+        let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    generics,
+                    type_packs,
+                    requirements,
+                    contextual,
+                },
+            arguments,
+            ..
+        } = &mut call.kind
+        else {
+            return false;
+        };
+        let owner = &self.program.modules[*module];
+        let Detail::Callable(signature) = &owner.details[*declaration] else {
+            return false;
+        };
+        if signature.generics.len() != generics.len() {
+            return false;
+        }
+        let mut found = Vec::new();
+        for (index, (parameter, argument)) in
+            signature.generics.iter().zip(generics.iter()).enumerate()
+        {
+            if matches!(parameter.kind, GenericKind::Pack { .. }) {
+                if !type_packs.iter().any(|pack| pack.parameter == index) {
+                    return false;
+                }
+                // A pack's types are separate from its placeholder.
+                found.push(Some(argument.clone()));
+            } else if matches!(argument, Argument::Type(Type::Unknown)) {
+                if parameter.kind != GenericKind::Type {
+                    return false;
+                }
+                found.push(None);
+            } else {
+                found.push(Some(argument.clone()));
+            }
+        }
+        let Some(mut supplied) = arguments
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| {
+                contextual
+                    .binary_search_by_key(position, |argument| argument.position)
+                    .is_err()
+            })
+            .map(|(_, argument)| Some((argument.parameter?, &argument.value)))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
+        // Use declaration order for inference, leaving the HIR itself
+        // in written order for evaluation (GEN-12, EXPR-13).
+        supplied.sort_by_key(|(slot, _)| *slot);
+        let declared = &owner.declarations[*declaration];
+        let listed = declared.kind.role() == Some(Role::Value);
+        let inferred_here: Vec<_> = found.iter().map(Option::is_none).collect();
+        let mut unfound: Vec<_> = signature
+            .generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, found)| found.is_none().then_some(generic.at))
+            .collect();
+        // GEN-13: a dependent value needs a contextual reading once its
+        // type settles. Recover only defaults whose omission is proven.
+        let dependent: Vec<_> = signature
+            .generics
+            .iter()
+            .enumerate()
+            .filter_map(|(index, generic)| {
+                matches!(&generic.kind, GenericKind::Value(ty) if mentions(ty, &unfound))
+                    .then_some(index)
+            })
+            .collect();
+        let defaults = if dependent.is_empty() {
+            None
+        } else {
+            let Some((name, defaulted)) =
+                self.omitted_function_defaults(call.at, (*module, *declaration), signature)
+            else {
+                return false;
+            };
+            if !dependent.iter().all(|index| defaulted.contains(index)) {
+                return false;
+            }
+            Some((name, defaulted))
+        };
+        for (slot, value) in supplied {
+            let Some(parameter) = signature.parameters.get(slot) else {
+                return false;
+            };
+            if !whole(&value.ty) || self.category(value) == ValueCategory::Unsettled {
+                return false;
+            }
+            let widenable = bare_parameter(&parameter.ty, &signature.generics).filter(|&index| {
+                inferred_here[index]
+                    && matches!(&found[index], Some(Argument::Type(Type::Named { .. })))
+            });
+            if !mentions(&parameter.ty, &unfound) && widenable.is_none() {
+                continue;
+            }
+            let actual = self.inferred_from(listed, value, Takes::Parameters);
+            let actual =
+                self.inference_input(&parameter.ty, &actual, &signature.generics, &found, None);
+            // GEN-2: a later abstract parent can widen a bare
+            // parameter inferred from an earlier argument.
+            if let Some(index) = widenable {
+                if let Some(Argument::Type(decided)) = &found[index]
+                    && self.widens(decided, actual)
+                {
+                    found[index] = Some(Argument::Type(actual.clone()));
+                }
+                continue;
+            }
+            infer(&parameter.ty, actual, &signature.generics, &mut found);
+            unfound = signature
+                .generics
+                .iter()
+                .zip(&found)
+                .filter_map(|(generic, found)| found.is_none().then_some(generic.at))
+                .collect();
+        }
+        if found.iter().any(Option::is_none) {
+            return false;
+        }
+        let mut packs = type_packs.clone();
+        if !self.settle_type_packs(signature, arguments, &mut packs, listed) {
+            return false;
+        }
+        let Some(sources) = contextual
+            .iter()
+            .map(|argument| {
+                let node = self.node_at(argument.at)?;
+                // A positional argument and its expression can share a span.
+                let value = if node.kind() == SyntaxKind::Arg {
+                    node.children().next()?
+                } else {
+                    node
+                };
+                Some((argument, value))
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
+        if let Some((name, defaulted)) = defaults {
+            for index in dependent {
+                found[index] = None;
+            }
+            let before = self.diagnostics.len();
+            self.generic_values(
+                &name,
+                declared,
+                &signature.generics,
+                (&[], &defaulted),
+                &mut found,
+            );
+            if self.diagnostics.len() != before {
+                call.kind = ExprKind::Unread;
+                return true;
+            }
+        }
+        let Some(resolved) = found.into_iter().collect::<Option<Vec<_>>>() else {
+            return false;
+        };
+
+        let own: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let map: Vec<_> = own.iter().copied().zip(&resolved).collect();
+        let before = self.diagnostics.len();
+        if listed {
+            self.check_value_type_arguments(
+                &declared.name,
+                call.at,
+                signature,
+                resolved.iter().map(Some),
+            );
+        }
+        if !sources.is_empty() {
+            self.index_instance_locals();
+        }
+        let mut sources = sources.into_iter().peekable();
+        for (position, argument) in arguments.iter_mut().enumerate() {
+            let parameter =
+                &signature.parameters[argument.parameter.expect("the call binds each argument")];
+            // Graph destinations fit heterogeneous pack elements using
+            // their own types in capture order (FN-8, GEN-10).
+            if type_pack(parameter, &signature.generics).is_some() {
+                continue;
+            }
+            let ty = placed(substitute_within(&parameter.ty, &map), &own);
+            if let Some((source, node)) = sources.next_if(|(source, _)| source.position == position)
+            {
+                if !self.may_reread() {
+                    continue;
+                }
+                // EXPR-9 and ERR-2: use the normal argument reader
+                // with its completed place, in written order (EXPR-2).
+                let slot = Slot {
+                    name: &parameter.name,
+                    configuration: parameter.configuration,
+                    ty,
+                    required: false,
+                    pack: parameter.pack,
+                    pack_bounds: parameter.pack_bounds,
+                    type_pack: None,
+                    listed,
+                };
+                let previous = std::mem::take(&mut self.present);
+                self.present
+                    .extend(source.facts.iter().filter_map(|fact| match fact {
+                        hir::ArgumentFact::Present(at) => {
+                            self.declared.get(at).copied().map(Fact::Present)
+                        }
+                        hir::ArgumentFact::Valid(at) => {
+                            self.declared.get(at).copied().map(Fact::Valid)
+                        }
+                        hir::ArgumentFact::Success(at) => {
+                            self.declared.get(at).copied().map(Fact::Success)
+                        }
+                        hir::ArgumentFact::Failure(at) => {
+                            self.declared.get(at).copied().map(Fact::Failure)
+                        }
+                    }));
+                argument.value = self
+                    .argument(
+                        argument.parameter,
+                        &node,
+                        Some((&slot, false)),
+                        Takes::Parameters,
+                    )
+                    .value;
+                self.present = previous;
+                continue;
+            }
+            if !matches!(ty, Type::Function(_))
+                && !self.lifted_window(&ty, listed, &argument.value, Takes::Parameters)
+                && argument.value.ty != ty
+            {
+                let place = format!("the parameter `{}`", parameter.name);
+                argument.value = self.fit_input(argument.value.clone(), &ty, &place);
+            }
+        }
+        sizes::call_sizes(
+            self.program,
+            (call.at, &declared.name),
+            signature,
+            (&own, &resolved),
+            self.diagnostics,
+        );
+        let callee = (*module, *declaration);
+        // GEN-10: the same quantified check applies when a graph
+        // completes the pack types that source typing could not see.
+        if self.diagnostics.len() == before {
+            if packs.is_empty() {
+                self.requires_met(call.at, callee, &resolved);
+            } else {
+                self.pack_requires_met(call.at, callee, &resolved, &packs);
+            }
+        }
+        if packs.is_empty() {
+            *requirements = self.answers(callee.0, callee.1, &resolved);
+        }
+        call.ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
+            placed(substitute_within(result, &map), &own)
+        });
+        *generics = resolved;
+        *type_packs = packs;
+        contextual.clear();
+        self.finished_call(&call.kind, false);
+        true
+    }
+
+    /// GEN-8, GEN-10 and FN-8: an inferred pack keeps its capture order
+    /// and any types already known. A written pack keeps all its types.
+    fn settle_type_packs(
+        &self,
+        signature: &Signature,
+        arguments: &[hir::Argument],
+        packs: &mut [hir::TypePackArgument],
+        listed: bool,
+    ) -> bool {
+        for pack in packs {
+            if pack.infer_from_arguments {
+                let Some(slot) = signature.parameters.iter().position(|parameter| {
+                    type_pack(parameter, &signature.generics) == Some(pack.parameter)
+                }) else {
+                    return false;
+                };
+                let captured = arguments
+                    .iter()
+                    .filter(|argument| argument.parameter == Some(slot));
+                if captured.clone().count() != pack.types.len() {
+                    return false;
+                }
+                for (ty, argument) in pack.types.iter_mut().zip(captured) {
+                    if !whole(ty) {
+                        fill_type(
+                            ty,
+                            self.inferred_from(listed, &argument.value, Takes::Parameters),
+                        );
+                    }
+                }
+            }
+            if !pack.types.iter().all(whole) {
+                return false;
+            }
+            pack.infer_from_arguments = false;
+        }
+        true
+    }
+
+    /// Defaults omitted from the original named call (GEN-8). A written
+    /// generic option would need its own source to be read in context.
+    fn omitted_function_defaults(
+        &self,
+        at: Location,
+        (module, declaration): (usize, usize),
+        signature: &Signature,
+    ) -> Option<(SyntaxToken, Vec<usize>)> {
+        let call = self.node_at(at)?;
+        let callee = call.children().next()?;
+        if call.kind() != SyntaxKind::CallExpr
+            || callee.kind() != SyntaxKind::NameExpr
+            || child(&callee, SyntaxKind::GenericArgs).is_some()
+        {
+            return None;
+        }
+        let name = name_token(&callee)?;
+        if !matches!(self.binding_at(at.file, name.span().start), Some(Binding::Declarations {
+            module: bound_module,
+            declarations,
+        }) if *bound_module == module && declarations.contains(&declaration))
+        {
+            return None;
+        }
+        let list = child(&call, SyntaxKind::ArgList)?;
+        let entries = self.call_entries(&list);
+        let declared = &self.program.modules[module].declarations[declaration];
+        let mut defaulted = Vec::new();
+        for (index, generic) in signature.generics.iter().enumerate() {
+            if matches!(generic.kind, GenericKind::Value(_))
+                && generic_default(&declared.syntax, generic).is_some()
+                && !entries.iter().any(|(_, name, _)| {
+                    name.as_ref()
+                        .is_some_and(|name| name.text() == generic.name)
+                })
+            {
+                defaulted.push(index);
+            }
+        }
+        Some((name, defaulted))
     }
 
     /// The member an enum's construction from `argument` names, where
@@ -1023,6 +1444,15 @@ impl<'a> Typer<'a> {
             _ => None,
         }
     }
+}
+
+/// A named function call with a fixed generic or a pack still to infer.
+pub(super) fn pending_function_inference(kind: &ExprKind) -> bool {
+    matches!(kind, ExprKind::Call { callee: Callee::Function { generics, type_packs, .. }, .. }
+        if type_packs.iter().any(|pack| pack.infer_from_arguments && !pack.types.iter().all(whole))
+            || generics.iter().enumerate().any(|(index, argument)|
+                matches!(argument, Argument::Type(Type::Unknown))
+                    && !type_packs.iter().any(|pack| pack.parameter == index)))
 }
 
 /// The arguments of an argument list, in order: each with its name,

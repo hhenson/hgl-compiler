@@ -8,7 +8,9 @@ use hgl_diagnostics::Category;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::control::{Outcome, branch_is_null, branch_takes_its_type};
-use super::fit::{accepts_float, is_integer_literal, not_null, nullable, open, window_value};
+use super::fit::{
+    accepts_float, is_integer_literal, not_null, nullable, open, whole, window_value,
+};
 use super::node::RefRead;
 use super::results::proof_binding;
 use super::{Fact, Typer, children};
@@ -18,7 +20,7 @@ use crate::hir::{
 };
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{child, name_token, tokens, ungrouped};
-use crate::types::{ConstantValue, Detail, GenericKind, Scalar, Type};
+use crate::types::{Argument, ConstantValue, Detail, GenericKind, Scalar, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -326,10 +328,24 @@ impl<'a> Typer<'a> {
             .find(|generic| generic.at == *declared);
         match generic.map(|generic| &generic.kind) {
             Some(GenericKind::Value(ty)) => Expr {
-                kind: ExprKind::GenericValue {
-                    name: name.text().to_string(),
-                    at: *declared,
-                },
+                kind: self
+                    .instance
+                    .iter()
+                    .find_map(|(parameter, argument)| {
+                        // GEN-13: a contextual argument reread in an instance
+                        // can use a value the instance has already supplied.
+                        if parameter == declared
+                            && let Argument::Constant(given) = argument
+                        {
+                            self.program.constant(&given.value, ty, at)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| ExprKind::GenericValue {
+                        name: name.text().to_string(),
+                        at: *declared,
+                    }),
                 ty: ty.clone(),
                 at,
                 category: ValueCategory::Unsettled,
@@ -473,11 +489,15 @@ impl<'a> Typer<'a> {
         }
         // ERR-12: "Refine that same binding to T on paths proving a
         // non-null T? value".
+        let present = self.present.contains(&Fact::Present(local));
         let ty = match &self.locals[local].ty {
-            Type::Nullable(inner) if self.present.contains(&Fact::Present(local)) => {
-                inner.as_ref().clone()
-            }
+            Type::Nullable(inner) if present => inner.as_ref().clone(),
             ty => ty.clone(),
+        };
+        let kind = if present && !whole(&ty) && self.deferred_presence(local) {
+            ExprKind::DeferredPresent(local)
+        } else {
+            ExprKind::Local(local)
         };
         // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary
         // V", and TYPE-16: "an atomic publishes whole". In a hook an
@@ -498,11 +518,17 @@ impl<'a> Typer<'a> {
             ty
         };
         Expr {
-            kind: ExprKind::Local(local),
+            kind,
             ty,
             at,
             category: ValueCategory::Unsettled,
         }
+    }
+
+    /// An ordinary binding may still be unknown where a generic
+    /// graph is read. Keep its null test until this instance is known.
+    fn deferred_presence(&self, local: LocalId) -> bool {
+        self.graph && self.locals[local].category != ValueCategory::Connection
     }
 
     /// The bindings the condition `condition` proves are not null: those
@@ -524,8 +550,11 @@ impl<'a> Typer<'a> {
             Type::Endpoint(payload) if self.bound_children.contains_key(&local) => payload,
             ty => ty,
         };
-        let refinable =
-            |local: LocalId| immutable(local) && matches!(payload(local), Type::Nullable(_));
+        let refinable = |local: LocalId| {
+            immutable(local)
+                && (matches!(payload(local), Type::Nullable(_))
+                    || matches!(payload(local), Type::Unknown) && self.deferred_presence(local))
+        };
         // ERR-3: "In composition a test of a connection is an ordinary
         // lifted call (FN-6): it gives a connection of `bool` and no
         // fact."
@@ -535,16 +564,23 @@ impl<'a> Typer<'a> {
         // operand of the connective the test is the right operand of:
         // `outcome != null && is_ok(outcome)`.
         let tagged = |local: LocalId, known: &[Fact]| {
+            let binding = &self.locals[local];
             let present = Fact::Present(local);
-            let result = match payload(local) {
-                Type::Result { .. } => true,
-                Type::Nullable(inner) => {
-                    matches!(**inner, Type::Result { .. })
-                        && (self.present.contains(&present) || known.contains(&present))
-                }
-                _ => false,
+            let present = self.present.contains(&present) || known.contains(&present);
+            let ty = match payload(local) {
+                Type::Nullable(inner) if present => inner,
+                ty => ty,
             };
-            immutable(local) && result && self.locals[local].category == ValueCategory::Value
+            // A deferred projection retains this lexical fact and checks
+            // that its read settled to an ordinary result binding.
+            immutable(local)
+                && match ty {
+                    Type::Result { .. } => {
+                        binding.category == ValueCategory::Value || self.deferred_presence(local)
+                    }
+                    Type::Unknown => self.deferred_presence(local),
+                    _ => false,
+                }
         };
         null_tests(
             condition,
@@ -829,11 +865,17 @@ impl<'a> Typer<'a> {
             })
             .collect();
         let known: Vec<&Type> = read.iter().flatten().map(|entry| &entry.ty).collect();
+        let has_null = items.iter().any(branch_is_null);
+        // GEN-7, EXPR-9: an unfinished entry can change the sequence's
+        // inferred type, even when another entry supplies a type now.
+        // Leave a hole for the instance's join rather than fixing the
+        // types of this list and of every place that infers from it.
+        let pending = self.graph && !misplaced && known.iter().any(|ty| !whole(ty));
         // EXPR-9: "Entries of two types reject, and so do entries that
         // give no type: `[]`, `[null]`." Where what the place expects
         // is not known, neither is the sequence, and nothing is
         // reported.
-        let Some(&first) = known.first() else {
+        let Some(mut of) = sequence_element(&known, has_null) else {
             if unexpected {
                 self.diagnostics.emit(error(
                     Category::Type,
@@ -849,30 +891,36 @@ impl<'a> Typer<'a> {
                 .collect();
             return (ExprKind::Sequence(elements), unjudged);
         };
-        let numbers = |ty: &Type| matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64));
-        let of = if known.iter().all(|ty| numbers(ty))
-            && known.iter().any(|ty| **ty == Type::Scalar(Scalar::F64))
-        {
-            Type::Scalar(Scalar::F64)
-        } else {
-            first.clone()
-        };
-        // "`[1, null]` [is] a `list<i64?>`": a `null` among the values
-        // makes their type nullable.
-        let of = if items.iter().any(branch_is_null) && !matches!(of, Type::Nullable(_)) {
-            Type::Nullable(Box::new(of))
-        } else {
-            of
-        };
+        let mut rejected = false;
+        if pending && unexpected && known.first().is_some_and(|ty| whole(ty)) {
+            // Once the first entry supplies its type, a pending entry
+            // cannot repair a conflict among the complete ones. A float
+            // can widen integer literals but cannot convert i64 values.
+            let known: Vec<&Type> = known.into_iter().filter(|ty| whole(ty)).collect();
+            if let Some(joined) = sequence_element(&known, has_null) {
+                let before = self.diagnostics.len();
+                for entry in read.iter().flatten().filter(|entry| whole(&entry.ty)) {
+                    self.fit(entry.clone(), &joined, "an element, as the first is,");
+                }
+                rejected = self.diagnostics.len() != before;
+                if rejected {
+                    // Keep the explicit error on the source entry. There
+                    // is no pending join to recheck for this sequence.
+                    of = joined;
+                }
+            }
+        }
         // Where what the place expects is not known, it may be what
         // gives entries of two types their one type: a `list<Base>` for
         // an `A` and a `B` that inherit from it. Such entries are not
         // judged here, and the sequence has no type. Where the place
         // is known and holds no sequence, the place reports it.
-        let disagree = read.iter().flatten().any(|entry| {
-            !(self.admits(&of, &entry.ty) || is_integer_literal(entry) && accepts_float(&of))
-        });
-        if !unexpected && disagree {
+        if !unexpected
+            && !pending
+            && read.iter().flatten().any(|entry| {
+                !(self.admits(&of, &entry.ty) || is_integer_literal(entry) && accepts_float(&of))
+            })
+        {
             let elements = items
                 .iter()
                 .enumerate()
@@ -891,15 +939,43 @@ impl<'a> Typer<'a> {
                     Some(entry) if !ordered => entry,
                     _ => self.expression(item, Some(&of)),
                 };
-                self.fit(entry, &of, "an element, as the first is,")
+                if pending {
+                    entry
+                } else {
+                    self.fit(entry, &of, "an element, as the first is,")
+                }
             })
             .collect();
+        let element = match (pending && !rejected, has_null) {
+            (false, _) => of,
+            (true, false) => Type::Unknown,
+            (true, true) => Type::Nullable(Box::new(Type::Unknown)),
+        };
         let ty = Type::List {
-            element: Box::new(of),
+            element: Box::new(element),
             size: None,
         };
         (ExprKind::Sequence(elements), ty)
     }
+}
+
+/// EXPR-9: the first entry that supplies a type fixes the element type,
+/// with numeric widening and the nullable form for a literal null.
+pub(super) fn sequence_element(known: &[&Type], has_null: bool) -> Option<Type> {
+    let first = *known.first()?;
+    let numbers = |ty: &Type| matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64));
+    let ty = if known.iter().all(|ty| numbers(ty))
+        && known.iter().any(|ty| **ty == Type::Scalar(Scalar::F64))
+    {
+        Type::Scalar(Scalar::F64)
+    } else {
+        first.clone()
+    };
+    Some(if has_null && !matches!(ty, Type::Nullable(_)) {
+        Type::Nullable(Box::new(ty))
+    } else {
+        ty
+    })
 }
 
 /// What [`null_tests`] asks of the function a condition is read in.

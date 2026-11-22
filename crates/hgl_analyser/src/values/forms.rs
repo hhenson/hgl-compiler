@@ -26,6 +26,18 @@ use crate::program::Role;
 use crate::types::Type;
 use crate::{codes, error};
 
+/// The type after the same result and nullable reads as `Typer::received`.
+pub(super) fn received_type(ty: &Type, reads: impl Fn(&Type) -> bool) -> &Type {
+    let received = match ty {
+        Type::Result { value, .. } if whole(ty) && !open(value) => value,
+        _ => ty,
+    };
+    match received {
+        Type::Nullable(payload) if reads(payload) => payload,
+        _ => received,
+    }
+}
+
 /// What a place that expects another type takes of a value given to it
 /// (ERR-12, ERR-15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,16 +192,23 @@ impl<'a> Typer<'a> {
     /// tests for a failure. Where T is nullable that place expects T, and
     /// takes the T form: the comparison is of a success's value, and a
     /// failure is raised"); any other value as it is.
-    pub(super) fn compared_with_null(&mut self, value: Expr) -> Expr {
+    pub(super) fn compared_with_null(
+        &mut self,
+        value: Expr,
+        context: Option<&ConfigurationRead>,
+    ) -> Expr {
+        if context.is_none() {
+            self.record_result_read(&value, None);
+        }
         match &value.ty {
             Type::Result {
                 value: success,
                 error,
             } if whole(&value.ty) && !open(success) => {
                 if matches!(**success, Type::Nullable(_)) || **error != Type::Error {
-                    self.take(value, Taken::Value)
+                    self.take_with(value, Taken::Value, context)
                 } else {
-                    self.take(value, Taken::Nullable)
+                    self.take_with(value, Taken::Nullable, context)
                 }
             }
             _ => value,

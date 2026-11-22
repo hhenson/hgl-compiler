@@ -204,11 +204,13 @@ impl Program {
             requirements,
             functions,
             &RefCell::new(Diagnostics::new()),
+            &mut Diagnostics::new(),
         )
     }
 
     /// Instantiate a body and report any configuration that fails to fit
-    /// the concrete candidate selected for a requirement (FN-18, GEN-16).
+    /// the selected candidate (FN-18, GEN-16). Collect new graph reports
+    /// separately so the instance walk can point them at its caller (GEN-7).
     pub(crate) fn checked_instance(
         &self,
         (module, declaration): (usize, usize),
@@ -216,6 +218,7 @@ impl Program {
         requirements: &[Answer],
         functions: &[(usize, Callee)],
         diagnostics: &RefCell<Diagnostics>,
+        graph_diagnostics: &mut Diagnostics,
     ) -> Option<(Signature, Body)> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
@@ -254,18 +257,33 @@ impl Program {
             requirements,
             diagnostics,
         };
+        let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
+        let recheck =
+            graph && (!declared.selecting[declaration].is_empty() || !requirements.is_empty());
+        let destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
         self.place_body(&mut body, &arguments, &functions);
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
         // could not say of an operation it requires.
-        let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
-        crate::values::record(self, &mut body, graph);
+        if let Some(destinations) = destinations {
+            destinations.settle(
+                self,
+                (module, declaration),
+                (&taken, &map),
+                &mut body,
+                graph_diagnostics,
+                &|expression| self.place(expression, &arguments, &functions),
+            );
+        } else {
+            crate::values::record(self, &mut body, graph);
+        }
         Some((taken, body))
     }
 
     /// Specialize one lexical body using its own local table. A call
-    /// a membership authorizes is selected with the instance's types
-    /// in place (GEN-5 and GEN-7), including in an anonymous body.
+    /// a generic candidate or membership authorizes is selected with
+    /// the instance's types in place (GEN-5 and GEN-7), including in an
+    /// anonymous body.
     fn place_body(
         &self,
         body: &mut Body,
@@ -333,6 +351,16 @@ impl Program {
                         self.place_required_arguments(callee, arguments, configuration, instance);
                     }
                 }
+            }
+            ExprKind::DeferredBinary {
+                expected: Some(expected),
+                ..
+            }
+            | ExprKind::DeferredNegation {
+                expected: Some(expected),
+                ..
+            } => {
+                **expected = substitute_within(expected, instance.types);
             }
             ExprKind::StaticCallable(callee) => self.place_target(callee, instance, functions),
             _ => {}
@@ -436,7 +464,12 @@ impl Program {
     /// `ty`, as the expression that reads it, written at `at`: `None`
     /// for one whose value is not held. A list and a tuple are each
     /// element as its own expression.
-    fn constant(&self, value: &ConstantValue, ty: &Type, at: Location) -> Option<ExprKind> {
+    pub(crate) fn constant(
+        &self,
+        value: &ConstantValue,
+        ty: &Type,
+        at: Location,
+    ) -> Option<ExprKind> {
         // TYPE-14: "`T?` denotes an ordinary value that is either a T or
         // null": a value of it other than null is a T.
         let of = match ty {
@@ -750,7 +783,11 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
                 };
             }
         }
-        Callee::Parameter { .. } | Callee::Anonymous(_) | Callee::Unread => {}
+        Callee::Parameter { .. }
+        | Callee::Anonymous(_)
+        | Callee::DeferredOperator(_)
+        | Callee::DeferredValue
+        | Callee::Unread => {}
     }
 }
 

@@ -7,7 +7,7 @@
 mod common;
 
 use common::{body, check, locals, module};
-use hgl_analyser::hir::{ExprKind, Stmt};
+use hgl_analyser::hir::{Callee, ExprKind, Stmt};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -738,6 +738,87 @@ fn operators_fit_each_argument_to_its_selected_parameter() {
     }
 }
 
+/// ERR-15: among admitted candidates, the fewest result reads take
+/// precedence. Equal read counts use ordinary candidate ranking.
+#[test]
+fn operators_rank_admitted_candidates_by_result_reads() {
+    use hgl_analyser::hir::walk_statements;
+
+    let checked = module(concat!(
+        "operator two<A, B>(x: A, y: B) -> i64\n",
+        "impl const fn two(x: result<i64, error>, y: i64) -> i64 => 1\n",
+        "impl const fn two(x: i64, y: i64) -> i64 => 3\n",
+        "const fn choose(x: result<i64, error>, y: result<i64, error>) -> i64 => two(x, y)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let mut selected = Vec::new();
+    walk_statements(&body(&checked, "choose").statements, &mut |expr| {
+        if let ExprKind::Call { arguments, .. } = &expr.kind {
+            selected.push((arguments[0].value.ty.clone(), arguments[1].value.ty.clone()));
+        }
+    });
+    assert_eq!(selected.len(), 1);
+    assert!(matches!(selected[0].0, hgl_analyser::Type::Result { .. }));
+    assert_eq!(
+        selected[0].1,
+        hgl_analyser::Type::Scalar(hgl_analyser::Scalar::I64)
+    );
+
+    let tied = module(concat!(
+        "operator two<A, B>(x: A, y: B) -> i64\n",
+        "impl const fn two(x: result<i64, error>, y: i64) -> i64 => 1\n",
+        "impl const fn two(x: i64, y: result<i64, error>) -> i64 => 2\n",
+        "const fn choose(x: result<i64, error>, y: result<i64, error>) -> i64 => two(x, y)\n",
+    ));
+    let faults = tied.summary();
+    assert_eq!(faults.len(), 1, "{}", tied.report);
+    assert!(faults[0].contains("operator/operator.ambiguous"));
+}
+
+/// ERR-15: a candidate admitted by payload inference competes with a
+/// concrete candidate. GEN-5 applies only after comparing read counts.
+#[test]
+fn an_inferred_payload_candidate_can_read_fewer_results() {
+    use hgl_analyser::hir::walk_statements;
+
+    let checked = module(concat!(
+        "operator two<A, B>(x: A, y: B) -> i64\n",
+        "impl const fn two<P>(x: result<i64, error>, y: P) -> i64 requires P == i64 => 1\n",
+        "impl const fn two(x: i64, y: i64) -> i64 => 3\n",
+        "const fn choose(x: result<i64, error>, y: result<i64, error>) -> i64 => two(x, y)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let mut kept_whole = false;
+    walk_statements(&body(&checked, "choose").statements, &mut |expr| {
+        if let ExprKind::Call { arguments, .. } = &expr.kind {
+            kept_whole = matches!(arguments[0].value.ty, hgl_analyser::Type::Result { .. });
+        }
+    });
+    assert!(kept_whole);
+}
+
+/// ERR-12, ERR-15: an operand kept whole leaves nullable inference at
+/// the first pass that admits a candidate without reading any result.
+#[test]
+fn a_whole_result_does_not_extend_nullable_fallback() {
+    use hgl_analyser::hir::walk_statements;
+
+    let checked = module(concat!(
+        "operator choose<A, B, C>(kept: A, used: B, extra: C) -> i64\n",
+        "impl const fn choose<A, C>(kept: A, used: i64, extra: C) -> i64 => 1\n",
+        "impl const fn choose<C>(kept: result<i64, error>, used: i64, extra: C) -> i64 requires C == i64 => 2\n",
+        "const fn chosen(kept: result<i64, error>, used: i64?, extra: i64?) -> i64 => choose(kept, used, extra)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let mut held = false;
+    walk_statements(&body(&checked, "chosen").statements, &mut |expr| {
+        if let ExprKind::Call { arguments, .. } = &expr.kind {
+            held = matches!(arguments[2].value.ty, hgl_analyser::Type::Nullable(_));
+        }
+    });
+    assert!(held);
+}
+
 /// GEN-2, ERR-12 and ERR-15: a generic function sees the argument its
 /// parameter can take. An unconstrained parameter keeps the whole type.
 #[test]
@@ -944,4 +1025,91 @@ fn candidate_uses_the_arrangement_with_fewest_result_reads() {
             .collect();
         assert_eq!(reads, raised, "{name}");
     }
+}
+
+/// ERR-7 and GEN-5: a capture's phase is checked against the candidate
+/// the graph instance selects, including when it selects ordinary work.
+#[test]
+fn a_graph_instance_checks_the_phase_of_a_deferred_capture() {
+    let checked = module(concat!(
+        "operator helper<T>(input: T) -> i64\n",
+        "impl const fn helper<T>(input: T) -> i64 => 5\n",
+        "impl fn helper(input: i64) -> i64 { when { return input } }\n",
+        "fn wraps<T>(const input: T) -> i64 {\n",
+        "    let seen = capture(helper, input)\n",
+        "    return seen.value\n",
+        "}\n",
+        "fn temporal_impl() -> i64 => wraps(3)\n",
+        "fn wiring_impl() -> i64 => wraps(\"s\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:10:28 phase/capture.phase ERR-7"],
+        "{}",
+        checked.report
+    );
+    assert!(checked.report.contains("`helper` is ordinary work here"));
+}
+
+/// ERR-7: both projections keep their types when a graph instance
+/// resolves the first type argument of the temporal call under a capture.
+#[test]
+fn a_graph_instance_recovers_a_deferred_captures_output() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn echo<U>(value: U) -> U { when { return value } }\n",
+        "fn wrapper<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let seen = capture(echo, chosen)\n",
+        "    let failure = seen.error\n",
+        "    let copied = seen.value\n",
+        "    let direct = capture(echo, chosen).value\n",
+        "    let forwarded = copied\n",
+        "    return forwarded\n",
+        "}\n",
+        "fn admitted() -> i64 => wrapper(1)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let [
+        Stmt::Return {
+            value: Some(call), ..
+        },
+    ] = body(&checked, "admitted").statements.as_slice()
+    else {
+        panic!("return of the concrete call");
+    };
+    let ExprKind::Call {
+        callee:
+            Callee::Function {
+                module,
+                declaration,
+                generics,
+                requirements,
+                ..
+            },
+        ..
+    } = &call.kind
+    else {
+        panic!("concrete graph call");
+    };
+    let (_, instance) = checked
+        .program
+        .instance(*module, *declaration, generics, requirements)
+        .unwrap();
+    let typed: Vec<_> = instance.locals[2..]
+        .iter()
+        .map(|local| (local.name.as_str(), local.ty.to_string()))
+        .collect();
+    assert_eq!(
+        typed,
+        [
+            ("seen", "_".into()),
+            ("failure", "error".into()),
+            ("copied", "i64".into()),
+            ("direct", "i64".into()),
+            ("forwarded", "i64".into())
+        ]
+    );
 }

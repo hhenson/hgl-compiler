@@ -3,6 +3,7 @@
 //! body may call because its requirements name them (GEN-3, GEN-7,
 //! GEN-15, GEN-16). Part of the typing pass ([`super`]).
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Code, Diagnostics, Location};
@@ -16,7 +17,7 @@ use super::operators::{Requested, from_place, has_generic_configuration_default,
 use super::{REQUIRING, Typer};
 use crate::declared::{names_parameter, same_type, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
-use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Program, Role};
+use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Phase, Program, Role};
 use crate::read::is_type;
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
@@ -596,6 +597,7 @@ impl<'a> Typer<'a> {
                 .iter()
                 .map(|pack| hir::TypePackArgument {
                     parameter: pack.parameter,
+                    infer_from_arguments: false,
                     types: pack
                         .types
                         .iter()
@@ -1100,6 +1102,7 @@ impl<'a> Typer<'a> {
             place: asked.as_ref(),
             among,
             written: false,
+            callback: None,
         };
         self.requiring += 1;
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
@@ -1515,6 +1518,7 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            braced: Vec::new(),
             lifted: false,
         };
         (kind, result.unwrap_or(Type::Unknown))
@@ -1949,24 +1953,53 @@ pub(super) fn instances_hold(
                 past_the_limit(&from, made.callee, program, diagnostics);
                 break;
             }
-            let mut defaults = Vec::new();
-            if configured.contains(&made.callee) {
-                super::operator_defaults::check_instance(
-                    program,
-                    made.callee,
-                    &made.generics,
-                    &made.answers,
-                    &mut defaults,
-                    diagnostics,
-                );
-            }
             let inner = passed.get(&made.callee).map_or(&[][..], Vec::as_slice);
             let selecting = program.modules.get(made.callee.0).map_or(&[][..], |unit| {
                 unit.selecting
                     .get(made.callee.1)
                     .map_or(&[][..], Vec::as_slice)
             });
-            if inner.is_empty() && selecting.is_empty() && defaults.is_empty() {
+            let graph = program.modules[made.callee.0].phases.get(made.callee.1)
+                == Some(&Some(Phase::Graph));
+            let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
+            let mut graph_reports = Diagnostics::new();
+            let mut instance_calls = Vec::new();
+            let instance = if configured.contains(&made.callee) {
+                super::operator_defaults::check_instance(
+                    program,
+                    made.callee,
+                    &made.generics,
+                    &made.answers,
+                    &mut instance_calls,
+                    diagnostics,
+                    &mut graph_reports,
+                )
+            } else if recheck_graph {
+                program.checked_instance(
+                    made.callee,
+                    &made.generics,
+                    &made.answers,
+                    &[],
+                    &RefCell::new(Diagnostics::new()),
+                    &mut graph_reports,
+                )
+            } else {
+                None
+            };
+            if recheck_graph && let Some((_, body)) = instance {
+                if let Some(Some(source)) = program.modules[made.callee.0].bodies.get(made.callee.1)
+                {
+                    made_after_inference(source, &body, &mut instance_calls);
+                }
+                super::lifting::check_instance_constants(program, &body, &from, diagnostics);
+                super::lifting::report_instance_checks(
+                    &graph_reports,
+                    &from,
+                    diagnostics,
+                    "this destination in the generic graph is checked for this instance",
+                );
+            }
+            if inner.is_empty() && selecting.is_empty() && instance_calls.is_empty() {
                 continue;
             }
             let declared = own(made.callee);
@@ -1975,7 +2008,7 @@ pub(super) fn instances_hold(
             // What each call of the instance calls, with what it gives
             // the callee's generic parameters and what answers the
             // callee's requirements there, and where it is written.
-            let mut calls: Vec<Resolved> = defaults
+            let mut calls: Vec<Resolved> = instance_calls
                 .into_iter()
                 .map(|call| Resolved {
                     callee: call.callee,
@@ -2112,14 +2145,15 @@ pub(super) fn instances_hold(
                     // lexical locals, with the same enclosing generics.
                     let locals = call.scope.as_deref().unwrap_or(body_locals);
                     if !current_locals.is_some_and(|current| std::ptr::eq(current, locals)) {
-                        typer.locals = locals
-                            .iter()
-                            .map(|local| hir::Local {
-                                ty: placed(substitute_within(&local.ty, &map), &declared),
-                                ..local.clone()
-                            })
-                            .collect();
-                        typer.assigned = vec![true; locals.len()];
+                        typer.use_instance_locals(
+                            locals
+                                .iter()
+                                .map(|local| hir::Local {
+                                    ty: placed(substitute_within(&local.ty, &map), &declared),
+                                    ..local.clone()
+                                })
+                                .collect(),
+                        );
                         current_locals = Some(locals);
                     }
                     let name = &program.modules[call.operator.module].declarations
@@ -2171,12 +2205,22 @@ pub(super) fn instances_hold(
                             // is selected (`Typer::called`): a `var`
                             // parameter's place among them (FN-15).
                             let mark = typer.diagnostics.len();
-                            typer.called(
+                            let (kind, ty) = typer.called(
                                 call.operator,
                                 *chosen,
                                 given,
                                 Vec::new(),
                                 (call.form, call.name),
+                            );
+                            typer.fit_selected_result(
+                                call,
+                                Expr {
+                                    kind,
+                                    ty,
+                                    at: call.at,
+                                    category: ValueCategory::Unsettled,
+                                },
+                                |ty| placed(substitute_within(ty, &map), &declared),
                             );
                             let reports = typer.diagnostics.as_slice()[mark..].to_vec();
                             typer.diagnostics.truncate(mark);
@@ -2561,6 +2605,41 @@ fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Loca
 /// The calls of generic declarations `statements` make, at any depth.
 fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
     hir::walk_statements(statements, &mut |expression| made_at(expression, made));
+}
+
+/// Follow calls that graph settlement has made concrete through the same
+/// bounded admission traversal as other calls. A source call already
+/// concrete there does not create a new edge here (GEN-3, GEN-13).
+fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<Made>) {
+    let mut pending = std::collections::HashSet::new();
+    hir::walk_statements(&source.statements, &mut |expression| {
+        if super::calls::pending_function_inference(&expression.kind)
+            || matches!(
+                expression.kind,
+                ExprKind::Call {
+                    callee: Callee::DeferredOperator(_),
+                    ..
+                } | ExprKind::DeferredBinary { .. }
+                    | ExprKind::DeferredNegation { .. }
+            )
+        {
+            pending.insert(expression.at);
+        }
+    });
+    if pending.is_empty() {
+        return;
+    }
+    hir::walk_statements(&settled.statements, &mut |expression| {
+        if pending.contains(&expression.at)
+            && let ExprKind::Call {
+                callee: Callee::Function { generics, .. } | Callee::Candidate { generics, .. },
+                ..
+            } = &expression.kind
+            && generics.iter().all(resolved_default_argument)
+        {
+            made_at(expression, made);
+        }
+    });
 }
 
 /// The calls of generic declarations `expression` makes, at any depth.

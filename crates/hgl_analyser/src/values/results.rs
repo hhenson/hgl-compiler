@@ -9,7 +9,8 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::calls::arguments_of;
 use super::fit::{not_null, nullable, open, whole};
 use super::{BOOL, CapturedOutput, Fact, Typer};
-use crate::hir::{Callee, ErrorPart, Expr, ExprKind, ValueCategory};
+use crate::hir::{ErrorPart, Expr, ExprKind, ValueCategory};
+use crate::program::{LocalKind, Program};
 use crate::syntax::{child, name_token, tokens};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error};
@@ -18,7 +19,7 @@ use crate::{codes, error};
 /// binding keeps its identity through an endpoint read (ERR-3, ERR-12, ERR-14).
 pub(super) fn proof_binding(value: &Expr) -> Option<crate::hir::LocalId> {
     match &value.kind {
-        ExprKind::Local(local) | ExprKind::BoundChild(local) => Some(*local),
+        ExprKind::BoundChild(local) => Some(*local),
         ExprKind::CheckedChild {
             read,
             result: false,
@@ -27,7 +28,50 @@ pub(super) fn proof_binding(value: &Expr) -> Option<crate::hir::LocalId> {
             _ => None,
         },
         ExprKind::PresentChild(read) => proof_binding(read),
+        _ => value.named_local(),
+    }
+}
+
+/// ERR-7: a `let` initialized by a capture names its boundary.
+pub(super) fn captured_binding(kind: LocalKind, value: &Expr) -> Option<&Expr> {
+    match &value.kind {
+        ExprKind::Capture(call) if kind == LocalKind::Let => Some(call),
         _ => None,
+    }
+}
+
+/// ERR-7: `.value` keeps the call's normal output, when it has one.
+pub(super) fn captured_output(program: &Program, call: &Expr) -> CapturedOutput {
+    let callable = match &call.kind {
+        ExprKind::Call { callee, .. } => callee.declaration(),
+        _ => None,
+    };
+    match callable
+        .and_then(|(module, declaration)| program.modules[module].details.get(declaration))
+    {
+        Some(Detail::Callable(signature)) if signature.result.is_none() => CapturedOutput::None,
+        _ => CapturedOutput::Of(call.ty.clone()),
+    }
+}
+
+/// ERR-4: the required message and the optional code of a new error.
+pub(super) fn error_fields() -> [(Type, &'static str); 2] {
+    [
+        (Type::Scalar(Scalar::Str), "the message of an error"),
+        (nullable(Type::Scalar(Scalar::Str)), "the code of an error"),
+    ]
+}
+
+/// ERR-2: `ok` fits its value to the success type and `err` to the failure type.
+pub(super) fn tagged_side<'a>(
+    success: bool,
+    value: &'a Type,
+    failure: &'a Type,
+) -> (&'a Type, &'static str) {
+    if success {
+        (value, "the type of a success")
+    } else {
+        (failure, "the type of a failure")
     }
 }
 
@@ -154,13 +198,8 @@ impl<'a> Typer<'a> {
         let Some(argument) = argument else {
             return (ExprKind::Unread, result);
         };
-        let side = if success { &value } else { &failure };
+        let (side, what) = tagged_side(success, &value, &failure);
         let payload = self.expression(&argument, Some(side));
-        let what = if success {
-            "the type of a success"
-        } else {
-            "the type of a failure"
-        };
         let payload = self.fit(payload, side, what);
         let kind = ExprKind::Tagged {
             success,
@@ -182,24 +221,39 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, BOOL);
         };
         let value = self.expression(&argument, None);
-        if !matches!(value.ty, Type::Result { .. }) && whole(&value.ty) && !open(&value.ty) {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::TYPE_MISMATCH,
-                value.at,
-                format!(
-                    "`{}` tests a `result<T, E>`, and this is `{}`",
-                    name.text(),
-                    value.ty
-                ),
-                "ERR-3",
-            ));
-        }
+        self.check_tag_test(success, &value);
         let kind = ExprKind::TagTest {
             success,
             value: Box::new(value),
         };
         (kind, BOOL)
+    }
+
+    /// ERR-3: a tag test takes a result itself, before any implicit read.
+    pub(super) fn check_tag_test(&mut self, success: bool, value: &Expr) {
+        if !matches!(value.ty, Type::Result { .. }) && whole(&value.ty) && !open(&value.ty) {
+            let name = if success { "is_ok" } else { "is_err" };
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                value.at,
+                format!(
+                    "`{name}` tests a `result<T, E>`, and this is `{}`",
+                    value.ty
+                ),
+                "ERR-3",
+            ));
+        }
+    }
+
+    /// The lexical fact a direct field projection needs on this binding.
+    pub(super) fn payload_proven(&self, base: &Expr, name: &str) -> bool {
+        let fact = match (name, proof_binding(base)) {
+            ("value", Some(local)) => Fact::Success(local),
+            ("error", Some(local)) => Fact::Failure(local),
+            _ => return false,
+        };
+        self.present.contains(&fact)
     }
 
     /// `binding.value` or `binding.error` (ERR-3): "`binding.value` is
@@ -209,11 +263,12 @@ impl<'a> Typer<'a> {
     pub(super) fn payload(
         &mut self,
         base: Expr,
-        name: &SyntaxToken,
+        name: &str,
+        at: Location,
         (value, failure): (Type, Type),
+        variant_proven: bool,
     ) -> (ExprKind, Type) {
-        let at = Location::new(self.file, name.span());
-        let success = match name.text() {
+        let success = match name {
             "value" => true,
             "error" => false,
             other => {
@@ -231,12 +286,7 @@ impl<'a> Typer<'a> {
             }
         };
         let binding = proof_binding(&base);
-        let fact = binding.map(if success {
-            Fact::Success
-        } else {
-            Fact::Failure
-        });
-        if !fact.is_some_and(|fact| self.present.contains(&fact)) {
+        if !variant_proven {
             let (test, tag) = if success {
                 ("is_ok", "a success")
             } else {
@@ -245,13 +295,12 @@ impl<'a> Typer<'a> {
             let message = match binding {
                 Some(local) => format!(
                     "`.{}` is read where `{}` is {tag}, and nothing here proves it one",
-                    name.text(),
-                    self.locals[local].name
+                    name, self.locals[local].name
                 ),
                 _ => format!(
                     "`.{}` is read of a binding a guard has proved {tag}, and this is no \
                      binding",
-                    name.text()
+                    name
                 ),
             };
             self.diagnostics.emit(
@@ -278,8 +327,8 @@ impl<'a> Typer<'a> {
     /// `.message`, `.code` or `.context` of an error (ERR-4):
     /// "`.message` is the `str` and `.code` the `str?`. `.context` is a
     /// read-only nullable record", an `error context?`.
-    pub(super) fn error_part(&mut self, base: Expr, name: &SyntaxToken) -> (ExprKind, Type) {
-        let (part, ty) = match name.text() {
+    pub(super) fn error_part(&mut self, base: Expr, name: &str, at: Location) -> (ExprKind, Type) {
+        let (part, ty) = match name {
             "message" => (ErrorPart::Message, Type::Scalar(Scalar::Str)),
             "code" => (ErrorPart::Code, nullable(Type::Scalar(Scalar::Str))),
             "context" => (ErrorPart::Context, nullable(Type::ErrorContext)),
@@ -287,7 +336,7 @@ impl<'a> Typer<'a> {
                 self.diagnostics.emit(error(
                     Category::Name,
                     codes::MEMBER_UNKNOWN,
-                    Location::new(self.file, name.span()),
+                    at,
                     format!(
                         "an `error` has no `{other}`: it has `.message`, `.code` and `.context`"
                     ),
@@ -307,8 +356,13 @@ impl<'a> Typer<'a> {
     /// (ERR-4): "a read-only nullable record of `.node: str`, `.phase:
     /// str`, one of `"evaluate"`, `"start"`, and `"stop"`, and
     /// `.evaluation_time: datetime`". `base` has been proved present.
-    pub(super) fn context_part(&mut self, base: Expr, name: &SyntaxToken) -> (ExprKind, Type) {
-        let (part, ty) = match name.text() {
+    pub(super) fn context_part(
+        &mut self,
+        base: Expr,
+        name: &str,
+        at: Location,
+    ) -> (ExprKind, Type) {
+        let (part, ty) = match name {
             "node" => (ErrorPart::Node, Type::Scalar(Scalar::Str)),
             "phase" => (ErrorPart::Phase, Type::Scalar(Scalar::Str)),
             "evaluation_time" => (ErrorPart::EvaluationTime, Type::Scalar(Scalar::Datetime)),
@@ -316,7 +370,7 @@ impl<'a> Typer<'a> {
                 self.diagnostics.emit(error(
                     Category::Name,
                     codes::MEMBER_UNKNOWN,
-                    Location::new(self.file, name.span()),
+                    at,
                     format!(
                         "an error's context has no `{other}`: it has `.node`, `.phase` and \
                          `.evaluation_time`"
@@ -349,8 +403,7 @@ impl<'a> Typer<'a> {
         if word.kind() != SyntaxKind::KwError {
             return self.unread_call(&list);
         }
-        let text = Type::Scalar(Scalar::Str);
-        let optional = nullable(Type::Scalar(Scalar::Str));
+        let [(text, message_place), (optional, code_place)] = error_fields();
         let mut message: Option<Expr> = None;
         let mut code: Option<Expr> = None;
         for (label, value) in arguments_of(&list) {
@@ -367,8 +420,8 @@ impl<'a> Typer<'a> {
                 continue;
             };
             let (slot, ty, what) = match label.text() {
-                "message" => (&mut message, &text, "the message of an error"),
-                "code" => (&mut code, &optional, "the code of an error"),
+                "message" => (&mut message, &text, message_place),
+                "code" => (&mut code, &optional, code_place),
                 other => {
                     self.diagnostics.emit(error(
                         Category::Name,
@@ -533,54 +586,50 @@ impl<'a> Typer<'a> {
             ));
             return (ExprKind::Unread, Type::Unknown);
         }
-        // "Capture of wiring-time scalar work rejects": a call that
-        // composes nothing, all its arguments ordinary values.
-        if matches!(call.kind, ExprKind::Call { .. })
-            && self.category(&call) == ValueCategory::Value
-        {
-            self.diagnostics.emit(
-                error(
-                    Category::Phase,
-                    codes::CAPTURE_PHASE,
-                    at,
-                    format!(
-                        "`{}` is ordinary work here, done while the graph is built: there is \
-                         no temporal call for `capture` to cover",
-                        callee.text()
-                    ),
-                    "ERR-7",
-                )
-                .with_note("a value function is lifted, and may be captured, where it is given a connection"),
-            );
-        }
+        self.check_capture_phase(&call, self.category(&call), Some(callee.text()));
         (ExprKind::Capture(Box::new(call)), Type::Unknown)
     }
 
-    /// What the `.value` of a capture of `call` is (ERR-7): "`.value`
-    /// retains the normal output type; outputless calls expose only
-    /// `.error`".
-    pub(super) fn captured_output(&self, call: &Expr) -> CapturedOutput {
-        let callee = match &call.kind {
-            ExprKind::Call {
-                callee:
-                    Callee::Function {
-                        module,
-                        declaration,
-                        ..
-                    }
-                    | Callee::Candidate {
-                        module,
-                        declaration,
-                        ..
-                    },
-                ..
-            } => self.program.modules[*module].details.get(*declaration),
-            _ => None,
-        };
-        match callee {
-            Some(Detail::Callable(signature)) if signature.result.is_none() => CapturedOutput::None,
-            _ => CapturedOutput::Of(call.ty.clone()),
+    /// ERR-7: capture cannot cover a call that does only wiring-time work.
+    /// The call's category may become known only after instance selection.
+    pub(super) fn check_capture_phase(
+        &mut self,
+        call: &Expr,
+        category: ValueCategory,
+        name: Option<&str>,
+    ) {
+        if !matches!(call.kind, ExprKind::Call { .. }) || category != ValueCategory::Value {
+            return;
         }
+        let callable = name
+            .map(str::to_owned)
+            .or_else(|| self.capture_name(call))
+            .map_or_else(
+                || "the captured call".to_string(),
+                |name| format!("`{name}`"),
+            );
+        self.diagnostics.emit(
+            error(
+                Category::Phase,
+                codes::CAPTURE_PHASE,
+                call.at,
+                format!(
+                    "{callable} is ordinary work here, done while the graph is built: there is \
+                     no temporal call for `capture` to cover"
+                ),
+                "ERR-7",
+            )
+            .with_note(
+                "a value function is lifted, and may be captured, where it is given a connection",
+            ),
+        );
+    }
+
+    /// The callable named by a capture whose phase is checked in an instance.
+    fn capture_name(&self, call: &Expr) -> Option<String> {
+        let list = child(&self.syntax_of(call)?, SyntaxKind::ArgList)?;
+        let (_, callable) = arguments_of(&list).into_iter().next()?;
+        Some(name_token(&callable)?.text().to_owned())
     }
 
     /// `seen.value` or `seen.error` (ERR-7): "`.value` retains the

@@ -129,6 +129,8 @@ fn composition_takes_the_temporal_definition_and_candidate() {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredOperator(_)
+            | Callee::DeferredValue
             | Callee::Unread => {
                 panic!("a callee")
             }
@@ -460,6 +462,136 @@ fn a_return_selected_at_runtime_needs_its_continuation() {
     ));
     assert_eq!(checked.summary(), ["m.hgl:9:4 type/return.missing FN-7"]);
     assert_eq!(locals(&checked, "picks")[3..], ["level: f64"]);
+}
+
+/// GEN-7 and CTRL-14: a newly temporal return needs a value on its
+/// continuation, using the same completeness check as a direct graph.
+#[test]
+fn an_instance_checks_its_temporal_return_continuation() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn partial<T>(const input: T) -> i64 {\n",
+        "    if predicate(input) { return 1 }\n",
+        "}\n",
+        "fn continued<T>(const input: T) -> i64 {\n",
+        "    if predicate(input) { return 1 }\n",
+        "    return 2\n",
+        "}\n",
+        "fn both<T>(const input: T) -> i64 {\n",
+        "    if predicate(input) { return 1 } else { return 2 }\n",
+        "}\n",
+        "fn checked_in_source<T>(const input: T, ready: bool) -> i64 {\n",
+        "    let chosen = predicate(input)\n",
+        "    if ready { return 1 }\n",
+        "}\n",
+        "fn node_control(ready: bool) -> i64 {\n",
+        "    when { if ready { return 1 } }\n",
+        "}\n",
+        "fn live_partial() -> i64 => partial(1)\n",
+        "fn wiring_partial() -> i64 => partial(\"s\")\n",
+        "fn live_continued() -> i64 => continued(1)\n",
+        "fn live_both() -> i64 => both(1)\n",
+        "fn direct_once() -> i64 => checked_in_source(1, true)\n",
+        "fn unused<T>(const input: T) -> i64 {\n",
+        "    if predicate(input) { return 1 }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:15:4 type/return.missing FN-7",
+            "m.hgl:22:29 type/return.missing FN-7",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// CTRL-6 and CTRL-14: a returning final switch can complete a graph
+/// when its selector settles to an enum whose members it covers.
+#[test]
+fn an_instance_can_complete_its_return_in_a_final_switch() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "enum Side { left, right }\n",
+        "fn covered<T>(const input: T) -> i64 {\n",
+        "    if predicate(input) { return 1 }\n",
+        "    let side = if predicate(input) { Side.left }\n",
+        "    switch side {\n",
+        "        case Side.left: return 2\n",
+        "        case Side.right: return 3\n",
+        "    }\n",
+        "}\n",
+        "fn uncovered<T>(const input: T) -> i64 {\n",
+        "    if predicate(input) { return 1 }\n",
+        "    let side = if predicate(input) { Side.left }\n",
+        "    switch side { case Side.left: return 2 }\n",
+        "}\n",
+        "fn falls_through<T>(const input: T) -> i64 {\n",
+        "    if predicate(input) { return 1 }\n",
+        "    let side = if predicate(input) { Side.left }\n",
+        "    switch side {\n",
+        "        case Side.left: return 2\n",
+        "        case Side.right: let unused = 3\n",
+        "    }\n",
+        "}\n",
+        "fn live_covered() -> i64 => covered(1)\n",
+        "fn live_uncovered() -> i64 => uncovered(1)\n",
+        "fn live_falls_through() -> i64 => falls_through(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:28:31 type/return.missing FN-7",
+            "m.hgl:29:35 type/return.missing FN-7",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// CTRL-6 and CTRL-14: every arm of the final `if` must complete the
+/// continuation, including arms which end in a deferred switch.
+#[test]
+fn an_instance_can_complete_its_return_in_both_tail_branches() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "enum Side { left, right }\n",
+        "fn covered<T>(const input: T, const use_switch: bool) -> i64 {\n",
+        "    if predicate(input) { return 1 }\n",
+        "    let side = if predicate(input) { Side.left }\n",
+        "    if use_switch {\n",
+        "        switch side {\n",
+        "            case Side.left: return 2\n",
+        "            case Side.right: return 3\n",
+        "        }\n",
+        "    } else { return 4 }\n",
+        "}\n",
+        "fn falls_through<T>(const input: T, const use_switch: bool) -> i64 {\n",
+        "    if predicate(input) { return 1 }\n",
+        "    let side = if predicate(input) { Side.left }\n",
+        "    if use_switch {\n",
+        "        switch side {\n",
+        "            case Side.left: return 2\n",
+        "            case Side.right: return 3\n",
+        "        }\n",
+        "    } else { let unused = 4 }\n",
+        "}\n",
+        "fn live_covered() -> i64 => covered(1, true)\n",
+        "fn live_falls_through() -> i64 => falls_through(1, false)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:27:35 type/return.missing FN-7"],
+        "{}",
+        checked.report
+    );
 }
 
 /// CTRL-15: "`for item in items` over an ordinary list, set, or

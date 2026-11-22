@@ -15,7 +15,9 @@ use super::operators::{
 };
 use super::{BOOL, Typer};
 use crate::constant::is_least_magnitude;
-use crate::hir::{BinaryOperator, Expr, ExprKind, Form, UnaryOperator, Value, ValueCategory};
+use crate::hir::{
+    BinaryOperator, DeferredOption, Expr, ExprKind, Form, UnaryOperator, Value, ValueCategory,
+};
 use crate::program::{DeclarationKind, OperatorRef};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{Detail, Scalar, Signature, Type};
@@ -66,7 +68,7 @@ impl<'a> Typer<'a> {
                 let operator = UnaryOperator::Negate;
                 let identity = self.symbol_operator(operator.identity(), at);
                 // EXPR-13: "Unary configuration precedes its operand."
-                let (mut given, faulty) = match (&config, identity) {
+                let (given, faulty) = match (&config, identity) {
                     (Some(config), Some(identity)) => {
                         self.configuration(operator.symbol(), config, identity)
                     }
@@ -76,55 +78,91 @@ impl<'a> Typer<'a> {
                     (None, _) => (Vec::new(), false),
                 };
                 let value = self.expression(&operand, None);
-                let symbol = Symbol {
-                    form: Form::Unary(operator),
-                    text: operator.symbol(),
+                self.negation(
+                    identity,
                     at,
-                    rule: "OPS-1",
-                    unjudged: Type::Unknown,
-                    place: expected.filter(|place| !open(place)).cloned(),
-                };
-                let only = Given::read(0, operand, value);
-                // GEN-7: `-value` under `requires neg_(T) -> T`.
-                if config.is_none()
-                    && let Some(operator) = identity
-                    && let Some(result) = self.required(operator, &[&only], (None, expected), None)
-                {
-                    return self.call_required(
-                        operator,
-                        result,
-                        vec![only],
-                        Vec::new(),
-                        (symbol.form, symbol.at),
-                    );
-                }
-                // An operand whose operators are not judged here: see
-                // `unjudged_operand`.
-                // A nullable operand is an operand as another is: no
-                // candidate takes one, and the minus is then rejected
-                // (ERR-12).
-                let identity = identity.filter(|_| {
-                    matches!(only.value.ty, Type::Nullable(_)) || !unjudged_operand(&only.value.ty)
-                });
-                let Some(identity) = identity else {
-                    if config.is_none() {
-                        let kind = ExprKind::Unary {
-                            operator,
-                            operand: Box::new(only.value),
-                        };
-                        return (kind, Type::Unknown);
-                    }
-                    given.push(only);
-                    return (self.unselected(given, symbol.form), Type::Unknown);
-                };
-                given.push(only);
-                if faulty {
-                    return (self.unselected(given, symbol.form), symbol.unjudged);
-                }
-                self.call_symbol(symbol, identity, given)
+                    Given::read(0, operand, value),
+                    (given, faulty, config.is_some()),
+                    expected,
+                )
             }
             _ => (ExprKind::Unread, Type::Unknown),
         }
+    }
+
+    /// Select unary minus after reading its operand and any configuration.
+    fn negation(
+        &mut self,
+        identity: Option<OperatorRef>,
+        at: Location,
+        only: Given,
+        (mut given, faulty, configured): (Vec<Given>, bool, bool),
+        expected: Option<&Type>,
+    ) -> (ExprKind, Type) {
+        let operator = UnaryOperator::Negate;
+        let symbol = Symbol {
+            form: Form::Unary(operator),
+            text: operator.symbol(),
+            at,
+            rule: "OPS-1",
+            unjudged: Type::Unknown,
+            place: expected.filter(|place| !open(place)).cloned(),
+        };
+        // GEN-7: `-value` under `requires neg_(T) -> T`.
+        if !configured
+            && let Some(operator) = identity
+            && let Some(result) = self.required(operator, &[&only], (None, expected), None)
+        {
+            return self.call_required(
+                operator,
+                result,
+                vec![only],
+                Vec::new(),
+                (symbol.form, symbol.at),
+            );
+        }
+        // A graph operand can gain its type from an instance selection.
+        // Remember what the minus asks of its candidate until then (GEN-7).
+        if self.graph
+            && !faulty
+            && let Some(identity) = identity
+            && matches!(only.value.ty, Type::Unknown)
+        {
+            return (
+                ExprKind::DeferredNegation {
+                    identity,
+                    at,
+                    expected: symbol.place.map(Box::new),
+                    operand_at: self.at(&only.node),
+                    configuration: self.deferred_configuration(given),
+                    operand: Box::new(only.value),
+                },
+                Type::Unknown,
+            );
+        }
+        // A nullable operand is an operand as another is: no candidate
+        // takes one unless the usual read supplies it (ERR-12).
+        let identity = identity.filter(|_| {
+            matches!(only.value.ty, Type::Nullable(_)) || !unjudged_operand(&only.value.ty)
+        });
+        let Some(identity) = identity else {
+            if !configured {
+                return (
+                    ExprKind::Unary {
+                        operator,
+                        operand: Box::new(only.value),
+                    },
+                    Type::Unknown,
+                );
+            }
+            given.push(only);
+            return (self.unselected(given, symbol.form), Type::Unknown);
+        };
+        given.push(only);
+        if faulty {
+            return (self.unselected(given, symbol.form), symbol.unjudged);
+        }
+        self.call_symbol(symbol, identity, given)
     }
 
     /// `left + right`, and each other operator with two operands.
@@ -383,8 +421,37 @@ impl<'a> Typer<'a> {
                 (symbol.form, symbol.at),
             );
         }
-        let identity = identity.filter(|_| !(as_written(&left) || as_written(&right)));
-        let Some(identity) = identity else {
+        let blocked = as_written(&left) || as_written(&right);
+        // A graph operand may gain its type during instance selection
+        // (GEN-7). Keep the identity when only the types of already-read
+        // operands prevent selection, and leave intrinsic forms alone.
+        if blocked
+            && self.graph
+            && !faulty
+            && let Some(identity) = identity
+            && [&left, &right].into_iter().all(|operand| {
+                !operand.by_place
+                    && !is_null(&operand.node)
+                    && (!as_written(operand) || !whole(&operand.value.ty))
+            })
+        {
+            let operands = [self.at(&left.node), self.at(&right.node)];
+            let (left, right) = self.operands_as_written(left, right);
+            return (
+                ExprKind::DeferredBinary {
+                    operator,
+                    identity,
+                    at,
+                    expected: symbol.place.map(Box::new),
+                    operands,
+                    configuration: self.deferred_configuration(entries),
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+                symbol.unjudged,
+            );
+        }
+        let Some(identity) = identity.filter(|_| !blocked) else {
             let (left_node, right_node) = (left.node.clone(), right.node.clone());
             let (left, right) = self.operands_as_written(left, right);
             // ERR-15: a result "compared with `null`, where T is not
@@ -415,6 +482,105 @@ impl<'a> Typer<'a> {
         self.call_symbol(symbol, identity, given)
     }
 
+    /// Select a graph symbol once its operands have settled (GEN-5, GEN-7).
+    /// Keep the operand HIR in written order and reuse the source selection.
+    pub(super) fn settle_symbol(&mut self, kind: &ExprKind) -> Option<(ExprKind, Type)> {
+        match kind {
+            ExprKind::DeferredNegation {
+                identity,
+                at,
+                expected,
+                operand_at,
+                configuration,
+                operand,
+            } if whole(&operand.ty) => {
+                let only = Given::read(0, self.node_at(*operand_at)?, (**operand).clone());
+                let entries = self.settle_configuration(*identity, configuration)?;
+                Some(self.negation(
+                    Some(*identity),
+                    *at,
+                    only,
+                    (entries, false, !configuration.is_empty()),
+                    expected.as_deref(),
+                ))
+            }
+            ExprKind::DeferredBinary {
+                operator,
+                identity,
+                at,
+                expected,
+                operands,
+                configuration,
+                left,
+                right,
+            } if whole(&left.ty) && whole(&right.ty) => {
+                let left = Given::read(0, self.node_at(operands[0])?, (**left).clone());
+                let right = Given::read(1, self.node_at(operands[1])?, (**right).clone());
+                let entries = self.settle_configuration(*identity, configuration)?;
+                Some(self.symbol(
+                    (*operator, *at),
+                    Some(*identity),
+                    (left, right),
+                    (entries, false, !configuration.is_empty()),
+                    expected.as_deref(),
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// Keep the EXPR-10 options without retaining a tentative reading
+    /// whose locals and flow were already rolled back.
+    fn deferred_configuration(&self, entries: Vec<Given>) -> Vec<DeferredOption> {
+        entries
+            .into_iter()
+            .filter_map(|given| {
+                Some(DeferredOption {
+                    name: given.key.name()?.to_string(),
+                    at: self.at(&given.node),
+                    value: (!given.retried).then_some(given.value),
+                })
+            })
+            .collect()
+    }
+
+    /// Restore the original EXPR-10 options for ordinary candidate selection.
+    fn settle_configuration(
+        &mut self,
+        operator: OperatorRef,
+        configuration: &[DeferredOption],
+    ) -> Option<Vec<Given>> {
+        if configuration.is_empty() {
+            return Some(Vec::new());
+        }
+        let Detail::Callable(public) =
+            &self.program.modules[operator.module].details[operator.declaration]
+        else {
+            return None;
+        };
+        let candidates = self.value_candidates(operator);
+        let options = options_of(public, &candidates);
+        self.index_instance_locals();
+        configuration
+            .iter()
+            .map(|entry| {
+                let node = self.node_at(entry.at)?;
+                let key = options.name_key(&entry.name, true);
+                Some(match &entry.value {
+                    Some(value) => Given {
+                        key,
+                        by_place: typed_by_place(&node),
+                        node,
+                        value: value.clone(),
+                        explicit: None,
+                        retried: false,
+                    },
+                    None => self.give(key, node),
+                })
+            })
+            .collect()
+    }
+
     /// An operand `value` of `==` or another symbol recorded as it is
     /// written, beside `other`, in the form its place takes: a result
     /// compared with `null` (`null_beside`) takes the form ERR-15 gives
@@ -422,14 +588,14 @@ impl<'a> Typer<'a> {
     /// ("An operand of an operator expects the T where the operator's
     /// candidates take one"); beside a result, itself, as `==` of two
     /// results takes them whole (ERR-2).
-    fn operand_form(&mut self, value: Expr, other: &Type, null_beside: bool) -> Expr {
-        if !matches!(value.ty, Type::Result { .. }) {
-            return value;
-        }
+    pub(super) fn operand_form(&mut self, value: Expr, other: &Type, null_beside: bool) -> Expr {
         if null_beside {
-            return self.compared_with_null(value);
+            return self.compared_with_null(value, None);
         }
-        if matches!(other, Type::Result { .. }) || open(other) {
+        if !matches!(value.ty, Type::Result { .. })
+            || matches!(other, Type::Result { .. })
+            || open(other)
+        {
             return value;
         }
         self.received(value, |_| false)
@@ -703,6 +869,18 @@ impl<'a> Typer<'a> {
         if self.diagnostics.len() != reported {
             return (self.unselected(given, symbol.form), symbol.unjudged);
         }
+        if said && !self.instance.is_empty() {
+            // GEN-8: a public option can forward a constant from the
+            // enclosing instance, just as a candidate's option can.
+            let map: Vec<_> = self
+                .instance
+                .iter()
+                .map(|(at, argument)| (*at, argument))
+                .collect();
+            for argument in found.iter_mut().flatten() {
+                *argument = crate::instance::placed(argument, &map);
+            }
+        }
         // An implicit configuration default can read the operator's
         // generics without changing what the symbol asks of its candidates.
         let has_default = has_generic_configuration_default(public);
@@ -734,6 +912,7 @@ impl<'a> Typer<'a> {
             place: requested.as_ref().or(symbol.place.as_ref()),
             among,
             written: false,
+            callback: None,
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         // GEN-7: "A generic body is checked under its stated
@@ -751,12 +930,13 @@ impl<'a> Typer<'a> {
                 .find(|given| matches!(given.key, Key::Position(0)))
                 .and_then(|given| given.node.parent())
                 .map_or(symbol.at, |node| self.at(&node));
+            let provisional = (selected.len() == 1).then(|| &mut selected[0]);
             let settled = self.select_per_instance(
                 operator,
                 &given,
                 (&wanted, None, &operator_generics),
                 (symbol.form, written, symbol.at),
-                untold,
+                (untold, provisional),
             );
             match settled {
                 Settled::Deferred(ty) => {

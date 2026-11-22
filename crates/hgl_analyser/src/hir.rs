@@ -15,8 +15,8 @@ use hgl_diagnostics::Location;
 // A tenor's value is the lexer's: a later stage reads it from here.
 pub use hgl_lexer::literal::Tenor;
 
-use crate::program::LocalKind;
-use crate::types::{Argument as GenericArgument, Type};
+use crate::program::{LocalKind, OperatorRef};
+use crate::types::{Argument as GenericArgument, CallArguments, Type};
 
 /// An application's run statement, typed (RUN-1): "its run statement
 /// is `run call` or `eval call`, where the call is of an entry, written
@@ -472,11 +472,35 @@ impl Expr {
         self.category == ValueCategory::Connection
     }
 
+    /// The local this expression names directly, including a read
+    /// whose proof of presence waits for instance selection (ERR-12).
+    pub(crate) fn named_local(&self) -> Option<LocalId> {
+        match self.kind {
+            ExprKind::Local(local) | ExprKind::DeferredPresent(local) => Some(local),
+            _ => None,
+        }
+    }
+
     /// True for a call that is lifted (FN-6): see the `lifted` of
     /// [`ExprKind::Call`].
     pub fn is_lifted(&self) -> bool {
         matches!(self.kind, ExprKind::Call { lifted: true, .. })
     }
+}
+
+/// Which branches can supply the deferred type of an `if` with an
+/// `else` (CTRL-10, CTRL-13). A branch that returns supplies no value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IfInference {
+    /// No inference across two branches. The result may come from its
+    /// context, or may have no value or no `else`.
+    None,
+    /// The value takes the common type of both branches.
+    Both,
+    /// Only the `then` branch supplies a value. The other one returns.
+    Then,
+    /// Only the `else` branch supplies a value. The other one returns.
+    Otherwise,
 }
 
 /// What an expression is.
@@ -509,6 +533,9 @@ pub enum ExprKind {
     /// where the local is a `T?` that a test against null has proved is
     /// not null there (ERR-12).
     Local(LocalId),
+    /// An immutable graph binding read where a null test proved its
+    /// presence, before the instance has determined its ordinary type (ERR-12).
+    DeferredPresent(LocalId),
     /// The endpoint of a temporal input, or of `out`, where a native
     /// value function takes the endpoint and not its payload: the
     /// argument of an `endpoint<T>` parameter (TIME-9). The payload is
@@ -592,6 +619,9 @@ pub enum ExprKind {
         then: Box<Expr>,
         /// What is done when it does not.
         otherwise: Option<Box<Expr>>,
+        /// Which branches supply the deferred type, as source flow
+        /// determined (CTRL-10, CTRL-13).
+        inference: IfInference,
     },
     /// A generic value parameter of the declaration: the `N` of
     /// `const fn width<const N: i64>() -> i64 => N`.
@@ -608,6 +638,21 @@ pub enum ExprKind {
         /// The operand.
         operand: Box<Expr>,
     },
+    /// A unary minus awaiting its operand's type in a graph.
+    DeferredNegation {
+        /// The operator this symbol binds.
+        identity: OperatorRef,
+        /// The source location of the minus itself.
+        at: Location,
+        /// What the original place expects of the operator's result.
+        expected: Option<Box<Type>>,
+        /// Where the operand was written.
+        operand_at: Location,
+        /// Configuration entries in written order (EXPR-13).
+        configuration: Vec<DeferredOption>,
+        /// The operand, already read.
+        operand: Box<Expr>,
+    },
     /// `left && right`, `left || right`, and each other symbol with
     /// two operands that is not read as a call: see [`Form`].
     Binary {
@@ -616,6 +661,25 @@ pub enum ExprKind {
         /// The left operand.
         left: Box<Expr>,
         /// The right operand.
+        right: Box<Expr>,
+    },
+    /// A binary symbol awaiting an operand's type in a graph.
+    DeferredBinary {
+        /// The binary form written in source.
+        operator: BinaryOperator,
+        /// The operator this symbol binds.
+        identity: OperatorRef,
+        /// The source location of the symbol itself.
+        at: Location,
+        /// What the original place expects of the operator's result.
+        expected: Option<Box<Type>>,
+        /// The source locations of the two written operands.
+        operands: [Location; 2],
+        /// Configuration entries in written order (EXPR-13).
+        configuration: Vec<DeferredOption>,
+        /// The left operand, already read in source order.
+        left: Box<Expr>,
+        /// The right operand, already read in source order.
         right: Box<Expr>,
     },
     /// An `i64` taken as the `f64` of the same number, where an `f64`
@@ -634,6 +698,9 @@ pub enum ExprKind {
         arguments: Vec<Argument>,
         /// How the call is written.
         form: Form,
+        /// Values explicitly supplied in braces (EXPR-10), by source
+        /// location, for the instance's wiring-time check (EXPR-14).
+        braced: Vec<Location>,
         /// True where the call is lifted (FN-6: "A selected value
         /// helper, a `const fn` or a value candidate of an operator,
         /// with temporal arguments in composition is lifted"): it is
@@ -659,6 +726,9 @@ pub enum ExprKind {
         /// The fields given, as they are written. A field's position
         /// is its place among the struct's `members`.
         arguments: Vec<Argument>,
+        /// Whether GEN-2 infers the type arguments from these fields.
+        /// Explicit arguments and an expected struct type stay fixed.
+        infer_types: bool,
     },
     /// A member of an enum: `Side.buy`, or `.buy` where a `Side` is
     /// expected (TYPE-7).
@@ -680,6 +750,9 @@ pub enum ExprKind {
         /// The number, an `i64`, or the name, a `str`.
         value: Box<Expr>,
     },
+    /// An enum construction whose argument type awaits graph settlement.
+    /// The expression's type is already the enum it constructs (TYPE-7).
+    DeferredEnumFrom(Box<Expr>),
     /// A field of a struct value, `quote.bid`; a property of a native
     /// value, `clock.now`; or a property of a delta that is a type of
     /// its own, `change.added` (TYPE-16).
@@ -693,6 +766,18 @@ pub enum ExprKind {
         /// `value`; for a struct's, the position of the field it is
         /// the delta of.
         member: usize,
+    },
+    /// A graph member read awaiting the base type of a selected instance.
+    DeferredMember {
+        /// What the member is read from.
+        base: Box<Expr>,
+        /// The member's spelling before its position is known.
+        name: String,
+        /// Where the member name is written.
+        at: Location,
+        /// Whether the matching ERR-3 guard holds here if the base
+        /// settles to an ordinary result binding.
+        variant_proven: bool,
     },
     /// A delta that is a type of its own made from its properties:
     /// `delta<set<i64>>(added: [1, 2], removed: [3])`, `delta<i64?>()`,
@@ -951,6 +1036,59 @@ pub struct ConfigurationRead {
     pub anonymous: bool,
 }
 
+/// A configuration entry of a graph symbol awaiting candidate selection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredOption {
+    /// The written option name (EXPR-10).
+    pub name: String,
+    /// The source expression that gives the option.
+    pub at: Location,
+    /// The existing reading, absent when the candidate must supply its place.
+    pub value: Option<Expr>,
+}
+
+/// A named operator whose arguments need the concrete graph instance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredOperator {
+    /// The bound operator identity (GEN-4).
+    pub identity: OperatorRef,
+    /// The written argument list, also used to recover a call within `capture`.
+    pub list: Location,
+    /// What the original place expects of the call's result.
+    pub expected: Option<Type>,
+    /// The explicit arguments written after the operator name (GEN-8).
+    pub generics: Option<CallArguments>,
+    /// Which arguments take their type from a candidate, in written order.
+    pub contextual: Vec<bool>,
+    /// Whether this call shares the enclosing `capture`'s argument list.
+    pub captured: bool,
+}
+
+/// A function argument waiting for a type its graph instance can infer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextualArgument {
+    /// Its index in the call's arguments, in written order.
+    pub position: usize,
+    /// The argument's source expression.
+    pub at: Location,
+    /// The local proofs in scope at this read (ERR-3, ERR-12, TIME-4).
+    pub facts: Vec<ArgumentFact>,
+}
+
+/// A fact about a binding, recorded by declaration location so it can be
+/// recovered if an instance inserts hidden parameters before its locals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgumentFact {
+    /// A nullable local is present (ERR-12).
+    Present(Location),
+    /// An input is valid (TIME-4).
+    Valid(Location),
+    /// The local is a success (ERR-3).
+    Success(Location),
+    /// The local is a failure (ERR-3).
+    Failure(Location),
+}
+
 /// What a call calls.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Callee {
@@ -973,6 +1111,9 @@ pub enum Callee {
         /// `generics` in place: see [`Answer`]. Empty where `generics`
         /// is.
         requirements: Vec<Answer>,
+        /// Written arguments whose places still depend on graph instance
+        /// inference, by index and source location (GEN-2, EXPR-9, ERR-2).
+        contextual: Vec<ContextualArgument>,
     },
     /// The value candidate selected for a call of an operator (GEN-5).
     Candidate {
@@ -1030,6 +1171,10 @@ pub enum Callee {
     },
     /// A statically selected anonymous function, with explicit lexical captures.
     Anonymous(Box<AnonymousFunction>),
+    /// A named operator awaiting an argument type before selection (GEN-7).
+    DeferredOperator(Box<DeferredOperator>),
+    /// A deferred operator call whose candidates are all value functions.
+    DeferredValue,
     /// No callee: a name left for the prelude, a function that is
     /// itself an expression, or an operator of which no candidate is
     /// selected, by its name or by a symbol.
@@ -1057,6 +1202,8 @@ impl Callee {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredOperator(_)
+            | Callee::DeferredValue
             | Callee::Unread => None,
         }
     }
@@ -1070,6 +1217,8 @@ impl Callee {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredOperator(_)
+            | Callee::DeferredValue
             | Callee::Unread => &[],
         }
     }
@@ -1083,6 +1232,8 @@ impl Callee {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredOperator(_)
+            | Callee::DeferredValue
             | Callee::Unread => &[],
         }
     }
@@ -1136,6 +1287,9 @@ pub struct TypePackArgument {
     pub parameter: usize,
     /// Each type of the pack in binding order, possibly none.
     pub types: Vec<Type>,
+    /// The graph's arguments still have to complete this inferred pack.
+    /// A pack with written types is already fixed (GEN-8).
+    pub infer_from_arguments: bool,
 }
 
 /// What answers a requirement a call's callee states (GEN-16).
@@ -1381,6 +1535,7 @@ impl Expr {
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
             | ExprKind::BoundChild(_)
+            | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
             | ExprKind::EnumMember { .. }
@@ -1396,6 +1551,7 @@ impl Expr {
                 condition,
                 then,
                 otherwise,
+                ..
             } => {
                 condition.walk_nodes(visit);
                 then.walk_nodes(visit);
@@ -1403,11 +1559,41 @@ impl Expr {
                     otherwise.walk_nodes(visit);
                 }
             }
+            ExprKind::DeferredNegation {
+                configuration,
+                operand,
+                ..
+            } => {
+                for value in configuration
+                    .iter()
+                    .filter_map(|entry| entry.value.as_ref())
+                {
+                    value.walk_nodes(visit);
+                }
+                operand.walk_nodes(visit);
+            }
+            ExprKind::DeferredBinary {
+                left,
+                configuration,
+                right,
+                ..
+            } => {
+                left.walk_nodes(visit);
+                for value in configuration
+                    .iter()
+                    .filter_map(|entry| entry.value.as_ref())
+                {
+                    value.walk_nodes(visit);
+                }
+                right.walk_nodes(visit);
+            }
             ExprKind::Unary { operand: inner, .. }
             | ExprKind::Widen(inner)
             | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
+            | ExprKind::DeferredEnumFrom(inner)
             | ExprKind::Field { base: inner, .. }
+            | ExprKind::DeferredMember { base: inner, .. }
             | ExprKind::Tagged { payload: inner, .. }
             | ExprKind::TagTest { value: inner, .. }
             | ExprKind::Payload { result: inner, .. }
@@ -1494,6 +1680,7 @@ impl Expr {
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
             | ExprKind::BoundChild(_)
+            | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
             | ExprKind::EnumMember { .. }
@@ -1509,6 +1696,7 @@ impl Expr {
                 condition,
                 then,
                 otherwise,
+                ..
             } => {
                 condition.walk_nodes_mut(visit);
                 then.walk_nodes_mut(visit);
@@ -1516,11 +1704,41 @@ impl Expr {
                     otherwise.walk_nodes_mut(visit);
                 }
             }
+            ExprKind::DeferredNegation {
+                configuration,
+                operand,
+                ..
+            } => {
+                for value in configuration
+                    .iter_mut()
+                    .filter_map(|entry| entry.value.as_mut())
+                {
+                    value.walk_nodes_mut(visit);
+                }
+                operand.walk_nodes_mut(visit);
+            }
+            ExprKind::DeferredBinary {
+                left,
+                configuration,
+                right,
+                ..
+            } => {
+                left.walk_nodes_mut(visit);
+                for value in configuration
+                    .iter_mut()
+                    .filter_map(|entry| entry.value.as_mut())
+                {
+                    value.walk_nodes_mut(visit);
+                }
+                right.walk_nodes_mut(visit);
+            }
             ExprKind::Unary { operand: inner, .. }
             | ExprKind::Widen(inner)
             | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
+            | ExprKind::DeferredEnumFrom(inner)
             | ExprKind::Field { base: inner, .. }
+            | ExprKind::DeferredMember { base: inner, .. }
             | ExprKind::Tagged { payload: inner, .. }
             | ExprKind::TagTest { value: inner, .. }
             | ExprKind::Payload { result: inner, .. }
@@ -1814,6 +2032,12 @@ impl ExprKind {
                 operator,
                 left,
                 right,
+            }
+            | ExprKind::DeferredBinary {
+                operator,
+                left,
+                right,
+                ..
             } => Some((*operator, left, right)),
             // The left operand is the first argument and the right the
             // last, with the configuration between (EXPR-13).

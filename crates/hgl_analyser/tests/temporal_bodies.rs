@@ -462,6 +462,42 @@ fn configuration_introduces_no_temporal_input() {
     );
 }
 
+/// EXPR-14 and GEN-7: a brace entry that becomes a connection after
+/// selection is still held to a value candidate's wiring-time option.
+#[test]
+fn instances_check_the_category_of_braced_configuration() {
+    let checked = module(concat!(
+        "operator helper<T>(input: T) -> f64\n",
+        "impl const fn helper<T>(input: T) -> f64 => 0.1\n",
+        "impl fn helper(input: i64) -> f64 { when { return 0.1 } }\n",
+        "fn braced<T>(const input: T, a: f64, b: f64) -> bool =>\n",
+        "    a =={abs: helper(input)} b\n",
+        "fn named_braced<T>(const input: T, a: f64, b: f64) -> bool =>\n",
+        "    eq_{abs: helper(input)}(a, b)\n",
+        "fn named<T>(const input: T, a: f64, b: f64) -> bool =>\n",
+        "    eq_(a, b, abs: helper(input))\n",
+        "fn already_reported<T>(const input: T, a: f64, b: f64, abs: f64) -> bool {\n",
+        "    let unused = helper(input)\n",
+        "    return a =={abs: abs} b\n",
+        "}\n",
+        "fn live(a: f64, b: f64) -> bool => braced(1, a, b)\n",
+        "fn live_named_braces(a: f64, b: f64) -> bool => named_braced(1, a, b)\n",
+        "fn ordinary(a: f64, b: f64) -> bool => braced(\"s\", a, b)\n",
+        "fn live_parentheses(a: f64, b: f64) -> bool => named(1, a, b)\n",
+        "fn source_once(a: f64, b: f64, abs: f64) -> bool => already_reported(1, a, b, abs)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:22 phase/connection.as_constant EXPR-14",
+            "m.hgl:15:36 phase/connection.as_constant EXPR-14",
+            "m.hgl:16:49 phase/connection.as_constant EXPR-14",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 // ---- A hook's and a graph's expressions ----
 
 /// The value rules hold in a node's hook, which is read as value code

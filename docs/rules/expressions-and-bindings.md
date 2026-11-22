@@ -60,6 +60,8 @@ analyser: partial
 analyser: partial
 
 - A value fits the type its place expects, in a value function, a hook and a graph; an integer literal is an `f64` where one is expected, the `f64` of its value (UNIT-13: `let x: f64 = 1` binds `1.0`), and a result or nullable value takes the form its place expects (ERR-12, ERR-15); `null`, a tuple and a sequence take the expected type, and so does a child read checked when it runs (ERR-14)
+- A graph instance rechecks newly known values against established field, tuple, list, set and dictionary entry types (GEN-7).
+- A graph instance refits an assigned list literal's known entries against the element type established by the inferred variable's initializer (EXPR-3, GEN-7).
 - What is read again to learn its place's type is counted for each statement, so a statement is judged the same whatever comes before it; one that needs more than its bound, 10,000 and 16 for each node of its syntax, is local `reading.limit`, and is not accepted
 - Left: const expression restrictions
 
@@ -68,6 +70,7 @@ analyser: partial
 analyser: partial
 
 - The Boolean connectives and `!` take bools, in value functions, reading a fallible or nullable operand where a bool is expected (ERR-12, ERR-15)
+- A graph instance fits newly known operands of `!`, `&&`, and `||`, with the right operand of a connective still short-circuited (GEN-7).
 - A compile-time constant short-circuits (`constant`): the right operand of `false &&` and `true ||` is not needed where it is a parameter, a constant held by its name, or one whose evaluation fails, which is then no failure (`const NO: bool = false && (1 // 0 == 0)` is `false`); one of no type is held to a `bool` still
 - Left: a guard precedes the payload read it protects
 
@@ -81,7 +84,10 @@ transpiler: done
 analyser: partial
 
 - A field of a struct value has its type, the value's generic arguments in place; a list's element by an `i64`, a tuple's by a constant within its length, read by the one reader (`constant`): a literal, a constant of a module, and a constant expression of those
-- A set indexed is rejected, to read or to assign
+- When a graph's deferred collection type settles, its bracket reads get the element type and take the implicit reads needed by the base, index or key (GEN-7, ERR-12, ERR-15).
+- A tuple that settles in an instance checks the same constant index and bounds. A checked position is recorded as its integer value.
+- A graph member read with a deferred base retains its member name until selection can check the field or property and its implicit reads (GEN-7, ERR-12, ERR-15).
+- Indexing a set is rejected for both reads and assignments, including when the base first settles to a set in a graph instance (GEN-7).
 - A member or an element of a nullable's payload is read where a null test proves it present (ERR-12), and a result's payload through its tag (ERR-3)
 - A structural projection of a `ref` parameter in a hook, `xs[i]` or `quote.bid`, selects its child, an endpoint, and reads no payload; an atomic projection of one, `quote.bid` of `ref quote: atomic<Quote>`, reads its payload and is `ref.read` (FN-16)
 - Left: an index on any other value that has none; temporal projection
@@ -90,7 +96,7 @@ transpiler: partial
 
 - Writes ordinary checked list and dictionary indexing, tuple and struct projection,
   temporal child access, atomic struct projection, and keyed graph references.
-- Left: Reports a nonliteral tuple index in HIR, a hook child of a list of structs or
+- Left: Reports an unresolved tuple index in HIR, a hook child of a list of structs or
   tuples, a graph child of a list at a connection-valued index, nested dictionary entry
   reads and unsupported endpoint operations on children. Unsupported fields and element
   forms are reported at the projection.
@@ -110,7 +116,9 @@ parser: done
 analyser: partial
 
 - A sequence of values is a list or a set by the type expected, and with none a list of its values' one type, nullable when a `null` is among them; entries of two types, and entries that give no type, rejected
+- An inferred list with unfinished entries keeps its element type open until graph specialization can join them and widen eligible literals (EXPR-5, GEN-7).
 - Pairs are a dictionary where one is expected, each key and value read as its type; with nothing expected they are `sequence.context_type`
+- A named function's empty sequence argument takes the parameter type when another argument supplies the missing type in a graph instance (GEN-2, GEN-7).
 - Left: `_`; pairs as a timed trace; ordering and uniqueness
 
 transpiler: partial
@@ -161,6 +169,7 @@ transpiler: done
 analyser: done
 
 - In a graph an entry of a symbol's configuration given to a value candidate, which the graph lifts, is given no connection (`connection.as_constant`); a temporal candidate's parameter takes one, and so does a call by name (FN-6)
+- An instance checks a brace entry again if its category was unsettled at declaration (GEN-7).
 - In a value function and a hook the entry is a value of the invocation
 
 transpiler: partial

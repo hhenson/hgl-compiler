@@ -204,12 +204,21 @@ fn values_read_again_are_counted_for_each_statement() {
         text.push_str("])");
     }
     text.push_str("\n}\n");
-    let started = std::time::Instant::now();
-    let checked = check_broken(&[("m.hgl", text.as_str())]);
-    assert_eq!(checked.front_end_errors, 0, "{}", checked.report);
-    // Two to the fortieth readings would not end in the life of the
-    // test; a bounded count ends at once.
-    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    // Forty levels of a struct of a list need the analyser's sized
+    // stack, as in `hgl`.
+    let limits = hgl_parser::Limits::default();
+    let worker = std::thread::Builder::new()
+        .stack_size(hgl_analyser::stack_size(limits))
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            let checked = check_broken(&[("m.hgl", text.as_str())]);
+            assert_eq!(checked.front_end_errors, 0, "{}", checked.report);
+            // Two to the fortieth readings would not end in the life of
+            // the test; a bounded count ends at once.
+            assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        })
+        .expect("a thread starts");
+    worker.join().expect("the analyser fits the stack");
 }
 
 /// GEN-5: an argument written as a sequence is tried as each candidate's

@@ -129,6 +129,7 @@ pub(crate) fn assemble<'a>(
             scope: Default::default(),
             instantiations: Vec::new(),
             selecting: Vec::new(),
+            graph_return_checks: Vec::new(),
         });
     }
     (program, omits)

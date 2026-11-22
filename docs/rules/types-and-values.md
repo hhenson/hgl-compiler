@@ -65,6 +65,7 @@ analyser: partial
 analyser: partial
 
 - A construction in a value function names each field it gives, in any order, and gives every field that has no default and is not optional; a positional argument is rejected
+- Once an inferred graph construction has concrete field types, its implied enum fields and written empty collections use those types (GEN-2, TYPE-7, EXPR-9).
 - Left: constructions elsewhere
 
 transpiler: partial
@@ -126,6 +127,7 @@ analyser: partial
 - An atomic payload is an ordinary value type
 - A node publishes a V to a result of `atomic<V>`
 - `atomic<S>` of a non-composite S is S, where the type is written and where a generic parameter is replaced, and an `atomic<T>` given a value of such a type says what `T` is
+- A graph instance fills inferred types inside a retained `atomic<V>` wrapper and normalizes a field from its settled payload (GEN-7, EXPR-7).
 - A field of an `atomic<S>` struct is an atomic of the field's type
 - In a hook an atomic input's payload is its V
 - Left: temporalization of composite types; an atomic connection given to a lifted value function of V
@@ -248,6 +250,7 @@ analyser: partial
 - A `signal` has none (`delta.unsupported_shape`); a `ref` parameter's `delta_value` is not read (`ref.read`, FN-16)
 - Each delta that is a type of its own has its properties: a set's `added` and `removed`, a list's `updated`, `removed` and `size_modified`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`)
 - It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`)
+- A generic graph instance fills inferred types inside a retained `delta<T>` wrapper, derives a property's type from its settled base and fits a constructor's property value (GEN-7, EXPR-5, EXPR-7).
 - A delta that is another type the language has, a scalar's, a tuple's or a window's, has no constructor: each property its constructor names, or the constructor where it names none, is `delta.argument_name`
 - A `delta<V>` is a value where a `delta<V?>` is expected, and null is not
 - A set's, a dictionary's or a list's delta that names one constant entry both as added or updated and as removed is `delta.overlap`, constants read by the one reader (`constant`) as values of the key's type: `-1`, an enum's member however written, `60s` and `1m`, an integer literal as an `f64` key. Two are compared by the language's `==` (`ConstantValue::equals`), as TYPE-16 has it, "and not by their sameness as constants (UNIT-13)": `0.0` and `-0.0` are one key, and two NaNs two
