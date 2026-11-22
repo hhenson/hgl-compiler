@@ -2285,16 +2285,17 @@ before it is committed. Its own tests are
 | Platform | Automatic pull request checks | C++ check before merge |
 | --- | --- | --- |
 | Linux | Hosted formatting, Clippy and Rust workspace tests | Hosted C++ job runs runtime CTests, SDK tests and pinned core cases, plain and sanitized |
-| macOS | Hosted Rust workspace tests | A maintainer dispatches **macOS C++ target** on the reviewed repository branch. It adds the workspace tests and the same C++ checks on Apple silicon |
+| macOS | Hosted Rust workspace tests | A maintainer dispatches **Release bundles** on the reviewed repository branch. Its `cpp-macos` job runs the workspace tests and the same C++ checks on Apple silicon |
 | Windows | Hosted Rust workspace tests | C++ build and execution remain outside CI |
 
-The macOS C++ workflow runs on pushes to `main` and on manual dispatches
-of branches in this repository, when `HGL_SELF_HOSTED_MACOS` is `true`.
-Once the workflow is on `main` and the reviewed branch contains it, a
-maintainer with write access can dispatch that branch.
+**Release bundles** runs its `cpp-macos` job after verifying the
+macOS packages, with the release deployment target. The job runs on pushes
+to `main` and on manual dispatches of branches in this repository when
+`HGL_SELF_HOSTED_MACOS` is `true`. Once the reviewed branch contains the job,
+a maintainer with write access can dispatch that branch.
 
 ```sh
-gh workflow run cpp-macos.yml --repo hhenson/hgl-compiler --ref BRANCH
+gh workflow run release.yml --repo hhenson/hgl-compiler --ref BRANCH
 ```
 
 Check the dispatch result for the commit being merged. Pull request events
