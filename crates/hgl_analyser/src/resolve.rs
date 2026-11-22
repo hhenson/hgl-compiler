@@ -37,7 +37,6 @@ use crate::{INJECTABLES, RESULT_FORMS, codes, error};
 /// Resolves the names of every module, filling in [`Module::uses`] and
 /// [`Module::decisions`] and adding to [`Module::prelude_names`].
 pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
-    crate::declare::bind_test_helpers(program, diagnostics);
     for index in 0..program.modules.len() {
         // A module is made from at least one file.
         let Some(first) = program.modules[index].files.first() else {
@@ -439,7 +438,7 @@ impl Resolver<'_> {
         match node.kind() {
             SyntaxKind::Block => self.block(node),
             // A named test's helpers are walked with the module's declarations.
-            SyntaxKind::FnDecl => {}
+            kind if crate::syntax::is_test_declaration(kind) => {}
             SyntaxKind::LocalDecl | SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
                 self.local(node);
             }
@@ -850,7 +849,7 @@ impl Resolver<'_> {
         self.module
             .tests
             .get(self.test_owner?)?
-            .helpers
+            .scope
             .get(name)
             .map(Vec::as_slice)
     }

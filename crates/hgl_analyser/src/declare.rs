@@ -25,7 +25,7 @@ use crate::{codes, error};
 pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut Diagnostics) {
     let mut walk = Walk {
         declarations: Vec::new(),
-        test_helpers: Vec::new(),
+        test_declarations: Vec::new(),
         tests: Vec::new(),
         instantiations: Vec::new(),
         application: module.application,
@@ -109,7 +109,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
         }
     }
     module.declarations = walk.declarations;
-    module.declarations.extend(walk.test_helpers);
+    module.declarations.extend(walk.test_declarations);
     module.tests = walk.tests;
     module.instantiations = walk.instantiations;
     bind_declarations(module, diagnostics);
@@ -232,7 +232,7 @@ fn read_import(import: &UseDecl, file: FileId, imports: &mut Vec<Import>) {
 struct Walk<'a> {
     declarations: Vec<Declaration>,
     /// Kept after ordinary declarations so a test cannot change their identities (TST-2).
-    test_helpers: Vec<Declaration>,
+    test_declarations: Vec<Declaration>,
     tests: Vec<Test>,
     instantiations: Vec<(usize, SyntaxNode)>,
     /// True when the unit walked is an application (UNIT-14).
@@ -343,27 +343,23 @@ impl Walk<'_> {
             Item::Test(test) => {
                 if let Some(name) = test.name() {
                     let owner = self.tests.len();
-                    for helper in test.helpers() {
-                        if omit.contains(&helper.syntax().span()) {
+                    for item in test.declarations() {
+                        let syntax = item.syntax().clone();
+                        if omit.contains(&syntax.span()) {
                             continue;
                         }
-                        let Some(name) = helper.name() else {
+                        let Some((name, kind, _)) = declaration(item) else {
                             continue;
                         };
-                        let role = if helper.is_const() {
-                            Role::Value
-                        } else {
-                            Role::Temporal
-                        };
-                        self.test_helpers.push(Declaration {
+                        self.test_declarations.push(Declaration {
                             name: name.text().to_string(),
                             at: Location::new(file, name.span()),
-                            kind: DeclarationKind::Function(role),
+                            kind,
                             exported: false,
                             test_only: true,
                             test_owner: Some(owner),
                             file: index,
-                            syntax: helper.syntax().clone(),
+                            syntax,
                         });
                     }
                     self.tests.push(Test {
@@ -375,66 +371,17 @@ impl Walk<'_> {
                         at: Location::new(file, name.span()),
                         file: index,
                         syntax,
-                        helpers: HashMap::new(),
+                        scope: HashMap::new(),
                     });
                 }
                 return;
             }
-            Item::Function(function) => {
-                let role = if function.is_const() {
-                    Role::Value
-                } else {
-                    Role::Temporal
+            item => {
+                let Some(declaration) = declaration(item) else {
+                    return;
                 };
-                // GEN-4: "An `impl fn` is a temporal candidate of the
-                // operator it names and an `impl const fn` a value
-                // candidate."
-                let kind = if function.is_impl() {
-                    DeclarationKind::Implementation(role, None)
-                } else {
-                    DeclarationKind::Function(role)
-                };
-                (function.name(), kind, function.export())
+                declaration
             }
-            Item::NativeFunction(function) => {
-                let role = if function.is_const() {
-                    Role::Value
-                } else {
-                    Role::Temporal
-                };
-                // NATIVE-3: a body makes an implementation; none, a
-                // declaration. NATIVE-1: with `impl`, the declaration
-                // is a candidate of an operator. NATIVE-7: "Checking an
-                // interface needs no executable provider loading." The
-                // role is the one written here, and every later pass
-                // checks a call against what the declaration says:
-                // nothing a provider supplies is read, and a declaration
-                // with no implementation part keeps its role.
-                let kind = match (function.is_impl(), function.body().is_some()) {
-                    (false, false) => DeclarationKind::NativeFunction(role),
-                    (false, true) => DeclarationKind::NativeImplementation(role),
-                    (true, false) => DeclarationKind::NativeCandidate(role, None),
-                    (true, true) => DeclarationKind::NativeCandidateImplementation(role),
-                };
-                // NATIVE-1: a native function that is no candidate "is
-                // private unless exported, as a function is".
-                (function.name(), kind, function.export())
-            }
-            // UNIT-3, GEN-4: record an operator's export mark.
-            Item::Operator(operator) => (
-                operator.name(),
-                DeclarationKind::Operator,
-                operator.export(),
-            ),
-            Item::Struct(decl) => (decl.name(), DeclarationKind::Struct, decl.export()),
-            Item::Enum(decl) => (decl.name(), DeclarationKind::Enum, decl.export()),
-            Item::NativeType(decl) => (decl.name(), DeclarationKind::NativeType, decl.export()),
-            // UNIT-13: a constant is a declaration of its module, private
-            // unless exported (UNIT-3).
-            Item::Constant(decl) => (decl.name(), DeclarationKind::Constant, decl.export()),
-        };
-        let Some(name) = name else {
-            return;
         };
         let at = Location::new(file, name.span());
 
@@ -496,6 +443,67 @@ impl Walk<'_> {
     }
 }
 
+/// Reads a declaration's name, kind and export mark. The caller places it
+/// in the module or in a test's own scope.
+fn declaration(item: Item) -> Option<(SyntaxToken, DeclarationKind, Option<SyntaxToken>)> {
+    let (name, kind, export) = match item {
+        Item::Function(function) => {
+            let role = if function.is_const() {
+                Role::Value
+            } else {
+                Role::Temporal
+            };
+            // GEN-4: "An `impl fn` is a temporal candidate of the
+            // operator it names and an `impl const fn` a value
+            // candidate."
+            let kind = if function.is_impl() {
+                DeclarationKind::Implementation(role, None)
+            } else {
+                DeclarationKind::Function(role)
+            };
+            (function.name(), kind, function.export())
+        }
+        Item::NativeFunction(function) => {
+            let role = if function.is_const() {
+                Role::Value
+            } else {
+                Role::Temporal
+            };
+            // NATIVE-3: a body makes an implementation; none, a
+            // declaration. NATIVE-1: with `impl`, the declaration
+            // is a candidate of an operator. NATIVE-7: "Checking an
+            // interface needs no executable provider loading." The
+            // role is the one written here, and every later pass
+            // checks a call against what the declaration says:
+            // nothing a provider supplies is read, and a declaration
+            // with no implementation part keeps its role.
+            let kind = match (function.is_impl(), function.body().is_some()) {
+                (false, false) => DeclarationKind::NativeFunction(role),
+                (false, true) => DeclarationKind::NativeImplementation(role),
+                (true, false) => DeclarationKind::NativeCandidate(role, None),
+                (true, true) => DeclarationKind::NativeCandidateImplementation(role),
+            };
+            // NATIVE-1: a native function that is no candidate "is
+            // private unless exported, as a function is".
+            (function.name(), kind, function.export())
+        }
+        // UNIT-3, GEN-4: record an operator's export mark.
+        Item::Operator(operator) => (
+            operator.name(),
+            DeclarationKind::Operator,
+            operator.export(),
+        ),
+        Item::Struct(decl) => (decl.name(), DeclarationKind::Struct, decl.export()),
+        Item::Enum(decl) => (decl.name(), DeclarationKind::Enum, decl.export()),
+        Item::NativeType(decl) => (decl.name(), DeclarationKind::NativeType, decl.export()),
+        // UNIT-13: a constant is a declaration of its module, private
+        // unless exported (UNIT-3).
+        Item::Constant(decl) => (decl.name(), DeclarationKind::Constant, decl.export()),
+        _ => return None,
+    };
+    Some((name?, kind, export))
+}
+
 /// Builds the module's scope from its declarations and rejects a name
 /// declared twice.
 ///
@@ -539,77 +547,80 @@ fn bind_declarations(module: &mut Module, diagnostics: &mut Diagnostics) {
     module.scope = scope;
 }
 
-/// Binds named-test helpers in their own tests, after module and import scopes are known.
-pub(crate) fn bind_test_helpers(program: &mut Program, diagnostics: &mut Diagnostics) {
+/// Binds a module's named-test declarations after its imports are known.
+pub(crate) fn bind_test_declarations(
+    program: &mut Program,
+    index: usize,
+    diagnostics: &mut Diagnostics,
+) {
     let core = program.core();
-    for index in 0..program.modules.len() {
-        let module = &program.modules[index];
-        let prelude = core
-            .filter(|&core| core != index)
-            .map(|core| &program.modules[core]);
-        let mut scopes = vec![HashMap::<String, Vec<usize>>::new(); module.tests.len()];
-        for (position, helper) in module.declarations.iter().enumerate() {
-            let Some(owner) = helper.test_owner else {
-                continue;
-            };
-            let name = &helper.name;
-            let test = &module.tests[owner];
-            let visible = module.lookup(name).next().or_else(|| {
-                prelude?
-                    .lookup(name)
-                    .find(|declaration| declaration.is_public())
-            });
-            let imported = module.files[helper.file]
-                .imports
-                .iter()
-                .find(|import| &import.name == name);
-            if let Some(first) = imported
-                .map(|import| import.at)
-                .or_else(|| visible.map(|decl| decl.at))
-            {
-                diagnostics.emit(
-                    error(
-                        Category::Name,
-                        codes::NAME_DUPLICATE,
-                        helper.at,
-                        format!(
-                            "helper `{name}` takes a name test `{}` already sees",
-                            test.name
-                        ),
-                        "TST-2",
-                    )
-                    .with_related(first, "this name is already visible to the test"),
-                );
-                continue;
-            }
-            // FN-4 permits a value and a temporal function to share a name in this test.
-            let bound = scopes[owner].entry(name.clone()).or_default();
-            if let Some(first) = bound
-                .iter()
-                .map(|&other| &module.declarations[other])
-                .find(|other| clashes(other.kind, helper.kind))
-            {
-                diagnostics.emit(
-                    error(
-                        Category::Name,
-                        codes::NAME_DUPLICATE,
-                        helper.at,
-                        format!(
-                            "test `{}` has two {}s named `{name}`",
-                            test.name,
-                            helper.kind.describe()
-                        ),
-                        "UNIT-5",
-                    )
-                    .with_related(first.at, "the first is declared here"),
-                );
-            } else {
-                bound.push(position);
-            }
+    let module = &program.modules[index];
+    let prelude = core
+        .filter(|&core| core != index)
+        .map(|core| &program.modules[core]);
+    let mut scopes = vec![HashMap::<String, Vec<usize>>::new(); module.tests.len()];
+    for (position, declaration) in module.declarations.iter().enumerate() {
+        let Some(owner) = declaration.test_owner else {
+            continue;
+        };
+        // A candidate is reached through its operator, with no binding of its own.
+        if !declaration.kind.binds_name() {
+            continue;
         }
-        for (test, scope) in program.modules[index].tests.iter_mut().zip(scopes) {
-            test.helpers = scope;
+        let name = &declaration.name;
+        let test = &module.tests[owner];
+        let visible = module.lookup(name).next().or_else(|| {
+            prelude?
+                .lookup(name)
+                .find(|declaration| declaration.is_public())
+        });
+        let imported = module.files[declaration.file]
+            .imports
+            .iter()
+            .find(|import| &import.name == name);
+        if let Some(first) = imported
+            .map(|import| import.at)
+            .or_else(|| visible.map(|decl| decl.at))
+        {
+            diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::NAME_DUPLICATE,
+                    declaration.at,
+                    format!("`{name}` takes a name test `{}` already sees", test.name),
+                    "TST-2",
+                )
+                .with_related(first, "this name is already visible to the test"),
+            );
+            continue;
         }
+        // FN-4 permits a value and a temporal function to share a name in this test.
+        let bound = scopes[owner].entry(name.clone()).or_default();
+        if let Some(first) = bound
+            .iter()
+            .map(|&other| &module.declarations[other])
+            .find(|other| clashes(other.kind, declaration.kind))
+        {
+            diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::NAME_DUPLICATE,
+                    declaration.at,
+                    format!(
+                        "test `{}` has two {}s named `{name}`",
+                        test.name,
+                        declaration.kind.describe()
+                    ),
+                    "UNIT-5",
+                )
+                .with_related(first.at, "the first is declared here"),
+            );
+        } else {
+            bound.push(position);
+        }
+    }
+    for (test, scope) in program.modules[index].tests.iter_mut().zip(scopes) {
+        test.scope = scope;
     }
 }
 

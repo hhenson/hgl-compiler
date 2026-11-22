@@ -21,6 +21,7 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
         check_names_in_files(&program.modules[index], diagnostics);
         check_declarations_against_imports(&program.modules[index], diagnostics);
         check_names_against_prelude(program, index, diagnostics);
+        crate::declare::bind_test_declarations(program, index, diagnostics);
         bind_implementations(program, index, diagnostics);
     }
     check_cycles(program, diagnostics);
@@ -307,8 +308,8 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
         if implementation.kind.candidate().is_none() {
             continue;
         }
-        // TST-1: one in a test context has been rejected already.
-        if implementation.test_only {
+        // TST-1: an unnamed test context cannot introduce a candidate.
+        if implementation.test_only && implementation.test_owner.is_none() {
             continue;
         }
         let name = implementation.name.as_str();
@@ -326,8 +327,16 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
                 })
         };
 
-        // A declaration of the module itself.
-        if let Some(declaration) = operator(module, false) {
+        // A declaration private to this test or one in the module itself (TST-1).
+        let local = implementation
+            .test_owner
+            .and_then(|test| module.tests[test].scope.get(name))
+            .or_else(|| module.scope.get(name));
+        if let Some(declaration) =
+            local.into_iter().flatten().copied().find(|&declaration| {
+                module.declarations[declaration].kind == DeclarationKind::Operator
+            })
+        {
             found.push((
                 position,
                 OperatorRef {
@@ -337,7 +346,10 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
             ));
             continue;
         }
-        if let Some(other) = module.lookup(name).next() {
+        if let Some(other) = local
+            .and_then(|declarations| declarations.first())
+            .map(|&declaration| &module.declarations[declaration])
+        {
             diagnostics.emit(
                 error(
                     Category::Operator,

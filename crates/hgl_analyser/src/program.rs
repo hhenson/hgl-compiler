@@ -601,7 +601,7 @@ pub struct Test {
     /// The test's syntax tree.
     pub syntax: SyntaxNode,
     /// Names private to this test, as positions in the module's declarations.
-    pub(crate) helpers: HashMap<String, Vec<usize>>,
+    pub(crate) scope: HashMap<String, Vec<usize>>,
 }
 
 /// A statement an application sets its run's store with, as it is
