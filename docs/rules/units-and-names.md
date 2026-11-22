@@ -93,7 +93,7 @@ analyser: partial
 
 - Every name in a signature, body, type and constraint resolved to its one binding, and one that nothing binds is `name.unknown`
 - Clock properties resolve on the capability, and `types(Ts)` supplies the selections in an `each` constraint (GEN-10).
-- Left: a declaration named `scheduled` can shadow the reserved `scheduled()` form (TIME-9); `schemas(pack)` is accepted in an ordinary value result where the borrowed view cannot be returned (GEN-10).
+- Left: a declaration named `scheduled` can shadow the reserved `scheduled()` form (TIME-9).
 
 ## UNIT-11
 
