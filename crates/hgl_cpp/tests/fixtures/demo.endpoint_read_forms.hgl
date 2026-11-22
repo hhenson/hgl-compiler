@@ -213,6 +213,24 @@ test child_equality_raises_for_an_unset_operand {
     }
 }
 
+# ERR-15: taking the value of one ordinary result costs fewer reads
+# than consuming two checked children.
+operator count_reads<L, R, V>(left: L, right: R, value: V) -> i64
+impl const fn count_reads(left: i64, right: i64, value: result<i64, error>) -> i64 => -1
+impl const fn count_reads(left: result<i64, error>, right: result<i64, error>, value: i64) -> i64 => value
+
+fn mixed_reads(parts: list<i64, 2>, index: i64) -> i64 {
+    when {
+        let left = parts[index]
+        let value: result<i64, error> = ok(11)
+        return count_reads(left, parts[index], value)
+    }
+}
+
+test fewer_result_reads_includes_checked_children {
+    assert eval mixed_reads(parts: [[1, 2]], index: [0]) == [11]
+}
+
 fn plain_scalar_child(parts: list<i64, 2>, index: i64) -> i64 {
     when {
         let entry = parts[index]

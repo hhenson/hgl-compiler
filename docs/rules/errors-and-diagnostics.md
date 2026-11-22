@@ -201,6 +201,7 @@ analyser: partial
 - In composition the analyser records whether a conversion belongs to the call's node or to a reader of a held connection. A field projection waits for an incomplete result type, then takes the success before reading the field (GEN-7, EXPR-7).
 - A candidate keeps operands whole where possible. Equal minimum arrangements of result reads are `operator.ambiguous`. [Compiler issue #356](https://github.com/hhenson/hgl-compiler/issues/356)
 - Among admitted operator candidates, fewer result reads take precedence over GEN-5 ranking. Equal counts use normal candidate ranking. [Compiler issue #429](https://github.com/hhenson/hgl-compiler/issues/429)
+- A checked child supplies its payload type to ordinary parameter inference. A candidate with a result slot can keep the whole read, and ranking counts each checked child consumed as an ordinary operand (ERR-14).
 
 transpiler: done
 

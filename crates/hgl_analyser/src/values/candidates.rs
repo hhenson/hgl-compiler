@@ -113,25 +113,14 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
     ) -> (Vec<Chosen<'a>>, bool) {
-        // ERR-14: a runtime-checked child competes as a fallible read.
-        // Keep the written operands for fitting after a candidate is chosen.
-        let mut checked = None;
-        for (position, argument) in given.iter().enumerate() {
-            if !argument.by_place
-                && argument.explicit.is_none()
-                && let Some(result) = checked_child_result(&argument.value)
-            {
-                checked.get_or_insert_with(|| given.to_vec())[position].value = result;
-            }
-        }
-        let given = checked.as_deref().unwrap_or(given);
+        let has_checked_children = given.iter().any(Given::reads_child);
         let has_results = given
             .iter()
             .any(|argument| !argument.by_place && matches!(argument.value.ty, Type::Result { .. }));
-        let has_forms = given.iter().any(|argument| {
-            !argument.by_place
-                && matches!(argument.value.ty, Type::Result { .. } | Type::Nullable(_))
-        });
+        let has_forms = has_results
+            || given.iter().any(|argument| {
+                !argument.by_place && matches!(argument.value.ty, Type::Nullable(_))
+            });
         let forms = if has_forms {
             &[
                 ArgumentForms::Whole,
@@ -145,16 +134,17 @@ impl<'a> Typer<'a> {
         let mut untold = false;
         for widening in [false, true] {
             let mut fits = false;
-            let mut converting = Admissions::default();
+            let mut result_forms = Admissions::default();
             for &form in forms {
                 let admitted =
                     self.admitted_as(operator, candidates, given, wanted, widening, form);
                 fits |= admitted.fits;
-                if has_results && form != ArgumentForms::Whole {
+                if has_checked_children || has_results && form != ArgumentForms::Whole {
                     // A more general inference pass can find an admitted
-                    // candidate that reads fewer operands (ERR-15).
+                    // candidate that reads fewer operands (ERR-15). A
+                    // checked child can already be read in the whole pass.
                     let keeps_results = admitted.known.iter().any(|(reads, _)| reads.is_empty());
-                    converting.include(admitted);
+                    result_forms.include(admitted);
                     if keeps_results {
                         break;
                     }
@@ -167,8 +157,8 @@ impl<'a> Typer<'a> {
                 }
                 untold |= unknown;
             }
-            let takes_types = converting.fits;
-            let (selected, unknown) = self.rank_admitted(operator, given, widening, converting);
+            let takes_types = result_forms.fits;
+            let (selected, unknown) = self.rank_admitted(operator, given, widening, result_forms);
             if !selected.is_empty() || unknown && takes_types {
                 return (selected, unknown);
             }
@@ -215,6 +205,27 @@ impl<'a> Typer<'a> {
             ) else {
                 continue;
             };
+            // ERR-14 and ERR-15: a checked child's ordinary type is the
+            // child's value. A candidate that declares a result slot can
+            // take the failure whole. A bare generic does not infer that
+            // slot just because the child can fail when read.
+            let mut with_results = std::borrow::Cow::Borrowed(given);
+            for (position, (argument, place)) in given.iter().zip(&bound).enumerate() {
+                if !argument.reads_child() {
+                    continue;
+                }
+                let Some(index) = place.parameter() else {
+                    continue;
+                };
+                let expected = &signature.parameters[index].ty;
+                if matches!(expected, Type::Result { error, .. } if **error == Type::Error)
+                    && let Some(result) = checked_child_result(&argument.value)
+                    && (names_parameter(expected) || self.admits(expected, &result.ty))
+                {
+                    with_results.to_mut()[position].value = result;
+                }
+            }
+            let given = with_results.as_ref();
             // FN-17: a static argument takes a declared function slot.
             // Inference cannot turn an ordinary parameter into that slot.
             if given.iter().zip(&bound).any(|(given, place)| {
@@ -465,8 +476,9 @@ impl<'a> Typer<'a> {
                         let ty = parameter_type(&taken, &type_packs, place)?;
                         (!given.by_place
                             && given.explicit.is_none()
-                            && matches!(given.ty(), Type::Result { .. })
-                            && self.taken(ty, given.ty()).is_some())
+                            && (given.reads_child()
+                                || matches!(given.ty(), Type::Result { .. })
+                                    && self.taken(ty, given.ty()).is_some()))
                         .then_some(position)
                     })
                     .collect();
@@ -2143,6 +2155,15 @@ pub(super) struct Given {
 }
 
 impl Given {
+    fn reads_child(&self) -> bool {
+        !self.by_place
+            && self.explicit.is_none()
+            && matches!(
+                self.value.kind,
+                ExprKind::CheckedChild { result: false, .. }
+            )
+    }
+
     /// The type the candidate sees. For example an explicit `i64?`
     /// stays nullable even when its argument is an `i64` value.
     pub(super) fn ty(&self) -> &Type {

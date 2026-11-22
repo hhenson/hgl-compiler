@@ -814,7 +814,7 @@ fn endpoint_read_forms_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 9 passed, 3 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 3 failed, 0 not run\n"),
         "{stdout}"
     );
     let line = fixture
