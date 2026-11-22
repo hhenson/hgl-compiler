@@ -186,6 +186,7 @@ def verify(bundle, forbidden, target):
         bin_file, sdk / "hgl-sdk.txt", sdk / "lib/cmake/hgraph/hgraphConfig.cmake",
         deps / "include/fmt", deps / "include/spdlog", deps / "include/simdjson.h",
         bundle / "licenses/hgl-compiler.txt",
+        bundle / "licenses/katex.txt", bundle / "licenses/mermaid.txt",
     ]:
         if not path.exists():
             raise ValueError(f"missing {path.relative_to(bundle)}")

@@ -42,7 +42,10 @@ pub(crate) fn render(output: &mut String, text: &str, link: impl Fn(&str) -> Opt
             // description. The source comment may refer to an online host.
             Event::Start(Tag::Link { .. } | Tag::Image { .. })
             | Event::End(TagEnd::Link | TagEnd::Image) => continue,
-            Event::Code(name) if !formula(text, range) => match link(&name) {
+            Event::Code(name) if formula(text, range.clone()) => Event::InlineHtml(
+                format!("<code class=\"formula-inline\">{}</code>", escaped(&name)).into(),
+            ),
+            Event::Code(name) => match link(&name) {
                 Some(href) => Event::InlineHtml(
                     format!(
                         "<a href=\"{}\"><code>{}</code></a>",

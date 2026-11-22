@@ -93,3 +93,10 @@ td p:last-child { margin-bottom: 0; }
   outline-offset: .15rem;
 }
 #search-results:empty, #declaration-search [role="status"]:empty { margin: 0; }
+
+.formula-block, .diagram {
+  max-width: 100%;
+  overflow: auto;
+  margin: .75rem 0;
+}
+.diagram svg { display: block; max-width: 100%; height: auto; }

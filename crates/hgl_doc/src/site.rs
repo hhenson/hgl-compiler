@@ -13,6 +13,27 @@ use crate::markdown::{escaped, render};
 use crate::model::{Declaration, Documentation, Interface, Model, Module, Section, Source};
 use crate::{LinkContext, links};
 
+/// The browser builds and notices from the exact npm releases in
+/// vendor/README.md. Embedding them also carries them in release binaries.
+const VENDOR: &[(&str, &[u8])] = &[
+    (
+        "vendor/katex/katex.min.js",
+        include_bytes!("../vendor/katex/katex.min.js"),
+    ),
+    (
+        "vendor/katex/LICENSE",
+        include_bytes!("../vendor/katex/LICENSE"),
+    ),
+    (
+        "vendor/mermaid/mermaid.min.js",
+        include_bytes!("../vendor/mermaid/mermaid.min.js"),
+    ),
+    (
+        "vendor/mermaid/LICENSE",
+        include_bytes!("../vendor/mermaid/LICENSE"),
+    ),
+];
+
 /// A generated documentation page or asset.
 pub struct SiteFile {
     /// Path relative to the output directory, using forward slashes.
@@ -79,7 +100,15 @@ pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
             format!("const hglDeclarations = {search};\n"),
         ),
         SiteFile::text("search.js", include_str!("search.js").replace("\r\n", "\n")),
+        SiteFile::text(
+            "renderers.js",
+            include_str!("renderers.js").replace("\r\n", "\n"),
+        ),
     ];
+    files.extend(VENDOR.iter().map(|&(path, contents)| SiteFile {
+        path: path.to_owned(),
+        contents: Cow::Borrowed(contents),
+    }));
     for (module, page) in model.modules.iter().zip(&pages) {
         files.push(SiteFile::text(
             format!("modules/{page}"),
@@ -111,7 +140,7 @@ fn filename(module: &str, index: usize) -> String {
 }
 
 fn index(model: &Model<'_>, pages: &[String]) -> String {
-    let mut output = page("API reference", "site.css", "index.html");
+    let mut output = page("API reference", "");
     output.push_str(
         "<h1>API reference</h1>\n\
          <div id=\"declaration-search\" hidden>\n\
@@ -134,12 +163,18 @@ fn index(model: &Model<'_>, pages: &[String]) -> String {
     finish_page(output)
 }
 
-fn page(title: &str, stylesheet: &str, home: &str) -> String {
+fn page(title: &str, root: &str) -> String {
+    // Local classic scripts have to run both from file:// and from a static
+    // web server. SVG and MathML may use inline styles but never a remote asset.
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>{}</title>\n<link rel=\"stylesheet\" href=\"{stylesheet}\">\n\
-         <body>\n<header><nav><a href=\"{home}\">API reference</a></nav></header>\n<main>\n",
+         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; \
+         script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; \
+         font-src 'self' file:; img-src data:; base-uri 'none'\">\n\
+         <title>{}</title>\n<link rel=\"stylesheet\" href=\"{root}site.css\">\n\
+         <script defer src=\"{root}renderers.js\"></script>\n\
+         <body>\n<header><nav><a href=\"{root}index.html\">API reference</a></nav></header>\n<main>\n",
         escaped(title),
     )
 }
@@ -172,7 +207,7 @@ impl<'a> Site<'a> {
     }
 
     fn module(&self, module: &Module<'_>, page_name: &str) -> String {
-        let mut output = page(module.name, "../site.css", "../index.html");
+        let mut output = page(module.name, "../");
         writeln!(output, "<h1>{}</h1>", escaped(module.name)).unwrap();
         for part in &module.parts {
             if let Some(comment) = &part.documentation {

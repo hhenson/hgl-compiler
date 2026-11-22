@@ -19,7 +19,10 @@ comment's source scope and appears in the site (SDOC-8). Only generated
 local destinations become active Markdown links. Other link labels
 and image descriptions remain readable text. The pages and stylesheet
 use relative paths and open offline. The index searches declaration names
-using a local search index.
+using a local search index. Inline formulas and `math` fences use the
+bundled KaTeX renderer. `mermaid` fences use the bundled Mermaid renderer.
+If a formula or diagram cannot be rendered, its source stays visible.
+The site includes both licenses.
 
 `hgl doc <ROOT>... --format json [--out DIR] [--private]` writes one
 UTF-8 JSON document for the analysed program. Source discovery and

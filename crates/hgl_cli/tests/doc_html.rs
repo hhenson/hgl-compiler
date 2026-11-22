@@ -70,7 +70,11 @@ fn internal_link_targets_exist(directory: &Path, files: &BTreeMap<PathBuf, Vec<u
         }
         let page = directory.join(filename);
         let html = std::str::from_utf8(bytes).unwrap();
-        for href in hrefs(html) {
+        let scripts = html
+            .split("src=\"")
+            .skip(1)
+            .filter_map(|tail| tail.split_once('"').map(|(src, _)| src));
+        for href in hrefs(html).chain(scripts) {
             let (target, anchor) = href
                 .split_once('#')
                 .map_or((href, None), |(path, id)| (path, Some(id)));
@@ -118,9 +122,11 @@ fn documentation_site_links_only_visible_declarations_and_local_files() {
     assert!(api.contains("<th scope=\"col\">Default</th>"));
     assert!(api.contains("class=\"keyword\">assert"));
     assert!(api.contains("<p><strong>Further reading</strong>:"));
-    assert!(api.contains("$<code>shared</code>$"));
+    assert!(api.contains("$<code class=\"formula-inline\">shared</code>$"));
     assert!(api.contains("class=\"language-math\">a^2+b^2=c^2"));
     assert!(api.contains("class=\"language-mermaid\">graph LR; A --&gt; B"));
+    assert!(api.contains("class=\"language-math\">\\badHglCommand{b}"));
+    assert!(api.contains("class=\"language-mermaid\">not a diagram"));
     assert_eq!(
         hrefs(&api)
             .filter(|href| href.contains("mod-guide.types.html#"))
@@ -240,6 +246,34 @@ fn the_offline_search_index_matches_the_pages_and_visibility() {
         }
         assert_eq!(has_private, private);
         assert_eq!(operators, 1, "candidates use the operator's search result");
+    }
+}
+
+#[test]
+fn the_site_copies_the_renderer_bundles_and_their_licenses() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    input(&source, "\n");
+    let site = write_site(root.path(), &source, &[]);
+    for (file, expected) in [
+        (
+            "vendor/katex/katex.min.js",
+            include_bytes!("../../hgl_doc/vendor/katex/katex.min.js").as_slice(),
+        ),
+        (
+            "vendor/katex/LICENSE",
+            include_bytes!("../../hgl_doc/vendor/katex/LICENSE").as_slice(),
+        ),
+        (
+            "vendor/mermaid/mermaid.min.js",
+            include_bytes!("../../hgl_doc/vendor/mermaid/mermaid.min.js").as_slice(),
+        ),
+        (
+            "vendor/mermaid/LICENSE",
+            include_bytes!("../../hgl_doc/vendor/mermaid/LICENSE").as_slice(),
+        ),
+    ] {
+        assert_eq!(fs::read(site.join(file)).unwrap(), expected, "{file}");
     }
 }
 
