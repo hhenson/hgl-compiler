@@ -3740,6 +3740,83 @@ fn graph_instances_follow_completed_function_calls_for_admission() {
     );
 }
 
+/// GEN-3 and GEN-13: deferred binary and unary symbols contribute the
+/// instances selected for their settled operands.
+#[test]
+fn graph_instances_follow_completed_symbols_for_admission() {
+    let checked = module(
+        r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+struct Box<U> { value: U }
+struct OnlyText<U> requires U in {str} { value: U }
+impl const fn add_<U>(lhs: Box<U>, rhs: Box<U>) -> U {
+    let held = OnlyText<U>(value: lhs.value)
+    return held.value
+}
+impl const fn neg_<U>(value: Box<U>) -> U {
+    let held = OnlyText<U>(value: value.value)
+    return held.value
+}
+fn binary<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { Box(value: 1) }
+    let first = chosen + chosen
+    return chosen + chosen
+}
+fn unary<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { Box(value: 1) }
+    return -chosen
+}
+fn direct_binary() -> i64 {
+    let chosen = Box(value: 1)
+    return chosen + chosen
+}
+fn direct_unary() -> i64 {
+    let chosen = Box(value: 1)
+    return -chosen
+}
+fn text<T>(const input: T) -> str {
+    let chosen = if predicate(input) { Box(value: "ok") }
+    let positive = chosen + chosen
+    let negative = -chosen
+    return positive + negative
+}
+fn binary_rejected() -> i64 => binary(1)
+fn unary_rejected() -> i64 => unary(1)
+fn admitted() -> str => text("s")"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:26:12 constraint/requires.unmet GEN-3",
+            "m.hgl:30:12 constraint/requires.unmet GEN-3",
+            "m.hgl:38:32 constraint/requires.unmet GEN-3",
+            "m.hgl:39:31 constraint/requires.unmet GEN-3",
+        ],
+        "{}",
+        checked.report
+    );
+    assert_eq!(
+        checked
+            .report
+            .matches("the `requires` of `OnlyText`")
+            .count(),
+        4
+    );
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    let called = called(&checked, &instance);
+    assert!(
+        called
+            .iter()
+            .any(|call| call == "add_(Box<U>, Box<U>) <str>"),
+        "{called:?}"
+    );
+    assert!(
+        called.iter().any(|call| call == "neg_(Box<U>) <str>"),
+        "{called:?}"
+    );
+}
+
 /// GEN-7 and TYPE-7: a graph instance checks the enum operand once it
 /// knows the type, and keeps the declared enum on the resulting expression.
 #[test]

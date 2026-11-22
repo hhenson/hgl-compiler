@@ -2618,7 +2618,8 @@ fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<
                 ExprKind::Call {
                     callee: Callee::DeferredOperator(_),
                     ..
-                }
+                } | ExprKind::DeferredBinary { .. }
+                    | ExprKind::DeferredNegation { .. }
             )
         {
             pending.insert(expression.at);
