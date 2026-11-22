@@ -80,7 +80,7 @@ test missing_pack_key {
 # does not occupy a reflected slot.
 const fn scale{by: f64 = 2.0}(value: f64) -> f64 => value * by
 const fn requires_configuration{by: f64}(value: f64) -> f64 => value * by
-operator scale_operator{by: f64 = 2.0}(value: f64) -> f64
+operator scale_operator<T>{by: f64 = 2.0}(value: T) -> T
 impl const fn scale_operator{by: f64}(value: f64) -> f64 => value * by
 
 const fn apply(f: const fn(f64) -> f64, value: f64) -> f64 => f(value)
@@ -90,6 +90,7 @@ const fn only_value<...Ps{1}>(f: const fn(...{Ps}) -> f64) -> i64
 test callback_configuration_defaults {
     assert apply(scale, 3.0) == 6.0
     assert apply(scale_operator, 4.0) == 8.0
+    assert apply(scale_operator<f64>, 5.0) == 10.0
     assert only_value(scale) == 48
 }
 

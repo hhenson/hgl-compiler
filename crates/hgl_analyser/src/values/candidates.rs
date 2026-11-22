@@ -2302,12 +2302,18 @@ impl CallbackRequest<'_> {
         (given, bound): (&[Given], &[Place]),
         result: Option<&Type>,
     ) -> bool {
+        let ordinary = signature
+            .parameters
+            .iter()
+            .filter(|parameter| !parameter.configuration)
+            .count();
         self.reference == signature.reference
             && (self.reflected.is_some()
-                || signature.parameters.len() == given.len()
+                || ordinary == given.len()
                     && given.iter().zip(bound).all(|(given, place)| {
                         matches!(*place, Place::Parameter(index)
-                            if agree(given.ty(), &signature.parameters[index].ty))
+                            if !signature.parameters[index].configuration
+                                && agree(given.ty(), &signature.parameters[index].ty))
                     }))
             && match (result, &signature.result) {
                 (Some(expected), Some(actual)) => agree(expected, actual),

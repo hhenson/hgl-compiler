@@ -261,8 +261,7 @@ impl<'a> Typer<'a> {
         if !reflected {
             given.extend(
                 request
-                    .parameters
-                    .iter()
+                    .ordinary_parameters()
                     .enumerate()
                     .map(|(index, input)| callback_operand(index, node, at, input.ty().clone())),
             );
