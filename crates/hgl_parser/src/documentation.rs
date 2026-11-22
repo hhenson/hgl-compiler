@@ -1,10 +1,16 @@
 //! The layout of SDOC comments on the lossless tree. The analyser checks
 //! names in this layout and the documentation stage publishes its text.
 
+use std::ops::Range;
+
 use hgl_source::{Span, line_break_length};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 
 use crate::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
+
+mod examples;
+
+pub use examples::{RunnableExample, parse_examples};
 
 /// The comment attached to this node by the parser (SDOC-1).
 pub fn attached(node: &SyntaxNode) -> Option<SyntaxToken> {
@@ -36,6 +42,14 @@ struct Line<'a> {
 impl Line<'_> {
     fn blank(&self) -> bool {
         self.text.trim().is_empty()
+    }
+
+    fn without_margin(self) -> Self {
+        let text = without_margin(self.text);
+        Self {
+            text,
+            start: self.start + (self.text.len() - text.len()) as u32,
+        }
     }
 }
 
@@ -120,6 +134,84 @@ impl<'a> Comment<'a> {
     pub fn sections(&self) -> impl Iterator<Item = &Section<'a>> {
         self.sections.iter().skip(1)
     }
+
+    /// The HGL fences in the comment (SDOC-7, SDOC-9). Only a fence
+    /// marked `hgl` under an Examples section is a runnable test.
+    pub fn examples(&self) -> Vec<Example> {
+        let mut position = 0;
+        let mut examples = Vec::new();
+        for section in &self.sections {
+            let in_examples = section.heading == Some("Examples:");
+            read_examples(
+                &section.markdown_lines(),
+                in_examples,
+                &mut position,
+                &mut examples,
+            );
+            for entry in section.entries() {
+                // SDOC-7 renders an entry description with its key removed.
+                // A fence can begin right after that key.
+                read_examples(&entry.markdown_lines(), false, &mut position, &mut examples);
+            }
+        }
+        examples.sort_by_key(|example| example.fence.start);
+        examples.dedup_by_key(|example| example.fence.start);
+        examples
+    }
+}
+
+/// Reads one CommonMark fragment using its original byte positions.
+fn read_examples(
+    lines: &[Line<'_>],
+    in_examples: bool,
+    ordinal: &mut usize,
+    examples: &mut Vec<Example>,
+) {
+    let mut offset = 0;
+    let starts: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            let start = offset;
+            offset += line.text.len() + 1;
+            start
+        })
+        .collect();
+    let text = joined(lines, |line| line.text);
+    let mut markdown = Parser::new_ext(&text, Options::ENABLE_TABLES).into_offset_iter();
+    while let Some((event, fence)) = markdown.next() {
+        let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = event else {
+            continue;
+        };
+        if !matches!(info.as_ref(), "hgl" | "hgl no-run") {
+            continue;
+        }
+        let position = in_examples.then(|| {
+            *ordinal += 1;
+            *ordinal
+        });
+        let mut code = String::new();
+        let mut source = Vec::new();
+        for (event, range) in markdown.by_ref() {
+            match event {
+                Event::End(pulldown_cmark::TagEnd::CodeBlock) => break,
+                Event::Text(text) => {
+                    source.extend(code_source(lines, &starts, range, code.len()));
+                    code.push_str(&text);
+                }
+                _ => {}
+            }
+        }
+        examples.push(Example {
+            code,
+            position,
+            runnable: in_examples && info.as_ref() == "hgl",
+            fence: Span::new(
+                source_offset(lines, &starts, fence.start),
+                source_offset(lines, &starts, fence.end),
+            ),
+            source,
+        });
+    }
 }
 
 /// One recognized SDOC-3 section or a stretch of unheaded prose.
@@ -143,6 +235,20 @@ impl<'a> Section<'a> {
                 line.text
             }
         })
+    }
+
+    /// Section text in Markdown coordinates and each line's original start.
+    fn markdown_lines(&self) -> Vec<Line<'a>> {
+        trim_blank(&self.lines)
+            .iter()
+            .map(|&line| {
+                if self.heading.is_some() {
+                    line.without_margin()
+                } else {
+                    line
+                }
+            })
+            .collect()
     }
 
     /// Keys whose spelling SDOC-3 defines, with their original source spans.
@@ -212,6 +318,63 @@ impl<'a> Section<'a> {
     }
 }
 
+/// An HGL code fence in a documentation comment (SDOC-7, SDOC-9).
+pub struct Example {
+    /// The contents read by CommonMark, without the fence.
+    pub code: String,
+    /// The position among the comment's `Examples:` fences, from one.
+    /// A fence outside that section has no position.
+    pub position: Option<usize>,
+    /// Whether the compiler checks and runs this fence as a test.
+    pub runnable: bool,
+    /// The original fence, including its delimiters where present.
+    pub fence: Span,
+    source: Vec<CodeSource>,
+}
+
+/// A run of the fence's rendered bytes with their original positions.
+/// A tab partly consumed by Markdown can leave synthetic spaces.
+struct CodeSource {
+    offset: usize,
+    start: usize,
+    synthetic: bool,
+}
+
+/// Pulldown ranges index the joined Markdown. The line records retain the
+/// original byte positions, including the margins and the source line breaks.
+fn source_offset(lines: &[Line<'_>], starts: &[usize], offset: usize) -> u32 {
+    let line = starts.partition_point(|&start| start <= offset) - 1;
+    lines[line].start + (offset - starts[line]) as u32
+}
+
+fn code_source<'a>(
+    lines: &'a [Line<'_>],
+    starts: &'a [usize],
+    range: Range<usize>,
+    offset: usize,
+) -> impl Iterator<Item = CodeSource> + 'a {
+    let Range { start, end } = range;
+    let first = starts.partition_point(|&line| line <= start) - 1;
+    let synthetic = (start == end).then(|| CodeSource {
+        offset,
+        start: source_offset(lines, starts, start).saturating_sub(1) as usize,
+        synthetic: true,
+    });
+    let written = lines[first..]
+        .iter()
+        .zip(&starts[first..])
+        .take_while(move |(_, line)| start != end && **line < end)
+        .map(move |(line, &line_start)| {
+            let from = start.max(line_start);
+            CodeSource {
+                offset: offset + from - start,
+                start: line.start as usize + from - line_start,
+                synthetic: false,
+            }
+        });
+    synthetic.into_iter().chain(written)
+}
+
 /// A named entry of `Args:` or `Type Args:`, with its description.
 pub struct Entry<'a> {
     /// The name before the colon (LEX-9).
@@ -225,19 +388,20 @@ pub struct Entry<'a> {
 impl Entry<'_> {
     /// The text after the colon, with any more deeply indented continuation.
     pub fn text(&self) -> String {
-        let end = self.continuation_length();
-        let mut text = self
-            .value
-            .strip_prefix(' ')
-            .unwrap_or(self.value)
-            .to_string();
-        for line in trim_end_blank(&self.following[..end]) {
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(without_margin(line.text));
-        }
-        text
+        joined(&self.markdown_lines(), |line| line.text)
+    }
+
+    fn markdown_lines(&self) -> Vec<Line<'_>> {
+        let text = self.value.strip_prefix(' ').unwrap_or(self.value);
+        let first = Line {
+            text,
+            start: self.span.end + 1 + (self.value.len() - text.len()) as u32,
+        };
+        let following = trim_end_blank(&self.following[..self.continuation_length()]);
+        std::iter::once(first)
+            .chain(following.iter().copied().map(Line::without_margin))
+            .skip_while(|line| line.text.is_empty())
+            .collect()
     }
 
     fn continuation_length(&self) -> usize {

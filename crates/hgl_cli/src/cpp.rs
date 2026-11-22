@@ -217,7 +217,7 @@ pub(super) fn test(arguments: &TestArgs, selection: &Selection) -> ExitCode {
         files,
         diagnostics,
         ..
-    } = match super::parse_sources(&inputs, arguments.limits.limits(), None) {
+    } = match super::parse_sources(&inputs, arguments.limits.limits(), None, true) {
         Ok(parsed) => parsed,
         Err(status) => return status,
     };
