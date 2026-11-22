@@ -1903,7 +1903,7 @@ fn written_pack_member_types_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 3 passed, 0 failed\nexecutable cases: 3 passed, 0 failed, 0 not run\n"
+            "rejection cases: 4 passed, 0 failed\nexecutable cases: 4 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

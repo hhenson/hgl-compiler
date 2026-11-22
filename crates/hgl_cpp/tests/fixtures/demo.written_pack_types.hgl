@@ -44,6 +44,15 @@ test unknown_written_member {
 
 # GEN-3 and GEN-7: the generic body needs evidence for the reflected type.
 const fn exact<T>(value: T) -> T requires T == i64 => value
+const fn exact_list<T>(value: T) -> T requires T == list<i64, 2> => value
+
+struct Boxed<const N: i64> {
+    items: list<i64, N>
+}
+
+const fn exact_box<T>(value: T) -> T requires T == tuple<Boxed<2>, str> => value
+const fn pair(item: list<i64, 2>) -> i64 => item[0] + item[1]
+const fn boxed_shape(item: tuple<Boxed<2>, str>) -> i64 => 0
 const fn known<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] requires i64 == Ps[item_key] =>
     exact<Ps[item_key]>(item)
 
@@ -62,3 +71,28 @@ test a_false_member_constraint_rejects {
     # expect-error(constraint, "requires.unmet")
     assert known(words, "value") == "value"
 }
+
+# GEN-3, GEN-7 and GEN-17: a member's stated key and type use the same bindings.
+const fn sized_member<const N: i64, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires N == 2 && Ps[item_key] == list<i64, N> => exact_list<Ps[item_key]>(item)
+
+const fn fixed_default<const key: str = "item", const N: i64 = 2, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]
+    requires key == "item" && N == 2 && Ps[key] == list<i64, N> => exact_list<Ps[key]>(item)
+
+const fn nested_value<const N: i64, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires N == 2 && Ps[item_key] == tuple<Boxed<N>, str> => exact_box<Ps[item_key]>(item)
+
+const fn member_of_finite_sizes<const N: i64, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires N in {2} && Ps[item_key] == list<i64, N> => exact_list<Ps[item_key]>(item)
+
+test stated_member_types_use_bound_values {
+    assert sized_member<2>(pair, [2, 3]) == [2, 3]
+    assert fixed_default(pair, [4, 5]) == [4, 5]
+    let boxed = Boxed<2>(items: [1, 6])
+    assert nested_value<2>(boxed_shape, (boxed, "tag")) == (boxed, "tag")
+    assert member_of_finite_sizes<2>(pair, [7, 9]) == [7, 9]
+}
+
+# GEN-8: a caller can override a default, so it proves no requirement in the body.
+# expect-error(constraint, "requires.unmet")
+const fn unconstrained_default<const N: i64 = 2, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] requires Ps[item_key] == list<i64, N> => exact_list<Ps[item_key]>(item)

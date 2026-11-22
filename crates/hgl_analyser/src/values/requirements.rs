@@ -684,11 +684,23 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|generic| generic.at)
             .collect();
+        let stated_members = self
+            .stated_pack_members()
+            .into_iter()
+            .filter(|(pack, _, _)| {
+                passes_on(generics, &[*pack]) || packs_pass_on(type_packs, &[*pack])
+            })
+            .collect::<Vec<_>>();
         let memberships: Vec<(Location, Vec<Argument>)> = self
             .memberships()
             .into_iter()
             .filter(|(parameter, _)| {
-                passes_on(generics, &[*parameter]) || packs_pass_on(type_packs, &[*parameter])
+                let parameter = &[*parameter];
+                passes_on(generics, parameter)
+                    || packs_pass_on(type_packs, parameter)
+                    || stated_members
+                        .iter()
+                        .any(|(_, key, ty)| key.names_one_of(parameter) || mentions(ty, parameter))
             })
             .collect();
         let mut combinations = super::candidates::combinations(&memberships);
@@ -696,12 +708,6 @@ impl<'a> Typer<'a> {
             combinations.push(Vec::new());
         }
         let bound = self.bound.clone();
-        let members = self.stated_pack_members();
-        let member_weight = members
-            .iter()
-            .map(|(_, _, ty)| weight(ty))
-            .max()
-            .unwrap_or(1);
         let name = &program.modules[callee.0].declarations[callee.1].name;
         let body = &self.declaration.name;
         for combination in combinations.iter().take(crate::INSTANCES + 1) {
@@ -710,19 +716,31 @@ impl<'a> Typer<'a> {
                 .chain(combination)
                 .map(|(at, argument)| (*at, argument))
                 .collect();
-            // Both sides of a key match use this combination's constants.
+            // The lookup and its evidence use the same combination's
+            // arguments. The substituted member types also set the size bound.
             let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
                 Argument::Constant(constant) => Some(constant.value.clone()),
                 Argument::Type(_) => None,
             };
+            let projected_members = stated_members
+                .iter()
+                .map(|(pack, key, ty)| {
+                    (
+                        *pack,
+                        key.substituted(&constant_at),
+                        substitute_within(ty, &given),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let member_weight = projected_members
+                .iter()
+                .map(|(_, _, ty)| weight(ty))
+                .max()
+                .unwrap_or(1);
             let member_type = |pack, _: &str, key: &Constant| {
-                members
-                    .iter()
-                    .filter(|(declared, _, _)| *declared == pack)
-                    .find_map(|(_, stated, ty)| {
-                        (stated.substituted(&constant_at).same(&key.value) == Some(true))
-                            .then(|| ty.clone())
-                    })
+                projected_members.iter().find_map(|(declared, stated, ty)| {
+                    (*declared == pack && stated.same(&key.value) == Some(true)).then(|| ty.clone())
+                })
             };
             let project = |ty: &Type| {
                 placed(
@@ -818,8 +836,8 @@ impl<'a> Typer<'a> {
         None
     }
 
-    /// GEN-3 and GEN-17: a positive equality can state a known type for
-    /// one reflected member without binding the pack's other keys.
+    /// GEN-3 and GEN-17: a positive equality can state the type of one
+    /// reflected member. Its key and type may name generic parameters.
     fn stated_pack_members(&self) -> Vec<(Location, ConstantValue, Type)> {
         let Some(condition) = child(&self.declaration.syntax, SyntaxKind::RequiresClause)
             .and_then(|clause| clause.children().next())
