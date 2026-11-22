@@ -9,9 +9,11 @@ produces diagnostics and no model.
 The model includes every module and its parts, including the supplied
 core prelude. Each interface lists its exported declarations. An
 operator lists its candidates with their own signatures, locations and
-comments, including candidates declared in another module. `--private`
-also lists private declarations and named tests. A declaration without
-a comment has `"documentation": null`.
+comments, including candidates declared in another module. A candidate
+has `"exported": false` because it is reached through its operator
+(UNIT-3). A member records the export status of its containing type.
+`--private` also lists private declarations and named tests. A declaration
+without a comment has `"documentation": null`.
 
 ## JSON model version 1
 
@@ -55,6 +57,8 @@ The [JSON Schema](documentation.schema.json) specifies the fields of
   how their keys are written.
 
 The JSON is indented with two spaces and ends with one LF. Source
-fragments and comments use LF for each LEX-15 line break. The document
-contains no timestamps or absolute filesystem paths. Markup, formulas,
-diagrams, references and examples remain authored text.
+fragments and comments use LF for each LEX-15 line break. Generated
+metadata contains no timestamps or absolute filesystem paths. Comment
+text is Markdown (CommonMark with tables). The model carries the authored
+markup, formulas, diagrams, references and examples as text after
+SDOC-2 normalization.
