@@ -24,6 +24,7 @@ analyser: partial
 docs: partial
 
 - Recognized headings, prose and Args/Type Args entries in the JSON model
+- Fenced Markdown preserves literal text in headings and entries
 - Left: key spelling of Requires, Properties and a struct’s Args
 
 ## SDOC-4

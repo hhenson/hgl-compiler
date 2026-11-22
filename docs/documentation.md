@@ -53,7 +53,8 @@ The [JSON Schema](documentation.schema.json) specifies the fields of
   their colons and have `recognized: true`. Other column-zero lines
   ending in a colon and followed by a four-space-indented line keep
   their heading and use `recognized: false`. A headed section's text
-  removes its four-space margin.
+  removes its four-space margin. Fenced Markdown keeps its delimiters
+  and literal contents, including heading-like lines and keys.
 - Only recognized `Args:` and `Type Args:` sections carry `entries` with
   keys and descriptions. A missing description is an empty string.
   `Requires:`, `Properties:` and a struct's `Args:` retain their text

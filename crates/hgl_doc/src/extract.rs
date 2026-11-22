@@ -8,7 +8,7 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::Location;
 use hgl_parser::ast::AstNode;
-use hgl_parser::documentation::{Comment, attached};
+use hgl_parser::documentation::{Comment, attached, fenced_lines};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::{FileId, SourceMap};
 
@@ -426,9 +426,17 @@ fn documentation(syntax: &SyntaxNode) -> Option<Documentation> {
 /// above can carry entries for the declaration.
 fn prose_sections(text: &str, sections: &mut Vec<Section>, summary: Option<&mut String>) {
     let lines: Vec<_> = text.lines().collect();
+    let literal: Vec<_> = fenced_lines(text).collect();
+    let heading_at = |at: usize| {
+        if literal[at] {
+            None
+        } else {
+            authored_heading(&lines[at..])
+        }
+    };
     let mut at = 0;
     if let Some(summary) = summary {
-        while at < lines.len() && !blank(lines[at]) && authored_heading(&lines[at..]).is_none() {
+        while at < lines.len() && !blank(lines[at]) && !literal[at] && heading_at(at).is_none() {
             at += 1;
         }
         *summary = lines[..at].join("\n");
@@ -439,14 +447,14 @@ fn prose_sections(text: &str, sections: &mut Vec<Section>, summary: Option<&mut 
             at += 1;
             continue;
         }
-        let heading = authored_heading(&lines[at..]);
+        let heading = heading_at(at);
         let start = at + usize::from(heading.is_some());
         at = start + 1;
         while at < lines.len() {
             let next = lines[at];
             let in_section = match heading {
                 Some(_) => blank(next) || next.starts_with("    "),
-                None => authored_heading(&lines[at..]).is_none(),
+                None => heading_at(at).is_none(),
             };
             if !in_section {
                 break;

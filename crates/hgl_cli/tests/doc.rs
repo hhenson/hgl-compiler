@@ -238,6 +238,77 @@ export const one: i64 = 1
     );
 }
 
+/// SDOC-2, SDOC-3 and SDOC-7. Markdown fences preserve literal headings
+/// and apparent keys while ordinary headings retain their meaning.
+#[test]
+fn fenced_markdown_preserves_literal_headings_and_keys() {
+    let root = scratch("documentation-fences");
+    let source = write(
+        &root,
+        "fences.hgl",
+        r#"module fences
+
+/** Shows comment syntax.
+~~~text
+Args:
+    sample: Shown literally.
+Options:
+    A literal authored heading.
+~~~
+
+````text
+Returns:
+    This is literal too.
+```
+Status:
+    A shorter fence did not end this block.
+````
+
+Args:
+    ~~~text
+    not_a_parameter: Also literal.
+    ~~~
+    value: The parameter.
+Returns:
+    The value.
+*/
+export const fn show(value: i64) -> i64 => value
+"#,
+    );
+    let checked = hgl(&["check", &source]);
+    assert!(checked.status.success(), "{}", text(&checked.stderr));
+
+    let model: Value = serde_json::from_slice(&document(&[&source])).unwrap();
+    let show = declaration(module(&model, "fences"), "show");
+    let comment = &show["documentation"];
+    let fences = concat!(
+        "~~~text\nArgs:\n    sample: Shown literally.\n",
+        "Options:\n    A literal authored heading.\n~~~\n\n",
+        "````text\nReturns:\n    This is literal too.\n```\n",
+        "Status:\n    A shorter fence did not end this block.\n````"
+    );
+    assert_eq!(comment["summary"], "Shows comment syntax.");
+    assert_eq!(
+        comment["text"],
+        format!(
+            "Shows comment syntax.\n{fences}\n\nArgs:\n    ~~~text\n    not_a_parameter: Also literal.\n    ~~~\n    value: The parameter.\nReturns:\n    The value."
+        )
+    );
+    assert_eq!(
+        comment["sections"],
+        json!([
+            {"heading": null, "recognized": false, "text": fences, "entries": []},
+            {
+                "heading": "Args:",
+                "recognized": true,
+                "text": "~~~text\nnot_a_parameter: Also literal.\n~~~\nvalue: The parameter.",
+                "entries": [{"key": "value", "text": "The parameter."}]
+            },
+            {"heading": "Returns:", "recognized": true, "text": "The value.", "entries": []}
+        ])
+    );
+}
+
 /// SDOC-4. Candidates follow their operator, including native candidates
 /// and a candidate implemented in another module. The interface and each
 /// candidate retain their own text, signature and source part.

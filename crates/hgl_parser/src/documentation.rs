@@ -2,6 +2,7 @@
 //! names in this layout and the documentation stage publishes its text.
 
 use hgl_source::{Span, line_break_length};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 
 use crate::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -73,13 +74,14 @@ impl<'a> Comment<'a> {
             line.text = &line.text[cut..];
             line.start += cut as u32;
         }
+        let normalized = joined(&lines, |line| line.text);
         let mut sections = vec![Section {
             heading: None,
-            lines: vec![*first],
+            lines: vec![lines[0]],
         }];
-        for &line in body.iter() {
+        for (&line, fenced) in lines[1..].iter().zip(fenced_lines(&normalized).skip(1)) {
             let current = sections.last_mut().expect("a comment has a summary");
-            if !line.blank() && indent(line.text) == 0 {
+            if !fenced && !line.blank() && indent(line.text) == 0 {
                 if let Some(heading) = HEADINGS
                     .iter()
                     .copied()
@@ -146,26 +148,37 @@ impl<'a> Section<'a> {
     /// Keys whose spelling SDOC-3 defines, with their original source spans.
     /// The spelling of requirements and property keys is still unspecified.
     pub fn entries(&self) -> impl Iterator<Item = Entry<'_>> {
-        self.lines.iter().enumerate().filter_map(|(index, line)| {
-            if !matches!(self.heading, Some("Args:" | "Type Args:")) || indent(line.text) != 4 {
-                return None;
-            }
-            let content = &line.text[4..];
-            let length = content
-                .find(|letter: char| !(letter.is_alphanumeric() || letter == '_'))
-                .unwrap_or(content.len());
-            let named = content
-                .chars()
-                .next()
-                .is_some_and(|first| first.is_alphabetic() || first == '_');
-            let value = content[length..].strip_prefix(':')?;
-            named.then_some(Entry {
-                name: &content[..length],
-                span: Span::new(line.start + 4, line.start + 4 + length as u32),
-                value,
-                following: &self.lines[index + 1..],
+        let mut literal = Vec::new();
+        if matches!(self.heading, Some("Args:" | "Type Args:")) {
+            // The four spaces that delimit the section are outside its
+            // Markdown. Use their original lines to recover key spans.
+            let normalized = joined(&self.lines, |line| without_margin(line.text));
+            literal.extend(fenced_lines(&normalized));
+        }
+        self.lines
+            .iter()
+            .enumerate()
+            .zip(literal)
+            .filter_map(|((index, line), fenced)| {
+                if fenced || indent(line.text) != 4 {
+                    return None;
+                }
+                let content = &line.text[4..];
+                let length = content
+                    .find(|letter: char| !(letter.is_alphanumeric() || letter == '_'))
+                    .unwrap_or(content.len());
+                let named = content
+                    .chars()
+                    .next()
+                    .is_some_and(|first| first.is_alphabetic() || first == '_');
+                let value = content[length..].strip_prefix(':')?;
+                named.then_some(Entry {
+                    name: &content[..length],
+                    span: Span::new(line.start + 4, line.start + 4 + length as u32),
+                    value,
+                    following: &self.lines[index + 1..],
+                })
             })
-        })
     }
 }
 
@@ -200,6 +213,33 @@ impl Entry<'_> {
         }
         text
     }
+}
+
+/// Marks each LF-separated line touched by a CommonMark fenced code
+/// block, including its delimiters (SDOC-7). The input is normalized
+/// Markdown without any enclosing SDOC section's four-space margin.
+pub fn fenced_lines(text: &str) -> impl Iterator<Item = bool> {
+    let mut fences = Parser::new_ext(text, Options::ENABLE_TABLES)
+        .into_offset_iter()
+        .filter_map(|(event, range)| {
+            matches!(
+                event,
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_)))
+            )
+            .then_some(range)
+        })
+        .peekable();
+    let mut start = 0;
+    text.split('\n').map(move |line| {
+        let end = start + line.len();
+        while fences.peek().is_some_and(|fence| fence.end <= start) {
+            fences.next();
+        }
+        // A fenced blank line still belongs to the block.
+        let fenced = fences.peek().is_some_and(|fence| fence.start <= end);
+        start = end + 1;
+        fenced
+    })
 }
 
 fn comment_lines(text: &str, start: u32) -> Vec<Line<'_>> {

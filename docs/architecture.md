@@ -1419,8 +1419,9 @@ rejection case that way (TST-13).
 
 `hgl_doc` reads the analysed program's interfaces and the lossless trees
 it retains. The parser's SDOC layout reader is shared with the analyser's
-key checks. The result is the [JSON API model](documentation.md), a leaf
-of the pipeline (SDOC-6).
+key checks. It uses CommonMark fence ranges to preserve literal text in
+comment and section contents. The result is the
+[JSON API model](documentation.md), a leaf of the pipeline (SDOC-6).
 
 ## Test runner
 
@@ -2408,6 +2409,7 @@ the job the way the design needs is dropped.
 | `ctrlc` | `hgl_cli` | taking an interrupt or a request to end while an application runs, to stop the run and still print its output |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
+| `pulldown-cmark` | `hgl_parser` | CommonMark fenced block ranges in documentation comments |
 | `tempfile` | `hgl_cli` | a file of a build written beside the one it replaces and renamed onto it, so that nothing reads half of it |
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 | `dirs` | `hgl_cli` | the user's cache directory, where the cpp target's builds are kept |
