@@ -231,8 +231,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     None
                 }
             };
+            let mut calls = selecting.take();
+            if let Some(body) = &body {
+                candidates::record_tag_tests(body, &mut calls);
+            }
             bodies.push(body);
-            selected.push(selecting.take());
+            selected.push(calls);
             graph_return_checks.push(check_return);
         }
         // TST-3: "A test is a composition-phase block with assertions."
