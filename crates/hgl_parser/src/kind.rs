@@ -322,6 +322,8 @@ define_syntax_kinds! {
         ArgList,
         /// `a` or `b: c` in an argument list
         Arg,
+        /// `...pack` in an argument list (FN-19).
+        PackSpreadArg,
 
         // ---- Statements (control-flow-and-sources.md, temporal-model.md) ----
         /// `let x = 1`, `var y: i64 = 2` or `var z: i64`

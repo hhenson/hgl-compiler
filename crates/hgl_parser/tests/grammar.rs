@@ -194,6 +194,7 @@ fn arrow{const by: i64 = 1}(x: i64) -> i64 => x + by
 
 const fn apply(f: const fn(value: i64) -> i64, x: i64) -> i64 => f(x)
 const fn via_generic(x: i64) -> i64 => apply(other::increase<i64>, x)
+const fn forward<...Args>(args: ...Args) => another(...args)
 
 export const limit: i64 = 2 * 5
 

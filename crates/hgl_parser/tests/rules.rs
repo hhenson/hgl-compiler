@@ -3134,3 +3134,23 @@ fn bool_generic_terms_compose_with_law_predicates() {
     assert!(tree.contains("ConstraintCall["), "{tree}");
     declarations("operator fold<T>(f: fn(T, T) -> T) requires commutative(f)");
 }
+
+#[test]
+fn pack_spreads_are_distinct_from_written_arguments() {
+    // FN-19: a spread may stand among positional and named arguments.
+    let read = run(Entry::Statements, "f(...(args), 2, item: 3, ...kwargs)");
+    assert!(read.findings.is_empty(), "{}", read.report);
+    let tree = read.outline();
+    assert!(
+        tree.contains(r#"PackSpreadArg["..." ParenExpr["(" NameExpr["args"] ")"]]"#),
+        "{tree}"
+    );
+    assert!(
+        tree.contains(
+            r#"Arg["item" ":" Literal["3"]] "," PackSpreadArg["..." NameExpr["kwargs"]]"#
+        ),
+        "{tree}"
+    );
+    rejected(Entry::Statements, "f(...)");
+    rejected(Entry::Statements, "f(item: ...kwargs)");
+}

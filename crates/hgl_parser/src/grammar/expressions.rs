@@ -656,7 +656,7 @@ impl Parser<'_> {
 
     /// ```text
     /// arguments = argument, { ",", argument }, [ "," ] ;
-    /// argument = [ member_name, ":" ], expression ;
+    /// argument = [ member_name, ":" ], expression | "...", expression ;
     /// delta_arguments = delta_argument, { ",", delta_argument }, [ "," ] ;
     /// delta_argument = member_name, ":", expression ;
     /// ```
@@ -669,6 +669,14 @@ impl Parser<'_> {
         self.nested(Context::LIST, |parser| {
             let mut index = 0usize;
             parser.list(RParen, "an argument", true, |parser| {
+                if mode == ArgMode::Call && parser.at(Ellipsis) {
+                    // FN-19: a spread takes its own argument position.
+                    parser.start(PackSpreadArg);
+                    parser.bump();
+                    parser.expression();
+                    parser.finish();
+                    return;
+                }
                 // LEX-9: `time` may label an argument.
                 let labelled = parser.at_member_name() && parser.nth(1) == Colon;
                 if !labelled && !can_start_expression(parser.current()) {
