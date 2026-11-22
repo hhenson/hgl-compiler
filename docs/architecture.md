@@ -1066,7 +1066,7 @@ places none of its own before or after them.
 Its rejection is `default.order`, and a tuple's index that is no
 constant or is outside the tuple is `tuple.index`.
 
-A selected value candidate is checked for any omitted ordinary parameter
+A selected value candidate is checked for any omitted nonconstant ordinary parameter
 that has neither its own default nor a nullable type (GEN-6, UNIT-8).
 `Typer::called` reports `argument.missing` at the call, with the candidate
 parameter as a related location. A public ordinary default does not supply

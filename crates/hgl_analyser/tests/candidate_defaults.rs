@@ -96,3 +96,21 @@ test observed { assert configured(1) == 8 }
     )]);
     assert!(!checked.rejected, "{}", checked.report);
 }
+
+#[test]
+fn public_constant_selector_defaults_are_kept() {
+    // GEN-6: a constant selector retains the public default used in
+    // candidate admission; it is not the ordinary runtime zero of RED-5.
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+enum Mode { slow, fast }
+operator step(value: i64, const mode: Mode = .slow) -> i64
+impl const fn step(value: i64, const mode: Mode) -> i64 requires mode == .slow => value + 1
+impl const fn step(value: i64, const mode: Mode) -> i64 requires mode == .fast => value + 2
+test observed { assert step(1) == 2
+assert step(1, mode: .fast) == 3 }
+"#,
+    )]);
+    assert!(!checked.rejected, "{}", checked.report);
+}

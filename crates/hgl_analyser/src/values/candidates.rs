@@ -786,7 +786,7 @@ impl<'a> Typer<'a> {
     /// arguments `given`, written as `form` says. Each argument is of
     /// the type the candidate's parameter has: the candidate was
     /// admitted, so each is given to one of its parameters. An omitted
-    /// ordinary argument follows this candidate's defaults (UNIT-8).
+    /// nonconstant ordinary argument follows this candidate's defaults (UNIT-8).
     pub(super) fn called(
         &mut self,
         operator: OperatorRef,
@@ -897,6 +897,7 @@ impl<'a> Typer<'a> {
                     "FN-15",
                 ));
             } else if value_candidate
+                && !parameter.constant
                 && !parameter.configuration
                 && parameter.pack.is_none()
                 && !parameter.has_default
@@ -906,6 +907,7 @@ impl<'a> Typer<'a> {
                 // GEN-6, UNIT-8: an ordinary public default does not
                 // supply a selected candidate's required argument. Check
                 // after selection, as for `var`; RED-5 depends on this.
+                // Constant selector parameters keep their public defaults.
                 let operator_name =
                     &program.modules[operator.module].declarations[operator.declaration].name;
                 let public_name =
@@ -926,7 +928,7 @@ impl<'a> Typer<'a> {
                         codes::ARGUMENT_MISSING,
                         at,
                         format!(
-                            "the selected candidate of `{operator_name}` is given no `{public_name}`,                              a required parameter with no default"
+                            "`{operator_name}` is given no `{public_name}`, required by the selected candidate"
                         ),
                         "UNIT-8",
                     )

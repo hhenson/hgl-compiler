@@ -102,7 +102,7 @@ analyser: partial
 - An option's name is one kind across an operator's candidates
 - A candidate declares its operator's configuration parameters. Named and symbolic calls bind those parameters in braces, and a candidate may use the operator's default (FN-18, EXPR-10).
 - A value candidate may mark a parameter `var`, which takes no part in selecting it (FN-15)
-- Omitted ordinary arguments are checked against the selected value candidate's own defaults and nullable types (UNIT-8). A missing required argument does not choose a less-specific fallback candidate.
+- Omitted nonconstant ordinary arguments are checked against the selected value candidate's own defaults and nullable types (UNIT-8). A missing required argument does not choose a less-specific fallback candidate.
 - An option given a generic value parameter of the enclosing function, `step(v, mode: M)` in `go<const M: Mode>`, admits a candidate where the function's `requires` binds the parameter, `requires M == .slow` (GEN-3); where it states nothing of it, a default of it included, no candidate is known to admit the call, which is `operator.no_candidate` where the function is declared (GEN-7)
 - A fixed parameter in an operator pack's place reports the proposed `impl.pack` code at the candidate parameter name. A pack with cardinality one is accepted. Bare Boolean requirements await #367.
 - Left: a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidates

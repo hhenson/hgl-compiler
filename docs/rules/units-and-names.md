@@ -72,7 +72,7 @@ analyser: partial
 - Known required-constant failures reject at the parameter default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
 - Using the proposed `constant.failure` catalogue code for parameter and field defaults is planned (hhenson/hgl_spec#228).
 - Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
-- A selected value candidate with an omitted ordinary nonnullable parameter and no own default reports `argument.missing` at the call, even when the operator has a public default (GEN-6, RED-5). Configuration default inheritance remains separate (FN-18).
+- A selected value candidate with an omitted nonconstant ordinary nonnullable parameter and no own default reports `argument.missing` at the call, even when the operator has a public default (GEN-6, RED-5). Configuration default inheritance remains separate (FN-18).
 
 transpiler: partial
 
