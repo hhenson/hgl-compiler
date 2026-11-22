@@ -73,12 +73,11 @@ analyser: partial
 
 transpiler: partial
 
-- Runs resolved value and temporal functions with replayed literal traces and ordinary
-  configuration. Applies ordinary value helper lifting and expands supported packed
-  inputs.
-- Left: An unresolved eval target, an unsupported trace cell or target input, or replay
-  of a trace held in a local or produced by a prior eval is reported. Missing native
-  replay or recording support is reported under CEVAL-1.
+- Runs resolved value and temporal functions with replayed literal or recorded traces
+  and ordinary configuration. Applies ordinary value helper lifting and expands
+  supported packed inputs.
+- Left: An unresolved eval target or an unsupported trace cell or target input is
+  reported. Missing native replay or recording support is reported under CEVAL-1.
 
 ## TST-6
 

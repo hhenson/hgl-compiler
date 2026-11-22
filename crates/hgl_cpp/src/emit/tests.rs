@@ -105,8 +105,8 @@ impl Emitter<'_> {
         // and then the call's arguments in the order written (EXPR-2).
         // Where more than one of them may fail, or one runs statements,
         // each is held first, in that order, before the run that reads
-        // them; a trace's cells are read where the entry is wired
-        // otherwise.
+        // them. An input that evaluates to a recording is also held
+        // before wiring a new entry. Literal cells can be read there.
         // The defaults of the `const` parameters the call leaves out, which
         // are evaluated after the arguments written (EXPR-2); of a value
         // function, which is lifted, of every parameter it leaves out,
@@ -147,7 +147,13 @@ impl Emitter<'_> {
             .count()
             + config_failing
             > 1
-            || arguments.iter().any(|argument| changes(&argument.value))
+            || arguments.iter().any(|argument| {
+                let value = &argument.value;
+                changes(value)
+                    || (matches!(value.ty, Type::Trace { .. })
+                        && !matches!(value.kind, ExprKind::Trace(_))
+                        && may_fail(value))
+            })
             || config_changes;
         let mut steps = String::new();
         let mut text = format!(
@@ -171,7 +177,7 @@ impl Emitter<'_> {
             bounds = name;
         }
         // CEVAL-1: "core's `replay` wired to each temporal input of the
-        // target", each given the trace written for it (CEVAL-2).
+        // target", each given its literal or recorded trace (CEVAL-2).
         // The runtime's replay applies the selected whole or delta
         // cell at its timestamp (CEVAL-3, TST-9).
         let mut given: Vec<(usize, String)> = Vec::new();
@@ -180,17 +186,7 @@ impl Emitter<'_> {
         let mut replayed: Vec<Given> = Vec::new();
         let mut context = Context::new(Kind::Entry, scope.body.locals.len());
         for (position, argument) in runtime_arguments(arguments) {
-            // A trace that is no trace written out, a `let` of one or an
-            // eval's, is replayed from what it holds: not written yet.
-            if matches!(argument.value.ty, Type::Trace { .. })
-                && !matches!(argument.value.kind, ExprKind::Trace(_))
-            {
-                return self.missing(
-                    argument.value.at,
-                    "a trace given to an eval that is no trace written out",
-                );
-            }
-            if !matches!(argument.value.kind, ExprKind::Trace(_)) {
+            if !matches!(argument.value.ty, Type::Trace { .. }) {
                 // A `const` parameter's configuration, held as a value; a
                 // value given to a temporal one is wired as a constant
                 // where the entry is (FN-3).
@@ -233,7 +229,11 @@ impl Emitter<'_> {
             };
             let mut trace = String::new();
             self.in_context(&mut context, |emitter| {
-                trace = emitter.trace(scope, &argument.value, &ty);
+                trace = if matches!(argument.value.kind, ExprKind::Trace(_)) {
+                    emitter.trace(scope, &argument.value, &ty)
+                } else {
+                    emitter.expression(scope, &argument.value)
+                };
             });
             if held {
                 let name = names::temporary("trace", self.temporary());

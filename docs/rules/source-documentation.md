@@ -73,9 +73,10 @@ analyser: done
 
 - Example tests use the containing module's ordinary named-test scope
 
-runner: done
+runner: partial
 
 - Runnable examples are listed, selected and run through the named-test path on the C++ target
+- Left: check and run examples only from explicitly supplied source (TST-14, #458).
 
 docs: done
 

@@ -1,0 +1,26 @@
+module demo.recorded_replay
+
+fn same(value: i64) -> i64 => value
+fn same_list(value: list<i64>) -> list<i64> => value
+
+# TST-3, TST-5, CEVAL-1: the second eval replays the first one's publications.
+test recorded_argument {
+    let published = eval same(value: [1, 2])
+    assert eval same(value: published) == [1, 2]
+    assert eval same(value: eval same(value: [9])) == [9]
+    let empty = eval same(value: [])
+    assert eval same(value: empty) == []
+}
+
+# CEVAL-2: the original timestamps remain absolute in a run with another start.
+test recorded_times_are_absolute {
+    const origin: datetime = @2026-01-02T00:00:00Z
+    let published = eval{start: origin} same(value: [0s: 5, 4us: 7])
+    assert eval{start: origin - 2us} same(value: published) == [2us: 5, 6us: 7]
+}
+
+# TST-5, CEVAL-3: a recording holds deltas, including the list's shrink.
+test recorded_collection_deltas_are_replayed {
+    let published = eval same_list(value: [[1, 2], _, [1]])
+    assert eval same_list(value: published) == [[1, 2], _, [1]]
+}

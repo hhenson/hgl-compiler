@@ -128,6 +128,7 @@ analyser: partial
 - `run_config` is an application's and an integration test's, and no function's (`inject.position`, RUN-6); braces after any other capability are `inject.configuration`
 - A key of the global store written out is used with one type in a program: a `put` or a `get` of another type than its earlier use is `store.key_type`, at the later use
 - A capability type written other than as the whole type of a parameter of a `const fn` or a native value function, and a capability that is the value of a `state` or `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published, is rejected (`capability.as_value`); a `let` and an argument of a parameter of its type are uses, one given to a parameter written as a generic parameter or `any` is rejected (hhenson/hgl_spec#73), and a property is read with its type (NATIVE-6)
+- The exception for naming a capability type in an operator declaration's membership is planned in #562 (GEN-3).
 - A capture by an anonymous function is reported: of the injected name by the resolver (`name.captured`, FN-14), and of a `let` it is bound to or a parameter of its type here
 - A wake asked of the scheduler or the alarm, a call of core's `schedule`, with a duration the compiler sees, a literal, a constant or a constant expression of them, that is not more than zero rejects (`schedule.duration_bounds`): in `start` a negative one, and in a `when` or `stop` zero too; in a value function given the capability a negative one, and a zero is left to the target, since the rule does not say whether a call there is in `start`
 
@@ -135,6 +136,7 @@ transpiler: partial
 
 - Supplies the declared node, source and application capabilities, including timers and
   run configuration. Wires them before initializers that read them.
+- Dropping a datetime wake at or before evaluation time, except for an equal-time request in `start`, is planned in #516. The first dropped request warns once per node, and further requests are counted for its stop log.
 - Left: Unknown or unavailable injections are reported, including graph injections other
   than the store. A nested child graph cannot read capabilities captured from its parent
   (CTRL-2).

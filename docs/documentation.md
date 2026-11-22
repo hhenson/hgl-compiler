@@ -12,6 +12,11 @@ parameters have a separate table. An operator lists its candidates
 with their own signatures and documentation. Exported declarations
 appear by default. Use `--private` to include the rest and named tests.
 
+HTML output goes into an empty directory or a site marked by `hgl doc`.
+An update removes generated files the new site no longer uses, including
+pages from a previous `--private` build. It preserves unrelated files.
+Choose an empty directory when regenerating an older, unmarked site.
+
 Comments are rendered as CommonMark with tables (SDOC-7). Authored HTML
 is shown as text. HGL fences are highlighted using the lexer and labeled
 as runnable or shown examples (SDOC-9). A code span naming a declaration or member links to it when it resolves in the
