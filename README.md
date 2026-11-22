@@ -76,8 +76,8 @@ unless `--integration` asks for them or `--test NAME` names it; its
 `run target(...)` is a run in real time, and it has failed if it is still
 running after the limit `@timeout(5s)` gives on the line before it, or
 after a minute where it writes none.
-`hgl doc --format json` writes a [versioned API model](docs/documentation.md)
-from the checked program and its documentation comments.
+`hgl doc` writes the checked program's [HTML API reference](docs/documentation.md).
+`hgl doc --format json` writes the versioned API model.
 
 `hgl emit --out DIR` writes an
 accepted program as C++, and reports what the target does not write

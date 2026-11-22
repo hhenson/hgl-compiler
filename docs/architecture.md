@@ -17,7 +17,7 @@ tokens
 syntax tree ---------> formatter (planned) ---------> source text
     |  hgl_analyser
 analysed program ----> error reporting (`check`)
-    |            ----> hgl_doc ----> API model (`doc`)
+    |            ----> hgl_doc ----> HTML reference or JSON model (`doc`)
     |  hgl_lower (in the optimiser's place)
 analysed program, and the facts every target decides the same way
     |  one transpiler per target (`hgl_cpp`)
@@ -42,7 +42,7 @@ Rules for every stage:
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
 | `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, and the typed bodies of value functions, nodes, sources, graphs and tests: see "Analyser" below |
-| `hgl_doc` | Analysed interfaces and their attached SDOC comments to the JSON API model | [documentation.md](documentation.md) |
+| `hgl_doc` | Analysed interfaces and their attached SDOC comments to an HTML reference or JSON API model | [documentation.md](documentation.md) |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases handed to a target to run |
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl doc`, `hgl test`, `hgl emit`, `hgl run` |
 | formatter | Syntax tree to source text | planned |
@@ -1420,8 +1420,8 @@ rejection case that way (TST-13).
 `hgl_doc` reads the analysed program's interfaces and the lossless trees
 it retains. The parser's SDOC layout reader is shared with the analyser's
 key checks. It uses CommonMark fence ranges to preserve literal text in
-comment and section contents. The result is the
-[JSON API model](documentation.md), a leaf of the pipeline (SDOC-6).
+comment and section contents. The result is an [HTML reference or a
+JSON API model](documentation.md), a leaf of the pipeline (SDOC-6).
 
 ## Test runner
 
@@ -2409,7 +2409,7 @@ the job the way the design needs is dropped.
 | `ctrlc` | `hgl_cli` | taking an interrupt or a request to end while an application runs, to stop the run and still print its output |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
-| `pulldown-cmark` | `hgl_parser` | CommonMark fenced block ranges in documentation comments |
+| `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |
 | `tempfile` | `hgl_cli` | a file of a build written beside the one it replaces and renamed onto it, so that nothing reads half of it |
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 | `dirs` | `hgl_cli` | the user's cache directory, where the cpp target's builds are kept |

@@ -23,7 +23,7 @@ analyser: partial
 
 docs: partial
 
-- Recognized headings, prose and Args/Type Args entries in the JSON model
+- Recognized headings, prose and Args/Type Args entries in JSON and HTML
 - Fenced Markdown preserves literal text in headings and entries
 - Left: key spelling of Requires, Properties and a struct’s Args
 
@@ -31,7 +31,7 @@ docs: partial
 
 docs: done
 
-- JSON interfaces, candidates and members carry their own canonical identity, signatures and source parts
+- JSON and HTML keep interfaces, candidates and members distinct, with their own signatures, comments and source parts
 
 ## SDOC-5
 
@@ -54,13 +54,14 @@ parser: done
 docs: partial
 
 - The JSON model carries Markdown text, preserving fenced blocks
-- Left: present Markdown, formulas, diagrams and authored HTML text on a documentation site (#457)
+- HTML renders CommonMark tables and displays authored HTML as text
+- Left: render formulas and diagrams with the offline assets (#457)
 
 ## SDOC-8
 
-docs: planned
+docs: done
 
-- Documentation site links a name to the declaration it resolves to (#457)
+- HTML links a code span found in its comment's scope to the named declaration, when present in the site
 
 ## SDOC-9
 

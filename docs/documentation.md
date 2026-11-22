@@ -1,5 +1,25 @@
 # API documentation
 
+`hgl doc <ROOT>... [--out DIR] [--private]` writes an HTML reference.
+Open `index.html` in that directory. The default directory is
+`hgl-doc`. Use `--format json` for the JSON model below.
+
+The index links to one page per module. Each module page shows its
+parts, their source comments and its declarations grouped by kind.
+Declarations show their written signatures, file and line,
+documentation, and parameter and type-parameter tables. Configuration
+parameters have a separate table. An operator lists its candidates
+with their own signatures and documentation. Exported declarations
+appear by default. Use `--private` to include the rest and named tests.
+
+Comments are rendered as CommonMark with tables (SDOC-7). Authored HTML
+is shown as text. HGL fences are highlighted using the lexer. A code
+span naming a declaration or member links to it when it resolves in the
+comment's source scope and appears in the site (SDOC-8). Only generated
+local destinations become active Markdown links. Other link labels
+and image descriptions remain readable text. The pages and stylesheet
+use relative paths and open offline.
+
 `hgl doc <ROOT>... --format json [--out DIR] [--private]` writes one
 UTF-8 JSON document for the analysed program. Source discovery and
 diagnostics follow `hgl check`. The compiler writes to standard output
