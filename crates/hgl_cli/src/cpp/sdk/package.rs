@@ -81,17 +81,38 @@ pub(super) fn unusable(directory: &Path) -> Option<String> {
             );
         }
     }
-    PACKAGES
-        .iter()
-        .find_map(|(prefix, name)| package_problem(directory, prefix, name))
+    // Every package and the files it imports are looked for before any
+    // library is read: what is missing is said before what is cut short.
+    let mut libraries = Vec::new();
+    for (prefix, name) in PACKAGES {
+        match package(directory, prefix, name) {
+            Ok(imported) => libraries.extend(imported),
+            Err(problem) => return Some(problem),
+        }
+    }
+    libraries.iter().find_map(|Imported { shown, path, .. }| {
+        whole(path)
+            .err()
+            .map(|why| format!("holds `{shown}`, which is not a whole library: {why}"))
+    })
 }
 
-/// What is wrong with CMake package `name` in `directory`'s `prefix`, as
-/// [`unusable`] says it: where it has no configuration file, imports no
-/// library, or imports one that is missing or not whole.
-fn package_problem(directory: &Path, prefix: &str, name: &str) -> Option<String> {
+/// A file a CMake package imports.
+struct Imported {
+    /// Its path relative to the directory of libraries, `/` between its
+    /// parts as the package writes them.
+    shown: String,
+    /// Its path.
+    path: PathBuf,
+}
+
+/// The libraries CMake package `name` in `directory`'s `prefix` imports;
+/// or what is wrong with it, as [`unusable`] says it: it has no
+/// configuration file, imports no library, or imports one that is not
+/// there.
+fn package(directory: &Path, prefix: &str, name: &str) -> Result<Vec<Imported>, String> {
     let relative = format!("{prefix}/lib/cmake/{name}");
-    let package = directory.join(&relative);
+    let package = directory.join(prefix).join("lib").join("cmake").join(name);
     // `find_package` reads `NAMEConfig.cmake` or `NAME-config.cmake`.
     let configured = [
         format!("{name}Config.cmake"),
@@ -100,50 +121,39 @@ fn package_problem(directory: &Path, prefix: &str, name: &str) -> Option<String>
     .iter()
     .any(|file| package.join(file).is_file());
     if !configured {
-        return Some(format!("holds no CMake package `{name}` in `{relative}`"));
+        return Err(format!("holds no CMake package `{name}` in `{relative}`"));
     }
-    let imported = imported(&package, &directory.join(prefix));
+    let imported = imported(&package, directory, prefix);
     if imported.is_empty() {
-        return Some(format!(
+        return Err(format!(
             "holds a CMake package `{name}` in `{relative}` that imports no library"
         ));
     }
     if name == "hgraph"
         && let Some(missing) = HGRAPH_LIBRARIES.iter().find(|library| {
-            !imported.iter().any(|path| {
-                path.file_name()
+            !imported.iter().any(|file| {
+                file.path
+                    .file_name()
                     .is_some_and(|file| file.to_string_lossy().starts_with(*library))
             })
         })
     {
-        return Some(format!(
+        return Err(format!(
             "holds a CMake package `hgraph` in `{relative}` that imports no `{missing}`"
         ));
     }
-    for library in &imported {
-        let shown = library
-            .strip_prefix(directory)
-            .unwrap_or(library)
-            .display()
-            .to_string();
-        if !library.is_file() {
-            return Some(format!(
-                "lacks `{shown}`, which its CMake package `{name}` imports"
-            ));
-        }
-        if let Err(why) = whole(library) {
-            return Some(format!(
-                "holds `{shown}`, which is not a whole library: {why}"
-            ));
-        }
+    if let Some(Imported { shown, .. }) = imported.iter().find(|file| !file.path.is_file()) {
+        return Err(format!(
+            "lacks `{shown}`, which its CMake package `{name}` imports"
+        ));
     }
-    None
+    Ok(imported)
 }
 
 /// The files the CMake package in `package` imports, its install prefix
-/// being `prefix`: each that CMake's generated `*-targets-CONFIG.cmake`
-/// lists to check, `"${_IMPORT_PREFIX}/lib/..."`.
-fn imported(package: &Path, prefix: &Path) -> Vec<PathBuf> {
+/// being `directory`'s `prefix`: each that CMake's generated
+/// `*-targets-CONFIG.cmake` lists to check, `"${_IMPORT_PREFIX}/lib/..."`.
+fn imported(package: &Path, directory: &Path, prefix: &str) -> Vec<Imported> {
     let mut files: Vec<PathBuf> = fs::read_dir(package)
         .into_iter()
         .flatten()
@@ -167,7 +177,13 @@ fn imported(package: &Path, prefix: &Path) -> Vec<PathBuf> {
             }
             for quoted in line.split('"').skip(1).step_by(2) {
                 if let Some(relative) = quoted.strip_prefix("${_IMPORT_PREFIX}/") {
-                    imported.push(prefix.join(relative));
+                    let path = relative
+                        .split('/')
+                        .fold(directory.join(prefix), |path, part| path.join(part));
+                    imported.push(Imported {
+                        shown: format!("{prefix}/{relative}"),
+                        path,
+                    });
                 }
             }
         }
