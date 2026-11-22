@@ -45,6 +45,10 @@ Examples:
     assert eval local_node(value: [1, _, 3]) == [3, _, 5]
     assert eval doubling_graph(value: [2, _, 4]) == [4, _, 8]
     ~~~
+
+Args:
+    value: ```hgl
+        assert shown_entry_only
 */
 export const fn twice(value: i64) -> i64 => private_twice(value)
 

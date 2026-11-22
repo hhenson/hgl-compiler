@@ -127,7 +127,8 @@ fn the_model_and_site_mark_the_status_on_the_documented_declaration() {
             json!([null, false]),
             json!([1, true]),
             json!([2, false]),
-            json!([3, true])
+            json!([3, true]),
+            json!([null, false]),
         ]
     );
     assert!(
@@ -135,6 +136,12 @@ fn the_model_and_site_mark_the_status_on_the_documented_declaration() {
             .as_str()
             .unwrap()
             .contains("assert private_twice(3)")
+    );
+    assert!(
+        examples[4]["code"]
+            .as_str()
+            .unwrap()
+            .contains("assert shown_entry_only")
     );
     assert!(!declarations.iter().any(|declaration| {
         let name = declaration["name"].as_str().unwrap();
@@ -152,7 +159,7 @@ fn the_model_and_site_mark_the_status_on_the_documented_declaration() {
             html.contains("data-example=\"shown\"").then_some(html)
         })
         .unwrap();
-    assert_eq!(page.matches("data-example=\"shown\"").count(), 2, "{page}");
+    assert_eq!(page.matches("data-example=\"shown\"").count(), 3, "{page}");
     assert_eq!(
         page.matches("data-example=\"runnable\"").count(),
         7,

@@ -43,6 +43,14 @@ impl Line<'_> {
     fn blank(&self) -> bool {
         self.text.trim().is_empty()
     }
+
+    fn without_margin(self) -> Self {
+        let text = without_margin(self.text);
+        Self {
+            text,
+            start: self.start + (self.text.len() - text.len()) as u32,
+        }
+    }
 }
 
 /// SDOC-2's normalized text and SDOC-3's ordered sections and prose.
@@ -134,54 +142,75 @@ impl<'a> Comment<'a> {
         let mut examples = Vec::new();
         for section in &self.sections {
             let in_examples = section.heading == Some("Examples:");
-            let lines = section.markdown_lines();
-            let mut offset = 0;
-            let starts: Vec<_> = lines
-                .iter()
-                .map(|line| {
-                    let start = offset;
-                    offset += line.text.len() + 1;
-                    start
-                })
-                .collect();
-            let text = joined(&lines, |line| line.text);
-            let mut markdown = Parser::new_ext(&text, Options::ENABLE_TABLES).into_offset_iter();
-            while let Some((event, fence)) = markdown.next() {
-                let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = event else {
-                    continue;
-                };
-                if !matches!(info.as_ref(), "hgl" | "hgl no-run") {
-                    continue;
-                }
-                let position = in_examples.then(|| {
-                    position += 1;
-                    position
-                });
-                let mut code = String::new();
-                let mut source = Vec::new();
-                for (event, range) in markdown.by_ref() {
-                    match event {
-                        Event::End(pulldown_cmark::TagEnd::CodeBlock) => break,
-                        Event::Text(text) => {
-                            code.push_str(&text);
-                            source.extend(source_ranges(&lines, &starts, range));
-                        }
-                        _ => {}
-                    }
-                }
-                examples.push(Example {
-                    code,
-                    position,
-                    runnable: in_examples && info.as_ref() == "hgl",
-                    fence: Span::new(
-                        source_offset(&lines, &starts, fence.start),
-                        source_offset(&lines, &starts, fence.end),
-                    ),
-                    source,
-                });
+            read_examples(
+                &section.markdown_lines(),
+                in_examples,
+                &mut position,
+                &mut examples,
+            );
+            for entry in section.entries() {
+                // SDOC-7 renders an entry description with its key removed.
+                // A fence can begin right after that key.
+                read_examples(&entry.markdown_lines(), false, &mut position, &mut examples);
             }
         }
+        examples.sort_by_key(|example| example.fence.start);
+        examples.dedup_by_key(|example| example.fence.start);
         examples
+    }
+}
+
+/// Reads one CommonMark fragment using its original byte positions.
+fn read_examples(
+    lines: &[Line<'_>],
+    in_examples: bool,
+    ordinal: &mut usize,
+    examples: &mut Vec<Example>,
+) {
+    let mut offset = 0;
+    let starts: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            let start = offset;
+            offset += line.text.len() + 1;
+            start
+        })
+        .collect();
+    let text = joined(lines, |line| line.text);
+    let mut markdown = Parser::new_ext(&text, Options::ENABLE_TABLES).into_offset_iter();
+    while let Some((event, fence)) = markdown.next() {
+        let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = event else {
+            continue;
+        };
+        if !matches!(info.as_ref(), "hgl" | "hgl no-run") {
+            continue;
+        }
+        let position = in_examples.then(|| {
+            *ordinal += 1;
+            *ordinal
+        });
+        let mut code = String::new();
+        let mut source = Vec::new();
+        for (event, range) in markdown.by_ref() {
+            match event {
+                Event::End(pulldown_cmark::TagEnd::CodeBlock) => break,
+                Event::Text(text) => {
+                    code.push_str(&text);
+                    source.extend(source_ranges(lines, &starts, range));
+                }
+                _ => {}
+            }
+        }
+        examples.push(Example {
+            code,
+            position,
+            runnable: in_examples && info.as_ref() == "hgl",
+            fence: Span::new(
+                source_offset(lines, &starts, fence.start),
+                source_offset(lines, &starts, fence.end),
+            ),
+            source,
+        });
     }
 }
 
@@ -212,15 +241,11 @@ impl<'a> Section<'a> {
     fn markdown_lines(&self) -> Vec<Line<'a>> {
         trim_blank(&self.lines)
             .iter()
-            .map(|line| {
-                let text = if self.heading.is_some() {
-                    without_margin(line.text)
+            .map(|&line| {
+                if self.heading.is_some() {
+                    line.without_margin()
                 } else {
-                    line.text
-                };
-                Line {
-                    text,
-                    start: line.start + (line.text.len() - text.len()) as u32,
+                    line
                 }
             })
             .collect()
@@ -350,19 +375,20 @@ pub struct Entry<'a> {
 impl Entry<'_> {
     /// The text after the colon, with any more deeply indented continuation.
     pub fn text(&self) -> String {
-        let end = self.continuation_length();
-        let mut text = self
-            .value
-            .strip_prefix(' ')
-            .unwrap_or(self.value)
-            .to_string();
-        for line in trim_end_blank(&self.following[..end]) {
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(without_margin(line.text));
-        }
-        text
+        joined(&self.markdown_lines(), |line| line.text)
+    }
+
+    fn markdown_lines(&self) -> Vec<Line<'_>> {
+        let text = self.value.strip_prefix(' ').unwrap_or(self.value);
+        let first = Line {
+            text,
+            start: self.span.end + 1 + (self.value.len() - text.len()) as u32,
+        };
+        let following = trim_end_blank(&self.following[..self.continuation_length()]);
+        std::iter::once(first)
+            .chain(following.iter().copied().map(Line::without_margin))
+            .skip_while(|line| line.text.is_empty())
+            .collect()
     }
 
     fn continuation_length(&self) -> usize {
