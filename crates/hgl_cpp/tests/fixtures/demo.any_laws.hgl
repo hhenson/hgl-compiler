@@ -13,6 +13,16 @@ const fn choose<U, ...Ts>(items: ...Ts) -> Chosen<U>
     requires any T in ((types((Ts)))) { T == list<U> } => Chosen<U>(marker: 11)
 const fn integer_choice(value: Chosen<i64>) -> i64 => value.marker
 
+# GEN-3, UNIT-13: inequality operands may be named module constants.
+const LIMIT: i64 = 2
+const fn outside_limit<const N: i64>() -> i64 requires N != LIMIT => N
+
+# GEN-3, GEN-10: a nested const generic can be on either equality side.
+const fn arity_left<const N: i64, ...Ts>(items: ...Ts) -> i64
+    requires any T in types(Ts) { list<i64, N> == T } => N
+const fn arity_right<const N: i64, ...Ts>(items: ...Ts) -> i64
+    requires any T in types(Ts) { T == list<i64, N> } => N
+
 # GEN-18 and RED-7: both laws are defaults of compile-time bool options.
 const fn lawful<V,
     const associative: bool = associative(f),
@@ -35,6 +45,16 @@ const fn declared_law<V>(f: const fn(V, V) -> V, a: V, b: V) -> V
 
 /** GEN-10: a later matching pack entry satisfies the existential. */
 test any_match { assert has_integer("first", true, 3) == 7 }
+
+/** GEN-3, UNIT-13: the named constant is read as a value. */
+test named_inequality { assert outside_limit<3>() == 3 }
+
+/** GEN-3, GEN-10: infer a const length without using an expected result type. */
+test inferred_length {
+    let pair: list<i64, 2> = [1, 2]
+    assert arity_left(pair) == 2
+    assert arity_right(pair) == 2
+}
 
 /** GEN-3, GEN-10: the first list fixes the otherwise unresolved U. */
 test first_match { assert integer_choice(choose(true, [1], ["later"])) == 11 }
@@ -75,6 +95,29 @@ test unmatched_any {
     # expect-error(constraint, "requires.unmet")
     assert has_integer("only", true) == 7
 }
+
+# GEN-10: a false existential is the cause of its missing result binding.
+test unmatched_binding_any {
+    # expect-error(constraint, "requires.unmet")
+    let selected = choose(true, 1)
+}
+
+test named_inequality_rejects_equal {
+    # expect-error(constraint, "requires.unmet")
+    assert outside_limit<2>() == 2
+}
+
+test supplied_length_is_preserved {
+    let pair: list<i64, 2> = [1, 2]
+    # expect-error(constraint, "requires.unmet")
+    assert arity_left<3>(pair) == 3
+}
+
+# GEN-18: invalid law operands reject at declaration, without a call.
+# expect-error(type, "type.mismatch")
+const fn law_on_value(a: i64) -> i64 requires associative(a) => a
+# expect-error(type, "type.mismatch")
+const fn law_on_type<T>(a: T) -> T requires commutative(T) => a
 
 # GEN-18: a named function, an anonymous function and missing metadata have no law.
 test ordinary_has_no_law {

@@ -927,14 +927,15 @@ impl<'a> Typer<'a> {
         for &index in &defaulted {
             if let Some(default) =
                 super::constants::generic_default(&callee.syntax, &generics[index])
-                && let Some((law, name)) = crate::laws::predicate(&default)
-                && let Some(parameter) = crate::laws::parameter(signature, &name)
+                && let Some(value) =
+                    self.law_call((module, declaration), signature, &default, &|parameter| {
+                        arguments
+                            .iter()
+                            .find(|argument| argument.parameter == Some(parameter))
+                            .map(|argument| &argument.value)
+                    })
             {
-                let value = arguments
-                    .iter()
-                    .find(|argument| argument.parameter == Some(parameter))
-                    .and_then(|argument| self.law_value(law, &argument.value))
-                    .map_or(ConstantValue::Unknown, ConstantValue::Bool);
+                let value = value.map_or(ConstantValue::Unknown, ConstantValue::Bool);
                 found[index] = Some(Argument::Constant(crate::types::Constant {
                     text: default.text().to_string(),
                     value,
@@ -976,7 +977,11 @@ impl<'a> Typer<'a> {
             .map(|generic| generic.name.as_str())
             .collect();
         let judged = !faulty && self.diagnostics.len() == reported && !unknown;
-        if judged && !unresolved.is_empty() {
+        let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
+        let requires_rejects = judged
+            && !unresolved.is_empty()
+            && self.pack_requires_rejects(at, (module, declaration), &found, &known_packs);
+        if judged && !unresolved.is_empty() && !requires_rejects {
             let names: Vec<String> = unresolved.iter().map(|name| format!("`{name}`")).collect();
             self.diagnostics.emit(
                 error(
@@ -1015,7 +1020,6 @@ impl<'a> Typer<'a> {
             .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
             .collect();
         let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
-        let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
         // TYPE-10, TYPE-11: the sizes the callee's parameters and result
         // have with what was resolved.
         sizes::call_sizes(

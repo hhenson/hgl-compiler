@@ -36,7 +36,9 @@ impl Reader<'_> {
                         && !self.constraint_pack_key(&node)
                         // GEN-18: this operand names a formal function,
                         // rather than writing a type.
-                        && !node.parent().is_some_and(|parent| crate::laws::predicate(&parent).is_some())
+                        && !node.parent().is_some_and(|parent| {
+                            crate::laws::requirement(self.module, self.file, &parent).is_some()
+                        })
                     {
                         self.outermost(&node);
                     }
@@ -241,7 +243,7 @@ impl Reader<'_> {
         };
         let compares = relation.kind() == SyntaxKind::ConstraintRelation
             && tokens(&relation).any(|token| {
-                token.kind() == SyntaxKind::EqEq
+                matches!(token.kind(), SyntaxKind::EqEq | SyntaxKind::BangEq)
                     || (token.kind() == SyntaxKind::Ident && token.text() == "in")
             });
         // A generic value parameter of the declaration, by its kind.
