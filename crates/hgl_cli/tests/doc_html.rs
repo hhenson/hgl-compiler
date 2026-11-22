@@ -70,7 +70,11 @@ fn internal_link_targets_exist(directory: &Path, files: &BTreeMap<PathBuf, Vec<u
         }
         let page = directory.join(filename);
         let html = std::str::from_utf8(bytes).unwrap();
-        for href in hrefs(html) {
+        let scripts = html
+            .split("src=\"")
+            .skip(1)
+            .filter_map(|tail| tail.split_once('"').map(|(src, _)| src));
+        for href in hrefs(html).chain(scripts) {
             let (target, anchor) = href
                 .split_once('#')
                 .map_or((href, None), |(path, id)| (path, Some(id)));
@@ -118,9 +122,11 @@ fn documentation_site_links_only_visible_declarations_and_local_files() {
     assert!(api.contains("<th scope=\"col\">Default</th>"));
     assert!(api.contains("class=\"keyword\">assert"));
     assert!(api.contains("<p><strong>Further reading</strong>:"));
-    assert!(api.contains("$<code>shared</code>$"));
+    assert!(api.contains("$<code class=\"formula-inline\">shared</code>$"));
     assert!(api.contains("class=\"language-math\">a^2+b^2=c^2"));
     assert!(api.contains("class=\"language-mermaid\">graph LR; A --&gt; B"));
+    assert!(api.contains("class=\"language-math\">\\badHglCommand{b}"));
+    assert!(api.contains("class=\"language-mermaid\">not a diagram"));
     assert_eq!(
         hrefs(&api)
             .filter(|href| href.contains("mod-guide.types.html#"))
@@ -210,6 +216,127 @@ fn modules_that_differ_in_case_have_distinct_paths() {
             .unwrap()
             .contains("<h1>guide.types</h1>")
     );
+}
+
+#[test]
+fn the_offline_search_index_matches_the_pages_and_visibility() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    input(&source, "\n");
+    let public = write_site(root.path(), &source, &[]);
+    write_site(root.path(), &source, &["--out", "private", "--private"]);
+    for (site, private) in [(public, false), (root.path().join("private"), true)] {
+        let index = fs::read_to_string(site.join("search-index.js")).unwrap();
+        let payload = index
+            .strip_prefix("const hglDeclarations = ")
+            .and_then(|content| content.strip_suffix(";\n"))
+            .unwrap();
+        let entries: Vec<serde_json::Value> = serde_json::from_str(payload).unwrap();
+        let mut has_private = false;
+        let mut operators = 0;
+        for entry in entries {
+            let name = entry["canonicalName"].as_str().unwrap();
+            has_private |= name == "guide.api::private_marker";
+            operators += usize::from(name == "guide.api::choose");
+            let href = entry["href"].as_str().unwrap();
+            let (file, anchor) = href.split_once('#').unwrap();
+            assert!(file.starts_with("modules/") && !file.contains(':'));
+            let page = fs::read_to_string(site.join(file)).unwrap();
+            assert!(page.contains(&format!("id=\"{anchor}\"")), "{href}");
+        }
+        assert_eq!(has_private, private);
+        assert_eq!(operators, 1, "candidates use the operator's search result");
+    }
+}
+
+#[test]
+fn the_site_copies_the_renderer_bundles_and_their_licenses() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    input(&source, "\n");
+    let site = write_site(root.path(), &source, &[]);
+    for (file, expected) in [
+        (
+            "vendor/katex/katex.min.js",
+            include_bytes!("../../hgl_doc/vendor/katex/katex.min.js").as_slice(),
+        ),
+        (
+            "vendor/katex/LICENSE",
+            include_bytes!("../../hgl_doc/vendor/katex/LICENSE").as_slice(),
+        ),
+        (
+            "vendor/mermaid/mermaid.min.js",
+            include_bytes!("../../hgl_doc/vendor/mermaid/mermaid.min.js").as_slice(),
+        ),
+        (
+            "vendor/mermaid/LICENSE",
+            include_bytes!("../../hgl_doc/vendor/mermaid/LICENSE").as_slice(),
+        ),
+        (
+            "vendor/mermaid/THIRD-PARTY-NOTICES.txt",
+            include_bytes!("../../hgl_doc/vendor/mermaid/THIRD-PARTY-NOTICES.txt").as_slice(),
+        ),
+    ] {
+        assert_eq!(fs::read(site.join(file)).unwrap(), expected, "{file}");
+    }
+}
+
+#[test]
+fn renderer_assets_follow_the_pages_that_use_them() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("core.hgl"), "module core\n").unwrap();
+    for (output, comment, math, mermaid) in [
+        (
+            "plain",
+            "Ordinary text.\n\n~~~mermaid ignored\nA --> B\n~~~",
+            false,
+            false,
+        ),
+        ("math", "A formula $`x^2`$.", true, false),
+        (
+            "diagram",
+            "~~~mermaid\nflowchart LR; A --> B\n~~~",
+            false,
+            true,
+        ),
+    ] {
+        fs::write(
+            source.join("assets.hgl"),
+            format!("module guide.assets\n/**\n{comment}\n*/\nexport const marker: i64 = 1\n"),
+        )
+        .unwrap();
+        write_site(root.path(), &source, &["--out", output]);
+        let site = root.path().join(output);
+        let page = fs::read_to_string(site.join("modules/mod-guide.assets.html")).unwrap();
+        assert_eq!(
+            page.contains("../renderers.js"),
+            math || mermaid,
+            "{output}"
+        );
+        assert_eq!(
+            site.join("renderers.js").is_file(),
+            math || mermaid,
+            "{output}"
+        );
+        assert_eq!(
+            site.join("vendor/katex/katex.min.js").is_file(),
+            math,
+            "{output}"
+        );
+        assert_eq!(
+            site.join("vendor/mermaid/mermaid.min.js").is_file(),
+            mermaid,
+            "{output}"
+        );
+        assert_eq!(
+            site.join("vendor/mermaid/THIRD-PARTY-NOTICES.txt")
+                .is_file(),
+            mermaid,
+            "{output}"
+        );
+    }
 }
 
 #[test]

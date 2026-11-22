@@ -27,7 +27,7 @@ Notes:
     [External label](https://example.invalid/external)
     ![External picture](https://example.invalid/picture.png)
 
-    Formula fallback $`shared`$ and diagram fallback:
+    Inline formula $`shared`$ with a formula and diagram below:
 
     ~~~math
     a^2+b^2=c^2
@@ -35,6 +35,23 @@ Notes:
 
     ~~~mermaid
     graph LR; A --> B
+    ~~~
+
+    ~~~mermaid
+    %%{init: {"htmlLabels": true, "flowchart": {"htmlLabels": true}, "themeCSS": ".hgl-theme-override { color: red; }", "themeVariables": {"primaryColor": "#010203"}, "fontFamily": "hgl-font-override", "securityLevel": "loose"}}%%
+    flowchart LR
+        A["<b>bold</b>"] --> B["plain"]
+        click A href "https://renderer-probe.invalid/"
+    ~~~
+
+    Unrenderable source stays visible:
+
+    ~~~math
+    \badHglCommand{b}
+    ~~~
+
+    ~~~mermaid
+    not a diagram
     ~~~
 
 Examples:
