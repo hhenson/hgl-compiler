@@ -58,7 +58,7 @@ analyser: partial
 
 - A default reads no parameter of its declaration and no field of its struct. Its own block bindings stay in scope when the default is specialized.
 - An imported default retains its defining module's private bindings, even where the caller binds the same name.
-- Left: defaults that read a function's laws (#367).
+- GEN-18 law-predicate defaults alone may name a formal function parameter; the call reads its declared metadata.
 
 ## UNIT-8
 
@@ -67,7 +67,7 @@ analyser: partial
 - Any parameter but a pack may have a default; a pack's is rejected under FN-8
 - A parameter that may be omitted follows every one that may not within the parentheses. Configuration parameters in braces can stand in any order. A value function's call may omit a parameter written `T?`.
 - A default is read as a value of its parameter's type (`type.mismatch`) and kept for the stages after, `Module::defaults`
-- Law predicates in defaults await #367.
+- A bool generic law default is evaluated from the static function supplied at the call; an explicit bool value overrides it (GEN-18).
 - A default on a `ref` parameter is checked against the type after its mode (FN-16).
 - Left: known required-constant failures in defaults; type checking a window or atomic default; checking a default against the selected generic parameter type where the argument is left out.
 

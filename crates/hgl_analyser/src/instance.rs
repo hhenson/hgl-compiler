@@ -323,7 +323,8 @@ impl Program {
             .filter(|_| crate::values::has_forwarded_calls(&body));
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
-        if (recheck_endpoints || pending_forwards.is_some())
+        let recheck_laws = crate::laws::has_dependent_calls(self, &body);
+        if (recheck_endpoints || recheck_laws || pending_forwards.is_some())
             && let Some(reread) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),

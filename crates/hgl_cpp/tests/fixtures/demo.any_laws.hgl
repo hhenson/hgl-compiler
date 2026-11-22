@@ -1,0 +1,123 @@
+module demo.any_laws
+
+# GEN-10: the existential sees every capture in declared pack order.
+const fn has_integer<...Ts>(items: ...Ts) -> i64
+    requires any T in types(Ts) { T == i64 } => 7
+
+# GEN-3: the first positive match binds U without a requested result type.
+struct Chosen<T> {
+    marker: i64
+    value: T? = null
+}
+const fn choose<U, ...Ts>(items: ...Ts) -> Chosen<U>
+    requires any T in types(Ts) { T == list<U> } => Chosen<U>(marker: 11)
+const fn integer_choice(value: Chosen<i64>) -> i64 => value.marker
+
+# GEN-18 and RED-7: both laws are defaults of compile-time bool options.
+const fn lawful<V,
+    const associative: bool = associative(f),
+    const commutative: bool = commutative(f),
+>(f: const fn(V, V) -> V, a: V, b: V) -> V
+    requires associative && commutative => f(a, b)
+
+const fn forward<V>(f: const fn(V, V) -> V, a: V, b: V) -> V
+    requires associative(f) && commutative(f) => lawful(f, a, b)
+const fn ordinary(a: i64, b: i64) -> i64 => a + b
+
+operator tree<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V
+impl const fn tree<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V
+    requires law => f(a, b)
+const fn forward_tree<V>(f: const fn(V, V) -> V, a: V, b: V) -> V
+    requires associative(f) => tree(f, a, b)
+
+const fn declared_law<V>(f: const fn(V, V) -> V, a: V, b: V) -> V
+    requires associative(f) && commutative(f) => f(a, b)
+
+/** GEN-10: a later matching pack entry satisfies the existential. */
+test any_match { assert has_integer("first", true, 3) == 7 }
+
+/** GEN-3, GEN-10: the first list fixes the otherwise unresolved U. */
+test first_match { assert integer_choice(choose(true, [1], ["later"])) == 11 }
+
+/** GEN-18, RED-7: Core publishes both numeric domains' addition laws. */
+test core_addition {
+    assert lawful(add_, 2, 3) == 5
+    assert lawful(add_, 2.0, 3.0) == 5.0
+}
+
+/** GEN-18, RED-7: multiplication has both laws over both numeric domains. */
+test core_multiplication {
+    assert lawful(mul_, 2, 3) == 6
+    assert lawful(mul_, 2.0, 3.0) == 6.0
+}
+
+/** GEN-18: the caller may answer for an ordinary or anonymous function. */
+test explicit_law {
+    assert lawful{associative: true, commutative: true}(ordinary, 2, 3) == 5
+    assert lawful{associative: true, commutative: true}(fn(a, b) => a + b, 2, 3) == 5
+}
+
+/** GEN-18, FN-17: a forwarded function retains the public operator identity. */
+test forwarded_law {
+    assert forward(add_, 2, 3) == 5
+    assert forward_tree(mul_, 2, 3) == 6
+}
+
+/** GEN-18: direct predicates use the supplied function's declared laws. */
+test direct_law { assert declared_law(add_, 2, 3) == 5 }
+
+# GEN-10: none and no matching element are both false.
+test empty_any {
+    # expect-error(constraint, "requires.unmet")
+    assert has_integer() == 7
+}
+test unmatched_any {
+    # expect-error(constraint, "requires.unmet")
+    assert has_integer("only", true) == 7
+}
+
+# GEN-18: a named function, an anonymous function and missing metadata have no law.
+test ordinary_has_no_law {
+    # expect-error(constraint, "requires.unmet")
+    assert lawful(ordinary, 2, 3) == 5
+}
+test anonymous_has_no_law {
+    # expect-error(constraint, "requires.unmet")
+    assert lawful(fn(a, b) => a + b, 2, 3) == 5
+}
+test undeclared_law {
+    # expect-error(constraint, "requires.unmet")
+    assert lawful(sub_, 2, 3) == -1
+}
+test forwarded_absent_law {
+    # expect-error(constraint, "requires.unmet")
+    assert forward(ordinary, 2, 3) == 5
+}
+test forwarded_absent_candidate {
+    # expect-error(constraint, "requires.unmet")
+    assert forward_tree(ordinary, 2, 3) == 5
+}
+test false_override {
+    # expect-error(constraint, "requires.unmet")
+    assert lawful{associative: false}(add_, 2, 3) == 5
+}
+
+
+# GEN-7/GEN-18 ruling: both law values have a candidate at declaration.
+operator either<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V
+impl const fn either<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V
+    requires law => f(a, b)
+impl const fn either<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V
+    requires !law => f(b, a)
+const fn either_forward<V>(f: const fn(V, V) -> V, a: V, b: V) -> V => either(f, a, b)
+const fn difference(a: i64, b: i64) -> i64 => a - b
+
+/** GEN-7, GEN-18: the admitted wrapper selects each concrete law branch. */
+test exhaustive_candidates {
+    assert either_forward(add_, 5, 2) == 7
+    assert either_forward(difference, 5, 2) == -3
+}
+
+# GEN-7/GEN-18 ruling: one law-dependent candidate needs a stated guarantee.
+# expect-error(operator, "operator.no_candidate")
+const fn missing_guarantee<V>(f: const fn(V, V) -> V, a: V, b: V) -> V => tree(f, a, b)

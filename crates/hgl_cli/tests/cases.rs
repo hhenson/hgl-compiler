@@ -444,3 +444,27 @@ fn a_missing_reflected_pack_member_is_reported() {
     assert_eq!(diagnostics[0]["code"], "pack.name", "{stdout}");
     assert_eq!(diagnostics[0]["category"], "type", "{stdout}");
 }
+
+/// GEN-7, GEN-10 and GEN-18: missing existential matches and law
+/// guarantees reject at the specified declaration or call.
+#[test]
+fn any_and_operator_law_rejections_are_checked() {
+    let root = scratch("any_laws_rejections");
+    let file = write(
+        &root,
+        "demo.any_laws.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.any_laws.hgl"),
+    );
+    let output = hgl(&["test", &file, "--rejections-only"]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 9 passed, 0 failed\n"),
+        "{stdout}"
+    );
+}

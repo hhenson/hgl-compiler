@@ -553,6 +553,113 @@ impl<'a> Typer<'a> {
             written: result_written,
             callback: None,
         };
+        // GEN-7/GEN-18 (#367 ruling): a static identity may choose only
+        // after every law value allowed at this declaration has a candidate.
+        let formal_laws = given.iter().any(|argument| matches!(&argument.value.kind,
+            ExprKind::StaticCallable(callback) if matches!(callback.as_ref(), Callee::Parameter { .. })))
+            && crate::laws::operator_needs_identity(program, operator);
+        if formal_laws {
+            let mut keys = Vec::new();
+            for argument in &given {
+                let ExprKind::StaticCallable(callback) = &argument.value.kind else {
+                    continue;
+                };
+                let Callee::Parameter { parameter, .. } = callback.as_ref() else {
+                    continue;
+                };
+                for law in [crate::laws::Law::Associative, crate::laws::Law::Commutative] {
+                    let used = candidates.iter().any(|(module, declaration, _)| {
+                        program.modules[*module].declarations[*declaration]
+                            .syntax
+                            .descendants()
+                            .any(|node| {
+                                crate::laws::predicate(&node).is_some_and(|(other, _)| other == law)
+                            })
+                    });
+                    if used
+                        && self.law_value(law, &argument.value).is_none()
+                        && !keys.contains(&(*parameter, law))
+                    {
+                        keys.push((*parameter, law));
+                    }
+                }
+            }
+            let trials = 1usize
+                .checked_shl(u32::try_from(keys.len()).unwrap_or(u32::MAX))
+                .unwrap_or(usize::MAX);
+            let mut result = None;
+            for bits in 0..trials {
+                if !self.may_reread() {
+                    return (self.unselected(given, Form::Named), Type::Unknown);
+                }
+                let before = self.law_assumptions.len();
+                self.law_assumptions.extend(keys.iter().enumerate().map(
+                    |(index, &(parameter, law))| {
+                        (
+                            parameter,
+                            law,
+                            bits.checked_shr(u32::try_from(index).unwrap_or(u32::MAX))
+                                .unwrap_or(0)
+                                & 1
+                                != 0,
+                        )
+                    },
+                ));
+                if !crate::laws::allows(
+                    self.signature,
+                    &self.declaration.syntax,
+                    &|parameter, law| {
+                        crate::laws::stated(
+                            self.signature,
+                            &self.declaration.syntax,
+                            parameter,
+                            law,
+                        )
+                        .or_else(|| {
+                            self.law_assumptions
+                                .iter()
+                                .rev()
+                                .find(|(slot, other, _)| *slot == parameter && *other == law)
+                                .map(|(_, _, value)| *value)
+                        })
+                    },
+                ) {
+                    self.law_assumptions.truncate(before);
+                    continue;
+                }
+                let (choices, _) = self.admitted(operator, &candidates, &given, &wanted);
+                self.law_assumptions.truncate(before);
+                if choices.len() != 1 {
+                    let diagnostic = self.no_one_candidate(
+                        (name.text(), Location::new(self.file, name.span())),
+                        public,
+                        (&given, &wanted),
+                        (!candidates.is_empty(), &choices),
+                    );
+                    self.diagnostics.emit(diagnostic);
+                    return (self.unselected(given, Form::Named), Type::Unknown);
+                }
+                if let Some(ty) = &choices[0].signature().result {
+                    result.get_or_insert_with(|| ty.clone());
+                }
+            }
+            let ty = result
+                .or_else(|| expected.cloned())
+                .unwrap_or(Type::Unknown);
+            let deferred = hir::DeferredOperator {
+                identity: operator,
+                list: self.at(list),
+                expected: expected.cloned(),
+                generics: generics.cloned(),
+                contextual: given.iter().map(|given| given.by_place).collect(),
+                captured: self.callable.is_some(),
+            };
+            let mut kind = self.unselected(given, Form::Named);
+            if let ExprKind::Call { callee, .. } = &mut kind {
+                *callee = Callee::DeferredOperator(Box::new(deferred));
+            }
+            return (kind, ty);
+        }
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         // EXPR-12: "Resolve configuration that selects an expression's
         // source result type during source checking." An option a

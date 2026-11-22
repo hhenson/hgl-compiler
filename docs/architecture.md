@@ -1369,6 +1369,25 @@ condition gives the facts that hold where it does and where it does
 not, and a branch, the right operand of a connective and what follows a
 branch that returns each read under theirs.
 
+### Compile-time laws and existential constraints
+
+GEN-10 `any` checks pack entries in order. A positive conjunctive equality
+can bind one unresolved generic from the first successful trial; failed
+trials do not change inference, and bindings are solved to a fixed point.
+A negated or disjunctive quantifier only tests resolved data. Empty `any`
+is false, while empty `each` is true. Their bound types and keys remain
+available inside nested written types.
+
+GEN-18 law predicates read the public operator's property domains, not
+its implementation's arithmetic. A plain or anonymous function has no
+law. Only the bool generic default form may inspect a formal function
+parameter (UNIT-7 and UNIT-8); an explicit option takes precedence.
+A generic wrapper's declaration must admit the call under every law
+value its own requirements allow (GEN-7). An exhaustive set of candidates
+can therefore be accepted before the function identity is known; the
+static-body specialization selects its concrete candidate later. This
+adds no runtime law evaluation or arithmetic reassociation.
+
 ### Order
 
 Nothing depends on the order the files are given in (UNIT-1). Where a
