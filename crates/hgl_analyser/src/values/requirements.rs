@@ -1877,14 +1877,14 @@ pub(super) fn instances_hold(
                 == Some(&Some(Phase::Graph));
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
             let mut graph_reports = Diagnostics::new();
-            let mut defaults = Vec::new();
+            let mut instance_calls = Vec::new();
             let instance = if configured.contains(&made.callee) {
                 super::operator_defaults::check_instance(
                     program,
                     made.callee,
                     &made.generics,
                     &made.answers,
-                    &mut defaults,
+                    &mut instance_calls,
                     diagnostics,
                     &mut graph_reports,
                 )
@@ -1901,6 +1901,10 @@ pub(super) fn instances_hold(
                 None
             };
             if recheck_graph && let Some((_, body)) = instance {
+                if let Some(Some(source)) = program.modules[made.callee.0].bodies.get(made.callee.1)
+                {
+                    made_after_inference(source, &body, &mut instance_calls);
+                }
                 super::lifting::check_instance_constants(program, &body, &from, diagnostics);
                 super::lifting::report_instance_checks(
                     &graph_reports,
@@ -1909,7 +1913,7 @@ pub(super) fn instances_hold(
                     "this destination in the generic graph is checked for this instance",
                 );
             }
-            if inner.is_empty() && selecting.is_empty() && defaults.is_empty() {
+            if inner.is_empty() && selecting.is_empty() && instance_calls.is_empty() {
                 continue;
             }
             let declared = own(made.callee);
@@ -1918,7 +1922,7 @@ pub(super) fn instances_hold(
             // What each call of the instance calls, with what it gives
             // the callee's generic parameters and what answers the
             // callee's requirements there, and where it is written.
-            let mut calls: Vec<Resolved> = defaults
+            let mut calls: Vec<Resolved> = instance_calls
                 .into_iter()
                 .map(|call| Resolved {
                     callee: call.callee,
@@ -2512,6 +2516,32 @@ fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Loca
 /// The calls of generic declarations `statements` make, at any depth.
 fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
     hir::walk_statements(statements, &mut |expression| made_at(expression, made));
+}
+
+/// Follow calls that graph settlement has made concrete through the same
+/// bounded admission traversal as other calls. A source call already
+/// concrete there does not create a new edge here (GEN-3, GEN-13).
+fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<Made>) {
+    let mut pending = std::collections::HashSet::new();
+    hir::walk_statements(&source.statements, &mut |expression| {
+        if super::calls::pending_function_inference(&expression.kind) {
+            pending.insert(expression.at);
+        }
+    });
+    if pending.is_empty() {
+        return;
+    }
+    hir::walk_statements(&settled.statements, &mut |expression| {
+        if pending.contains(&expression.at)
+            && let ExprKind::Call {
+                callee: Callee::Function { generics, .. },
+                ..
+            } = &expression.kind
+            && generics.iter().all(resolved_default_argument)
+        {
+            made_at(expression, made);
+        }
+    });
 }
 
 /// The calls of generic declarations `expression` makes, at any depth.

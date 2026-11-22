@@ -2210,6 +2210,109 @@ fn a_call_of_another_generic_function_is_judged_by_what_the_body_states() {
     }
 }
 
+/// GEN-2 and GEN-7: a graph instance fills the missing type argument
+/// without changing explicit and defaulted arguments. GEN-3 checks the
+/// newly concrete call's requirement.
+#[test]
+fn graph_instances_complete_named_function_inference() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn retain<Tag, U, const Amount: i64 = 9>(value: U, tag: Tag) -> U => value\n",
+        "const fn only_text<U>(value: U) -> U requires U in {str} => value\n",
+        "fn wrap_copied<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied = retain<str>(chosen, \"tag\")\n",
+        "    return copied\n",
+        "}\n",
+        "fn constrained<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied = only_text(chosen)\n",
+        "    return copied\n",
+        "}\n",
+        "fn accepted() -> i64 => wrap_copied(3)\n",
+        "fn rejected() -> i64 => constrained(3)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:18:25 constraint/requires.unmet GEN-3"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    let Some(Stmt::Return {
+        value: Some(result),
+        ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns the value of the call");
+    };
+    assert_eq!(result.ty.to_string(), "i64");
+    let mut generics = None;
+    walk_statements(&instance.statements, &mut |value| {
+        if let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    generics: arguments,
+                    ..
+                },
+            ..
+        } = &value.kind
+            && checked.program.modules[*module].declarations[*declaration].name == "retain"
+        {
+            generics = Some(
+                arguments
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+            );
+        }
+    });
+    assert_eq!(generics.unwrap(), ["str", "i64", "9"]);
+}
+
+/// GEN-3 and GEN-13: a call completed in a graph instance must follow
+/// the same downstream requirements as a call already concrete in source.
+#[test]
+fn graph_instances_follow_completed_function_calls_for_admission() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "struct OnlyText<U> requires U in {str} { value: U }\n",
+        "const fn through<U>(value: U) -> U {\n",
+        "    let held = OnlyText<U>(value: value)\n",
+        "    return held.value\n",
+        "}\n",
+        "fn wrapped<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied = through(chosen)\n",
+        "    return copied\n",
+        "}\n",
+        "fn late() -> i64 => wrapped(1)\n",
+        "fn direct() -> i64 => through(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:15:21 constraint/requires.unmet GEN-3",
+            "m.hgl:16:23 constraint/requires.unmet GEN-3",
+        ],
+        "{}",
+        checked.report
+    );
+    assert_eq!(
+        checked
+            .report
+            .matches("the `requires` of `OnlyText`")
+            .count(),
+        2
+    );
+}
+
 /// GEN-7 and TYPE-7: a graph instance checks the enum operand once it
 /// knows the type, and keeps the declared enum on the resulting expression.
 #[test]

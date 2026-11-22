@@ -5,6 +5,7 @@
 use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 
 use super::Typer;
+use super::calls::pending_function_inference;
 use super::control::{bound_by_loop, iterates, iteration_types, no_else_type, while_connection};
 use super::expressions::sequence_element;
 use super::fit::{open, whole};
@@ -561,6 +562,18 @@ pub(super) fn record_with(
                     {
                         *kind = constructor;
                         settling = true;
+                    }
+                    return;
+                }
+                NodeMut::Expression(value)
+                    if composition && pending_function_inference(&value.kind) =>
+                {
+                    if let Some(typer) = typer.as_deref_mut() {
+                        // Inference and admission use the concrete locals
+                        // of the graph, as ordinary call checking does.
+                        std::mem::swap(&mut typer.locals, locals);
+                        settling |= typer.settle_function_call(value);
+                        std::mem::swap(&mut typer.locals, locals);
                     }
                     return;
                 }

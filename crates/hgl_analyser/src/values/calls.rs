@@ -13,16 +13,18 @@ use super::arguments::{Slot, Takes};
 use super::evals::{trace_input_type, trace_pack_type};
 use super::fit::{not_null, open, whole};
 use super::inference::{
-    ExplicitGenerics, Inferred, Places, infer_from_place, mentions, pack_bounds, placed, type_pack,
+    ExplicitGenerics, Inferred, Places, infer, infer_from_place, mentions, pack_bounds, placed,
+    type_pack,
 };
 use super::node::RefRead;
 use super::sizes;
 use crate::declared::{names_parameter, substitute_within};
-use crate::hir::{self, Callee, EndpointOperation, ExprKind, Form, Hook};
+use crate::hir::{self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, ValueCategory};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
-    Argument, CallArguments, ConstantValue, Detail, GenericKind, NamedKind, Parameter, Scalar, Type,
+    Argument, CallArguments, ConstantValue, Detail, GenericKind, NamedKind, Parameter, Scalar,
+    Signature, Type,
 };
 use crate::{codes, error};
 
@@ -897,57 +899,13 @@ impl<'a> Typer<'a> {
             );
         }
 
-        // FN-1: a value function's "parameter and result types are
-        // ordinary value types", and GEN-1: "ordinary positions require
-        // value types", which a window is not (TYPE-12). A window given
-        // to a value function binds its generic parameters to the list
-        // it holds (`inferred_from`); one that the call's place, or what
-        // the call writes, binds to a type that holds a window rejects.
-        // FN-1's exception, "in a native value function, one of
-        // `endpoint<T>` (TIME-9)", takes the endpoint and not its
-        // payload, and is the whole type of its parameter (TYPE-12): a
-        // generic that stands only there is in no ordinary position.
-        let ordinary = |at: Location| {
-            signature
-                .result
-                .as_ref()
-                .is_some_and(|result| mentions(result, &[at]))
-                || signature.parameters.iter().any(|parameter| {
-                    !matches!(parameter.ty, Type::Endpoint(_)) && mentions(&parameter.ty, &[at])
-                })
-        };
         if listed && judged {
-            for (generic, found) in generics.iter().zip(&found) {
-                let Some(Argument::Type(ty)) = found else {
-                    continue;
-                };
-                if !ordinary(generic.at) {
-                    continue;
-                }
-                if !ty.any_part(&|part| matches!(part, Type::RollingWindow { .. }), &|_| {
-                    false
-                }) {
-                    continue;
-                }
-                self.diagnostics.emit(
-                    error(
-                        Category::Type,
-                        codes::TYPE_NOT_ORDINARY,
-                        Location::new(self.file, name.span()),
-                        format!(
-                            "`{ty}` is not an ordinary value type, and the `{}` of the value \
-                             function `{}` stands for it here",
-                            generic.name,
-                            name.text()
-                        ),
-                        "FN-1",
-                    )
-                    .with_note(
-                        "a value function's parameters and result are ordinary values; a window \
-                         given to one is the `list<V>` it holds (TYPE-11)",
-                    ),
-                );
-            }
+            self.check_value_type_arguments(
+                name.text(),
+                Location::new(self.file, name.span()),
+                signature,
+                found.iter().map(Option::as_ref),
+            );
         }
 
         // The result, with what was found in place. One that still
@@ -1010,6 +968,186 @@ impl<'a> Typer<'a> {
         (kind, ty)
     }
 
+    /// FN-1 and TYPE-12: an ordinary position of a value function
+    /// cannot contain a window. A native endpoint's payload is exempt.
+    fn check_value_type_arguments<'g>(
+        &mut self,
+        name: &str,
+        at: Location,
+        signature: &Signature,
+        arguments: impl Iterator<Item = Option<&'g Argument>>,
+    ) {
+        let ordinary = |at: Location| {
+            signature
+                .result
+                .as_ref()
+                .is_some_and(|result| mentions(result, &[at]))
+                || signature.parameters.iter().any(|parameter| {
+                    !matches!(parameter.ty, Type::Endpoint(_)) && mentions(&parameter.ty, &[at])
+                })
+        };
+        for (generic, found) in signature.generics.iter().zip(arguments) {
+            let Some(Argument::Type(ty)) = found else {
+                continue;
+            };
+            if !ordinary(generic.at) {
+                continue;
+            }
+            if !ty.any_part(&|part| matches!(part, Type::RollingWindow { .. }), &|_| {
+                false
+            }) {
+                continue;
+            }
+            self.diagnostics.emit(
+                error(
+                    Category::Type,
+                    codes::TYPE_NOT_ORDINARY,
+                    at,
+                    format!(
+                        "`{ty}` is not an ordinary value type, and the `{}` of the value \
+                         function `{}` stands for it here",
+                        generic.name, name
+                    ),
+                    "FN-1",
+                )
+                .with_note(
+                    "a value function's parameters and result are ordinary values; a window \
+                     given to one is the `list<V>` it holds (TYPE-11)",
+                ),
+            );
+        }
+    }
+
+    /// GEN-2 and GEN-12: settled argument types can complete a named
+    /// call that the source pass could not infer. Keep arguments already
+    /// decided by the source and apply the usual checks when all are known.
+    pub(super) fn settle_function_call(&mut self, call: &mut Expr) -> bool {
+        let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    generics,
+                    type_packs,
+                    requirements,
+                },
+            arguments,
+            ..
+        } = &mut call.kind
+        else {
+            return false;
+        };
+        let owner = &self.program.modules[*module];
+        let Detail::Callable(signature) = &owner.details[*declaration] else {
+            return false;
+        };
+        if !type_packs.is_empty() || signature.generics.len() != generics.len() {
+            return false;
+        }
+        let mut found = Vec::new();
+        for (parameter, argument) in signature.generics.iter().zip(generics.iter()) {
+            if matches!(parameter.kind, GenericKind::Pack { .. }) {
+                return false;
+            }
+            if matches!(argument, Argument::Type(Type::Unknown)) {
+                if parameter.kind != GenericKind::Type {
+                    return false;
+                }
+                found.push(None);
+            } else {
+                found.push(Some(argument.clone()));
+            }
+        }
+        let Some(mut supplied) = arguments
+            .iter()
+            .map(|argument| Some((argument.parameter?, &argument.value)))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
+        // Use declaration order for inference, leaving the HIR itself
+        // in written order for evaluation (GEN-12, EXPR-13).
+        supplied.sort_by_key(|(slot, _)| *slot);
+        let declared = &owner.declarations[*declaration];
+        let listed = declared.kind.role() == Some(Role::Value);
+        let mut unfound: Vec<_> = signature
+            .generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, found)| found.is_none().then_some(generic.at))
+            .collect();
+        for (slot, value) in supplied {
+            let Some(parameter) = signature.parameters.get(slot) else {
+                return false;
+            };
+            if !whole(&value.ty) || self.category(value) == ValueCategory::Unsettled {
+                return false;
+            }
+            if !mentions(&parameter.ty, &unfound) {
+                continue;
+            }
+            let actual = self.inferred_from(listed, value, Takes::Parameters);
+            let actual =
+                self.inference_input(&parameter.ty, &actual, &signature.generics, &found, None);
+            infer(&parameter.ty, actual, &signature.generics, &mut found);
+            unfound = signature
+                .generics
+                .iter()
+                .zip(&found)
+                .filter_map(|(generic, found)| found.is_none().then_some(generic.at))
+                .collect();
+        }
+        let Some(resolved) = found.into_iter().collect::<Option<Vec<_>>>() else {
+            return false;
+        };
+
+        let own: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let map: Vec<_> = own.iter().copied().zip(&resolved).collect();
+        let before = self.diagnostics.len();
+        if listed {
+            self.check_value_type_arguments(
+                &declared.name,
+                call.at,
+                signature,
+                resolved.iter().map(Some),
+            );
+        }
+        for argument in arguments {
+            let parameter =
+                &signature.parameters[argument.parameter.expect("the call binds each argument")];
+            let ty = placed(substitute_within(&parameter.ty, &map), &own);
+            if !matches!(ty, Type::Function(_))
+                && !self.lifted_window(&ty, listed, &argument.value, Takes::Parameters)
+                && argument.value.ty != ty
+            {
+                let place = format!("the parameter `{}`", parameter.name);
+                argument.value = self.fit_input(argument.value.clone(), &ty, &place);
+            }
+        }
+        sizes::call_sizes(
+            self.program,
+            (call.at, &declared.name),
+            signature,
+            (&own, &resolved),
+            self.diagnostics,
+        );
+        let callee = (*module, *declaration);
+        if self.diagnostics.len() == before {
+            self.requires_met(call.at, callee, &resolved);
+        }
+        *requirements = self.answers(callee.0, callee.1, &resolved);
+        call.ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
+            placed(substitute_within(result, &map), &own)
+        });
+        *generics = resolved;
+        self.finished_call(&call.kind, false);
+        true
+    }
+
     /// The member an enum's construction from `argument` names, where
     /// that is a constant: its place among the members, `Ok`, or what
     /// the enum has none of, `Err`. `None` for a value that is no
@@ -1046,6 +1184,12 @@ impl<'a> Typer<'a> {
             _ => None,
         }
     }
+}
+
+/// A named function call with a generic type left to instance inference.
+pub(super) fn pending_function_inference(kind: &ExprKind) -> bool {
+    matches!(kind, ExprKind::Call { callee: Callee::Function { generics, .. }, .. }
+        if generics.iter().any(|argument| matches!(argument, Argument::Type(Type::Unknown))))
 }
 
 /// The arguments of an argument list, in order: each with its name,
