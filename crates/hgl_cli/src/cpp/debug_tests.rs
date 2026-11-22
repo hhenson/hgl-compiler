@@ -5,17 +5,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
 
 use hgl_runner::{CaseKind, Selection};
 use hgl_source::SourceMap;
 use serde::Serialize;
 
 use super::application::{DebugLaunch, debug_path};
-use super::commands::{BuildRequest, build_error};
+use super::commands::{BuildRequest, TestFailure, build_error};
 use super::plan::{Action, CaseOutcome, TestCase};
 use super::{BuildSession, Description, Interrupt, sdk, select_tests};
-use crate::{EXIT_FAILED, ProgramSources, TestArgs, write_problems};
+use crate::{EXIT_FAILED, EXIT_REJECTED, ProgramSources, TestArgs, write_problems};
 
 /// The JSON contract read by IDEs. A launch never starts in this command.
 #[derive(Serialize)]
@@ -39,12 +38,21 @@ struct Launch {
 struct Skipped {
     name: String,
     reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<SkipStatus>,
+}
+
+/// A selected rejection check failed before any native test was started.
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum SkipStatus {
+    Failed,
 }
 
 /// A module's selected tests in the order given to its native host.
 struct Module<'a> {
     stem: &'a str,
-    tests: Vec<(&'a str, Option<Duration>)>,
+    tests: Vec<&'a str>,
 }
 
 struct Selected<'a> {
@@ -72,16 +80,27 @@ impl<'a> Selected<'a> {
                         tests: Vec::new(),
                     })
                     .tests
-                    .push((&case.identity, test.timeout)),
+                    .push(&case.identity),
                 Action::Checked(outcome) => {
-                    let reason = match (case.kind, outcome) {
-                        (CaseKind::Rejection, _) => "rejection case checked by the compiler",
-                        (_, CaseOutcome::NotRun(reason) | CaseOutcome::Failed(reason)) => reason,
-                        (_, CaseOutcome::Passed) => "the case has no native test executable",
+                    let (reason, status) = match (case.kind, outcome) {
+                        (CaseKind::Rejection, CaseOutcome::Failed(details)) => (
+                            format!("rejection check failed\n{}", details.trim_end()),
+                            Some(SkipStatus::Failed),
+                        ),
+                        (CaseKind::Rejection, _) => {
+                            ("rejection case checked by the compiler".into(), None)
+                        }
+                        (_, CaseOutcome::NotRun(reason) | CaseOutcome::Failed(reason)) => {
+                            (reason.clone(), None)
+                        }
+                        (_, CaseOutcome::Passed) => {
+                            ("the case has no native test executable".into(), None)
+                        }
                     };
                     selected.skipped.push(Skipped {
                         name: case.identity.clone(),
-                        reason: reason.to_string(),
+                        reason,
+                        status,
                     });
                 }
             }
@@ -112,15 +131,13 @@ impl<'a> Selected<'a> {
             .map(|(&name, module)| {
                 let results = debug_path(&directory.join(format!("{}.txt", module.stem)))?;
                 let mut arguments = vec![results.clone()];
-                // TST-17: the native host accepts a per-test clock limit,
-                // so it can keep it even when tests share one launch.
-                arguments.extend(module.tests.iter().map(|&(test, limit)| match limit {
-                    Some(limit) => format!("{test}@{}", limit.as_micros()),
-                    None => test.to_string(),
-                }));
+                // TST-17's host-clock limit applies to an ordinary test run.
+                // A debugger launch lets the user pause on a breakpoint.
+                let tests: Vec<_> = module.tests.iter().map(|&test| test.to_string()).collect();
+                arguments.extend(tests.iter().cloned());
                 Ok(Launch {
                     module: name.to_string(),
-                    tests: module.tests.iter().map(|&(test, _)| test.into()).collect(),
+                    tests,
                     command: DebugLaunch::new(
                         &session.workspace.test_executable(module.stem),
                         arguments,
@@ -135,7 +152,8 @@ impl<'a> Selected<'a> {
     }
 }
 
-/// Prints a v1 launch plan on success. Native build messages go to stderr.
+/// Prints a v1 launch plan once prepared, even if a selected rejection
+/// check failed. Diagnostics and native build messages go to stderr.
 pub(super) fn run(
     arguments: &TestArgs,
     directory: &Path,
@@ -149,7 +167,17 @@ pub(super) fn run(
     match serde_json::to_string(&plan) {
         Ok(json) => {
             println!("{json}");
-            ExitCode::SUCCESS
+            let mut status = ExitCode::SUCCESS;
+            for skipped in &plan.skipped {
+                if matches!(skipped.status, Some(SkipStatus::Failed)) {
+                    eprintln!("FAILED   rejection   {}", skipped.name);
+                    for line in skipped.reason.lines() {
+                        eprintln!("    {line}");
+                    }
+                    status = ExitCode::from(EXIT_REJECTED);
+                }
+            }
+            status
         }
         Err(error) => build_error(error.to_string()),
     }
@@ -191,7 +219,7 @@ fn prepare(
         }
     }
 
-    let (output, program, _) = request.prepare(&inputs)?;
+    let (output, program, _) = request.prepare(&inputs, TestFailure::DiagnosticsOnly)?;
     let selected = Selected::from_cases(program.tests.as_deref().unwrap_or_default(), selection)?;
     if selected.modules.is_empty() {
         interrupt.finish().map_err(build_error)?;

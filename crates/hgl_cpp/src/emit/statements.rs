@@ -104,8 +104,8 @@ impl Emitter<'_> {
     /// Writes `statement` into `text`, `depth` levels in, after what it
     /// needs run before it (`Scope::before`). Each line it writes is given
     /// the HGL file and line of the statement outside a test, and in a test
-    /// written for a debugger (`stamped`). The test's host marker precedes
-    /// this mapping and keeps its generated line (`tests`).
+    /// written for a debugger (`stamped`). The debugger also maps the
+    /// test host's marker to the statement (`tests`).
     pub(super) fn statement(
         &mut self,
         scope: &mut Scope,

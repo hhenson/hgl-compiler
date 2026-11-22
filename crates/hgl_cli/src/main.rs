@@ -1232,17 +1232,22 @@ fn print_problems(sources: &SourceMap, problems: &[Problem]) -> ExitCode {
     ExitCode::from(EXIT_REJECTED)
 }
 
-fn print_report(sources: &SourceMap, report: &Report) -> ExitCode {
-    // TST-14: invalid metadata and errors in the surviving source stop
-    // the run before any case.
-    if report.prevented() {
-        write_problems(sources, &report.problems);
-        if let Err(error) = render::to_stderr(sources, &report.surviving) {
-            eprintln!("hgl: cannot write diagnostics: {error}");
-            return ExitCode::from(EXIT_FAILED);
-        }
+/// Reports what stopped test preparation before any case (TST-14).
+fn print_test_prevention(sources: &SourceMap, report: &Report, summary: bool) -> ExitCode {
+    write_problems(sources, &report.problems);
+    if let Err(error) = render::to_stderr(sources, &report.surviving) {
+        eprintln!("hgl: cannot write diagnostics: {error}");
+        return ExitCode::from(EXIT_FAILED);
+    }
+    if summary {
         println!("no case was run");
-        return ExitCode::from(EXIT_REJECTED);
+    }
+    ExitCode::from(EXIT_REJECTED)
+}
+
+fn print_report(sources: &SourceMap, report: &Report) -> ExitCode {
+    if report.prevented() {
+        return print_test_prevention(sources, report, true);
     }
     let outcomes: Vec<_> = report
         .cases

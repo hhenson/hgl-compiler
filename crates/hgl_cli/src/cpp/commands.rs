@@ -40,6 +40,14 @@ pub(super) enum BuildStart {
     Miss(ProgramSources, Result<(BuildSession, String), String>),
 }
 
+/// Whether a test front-end failure also prints the ordinary stdout summary.
+pub(super) enum TestFailure {
+    /// Keep the ordinary test summary on stdout.
+    Summary,
+    /// Reserve stdout for the debugger's JSON description.
+    DiagnosticsOnly,
+}
+
 impl<'a> BuildRequest<'a> {
     pub(super) fn tests(arguments: &'a TestArgs) -> Self {
         Self {
@@ -123,7 +131,7 @@ impl<'a> BuildRequest<'a> {
             }
             BuildStart::Miss(inputs, session) => (inputs, session),
         };
-        let (output, program, chosen) = self.prepare(&inputs)?;
+        let (output, program, chosen) = self.prepare(&inputs, TestFailure::Summary)?;
         if (self.running || self.debug)
             && let Some(path) = &chosen
         {
@@ -146,13 +154,20 @@ impl<'a> BuildRequest<'a> {
     pub(super) fn prepare(
         &self,
         inputs: &ProgramSources,
+        failure: TestFailure,
     ) -> Result<(Output, plan::Program, Option<String>), ExitCode> {
         let limits = self.limits.limits();
         let has_replacements =
             !self.replacements.arguments.is_empty() || !self.replacements.configuration.is_empty();
         if self.tests && !has_replacements {
             let parsed = crate::parse_sources(inputs, limits, None, true)?;
-            return self.prepare_tests(parsed.sources, &parsed.files, &parsed.diagnostics, None);
+            return self.prepare_tests(
+                parsed.sources,
+                &parsed.files,
+                &parsed.diagnostics,
+                None,
+                failure,
+            );
         }
         let checked = crate::prepare_program(
             inputs,
@@ -168,6 +183,7 @@ impl<'a> BuildRequest<'a> {
                 &checked.parsed,
                 &checked.front_end,
                 checked.original_source.as_ref(),
+                failure,
             );
         }
         let output = self.lower(
@@ -185,10 +201,15 @@ impl<'a> BuildRequest<'a> {
         files: &[hgl_analyser::ParsedFile],
         front_end: &Diagnostics,
         original_source: Option<&(hgl_source::SourceFile, crate::replace::SourceEdits)>,
+        failure: TestFailure,
     ) -> Result<(Output, plan::Program, Option<String>), ExitCode> {
         let checked = hgl_runner::prepare_all(&sources, files, front_end, &Selection::default());
         let Some(program) = checked.program else {
-            return Err(crate::print_report(&sources, &checked.report));
+            return Err(crate::print_test_prevention(
+                &sources,
+                &checked.report,
+                matches!(failure, TestFailure::Summary),
+            ));
         };
         let output = self.lower(&program, &sources, original_source);
         let program = plan::Program::new(&output, Some(&checked.report), &sources);
@@ -334,7 +355,7 @@ fn legacy_debug(
 ) -> Result<serde_json::Value, ExitCode> {
     let interrupt = Interrupt::watch(None).map_err(build_error)?;
     let inputs = ProgramSources::read(request.roots)?;
-    let (output, program, chosen) = request.prepare(&inputs)?;
+    let (output, program, chosen) = request.prepare(&inputs, TestFailure::Summary)?;
     let chosen =
         chosen.ok_or_else(|| build_error("the program has no application to run".into()))?;
     let app = runnable_application(&program, &chosen, true)?;

@@ -146,15 +146,19 @@ warm-up.
 ## Debugging tests
 
 `hgl test ROOTS --target cpp --debug-build DIR` builds the selected test
-modules with debug information and no optimisation. It writes one JSON
-object to stdout without starting any test. Use `--test`, repeatable
+modules with debug information and no optimisation. It starts no tests.
+Stdout contains the JSON description or is empty. Diagnostics go to
+stderr. Use `--test`, repeatable
 `--test-path`, `--integration` or `--integration-only` as for an ordinary
 test run. Omitting selectors selects the ordinary cases. A bad path, an
 unknown test name or conflicting integration flags exits 2 before any build.
 
 The debugger sets breakpoints in the original HGL files, including on the
-statements of ordinary and integration tests. The same sources and
-selection in `DIR` reuse the same launches without compiling again. A new
+statements of ordinary and integration tests. Step Over between test
+statements stays in HGL. Breakpoints on declaration lines can bind to
+nearby executable lines, including a helper. Set a breakpoint on a body
+statement to stop there. The same sources and selection in `DIR` reuse
+the same launches without compiling again. A new
 selection builds only missing modules and their dependencies. Debug library
 selection matches application debug builds.
 
@@ -168,6 +172,12 @@ All paths are absolute. `hgraph` reports the linked libraries as in an
 application launch. Each skipped entry gives a `name` and `reason` for a
 selected rejection case or a test the target cannot write.
 
+A failed selected rejection has `status: "failed"` in its skipped entry
+and gives the ordinary rejection details in `reason`. The command exits 1
+and still prints the description with any launches it prepared. An error
+in the surviving source exits 1 with empty stdout. A native build failure
+exits 2 with empty stdout. A failed build supplies no partial launches.
+
 The test executable's result file is text. It starts fresh on each
 launch and flushes one record per line. `N` is the zero-based index in the
 launch's `tests` array.
@@ -176,16 +186,16 @@ launch's `tests` array.
 | --- | --- |
 | `start N` | The host started processing that test. |
 | `passed N` | The test ran to completion. |
-| `failed N LINE TEXT` | The test failed. `LINE` is the generated statement's line, or 0 if unavailable. |
+| `failed N LINE TEXT` | The test failed. `LINE` is the HGL line of the test statement, or 0 if unavailable. |
 | `unloaded N TEXT` | The executable could not find the requested test. |
 
 `TEXT` escapes backslash, newline and carriage return as `\\`, `\n` and
 `\r`. Exit 0 means the host finished writing its records. Test failures
 appear in those records and the host still runs later tests in the module.
-Exit 2 means usage or result-file failure. Exit 3 means a timed-out test
-could not be stopped and the host ended the module. Integration tests
-retain their TST-17 host-clock limits. If a launch stops early, an index
-without an outcome did not finish. Remove any previous results file before
+Exit 2 means usage or result-file failure. Debugger launches do not apply
+integration tests' host-clock limits. Ordinary runs keep their TST-17
+limits. If a launch stops early, an index without an outcome did not
+finish. Remove any previous results file before
 starting an executable if the debugger needs to distinguish a launch
 failure from old results.
 

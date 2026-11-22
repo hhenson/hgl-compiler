@@ -22,6 +22,19 @@ const ALPHA: &str = concat!(
     "}\n",
 );
 
+const REJECTIONS: &str = concat!(
+    "module debug.rejections\n",
+    "test good {\n",
+    "    # expect-error(type, \"type.mismatch\")\n",
+    "    assert 1\n",
+    "}\n",
+    "test bad {\n",
+    "    # expect-error(type, \"type.mismatch\")\n",
+    "    assert true\n",
+    "}\n",
+    "test runnable { assert true }\n",
+);
+
 fn plan(output: Output) -> Value {
     assert!(output.status.success(), "{}", text(&output.stderr));
     let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -96,6 +109,74 @@ fn debug_test_usage_and_empty_selection() {
             .unwrap()
             .contains("rejection")
     );
+    assert!(!workspace.exists());
+}
+
+/// TST-14: a surviving-source error stops preparation and uses stderr.
+#[test]
+fn debug_test_source_errors_leave_stdout_empty() {
+    let root = scratch("debug-test-source-error");
+    let source = write(
+        &root,
+        "bad.hgl",
+        "module debug.bad\ntest bad { assert 1 }\n",
+    );
+    let workspace = root.join("debug workspace");
+    let directory = argument(&workspace);
+    let output = hgl(&[
+        "test",
+        &source,
+        "--target",
+        "cpp",
+        "--debug-build",
+        &directory,
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(text(&output.stderr).contains("type.mismatch"));
+    assert!(!workspace.exists());
+
+    let ordinary = hgl(&["test", &source]);
+    assert_eq!(ordinary.status.code(), Some(1));
+    assert_eq!(text(&ordinary.stdout), "no case was run\n");
+}
+
+/// TST-13: the debugger description reports a failed rejection using the
+/// same source detail as the ordinary test runner.
+#[test]
+fn debug_test_rejection_failures_preserve_the_plan_and_diagnostic() {
+    let root = scratch("debug-test-rejection-error");
+    let source = write(&root, "cases.hgl", REJECTIONS);
+    let workspace = root.join("debug workspace");
+    let directory = argument(&workspace);
+    let ordinary = hgl(&["test", &source, "--rejections-only"]);
+    let ordinary_stdout = text(&ordinary.stdout);
+    assert_eq!(ordinary.status.code(), Some(1));
+    let detail = ordinary_stdout
+        .lines()
+        .map(str::trim_start)
+        .find(|line| line.starts_with("expected type/type.mismatch"))
+        .unwrap();
+    let result = hgl(&[
+        "test",
+        &source,
+        "--target",
+        "cpp",
+        "--debug-build",
+        &directory,
+        "--rejections-only",
+    ]);
+    assert_eq!(result.status.code(), Some(1));
+    let plan: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(plan["version"], 1);
+    assert_eq!(plan["launches"], json!([]));
+    assert_eq!(plan["skipped"][0]["name"], "debug.rejections::good");
+    assert!(plan["skipped"][0].get("status").is_none());
+    assert_eq!(plan["skipped"][1]["name"], "debug.rejections::bad");
+    assert_eq!(plan["skipped"][1]["status"], "failed");
+    let reason = plan["skipped"][1]["reason"].as_str().unwrap();
+    assert!(reason.contains(detail), "{reason}");
+    assert!(text(&result.stderr).contains(detail));
     assert!(!workspace.exists());
 }
 
@@ -181,6 +262,10 @@ fn debug_launches_group_tests_and_build_only_missing_modules() {
         integration["launches"][0]["tests"],
         json!(["debug.beta::live"])
     );
+    assert_eq!(
+        integration["launches"][0]["arguments"][1],
+        "debug.beta::live"
+    );
     assert_eq!(bin_count(), 2);
     let second_build = ninja_log();
     assert!(second_build.starts_with(&first_build) && second_build.len() > first_build.len());
@@ -257,6 +342,81 @@ fn debug_launches_group_tests_and_build_only_missing_modules() {
     let lines: Vec<_> = content.lines().collect();
     assert_eq!(lines.len(), 6, "{content}");
     assert_eq!(&lines[..3], &["start 0", "passed 0", "start 1"]);
-    assert!(lines[3].starts_with("failed 1 "), "{content}");
+    assert!(lines[3].starts_with("failed 1 5 "), "{content}");
     assert_eq!(&lines[4..], &["start 2", "passed 2"]);
+
+    let rejections = write(&root, "rejections.hgl", REJECTIONS);
+    let rejection_workspace = argument(&root.join("rejection workspace"));
+    let mixed = hgl(&[
+        "test",
+        &rejections,
+        "--target",
+        "cpp",
+        "--debug-build",
+        &rejection_workspace,
+    ]);
+    assert_eq!(mixed.status.code(), Some(1));
+    let plan: Value = serde_json::from_slice(&mixed.stdout).unwrap();
+    assert_eq!(plan["skipped"][1]["status"], "failed");
+    let launch = &plan["launches"][0];
+    assert_eq!(launch["tests"], json!(["debug.rejections::runnable"]));
+    assert!(Path::new(launch["executable"].as_str().unwrap()).is_file());
+    assert!(!Path::new(launch["resultsFile"].as_str().unwrap()).exists());
+}
+
+/// A failed requested native module gives an error even when Ninja was
+/// able to link the other module. There is no partial launch plan.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn debug_native_build_failure_leaves_stdout_empty() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("debug-test-native-error");
+    write(
+        &root,
+        "src/good.hgl",
+        "module debug.good\ntest good { assert true }\n",
+    );
+    write(
+        &root,
+        "src/bad.hgl",
+        "module debug.bad\ntest bad { assert true }\n",
+    );
+    let workspace = root.join("debug workspace");
+    let ninja = which::which("ninja").expect("the SDK uses Ninja");
+    let wrapper = write(
+        &root,
+        "bin/ninja",
+        r#"#!/bin/sh
+if [ "$1" = -C ] && [ "$2" = "$HGL_TEST_DEBUG_WORKSPACE" ]; then
+    printf '\n#error controlled debug C++ failure\n' >> "$2/modules/mod-debug-bad.cpp"
+fi
+exec "$HGL_TEST_REAL_NINJA" "$@"
+"#,
+    );
+    fs::set_permissions(wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(root.join("bin"))
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hgl"))
+        .arg("test")
+        .arg(root.join("src"))
+        .args(["--target", "cpp", "--debug-build"])
+        .arg(&workspace)
+        .env("PATH", path)
+        .env("HGL_TEST_DEBUG_WORKSPACE", &workspace)
+        .env("HGL_TEST_REAL_NINJA", ninja)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(text(&output.stderr).contains("controlled debug C++ failure"));
+    assert!(workspace.join("bin/test-debug-good").is_file());
+    assert!(!workspace.join(".hgl-built.json").exists());
 }

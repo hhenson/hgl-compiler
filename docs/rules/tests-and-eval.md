@@ -242,4 +242,4 @@ transpiler: done
 runner: done
 
 - An integration test and its rejection case are selected only when asked for. `--integration` adds integration cases, `--test` names one, and `--integration-only` selects only integration cases.
-- Debugger launches use the same selectors and give the native host each selected integration test's time limit.
+- Debugger launches use the same selectors. Their integration tests can pause at a breakpoint without a host-clock limit.
