@@ -1,0 +1,60 @@
+module demo.generic_endpoint_read_forms
+
+const fn is_null<T>(value: T?) -> bool => value == null
+
+# ERR-14, ERR-15 and GEN-7: a generic hook uses the concrete endpoint's
+# nullable read form. A later complete publication is readable again.
+fn whole_is_null<T>(probe: i64, value: T) -> bool {
+    when modified(probe) && valid<T>(value) {
+        let observed: T? = value
+        return is_null<T>(observed)
+    }
+}
+
+fn publish_dictionary(step: i64) -> dict<str, tuple<i64, i64>> {
+    when {
+        if step == 0 { return ["ready": (7, 8)] }
+        let partial: delta<tuple<i64, i64>> = (3, null)
+        if step == 1 {
+            return delta<dict<str, tuple<i64, i64>>>(updated: ["partial": partial])
+        }
+        let finish: delta<tuple<i64, i64>> = (null, 4)
+        return delta<dict<str, tuple<i64, i64>>>(updated: ["partial": finish])
+    }
+}
+
+fn publish_list(step: i64) -> list<i64> {
+    when {
+        if step == 0 { return [1] }
+        if step == 1 { return delta<list<i64>>(updated: [2: 4]) }
+        return delta<list<i64>>(updated: [1: 3])
+    }
+}
+
+fn observe_dictionary(step: i64) -> bool => whole_is_null(step, publish_dictionary(step))
+fn observe_list(step: i64) -> bool => whole_is_null(step, publish_list(step))
+
+test generic_nullable_whole_dictionary_read {
+    assert eval observe_dictionary(step: [0, 1, 2]) == [false, true, false]
+}
+
+test generic_nullable_whole_list_read {
+    assert eval observe_list(step: [0, 1, 2]) == [false, true, false]
+}
+
+fn collect_recent(reading: i64) -> rolling_window<i64, 3us, 1us> {
+    when { return reading }
+}
+
+# TYPE-11, ERR-14 and GEN-7: a nullable delta still observes arrival
+# and expiry-only cycles after this node is specialized.
+fn nullable_arrival<T>(value: T) -> delta<T>? {
+    when modified(value) { return delta_value(value) }
+}
+
+fn observe_arrival(reading: i64) -> i64? => nullable_arrival(collect_recent(reading))
+
+test generic_nullable_duration_delta {
+    assert eval{length: 6us} observe_arrival(reading: [1, 2, _, _, _, 3]) ==
+        [1, 2, _, _, null, 3]
+}

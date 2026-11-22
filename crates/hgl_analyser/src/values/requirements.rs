@@ -1811,6 +1811,7 @@ pub(super) fn instances_hold(
     // works out from its own generic parameters.
     let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
     let mut configured = std::collections::HashSet::new();
+    let mut endpoint_reads = std::collections::HashSet::new();
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
@@ -1844,6 +1845,9 @@ pub(super) fn instances_hold(
                 && super::operator_defaults::selects_configuration(program, module, position)
             {
                 configured.insert((index, position));
+            }
+            if super::node_endpoint_reads(module, position, None) {
+                endpoint_reads.insert((index, position));
             }
             for call in made {
                 // ERR-9: a generic argument the body works out from its
@@ -1905,6 +1909,7 @@ pub(super) fn instances_hold(
         .chain(passed.keys().copied())
         .chain(computing)
         .chain(configured.iter().copied())
+        .chain(endpoint_reads.iter().copied())
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -1983,10 +1988,22 @@ pub(super) fn instances_hold(
                     .get(made.callee.1)
                     .map_or(&[][..], Vec::as_slice)
             });
-            let graph = program.modules[made.callee.0].phases.get(made.callee.1)
-                == Some(&Some(Phase::Graph));
+            let unit = &program.modules[made.callee.0];
+            let graph = unit.phases.get(made.callee.1) == Some(&Some(Phase::Graph));
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
-            let mut graph_reports = Diagnostics::new();
+            let declared = own(made.callee);
+            let map: Vec<(Location, &Argument)> =
+                declared.iter().copied().zip(&made.generics).collect();
+            let recheck_endpoints = endpoint_reads.contains(&made.callee)
+                && matches!(
+                    unit.details.get(made.callee.1),
+                    Some(Detail::Callable(signature)) if super::node_endpoint_reads(
+                        unit,
+                        made.callee.1,
+                        Some(&super::candidates::in_instance(signature, &map)),
+                    )
+                );
+            let mut body_reports = Diagnostics::new();
             let mut instance_calls = Vec::new();
             let instance = if configured.contains(&made.callee) {
                 super::operator_defaults::check_instance(
@@ -1996,16 +2013,16 @@ pub(super) fn instances_hold(
                     &made.answers,
                     &mut instance_calls,
                     diagnostics,
-                    &mut graph_reports,
+                    &mut body_reports,
                 )
-            } else if recheck_graph {
+            } else if recheck_graph || recheck_endpoints {
                 program.checked_instance(
                     made.callee,
                     &made.generics,
                     &made.answers,
                     crate::instance::InstanceInputs::default(),
                     &RefCell::new(Diagnostics::new()),
-                    &mut graph_reports,
+                    &mut body_reports,
                 )
             } else {
                 None
@@ -2017,18 +2034,23 @@ pub(super) fn instances_hold(
                 }
                 super::lifting::check_instance_constants(program, &body, &from, diagnostics);
                 super::lifting::report_instance_checks(
-                    &graph_reports,
+                    &body_reports,
                     &from,
                     diagnostics,
                     "this destination in the generic graph is checked for this instance",
                 );
             }
+            if recheck_endpoints {
+                super::lifting::report_instance_checks(
+                    &body_reports,
+                    &from,
+                    diagnostics,
+                    "this endpoint read in the generic hook is checked for this instance",
+                );
+            }
             if inner.is_empty() && selecting.is_empty() && instance_calls.is_empty() {
                 continue;
             }
-            let declared = own(made.callee);
-            let map: Vec<(Location, &Argument)> =
-                declared.iter().copied().zip(&made.generics).collect();
             // What each call of the instance calls, with what it gives
             // the callee's generic parameters and what answers the
             // callee's requirements there, and where it is written.

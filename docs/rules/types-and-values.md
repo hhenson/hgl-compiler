@@ -168,7 +168,8 @@ analyser: partial
 - Core's `removed_value` is read where its place takes a `result<V, error>` (ERR-14); a read whose place is not a `result` is `payload.unguarded` for every window
 - A window's result takes a V and nothing else (TIME-7); its trace's cells are V (TST-5), a generic target's once its arguments are known
 - A size a generic value parameter gives is held to the same kind and bounds where the parameter is given, as TYPE-10's is (`values::sizes`): `Ticks<0>` for a `rolling_window<f64, N>` is `rolling_window.size_bounds`, and `Kinded<"x">` `rolling_window.size_kind`
-- Left: a size computed by a call; a size inside a generic body (GEN-7); the delta of a window of a duration that a generic parameter stands for, which is read in an instance
+- A generic hook applies the duration-window delta restriction when its instance supplies that input shape (GEN-7).
+- Left: a size computed by a call; a size inside a generic body (GEN-7)
 
 transpiler: partial
 
