@@ -35,7 +35,7 @@ UNSUPPORTED = re.compile(rf".+\.hgl:\d+:\d+: the {TARGET} target does not write 
 # be rejected is "expected category/code on line N of file: not reported".
 REJECTION = re.compile(r"^(?:.*/)?tests/([^/]+)/(.+?):\d+ (?:\S+ )+(\S+)$")
 NOT_REJECTED = re.compile(r"^expected \S+ on line \d+ of .+: not reported$")
-SUITES = {"conformance": "conformance", "implementation": "core_implementation"}
+SUITES = {"conformance": "conformance", "core_conformance": "core_conformance"}
 
 
 def known_gaps():
