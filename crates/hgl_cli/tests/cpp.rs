@@ -1170,8 +1170,8 @@ fn named_test_helpers_run_on_the_sdk() {
     let root = scratch("named-test-helpers");
     let file = write(
         &root,
-        "core_implementation.named_test_helpers.hgl",
-        include_str!("../../hgl_cpp/tests/fixtures/core_implementation.named_test_helpers.hgl"),
+        "core_conformance.named_test_helpers.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/core_conformance.named_test_helpers.hgl"),
     );
     let output = hgl_in(
         &["test", &file, "--target", "cpp", "--integration"],
