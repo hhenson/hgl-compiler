@@ -222,6 +222,69 @@ const LAWS: &str = concat!(
 );
 
 #[test]
+fn one_property_clause_gives_both_laws_and_a_typed_identity_to_each_domain() {
+    // GEN-9, GEN-18: one clause supplies both operand types. EXPR-5
+    // admits the integer literal where the identity must be an f64.
+    let declarations = LAWS.replace(
+        "properties<i64> { associative, commutative }",
+        "properties<i64, f64> { associative, commutative, identity = 0 }",
+    );
+    let accepted = check(&[(
+        "m.hgl",
+        &format!(
+            "{declarations}\
+             operator float_only(a: f64, b: f64) -> f64 properties<f64> {{ identity = 0 }}\n\
+             const fn both<V>(f: const fn(V, V) -> V, a: V, b: V) -> V requires associative(f) && commutative(f) => f(a, b)\n\
+             const fn ints() -> i64 => both(plus, 1, 2)\n\
+             const fn floats() -> f64 => both(plus, 1.0, 2.0)\n"
+        ),
+    )]);
+    assert!(!accepted.rejected, "{}", accepted.report);
+}
+
+#[test]
+fn a_property_identity_must_fit_every_domain() {
+    // GEN-9, EXPR-5: the identity is rejected at its value, even if
+    // another domain in the same clause admits it.
+    for (domains, identity, column) in [("i64", "\"zero\"", 34), ("i64, f64", "0.5", 39)] {
+        let rejected = check(&[(
+            "m.hgl",
+            &format!(
+                "module m\noperator combine<T>(a: T, b: T) -> T\n    properties<{domains}> {{ identity = {identity} }}\n"
+            ),
+        )]);
+        assert!(rejected.rejected, "{domains}");
+        assert_eq!(
+            rejected.summary(),
+            [format!("m.hgl:3:{column} type/type.mismatch EXPR-5")],
+            "{}",
+            rejected.report
+        );
+    }
+}
+
+#[test]
+fn a_later_property_clause_cannot_repeat_an_earlier_domain() {
+    // GEN-9: the later clause rejects at its repeated domain, including
+    // when the earlier clause gives the law to more than one type.
+    for (earlier, later) in [("i64", "i64"), ("i64, f64", "f64")] {
+        let rejected = check(&[(
+            "m.hgl",
+            &format!(
+                "module m\noperator combine<T>(a: T, b: T) -> T\n    properties<{earlier}> {{ associative }}\n    properties<{later}> {{ commutative }}\n"
+            ),
+        )]);
+        assert!(rejected.rejected, "{earlier}; {later}");
+        assert_eq!(
+            rejected.summary(),
+            ["m.hgl:4:16 operator/property.duplicate GEN-9"],
+            "{}",
+            rejected.report
+        );
+    }
+}
+
+#[test]
 fn a_law_default_queries_the_public_operator_and_allows_a_caller_override() {
     // GEN-9, GEN-18: metadata belongs to the operator and concrete domain.
     for call in [

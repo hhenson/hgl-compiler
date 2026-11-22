@@ -141,6 +141,7 @@ analyser: partial
 analyser: done
 
 - Property domains are ordinary concrete value types. A generic domain rejects with local `property.domain`.
+- Each domain in a clause gets its laws and expects its own identity type (EXPR-5). A later clause naming an earlier domain rejects at that domain with the proposed `property.duplicate` code. The proposed checks for repeated domains or properties within one clause are pending.
 - Law queries read the public operator's metadata for the concrete operand type; an ordinary or anonymous function declares no guarantee. Metadata performs no arithmetic transformation.
 
 optimiser: planned
