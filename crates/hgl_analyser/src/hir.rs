@@ -534,6 +534,8 @@ pub enum ExprKind {
     /// The child endpoint held by an inferred `let` (ERR-14). This
     /// names the endpoint selected when the binding was evaluated,
     /// with its payload type. An endpoint operation uses it directly.
+    /// It also names a captured parent's endpoint when a value helper
+    /// binds a child of that parent (FN-14).
     BoundChild(LocalId),
     /// A read of a collection's child that is checked when it runs
     /// (TIME-1, ERR-14): `parts[i]` in a hook, whose child is known only
@@ -1095,6 +1097,32 @@ pub struct AnonymousFunction {
     pub captures: Vec<LocalId>,
     /// Type and value arguments of the enclosing specialization, if any.
     pub specialization: Vec<GenericArgument>,
+}
+
+impl AnonymousFunction {
+    /// The type of the captured input in this function's local table.
+    pub fn capture_type(&self, index: usize) -> &Type {
+        &self.body.locals[self.template.parameters.len() + index].ty
+    }
+
+    /// What a caller passes for this lexical capture (FN-14). A child
+    /// selected in the helper still needs its parent's endpoint (ERR-14).
+    pub fn capture_value(&self, index: usize, binding: &Local, at: Location) -> Expr {
+        let capture = self.captures[index];
+        let ty = self.capture_type(index);
+        let (kind, ty) =
+            if matches!(ty, Type::Endpoint(_)) && !matches!(binding.ty, Type::Endpoint(_)) {
+                (ExprKind::EndpointOf(capture), ty.clone())
+            } else {
+                (ExprKind::Local(capture), binding.ty.clone())
+            };
+        Expr {
+            kind,
+            ty,
+            at,
+            category: binding.category,
+        }
+    }
 }
 
 /// The ordered list of types that a call gives one generic type pack.

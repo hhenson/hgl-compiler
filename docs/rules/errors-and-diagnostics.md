@@ -175,7 +175,8 @@ transpiler: partial
 
 - Holds the position or key of an inferred child binding through pack expansion
   and static value-function captures (FN-8, FN-14, FN-17). A payload read happens at
-  the use, and a failed plain read reports the use's HGL location.
+  the use, and a failed plain read reports the use's HGL location. A child bound
+  inside a value helper borrows its captured parent's endpoint.
 - Writes checked child, dictionary, unsized-list and window reads in the analysed
   value, result or nullable form. A dictionary omits wholly unset entries and a
   partial valid entry fails its whole read.

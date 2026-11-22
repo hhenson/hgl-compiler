@@ -2,6 +2,8 @@
 //! from a direct call (FN-7) and the lexical context of their captures
 //! (FN-14). Part of the typing pass ([`super`]).
 
+use std::collections::HashSet;
+
 use hgl_diagnostics::Location;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -9,7 +11,7 @@ use super::Typer;
 use super::arguments::{Slot, Takes};
 use crate::hir::{
     Body, Callee, ExprKind, Form, LocalId, Node, NodeMut, Stmt, ValueCategory,
-    walk_statement_nodes, walk_statement_nodes_mut,
+    walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::LocalKind;
 use crate::read::is_type;
@@ -151,7 +153,7 @@ impl Typer<'_> {
                 locals: self.locals.clone(),
                 statements,
             };
-            close(body, first_local, count)
+            close(body, first_local, count, specialization == Some(false))
         });
         self.restore_read(mark, false);
         self.anonymous = outer;
@@ -213,8 +215,9 @@ impl Typer<'_> {
 
 /// Put the anonymous function's inputs and captures first in its own
 /// local table. Every outer reference then has an explicit input.
-fn close(mut body: Body, first: LocalId, parameters: usize) -> (Body, Vec<LocalId>) {
+fn close(mut body: Body, first: LocalId, parameters: usize, value: bool) -> (Body, Vec<LocalId>) {
     let mut captures = Vec::new();
+    let mut endpoints = HashSet::new();
     let mut captured = |local: LocalId| {
         if local < first && !captures.contains(&local) {
             captures.push(local);
@@ -234,20 +237,44 @@ fn close(mut body: Body, first: LocalId, parameters: usize) -> (Body, Vec<LocalI
             } => {
                 locals.iter().copied().for_each(&mut captured);
             }
-            ExprKind::Call {
-                callee: Callee::Anonymous(function),
-                ..
-            } => {
-                function.captures.iter().copied().for_each(&mut captured);
-            }
-            ExprKind::StaticCallable(callee) => {
-                if let Callee::Anonymous(function) = &**callee {
-                    function.captures.iter().copied().for_each(&mut captured);
+            // ERR-14: a child bound in the helper needs the endpoint
+            // of the captured parent. An ordinary snapshot loses validity.
+            ExprKind::ChildEndpointOf(child) if value => {
+                if let ExprKind::Local(local) = child.place_root().kind
+                    && local < first
+                {
+                    endpoints.insert(local);
                 }
             }
             _ => {}
         }
+        let target = match &expression.kind {
+            ExprKind::Call { callee, .. } => Some(callee),
+            ExprKind::StaticCallable(callee) => Some(&**callee),
+            _ => None,
+        };
+        if let Some(Callee::Anonymous(function)) = target {
+            for (index, &local) in function.captures.iter().enumerate() {
+                captured(local);
+                if value
+                    && local < first
+                    && matches!(function.capture_type(index), Type::Endpoint(_))
+                {
+                    endpoints.insert(local);
+                }
+            }
+        }
     });
+    if !endpoints.is_empty() {
+        walk_statements_mut(&mut body.statements, &mut |expression| {
+            if let ExprKind::Local(local) = expression.kind
+                && endpoints.contains(&local)
+                && !matches!(expression.ty, Type::Endpoint(_))
+            {
+                expression.kind = ExprKind::BoundChild(local);
+            }
+        });
+    }
     let mut remapped = vec![0; body.locals.len()];
     let order = (first..first + parameters)
         .chain(captures.iter().copied())
@@ -256,7 +283,11 @@ fn close(mut body: Body, first: LocalId, parameters: usize) -> (Body, Vec<LocalI
         .enumerate()
         .map(|(new, old)| {
             remapped[old] = new;
-            body.locals[old].clone()
+            let mut local = body.locals[old].clone();
+            if endpoints.contains(&old) && !matches!(local.ty, Type::Endpoint(_)) {
+                local.ty = Type::Endpoint(Box::new(local.ty));
+            }
+            local
         })
         .collect();
     remap_locals(&mut body, &remapped);

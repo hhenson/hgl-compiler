@@ -379,8 +379,8 @@ using viewed_t = std::remove_cvref_t<decltype(viewed(std::declval<const E&>()))>
 
 } // namespace detail
 
-/// An ERR-14 child binding borrowed by a value helper (FN-14, FN-17).
-/// The selector belongs to the calling scope and is invoked only at use.
+/// An ERR-14 child binding or its parent input borrowed by a value helper
+/// (FN-14, FN-17). The calling scope retains both for the duration of the call.
 template <class S>
 class BoundChild {
     using View = hgraph::In<"", S>;
@@ -388,7 +388,8 @@ class BoundChild {
   public:
     /// Borrow a generated selector for the duration of the call.
     template <class Select>
-        requires (!std::is_same_v<std::remove_cvref_t<Select>, BoundChild>)
+        requires (!std::is_same_v<std::remove_cvref_t<Select>, BoundChild>
+                  && std::is_invocable_v<const Select&, std::source_location>)
     BoundChild(Select& select) : select_(&select), project_([](const void* binding, std::source_location at) {
         const auto child = (*static_cast<const Select*>(binding))(at);
         if (!detail::present(child)) {
@@ -403,6 +404,14 @@ class BoundChild {
             return Child<View>{View{view.base().borrowed_ref()}};
         }
     }) {}
+
+    /// Borrow the parent input of a child that the helper binds.
+    template <hgraph::fixed_string Name, auto... Policy>
+    BoundChild(const hgraph::In<Name, S, Policy...>& input)
+        : select_(&input), project_([](const void* binding, std::source_location) {
+            const auto& view = *static_cast<const hgraph::In<Name, S, Policy...>*>(binding);
+            return Child<View>{View{view.base().borrowed_ref()}};
+        }) {}
 
     /// Resolve the selected endpoint at this consuming use.
     [[nodiscard]] Child<View> operator()(std::source_location at) const {

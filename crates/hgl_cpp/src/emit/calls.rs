@@ -285,13 +285,17 @@ impl Emitter<'_> {
             if let Type::Endpoint(payload) = &parameter.ty {
                 // A hidden FN-14 capture passes the selector itself,
                 // without checking its position or reading its payload (ERR-14).
-                let ExprKind::Local(local) = argument.value.kind else {
+                let value = match argument.value.kind {
+                    ExprKind::Local(local) => Some(identifier(&scope.body.locals[local].name)),
+                    ExprKind::EndpointOf(local) => self.view(&scope.body.locals, local),
+                    _ => None,
+                };
+                let Some(value) = value else {
                     return self.missing(argument.value.at, "this captured endpoint");
                 };
                 let Some(ty) = self.bound_child_type(payload, argument.value.at) else {
                     return "0".to_string();
                 };
-                let value = identifier(&scope.body.locals[local].name);
                 written.push((index, value, false, Held::Value(ty)));
                 continue;
             }

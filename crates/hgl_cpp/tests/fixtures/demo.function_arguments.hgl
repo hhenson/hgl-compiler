@@ -70,6 +70,35 @@ fn delayed_child(parts: list<i64, 2>, position: i64, read: bool) -> i64 {
     }
 }
 
+# ERR-14 and FN-14: the callback binds a child of its captured input.
+fn binds_inside_callback(parts: list<i64, 2>) -> i64 {
+    when all_valid(parts) {
+        return apply(fn(n) {
+            let entry = parts[0]
+            return n + entry
+        }, 1)
+    }
+}
+
+fn binds_inside_nested_callback(parts: list<i64, 2>) -> i64 {
+    when all_valid(parts) {
+        return apply(fn(n) => apply(fn(m) {
+            let entry = parts[0]
+            return m + entry
+        }, n), 1)
+    }
+}
+
+fn observes_inside_callback(parts: list<i64, 2>, position: i64, inspect: bool) -> i64 {
+    when {
+        return apply(fn(n) {
+            let entry = parts[position]
+            if inspect && valid(entry) { return n + entry }
+            return -1
+        }, 1)
+    }
+}
+
 fn sample(f: const fn(i64) -> i64, const input: i64) -> i64 {
     yield 1s: f(input)
 }
@@ -199,4 +228,11 @@ test bound_child_captures {
     assert raises("value.unset_read") {
         eval delayed_child(parts: [delta<list<i64, 2>>(updated: [0: 3])], position: [1], read: [true])
     }
+    assert eval binds_inside_callback(parts: [[3, 4]]) == [4]
+    assert eval binds_inside_nested_callback(parts: [[3, 4]]) == [4]
+    assert eval observes_inside_callback(
+        parts: [delta<list<i64, 2>>(updated: [0: 3]), _, _],
+        position: [0, 1, 2],
+        inspect: [true, _, false],
+    ) == [4, -1, -1]
 }
