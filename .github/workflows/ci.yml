@@ -50,15 +50,19 @@ jobs:
         with:
           submodules: recursive
       # Installs the pinned toolchain and keeps its version for the cache
-      # key: a build by another compiler is of no use.
+      # key: a build by another compiler is of no use. Keeps a hash of
+      # Cargo.lock without the versions of the workspace's own crates
+      # (`hgl_*`), which every release changes and no dependency depends
+      # on, so that a release does not empty the cache.
       - id: rust
         shell: bash
         run: |
           cargo --version
           echo "version=$(rustc --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+          echo "dependencies=$(awk '/^name = "hgl_/ { own = 1 } own && /^version = / { own = 0; next } { print }' Cargo.lock | git hash-object --stdin)" >> "$GITHUB_OUTPUT"
       # The downloaded crates and the built dependencies a run on main
-      # saved for this system, toolchain and Cargo.lock. With them a run
-      # compiles only the workspace's own crates.
+      # saved for this system, toolchain and Cargo.lock's dependencies.
+      # With them a run compiles only the workspace's own crates.
       - id: cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -69,7 +73,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ steps.rust.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ steps.rust.outputs.version }}-${{ steps.rust.outputs.dependencies }}
       # The dependencies are built with optimisation, which makes the
       # tests about 2.5 times quicker. The workspace's own crates stay
       # unoptimised, as the stack-size tests assume, and debug assertions
