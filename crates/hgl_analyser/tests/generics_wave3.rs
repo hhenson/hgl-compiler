@@ -1017,6 +1017,47 @@ fn graph_instances_propagate_settled_delta_wrappers() {
     assert_eq!(value.ty, instance.locals[2].ty);
 }
 
+/// TYPE-16 and GEN-7: a property uses the settled delta's payload type.
+#[test]
+fn graph_instances_read_settled_delta_properties() {
+    for (shape, property, expected) in [
+        ("set<U>", "added", "set<i64>"),
+        ("list<U>", "updated", "dict<i64, i64>"),
+        ("list<U, 2>", "updated", "dict<i64, i64>"),
+        ("dict<str, U>", "updated", "dict<str, i64>"),
+        ("U?", "value", "i64?"),
+        ("Payload<U>", "first", "i64?"),
+    ] {
+        let checked = module(&format!(
+            "operator predicate<T>(input: T) -> bool\n\
+             impl const fn predicate<T>(input: T) -> bool => true\n\
+             impl fn predicate(input: i64) -> bool {{ when {{ return input > 0 }} }}\n\
+             struct Payload<U> {{ first: U }}\n\
+             const fn changes<U>(value: U) -> delta<{shape}> => delta<{shape}>()\n\
+             fn wrapper<T>(const input: T) -> {expected} {{\n\
+                 let chosen = if predicate(input) {{ 1 }}\n\
+                 let changed = changes(chosen)\n\
+                 let property = changed.{property}\n\
+                 return property\n\
+             }}\n\
+             fn admitted() -> {expected} => wrapper(1)\n"
+        ));
+        assert_eq!(checked.summary(), NONE, "{shape}: {}", checked.report);
+        let instance = instance_called_by(&checked, body(&checked, "admitted"));
+        let Some(Stmt::Return {
+            value: Some(read), ..
+        }) = instance.statements.last()
+        else {
+            panic!("{shape}: the graph returns the projected property");
+        };
+        assert_eq!(
+            (instance.locals[3].ty.to_string(), read.ty.to_string()),
+            (expected.to_string(), expected.to_string()),
+            "{shape}.{property}"
+        );
+    }
+}
+
 /// GEN-7, TYPE-16 and EXPR-5: a delta's named property keeps its
 /// destination type when the given value becomes known.
 #[test]

@@ -667,10 +667,23 @@ fn deferred_list_delta<T>(const value: T) -> i64 {
     return chosen_or_skip(copied.size_modified)
 }
 
+# TYPE-16: project the updated entries from a settled ordinary delta.
+const fn update_delta_entries<U>(value: U) -> delta<dict<str, list<U>>> =>
+    delta<dict<str, list<U>>>(updated: ["key": delta<list<U>>(size_modified: 1)])
+
+fn deferred_dictionary_delta<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let changed = update_delta_entries(chosen)
+    let updated = changed.updated
+    let entry = updated["key"]
+    return chosen_or_skip(entry.size_modified)
+}
+
 test deferred_delta_properties_fit {
     assert eval deferred_delta_properties(value: "s", ready: true) == ["ready"]
     assert eval deferred_delta_properties(value: "s", ready: false) == ["absent"]
     assert eval deferred_list_delta(value: "s") == [1]
+    assert eval deferred_dictionary_delta(value: "s") == [1]
 }
 
 # FN-9 and GEN-7: the value candidate can supply the graph's store

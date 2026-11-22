@@ -415,7 +415,7 @@ impl GraphDestinations {
                 ty: Type::Delta(of),
                 ..
             }) => {
-                let Some(properties) = typer.delta_properties(of) else {
+                let Some(properties) = typer.program.delta_properties(of) else {
                     return;
                 };
                 for argument in arguments {

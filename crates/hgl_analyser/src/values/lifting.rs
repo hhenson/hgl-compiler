@@ -946,9 +946,12 @@ fn settled_type(
             infer_types: true,
             ..
         } => typer?.infer_settled_fields(value.ty.clone(), arguments)?,
-        // EXPR-7: the member's position was checked where it was read.
-        // Its field type uses the struct's now-concrete type arguments.
-        ExprKind::Field { base, member } => program.field_types(&base.ty)?.get(*member)?.clone(),
+        // EXPR-7 and TYPE-16: the member's position was checked where
+        // it was read. Recover its type using the now-concrete base.
+        ExprKind::Field { base, member } => match &base.ty {
+            Type::Delta(of) => program.delta_properties(of)?.into_iter().nth(*member)?.1,
+            ty => program.field_types(ty)?.get(*member)?.clone(),
+        },
         _ => return None,
     };
     (ty != Type::Unknown).then_some(ty)

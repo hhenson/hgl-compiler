@@ -11,11 +11,12 @@ use super::fit::{nullable, open};
 use super::inference::{fixed, placed};
 use crate::declared::substitute_within;
 use crate::hir::{self, Expr, ExprKind};
+use crate::program::Program;
 use crate::syntax::{child, ungrouped};
 use crate::types::{Argument, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
 
-impl<'a> Typer<'a> {
+impl Program {
     /// The properties of the delta of `of`, each with its type, in
     /// the order TYPE-16 has them. `None` for a type whose delta is no
     /// type of its own, or is not known yet.
@@ -29,6 +30,15 @@ impl<'a> Typer<'a> {
     /// name and of type `delta<F>?`: null where the field did not
     /// change".
     pub(super) fn delta_properties(&self, of: &Type) -> Option<Vec<(String, Type)>> {
+        // A wholly unknown payload does not yet say what shape its
+        // delta has. A written generic parameter still has a symbolic delta.
+        let property_delta = |ty: &Type| {
+            if *ty == Type::Unknown {
+                Type::Unknown
+            } else {
+                Type::delta(ty.clone())
+            }
+        };
         match of {
             Type::Set(_) => Some(vec![
                 ("added".to_string(), of.clone()),
@@ -45,7 +55,7 @@ impl<'a> Typer<'a> {
                         "updated".to_string(),
                         Type::Dict {
                             key: position(),
-                            value: Box::new(Type::delta((**element).clone())),
+                            value: Box::new(property_delta(element)),
                         },
                     ),
                     ("removed".to_string(), Type::Set(position())),
@@ -60,14 +70,14 @@ impl<'a> Typer<'a> {
                     "updated".to_string(),
                     Type::Dict {
                         key: key.clone(),
-                        value: Box::new(Type::delta((**value).clone())),
+                        value: Box::new(property_delta(value)),
                     },
                 ),
                 ("removed".to_string(), Type::Set(key.clone())),
             ]),
             Type::Nullable(payload) => Some(vec![(
                 "value".to_string(),
-                nullable(Type::delta((**payload).clone())),
+                nullable(property_delta(payload)),
             )]),
             Type::Named {
                 module,
@@ -76,8 +86,7 @@ impl<'a> Typer<'a> {
                 kind: NamedKind::Struct,
                 ..
             } => {
-                let Some(Detail::Struct(read)) =
-                    self.program.modules[*module].details.get(*declaration)
+                let Some(Detail::Struct(read)) = self.modules[*module].details.get(*declaration)
                 else {
                     return None;
                 };
@@ -106,7 +115,9 @@ impl<'a> Typer<'a> {
             _ => None,
         }
     }
+}
 
+impl<'a> Typer<'a> {
     /// A property of a delta that is a type of its own (TYPE-16):
     /// `change.added`, of a set's delta; `change.updated`, of a
     /// dictionary's; `change.value`, of a nullable's; `change.bid`, of
@@ -118,7 +129,7 @@ impl<'a> Typer<'a> {
         at: Location,
         of: &Type,
     ) -> (ExprKind, Type) {
-        let Some(properties) = self.delta_properties(of) else {
+        let Some(properties) = self.program.delta_properties(of) else {
             return (ExprKind::Unread, Type::Unknown);
         };
         let member = properties.iter().position(|(property, _)| property == name);
@@ -166,7 +177,7 @@ impl<'a> Typer<'a> {
         // The delta is recorded where the constructor starts.
         let written = self.written.get(&(self.file, node.span().start)).copied();
         let properties = match written {
-            Some(Type::Delta(of)) => self.delta_properties(of),
+            Some(Type::Delta(of)) => self.program.delta_properties(of),
             _ => None,
         };
         if let Some(ty) = written
