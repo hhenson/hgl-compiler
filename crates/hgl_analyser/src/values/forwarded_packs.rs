@@ -122,7 +122,7 @@ pub(super) fn spread_operands(list: &SyntaxNode) -> impl Iterator<Item = SyntaxN
         .filter_map(|argument| argument.children().next())
 }
 
-/// Whether the shape of a parameter pack still needs to be applied.
+/// Whether a body needs its concrete pack inputs for a spread or entry read.
 pub(crate) fn has_forwarded_calls(body: &crate::hir::Body) -> bool {
     let mut pending = false;
     walk_nested_calls(&body.statements, &mut |value| {
@@ -137,7 +137,7 @@ fn is_forwarded_call(value: &Expr) -> bool {
         ExprKind::Call {
             callee: Callee::DeferredPackCall,
             ..
-        }
+        } | ExprKind::DeferredPackRead
     )
 }
 
