@@ -156,16 +156,15 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
     // Within each file, order source ranges separately for ordinary
     // declarations and example-local declarations. An example's code
     // shares the positions of its owner's comment (SDOC-6).
-    let mut written: HashMap<(FileId, bool), Vec<(u32, u32, usize)>> = HashMap::new();
+    let mut written = HashMap::new();
     for (position, declaration) in module.declarations.iter().enumerate() {
         let in_example = declaration
             .test_owner
             .is_some_and(|test| module.tests[test].documentation_example);
-        let span = declaration.syntax.span();
         written
             .entry((module.files[declaration.file].file, in_example))
-            .or_default()
-            .push((span.start, span.end, position));
+            .or_insert_with(Vec::new)
+            .push((declaration.syntax.span(), position));
     }
     for declarations in written.values_mut() {
         declarations.sort_unstable();
@@ -186,9 +185,9 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
         let declarations = written.get(&(file, in_example))?;
         // `partition_point` gives how many start at or before `at`: the
         // last of them is the only one that can hold it.
-        let before = declarations.partition_point(|&(start, _, _)| start <= at);
-        let &(_, end, position) = declarations.get(before.checked_sub(1)?)?;
-        if at >= end {
+        let before = declarations.partition_point(|&(span, _)| span.start <= at);
+        let &(span, position) = declarations.get(before.checked_sub(1)?)?;
+        if at >= span.end {
             return None;
         }
         let declared = (index, position);
