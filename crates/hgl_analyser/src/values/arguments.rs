@@ -214,6 +214,7 @@ impl<'a> Typer<'a> {
                     values: &[],
                     written_pack: None,
                     result_fallback: None,
+                    callable: None,
                     // GEN-2: "a generic value parameter that nothing
                     // says anything of takes its default".
                     defaults: read
@@ -379,6 +380,20 @@ impl<'a> Typer<'a> {
         takes: Takes,
         aside: &[&str],
     ) -> Vec<Assigned> {
+        self.assign_dependent(callee, list, slots, takes, aside, None)
+    }
+
+    /// A dependent named pack takes the remaining positional arguments
+    /// as well as names. Their callback slots are settled separately (FN-8).
+    pub(super) fn assign_dependent(
+        &mut self,
+        callee: &SyntaxToken,
+        list: &SyntaxNode,
+        slots: &[Slot],
+        takes: Takes,
+        aside: &[&str],
+        dependent: Option<usize>,
+    ) -> Vec<Assigned> {
         let what = takes.noun();
         let callee_at = Location::new(self.file, callee.span());
         let pack = |kind| {
@@ -454,7 +469,7 @@ impl<'a> Typer<'a> {
                     // (FN-8).
                     let next = (0..slots.len())
                         .find(|&index| !filled[index] && slots[index].takes_position());
-                    if next.is_none() && !has_positional_pack {
+                    if next.is_none() && !has_positional_pack && dependent.is_none() {
                         let fixed = slots.iter().filter(|slot| slot.takes_position()).count();
                         self.diagnostics.emit(error(
                             Category::Type,
@@ -468,7 +483,7 @@ impl<'a> Typer<'a> {
                             "EXPR-2",
                         ));
                     }
-                    next.or(positional_pack)
+                    next.or(positional_pack).or(dependent)
                 }
                 Some(name) => {
                     named_seen |= !brace;
@@ -504,7 +519,10 @@ impl<'a> Typer<'a> {
                         Some(index) => Some(index),
                         // A named pack takes the names the others
                         // leave (FN-8).
-                        None if has_named_pack && !configuration => {
+                        None if has_named_pack
+                            && (!configuration || !brace && dependent.is_some())
+                            && (!brace || dependent.is_none()) =>
+                        {
                             if named_pack.is_some() && !pack_names.insert(name.text().to_string()) {
                                 self.diagnostics.emit(error(
                                     Category::Name,
@@ -537,11 +555,9 @@ impl<'a> Typer<'a> {
                     let captured = &mut pack_locations[index];
                     let key = match kind {
                         Pack::Positional => hir::PackKey::Position(captured.len()),
-                        Pack::Named => hir::PackKey::Name(
-                            name.as_ref()
-                                .expect("named pack argument")
-                                .text()
-                                .to_string(),
+                        Pack::Named => name.as_ref().map_or_else(
+                            || hir::PackKey::Position(captured.len()),
+                            |name| hir::PackKey::Name(name.text().to_string()),
                         ),
                     };
                     let position = captured.len();
@@ -551,7 +567,12 @@ impl<'a> Typer<'a> {
                     (position, key)
                 })
             });
-            arguments.push(Assigned { slot, pack, value });
+            arguments.push(Assigned {
+                slot,
+                pack,
+                name,
+                value,
+            });
         }
         for (index, slot) in slots.iter().enumerate() {
             if slot.required && slot.pack.is_none() && !filled[index] && !unnamed_field {
@@ -643,17 +664,21 @@ impl<'a> Typer<'a> {
     ) -> Vec<hir::Argument> {
         self.assign(callee, list, slots, takes, &[])
             .into_iter()
-            .map(|Assigned { slot, pack, value }| {
-                // No generic parameter here: a slot that is a trace is
-                // one an eval gives (TST-5).
-                let expected = slot.map(|index| {
-                    let slot = &slots[index];
-                    (slot, matches!(slot.ty, Type::Trace { .. }))
-                });
-                let mut argument = self.argument(slot, &value, expected, takes);
-                argument.pack = pack.map(|(_, key)| key);
-                argument
-            })
+            .map(
+                |Assigned {
+                     slot, pack, value, ..
+                 }| {
+                    // No generic parameter here: a slot that is a trace is
+                    // one an eval gives (TST-5).
+                    let expected = slot.map(|index| {
+                        let slot = &slots[index];
+                        (slot, matches!(slot.ty, Type::Trace { .. }))
+                    });
+                    let mut argument = self.argument(slot, &value, expected, takes);
+                    argument.pack = pack.map(|(_, key)| key);
+                    argument
+                },
+            )
             .collect()
     }
 
@@ -735,6 +760,8 @@ pub(super) struct Assigned {
     pub(super) slot: Option<usize>,
     /// The position and key within the capture when the slot is a pack.
     pub(super) pack: Option<(usize, hir::PackKey)>,
+    /// Its source name, where it has one.
+    pub(super) name: Option<SyntaxToken>,
     /// The value written by the call.
     pub(super) value: SyntaxNode,
 }

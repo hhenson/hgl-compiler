@@ -1,0 +1,133 @@
+module demo.packdepends
+
+# FN-8, GEN-17: the call-through signature in the specification. The body
+# returns a marker because reading and forwarding the pack belong to FN-19.
+export const fn call_shape<...Ps, ...As>(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f},
+) -> i64 requires each arg in arg_keys(As) { As[arg] == Ps[arg] } => 11
+
+export const fn scaled(price: f64, factor: f64 = 1.0) -> f64 => price * factor
+export const fn other_scale(price: f64, factor: f64 = 1.0) -> f64 => price + factor
+
+export const fn omit_default<...Ps, ...As>(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f},
+) -> i64
+    requires each arg in arg_keys(As) { arg == "price" && Ps[arg] == As[arg] }
+    => 12
+
+# FN-8: a string, several strings, or a set of strings excludes the
+# matching parameter names, while an absent name excludes nothing.
+export const fn labelled(key: str, price: f64) -> f64 => price
+export const fn placed(index: i64, key: str, order: f64) -> f64 => order
+
+export const fn tagged<...Ps, ...As, const key: str = "key">(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f without key},
+) -> i64 requires each arg in arg_keys(As) { As[arg] == Ps[arg] } => 21
+
+export const fn each_slot<...Ps, ...As, const key: str = "key", const index: str = "index">(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f without key, index},
+) -> i64 requires each arg in arg_keys(As) { As[arg] == Ps[arg] } => 22
+
+export const fn each_given<...Ps, ...As, const given: set<str> = ["key", "index"]>(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f without given},
+) -> i64 requires each arg in arg_keys(As) { As[arg] == Ps[arg] } => 23
+
+# The specification's total callback has one named fixed parameter and
+# a positional pack. As and Ps see the keys "scale", 0, and 1 in the call.
+export const fn total(scale: f64, values: ...f64) -> f64 => scale
+
+export const fn need_positions<...Ps, ...As>(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f}{3},
+) -> i64
+    requires each arg in arg_keys(Ps) { arg in arg_keys(As) }
+          && each arg in arg_keys(As) {
+              (arg == "scale" || arg == 0 || arg == 1) && As[arg] == Ps[arg]
+          }
+    => 24
+
+# GEN-17: the callback type remains f64 while As may hold a dictionary.
+# Writing K uses the membership without needing an any condition to infer K.
+export const fn membership<K, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f},
+) -> i64 requires each arg in arg_keys(As) { As[arg] in {Ps[arg], dict<K, Ps[arg]>} } => 25
+
+# GEN-17: a member is also a type in a signature.
+const price_key: str = "price"
+export const fn reflect_type<...Ps>(f: const fn(...{Ps}) -> f64, price: Ps[price_key]) -> Ps[price_key] =>
+    price
+
+# FN-8 and GEN-17: a callback's own named pack reflects its written keys
+# after the fixed slots, and each key keeps the argument's type.
+export const fn fields<...Fields>(price: f64, others: ...{Fields}) -> f64 => price
+
+export operator call_operator<...Ps, ...As>(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f},
+) -> i64 requires each arg in arg_keys(As) { As[arg] == Ps[arg] }
+
+impl const fn call_operator<...Ps, ...As>(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f},
+) -> i64 requires each arg in arg_keys(As) { As[arg] == Ps[arg] } => 51
+
+# FN-18: the braces can give the operator a configuration slot named
+# keys, while the parentheses give the callback an input of that name.
+export const fn found(order: f64, keys: set<str>) -> f64 => order
+
+export operator each_wanted<K, ...Ps, ...As, const key: str = "key">{
+    const strict: bool = true,
+    keys: set<K>? = null,
+}(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f without key},
+) -> i64 requires each arg in arg_keys(As) { As[arg] == Ps[arg] }
+
+impl const fn each_wanted<K, ...Ps, ...As, const key: str = "key">{
+    const strict: bool,
+    keys: set<K>?,
+}(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f without key},
+) -> i64 requires each arg in arg_keys(As) { As[arg] == Ps[arg] } {
+    if strict { return 52 }
+    return 53
+}
+
+export operator routed<...Ps, ...As>(
+    f: const fn(...{Ps}) -> f64,
+    args: ...{As for f},
+) -> i64
+
+# GEN-5: candidates read the resolved As keys to select a result.
+impl const fn routed<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> i64
+    requires each arg in arg_keys(As) { f64 == As[arg] } => 54
+impl const fn routed<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> i64
+    requires each arg in arg_keys(As) { str == As[arg] } => 55
+
+export operator temporal_shape<...Ps, ...As>(
+    f: fn(...{Ps}) -> f64,
+    args: ...{As for f},
+) -> i64 requires each arg in arg_keys(As) { As[arg] == Ps[arg] }
+
+impl fn temporal_shape<...Ps, ...As>(
+    f: fn(...{Ps}) -> f64,
+    args: ...{As for f},
+) -> i64 => 56
+
+fn temporal_scaled(price: f64) -> f64 {
+    when { return price }
+}
+export fn temporal_use(price: f64) -> i64 => temporal_shape(temporal_scaled, price)
+
+# FN-17: an operator callback uses its public parameter name and the
+# candidate selected by the dependent call's resolved argument type.
+export operator choose<T>(item: T) -> f64
+impl const fn choose(value: f64) -> f64 => value
+impl const fn choose(value: str) -> f64 => 1.0

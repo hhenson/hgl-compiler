@@ -136,10 +136,12 @@ define_syntax_kinds! {
         Param,
         /// `const fn(i64, price: f64) -> bool` as a parameter's type.
         FunctionType,
-        /// One input of a function type, with an optional name.
+        /// One input of a function type, a pack or a type with an optional name.
         FunctionTypeParam,
-        /// `{T}` after `...` in a parameter
+        /// `{T}` or `{As for f without key}` after `...` in a parameter
         PackType,
+        /// `for f` or `for f without key, index` inside a named pack
+        PackFor,
         /// `{2}`, `{1:*}` or `{1:4}` after a pack: how many it may hold
         Cardinality,
         /// `-> f64`
@@ -221,6 +223,8 @@ define_syntax_kinds! {
         ScalarType,
         /// `Quote`, `pc::Curve` or `Box<i64>`
         NamedType,
+        /// `Ps[arg]` in a type position
+        PackMemberType,
         /// `<i64, 3>` after a name
         GenericArgs,
         /// `tuple<i64, str>`

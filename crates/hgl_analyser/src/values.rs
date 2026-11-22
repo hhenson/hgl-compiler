@@ -73,6 +73,8 @@ mod constants;
 mod control;
 // A delta as a type of its own: its properties and its construction (TYPE-16).
 mod deltas;
+mod dependent_packs;
+pub(crate) use dependent_packs::PackTypes;
 // The endpoint operations and an `endpoint<T>` parameter's argument (TIME-9).
 mod endpoints;
 // A test's block, `assert`, `eval` and traces; a run statement and the store (TST-3, RUN-1).

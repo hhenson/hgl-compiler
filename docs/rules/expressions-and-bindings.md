@@ -119,7 +119,8 @@ analyser: partial
 - An inferred list with unfinished entries keeps its element type open until graph specialization can join them and widen eligible literals (EXPR-5, GEN-7).
 - Pairs are a dictionary where one is expected, each key and value read as its type; with nothing expected they are `sequence.context_type`
 - A named function's empty sequence argument takes the parameter type when another argument supplies the missing type in a graph instance (GEN-2, GEN-7).
-- Left: `_`; pairs as a timed trace; ordering and uniqueness
+- A written `set<str>` rejects a repeated constant string at the later member (`set.duplicate_member`, UNIT-13).
+- Left: `_`; pairs as a timed trace; ordering and uniqueness for other collection forms
 
 transpiler: partial
 

@@ -31,7 +31,7 @@ use crate::program::{
     Binding, Decision, DeclarationKind, ImportKind, LocalKind, Module, NameUse, PreludeName,
     Program, RUN_CONFIG,
 };
-use crate::syntax::{child, has_token, leads_its_test};
+use crate::syntax::{child, has_token, is_arg_keys_call, leads_its_test, pack_for_names};
 use crate::{INJECTABLES, RESULT_FORMS, codes, error};
 
 /// Resolves the names of every module, filling in [`Module::uses`] and
@@ -317,6 +317,20 @@ impl Resolver<'_> {
                 self.bind(&name, kind);
             }
         }
+        // FN-8: a pack's `for f` sees the callable's parameters. This is
+        // separate from reading the pack's type or the parameter defaults.
+        for parameter in &parameters {
+            let clause = child(parameter, SyntaxKind::PackType)
+                .and_then(|pack| child(&pack, SyntaxKind::PackFor));
+            if let Some(clause) = clause
+                && let Some((function, exclusions)) = pack_for_names(&clause)
+            {
+                self.lookup(&function);
+                for exclusion in exclusions {
+                    self.lookup(&exclusion);
+                }
+            }
+        }
         // The result type, the constraints, the body.
         for part in node.children() {
             match part.kind() {
@@ -424,6 +438,11 @@ impl Resolver<'_> {
             SyntaxKind::ForStmt => self.for_statement(node),
             SyntaxKind::FnExpr => self.function_expression(node),
             SyntaxKind::ConstraintEach => self.each_constraint(node),
+            SyntaxKind::PackMemberType => {
+                for name in identifiers(node) {
+                    self.lookup(&name);
+                }
+            }
             SyntaxKind::NameExpr
             | SyntaxKind::NamedType
             | SyntaxKind::TypedConstructor
@@ -639,13 +658,17 @@ impl Resolver<'_> {
         // The identifiers directly inside are `each`, the name, `in`.
         let name = identifiers(node).nth(1);
         let mut parts = node.children();
+        let mut kind = LocalKind::GenericParameter;
         // What is iterated is outside the scope of the name.
         if let Some(operand) = parts.next() {
+            if is_arg_keys_call(&operand) {
+                kind = LocalKind::PackKey;
+            }
             self.walk(&operand);
         }
         self.frames.push(Frame::default());
         if let Some(name) = name {
-            self.bind(&name, LocalKind::GenericParameter);
+            self.bind(&name, kind);
         }
         for part in parts {
             self.walk(&part);
@@ -792,6 +815,17 @@ impl Resolver<'_> {
         // looked up nowhere, and is not one the prelude is waited on
         // for.
         if RESULT_FORMS.contains(&name.text()) && is_callee(node) {
+            return None;
+        }
+        // GEN-17: in a requirement `arg_keys(Ps)` is a language form.
+        // The argument still uses normal name resolution.
+        if name.text() == "arg_keys"
+            && node.kind() == SyntaxKind::NameExpr
+            && is_callee(node)
+            && node
+                .ancestors()
+                .any(|part| part.kind() == SyntaxKind::RequiresClause)
+        {
             return None;
         }
         self.lookup(&name)
