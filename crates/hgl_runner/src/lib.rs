@@ -39,6 +39,8 @@
 mod annotation;
 mod owner;
 
+use std::collections::HashSet;
+
 use hgl_analyser::{ParsedFile, Program, analyse};
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location, Severity};
 use hgl_source::{FileId, SourceMap};
@@ -69,8 +71,8 @@ pub trait Executor {
 #[derive(Debug, Clone, Default)]
 pub struct Selection {
     /// Names of tests, as `name` or `module.path::name`. When empty,
-    /// every test is selected. A rejection case owned by a declaration
-    /// or an import is always selected.
+    /// every name is selected. Declaration and import rejection cases
+    /// are independent of this filter.
     pub tests: Vec<String>,
     /// Select no executable case: a rejection-only run (TST-15).
     pub rejections_only: bool,
@@ -78,13 +80,46 @@ pub struct Selection {
     /// is run only when it is asked for; a run of a module's tests
     /// leaves it out." One that `tests` names is asked for as well.
     pub integration: bool,
+    /// Select only integration tests, including the rejection cases they own.
+    pub integration_only: bool,
+    /// Display names of source files in the selected paths. `None` means
+    /// there is no path filter. An empty set selects no cases.
+    pub source_files: Option<HashSet<String>>,
 }
 
 impl Selection {
     /// Whether a named test is selected (TST-14, TST-17).
     pub fn selects(&self, test: &str, integration: bool) -> bool {
+        if self.integration_only && !integration {
+            return false;
+        }
         let named = self.tests.iter().any(|selector| matches(selector, test));
-        named || (self.tests.is_empty() && (!integration || self.integration))
+        named
+            || (self.tests.is_empty()
+                && (!integration || self.integration || self.integration_only))
+    }
+
+    /// Whether a case satisfies the source, name and kind filters.
+    pub fn selects_case(
+        &self,
+        identity: &str,
+        kind: CaseKind,
+        selection: CaseSelection,
+        file: &str,
+    ) -> bool {
+        if (self.rejections_only && kind == CaseKind::Executable)
+            || self
+                .source_files
+                .as_ref()
+                .is_some_and(|files| !files.contains(file))
+        {
+            return false;
+        }
+        match selection {
+            CaseSelection::Always => !self.integration_only,
+            // TST-17: a rejection case follows the kind of its owning test.
+            CaseSelection::Named { integration } => self.selects(identity, integration),
+        }
     }
 
     /// Any selectors that name neither an executable nor a rejection test.
@@ -160,10 +195,12 @@ pub struct Case {
     /// file, the line the owner starts on and a few words for it
     /// otherwise.
     pub identity: String,
+    /// The source where the case is written, including an example's comment.
+    pub file: FileId,
     /// Its kind.
     pub kind: CaseKind,
     /// Whether this case can be selected by name and is an integration test.
-    /// Declaration- and import-owned cases are always selected.
+    /// Declaration- and import-owned cases ignore named selectors.
     pub selection: CaseSelection,
     /// What became of it.
     pub outcome: Outcome,
@@ -172,7 +209,7 @@ pub struct Case {
 /// How a case is selected after discovery (TST-14, TST-17).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CaseSelection {
-    /// A declaration- or import-owned rejection that always runs.
+    /// A declaration- or import-owned rejection independent of name filters.
     Always,
     /// A named executable or rejection test.
     Named {
@@ -384,20 +421,15 @@ fn prepare_cases(
 
     // The tests there are to select: those of the surviving source, to
     // run, and those that own a rejection case.
-    let tests = || {
-        program.modules.iter().flat_map(|module| {
+    let executable: Vec<_> = program
+        .modules
+        .iter()
+        .flat_map(|module| {
             module
                 .tests
                 .iter()
-                .map(|test| (format!("{}::{}", module.path, test.name), test.integration))
+                .map(|test| (format!("{}::{}", module.path, test.name), test))
         })
-    };
-    let executable: Vec<String> = tests().map(|(test, _)| test).collect();
-    // TST-17: the integration tests, which a run leaves out unless it
-    // is asked for them.
-    let integration: Vec<String> = tests()
-        .filter(|(_, integration)| *integration)
-        .map(|(test, _)| test)
         .collect();
     let identity = |owner: &Owner| match &owner.test {
         Some((module, name)) => format!("{module}::{name}"),
@@ -418,12 +450,15 @@ fn prepare_cases(
     // TST-14: "Unknown selectors reject."
     let names: Vec<_> = executable
         .iter()
-        .chain(&rejected_tests)
+        .map(|(identity, _)| identity)
+        .chain(rejected_tests.iter())
         .map(String::as_str)
         .collect();
     report.problems.extend(selection.unknown(&names));
-    let is_integration = |test: &str| integration.iter().any(|found| found == test);
-    let selected = |test: &str| complete || selection.selects(test, is_integration(test));
+    let selected = |identity: &str, kind, case_selection, file| {
+        complete
+            || selection.selects_case(identity, kind, case_selection, sources.file(file).name())
+    };
 
     // TST-14: "Invalid metadata, ambiguous boundaries, or surviving-source
     // errors prevent execution."
@@ -439,9 +474,18 @@ fn prepare_cases(
     for &owner in &owning {
         let candidate = &candidates[owner];
         let identity = identity(candidate);
-        // TST-14: "Named selectors include rejection tests;
-        // declaration-owned cases always run."
-        if candidate.test.is_some() && !selected(&identity) {
+        let case_selection = match candidate.test {
+            Some(_) => CaseSelection::Named {
+                integration: candidate.integration,
+            },
+            None => CaseSelection::Always,
+        };
+        if !selected(
+            &identity,
+            CaseKind::Rejection,
+            case_selection,
+            candidate.file,
+        ) {
             continue;
         }
         let mut reported = Diagnostics::new();
@@ -471,16 +515,11 @@ fn prepare_cases(
                 None => true,
             }
         });
-        let selection = match candidate.test {
-            Some(_) => CaseSelection::Named {
-                integration: is_integration(&identity),
-            },
-            None => CaseSelection::Always,
-        };
         report.cases.push(Case {
             identity,
+            file: candidate.file,
             kind: CaseKind::Rejection,
-            selection,
+            selection: case_selection,
             outcome: if missing.is_empty() && unexpected.is_empty() {
                 Outcome::Passed
             } else {
@@ -493,15 +532,21 @@ fn prepare_cases(
     }
 
     // The executable cases will be run by the target where one is named.
-    if complete || !selection.rejections_only {
-        for test in executable.into_iter().filter(|test| selected(test)) {
-            let selection = CaseSelection::Named {
-                integration: is_integration(&test),
-            };
+    for (identity, test) in executable {
+        let case_selection = CaseSelection::Named {
+            integration: test.integration,
+        };
+        if selected(
+            &identity,
+            CaseKind::Executable,
+            case_selection,
+            test.at.file,
+        ) {
             report.cases.push(Case {
-                identity: test,
+                identity,
+                file: test.at.file,
                 kind: CaseKind::Executable,
-                selection,
+                selection: case_selection,
                 outcome: Outcome::NotRun(NO_TARGET.to_string()),
             });
         }

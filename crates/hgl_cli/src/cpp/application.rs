@@ -32,6 +32,7 @@ use std::time::Duration;
 use hgl_cpp::application_stem;
 
 use super::build::Workspace;
+use super::sdk::Hgraph;
 
 /// What became of an application given to [`launch`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,13 +134,17 @@ pub(super) struct DebugLaunch {
     arguments: [String; 2],
     working_directory: String,
     environment: serde_json::Map<String, serde_json::Value>,
+    /// hgraph's libraries the build links ([`Hgraph::json`]).
+    hgraph: serde_json::Value,
 }
 
-/// The launch description consumed by a native debugger.
+/// The launch description consumed by a native debugger, of a build that
+/// links `hgraph`.
 pub(super) fn debug_launch(
     workspace: &Workspace,
     path: &str,
     libraries: Libraries,
+    hgraph: &Hgraph,
 ) -> Result<DebugLaunch, String> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut environment = serde_json::Map::new();
@@ -160,6 +165,7 @@ pub(super) fn debug_launch(
         arguments: [results, "--debug-console".to_string()],
         working_directory: path_text(&cwd)?,
         environment,
+        hgraph: hgraph.json(),
     })
 }
 

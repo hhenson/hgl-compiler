@@ -240,4 +240,4 @@ transpiler: done
 
 runner: done
 
-- An integration test is left out of a run unless `--integration` asks for them or `--test` names it
+- An integration test and its rejection case are selected only when asked for. `--integration` adds integration cases, `--test` names one, and `--integration-only` selects only integration cases.

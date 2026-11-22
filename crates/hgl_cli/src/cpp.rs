@@ -80,7 +80,12 @@ impl BuildSession {
         let cache = build::cache()?;
         let workspace = Workspace::open(keep, roots, &cache, debug)?;
         let previous = PreviousBuild::read(&workspace);
-        let mut toolchain = match Toolchain::find() {
+        let found = if debug {
+            Toolchain::find_debug()
+        } else {
+            Toolchain::find()
+        };
+        let toolchain = match found {
             Ok(toolchain) => toolchain,
             Err(reason) => {
                 PreviousBuild::invalidate(&workspace, previous.as_ref())?;
@@ -88,7 +93,9 @@ impl BuildSession {
             }
         };
         if debug {
-            toolchain.enable_debug();
+            // Said before the build, which may fail. Standard output is
+            // left to what a debugger's integration reads.
+            eprintln!("hgl: {}", toolchain.hgraph().said());
         }
         let toolchain_key = toolchain.key();
         let jobs = std::env::var(build::JOBS)
@@ -187,12 +194,16 @@ impl BuildSession {
 }
 
 /// Builds the executable cases on a miss and runs the selected cases.
-pub(super) fn test(arguments: &TestArgs, selection: &Selection) -> ExitCode {
+pub(super) fn test(
+    arguments: &TestArgs,
+    selection: &Selection,
+    paths: Option<&[PathBuf]>,
+) -> ExitCode {
     let interrupt = match Interrupt::watch(None) {
         Ok(interrupt) => interrupt,
         Err(reason) => return commands::build_error(reason),
     };
-    let (inputs, session) = match commands::BuildRequest::tests(arguments).start() {
+    let (inputs, session) = match commands::BuildRequest::tests(arguments).start(paths) {
         Ok(commands::BuildStart::Hit(session, built)) => {
             let cases = built.program.tests.as_deref().unwrap_or_default();
             let ready = interrupt.finish();
@@ -227,12 +238,14 @@ pub(super) fn test(arguments: &TestArgs, selection: &Selection) -> ExitCode {
         Ok(chosen) => chosen,
         Err(problems) => return super::print_problems(&sources, &problems),
     };
+    if chosen.is_empty() {
+        return super::print_empty_test_selection(selection.source_files.is_some());
+    }
     if !chosen
         .iter()
         .any(|case| matches!(case.action, Action::Run(_)))
     {
         if arguments.keep.is_some()
-            && !chosen.is_empty()
             && !selection.rejections_only
             && let Ok((session, _)) = &session
             && interrupt.check().is_ok()
@@ -276,6 +289,9 @@ fn show_tests(
     run: Result<(&BuildSession, &Description), &str>,
 ) -> ExitCode {
     match select_tests(cases, selection) {
+        Ok(chosen) if chosen.is_empty() => {
+            super::print_empty_test_selection(selection.source_files.is_some())
+        }
         Ok(chosen) => print_cases(&chosen, run),
         Err(problems) => super::print_problems(&SourceMap::new(), &problems),
     }

@@ -71,6 +71,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Operator, "impl.unknown_operator"),
     (Category::Operator, "impl.pack"),
     (Category::Operator, "impl.option_kind"),
+    (Category::Operator, "property.duplicate"),
     (Category::Name, "native.missing_declaration"),
     (Category::Phase, "native.const_hook"),
     (Category::Phase, "native.hook_without_when"),

@@ -5,35 +5,77 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as pause } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 
-const profile = await mkdtemp(join(tmpdir(), 'q457-browser-'));
+const waitSeconds = 60;
+const profile = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), 'hgl-doc-browser-'));
 const site = process.argv[2];
 const chrome = spawn(process.env.CHROME || 'google-chrome', [
   '--headless', '--disable-gpu', '--disable-background-networking', '--no-first-run',
   '--remote-debugging-port=0', '--user-data-dir=' + profile, 'about:blank',
-], { stdio: 'ignore' });
-const pause = () => new Promise(resolve => setTimeout(resolve, 50));
+], { stdio: ['ignore', 'pipe', 'pipe'] });
+let chromeOutput = '';
+for (const stream of [chrome.stdout, chrome.stderr]) {
+  stream.setEncoding('utf8');
+  stream.on('data', chunk => {
+    chromeOutput = (chromeOutput + chunk).slice(-16_000);
+  });
+}
+let launchError;
+chrome.on('error', error => { launchError = error; });
+const chromeClosed = new Promise(resolve => chrome.once('close', resolve));
+
+async function waitFor(action, probe) {
+  let timedOut = false;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(Error(`Chrome did not ${action} within ${waitSeconds} seconds.`));
+    }, waitSeconds * 1000);
+  });
+  async function poll() {
+    while (!timedOut) {
+      if (launchError) throw Error(`Chrome could not start: ${launchError.message}`, { cause: launchError });
+      if (chrome.exitCode !== null || chrome.signalCode !== null) {
+        await chromeClosed;
+        throw Error(`Chrome exited (${chrome.signalCode ?? chrome.exitCode}) before it could ${action}.`);
+      }
+      const ready = await probe();
+      if (ready) return ready;
+      await pause(50);
+    }
+  }
+  try {
+    return await Promise.race([poll(), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 let socket;
 const history = [];
 try {
-  let port;
-  for (let attempt = 0; attempt < 100 && !port; ++attempt) {
+  const port = await waitFor('report a DevTools port', async () => {
     try {
-      port = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0];
-    } catch {
-      await pause();
+      const [port] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n');
+      if (/^\d+$/.test(port)) return port;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
     }
-  }
-  assert.ok(port);
-  const tabs = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json();
-  const tab = tabs.find(candidate => candidate.type === 'page');
-  assert.ok(tab);
+  });
+  const tab = await waitFor('report a DevTools page', async () => {
+    const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: AbortSignal.timeout(waitSeconds * 1000),
+    })).json();
+    return tabs.find(candidate => candidate.type === 'page');
+  });
   socket = new WebSocket(tab.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    socket.addEventListener('open', resolve, { once: true });
-    socket.addEventListener('error', reject, { once: true });
+  await waitFor('open its DevTools connection', () => {
+    if (socket.readyState === WebSocket.CLOSED) throw Error('Chrome closed its DevTools connection.');
+    return socket.readyState === WebSocket.OPEN;
   });
   socket.addEventListener('message', ({data}) => {
     const message = JSON.parse(data);
@@ -59,13 +101,6 @@ try {
     if (result.exceptionDetails) throw Error(JSON.stringify(result.exceptionDetails));
     return result.result.value;
   }
-  async function when(expression) {
-    for (let attempt = 0; attempt < 120; ++attempt) {
-      if (await evaluate(expression)) return;
-      await pause();
-    }
-    throw Error('Browser did not satisfy ' + expression);
-  }
   await send('Runtime.enable');
   await send('Log.enable');
   await send('Network.enable');
@@ -79,15 +114,20 @@ try {
     features: [{name: 'prefers-color-scheme', value: 'dark'}],
   });
   await send('Page.navigate', { url: pathToFileURL(join(site, 'modules/mod-guide.api.html')).href });
-  await when('Boolean(document.querySelector(".formula math") && document.querySelector(".formula-block math") && document.querySelectorAll(".diagram svg").length === 2)');
+  await waitFor('render the formulas and diagrams', () => evaluate(`Boolean(
+    document.querySelector('.formula math') &&
+    document.querySelectorAll('.formula-block math').length === 2 &&
+    document.querySelectorAll('.diagram svg').length === 3
+  )`));
   const rendered = await evaluate(`({
     inline: document.querySelector('.formula math').textContent,
+    formulas: [...document.querySelectorAll('.formula-block math annotation')].map(formula => formula.textContent.trim()),
     diagrams: [...document.querySelectorAll('.diagram svg')].map(svg => ({
       text: svg.textContent,
       usesHtml: Boolean(svg.querySelector('foreignObject')),
       links: [...svg.querySelectorAll('a')].map(link => link.getAttribute('href') || link.getAttribute('xlink:href')),
     })),
-    formulaFallback: document.querySelector('code.language-math').textContent.trim(),
+    formulaFallbacks: [...document.querySelectorAll('code.language-math')].map(code => code.textContent.trim()),
     diagramFallback: document.querySelector('code.language-mermaid').textContent.trim(),
     unhandled: document.querySelector('code.formula-inline'),
   })`);
@@ -99,7 +139,16 @@ try {
   assert.equal(protectedDiagram.usesHtml, false);
   assert.doesNotMatch(protectedDiagram.text, /hgl-theme-override|hgl-font-override|#010203/i);
   assert.ok(protectedDiagram.links.every(link => link === null || link.startsWith('#')));
-  assert.equal(rendered.formulaFallback, '\\badHglCommand{b}');
+  const journey = rendered.diagrams[2];
+  assert.match(journey.text, /Read notes/);
+  assert.equal(journey.usesHtml, false);
+  assert.deepEqual(rendered.formulas, ['a^2+b^2=c^2', '\\kern{-1em}']);
+  assert.deepEqual(rendered.formulaFallbacks, [
+    '\\badHglCommand{b}',
+    '\\rule[-100000em]{1em}{1em}',
+    '\\kern{-100000em}',
+    '\\raisebox{100000em}{x}',
+  ]);
   assert.equal(rendered.diagramFallback, 'not a diagram');
   assert.equal(rendered.unhandled, null);
   const layout = await evaluate(`({
@@ -110,7 +159,8 @@ try {
   assert.deepEqual(layout, {viewport: 390, width: 390, dark: true});
 
   await send('Page.navigate', { url: pathToFileURL(join(site, 'index.html')).href });
-  await when('Boolean(document.querySelector("#declaration-search")?.hidden === false)');
+  await waitFor('load the declaration search index', () =>
+    evaluate('document.querySelector("#declaration-search")?.hidden === false'));
   const search = await evaluate(`(() => {
     const query = document.querySelector('#declaration-query');
     const status = document.querySelector('[role=status]');
@@ -134,14 +184,22 @@ try {
   assert.ok(requested.every(({params}) => params.request.url.startsWith('file:')), 'network request');
   console.log('Offline browser checks passed for math, plain Mermaid labels, secure diagram settings, source fallbacks, search, and local assets.');
 } catch (error) {
-  console.error(history.filter(({method}) => method === 'Runtime.exceptionThrown' || method === 'Log.entryAdded').slice(-15));
+  console.error(`Chrome output:\n${chromeOutput.trim() || '(none)'}`);
+  const messages = history.filter(({method}) => method === 'Runtime.exceptionThrown' || method === 'Log.entryAdded');
+  if (messages.length) console.error(messages.slice(-15));
   throw error;
 } finally {
   socket?.close();
-  if (chrome.exitCode === null && chrome.signalCode === null) {
-    const closed = new Promise(resolve => chrome.once('close', resolve));
-    chrome.kill();
-    await closed;
+  chrome.kill();
+  const forceExit = setTimeout(() => {
+    chrome.kill('SIGKILL');
+    chrome.stdout.destroy();
+    chrome.stderr.destroy();
+  }, 5000);
+  try {
+    await chromeClosed;
+  } finally {
+    clearTimeout(forceExit);
   }
   await rm(profile, { recursive: true, force: true, maxRetries: 5 });
 }

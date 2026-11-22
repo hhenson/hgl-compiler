@@ -13,6 +13,8 @@
   }
 
   const math = document.querySelectorAll("code.formula-inline, code[data-renderer=math]");
+  const maxMathSize = 20;
+  const mathDimensions = ["height", "depth", "width", "lspace", "voffset"];
   if (math.length) {
     load("vendor/katex/katex.min.js").then(() => {
       for (const source of math) {
@@ -26,9 +28,20 @@
             trust: false,
             strict: "error",
             maxExpand: 1000,
-            maxSize: 20,
+            maxSize: maxMathSize,
             throwOnError: true,
           });
+          // KaTeX's cap can leave signed offsets and spacing outside
+          // the bound. Check their converted lengths before publishing.
+          const oversized = [...rendered.querySelectorAll("mspace, mpadded")].some(element =>
+            mathDimensions.some(name => {
+              const size = element.getAttribute(name);
+              return size?.endsWith("em") && Math.abs(Number.parseFloat(size)) > maxMathSize;
+            })
+          );
+          if (oversized) {
+            continue;
+          }
           if (displayMode) {
             source.parentElement.replaceWith(rendered);
           } else {
@@ -58,9 +71,10 @@
         suppressErrorRendering: true,
         theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default",
         htmlLabels: false,
+        journey: {textPlacement: "tspan"},
         secure: [...new Set([
           ...mermaid.mermaidAPI.defaultConfig.secure,
-          "htmlLabels", "themeCSS", "themeVariables", "fontFamily", "securityLevel",
+          "htmlLabels", "textPlacement", "themeCSS", "themeVariables", "fontFamily", "securityLevel",
         ])],
       });
       const template = document.createElement("template");

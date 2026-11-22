@@ -153,23 +153,18 @@ fn reads_of(program: &Program, visited: &Expr, reads: &mut Vec<Part>) {
 /// generic value argument (GEN-8).
 fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
     let module = &program.modules[index];
-    // Where each declaration is written: for each file, the start, the
-    // end and the position of each of its declarations, in order of
-    // start. An example's helpers share positions with the comment of
-    // another declaration; they are outside that declaration's code (SDOC-6).
-    let mut written: HashMap<FileId, Vec<(u32, u32, usize)>> = HashMap::new();
+    // Within each file, order source ranges separately for ordinary
+    // declarations and example-local declarations. An example's code
+    // shares the positions of its owner's comment (SDOC-6).
+    let mut written = HashMap::new();
     for (position, declaration) in module.declarations.iter().enumerate() {
-        if declaration
+        let in_example = declaration
             .test_owner
-            .is_some_and(|test| module.tests[test].documentation_example)
-        {
-            continue;
-        }
-        let span = declaration.syntax.span();
+            .is_some_and(|test| module.tests[test].documentation_example);
         written
-            .entry(module.files[declaration.file].file)
-            .or_default()
-            .push((span.start, span.end, position));
+            .entry((module.files[declaration.file].file, in_example))
+            .or_insert_with(Vec::new)
+            .push((declaration.syntax.span(), position));
     }
     for declarations in written.values_mut() {
         declarations.sort_unstable();
@@ -186,13 +181,13 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
         })
         .collect();
     // The part a name at `at` of `file` is written in.
-    let owner = |file: FileId, at: u32| -> Option<Part> {
-        let declarations = written.get(&file)?;
+    let owner = |file: FileId, at: u32, in_example: bool| -> Option<Part> {
+        let declarations = written.get(&(file, in_example))?;
         // `partition_point` gives how many start at or before `at`: the
         // last of them is the only one that can hold it.
-        let before = declarations.partition_point(|&(start, _, _)| start <= at);
-        let &(_, end, position) = declarations.get(before.checked_sub(1)?)?;
-        if at >= end {
+        let before = declarations.partition_point(|&(span, _)| span.start <= at);
+        let &(span, position) = declarations.get(before.checked_sub(1)?)?;
+        if at >= span.end {
             return None;
         }
         let declared = (index, position);
@@ -212,13 +207,7 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
     };
 
     let mut found = Vec::new();
-    // SDOC-6: a use at a comment's location belongs to its example's
-    // test, so it cannot add a dependency to the documented declaration.
-    for used in module
-        .uses
-        .iter()
-        .filter(|used| !used.documentation_example)
-    {
+    for used in &module.uses {
         let Binding::Declarations {
             module: bound,
             declarations,
@@ -236,7 +225,7 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
         if constants.is_empty() {
             continue;
         }
-        if let Some(part) = owner(used.at.file, used.at.span.start) {
+        if let Some(part) = owner(used.at.file, used.at.span.start, used.documentation_example) {
             found.push((part, constants));
         }
     }

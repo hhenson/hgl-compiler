@@ -525,7 +525,23 @@ fn a_site_manifest_cannot_claim_an_unrelated_file() {
 }
 
 #[test]
-fn concurrent_site_rebuilds_leave_one_complete_site() {
+fn a_legacy_site_reuses_its_marker() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    input(&source, "\n");
+    let site = root.path().join("hgl-doc");
+    fs::create_dir(&site).unwrap();
+    let marker = site.join(".hgl-doc");
+    let version = "hgl doc HTML site version 1\n";
+    fs::write(&marker, version).unwrap();
+
+    write_site(root.path(), &source, &[]);
+    assert!(site.join("index.html").is_file());
+    assert_eq!(fs::read_to_string(marker).unwrap(), version);
+}
+
+#[test]
+fn concurrent_first_writes_and_rebuilds_leave_one_complete_site() {
     let root = tempdir().unwrap();
     for (file, module) in [("left.hgl", "guide.left"), ("right.hgl", "guide.right")] {
         fs::write(
@@ -536,12 +552,14 @@ fn concurrent_site_rebuilds_leave_one_complete_site() {
     }
     let left = root.path().join("left.hgl");
     let right = root.path().join("right.hgl");
-    let site = write_site(root.path(), &left, &[]);
-    fs::create_dir(root.path().join("expected-left")).unwrap();
+    let site = root.path().join("hgl-doc");
+    fs::create_dir(&site).unwrap();
     write_site(root.path(), &left, &["--out", "expected-left"]);
     write_site(root.path(), &right, &["--out", "expected-right"]);
+    let expected_left = snapshot(&root.path().join("expected-left"));
+    let expected_right = snapshot(&root.path().join("expected-right"));
 
-    let rebuild = |source: &Path| {
+    let publish = |source: &Path| {
         Command::new(env!("CARGO_BIN_EXE_hgl"))
             .current_dir(root.path())
             .arg("doc")
@@ -550,19 +568,18 @@ fn concurrent_site_rebuilds_leave_one_complete_site() {
             .spawn()
             .unwrap()
     };
-    let left_build = rebuild(&left);
-    let right_build = rebuild(&right);
-    for child in [left_build, right_build] {
-        let output = child.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    // The first pair both target the empty directory. The second pair
+    // both replace a site installed by a previous run.
+    for _ in 0..2 {
+        for child in [publish(&left), publish(&right)] {
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let actual = snapshot(&site);
+        assert!(actual == expected_left || actual == expected_right);
     }
-
-    let actual = snapshot(&site);
-    let expected_left = snapshot(&root.path().join("expected-left"));
-    let expected_right = snapshot(&root.path().join("expected-right"));
-    assert!(actual == expected_left || actual == expected_right);
 }

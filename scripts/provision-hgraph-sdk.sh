@@ -27,10 +27,18 @@
 #                      holds more, Arrow among it, does: nothing more is used.
 #   HGL_HGRAPH_SOURCE  a checkout of hgraph at TAG to build. Without it, TAG
 #                      is cloned from GitHub into a temporary directory.
+#   HGL_HGRAPH_WORK_DIR  a new scratch directory to use and remove after the
+#                      build. Without it, a scratch directory is made in TMPDIR.
 #   CXX                the C++ compiler (default: g++ on Linux, clang++ on
 #                      macOS).
 #   HGL_HGRAPH_INSTALL_RPATH  where SDK libraries look for dependencies.
 #                      Defaults to HGL_HGRAPH_DEPS/lib.
+#   HGL_HGRAPH_BUILD_TYPE  `Release` (the default), or `Debug`: no
+#                      optimisation and debug information, the build `hgl`
+#                      uses for a debug build where it is given one
+#                      (docs/architecture.md, "The build driver"). Name the
+#                      source with HGL_HGRAPH_SOURCE for a debugger to show
+#                      it: a clone of the script's own is removed.
 #   HGL_BUILD_JOBS     how many jobs the build runs at once (default: every
 #                      processor).
 #   MAMBA_EXE          micromamba, where it is not `micromamba` on the path.
@@ -57,13 +65,17 @@
 # information, and an exception thrown in one library is caught in another.
 #
 # DIR/hgl-sdk.txt says what was built: the tag, its commit, how it was
-# configured (`arrow=off`), the compiler and the dependency prefix. It is
+# configured (`arrow=off`, and `build-type=Debug` for a debug build), the
+# compiler and the dependency prefix. It is
 # written last, so that a DIR without it holds no whole SDK, and an SDK of
 # the tag built otherwise, with Arrow, is not taken for this one.
 
 set -euo pipefail
 
-source "$(dirname -- "${BASH_SOURCE[0]}")/hgraph-dependencies.sh"
+# This script's own directory, which holds the scripts it uses.
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$here/hgraph-dependencies.sh"
+source "$here/gather-dsyms.sh"
 
 # The dependency prefix made where there is none: what hgraph's build
 # without Arrow finds as packages (fmt 11 or later, spdlog 1.15 or later,
@@ -134,13 +146,22 @@ main() {
     dir=$(absolute "$2")
     deps=$(absolute "$HGL_HGRAPH_DEPS")
     local stamp=$dir/hgl-sdk.txt
+    local build_type=${HGL_HGRAPH_BUILD_TYPE:-Release}
+    case $build_type in
+        Release | Debug) ;;
+        *) fail "HGL_HGRAPH_BUILD_TYPE is $build_type: it is Release or Debug" ;;
+    esac
+    # A Release build's stamp has no such line, as before there was a choice.
+    local build_stamp=
+    [[ $build_type == Release ]] || build_stamp="build-type=$build_type"
 
     # An SDK this script installed for the tag, configured as it configures
     # one, is kept; anything else in the way is not replaced.
     local rpath_stamp="${HGL_HGRAPH_INSTALL_RPATH:+install-rpath=$HGL_HGRAPH_INSTALL_RPATH}"
     if [[ -f $stamp ]] && grep -qx "tag=$tag" "$stamp" && grep -qxF "$CONFIGURATION" "$stamp" &&
         grep -qxF "dependencies=$deps" "$stamp" &&
-        [[ $(sed -n '/^install-rpath=/p' "$stamp") == "$rpath_stamp" ]]; then
+        [[ $(sed -n '/^install-rpath=/p' "$stamp") == "$rpath_stamp" ]] &&
+        [[ $(sed -n '/^build-type=/p' "$stamp") == "$build_stamp" ]]; then
         say "$dir already holds hgraph $tag's SDK"
         return 0
     fi
@@ -148,7 +169,14 @@ main() {
         fail "$dir holds no whole SDK of hgraph $tag; remove it or name another directory"
     fi
 
-    work=$(mktemp -d)
+    if [[ -n ${HGL_HGRAPH_WORK_DIR:-} ]]; then
+        work=$(absolute "$HGL_HGRAPH_WORK_DIR")
+        mkdir -- "$work" || fail "the work directory must be new: $work"
+    else
+        # A template keeps the ordinary build in the caller's temporary directory.
+        work=$(mktemp -d "${TMPDIR:-/tmp}/provision-hgraph-sdk.XXXXXX")
+    fi
+    work=$(cd -- "$work" && pwd -P)
     trap 'rm -rf -- "$work"' EXIT
 
     # The dependency prefix, made where it is not there.
@@ -208,12 +236,19 @@ main() {
 
     # Every processor: `getconf` counts them on Linux and on macOS alike.
     local jobs=${HGL_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}
-    say "building hgraph $tag ($commit) with $compiler, $jobs jobs"
+    say "building hgraph $tag ($commit), $build_type, with $compiler, $jobs jobs"
     local started=$SECONDS
+    # On macOS each library's link keeps the objects link-time optimisation
+    # compiles, whose debug information gather_dsyms reads (keep-lto-objects.sh).
+    local -a launcher=()
+    if [[ $platform == Darwin ]]; then
+        launcher=("-DCMAKE_CXX_LINKER_LAUNCHER=$here/keep-lto-objects.sh")
+    fi
     "$cmake" -S "$source" -B "$work/build" -G Ninja \
         -DCMAKE_MAKE_PROGRAM="$ninja" \
+        ${launcher[@]+"${launcher[@]}"} \
         -DCMAKE_CXX_COMPILER="$cxx" \
-        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_BUILD_TYPE="$build_type" \
         -DCMAKE_PREFIX_PATH="$deps" \
         -DCMAKE_INSTALL_PREFIX="$dir" \
         -DCMAKE_INSTALL_RPATH="${HGL_HGRAPH_INSTALL_RPATH:-$deps/lib}" \
@@ -230,6 +265,12 @@ main() {
         -DCMAKE_DISABLE_FIND_PACKAGE_date=ON
     "$cmake" --build "$work/build" --parallel "$jobs"
     "$cmake" --install "$work/build"
+    # A library's debug information on macOS, which a Debug build has and a
+    # build with `-g` in CXXFLAGS, into a dSYM bundle beside it while the
+    # objects that hold it are here.
+    if [[ $platform == Darwin ]]; then
+        gather_dsyms "$dir/lib"
+    fi
 
     # date/tz can be built into the shared runtime and is not installed
     # separately. Keep its notice alongside hgraph's if it was fetched.
@@ -244,6 +285,9 @@ main() {
         "$deps" >"$stamp"
     if [[ -n ${HGL_HGRAPH_INSTALL_RPATH:-} ]]; then
         printf 'install-rpath=%s\n' "$HGL_HGRAPH_INSTALL_RPATH" >>"$stamp"
+    fi
+    if [[ -n $build_stamp ]]; then
+        printf '%s\n' "$build_stamp" >>"$stamp"
     fi
     say "installed hgraph $tag's SDK into $dir in $((SECONDS - started)) s"
 }
