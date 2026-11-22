@@ -156,6 +156,7 @@ analyser: partial
 - Function and operator calls check the cardinality of captured arguments against the value parameter and its generic type pack. Explicit positional type sequences also constrain the argument count. The HIR records the resolved sequence of types for each captured type pack.
 - A function's `each T in types(Ts)` checks its condition for every resolved type in the pack. An empty capture satisfies it. Equality and membership can test the bound type by name. A verdict the analyser cannot give rejects as untold (GEN-3).
 - GEN-17 adds `each` over pack keys. Named operator requirements bound by `each` and evaluation of `any`, including its generic binding rule (#367), are pending.
+- An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
 transpiler: partial
 

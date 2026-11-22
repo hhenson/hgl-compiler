@@ -1052,8 +1052,8 @@ impl Resolver<'_> {
         // prelude would bind is not known.
         //
         // GEN-9, GEN-10: `types(Ts)` and `schemas(pack)` are forms of
-        // the language, which no declaration binds and no pass reads
-        // yet. Each is left as it was, listed and not reported.
+        // the language. Leave these names for the passes that check
+        // what each form supplies or where it is used.
         let form = matches!(name, "types" | "schemas");
         if self.program.core().is_some() && !form {
             self.diagnostics.emit(error(
