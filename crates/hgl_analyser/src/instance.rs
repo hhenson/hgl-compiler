@@ -586,23 +586,22 @@ impl Program {
                 function.template = *template;
             }
             let specialization = &mut function.specialization;
-            specialization
-                .generics
-                .extend(
-                    instance
-                        .types
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, (_, value))| {
-                            // A type pack's slot holds a placeholder, while its
-                            // concrete type sequence and keys are separate.
-                            (!instance
-                                .type_packs
-                                .iter()
-                                .any(|pack| pack.parameter == index))
-                            .then(|| (*value).clone())
-                        }),
-                );
+            // A type pack's slot holds a placeholder. Keep its concrete
+            // type sequence and keys separately.
+            let type_pack = |index| {
+                instance
+                    .type_packs
+                    .iter()
+                    .any(|pack| pack.parameter == index)
+            };
+            specialization.generics.extend(
+                instance
+                    .types
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| !type_pack(*index))
+                    .map(|(_, (_, value))| (*value).clone()),
+            );
             specialization
                 .type_packs
                 .extend_from_slice(instance.type_packs);
