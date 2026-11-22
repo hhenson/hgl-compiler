@@ -58,6 +58,33 @@ impl<'a> BuildRequest<'a> {
         }
     }
 
+    /// The same test inventory in a persistent debug workspace.
+    pub(super) fn debug_tests(arguments: &'a TestArgs, directory: &'a Path) -> Self {
+        Self {
+            keep: Some(directory),
+            debug: true,
+            ..Self::tests(arguments)
+        }
+    }
+
+    /// Opens the workspace and derives its key from the input snapshot.
+    pub(super) fn keyed_session(
+        &self,
+        inputs: &ProgramSources,
+    ) -> Result<(BuildSession, String), String> {
+        let session = BuildSession::open(self.roots, self.keep, self.debug)?;
+        self.with_key(session, inputs)
+    }
+
+    fn with_key(
+        &self,
+        session: BuildSession,
+        inputs: &ProgramSources,
+    ) -> Result<(BuildSession, String), String> {
+        let key = session.key(inputs, self.limits, &self.replacements)?;
+        Ok((session, key))
+    }
+
     pub(super) fn start(&self, paths: Option<&[PathBuf]>) -> Result<BuildStart, ExitCode> {
         let session = BuildSession::open(self.roots, self.keep, self.debug);
         let inputs = match paths {
@@ -73,10 +100,7 @@ impl<'a> BuildRequest<'a> {
                 return Err(status);
             }
         };
-        let session = session.and_then(|session| {
-            let key = session.key(&inputs, self.limits, &self.replacements)?;
-            Ok((session, key))
-        });
+        let session = session.and_then(|session| self.with_key(session, &inputs));
         let session = match session {
             Ok((mut session, key)) => {
                 if (!self.compile_commands || session.workspace.manifest().is_file())
@@ -119,7 +143,7 @@ impl<'a> BuildRequest<'a> {
         ))
     }
 
-    fn prepare(
+    pub(super) fn prepare(
         &self,
         inputs: &ProgramSources,
     ) -> Result<(Output, plan::Program, Option<String>), ExitCode> {
@@ -197,7 +221,12 @@ impl<'a> BuildRequest<'a> {
             };
             Some((path, line))
         };
-        hgl_cpp::transpile_with_positions(program, &position, &mut Diagnostics::new())
+        let mut unwritten = Diagnostics::new();
+        if self.debug {
+            hgl_cpp::transpile_for_debugger(program, &position, &mut unwritten)
+        } else {
+            hgl_cpp::transpile_with_positions(program, &position, &mut unwritten)
+        }
     }
 
     fn failed(&self, path: Option<&str>, reason: String) -> ExitCode {

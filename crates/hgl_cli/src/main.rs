@@ -199,6 +199,12 @@ struct TestArgs {
     #[arg(long, value_enum)]
     target: Option<Target>,
 
+    /// Build the selected tests with native debug symbols. Print a JSON
+    /// launch plan for the modules without starting any test. Reuse DIR
+    /// on later calls.
+    #[arg(long, value_name = "DIR", requires = "target", conflicts_with = "keep")]
+    debug_build: Option<PathBuf>,
+
     /// Build the program in this directory, which keeps what the target
     /// wrote. With none, it is built in a directory under the cache
     /// for its source roots, which is kept for the next run.

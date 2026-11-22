@@ -237,7 +237,9 @@ transpiler: done
 
 - Emits integration test runs in both modes and passes inherited run configuration and
   timeouts to the host.
+- Maps integration test statements to their HGL lines in debugger builds.
 
 runner: done
 
 - An integration test and its rejection case are selected only when asked for. `--integration` adds integration cases, `--test` names one, and `--integration-only` selects only integration cases.
+- Debugger launches use the same selectors and give the native host each selected integration test's time limit.

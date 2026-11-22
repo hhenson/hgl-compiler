@@ -296,7 +296,33 @@ pub fn transpile_with_positions(
     position: SourcePosition,
     diagnostics: &mut Diagnostics,
 ) -> Output {
-    transpile_with(program, &runtime::provides, Some(position), diagnostics)
+    transpile_with(
+        program,
+        &runtime::provides,
+        Positions {
+            source: Some(position),
+            tests: false,
+        },
+        diagnostics,
+    )
+}
+
+/// Writes source positions for a native debugger, including the statements
+/// of ordinary and integration tests (TST-17).
+pub fn transpile_for_debugger(
+    program: &Program,
+    position: SourcePosition,
+    diagnostics: &mut Diagnostics,
+) -> Output {
+    transpile_with(
+        program,
+        &runtime::provides,
+        Positions {
+            source: Some(position),
+            tests: true,
+        },
+        diagnostics,
+    )
 }
 
 /// [`transpile`], for a runtime library that defines the native
@@ -318,15 +344,24 @@ pub fn transpile_for(
     transpile_with(
         program,
         provides,
-        file_name.map(|_| &position as SourcePosition),
+        Positions {
+            source: file_name.map(|_| &position as SourcePosition),
+            tests: false,
+        },
         diagnostics,
     )
+}
+
+#[derive(Clone, Copy)]
+struct Positions<'a> {
+    source: Option<SourcePosition<'a>>,
+    tests: bool,
 }
 
 fn transpile_with(
     program: &Program,
     provides: &dyn Fn(&str) -> bool,
-    position: Option<SourcePosition>,
+    positions: Positions<'_>,
     diagnostics: &mut Diagnostics,
 ) -> Output {
     let core = program.core();
@@ -342,7 +377,7 @@ fn transpile_with(
                     program,
                     index,
                     provides,
-                    position,
+                    positions,
                     &instances,
                     &readers,
                     &mut unwritten_in_core,
@@ -352,7 +387,7 @@ fn transpile_with(
                     program,
                     index,
                     provides,
-                    position,
+                    positions,
                     &instances,
                     &readers,
                     diagnostics,
