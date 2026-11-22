@@ -24,7 +24,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
 use crate::program::{Declaration, DeclarationKind, Phase, Program, RUN_CONFIG, Role};
-use crate::syntax::{child, tokens};
+use crate::syntax::{child, test_statements, tokens};
 use crate::types::Detail;
 use crate::{codes, error};
 
@@ -68,13 +68,12 @@ fn phase_of(declaration: &Declaration) -> Option<Phase> {
     Some(if runtime { Phase::Node } else { Phase::Graph })
 }
 
-/// Every node of a function's own body: what stands under `root`,
-/// but for what an anonymous function inside it holds. That is a
-/// function of its own (FN-14), and what it holds is not `root`'s.
+/// Nodes of a function or test's own body. An anonymous function (FN-14)
+/// or a test's named helper (TST-1) has a body of its own.
 fn own_nodes(root: &SyntaxNode) -> Vec<SyntaxNode> {
     fn collect(node: &SyntaxNode, found: &mut Vec<SyntaxNode>) {
         for child in node.children() {
-            if child.kind() == SyntaxKind::FnExpr {
+            if matches!(child.kind(), SyntaxKind::FnExpr | SyntaxKind::FnDecl) {
                 continue;
             }
             found.push(child.clone());
@@ -154,7 +153,9 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
         for test in &module.tests {
             let file = module.files[test.file].file;
             test_body(&test.syntax, file, diagnostics);
-            yield_placement(&test.syntax, file, false, diagnostics);
+            for statement in test_statements(&test.syntax) {
+                yield_placement(&statement, file, false, diagnostics);
+            }
             in_test(&test.syntax, test.integration, file, diagnostics);
         }
         for (syntax, file) in module
@@ -258,12 +259,9 @@ fn in_function(root: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) {
 /// integration test, and in one that is, after another statement or
 /// inside one.
 fn in_test(test: &SyntaxNode, integration: bool, file: FileId, diagnostics: &mut Diagnostics) {
-    let block = child(test, SyntaxKind::Block);
     // The test's leading `inject` statements, which come before its
     // other statements.
-    let leading: Vec<SyntaxNode> = block
-        .iter()
-        .flat_map(|block| block.children())
+    let leading: Vec<SyntaxNode> = test_statements(test)
         .take_while(|statement| statement.kind() == SyntaxKind::InjectDecl)
         .collect();
     for (statement, at) in run_config_injections(test, file) {

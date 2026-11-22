@@ -1,8 +1,9 @@
 //! Lists what a module declares and builds its scopes.
 //!
 //! A module has one declaration scope, shared by all its files (UNIT-1),
-//! and one test scope, made of the unnamed `test { ... }` contexts of all
-//! its files (TST-1). A name is bound once in scope (UNIT-12), with one
+//! and a test scope made of all its unnamed `test { ... }` contexts. Each
+//! named test has its own scope (TST-1). A name is bound once in scope
+//! (UNIT-12), with one
 //! exception: a temporal function and a value function may share a name
 //! (FN-4).
 
@@ -14,8 +15,8 @@ use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
 use crate::program::{
-    Declaration, DeclarationKind, Import, ImportKind, Module, Role, RunStatement, StoreStatement,
-    Test,
+    Declaration, DeclarationKind, Import, ImportKind, Module, Program, Role, RunStatement,
+    StoreStatement, Test,
 };
 use crate::{codes, error};
 
@@ -24,6 +25,7 @@ use crate::{codes, error};
 pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut Diagnostics) {
     let mut walk = Walk {
         declarations: Vec::new(),
+        test_helpers: Vec::new(),
         tests: Vec::new(),
         instantiations: Vec::new(),
         application: module.application,
@@ -107,6 +109,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
         }
     }
     module.declarations = walk.declarations;
+    module.declarations.extend(walk.test_helpers);
     module.tests = walk.tests;
     module.instantiations = walk.instantiations;
     bind_declarations(module, diagnostics);
@@ -228,6 +231,8 @@ fn read_import(import: &UseDecl, file: FileId, imports: &mut Vec<Import>) {
 /// Walks a module's items and lists its declarations and tests.
 struct Walk<'a> {
     declarations: Vec<Declaration>,
+    /// Kept after ordinary declarations so a test cannot change their identities (TST-2).
+    test_helpers: Vec<Declaration>,
     tests: Vec<Test>,
     instantiations: Vec<(usize, SyntaxNode)>,
     /// True when the unit walked is an application (UNIT-14).
@@ -337,6 +342,30 @@ impl Walk<'_> {
             }
             Item::Test(test) => {
                 if let Some(name) = test.name() {
+                    let owner = self.tests.len();
+                    for helper in test.helpers() {
+                        if omit.contains(&helper.syntax().span()) {
+                            continue;
+                        }
+                        let Some(name) = helper.name() else {
+                            continue;
+                        };
+                        let role = if helper.is_const() {
+                            Role::Value
+                        } else {
+                            Role::Temporal
+                        };
+                        self.test_helpers.push(Declaration {
+                            name: name.text().to_string(),
+                            at: Location::new(file, name.span()),
+                            kind: DeclarationKind::Function(role),
+                            exported: false,
+                            test_only: true,
+                            test_owner: Some(owner),
+                            file: index,
+                            syntax: helper.syntax().clone(),
+                        });
+                    }
                     self.tests.push(Test {
                         name: name.text().to_string(),
                         integration: test.is_integration(),
@@ -346,6 +375,7 @@ impl Walk<'_> {
                         at: Location::new(file, name.span()),
                         file: index,
                         syntax,
+                        helpers: HashMap::new(),
                     });
                 }
                 return;
@@ -459,6 +489,7 @@ impl Walk<'_> {
             kind,
             exported: export.is_some() && !in_test && !self.application,
             test_only: in_test,
+            test_owner: None,
             file: index,
             syntax,
         });
@@ -479,7 +510,10 @@ fn bind_declarations(module: &mut Module, diagnostics: &mut Diagnostics) {
     let binders = |test_only: bool| {
         // `move` lets the closure keep its own copy of `test_only`.
         (0..declarations.len()).filter(move |&index| {
-            declarations[index].kind.binds_name() && declarations[index].test_only == test_only
+            let declaration = &declarations[index];
+            declaration.test_owner.is_none()
+                && declaration.kind.binds_name()
+                && declaration.test_only == test_only
         })
     };
     let mut scope: HashMap<String, Vec<usize>> = HashMap::new();
@@ -503,6 +537,80 @@ fn bind_declarations(module: &mut Module, diagnostics: &mut Diagnostics) {
         }
     }
     module.scope = scope;
+}
+
+/// Binds named-test helpers in their own tests, after module and import scopes are known.
+pub(crate) fn bind_test_helpers(program: &mut Program, diagnostics: &mut Diagnostics) {
+    let core = program.core();
+    for index in 0..program.modules.len() {
+        let module = &program.modules[index];
+        let prelude = core
+            .filter(|&core| core != index)
+            .map(|core| &program.modules[core]);
+        let mut scopes = vec![HashMap::<String, Vec<usize>>::new(); module.tests.len()];
+        for (position, helper) in module.declarations.iter().enumerate() {
+            let Some(owner) = helper.test_owner else {
+                continue;
+            };
+            let name = &helper.name;
+            let test = &module.tests[owner];
+            let visible = module.lookup(name).next().or_else(|| {
+                prelude?
+                    .lookup(name)
+                    .find(|declaration| declaration.is_public())
+            });
+            let imported = module.files[helper.file]
+                .imports
+                .iter()
+                .find(|import| &import.name == name);
+            if let Some(first) = imported
+                .map(|import| import.at)
+                .or_else(|| visible.map(|decl| decl.at))
+            {
+                diagnostics.emit(
+                    error(
+                        Category::Name,
+                        codes::NAME_DUPLICATE,
+                        helper.at,
+                        format!(
+                            "helper `{name}` takes a name test `{}` already sees",
+                            test.name
+                        ),
+                        "TST-2",
+                    )
+                    .with_related(first, "this name is already visible to the test"),
+                );
+                continue;
+            }
+            // FN-4 permits a value and a temporal function to share a name in this test.
+            let bound = scopes[owner].entry(name.clone()).or_default();
+            if let Some(first) = bound
+                .iter()
+                .map(|&other| &module.declarations[other])
+                .find(|other| clashes(other.kind, helper.kind))
+            {
+                diagnostics.emit(
+                    error(
+                        Category::Name,
+                        codes::NAME_DUPLICATE,
+                        helper.at,
+                        format!(
+                            "test `{}` has two {}s named `{name}`",
+                            test.name,
+                            helper.kind.describe()
+                        ),
+                        "UNIT-5",
+                    )
+                    .with_related(first.at, "the first is declared here"),
+                );
+            } else {
+                bound.push(position);
+            }
+        }
+        for (test, scope) in program.modules[index].tests.iter_mut().zip(scopes) {
+            test.helpers = scope;
+        }
+    }
 }
 
 /// True when two declarations of one name cannot both stand: always,

@@ -221,7 +221,7 @@ impl Parser<'_> {
         match item {
             Item::Module => self.module_decl(),
             Item::Use => self.use_decl(),
-            Item::Function => self.function_decl(),
+            Item::Function => self.function_decl(false),
             Item::Struct => self.struct_decl(),
             Item::Enum => self.enum_decl(),
             Item::Operator => self.operator_decl(),
@@ -417,7 +417,7 @@ impl Parser<'_> {
     ///     [ requires_clause ], function_body ;
     /// function_body = "=>", expression | block ;
     /// ```
-    fn function_decl(&mut self) {
+    fn function_decl(&mut self, test_helper: bool) {
         self.start(FnDecl);
         // ERR-10: `@suppress_warning("...")` stands on the lines before a
         // named function.
@@ -437,6 +437,13 @@ impl Parser<'_> {
             return;
         }
 
+        if test_helper && matches!(self.current(), KwExport | KwImpl) {
+            self.error(
+                "a test helper must be a private `fn` or `const fn`",
+                "TST-1",
+                None,
+            );
+        }
         if self.eat(KwExport) {
             if self.at(KwImpl) && !self.cut() {
                 // The grammar has `export` or `impl`, and no form with
@@ -1110,8 +1117,8 @@ impl Parser<'_> {
     // ---- Tests ----
 
     /// ```text
-    /// test_decl = "test", IDENTIFIER, block
-    ///           | [ timeout_annotation, NL ], "integration_test", IDENTIFIER, block ;
+    /// test_decl = "test", IDENTIFIER, test_block
+    ///           | [ timeout_annotation, NL ], "integration_test", IDENTIFIER, test_block ;
     /// ```
     fn test_decl(&mut self) {
         self.start(TestDecl);
@@ -1138,8 +1145,57 @@ impl Parser<'_> {
             self.expect(KwTest);
         }
         self.expect_name("a test name");
-        self.body_block();
+        if self.at(LBrace) {
+            self.header_brace();
+            self.block_with(Self::test_block_contents);
+        } else {
+            self.expected("`{`");
+        }
         self.finish();
+    }
+
+    /// TST-1: a named test starts with its helper functions, before any
+    /// statements. Each helper declaration is followed by a line break.
+    fn test_block_contents(&mut self) {
+        while self.at_test_helper() {
+            self.begin_entry();
+            let errors = self.errors;
+            self.function_decl(true);
+            if self.errors != errors {
+                self.skip_line(false);
+            } else if !self.at_line_start() {
+                self.expected_rule("a line break after a test helper", "TST-1");
+            }
+        }
+        self.block_statements(|parser| {
+            if parser.at_test_helper() {
+                parser.error(
+                    "a test helper must precede the test's statements",
+                    "TST-1",
+                    None,
+                );
+                // Read the whole misplaced declaration for recovery, so
+                // its body braces cannot close the test's block.
+                parser.start(Error);
+                parser.function_decl(true);
+                parser.finish();
+            } else {
+                parser.statement();
+            }
+        });
+    }
+
+    /// A named function or an attached warning annotation. A named
+    /// function has a name where an anonymous one's parameters begin.
+    fn at_test_helper(&self) -> bool {
+        if self.at(At) && self.nth_word(1, "suppress_warning") {
+            return true;
+        }
+        // Recognize forbidden modifiers too, to diagnose them on a
+        // declaration while recovering its body as a unit.
+        let visibility = usize::from(matches!(self.current(), KwExport | KwImpl));
+        let modifier = visibility + usize::from(self.nth_word(visibility, "const"));
+        self.nth(modifier) == KwFn && self.nth(modifier + 1) == Ident
     }
 
     /// `timeout_annotation = "@", "timeout", "(", TEMPORAL_LITERAL, ")" ;`

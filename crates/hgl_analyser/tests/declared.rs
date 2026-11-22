@@ -450,7 +450,10 @@ fn a_field_is_compared_by_what_its_type_means() {
 /// A chain of parents is as long as the source makes it. The fields of
 /// each struct are worked out from its parents' without one call inside
 /// another for each link, so the chain's length does not grow the call
-/// stack: this one is read on a thread with a small stack.
+/// stack: this one is read on a thread with a small stack. One megabyte
+/// is small for the purpose: twenty thousand calls inside one another
+/// would need many times that. A quarter of that left no room, in an
+/// unoptimised build on Windows, for the frames every analysis has.
 #[test]
 fn a_long_chain_of_parents_is_read_on_a_small_stack() {
     const LINKS: usize = 20_000;
@@ -465,7 +468,7 @@ fn a_long_chain_of_parents_is_read_on_a_small_stack() {
     // The syntax tree is not shared between threads, so the thread
     // gives back only what is compared.
     let found = std::thread::Builder::new()
-        .stack_size(256 * 1024)
+        .stack_size(1024 * 1024)
         .spawn(move || {
             let checked = module(&text);
             (checked.summary(), checked.findings[0].message.clone())
