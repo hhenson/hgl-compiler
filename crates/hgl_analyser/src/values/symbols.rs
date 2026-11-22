@@ -912,6 +912,7 @@ impl<'a> Typer<'a> {
             place: requested.as_ref().or(symbol.place.as_ref()),
             among,
             written: false,
+            callback: None,
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         // GEN-7: "A generic body is checked under its stated

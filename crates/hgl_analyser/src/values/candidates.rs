@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
+use hgl_source::FileId;
 
 use super::Typer;
 use super::constants::{constant_text, default_at, generic_default};
@@ -20,7 +21,7 @@ use super::inference::{
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use crate::constant::Fault;
-use crate::declared::{names_parameter, substitute_within};
+use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, tokens, ungrouped};
@@ -263,21 +264,27 @@ impl<'a> Typer<'a> {
                 let widens = |decided: &Type, later: &Type| self.widens(decided, later);
                 let defaults =
                     |generic: &GenericParameter| self.default_constant(candidate, generic);
-                let constant = |node: &SyntaxNode, ty: Option<&Type>| self.given_constant(node, ty);
                 let Some((taken, generics, type_packs, defaulted)) = instance(
+                    self,
                     signature,
                     (given, &bound),
                     wanted,
                     (
                         &widens,
                         &defaults,
-                        &constant,
                         converting.then_some((self, forms, &payload_parameters, &rejects_form)),
                     ),
                     &mut choose,
                 ) else {
                     continue;
                 };
+                // FN-17: a function reference supplies a signature.
+                // Contextual operand or result reads do not make it fit.
+                if let Some(callback) = &wanted.callback
+                    && !callback.matches(&taken, (given, &bound), wanted.place)
+                {
+                    continue;
+                }
                 // GEN-13: a generic value parameter has an ordinary
                 // type, and the default it takes is of that type as
                 // this call resolves it: the `2` of
@@ -1337,6 +1344,7 @@ impl<'a> Typer<'a> {
                 .as_ref()
                 .map(|among| among.iter().map(in_place).collect()),
             written: selecting.written,
+            callback: None,
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         if untold || self.rereads == 0 && given.iter().any(|given| given.by_place) {
@@ -1889,6 +1897,110 @@ pub(super) struct Wanted<'w> {
     /// result that is its type parameter and nothing more, which a
     /// candidate is given whole (GEN-8; see `infer_from_place`).
     pub(super) written: bool,
+    /// The exact signature and options of an explicit operator callback (FN-17).
+    pub(super) callback: Option<CallbackRequest<'w>>,
+}
+
+/// A callback must have the template's actual types before ranking (FN-17).
+pub(super) struct CallbackRequest<'w> {
+    /// Whether the template expects a designation as its result.
+    pub(super) reference: bool,
+    /// The operator's compile-time options taken by a candidate that uses them.
+    pub(super) values: &'w [CallbackOption<'w>],
+}
+
+/// A public option that a candidate may take under the same name.
+pub(super) struct CallbackOption<'w> {
+    /// Its name in the public operator and its candidates.
+    pub(super) name: &'w str,
+    /// Its value as read for the public operator.
+    pub(super) value: &'w Constant,
+    /// The resolved type of the operator's value parameter.
+    pub(super) ty: Type,
+    /// The expression, if available, that gave the public option its value.
+    pub(super) source: CallbackOptionSource<'w>,
+}
+
+/// Where an explicit callback's public option gets its value (GEN-8).
+pub(super) enum CallbackOptionSource<'w> {
+    /// A value written at the reference.
+    Written(SyntaxNode),
+    /// The operator's default, read in the file that declares it.
+    Default {
+        file: FileId,
+        node: SyntaxNode,
+        generics: &'w [GenericParameter],
+        arguments: &'w [Argument],
+    },
+    /// A value inferred from the callback's template.
+    Resolved,
+}
+
+impl CallbackOption<'_> {
+    fn fit(&self, typer: &Typer<'_>, expected: &Type) -> Result<ConstantValue, Fault> {
+        if let CallbackOptionSource::Written(node) = &self.source {
+            return typer.given_constant(node, Some(expected));
+        }
+        let read = crate::constant::Typed::of(self.value.value.clone(), Some(self.ty.clone()));
+        crate::constant::fit(read, Some(expected), typer.program).or_else(|fault| {
+            // EXPR-5 contextualizes literals in the candidate's type.
+            // Read in the definition scope so a named constant keeps its type.
+            if let CallbackOptionSource::Default {
+                file,
+                node,
+                generics,
+                arguments,
+            } = &self.source
+                && let Ok(value) =
+                    typer.read_instance_default(*file, node, expected, (generics, arguments))
+                && widens_default_literals(&self.value.value, &value)
+            {
+                Ok(value)
+            } else {
+                Err(fault)
+            }
+        })
+    }
+}
+
+/// A contextual read may widen an integer literal at any depth (EXPR-5).
+/// The constant reader decides whether each expression fits the new type.
+/// Other parts keep their resolved values, including an implied enum member
+/// whose nominal identity was resolved at the public parameter.
+fn widens_default_literals(public: &ConstantValue, fitted: &ConstantValue) -> bool {
+    match (public, fitted) {
+        (ConstantValue::Int(_), ConstantValue::Float(_)) => true,
+        (ConstantValue::List(public), ConstantValue::List(fitted))
+        | (ConstantValue::Tuple(public), ConstantValue::Tuple(fitted)) => {
+            public.len() == fitted.len()
+                && public
+                    .iter()
+                    .zip(fitted)
+                    .all(|(public, fitted)| widens_default_literals(public, fitted))
+        }
+        _ => public.same(fitted) == Some(true),
+    }
+}
+
+impl CallbackRequest<'_> {
+    fn matches(
+        &self,
+        signature: &Signature,
+        (given, bound): (&[Given], &[Place]),
+        result: Option<&Type>,
+    ) -> bool {
+        self.reference == signature.reference
+            && signature.parameters.len() == given.len()
+            && given.iter().zip(bound).all(|(given, place)| {
+                matches!(*place, Place::Parameter(index)
+                    if agree(given.ty(), &signature.parameters[index].ty))
+            })
+            && match (result, &signature.result) {
+                (Some(expected), Some(actual)) => agree(expected, actual),
+                (None, None) => true,
+                _ => false,
+            }
+    }
 }
 
 /// What an argument of a call is given to in a candidate.
@@ -2084,19 +2196,19 @@ impl Chosen<'_> {
 /// all the way down, `null`, `.member` or `[]`, says nothing.
 ///
 /// `defaults` gives the constant a generic value parameter's default
-/// comes to (GEN-2), and `constant` what a constant the call gives an
-/// option comes to as a value of the type given (`crate::constant`).
+/// comes to (GEN-2). The typer reads the constants the call supplies
+/// or takes from an operator default (GEN-8).
 /// `converting` supplies the typer in the pass that tries the forms a
 /// parameter can take of an argument (ERR-12, ERR-15).
 #[allow(clippy::type_complexity)]
 fn instance<'s>(
+    typer: &Typer<'_>,
     signature: &'s Signature,
     (given, bound): (&[Given], &[Place]),
     wanted: &Wanted,
-    (widens, defaults, constant, converting): (
+    (widens, defaults, converting): (
         &dyn Fn(&Type, &Type) -> bool,
         &dyn Fn(&GenericParameter) -> Option<Constant>,
-        &dyn Fn(&SyntaxNode, Option<&Type>) -> Result<ConstantValue, Fault>,
         Option<(
             &Typer<'_>,
             ArgumentForms,
@@ -2121,6 +2233,18 @@ fn instance<'s>(
         ));
     }
     let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
+    if let Some(callback) = &wanted.callback {
+        for (index, generic) in generics.iter().enumerate() {
+            if matches!(generic.kind, GenericKind::Value(_))
+                && let Some(option) = callback
+                    .values
+                    .iter()
+                    .find(|option| option.name == generic.name)
+            {
+                found[index] = Some(Argument::Constant(option.value.clone()));
+            }
+        }
+    }
     // GEN-2: what the call writes decides first. A generic value
     // parameter it gives by name is that, whatever an argument's type
     // would say of it: `pick(pair, N: 3)` for `value: list<i64, N>` asks
@@ -2134,7 +2258,9 @@ fn instance<'s>(
                 GenericKind::Value(ty) if !names_parameter(ty) => Some(ty),
                 _ => None,
             };
-            let value = constant(&given.node, expected).unwrap_or(ConstantValue::Unknown);
+            let value = typer
+                .given_constant(&given.node, expected)
+                .unwrap_or(ConstantValue::Unknown);
             found[index] = Some(Argument::Constant(Constant {
                 text: constant_text(&given.node),
                 value,
@@ -2231,11 +2357,24 @@ fn instance<'s>(
     // GEN-12: in the order they are declared, whatever order the call
     // writes them in.
     for (index, generic) in generics.iter().enumerate() {
-        let argument = bound
+        let GenericKind::Value(ty) = &generic.kind else {
+            continue;
+        };
+        let argument_type = bound
             .iter()
-            .position(|&place| place == Place::Generic(index));
-        if let (Some(position), GenericKind::Value(ty)) = (argument, &generic.kind) {
-            infer(ty, given[position].ty(), generics, &mut found);
+            .position(|&place| place == Place::Generic(index))
+            .map(|position| given[position].ty())
+            .or_else(|| {
+                wanted
+                    .callback
+                    .as_ref()?
+                    .values
+                    .iter()
+                    .find(|option| option.name == generic.name)
+                    .map(|option| &option.ty)
+            });
+        if let Some(actual) = argument_type {
+            infer(ty, actual, generics, &mut found);
         }
     }
     // GEN-6: "An option that selects among candidates is a generic
@@ -2261,8 +2400,36 @@ fn instance<'s>(
             defaulted.push(index);
         }
     }
-    let resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
+    let mut resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
     let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
+    if let Some(callback) = &wanted.callback {
+        let map: Vec<_> = own.iter().copied().zip(&resolved).collect();
+        let mut fitted = Vec::new();
+        for (index, generic) in generics.iter().enumerate() {
+            let GenericKind::Value(ty) = &generic.kind else {
+                continue;
+            };
+            let Some(option) = callback
+                .values
+                .iter()
+                .find(|option| option.name == generic.name)
+            else {
+                continue;
+            };
+            let expected = placed(substitute_within(ty, &map), &own);
+            let value = option.fit(typer, &expected).ok()?;
+            fitted.push((
+                index,
+                Constant {
+                    text: option.value.text.clone(),
+                    value,
+                },
+            ));
+        }
+        for (index, value) in fitted {
+            resolved[index] = Argument::Constant(value);
+        }
+    }
     let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
     let mut taken = signature.clone();
     for parameter in &mut taken.parameters {
