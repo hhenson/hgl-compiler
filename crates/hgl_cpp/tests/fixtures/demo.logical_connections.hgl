@@ -22,6 +22,17 @@ fn concrete(value: bool) -> bool => deferred(1, value)
 fn scalar_branch(const input: list<i64>) -> bool => true || input[0] > 0
 fn scalar_graph() -> bool => scalar_branch([])
 
+operator scalar_kind<T>(value: T) -> bool
+impl const fn scalar_kind<T>(value: T) -> bool => false
+impl const fn scalar_kind(value: i64) -> bool => true
+
+fn scalar_guard(const value: i64?) -> bool {
+    if !(value == null) { return scalar_kind(value) }
+    return false
+}
+
+fn guarded_graph() -> bool => scalar_guard(1)
+
 test boolean_symbols_on_connections {
     assert eval both(left: [true, true], right: [true, false]) == [true, false]
     assert eval either(left: [false, false], right: [true, false]) == [true, false]
@@ -47,4 +58,5 @@ test scalar_symbols_still_short_circuit {
     assert all_(true, true, true)
     assert !any_(false, false, false)
     assert eval scalar_graph() == [true]
+    assert eval guarded_graph() == [true]
 }

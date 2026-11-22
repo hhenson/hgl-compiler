@@ -497,17 +497,27 @@ impl<'a> Typer<'a> {
         if self.diagnostics.len() != reported {
             return (self.unselected(given, form), BOOL);
         }
-        // GEN-7: a deferred graph expression can settle to an ordinary
-        // value. Its scalar operands still evaluate left to right.
-        if let Form::Binary(operator) = form
-            && given
-                .iter()
-                .all(|given| self.category(&given.value) == ValueCategory::Value)
+        // FN-6 and GEN-7: all-scalar wiring, including after instance
+        // selection, keeps short-circuit reads and unary guard facts.
+        if given
+            .iter()
+            .all(|given| self.category(&given.value) == ValueCategory::Value)
         {
             let mut operands = given.into_iter().map(|given| given.value);
-            let first = operands.next().expect("a Boolean connective has operands");
-            let value = operands.fold(first, |left, right| scalar_link(operator, left, right));
-            return (value.kind, BOOL);
+            let first = operands.next().expect("a Boolean symbol has operands");
+            let kind = match form {
+                Form::Binary(operator) => {
+                    operands
+                        .fold(first, |left, right| scalar_link(operator, left, right))
+                        .kind
+                }
+                Form::Unary(operator) => ExprKind::Unary {
+                    operator,
+                    operand: Box::new(first),
+                },
+                Form::Named => unreachable!("a Boolean symbol has an operator token"),
+            };
+            return (kind, BOOL);
         }
         let symbol = Symbol {
             form,
