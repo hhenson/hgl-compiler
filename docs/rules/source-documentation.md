@@ -51,11 +51,11 @@ parser: done
 
 - Fenced Markdown protects literal headings and keys after normalization
 
-docs: partial
+docs: done
 
 - The JSON model carries Markdown text, preserving fenced blocks
 - HTML renders CommonMark tables and displays authored HTML as text
-- Left: render formulas and diagrams with the offline assets (#457)
+- Inline and fenced formulas and Mermaid fences render with local assets, with source text remaining visible on rendering failure
 
 ## SDOC-8
 

@@ -9,15 +9,41 @@ use hgl_lexer::TokenKind;
 use hgl_source::SourceMap;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
+/// The page text and which optional renderers its Markdown actually uses.
+pub(crate) struct Markup {
+    pub(crate) html: String,
+    pub(crate) renderers: Renderers,
+}
+
+/// Browser assets needed by the rendered forms (SDOC-7).
+#[derive(Default)]
+pub(crate) struct Renderers {
+    pub(crate) math: bool,
+    pub(crate) mermaid: bool,
+}
+
+impl Renderers {
+    /// Whether a page needs the renderer loader.
+    pub(crate) fn any(&self) -> bool {
+        self.math || self.mermaid
+    }
+
+    /// Adds one page's renderer needs to those of the whole site.
+    pub(crate) fn include(&mut self, other: &Self) {
+        self.math |= other.math;
+        self.mermaid |= other.mermaid;
+    }
+}
+
 /// Appends a CommonMark fragment. The callback only returns destinations
 /// of declarations present in the generated site.
-pub(crate) fn render(output: &mut String, text: &str, link: impl Fn(&str) -> Option<String>) {
+pub(crate) fn render(output: &mut Markup, text: &str, link: impl Fn(&str) -> Option<String>) {
     let mut source = Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter();
     let mut events = Vec::new();
     while let Some((event, range)) = source.next() {
         let event = match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
-                if matches!(&*info, "hgl" | "hgl no-run") =>
+                if matches!(&*info, "hgl" | "hgl no-run" | "math" | "mermaid") =>
             {
                 let mut code = String::new();
                 for (event, _) in source.by_ref() {
@@ -27,10 +53,20 @@ pub(crate) fn render(output: &mut String, text: &str, link: impl Fn(&str) -> Opt
                         _ => {}
                     }
                 }
+                let (language, marker, code) = match &*info {
+                    "math" => {
+                        output.renderers.math = true;
+                        ("math", " data-renderer=\"math\"", escaped(&code))
+                    }
+                    "mermaid" => {
+                        output.renderers.mermaid = true;
+                        ("mermaid", " data-renderer=\"mermaid\"", escaped(&code))
+                    }
+                    _ => ("hgl", "", highlight(&code)),
+                };
                 Event::Html(
                     format!(
-                        "<pre><code class=\"language-hgl\">{}</code></pre>\n",
-                        highlight(&code)
+                        "<pre><code{marker} class=\"language-{language}\">{code}</code></pre>\n"
                     )
                     .into(),
                 )
@@ -42,7 +78,13 @@ pub(crate) fn render(output: &mut String, text: &str, link: impl Fn(&str) -> Opt
             // description. The source comment may refer to an online host.
             Event::Start(Tag::Link { .. } | Tag::Image { .. })
             | Event::End(TagEnd::Link | TagEnd::Image) => continue,
-            Event::Code(name) if !formula(text, range) => match link(&name) {
+            Event::Code(name) if formula(text, &range) => {
+                output.renderers.math = true;
+                Event::InlineHtml(
+                    format!("<code class=\"formula-inline\">{}</code>", escaped(&name)).into(),
+                )
+            }
+            Event::Code(name) => match link(&name) {
                 Some(href) => Event::InlineHtml(
                     format!(
                         "<a href=\"{}\"><code>{}</code></a>",
@@ -57,12 +99,12 @@ pub(crate) fn render(output: &mut String, text: &str, link: impl Fn(&str) -> Opt
         };
         events.push(event);
     }
-    html::push_html(output, events.into_iter());
+    html::push_html(&mut output.html, events.into_iter());
 }
 
 /// Dollar-delimited code spans belong to a formula (SDOC-7), even if the
 /// formula text happens to be an in-scope declaration name.
-fn formula(text: &str, range: Range<usize>) -> bool {
+fn formula(text: &str, range: &Range<usize>) -> bool {
     let Some(dollar) = range.start.checked_sub(1) else {
         return false;
     };
