@@ -288,10 +288,11 @@ enum Read {
     /// It is an ELF or Mach-O shared library whose headers parse whole,
     /// none of its sections or segments running past its end.
     Whole(Names),
-    /// It is of a form this check does not read, such as a static archive
+    /// It is of a form this check knows and does not read, a static archive
     /// or a universal Mach-O: a build may link it all the same.
     Unread,
-    /// It cannot be linked: empty, or ELF or Mach-O cut short, with why.
+    /// It cannot be linked: empty, of no form known, or ELF or Mach-O cut
+    /// short, with why.
     Broken(String),
 }
 
@@ -310,7 +311,9 @@ fn read(path: &Path) -> Read {
     let cache = object::ReadCache::new(file);
     match FileKind::parse(&cache) {
         Ok(FileKind::Elf32 | FileKind::Elf64 | FileKind::MachO32 | FileKind::MachO64) => {}
-        _ => return Read::Unread,
+        Ok(_) => return Read::Unread,
+        // Too short to say what it is, or no form known: cut short, say.
+        Err(error) => return Read::Broken(format!("its form is not known: {error}")),
     }
     let parsed = match object::File::parse(&cache) {
         Ok(parsed) => parsed,
@@ -468,14 +471,26 @@ mod tests {
     }
 
     #[test]
-    fn what_the_check_cannot_read_is_said_so_and_an_empty_file_is_broken() {
+    fn a_form_the_check_does_not_read_is_said_so_and_an_unknown_one_is_broken() {
         let directory = tempfile::tempdir().unwrap();
+        // A static archive's magic and its first member's header.
         let archive = directory.path().join("libfmtd.a");
-        fs::write(&archive, b"!<arch>\n").unwrap();
+        let mut bytes = b"!<arch>\n".to_vec();
+        bytes.extend([b' '; 60]);
+        fs::write(&archive, &bytes).unwrap();
         assert_eq!(read(&archive), Read::Unread);
         let empty = directory.path().join("libfmtd.so");
         fs::write(&empty, b"").unwrap();
         assert_eq!(read(&empty), Read::Broken("it is empty".to_string()));
+        // A library cut to a few bytes, too few to say what it is.
+        let fragment = directory.path().join("libfmtd.so.12");
+        fs::write(&fragment, b"\x7fELF\x02").unwrap();
+        assert!(matches!(read(&fragment), Read::Broken(_)));
+        let unknown = directory.path().join("libfmtd.so.12.1.0");
+        fs::write(&unknown, b"no library at all, of no form").unwrap();
+        assert!(
+            matches!(read(&unknown), Read::Broken(why) if why.starts_with("its form is not known"))
+        );
     }
 
     #[cfg(unix)]
