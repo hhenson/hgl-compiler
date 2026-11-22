@@ -27,10 +27,7 @@ pub fn canonical(program: &Program, ty: &Type) -> Option<String> {
                 .declarations
                 .get(*declaration)
                 .and_then(|declared| declared.test_owner);
-            let name = match owner {
-                Some(owner) => format!("{}::{}::{name}", unit.path, unit.tests[owner].name),
-                None => format!("{}::{name}", unit.path),
-            };
+            let name = unit.qualified_declaration_name(name, owner);
             if arguments.is_empty() {
                 name
             } else {

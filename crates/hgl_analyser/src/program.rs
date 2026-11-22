@@ -261,6 +261,15 @@ pub struct Module {
 }
 
 impl Module {
+    /// Qualifies a name with this module's path and its named test's
+    /// identity when the declaration belongs to a test (TST-1).
+    pub fn qualified_declaration_name(&self, name: &str, test_owner: Option<usize>) -> String {
+        match test_owner {
+            Some(owner) => format!("{}::{}::{name}", self.path, self.tests[owner].name),
+            None => format!("{}::{name}", self.path),
+        }
+    }
+
     /// True where the body of `declaration` has a call whose candidate
     /// is selected for each instance of the declaration: its candidate
     /// is known only in an instance ([`Program::instance`]), so the
