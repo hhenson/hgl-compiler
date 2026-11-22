@@ -698,10 +698,18 @@ impl GraphDestinations {
             let place = format!("the field `{}`", field.name);
             if completed
                 && !whole(&value.ty)
-                && matches!(value.kind, ExprKind::Literal(Value::Null))
-                && let Some(node) = typer.syntax_of(value)
+                && let Some(node) = typer.syntax_of(value).map(ungrouped)
+                && match node.kind() {
+                    // TYPE-7 and EXPR-9: these leaves take their type
+                    // from the completed field. A source-resolved
+                    // leaf already has a whole type and stays intact.
+                    SyntaxKind::ImpliedMember => matches!(value.kind, ExprKind::Unread),
+                    SyntaxKind::SequenceExpr => node.children().next().is_none(),
+                    _ => matches!(value.kind, ExprKind::Literal(Value::Null)),
+                }
             {
-                *value = typer.expression(&node, Some(expected));
+                let read = typer.expression(&node, Some(expected));
+                *value = typer.fit(read, expected, &place);
             } else if completed && whole(&value.ty) && value.ty != *expected {
                 // An earlier argument may decide a field's type only
                 // now, even when this sibling was already known.

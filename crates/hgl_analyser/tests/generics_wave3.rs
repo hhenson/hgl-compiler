@@ -2455,6 +2455,87 @@ fn expected_fixed() -> Pair<i64> => required(1)"#,
     assert_eq!(optional.locals[2].ty.to_string(), "Optional<f64>");
 }
 
+/// TYPE-5, TYPE-7 and EXPR-9: a newly inferred field type supplies the
+/// context for its implied member or empty collection.
+#[test]
+fn inferred_struct_fields_read_contextual_leaves_after_settlement() {
+    let checked = module(
+        r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+enum Side { buy, sell }
+struct Pair<U> {
+    first: U
+    second: U
+    seen: list<U>
+    tags: set<U>
+    entries: dict<str, U>
+    optional: U?
+}
+struct BarePair<U> {
+    first: U
+    second: U
+}
+fn through<T>(const input: T) -> Side {
+    let chosen = if predicate(input) { Side.buy }
+    let values = Pair(first: chosen, second: (.sell), seen: [], tags: [], entries: [], optional: null)
+    return values.second
+}
+fn unknown_member<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { Side.buy }
+    let values = BarePair(first: chosen, second: .hold)
+    return 0
+}
+fn non_enum<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { 2.5 }
+    let values = BarePair(first: chosen, second: .sell)
+    return 0
+}
+fn admitted() -> Side => through(1)
+fn rejects_unknown() -> i64 => unknown_member(1)
+fn rejects_non_enum() -> i64 => non_enum(1)"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:34:32 name/member.unknown TYPE-7",
+            "m.hgl:35:33 type/enum.context_type TYPE-7",
+        ],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    assert_eq!(instance.locals[2].ty.to_string(), "Pair<Side>");
+    let Stmt::Declare {
+        value: Some(values),
+        ..
+    } = &instance.statements[1]
+    else {
+        panic!("the graph declares the pair");
+    };
+    let ExprKind::Construct { arguments, .. } = &values.kind else {
+        panic!("the fields belong to the constructor");
+    };
+    assert!(matches!(
+        arguments[1].value.kind,
+        ExprKind::EnumMember { member: 1, .. }
+    ));
+    for (slot, ty) in [(2, "list<Side>"), (3, "set<Side>")] {
+        let value = &arguments[slot].value;
+        assert_eq!(value.ty.to_string(), ty);
+        assert!(matches!(&value.kind, ExprKind::Sequence(entries) if entries.is_empty()));
+    }
+    let dictionary = &arguments[4].value;
+    assert_eq!(dictionary.ty.to_string(), "dict<str, Side>");
+    assert!(matches!(&dictionary.kind, ExprKind::Pairs(entries) if entries.is_empty()));
+    let null = &arguments[5].value;
+    assert_eq!(null.ty.to_string(), "Side?");
+    assert!(matches!(
+        null.kind,
+        ExprKind::Literal(hgl_analyser::hir::Value::Null)
+    ));
+}
+
 /// GEN-7 and CTRL-15: settled sequence types reach the iteration
 /// binding and its local reads, using the existing rules for shape.
 #[test]

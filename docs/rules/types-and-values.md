@@ -65,6 +65,7 @@ analyser: partial
 analyser: partial
 
 - A construction in a value function names each field it gives, in any order, and gives every field that has no default and is not optional; a positional argument is rejected
+- Once an inferred graph construction has concrete field types, its implied enum fields and written empty collections use those types (GEN-2, TYPE-7, EXPR-9).
 - Left: constructions elsewhere
 
 transpiler: partial
