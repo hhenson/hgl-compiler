@@ -85,12 +85,12 @@ pub(super) const FLAGS: &str = "HGL_CPP_FLAGS";
 /// written last: a directory that holds it is ready.
 const DESCRIPTION: &str = "description.json";
 
-/// The flags that confine a CMake configure against hgraph's libraries
-/// built for debugging to the SDK and the dependency prefix it names
-/// (`CMAKE_PREFIX_PATH`): no package is looked for through `PATH`, the
-/// environment, the system's prefixes or a package registry, and hgraph's
-/// package does not fetch one it misses. One program can then never link
-/// fmt, spdlog or simdjson twice, the debug prefix's and another's.
+/// The flags that confine every CMake configure of a toolchain to the SDK
+/// and the dependency prefix it names (`CMAKE_PREFIX_PATH`): no package is
+/// looked for through `PATH`, the environment, the system's prefixes or a
+/// package registry, and hgraph's package does not fetch one it misses.
+/// One program can then never link fmt, spdlog or simdjson twice, the
+/// prefix's and another's.
 const CONFINED: [&str; 7] = [
     "-DCMAKE_FIND_USE_PACKAGE_ROOT_PATH=OFF",
     "-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=OFF",
@@ -100,6 +100,78 @@ const CONFINED: [&str; 7] = [
     "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
     "-DHGRAPH_FETCH_MISSING_DEPENDENCIES=OFF",
 ];
+
+/// The variables of the environment CMake reads for itself in finding
+/// packages, choosing its generator, compilers and flags, and placing what
+/// it installs, which are taken out of the environment of every CMake
+/// `hgl` runs ([`cmake_command`]): what they would change is given on the command
+/// line, or is not to change at all, and the toolchain's hash holds none
+/// of them. `CMAKE_FIND_ROOT_PATH` and `CMAKE_MODULE_PATH` are no
+/// variables of CMake's environment, and are taken out all the same. Kept:
+/// `PATH`, which finds no package ([`CONFINED`]); `MACOSX_DEPLOYMENT_TARGET`
+/// and `SDKROOT`, which the hash holds ([`Family::environment`]); and
+/// `CMAKE_BUILD_PARALLEL_LEVEL`, how many jobs, which changes nothing made.
+const CMAKE_READS: [&str; 33] = [
+    "CMAKE_TOOLCHAIN_FILE",
+    "CMAKE_PREFIX_PATH",
+    "CMAKE_FRAMEWORK_PATH",
+    "CMAKE_APPBUNDLE_PATH",
+    "CMAKE_INCLUDE_PATH",
+    "CMAKE_LIBRARY_PATH",
+    "CMAKE_PROGRAM_PATH",
+    "CMAKE_FIND_ROOT_PATH",
+    "CMAKE_MODULE_PATH",
+    "CMAKE_GENERATOR",
+    "CMAKE_GENERATOR_INSTANCE",
+    "CMAKE_GENERATOR_PLATFORM",
+    "CMAKE_GENERATOR_TOOLSET",
+    "CMAKE_BUILD_TYPE",
+    "CMAKE_CONFIGURATION_TYPES",
+    "CMAKE_CONFIG_TYPE",
+    "CMAKE_CROSSCOMPILING_EMULATOR",
+    "CMAKE_C_COMPILER_LAUNCHER",
+    "CMAKE_CXX_COMPILER_LAUNCHER",
+    "CMAKE_C_LINKER_LAUNCHER",
+    "CMAKE_CXX_LINKER_LAUNCHER",
+    "CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES_EXCLUDE",
+    "CMAKE_OSX_ARCHITECTURES",
+    "CMAKE_APPLE_SILICON_PROCESSOR",
+    "CMAKE_INSTALL_PREFIX",
+    "CMAKE_INSTALL_MODE",
+    "CMAKE_POLICY_VERSION_MINIMUM",
+    "DESTDIR",
+    "CC",
+    "CXX",
+    "CFLAGS",
+    "CXXFLAGS",
+    "LDFLAGS",
+];
+
+/// The packages a configure of a toolchain finds, whose `<Package>_DIR`,
+/// `<Package>_ROOT` and `<PACKAGE>_ROOT` CMake reads from the environment
+/// too, and which are taken out with [`CMAKE_READS`].
+const FOUND_PACKAGES: [&str; 6] = ["hgraph", "fmt", "spdlog", "simdjson", "Threads", "doctest"];
+
+/// `cmake`, to be run with none of what [`CMAKE_READS`] and
+/// [`FOUND_PACKAGES`] name in its environment.
+fn cmake_command(program: &Path) -> Command {
+    let mut command = Command::new(program);
+    for variable in CMAKE_READS {
+        command.env_remove(variable);
+    }
+    for package in FOUND_PACKAGES {
+        let upper = package.to_uppercase();
+        for variable in [
+            format!("{package}_DIR"),
+            format!("{package}_ROOT"),
+            format!("{upper}_DIR"),
+            format!("{upper}_ROOT"),
+        ] {
+            command.env_remove(variable);
+        }
+    }
+    command
+}
 
 /// A version of what is made for a toolchain: raised when what this
 /// driver makes changes, so that what an older `hgl` made is not used.
@@ -533,9 +605,7 @@ impl Toolchain {
             format!("-D{SDK}={}", self.hgraph.sdk.display()),
             format!("-D{DEPS}={}", self.hgraph.deps.display()),
         ];
-        if self.hgraph.build == Build::Debug {
-            flags.extend(CONFINED.iter().map(|flag| flag.to_string()));
-        }
+        flags.extend(CONFINED.iter().map(|flag| flag.to_string()));
         Ok(flags)
     }
 
@@ -568,7 +638,7 @@ impl Toolchain {
             fs::write(&file, bytes)
                 .map_err(|error| format!("{} could not be written: {error}", file.display()))?;
         }
-        let mut configure = Command::new(cmake);
+        let mut configure = cmake_command(cmake);
         configure
             .arg("-S")
             .arg(&source)
@@ -587,7 +657,7 @@ impl Toolchain {
             .arg("-DCMAKE_INSTALL_LIBDIR=lib")
             .arg("-DBUILD_TESTING=OFF");
         run("the runtime library's configuration", &mut configure)?;
-        let mut built = Command::new(cmake);
+        let mut built = cmake_command(cmake);
         built.arg("--build").arg(&build);
         if let Some(jobs) = jobs {
             built.arg("--parallel").arg(jobs);
@@ -595,7 +665,7 @@ impl Toolchain {
         run("the runtime library's build", &mut built)?;
         run(
             "the runtime library's installation",
-            Command::new(cmake).arg("--install").arg(&build),
+            cmake_command(cmake).arg("--install").arg(&build),
         )?;
         Ok(installed)
     }
@@ -620,7 +690,7 @@ impl Toolchain {
         // A file under `.cmake/api/v1/query` asks CMake to describe the
         // build; an empty one named `codemodel-v2` asks for the targets.
         write_if_changed(&build.join(".cmake/api/v1/query/codemodel-v2"), "")?;
-        let mut configure = Command::new(cmake);
+        let mut configure = cmake_command(cmake);
         configure
             .arg("-S")
             .arg(&source)
@@ -736,7 +806,7 @@ fn chosen(debug: bool) -> Result<Hgraph, String> {
 /// are given, and the optimised ones otherwise:
 ///
 /// 1. those `HGL_HGRAPH_DEBUG` names, which must be whole and built for
-///    debugging (`package::unusable`), or it is an error;
+///    debugging (`package::usable`), or it is an error;
 /// 2. else, where neither `HGL_HGRAPH_SDK` nor `HGL_HGRAPH_DEPS` names
 ///    libraries of the user's own, those the `hgl-debug` package
 ///    installs in the release's `libexec/hgraph-debug`, where they are
@@ -779,13 +849,13 @@ fn choose(debug: bool, variables: Variables, bundle: Option<&Path>) -> Result<Hg
             ));
         }
         let directory = PathBuf::from(named);
-        if let Some(problem) = package::unusable(&directory) {
-            return Err(format!(
+        let notes = package::usable(&directory).map_err(|problem| {
+            format!(
                 "{DEBUG} names {}, which {problem}: set it to {WHAT_DEBUG}",
                 directory.display()
-            ));
-        }
-        return debug_libraries(&directory, &format!("named by {DEBUG}"));
+            )
+        })?;
+        return debug_libraries(&directory, &format!("named by {DEBUG}"), &notes);
     }
     if let Some(own) = [SDK, DEPS]
         .into_iter()
@@ -801,12 +871,15 @@ fn choose(debug: bool, variables: Variables, bundle: Option<&Path>) -> Result<Hg
             ": the `hgl-debug` package is not installed beside hgl, and {DEBUG} is not set"
         ));
     };
-    if let Some(problem) = package::unusable(&beside) {
-        return optimised(format!(
-            ": the `hgl-debug` package beside hgl, in {}, {problem}",
-            beside.display()
-        ));
-    }
+    let notes = match package::usable(&beside) {
+        Ok(notes) => notes,
+        Err(problem) => {
+            return optimised(format!(
+                ": the `hgl-debug` package beside hgl, in {}, {problem}",
+                beside.display()
+            ));
+        }
+    };
     let tag = package::stamp(&beside.join("hgraph-sdk")).and_then(|stamp| stamp.tag);
     if tag.as_deref() != Some(HGRAPH_TAG) {
         return optimised(format!(
@@ -816,12 +889,13 @@ fn choose(debug: bool, variables: Variables, bundle: Option<&Path>) -> Result<Hg
             tag.as_deref().unwrap_or("no tag")
         ));
     }
-    debug_libraries(&beside, "installed beside hgl")
+    debug_libraries(&beside, "installed beside hgl", &notes)
 }
 
 /// The libraries built for debugging in `directory`, which
-/// `package::unusable` finds nothing wrong with, found as `how` says.
-fn debug_libraries(directory: &Path, how: &str) -> Result<Hgraph, String> {
+/// `package::usable` finds nothing wrong with, found as `how` says, with
+/// what the check could not read of them, `notes`.
+fn debug_libraries(directory: &Path, how: &str, notes: &[String]) -> Result<Hgraph, String> {
     let resolved = |path: PathBuf| {
         fs::canonicalize(&path).map_err(|error| format!("{}: {error}", path.display()))
     };
@@ -830,7 +904,14 @@ fn debug_libraries(directory: &Path, how: &str) -> Result<Hgraph, String> {
         build: Build::Debug,
         sdk: resolved(directory.join("hgraph-sdk"))?,
         deps: resolved(directory.join("hgraph-deps"))?,
-        found: format!("in {}, {how}", directory.display()),
+        found: format!(
+            "in {}, {how}{}",
+            directory.display(),
+            notes
+                .iter()
+                .map(|note| format!("; {note}"))
+                .collect::<String>()
+        ),
     })
 }
 
@@ -1098,7 +1179,10 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use super::{Build, CONFINED, Family, HGRAPH_TAG, Hgraph, Toolchain, choose, read_description};
+    use super::{
+        Build, CONFINED, Family, HGRAPH_TAG, Hgraph, Toolchain, choose, cmake_command,
+        read_description,
+    };
 
     /// The suffix of a shared library on this platform.
     const SUFFIX: &str = std::env::consts::DLL_SUFFIX;
@@ -1520,17 +1604,49 @@ mod tests {
     }
 
     #[test]
-    fn a_build_against_debug_libraries_finds_packages_nowhere_else() {
+    fn every_configure_finds_packages_in_the_two_prefixes_alone() {
         let libexec = Path::new("libexec");
-        let confined = |toolchain: Toolchain| {
-            let flags = toolchain.configure_flags().unwrap();
-            CONFINED
+        for (build, debug) in [
+            (Build::Debug, true),
+            (Build::Optimised, true),
+            (Build::Optimised, false),
+        ] {
+            let flags = toolchain(libexec, build, debug).configure_flags().unwrap();
+            assert!(
+                CONFINED
+                    .iter()
+                    .all(|flag| flags.iter().any(|given| given == flag)),
+                "{flags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cmake_runs_with_none_of_its_own_variables_of_the_environment() {
+        let command = cmake_command(Path::new("cmake"));
+        let removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        for variable in [
+            "CMAKE_TOOLCHAIN_FILE",
+            "CMAKE_PREFIX_PATH",
+            "CMAKE_GENERATOR",
+            "CMAKE_BUILD_TYPE",
+            "DESTDIR",
+            "fmt_DIR",
+            "spdlog_ROOT",
+            "SPDLOG_ROOT",
+            "hgraph_DIR",
+        ] {
+            assert!(removed.iter().any(|name| name == variable), "{variable}");
+        }
+        assert!(
+            !removed
                 .iter()
-                .all(|flag| flags.iter().any(|given| given == flag))
-        };
-        assert!(confined(toolchain(libexec, Build::Debug, true)));
-        assert!(!confined(toolchain(libexec, Build::Optimised, true)));
-        assert!(!confined(toolchain(libexec, Build::Optimised, false)));
+                .any(|name| name == "PATH" || name == "SDKROOT")
+        );
     }
 
     /// Some of what GCC 15.2 defines, as `-dM -E` prints it.

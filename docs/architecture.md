@@ -2047,23 +2047,53 @@ those `HGL_HGRAPH_DEBUG` names; else, where neither `HGL_HGRAPH_SDK` nor
 resolved executable, where their `hgl-sdk.txt` names the hgraph tag
 `hgl` is built for. Either is taken only whole (`cpp/sdk/package.rs`):
 laid out as above; its SDK's `hgl-sdk.txt` saying `build-type=Debug`;
-and the CMake packages a build configures from, hgraph's, fmt's,
-spdlog's and simdjson's, each there with every library it imports there
-and whole (its headers parse, none of its sections runs past its end,
-read with the [`object`](https://crates.io/crates/object) crate).
-`HGL_HGRAPH_DEBUG` naming a directory that is not is an error that says
-what is wrong; a package beside `hgl` that is not is passed over, and the
-optimised libraries are linked, saying why. A configure against debug
-libraries looks for packages in the SDK and the dependency prefix alone
-(`CONFINED` in `sdk.rs`: not through `PATH`, the environment, the
-system's prefixes or a registry, and hgraph's package fetches none it
+the CMake packages a build configures from, hgraph's, fmt's, spdlog's
+and simdjson's, each there with every library it imports there; each of
+those libraries whole (its headers parse, none of its sections runs past
+its end, read with the [`object`](https://crates.io/crates/object)
+crate); and the name a program loads each by, and each name of the four
+packages' libraries it needs, there in either prefix as a library of
+that name, so that a program built against them starts with them alone.
+A library of a form the check does not read, a static archive or a
+universal Mach-O, is not held against the package: the line `hgl`
+prints says so. `HGL_HGRAPH_DEBUG` naming a directory that is not whole
+is an error that says what is wrong; a package beside `hgl` that is not
+is passed over, and the optimised libraries are linked, saying why.
+hgraph's installed headers do not depend on `NDEBUG`, so the debug build
+stands in for the optimised one. A debug build's runtime library is
+built as CMake's `Debug`, whichever libraries it links. A debug build
+says on standard error, before it builds, which it links, and why where
+it links the optimised ones, and its JSON description says it too
+(below).
+
+Every CMake `hgl` runs, for an ordinary build and a debug one, finds
+packages in the SDK and the dependency prefix alone (`CONFINED` in
+`sdk.rs`: no package root, no `PATH` or other environment prefixes, no
+system prefixes or registries, and hgraph's package fetches none it
 misses), so that a program never links two copies of fmt, spdlog or
-simdjson. hgraph's installed headers do not depend on `NDEBUG`, so the
-debug build stands in for the optimised one. A debug build's runtime
-library is built as CMake's `Debug`, whichever libraries it links. A
-debug build says on standard error, before it builds, which it links,
-and why where it links the optimised ones, and its JSON description says
-it too (below).
+simdjson, the prefix's and another's. It runs with none of the
+variables of the environment CMake reads for itself (`CMAKE_READS` in
+`sdk.rs`): the toolchain file `CMAKE_TOOLCHAIN_FILE`, which can name
+prefixes, packages and compilers; the search paths `CMAKE_PREFIX_PATH`,
+`CMAKE_FRAMEWORK_PATH`, `CMAKE_APPBUNDLE_PATH`, `CMAKE_INCLUDE_PATH`,
+`CMAKE_LIBRARY_PATH`, `CMAKE_PROGRAM_PATH`, and `CMAKE_FIND_ROOT_PATH` and
+`CMAKE_MODULE_PATH`, which CMake does not read from the environment
+today; `<Package>_DIR`, `<Package>_ROOT` and `<PACKAGE>_ROOT` of each
+package it finds (hgraph, fmt, spdlog, simdjson, Threads, doctest); the
+generator `CMAKE_GENERATOR` and its `_INSTANCE`, `_PLATFORM` and
+`_TOOLSET`; `CMAKE_BUILD_TYPE`, `CMAKE_CONFIGURATION_TYPES`,
+`CMAKE_CONFIG_TYPE`; the compilers, flags and launchers `CC`, `CXX`,
+`CFLAGS`, `CXXFLAGS`, `LDFLAGS`, `CMAKE_C_COMPILER_LAUNCHER`,
+`CMAKE_CXX_COMPILER_LAUNCHER`, `CMAKE_C_LINKER_LAUNCHER`,
+`CMAKE_CXX_LINKER_LAUNCHER`, `CMAKE_CROSSCOMPILING_EMULATOR`,
+`CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES_EXCLUDE`; macOS's
+`CMAKE_OSX_ARCHITECTURES` and `CMAKE_APPLE_SILICON_PROCESSOR`; what
+`cmake --install` reads, `CMAKE_INSTALL_PREFIX`, `CMAKE_INSTALL_MODE` and
+`DESTDIR`; and `CMAKE_POLICY_VERSION_MINIMUM`. What the build is given of
+these, it is given on the command line. Kept, and under the toolchain's
+hash: `MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`. Kept, and not under it:
+`PATH`, which finds no package, and `CMAKE_BUILD_PARALLEL_LEVEL`, how
+many jobs, which changes nothing made.
 `HGL_HGRAPH_BUILD_TYPE=Debug scripts/provision-hgraph-sdk.sh TAG
 DIR/hgraph-sdk`, with `HGL_HGRAPH_SOURCE` naming a checkout of `TAG` for
 a debugger to read, makes a debug SDK for `HGL_HGRAPH_DEBUG` to name,
