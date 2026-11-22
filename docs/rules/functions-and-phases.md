@@ -267,12 +267,17 @@ transpiler: partial
 
 ## FN-19
 
-parser: planned
+parser: partial
 
-- #368 tracks pack values read by key, built by loops and expanded at calls.
+- Reads a pack spread among ordinary call arguments.
 
-analyser: planned
+analyser: partial
 
-transpiler: planned
+- Resolves spreads of parameter packs when the enclosing callable is instantiated. Written arguments bind first, then named entries, then positional entries fill the remaining parameter slots in order.
+- Checks function, operator and static callback arguments with the ordinary call diagnostics (EXPR-2).
 
-- Making and applying argument packs in a body is tracked in #368.
+transpiler: partial
+
+- Lowers each forwarded entry from its own pack input slot. The SDK cases exercise values, connections, operator selection and reflected callbacks.
+
+Left: Pack indexing, pack comprehensions and pack bindings are tracked in #368.
