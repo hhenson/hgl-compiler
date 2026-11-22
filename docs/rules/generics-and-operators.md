@@ -19,7 +19,7 @@ parser: done
 analyser: partial
 
 - A generic type in a type position or constructor is given all its arguments; a type pack is no single type; a value function's generics resolved at a call from what the call writes, then the type its place expects, then its arguments in declared parameter order; an abstract struct a later argument has widens what an earlier argument decided
-- A graph instance fills unresolved inferred struct type arguments from settled fields in written order and checks the concrete application (GEN-3, GEN-7). Written and contextual arguments keep their source types.
+- A graph instance fills unresolved inferred struct type arguments from settled fields in written order and checks the concrete application (GEN-3, GEN-7). An earlier unsettled field can defer a later field's binding. Explicit and expected type arguments and types needed to read a contextual field or generic default keep their source treatment.
 - A graph instance can infer a named function's type arguments from settled operands and use the resulting parameter types to read context-dependent arguments (EXPR-9, ERR-2).
 - A nullable type the call writes for an operator's result that is a type parameter is given whole to a generic candidate whose result is one: `get<i64?>(...)` gives core's candidate an `i64?`
 - A nullable place leaves a bare result parameter for the inputs to decide. A fallible dictionary read resolves its success type from the dictionary. A store read can infer it from its place (CAP-6).

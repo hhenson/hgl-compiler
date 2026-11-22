@@ -574,7 +574,7 @@ impl<'a> Typer<'a> {
         // Written value arguments and static function templates are
         // checked during the source pass. Preserve the precedence of
         // argument inference over the result payload fallback, too.
-        let source_contexts: Vec<_> = generics
+        let mut source_contexts: Vec<_> = generics
             .iter()
             .zip(&found)
             .filter_map(|(generic, value)| match (&generic.kind, value) {
@@ -589,6 +589,21 @@ impl<'a> Typer<'a> {
             )
             .chain(result_fallback.iter().map(|(result, _)| *result))
             .collect();
+        if takes == Takes::Fields {
+            // Constructor replay completes type arguments and fits
+            // typed fields. Context-only fields and dependent generic
+            // defaults still need their original source reading.
+            source_contexts.extend(assigned.iter().filter_map(|field| {
+                let slot = field.slot?;
+                needs_argument_place(&field.value).then_some(patterns[slot])
+            }));
+            source_contexts.extend(generics.iter().zip(defaults).filter_map(
+                |(generic, default)| match (&generic.kind, default) {
+                    (GenericKind::Value(ty), Some(_)) => Some(ty),
+                    _ => None,
+                },
+            ));
+        }
         let mut late = std::collections::HashSet::new();
         for position in order {
             let Assigned {
@@ -644,7 +659,6 @@ impl<'a> Typer<'a> {
             let mut learn = |this: &Self, value: &Expr, found: &mut Vec<Option<Argument>>| {
                 let unsettled = this.graph
                     && this.hook.is_none()
-                    && takes == Takes::Parameters
                     && !whole(&value.ty)
                     && this.category(value) == ValueCategory::Unsettled;
                 let actual = this.inferred_from(listed, value, takes);
@@ -669,8 +683,10 @@ impl<'a> Typer<'a> {
                         && generic.kind == GenericKind::Type
                         && !source_contexts.iter().any(|ty| mentions(ty, &[generic.at]))
                     {
-                        // GEN-12: the earlier unresolved argument gets
-                        // the first opportunity to bind this parameter.
+                        // GEN-2 and GEN-12: the earlier unresolved
+                        // input gets the first opportunity to bind
+                        // this parameter, in written field order or
+                        // declared parameter order.
                         found[index] = None;
                     }
                     if unsettled && found[index].is_none() && mentions(pattern, &[generic.at]) {
@@ -840,15 +856,13 @@ impl<'a> Typer<'a> {
                 // type of its own needs the slot another argument can
                 // settle in the graph instance (GEN-2).
                 let depends_on_instance = !late.is_empty() && !traced && !whole(&slot.ty) && {
-                    let syntax = ungrouped(node.clone());
-                    let needs_place = takes_its_type(&syntax)
-                        || syntax.kind() == SyntaxKind::SequenceExpr
-                            && syntax.children().next().is_none();
                     let mut missing = unfound
                         .iter()
                         .filter(|at| mentions(pattern, &[**at]))
                         .peekable();
-                    needs_place && missing.peek().is_some() && missing.all(|at| late.contains(at))
+                    needs_argument_place(node)
+                        && missing.peek().is_some()
+                        && missing.all(|at| late.contains(at))
                 };
                 // A place whose type names a parameter nothing resolved
                 // is not known, and where the call is settled it never
@@ -1006,6 +1020,13 @@ impl<'a> Typer<'a> {
             missing_pack_context,
         }
     }
+}
+
+/// Whether an argument has no complete type without its expected place.
+fn needs_argument_place(node: &SyntaxNode) -> bool {
+    let node = ungrouped(node.clone());
+    takes_its_type(&node)
+        || node.kind() == SyntaxKind::SequenceExpr && node.children().next().is_none()
 }
 
 /// Explicit arguments to ordinary generics and to the positional type

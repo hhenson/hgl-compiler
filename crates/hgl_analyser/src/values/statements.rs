@@ -378,6 +378,16 @@ impl<'a> Typer<'a> {
         if self.graph && matches!(result, Type::Nullable(_)) {
             self.record_result_read(&value, Some((result, place)));
         }
+        // A projected field can be known nullable before its inferred
+        // constructor arguments decide the payload. The graph instance
+        // fits that result once the payload and category settle (EXPR-5).
+        if self.graph
+            && self.hook.is_none()
+            && matches!(&value.ty, Type::Nullable(payload) if **payload == Type::Unknown)
+            && self.category(&value) == ValueCategory::Unsettled
+        {
+            return value;
+        }
         self.fit_input(value, result, place)
     }
 

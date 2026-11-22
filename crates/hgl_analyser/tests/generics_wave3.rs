@@ -2352,6 +2352,85 @@ fn graph_instances_finish_inferred_constructor_arguments() {
     ));
 }
 
+/// GEN-2 and TYPE-5: an earlier written field settles before a later
+/// field can decide its generic type.
+#[test]
+fn inferred_struct_fields_keep_written_order_after_settlement() {
+    let checked = module(
+        r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+struct Pair<U> {
+    a: U
+    b: U
+}
+struct Optional<U> {
+    a: U?
+    b: U
+}
+
+fn through<T>(const input: T) -> f64 {
+    let pair = Pair(b: (if predicate(input) { 2.5 }), a: 0)
+    let expected: Pair<f64> = Pair(b: pair.b, a: 0)
+    let written = Pair<f64>(b: pair.b, a: 0)
+    return pair.b
+}
+fn optional<T>(const input: T) -> f64 {
+    let chosen = if predicate(input) { 2.5 }
+    let pair = Optional(a: chosen, b: 0.0)
+    return pair.a
+}
+fn opposite<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { 2.5 }
+    let pair = Pair(a: 0, b: chosen)
+    return 0
+}
+fn fixed<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { 2.5 }
+    let pair = Pair<i64>(b: chosen, a: 0)
+    return 0
+}
+fn required<T>(const input: T) -> Pair<i64> {
+    let chosen = if predicate(input) { 2.5 }
+    return Pair(b: chosen, a: 0)
+}
+
+fn admitted() -> f64 => through(1)
+fn optional_result() -> f64 => optional("s")
+fn reversed() -> i64 => opposite(1)
+fn explicitly_fixed() -> i64 => fixed(1)
+fn expected_fixed() -> Pair<i64> => required(1)"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:42:25 type/type.mismatch EXPR-5",
+            "m.hgl:43:33 type/type.mismatch EXPR-5",
+            "m.hgl:44:37 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    assert_eq!(instance.locals[1].ty.to_string(), "Pair<f64>");
+    assert_eq!(instance.locals[2].ty.to_string(), "Pair<f64>");
+    assert_eq!(instance.locals[3].ty.to_string(), "Pair<f64>");
+    let Stmt::Declare {
+        value: Some(pair), ..
+    } = &instance.statements[0]
+    else {
+        panic!("the graph binds its inferred pair");
+    };
+    let ExprKind::Construct { arguments, .. } = &pair.kind else {
+        panic!("the pair comes from its constructor");
+    };
+    assert_eq!(arguments[0].parameter, Some(1));
+    assert_eq!(arguments[1].parameter, Some(0));
+    assert!(matches!(arguments[1].value.kind, ExprKind::Widen(_)));
+    let optional = instance_called_by(&checked, body(&checked, "optional_result"));
+    assert_eq!(optional.locals[2].ty.to_string(), "Optional<f64>");
+}
+
 /// GEN-7 and CTRL-15: settled sequence types reach the iteration
 /// binding and its local reads, using the existing rules for shape.
 #[test]
