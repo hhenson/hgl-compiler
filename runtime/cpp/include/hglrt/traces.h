@@ -726,6 +726,16 @@ Recorded<delta_t<T>> replay_items(const Timed<T>& trace, datetime start) {
     return items;
 }
 
+/// A recorded trace already holds the absolute times and deltas that
+/// core's replay takes (CEVAL-2, CEVAL-4).
+template <class T>
+Recorded<delta_t<T>> replay_items(const Recording<T>& trace, datetime start) {
+    if (!trace.entries.empty() && std::get<0>(trace.entries.front()) < start) {
+        detail::before_start();
+    }
+    return trace.entries;
+}
+
 /// What a `const fn` is given for a trace (TST-16): "for a result type T a
 /// `list<tuple<datetime, delta<T>>>`, one tuple for each publication, in
 /// time order". An eval's trace gives what its run recorded. A trace

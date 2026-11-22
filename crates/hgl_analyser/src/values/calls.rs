@@ -69,12 +69,22 @@ impl<'a> Typer<'a> {
     /// A name left for the prelude, an operator, and a callee that is
     /// itself an expression are for later parts: the callee and the
     /// arguments are read, and the call has no type.
-    pub(super) fn call(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
-        self.call_read(node, expected)
+    pub(super) fn call(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        used: bool,
+    ) -> (ExprKind, Type) {
+        self.call_read(node, expected, used)
     }
 
     /// A call, as the form or the function its callee names.
-    fn call_read(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
+    fn call_read(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        used: bool,
+    ) -> (ExprKind, Type) {
         let (Some(callee), Some(list)) = (node.children().next(), child(node, SyntaxKind::ArgList))
         else {
             return (ExprKind::Unread, Type::Unknown);
@@ -91,6 +101,25 @@ impl<'a> Typer<'a> {
             && let Some(name) = name_token(&direct)
         {
             return self.call_function_parameter(&name, &list, index, &template);
+        }
+        // GEN-10: a runtime schema view has no ordinary value type.
+        // Resolve the language form only where no declaration or local
+        // binds that name (UNIT-10).
+        if used
+            && direct.kind() == SyntaxKind::NameExpr
+            && child(&direct, SyntaxKind::QualifiedName).is_none()
+            && let Some(name) = name_token(&direct)
+            && name.text() == "schemas"
+            && !self.bindings.contains_key(&(self.file, name.span().start))
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                self.at(node),
+                "a borrowed schema view cannot be used as an ordinary value".to_string(),
+                "GEN-10",
+            ));
+            return self.unread_call(&list);
         }
         // ERR-13: "as the callee of a call each is the form this
         // chapter defines, whatever else is in scope."

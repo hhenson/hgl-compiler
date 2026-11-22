@@ -570,8 +570,9 @@ runner: planned
 transpiler: partial
 
 - Creates an eval entry wired to core's replay and record and binds ordinary const
-  arguments for the run.
-- Left: reports replay of a trace bound from an earlier eval (TST-3, TST-5). Replay and recording require a representable temporal schema (CEVAL-3, CEVAL-4).
+  arguments for the run. Replay of a recorded trace uses its timestamps and deltas
+  (TST-3, TST-5, CEVAL-2).
+- Left: Replay and recording require a representable temporal schema (CEVAL-3, CEVAL-4).
 
 ## CEVAL-2
 

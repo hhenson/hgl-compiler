@@ -156,6 +156,7 @@ analyser: partial
 - A function's `each T in types(Ts)` checks its condition for every resolved type in the pack. An empty capture satisfies it. Equality and membership can test the bound type by name. A verdict the analyser cannot give rejects as untold (GEN-3).
 - GEN-17 adds quantification over pack keys. `any` succeeds for at least one entry and rejects an empty pack. Type and key bindings project within nested type expressions.
 - Left: named operator requirements bound by a quantifier.
+- An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
 transpiler: partial
 
