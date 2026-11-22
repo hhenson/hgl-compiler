@@ -39,7 +39,7 @@ use hgl_diagnostics::{Diagnostics, Location};
 use crate::declared::substitute_within;
 use crate::hir::{
     AnonymousFunction, Answer, Body, Callee, ConfigurationRead, DefaultExpr, Expr, ExprKind,
-    TypePackArgument, Value, ValueCategory, walk_statements, walk_statements_mut,
+    PackInput, TypePackArgument, Value, ValueCategory, walk_statements, walk_statements_mut,
 };
 use crate::program::{LocalKind, Phase, Program, Role};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
@@ -49,6 +49,17 @@ use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar,
 type Map<'a> = [(Location, &'a Argument)];
 
 use crate::values::PackTypes;
+
+/// The compile-time call inputs that specialize a declaration (FN-17, FN-19).
+#[derive(Default)]
+pub struct InstanceInputs<'a> {
+    /// Each function supplied at an original parameter slot.
+    pub functions: &'a [(usize, Callee)],
+    /// Generic type and reflected packs of the declaration.
+    pub type_packs: &'a [TypePackArgument],
+    /// Concrete entries held by the caller's packs, including an empty shape.
+    pub pack_inputs: Option<&'a [PackInput]>,
+}
 
 /// The enclosing declaration and the arguments common to its body and
 /// any anonymous bodies written inside it.
@@ -227,11 +238,31 @@ impl Program {
         functions: &[(usize, Callee)],
         packs: &[TypePackArgument],
     ) -> Option<(Signature, Body)> {
+        self.instance_with_inputs(
+            declaration,
+            generics,
+            requirements,
+            InstanceInputs {
+                functions,
+                type_packs: packs,
+                ..InstanceInputs::default()
+            },
+        )
+    }
+
+    /// Instantiate a declaration with the inputs its caller supplies.
+    pub fn instance_with_inputs(
+        &self,
+        declaration: (usize, usize),
+        generics: &[Argument],
+        requirements: &[Answer],
+        inputs: InstanceInputs<'_>,
+    ) -> Option<(Signature, Body)> {
         self.checked_instance(
             declaration,
             generics,
             requirements,
-            (functions, packs),
+            inputs,
             &RefCell::new(Diagnostics::new()),
             &mut Diagnostics::new(),
         )
@@ -245,7 +276,7 @@ impl Program {
         (module, declaration): (usize, usize),
         generics: &[Argument],
         requirements: &[Answer],
-        (functions, packs): (&[(usize, Callee)], &[TypePackArgument]),
+        inputs: InstanceInputs<'_>,
         diagnostics: &RefCell<Diagnostics>,
         graph_diagnostics: &mut Diagnostics,
     ) -> Option<(Signature, Body)> {
@@ -260,8 +291,8 @@ impl Program {
             .map(|generic| generic.at)
             .zip(generics)
             .collect();
-        let packs = PackTypes::new(&signature.generics, packs);
-        let project = |ty| packs.project(ty, &map).unwrap_or(Type::Unknown);
+        let packs = PackTypes::new(&signature.generics, inputs.type_packs);
+        let project = |ty: &Type| packs.project(ty, &map).unwrap_or(Type::Unknown);
         let mut taken = Signature {
             generics: Vec::new(),
             parameters: signature
@@ -277,7 +308,7 @@ impl Program {
         };
         let mut body = body.clone();
         let temporal = declared.declarations[declaration].kind.role() == Some(Role::Temporal);
-        let functions = hidden_captures(functions, &mut taken, &mut body, temporal);
+        let functions = hidden_captures(inputs.functions, &mut taken, &mut body, temporal);
         let arguments = InstanceArguments {
             declaration: (module, declaration),
             generics,
@@ -305,6 +336,17 @@ impl Program {
             );
         } else {
             crate::values::record(self, &mut body, graph);
+        }
+        if let Some(pack_inputs) = inputs.pack_inputs {
+            crate::values::resolve_forwarded_calls(
+                self,
+                (module, declaration),
+                (&taken, &map),
+                (&functions, pack_inputs),
+                &mut body,
+                graph_diagnostics,
+                &project,
+            );
         }
         Some((taken, body))
     }
@@ -829,6 +871,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
         Callee::Parameter { .. }
         | Callee::Anonymous(_)
         | Callee::DeferredOperator(_)
+        | Callee::DeferredPackCall(_)
         | Callee::DeferredValue
         | Callee::Unread => {}
     }

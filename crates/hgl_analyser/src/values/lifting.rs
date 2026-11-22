@@ -214,6 +214,7 @@ fn check_const_arguments(
         Callee::Parameter { .. }
         | Callee::Anonymous(_)
         | Callee::DeferredOperator(_)
+        | Callee::DeferredPackCall(_)
         | Callee::DeferredValue
         | Callee::Unread => {
             return;
@@ -398,6 +399,7 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
                 Callee::Parameter { .. }
                 | Callee::Required { .. }
                 | Callee::DeferredOperator(_)
+                | Callee::DeferredPackCall(_)
                 | Callee::Unread => join(given, Unsettled),
                 _ => given,
             }

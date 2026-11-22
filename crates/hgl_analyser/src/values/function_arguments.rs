@@ -710,6 +710,9 @@ impl<'a> Typer<'a> {
             ));
             return self.unread_call(list);
         }
+        if let Some(call) = self.defer_pack_call(list, template.result.as_ref(), None) {
+            return call;
+        }
         let slots: Vec<_> = template
             .parameters
             .iter()

@@ -226,6 +226,13 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         generics: Option<&CallArguments>,
     ) -> (ExprKind, Type) {
+        let result = match &self.program.modules[operator.module].details[operator.declaration] {
+            Detail::Callable(signature) => signature.result.as_ref(),
+            _ => None,
+        };
+        if let Some(call) = self.defer_pack_call(list, result, expected) {
+            return call;
+        }
         self.call_operator_with(name, list, operator, expected, generics, None)
     }
 
@@ -298,7 +305,7 @@ impl<'a> Typer<'a> {
         let named_generics = self.diagnostics.len() == reported
             && self.operator_generic_arguments(
                 public,
-                written.iter().map(|(key, node)| (key, node)),
+                written.iter().map(|(key, node, _)| (key, node)),
                 &mut explicit,
             );
         if replay.is_some() && named_generics {
@@ -327,7 +334,7 @@ impl<'a> Typer<'a> {
                 .filter_map(|(generic, given)| given.is_none().then_some(generic.at))
                 .collect();
             if !unknown.is_empty()
-                && written.iter().any(|(key, _)| {
+                && written.iter().any(|(key, _, _)| {
                     public_function(public, key).is_some_and(|ty| mentions(ty, &unknown))
                 })
             {
@@ -720,7 +727,7 @@ impl<'a> Typer<'a> {
     fn read_operator_arguments(
         &mut self,
         (public, declared, dependent): (&Signature, &Declaration, Option<&DependentPack>),
-        written: impl IntoIterator<Item = (Key, SyntaxNode)>,
+        written: impl IntoIterator<Item = (Key, SyntaxNode, Option<Expr>)>,
         context: Option<&[Option<Argument>]>,
         pack: Option<&hir::TypePackArgument>,
         replay: Option<ReplayedCall<'_>>,
@@ -761,13 +768,24 @@ impl<'a> Typer<'a> {
                 .iter()
                 .any(|p| p.pack == Some(Pack::Positional));
             let mark = self.mark();
-            dependent_values.extend(written.iter().filter_map(|(key, node)| {
+            dependent_values.extend(written.iter().filter_map(|(key, node, ready)| {
                 let captured = match key {
                     Key::Position(position) => *position >= fixed && !positional_pack,
+                    Key::ForwardedPosition => !positional_pack,
                     Key::Name(_) => key.public_parameter(public).is_none(),
                     _ => false,
                 };
-                captured.then(|| self.give(key.clone(), node.clone()))
+                captured.then(|| match ready {
+                    Some(value) => Given {
+                        key: key.clone(),
+                        node: node.clone(),
+                        value: value.clone(),
+                        by_place: false,
+                        explicit: None,
+                        retried: false,
+                    },
+                    None => self.give(key.clone(), node.clone()),
+                })
             }));
             self.take_back(mark, false);
         }
@@ -779,7 +797,7 @@ impl<'a> Typer<'a> {
         written
             .into_iter()
             .enumerate()
-            .map(|(position, (key, node))| {
+            .map(|(position, (key, node, ready))| {
                 let explicit = match &key {
                     Key::Position(position) => position
                         .checked_sub(fixed)
@@ -795,6 +813,15 @@ impl<'a> Typer<'a> {
                         by_place,
                         explicit: explicit.cloned(),
                         retried: by_place,
+                    }
+                } else if let Some(value) = ready {
+                    Given {
+                        key,
+                        node,
+                        value,
+                        by_place: false,
+                        explicit: None,
+                        retried: false,
                     }
                 } else if context.is_some()
                     && let Some(pattern) = public_function(public, &key)
@@ -1131,7 +1158,7 @@ impl<'a> Typer<'a> {
         (public, dependent): (&Signature, Option<usize>),
         options: &OperatorOptions<'_>,
         written_pack: Option<&hir::TypePackArgument>,
-    ) -> Vec<(Key, SyntaxNode)> {
+    ) -> Vec<(Key, SyntaxNode, Option<Expr>)> {
         let mut named_seen = false;
         let mut position = 0;
         let mut names = HashSet::new();
@@ -1148,13 +1175,24 @@ impl<'a> Typer<'a> {
             .any(|parameter| parameter.pack == Some(Pack::Named));
         let mut positional = Vec::new();
         let mut named = Vec::new();
-        for (brace, name, value) in self.call_entries(list) {
+        let mut spreads = self.forwarded_arguments(list);
+        spreads.sort_by_key(|entry| matches!(entry.key, hir::PackKey::Position(_)));
+        let explicit = self
+            .call_entries(list)
+            .into_iter()
+            .map(|(brace, name, node)| (brace, name, node, None));
+        let expanded = spreads
+            .into_iter()
+            .map(|entry| (false, None, entry.source, Some((entry.key, entry.value))));
+        for (brace, name, value, forwarded) in explicit.chain(expanded) {
             let at = name.as_ref().map_or_else(
                 || self.at(&value),
                 |name| Location::new(self.file, name.span()),
             );
-            let key = match name {
-                None => {
+            let key = match (&forwarded, name) {
+                (Some((hir::PackKey::Name(name), _)), _) => Key::Name(name.clone()),
+                (Some((hir::PackKey::Position(_), _)), _) => Key::ForwardedPosition,
+                (_, None) => {
                     if named_seen {
                         self.diagnostics.emit(error(
                             Category::Type,
@@ -1188,14 +1226,30 @@ impl<'a> Typer<'a> {
                     position += 1;
                     Key::Position(position - 1)
                 }
-                Some(name) => {
+                (_, Some(name)) => {
                     // A named brace entry does not put the parentheses
                     // into their named-argument portion (EXPR-2, EXPR-10).
                     named_seen |= !brace;
                     options.name_key(name.text(), brace)
                 }
             };
-            let own = key.public_parameter(public);
+            let own = if matches!(key, Key::ForwardedPosition) {
+                public
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .find(|(index, parameter)| {
+                        !parameter.configuration
+                            && parameter.pack.is_none()
+                            && !filled.contains(index)
+                    })
+                    .map(|(index, _)| index)
+            } else {
+                key.public_parameter(public)
+            };
+            if matches!(key, Key::ForwardedPosition) && own.is_none() {
+                positional.push(at);
+            }
             let mut duplicate = own.is_some_and(|index| !filled.insert(index));
             if let Some(text) = key.name() {
                 let known = own.is_some() || options.accepts_name(&key);
@@ -1239,7 +1293,7 @@ impl<'a> Typer<'a> {
                     "EXPR-2",
                 ));
             }
-            arguments.push((key, value));
+            arguments.push((key, value, forwarded.map(|(_, value)| value)));
         }
         for (index, parameter) in public.parameters.iter().enumerate() {
             let combined: Vec<_>;
@@ -1415,6 +1469,20 @@ pub(super) fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<O
     for argument in given {
         if let Some(index) = argument.key.public_parameter(public) {
             inputs[index] = Some(argument.ty());
+        }
+    }
+    let mut remaining = inputs
+        .iter_mut()
+        .zip(&public.parameters)
+        .filter(|(input, parameter)| {
+            input.is_none() && !parameter.configuration && parameter.pack.is_none()
+        });
+    for argument in given
+        .iter()
+        .filter(|argument| matches!(argument.key, Key::ForwardedPosition))
+    {
+        if let Some((input, _)) = remaining.next() {
+            *input = Some(argument.ty());
         }
     }
     inputs

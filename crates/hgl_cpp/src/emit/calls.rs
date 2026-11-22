@@ -139,6 +139,7 @@ impl Emitter<'_> {
             Callee::Parameter { .. } => return self.missing(at, "an unresolved function argument"),
             Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
+            | Callee::DeferredPackCall(_)
             | Callee::DeferredValue
             | Callee::Unread => {
                 return self.missing(at, "this call");

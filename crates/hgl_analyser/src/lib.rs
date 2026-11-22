@@ -87,6 +87,7 @@ mod forms;
 pub mod hir;
 mod imports;
 mod instance;
+pub use instance::InstanceInputs;
 mod phases;
 mod program;
 mod read;

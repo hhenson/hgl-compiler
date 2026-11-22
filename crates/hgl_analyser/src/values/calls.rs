@@ -531,6 +531,13 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         given: Option<&CallArguments>,
     ) -> (ExprKind, Type) {
+        let result = match &self.program.modules[module].details[declaration] {
+            Detail::Callable(signature) => signature.result.as_ref(),
+            _ => None,
+        };
+        if let Some(call) = self.defer_pack_call(list, result, expected) {
+            return call;
+        }
         // The call an `eval` stands for is this one, and not one among
         // its arguments.
         let evaluating = std::mem::take(&mut self.evaluating);

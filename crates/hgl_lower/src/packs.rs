@@ -3,7 +3,8 @@
 //! argument its own runtime slot and removes compile-time function slots.
 
 use hgl_analyser::hir::{
-    Argument, Body, Callee, ExprKind, LocalId, NodeMut, PackKey, Stmt, walk_statement_nodes_mut,
+    Argument, Body, Callee, ExprKind, LocalId, NodeMut, PackInput, PackKey, Stmt,
+    walk_statement_nodes_mut,
 };
 use hgl_analyser::{Program, Signature, Type, substitute_within};
 use hgl_diagnostics::Location;
@@ -78,6 +79,20 @@ impl Captures {
             ));
         }
         Self { entries }
+    }
+
+    /// The analyzer's input shape for an instance that forwards a pack (FN-19).
+    pub(crate) fn inputs(&self) -> Vec<PackInput> {
+        self.entries
+            .iter()
+            .filter_map(|(slot, ty)| {
+                Some(PackInput {
+                    parameter: slot.parameter,
+                    key: slot.pack.clone()?,
+                    ty: ty.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Types and keys of the captures distinguish instances of both

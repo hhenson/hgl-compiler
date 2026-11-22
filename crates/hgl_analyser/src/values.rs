@@ -85,6 +85,8 @@ mod expressions;
 mod fit;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
+mod forwarded_packs;
+pub(crate) use forwarded_packs::resolve_forwarded_calls;
 mod function_arguments;
 // Fits destinations whose graph values become known only in an instance (GEN-7).
 mod graph_instance;
@@ -583,6 +585,10 @@ struct Typer<'a> {
     /// ([`candidates::Selecting`]): where each is declared, with its
     /// argument. Empty otherwise.
     instance: Vec<(Location, crate::types::Argument)>,
+    /// Concrete entries of the enclosing instance's pack parameters.
+    pack_inputs: Option<Vec<hir::PackInput>>,
+    /// Compile-time callbacks available to forwarded calls.
+    pack_functions: Vec<(usize, hir::Callee)>,
     /// The generic value parameters of the declaration being read that
     /// its `requires` binds, each where it is declared with the constant
     /// it is bound to (GEN-3: "A positive conjunctive equality may bind
@@ -714,6 +720,8 @@ impl<'a> Typer<'a> {
             constants: Default::default(),
             selecting: tables.selecting,
             instance: Vec::new(),
+            pack_inputs: None,
+            pack_functions: Vec::new(),
             bound: Vec::new(),
             diagnostics,
         }

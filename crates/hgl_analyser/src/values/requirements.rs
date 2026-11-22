@@ -1988,7 +1988,7 @@ pub(super) fn instances_hold(
                     made.callee,
                     &made.generics,
                     &made.answers,
-                    (&[], &[]),
+                    crate::instance::InstanceInputs::default(),
                     &RefCell::new(Diagnostics::new()),
                     &mut graph_reports,
                 )
