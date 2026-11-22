@@ -14,6 +14,9 @@ mod build_reuse;
 mod common;
 #[path = "cpp/debug_tests.rs"]
 mod debug_tests;
+#[cfg(unix)]
+#[path = "common/executable.rs"]
+mod executable;
 
 use std::fs;
 use std::path::Path;
@@ -314,8 +317,9 @@ fn release_prefixes_follow_the_real_executable() {
     let file = write(&root, "flags.hgl", FLAGS);
     let bundle = root.join("bundle");
     let hgl = bundle.join("bin/hgl");
-    fs::create_dir_all(hgl.parent().unwrap()).unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_hgl"), &hgl).unwrap();
+    let source = fs::File::open(env!("CARGO_BIN_EXE_hgl")).unwrap();
+    let permissions = source.metadata().unwrap().permissions();
+    executable::publish_executable(&hgl, source, permissions);
     let linked = root.join("hgl");
     std::os::unix::fs::symlink(&hgl, &linked).unwrap();
     let sdk = bundle.join("libexec/hgraph-sdk/lib/cmake/hgraph");
@@ -2719,12 +2723,14 @@ fn builds_an_isolated_debug_application_without_running_it() {
     write(&root, "ticks.hgl", TICKS);
     write(&root, "backtest.hgl", BACKTEST);
     let builds = root.join("debug builds");
-    // hgraph's libraries built for debugging where HGL_HGRAPH_DEBUG names
-    // them, and the optimised ones HGL_HGRAPH_SDK names otherwise: the
-    // binary under test has no release beside it.
-    let libraries = match std::env::var_os("HGL_HGRAPH_DEBUG") {
-        Some(_) => "debug",
-        None => "optimised",
+    // The test binary has no release beside it. Only a package stamped
+    // for this hgl can supply debug libraries through HGL_HGRAPH_DEBUG.
+    let version = std::env::var_os("HGL_HGRAPH_DEBUG")
+        .and_then(|directory| fs::read_to_string(Path::new(&directory).join("hgl-debug.txt")).ok());
+    let libraries = if version.as_deref().map(str::trim) == Some(env!("CARGO_PKG_VERSION")) {
+        "debug"
+    } else {
+        "optimised"
     };
     let prepare = || {
         let report = hgl_in(
