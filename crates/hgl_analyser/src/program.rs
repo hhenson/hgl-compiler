@@ -638,6 +638,8 @@ pub struct NameUse {
     pub at: Location,
     /// What it is bound to.
     pub binding: Binding,
+    /// Whether this use is in a documentation example or one of its helpers (SDOC-9).
+    pub(crate) documentation_example: bool,
 }
 
 /// What a name is bound to (UNIT-10).

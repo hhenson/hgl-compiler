@@ -198,6 +198,9 @@ impl Resolver<'_> {
             name: token.text().to_string(),
             at: self.at(token),
             binding: binding.clone(),
+            documentation_example: self
+                .test_owner
+                .is_some_and(|test| self.module.tests[test].documentation_example),
         });
         Some(binding)
     }

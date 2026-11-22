@@ -92,6 +92,17 @@ export struct Box {
     value: i64
 }
 
+/** A constant with an example that uses it.
+
+Examples:
+    ```hgl
+    const fn from_example() -> i64 => documented
+
+    assert from_example() == documented
+    ```
+*/
+export const documented: i64 = 17
+
 test ordinary {
     assert true
 }

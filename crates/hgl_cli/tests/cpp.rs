@@ -1221,7 +1221,7 @@ fn runnable_documentation_examples_use_the_named_test_runner() {
         + 1;
     assert!(listing.contains(&format!("{file}:{line}:")), "{listing}");
     assert!(
-        listing.ends_with("executable cases: 7 passed, 1 failed, 0 not run\n"),
+        listing.ends_with("executable cases: 8 passed, 1 failed, 0 not run\n"),
         "{listing}"
     );
 }

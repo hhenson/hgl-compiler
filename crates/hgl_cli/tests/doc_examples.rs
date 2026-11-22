@@ -27,6 +27,7 @@ fn the_runner_lists_and_selects_examples_and_ordinary_tests() {
         "choose~2#example-1",
         "Box#example-1",
         "Box.value#example-1",
+        "documented#example-1",
     ] {
         assert!(
             listing.contains(&format!(
@@ -162,7 +163,7 @@ fn the_model_and_site_mark_the_status_on_the_documented_declaration() {
     assert_eq!(page.matches("data-example=\"shown\"").count(), 3, "{page}");
     assert_eq!(
         page.matches("data-example=\"runnable\"").count(),
-        7,
+        8,
         "{page}"
     );
 }
