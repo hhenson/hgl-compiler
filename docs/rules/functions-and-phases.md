@@ -96,9 +96,9 @@ transpiler: partial
 
 ## FN-8
 
-parser: partial
+parser: done
 
-- Reads pack parameters. The named pack declared for a function, including `without`, awaits #366.
+- Reads positional and named packs and the `for` and `without` parts of a pack declared for a function.
 
 analyser: partial
 
@@ -229,10 +229,9 @@ transpiler: partial
 
 ## FN-17
 
-parser: partial
+parser: done
 
-- Function types in parameter positions take fixed positional or named inputs, a result type and the optional `const fn` phase. Explicit generic function references are read as arguments.
-- Named packs inside the template await #366.
+- Function types in parameter positions take fixed inputs and packs, a result type and the optional `const fn` phase. Explicit generic function references are read as arguments.
 
 analyser: partial
 

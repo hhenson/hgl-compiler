@@ -231,9 +231,10 @@ transpiler: partial
 
 ## GEN-17
 
-parser: planned
+parser: partial
 
-- #366 tracks a function's remaining parameters as a named pack, and syntax for keys and member types.
+- Reads a function type's named pack and `arg_keys` and member types in requirements. `Ps[arg]` has a type form, with an index tree in positions that also allow values.
+- Left: pack key membership in a body, alongside pack values and unrolled loops (#368).
 
 analyser: planned
 
