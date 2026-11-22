@@ -20,6 +20,7 @@
 //! The caller publishes a content stamp after Ninja succeeds. The stamp
 //! covers the objects and the executables needed to reuse the build.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write as _;
@@ -319,6 +320,43 @@ impl Workspace {
                 .filter_map(|application| application.source.as_deref())
                 .map(object),
         );
+        if !targets.is_empty() {
+            Stamp::remove_unverified(previous, self, &artifacts)?;
+            self.build_targets(ninja, &targets, jobs)?;
+        }
+        Ok(artifacts)
+    }
+
+    /// Builds the selected test executables and their object dependencies.
+    /// The full manifest lets a later selection reuse the same files.
+    pub(super) fn build_debug_tests(
+        &self,
+        ninja: &Path,
+        output: &Output,
+        stems: &BTreeSet<&str>,
+        jobs: Option<&str>,
+        previous: Option<&Stamp>,
+    ) -> Result<Vec<String>, String> {
+        let mut targets = Vec::new();
+        let mut artifacts = BTreeSet::new();
+        for executable in &output.executables {
+            if stems.contains(executable.stem.as_str()) {
+                let target = test_target(executable);
+                artifacts.insert(target.clone());
+                targets.push(target);
+                artifacts.insert(object(&executable.source));
+                artifacts.extend(
+                    executable
+                        .units
+                        .iter()
+                        .map(|&unit| object(&output.units[unit].source)),
+                );
+            }
+        }
+        if targets.len() != stems.len() {
+            return Err("the test build plan is missing a selected module".to_string());
+        }
+        let artifacts: Vec<_> = artifacts.into_iter().collect();
         if !targets.is_empty() {
             Stamp::remove_unverified(previous, self, &artifacts)?;
             self.build_targets(ninja, &targets, jobs)?;

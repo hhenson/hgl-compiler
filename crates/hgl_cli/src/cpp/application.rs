@@ -131,11 +131,44 @@ pub(super) type Libraries = Option<(&'static str, std::ffi::OsString)>;
 #[serde(rename_all = "camelCase")]
 pub(super) struct DebugLaunch {
     executable: String,
-    arguments: [String; 2],
+    arguments: Vec<String>,
     working_directory: String,
     environment: serde_json::Map<String, serde_json::Value>,
     /// hgraph's libraries the build links ([`Hgraph::json`]).
     hgraph: serde_json::Value,
+}
+
+impl DebugLaunch {
+    /// The native debugger fields shared by applications and test modules.
+    pub(super) fn new(
+        executable: &Path,
+        arguments: Vec<String>,
+        libraries: &Libraries,
+        hgraph: &Hgraph,
+    ) -> Result<Self, String> {
+        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        let mut environment = serde_json::Map::new();
+        if let Some((name, value)) = libraries {
+            let value = value
+                .to_str()
+                .ok_or_else(|| format!("{name} is not UTF-8"))?;
+            environment.insert((*name).into(), value.into());
+        }
+        Ok(Self {
+            executable: debug_path(executable)?,
+            arguments,
+            working_directory: debug_path(&cwd)?,
+            environment,
+            hgraph: hgraph.json(),
+        })
+    }
+}
+
+/// A path as the debugger's launch description gives it.
+pub(super) fn debug_path(path: &Path) -> Result<String, String> {
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("debug launch path is not UTF-8: {}", path.display()))
 }
 
 /// The launch description consumed by a native debugger, of a build that
@@ -146,27 +179,13 @@ pub(super) fn debug_launch(
     libraries: Libraries,
     hgraph: &Hgraph,
 ) -> Result<DebugLaunch, String> {
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let mut environment = serde_json::Map::new();
-    if let Some((name, value)) = libraries {
-        let value = value
-            .into_string()
-            .map_err(|_| format!("{name} is not UTF-8"))?;
-        environment.insert(name.into(), value.into());
-    }
-    let path_text = |path: &Path| {
-        path.to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| format!("debug launch path is not UTF-8: {}", path.display()))
-    };
-    let results = path_text(&workspace.directory.join("results.txt"))?;
-    Ok(DebugLaunch {
-        executable: path_text(&workspace.application(path))?,
-        arguments: [results, "--debug-console".to_string()],
-        working_directory: path_text(&cwd)?,
-        environment,
-        hgraph: hgraph.json(),
-    })
+    let results = debug_path(&workspace.directory.join("results.txt"))?;
+    DebugLaunch::new(
+        &workspace.application(path),
+        vec![results, "--debug-console".to_string()],
+        &libraries,
+        hgraph,
+    )
 }
 
 /// Runs the executable of `application` built in `workspace`, with

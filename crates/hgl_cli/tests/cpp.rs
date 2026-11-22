@@ -12,6 +12,8 @@
 #[path = "cpp/build_reuse.rs"]
 mod build_reuse;
 mod common;
+#[path = "cpp/debug_tests.rs"]
+mod debug_tests;
 #[cfg(unix)]
 #[path = "common/executable.rs"]
 mod executable;

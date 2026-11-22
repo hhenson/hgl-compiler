@@ -48,6 +48,10 @@ pub(super) enum Action {
 /// The host entry, its per-test timeout and its generated source map.
 #[derive(Deserialize, Serialize)]
 pub(super) struct NativeTest {
+    /// The containing module, also the executable's module. A stamp
+    /// without this field can still provide old artifact digests.
+    #[serde(default)]
+    pub(super) module: String,
     pub(super) stem: String,
     pub(super) timeout: Option<Duration>,
     pub(super) statements: Vec<(usize, String)>,
@@ -150,6 +154,7 @@ impl TestCase {
             {
                 Some(test) => match test.executable {
                     Some(index) => Action::Run(NativeTest {
+                        module: output.executables[index].module.clone(),
                         stem: output.executables[index].stem.clone(),
                         timeout: test.limit(),
                         statements: test
