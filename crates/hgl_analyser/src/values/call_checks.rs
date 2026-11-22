@@ -73,11 +73,49 @@ impl<'a> Typer<'a> {
             }
         }
         self.store_call(kind, connected);
+        self.configuration_connections(&selected, connected);
         self.capabilities_given(&selected);
         self.fixed_arguments(&selected);
         self.traces_given(&selected, evaluating);
         self.store_keys(&selected);
         self.wake_durations(&selected);
+    }
+
+    /// EXPR-14: in composition, a value function's declared configuration
+    /// binds at graph construction. The selected slot decides for both
+    /// call spellings. A `const` argument is checked under FN-3.
+    pub(super) fn configuration_connections(
+        &mut self,
+        selected: &Selected,
+        connected: impl Fn(&Self, &Expr) -> bool,
+    ) {
+        let declared = &self.program.modules[selected.module].declarations[selected.declaration];
+        let Some(signature) = selected.signature else {
+            return;
+        };
+        if !self.graph || declared.kind.role() != Some(Role::Value) {
+            return;
+        }
+        for argument in selected.arguments {
+            let Some(parameter) = argument
+                .parameter
+                .and_then(|slot| signature.parameters.get(slot))
+            else {
+                continue;
+            };
+            if parameter.configuration && !parameter.constant && connected(self, &argument.value) {
+                self.diagnostics.emit(error(
+                    Category::Phase,
+                    codes::CONNECTION_AS_CONSTANT,
+                    argument.value.at,
+                    format!(
+                        "`{}` configures `{}`, which binds it where the graph is built, and this is a connection",
+                        parameter.name, declared.name,
+                    ),
+                    "EXPR-14",
+                ));
+            }
+        }
     }
 
     /// TIME-8: "A wake asked for with a `duration` takes one more than

@@ -432,14 +432,29 @@ impl Emitter<'_> {
         // order, before the call; a lambda called where the call is
         // gives them a block to be in.
         let mut given: Vec<String> = vec![String::new(); signature.parameters.len()];
+        let native_candidate = callee.declaration().is_some_and(|(module, declaration)| {
+            matches!(
+                program.modules[module].declarations[declaration].kind,
+                DeclarationKind::NativeCandidate(..)
+            )
+        });
         let joined = |given: Vec<String>| {
-            given
-                .into_iter()
-                .zip(&signature.parameters)
-                .filter(|(_, parameter)| !matches!(parameter.ty, Type::Function(_)))
-                .map(|(argument, _)| argument)
-                .collect::<Vec<_>>()
-                .join(", ")
+            let argument = |(slot, parameter): (usize, &hgl_analyser::Parameter)| {
+                (!matches!(parameter.ty, Type::Function(_))).then(|| given[slot].as_str())
+            };
+            let ordered: Vec<_> = if native_candidate {
+                names::native_candidate_parameters(signature)
+                    .filter_map(argument)
+                    .collect()
+            } else {
+                signature
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .filter_map(argument)
+                    .collect()
+            };
+            ordered.join(", ")
         };
         let ordered: Vec<(usize, String, bool, Held)> =
             written.into_iter().chain(defaulted).collect();

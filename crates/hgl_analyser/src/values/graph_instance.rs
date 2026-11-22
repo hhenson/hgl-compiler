@@ -26,7 +26,7 @@ use crate::hir::{
     self, BinaryOperator, Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut,
     Stmt, UnaryOperator, Value, ValueCategory,
 };
-use crate::program::{OperatorRef, Program, Role};
+use crate::program::{Program, Role};
 use crate::syntax::ungrouped;
 use crate::types::{Argument, Detail, Signature, Type};
 
@@ -196,11 +196,14 @@ impl GraphDestinations {
                 kind @ ExprKind::Call { .. } if !self.unsettled_arguments.is_empty() => {
                     // FN-9: use the graph's injected locals and typed
                     // aliases to recognize the same store as source typing.
-                    typer.store_call(kind, |_, value| {
+                    let connected = |_: &Typer<'_>, value: &Expr| {
                         self.unsettled_arguments.contains(&value.at)
                             && value.category == ValueCategory::Connection
-                    });
-                    self.check_configuration(&mut typer, kind);
+                    };
+                    typer.store_call(kind, connected);
+                    if let Some(selected) = super::Selected::of(program, kind) {
+                        typer.configuration_connections(&selected, connected);
+                    }
                 }
                 _ => {}
             });
@@ -210,56 +213,6 @@ impl GraphDestinations {
             &body.statements,
             owner.graph_return_checks[declaration].as_ref(),
         );
-    }
-
-    /// EXPR-14: only an actual brace entry whose category was unknown
-    /// at source can require another check against the selected parameter.
-    fn check_configuration(&self, typer: &mut Typer<'_>, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee:
-                Callee::Candidate {
-                    operator,
-                    module,
-                    declaration,
-                    ..
-                },
-            arguments,
-            form,
-            braced,
-            ..
-        } = kind
-        else {
-            return;
-        };
-        if braced.is_empty() {
-            return;
-        }
-        let Some(Detail::Callable(signature)) =
-            typer.program.modules[*module].details.get(*declaration)
-        else {
-            return;
-        };
-        let operator = OperatorRef {
-            module: operator.0,
-            declaration: operator.1,
-        };
-        for argument in arguments {
-            let value = &argument.value;
-            if self.unsettled_arguments.contains(&value.at)
-                && braced.contains(&value.at)
-                && let Some(parameter) = argument
-                    .parameter
-                    .and_then(|slot| signature.parameters.get(slot))
-            {
-                typer.configuration_input(
-                    (operator, *form),
-                    (*module, *declaration),
-                    parameter,
-                    value,
-                    value.category,
-                );
-            }
-        }
     }
 
     fn fit_destination(&self, typer: &mut Typer<'_>, node: NodeMut<'_>) {

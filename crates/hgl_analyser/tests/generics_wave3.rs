@@ -652,7 +652,7 @@ fn the_fragments_judged_where_they_are_declared_are_accepted() {
     assert_eq!(called(&checked, body(&checked, "same")), ["none"]);
     assert_eq!(
         called(&checked, &instance("same_ints")),
-        ["eq_(i64, i64, f64, f64)"]
+        ["eq_(f64, f64, i64, i64)"]
     );
 }
 
@@ -2781,7 +2781,7 @@ fn graph_instances_select_configured_symbols_after_types_settle() {
         .iter()
         .map(|argument| argument.parameter)
         .collect();
-    assert_eq!(slots, [Some(0), Some(3), Some(2), Some(1)]);
+    assert_eq!(slots, [Some(2), Some(1), Some(0), Some(3)]);
     assert!(matches!(arguments[2].value.kind, ExprKind::Block { .. }));
     assert_eq!(arguments[2].value.ty.to_string(), "f64");
 }

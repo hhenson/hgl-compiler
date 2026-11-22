@@ -264,7 +264,7 @@ analyser: partial
 
 transpiler: partial
 
-- Passes configuration as values, const graph inputs or connections in functions, node hooks, graphs and operator candidates. The SDK tests cover each role.
+- Passes scalar configuration to value functions, hooks and value candidates. Temporal declarations can receive connected configuration where their own parameter rules admit it (EXPR-14).
 - Calls through a static function parameter use the callback declaration's configuration defaults (FN-17).
 
 ## FN-19

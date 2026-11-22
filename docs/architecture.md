@@ -2232,7 +2232,9 @@ fails where a public header brings it in.
 
 A native is a function named as the emitter names the candidate
 (`hgl_cpp`, `names::native_candidate`): the operator's name and the type
-of each parameter, `add__i64_i64`. One with a generic type parameter is a
+of each parameter, `add__i64_i64`. Both the name and the native call put
+ordinary parameters before configuration. Argument evaluation follows
+the written order (EXPR-13). One with a generic type parameter is a
 template the generated code instances, `lt__T_T<i64>`; one with a generic
 value parameter takes it as a template argument,
 `div__f64_f64<ZeroPolicy::ieee>`, and so do the candidates that differ in
