@@ -1286,8 +1286,21 @@ pub struct AnonymousFunction {
     pub body: Body,
     /// The bindings in the expression's enclosing body that supply those captures.
     pub captures: Vec<LocalId>,
-    /// Type and value arguments of the enclosing specialization, if any.
-    pub specialization: Vec<GenericArgument>,
+    /// A capture index and its entry key when its binding is an enclosing pack.
+    pub pack_captures: Vec<(usize, PackKey)>,
+    /// The concrete arguments of the enclosing specialization, if any.
+    pub specialization: AnonymousSpecialization,
+}
+
+/// The enclosing call inputs that can determine an anonymous body's code.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AnonymousSpecialization {
+    /// The enclosing declaration's non-pack generic arguments.
+    pub generics: Vec<GenericArgument>,
+    /// Its type packs, with their keys (GEN-17).
+    pub type_packs: Vec<TypePackArgument>,
+    /// The shape of its value packs used in forwarding (FN-19).
+    pub pack_inputs: Vec<PackInput>,
 }
 
 impl AnonymousFunction {
@@ -1296,17 +1309,31 @@ impl AnonymousFunction {
         &self.body.locals[self.template.parameters.len() + index].ty
     }
 
+    /// The captured entry key, if the enclosing binding is a pack.
+    pub fn capture_pack_key(&self, index: usize) -> Option<&PackKey> {
+        self.pack_captures
+            .iter()
+            .find_map(|(capture, key)| (*capture == index).then_some(key))
+    }
+
     /// What a caller passes for this lexical capture (FN-14). A child
     /// selected in the helper still needs its parent's endpoint (ERR-14).
     pub fn capture_value(&self, index: usize, binding: &Local, at: Location) -> Expr {
         let capture = self.captures[index];
         let ty = self.capture_type(index);
-        let (kind, ty) =
-            if matches!(ty, Type::Endpoint(_)) && !matches!(binding.ty, Type::Endpoint(_)) {
-                (ExprKind::EndpointOf(capture), ty.clone())
-            } else {
-                (ExprKind::Local(capture), binding.ty.clone())
-            };
+        let (kind, ty) = if let Some(key) = self.capture_pack_key(index) {
+            (
+                ExprKind::PackEntry {
+                    pack: capture,
+                    key: key.clone(),
+                },
+                ty.clone(),
+            )
+        } else if matches!(ty, Type::Endpoint(_)) && !matches!(binding.ty, Type::Endpoint(_)) {
+            (ExprKind::EndpointOf(capture), ty.clone())
+        } else {
+            (ExprKind::Local(capture), binding.ty.clone())
+        };
         Expr {
             kind,
             ty,
@@ -1329,8 +1356,21 @@ pub struct TypePackArgument {
     /// The enclosing type pack that supplies the rest of this reflected
     /// parameter pack when the static function argument is known (GEN-17).
     pub forwarded_from: Option<Location>,
+    /// The fixed inputs left out of this reflection, kept for a receiver
+    /// whose function type divides the same inputs at another place (GEN-17).
+    pub reflected: Option<ReflectedInputs>,
     /// Each type's name or position in the same order (GEN-17).
     pub keys: Vec<PackKey>,
+}
+
+/// The prefix of a function's inputs covered by the fixed part of a template.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReflectedInputs {
+    /// How many fixed inputs the template specifies (GEN-17).
+    pub fixed: usize,
+    /// Each fixed input's original key and type. An unapplied template
+    /// can leave a name unknown until the static function is supplied.
+    pub prefix: Vec<(Option<PackKey>, Type)>,
 }
 
 impl TypePackArgument {
@@ -1342,6 +1382,7 @@ impl TypePackArgument {
             types,
             infer_from_arguments: false,
             forwarded_from: None,
+            reflected: None,
             keys,
         }
     }
@@ -1354,7 +1395,29 @@ impl TypePackArgument {
             types,
             infer_from_arguments: false,
             forwarded_from: None,
+            reflected: None,
             keys,
+        }
+    }
+
+    /// Types that also matter if this reflection is forwarded to another template.
+    pub(crate) fn types_with_prefix(&self) -> impl Iterator<Item = &Type> {
+        self.types.iter().chain(
+            self.reflected
+                .iter()
+                .flat_map(|inputs| inputs.prefix.iter().map(|(_, ty)| ty)),
+        )
+    }
+
+    /// Specialize the pack's member types and any fixed inputs it can forward.
+    pub(crate) fn place_types(&mut self, mut place: impl FnMut(&Type) -> Type) {
+        for ty in &mut self.types {
+            *ty = place(ty);
+        }
+        if let Some(inputs) = &mut self.reflected {
+            for (_, ty) in &mut inputs.prefix {
+                *ty = place(ty);
+            }
         }
     }
 
