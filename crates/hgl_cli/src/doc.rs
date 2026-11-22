@@ -9,6 +9,8 @@ use clap::{Args, ValueEnum};
 
 use crate::{EXIT_FAILED, LimitArgs, parse_program, report};
 
+mod site;
+
 /// Arguments of `hgl doc`.
 #[derive(Args)]
 pub(crate) struct DocArgs {
@@ -80,7 +82,7 @@ pub(crate) fn run(arguments: &DocArgs) -> ExitCode {
         .collect();
     let path = |file: hgl_source::FileId| paths[file.index()].clone();
     let result = match arguments.format {
-        Format::Html => write_site(
+        Format::Html => site::write(
             arguments
                 .out
                 .as_deref()
@@ -96,19 +98,6 @@ pub(crate) fn run(arguments: &DocArgs) -> ExitCode {
         return ExitCode::from(EXIT_FAILED);
     }
     ExitCode::SUCCESS
-}
-
-/// Writes the generated files under the chosen directory.
-fn write_site(directory: &Path, files: Vec<hgl_doc::SiteFile>) -> io::Result<()> {
-    fs::create_dir_all(directory)?;
-    for file in files {
-        let destination = directory.join(file.path);
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(destination, file.contents)?;
-    }
-    Ok(())
 }
 
 fn write_json(
