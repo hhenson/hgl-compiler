@@ -356,6 +356,29 @@ impl Emitter<'_> {
                 continue;
             }
             let value = self.expression(scope, &argument.value);
+            // TYPE-10: the ordinary unsized parameter takes the fixed
+            // list's entries. Read the array once, in argument order.
+            if matches!(
+                (&parameter.ty, &argument.value.ty),
+                (
+                    Type::List { size: None, .. },
+                    Type::List { size: Some(_), .. }
+                )
+            ) {
+                let Some(ty) = self.named_type(&parameter.ty) else {
+                    return self.missing(at, &format!("the type `{}`", parameter.ty));
+                };
+                let list = format!(
+                    "[](const auto& entries) {{ return {ty}(entries.begin(), entries.end()); }}({value})"
+                );
+                written.push((
+                    index,
+                    list,
+                    self.may_fail_here(&argument.value),
+                    Held::Value(ty),
+                ));
+                continue;
+            }
             let Some(ty) = self.named_type(&argument.value.ty) else {
                 return self.missing(at, &format!("the type `{}`", argument.value.ty));
             };

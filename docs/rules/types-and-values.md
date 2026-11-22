@@ -149,7 +149,8 @@ analyser: partial
 - A size is a count that is not negative; `unbounded`; size in identity, by value; tuples distinct from lists
 - A size is read by the one reader (`constant`) as an `i64`: a constant of a module, and a constant expression of those, is its value (UNIT-13); a list constant of another length than its place's size is of another type
 - A size a generic value parameter gives is held where the parameter is given (`values::sizes`): by a struct application written in any type, a construction's and a parent's included, its argument written, defaulted, or worked out from a size expression, through the fields of the structs it applies; and by a call of a generic function, in its parameters and result. A negative count, or no count, is `list.size` there
-- Left: an unsized pattern accepting a fixed size; a size inside a generic body, a local's `list<i64, N - 3>`, which GEN-7 judges once where the body is declared
+- Ordinary and generic value functions accept a fixed-size list at an unsized `list<T>` parameter when the element type agrees.
+- Left: fixed-size connections at unsized inputs, and a size inside a generic body, a local's `list<i64, N - 3>`, which GEN-7 judges once where the body is declared
 
 transpiler: partial
 
