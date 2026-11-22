@@ -137,9 +137,8 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
             &mut diagnostics,
         );
         parsed.push(ParsedFile {
-            file,
-            root: tree.syntax(),
             omit: omit(name, text),
+            ..ParsedFile::new(file, tree.syntax())
         });
     }
     let front_end_errors = diagnostics.len();

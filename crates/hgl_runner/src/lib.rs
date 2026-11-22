@@ -41,7 +41,7 @@ mod owner;
 
 use hgl_analyser::{ParsedFile, Program, analyse};
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location, Severity};
-use hgl_source::{FileId, SourceMap, Span};
+use hgl_source::{FileId, SourceMap};
 use serde::{Deserialize, Serialize};
 
 pub use annotation::Expectation;
@@ -298,7 +298,7 @@ fn prepare_cases(
     // 1. The annotations, and 2. what can own them.
     let mut expectations: Vec<Expectation> = Vec::new();
     let mut candidates: Vec<Owner> = Vec::new();
-    for parsed in files {
+    for parsed in files.iter().filter(|parsed| !parsed.compiler_supplied) {
         let source = sources.file(parsed.file);
         expectations.extend(annotation::read(
             source,
@@ -360,16 +360,19 @@ fn prepare_cases(
     let without = |kept: Option<usize>| -> Vec<ParsedFile> {
         files
             .iter()
-            .map(|parsed| ParsedFile {
-                file: parsed.file,
-                root: parsed.root.clone(),
-                omit: owning
-                    .iter()
-                    .filter(|&&owner| Some(owner) != kept)
-                    .map(|&owner| &candidates[owner])
-                    .filter(|owner| owner.file == parsed.file)
-                    .map(|owner| owner.span)
-                    .collect::<Vec<Span>>(),
+            .map(|parsed| {
+                // Retain source scope (TST-14) and documentation
+                // examples of surviving declarations (SDOC-9).
+                let mut file = parsed.clone();
+                file.omit.extend(
+                    owning
+                        .iter()
+                        .filter(|&&owner| Some(owner) != kept)
+                        .map(|&owner| &candidates[owner])
+                        .filter(|owner| owner.file == parsed.file)
+                        .map(|owner| owner.span),
+                );
+                file
             })
             .collect()
     };

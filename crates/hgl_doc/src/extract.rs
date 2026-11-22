@@ -13,8 +13,8 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::{FileId, SourceMap};
 
 use crate::model::{
-    Bounds, Declaration, Documentation, Entry, Generic, Interface, Model, Module, Parameter, Part,
-    ResultType, SCHEMA_VERSION, Section, Source,
+    Bounds, Declaration, Documentation, Entry, Example, Generic, Interface, Model, Module,
+    Parameter, Part, ResultType, SCHEMA_VERSION, Section, Source,
 };
 
 /// An analysed declaration's module and declaration indices.
@@ -57,7 +57,12 @@ pub(crate) fn build<'a>(
                 for (index, declaration) in data.declarations.iter().enumerate() {
                     let module_candidate = declaration.test_owner.is_none()
                         && matches!(declaration.kind.candidate(), Some((_, Some(_))));
-                    if module_candidate || (!private && !declaration.is_public()) {
+                    if module_candidate
+                        || declaration
+                            .test_owner
+                            .is_some_and(|test| data.tests[test].documentation_example)
+                        || (!private && !declaration.is_public())
+                    {
                         continue;
                     }
                     let id = (module, index);
@@ -71,7 +76,7 @@ pub(crate) fn build<'a>(
                     declarations.push(((declaration.file, declaration.at.span.start), item));
                 }
                 if private {
-                    for test in &data.tests {
+                    for test in data.tests.iter().filter(|test| !test.documentation_example) {
                         let part = &data.files[test.file];
                         declarations.push((
                             (test.file, test.at.span.start),
@@ -442,6 +447,15 @@ fn documentation(syntax: &SyntaxNode) -> Option<Documentation> {
         text: comment.text(),
         summary,
         sections,
+        examples: comment
+            .examples()
+            .into_iter()
+            .map(|example| Example {
+                code: example.code,
+                position: example.position,
+                runnable: example.runnable,
+            })
+            .collect(),
     })
 }
 

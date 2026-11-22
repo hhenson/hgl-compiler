@@ -123,11 +123,17 @@ impl<'a> BuildRequest<'a> {
         let has_replacements =
             !self.replacements.arguments.is_empty() || !self.replacements.configuration.is_empty();
         if self.tests && !has_replacements {
-            let parsed = crate::parse_sources(inputs, limits, None)?;
+            let parsed = crate::parse_sources(inputs, limits, None, true)?;
             return self.prepare_tests(parsed.sources, &parsed.files, &parsed.diagnostics, None);
         }
-        let checked =
-            crate::prepare_program(inputs, limits, &self.replacements, self.running, self.debug)?;
+        let checked = crate::prepare_program(
+            inputs,
+            limits,
+            &self.replacements,
+            self.running,
+            self.debug,
+            self.tests,
+        )?;
         if self.tests {
             return self.prepare_tests(
                 checked.sources,

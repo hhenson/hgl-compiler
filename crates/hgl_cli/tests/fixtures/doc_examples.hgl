@@ -1,0 +1,108 @@
+/** Documentation examples for this module.
+
+Examples:
+    > ~~~hgl
+    > let label = """
+    >café
+    > """
+    > assert label == "café"
+    > ~~~
+*/
+module demo.documentation_examples
+
+const fn private_twice(value: i64) -> i64 => value * 2
+
+fn doubling_node(value: i64) -> i64 {
+    when { return value * 2 }
+}
+
+fn doubling_graph(value: i64) -> i64 {
+    return doubling_node(value)
+}
+
+/** Doubles a value.
+
+```hgl
+This displayed fragment is deliberately not HGL.
+```
+
+Examples:
+    ```hgl
+    fn local_node(value: i64) -> i64 {
+        when { return value + 1 }
+    }
+
+    assert private_twice(3) == 6
+    assert eval local_node(value: [1, _, 3]) == [2, _, 4]
+    ```
+
+    ~~~hgl no-run
+    This displayed fragment is also deliberately not HGL.
+    ~~~
+
+    ~~~hgl
+    fn local_node(value: i64) -> i64 {
+        when { return value + 2 }
+    }
+
+    assert eval local_node(value: [1, _, 3]) == [3, _, 5]
+    assert eval doubling_graph(value: [2, _, 4]) == [4, _, 8]
+    ~~~
+
+Args:
+    value: ```hgl
+        assert shown_entry_only
+*/
+export const fn twice(value: i64) -> i64 => private_twice(value)
+
+/** An operator with an example.
+
+Examples:
+    ```hgl
+    assert choose(3) == 3
+    ```
+*/
+export operator choose(value: i64) -> i64
+
+/** A candidate with its own example.
+
+Examples:
+    ```hgl
+    assert choose(4) == 4
+    ```
+*/
+impl const fn choose(value: i64) -> i64 => value
+
+/** A struct with a deliberately failing example.
+
+Examples:
+    ~~~hgl
+    let box = Box(value: 5)
+    assert box.value == 7
+    ~~~
+*/
+export struct Box {
+    /** The held value.
+
+    Examples:
+        ```hgl
+        assert Box(value: 2).value == 2
+        ```
+    */
+    value: i64
+}
+
+/** A constant with an example that uses it.
+
+Examples:
+    ```hgl
+    const fn from_example() -> i64 => documented
+
+    assert from_example() == documented
+    ```
+*/
+export const documented: i64 = 17
+
+test ordinary {
+    assert true
+}
