@@ -28,6 +28,7 @@ use hgl_analyser::{ConstantValue, NamedKind, Type};
 
 use super::Emitter;
 use super::forms::Family;
+use super::graphs::WIRING;
 use super::names;
 use super::nodes::{Kind, Role};
 use super::statements::Scope;
@@ -42,6 +43,14 @@ enum Shape<'t> {
     Growing(&'t Type),
     /// `list<V, N>`, of its element and size.
     Fixed(&'t Type, i64),
+}
+
+/// Keep the fixed container conversion guarded even when the analyser
+/// could not compare the extents. The loop itself always visits its source.
+fn check_extent(items: &str, count: i64) -> String {
+    format!(
+        "if ({items}.size() != ::std::size_t{{{count}}}) throw ::std::logic_error(\"list comprehension extent does not match its result type\");\n"
+    )
 }
 
 /// The shape of `ty`, where it is a list this family writes: a fixed list
@@ -125,6 +134,131 @@ fn native(operation: EndpointOperation) -> Option<&'static str> {
 }
 
 impl Emitter<'_> {
+    /// Write the evaluation of an ordinary list comprehension (EXPR-17).
+    /// Collect its entries before making a fixed array so even its
+    /// elements with no default construction can be built in order.
+    pub(super) fn list_comprehension(
+        &mut self,
+        scope: &mut Scope,
+        value: &Expr,
+        (binding, sequence, entry): (usize, &Expr, &Expr),
+    ) -> String {
+        let Type::List { element, size } = &value.ty else {
+            return self.missing(value.at, "this list comprehension");
+        };
+        let Some(result) = self.written_type(&value.ty, value.at) else {
+            return "0".to_string();
+        };
+        let fixed = if let Some(size) = size {
+            let ConstantValue::Int(count) = size.value else {
+                return self.missing(
+                    value.at,
+                    "a list comprehension with an unresolved fixed size",
+                );
+            };
+            let Some(element) = self.written_type(element, value.at) else {
+                return "0".to_string();
+            };
+            Some((count, element))
+        } else {
+            None
+        };
+        let collection = fixed.as_ref().map_or_else(
+            || result.clone(),
+            |(_, element)| format!("::std::vector<{element}>"),
+        );
+        let items = names::temporary("comprehension_items", self.temporary());
+        let name = names::identifier(&scope.body.locals[binding].name);
+        let saved = std::mem::take(&mut scope.before);
+        scope.conditional += 1;
+        let header = if let ExprKind::Range { lower, upper } = &sequence.kind {
+            self.range_header(scope, lower, upper, &name)
+        } else {
+            let source = self.expression(scope, sequence);
+            let source_value = names::temporary("comprehension_source", self.temporary());
+            scope
+                .before
+                .push(format!("const auto {source_value} = {source};"));
+            format!("for ([[maybe_unused]] const auto& {name} : {source_value}) {{")
+        };
+        let begin = std::mem::take(&mut scope.before).join("\n");
+        let entry = self.expression(scope, entry);
+        let before_entry = std::mem::replace(&mut scope.before, saved).join("\n");
+        scope.conditional -= 1;
+        scope.acted = true;
+        let (check, output) = if let Some((count, _)) = fixed {
+            let check = check_extent(&items, count);
+            let output = format!(
+                "[&]<::std::size_t... I>(::std::index_sequence<I...>) {{ return {result}{{::std::move({items}[I])...}}; }}(::std::make_index_sequence<{count}>{{}})"
+            );
+            (check, output)
+        } else {
+            (String::new(), items.clone())
+        };
+        format!(
+            "[&]() -> {result} {{\n{begin}\n{collection} {items};\n{header}\n{before_entry}\n{items}.emplace_back({entry});\n}}\n{check}return {output};\n}}()"
+        )
+    }
+
+    /// Compose one connection per pass and combine them into the fixed
+    /// list's structural port (EXPR-17). A range carries ordinary values
+    /// and a fixed input list carries child connections.
+    fn list_comprehension_port(
+        &mut self,
+        scope: &mut Scope,
+        value: &Expr,
+        (binding, sequence, entry): (usize, &Expr, &Expr),
+    ) -> String {
+        let Some(Shape::Fixed(element, count)) = shape(&value.ty) else {
+            return self.missing(
+                value.at,
+                "a composed list comprehension without a supported fixed size",
+            );
+        };
+        let Some(schema) = self.temporal_schema(&value.ty, value.at) else {
+            return "0".to_string();
+        };
+        let input_count = match &sequence.kind {
+            ExprKind::Range { .. } => count,
+            _ => match shape(&sequence.ty) {
+                Some(Shape::Fixed(_, count)) => count,
+                _ => {
+                    return self.missing(
+                        sequence.at,
+                        "a comprehension over a list without a fixed size",
+                    );
+                }
+            },
+        };
+        let name = names::identifier(&scope.body.locals[binding].name);
+        let children = names::temporary("comprehension_children", self.temporary());
+        let cursor = names::temporary("comprehension_position", self.temporary());
+        let saved = std::mem::take(&mut scope.before);
+        scope.conditional += 1;
+        let header = if let ExprKind::Range { lower, upper } = &sequence.kind {
+            self.range_header(scope, lower, upper, &name)
+        } else {
+            let source = self.wiring_form(scope, sequence);
+            let source_port = names::temporary("comprehension_source", self.temporary());
+            scope
+                .before
+                .push(format!("const auto {source_port} = {source};"));
+            format!(
+                "for (::hgraph::Int {cursor} = 0; {cursor} < {input_count}; ++{cursor}) {{ [[maybe_unused]] const auto {name} = ::{}::element_port({source_port}, {cursor});",
+                runtime::NAMESPACE
+            )
+        };
+        let begin = std::mem::take(&mut scope.before).join("\n");
+        let entry = self.connection(scope, entry, element);
+        let before_entry = std::mem::replace(&mut scope.before, saved).join("\n");
+        scope.conditional -= 1;
+        scope.acted = true;
+        let check = check_extent(&children, count);
+        format!(
+            "[&]() -> ::hgraph::Port<{schema}> {{\n{begin}\n::std::vector<::hgraph::WiringPortRef> {children};\n{children}.reserve({count});\n{header}\n{before_entry}\n{children}.push_back(({entry}).erased());\n}}\n{check}return {{&{WIRING}, ::hgraph::WiringPortRef::structural_source(::hgraph::schema_descriptor<{schema}>::ts_meta(), ::std::move({children}))}};\n}}()"
+        )
+    }
+
     /// The endpoint of `child`, a child of a temporal input that is a
     /// list, an element at any depth (TIME-1: "A
     /// child of a collection ... is an endpoint whether or not it is
@@ -398,6 +532,19 @@ impl Family for Lists {
         scope: &mut Scope<'_>,
         value: &Expr,
     ) -> Option<String> {
+        if let ExprKind::ListComprehension {
+            composition: true,
+            binding,
+            sequence,
+            entry,
+        } = &value.kind
+        {
+            return Some(emitter.list_comprehension_port(
+                scope,
+                value,
+                (*binding, sequence, entry),
+            ));
+        }
         let ExprKind::Index { base, index } = &value.kind else {
             return None;
         };

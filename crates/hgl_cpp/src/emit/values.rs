@@ -241,9 +241,7 @@ impl Emitter<'_> {
             self.unsupported(at, "a constant with no value");
             return;
         };
-        // The analyser keeps a constant's value with no locals of its
-        // own, so a block in it that runs statements cannot be written.
-        if changes(value) {
+        if changes(&value.value) {
             self.unsupported(at, "a constant whose value runs statements");
             return;
         }
@@ -251,12 +249,9 @@ impl Emitter<'_> {
             return;
         };
         let (namespace, name) = names::placed(program, self.module, index, None);
-        let empty = Body {
-            locals: Vec::new(),
-            statements: Vec::new(),
-        };
-        let mut scope = Scope::cold(program, &empty);
-        let value = self.expression(&mut scope, value);
+        let body = value.clone().into_body();
+        let mut scope = Scope::cold(program, &body);
+        let value = self.expression(&mut scope, &value.value);
         if !scope.before.is_empty() {
             self.unsupported(at, "a constant whose value propagates a failure");
             return;

@@ -2,7 +2,7 @@
 
 use crate::grammar::can_start_expression;
 use crate::kind::SyntaxKind::{self, *};
-use crate::parser::{Bracket, Choice, Context, Parser, Verdict};
+use crate::parser::{Bracket, Choice, Context, Mark, Parser, Verdict};
 
 /// CTRL-9: "An expression there that contains any other brace is
 /// parenthesized." Said where a brace stands bare between `if`, `for`,
@@ -58,7 +58,20 @@ impl Parser<'_> {
     /// Parses nothing, with a report, when no expression starts at the
     /// cursor.
     pub(crate) fn expression(&mut self) {
+        let mark = self.mark();
         self.binary_expr(1);
+        if self.at(RangeUntil) && !self.nl() {
+            self.error(
+                "a range is only written as the iterable of a loop",
+                "EXPR-16",
+                None,
+            );
+            while self.at(RangeUntil) && !self.nl() {
+                self.bump();
+                self.binary_expr(1);
+            }
+            self.wrap(mark, Error);
+        }
     }
 
     /// The six binary levels of the grammar, `or_expr` down to
@@ -84,7 +97,14 @@ impl Parser<'_> {
             return false;
         }
         let mark = self.mark();
-        let mut bare_fn = self.unary_expr();
+        let bare_fn = self.unary_expr();
+        let bare_fn = self.binary_tail(mark, lowest, bare_fn);
+        self.leave();
+        bare_fn
+    }
+
+    /// Continue an expression from its already-read left operand.
+    fn binary_tail(&mut self, mark: Mark, lowest: u8, mut bare_fn: bool) -> bool {
         loop {
             let operator = self.current();
             let Some(tier) = binary_tier(operator) else {
@@ -116,8 +136,26 @@ impl Parser<'_> {
             // `a - b - c` is `(a - b) - c`.
             self.wrap(mark, BinaryExpr);
         }
-        self.leave();
         bare_fn
+    }
+
+    /// `iterable = range | expression` (EXPR-16). Read the additive
+    /// prefix once so a normal iterable can continue with looser operators.
+    pub(super) fn loop_iterable(&mut self) {
+        let mark = self.mark();
+        let bare_fn = self.binary_expr(ADDITIVE);
+        if self.at(RangeUntil) && !self.nl() {
+            if bare_fn {
+                self.error(BARE_FN, "FN-10", None);
+            }
+            self.bump();
+            if self.binary_expr(ADDITIVE) {
+                self.error(BARE_FN, "FN-10", None);
+            }
+            self.wrap(mark, RangeExpr);
+        } else {
+            self.binary_tail(mark, 1, bare_fn);
+        }
     }
 
     /// `unary_expr = ( "-" | "!" ), [ operator_configuration ], unary_expr | postfix_expr ;`
@@ -730,7 +768,8 @@ impl Parser<'_> {
     }
 
     /// ```text
-    /// sequence_literal = "[", [ sequence_entries ], "]" ;
+    /// sequence_literal = "[", [ sequence_entries | loop_entries ], "]" ;
+    /// loop_entries = "for", IDENTIFIER, "in", iterable, ":", expression ;
     /// sequence_entries = sequence_values | sequence_pairs ;
     /// sequence_pair = sequence_item, ":", sequence_item ;
     /// sequence_item = expression | "_" ;
@@ -739,10 +778,21 @@ impl Parser<'_> {
     /// EXPR-9: the entries are all values or all pairs. The first entry of
     /// the other form is reported; the tree keeps every entry as written.
     fn sequence_expr(&mut self) {
-        self.start(SequenceExpr);
+        let mark = self.mark();
         self.bump();
         // LEX-5: line breaks do not count inside brackets.
-        self.nested(Context::LIST, |parser| {
+        let kind = self.nested(Context::LIST, |parser| {
+            if parser.eat(KwFor) {
+                parser.expect_name("an iteration name");
+                if parser.expect_word("in") {
+                    parser.loop_iterable();
+                }
+                if parser.expect(Colon) {
+                    parser.expression();
+                }
+                parser.close(RBracket);
+                return ListComprehension;
+            }
             // `Some(true)` once the first entry was a pair, `Some(false)`
             // once it was a value.
             let mut pairs: Option<bool> = None;
@@ -770,8 +820,9 @@ impl Parser<'_> {
                     );
                 }
             });
+            SequenceExpr
         });
-        self.finish();
+        self.wrap(mark, kind);
     }
 
     /// `sequence_item = expression | "_" ;`

@@ -658,6 +658,8 @@ pub enum ConstantValue {
         Box<ConstantValue>,
         Box<ConstantValue>,
     ),
+    /// The number of passes of a range with generic value bounds (EXPR-17).
+    RangeLength(Box<ConstantValue>, Box<ConstantValue>),
     /// Not valued: a constant whose value this compiler does not work
     /// out (an operation that overflows, a date moved by a tenor), or
     /// what is no constant at all. It is equal to nothing and unequal to

@@ -145,7 +145,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             calls: &calls,
             selecting: &selecting,
         };
-        let mut constants: Vec<Option<Expr>> = module
+        let constants = module
             .declarations
             .iter()
             .enumerate()
@@ -153,12 +153,15 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 let Some(Detail::Constant(ty)) = module.details.get(position) else {
                     return None;
                 };
-                Typer::new(program, module, declaration, &empty, found, diagnostics).constant(ty)
+                Typer::new(program, module, declaration, &empty, found, diagnostics)
+                    .constant(ty)
+                    .map(|constant| {
+                        let mut body = constant.into_body();
+                        lifting::record(program, &mut body, false);
+                        hir::DefaultExpr::from_body(body)
+                    })
             })
             .collect();
-        for constant in constants.iter_mut().flatten() {
-            lifting::record_value(program, constant);
-        }
         program.modules[index].constants = constants;
     }
     for index in 0..program.modules.len() {

@@ -891,6 +891,7 @@ impl<'a> Lexer<'a> {
         use TokenKind::*;
         let (kind, length) = match (self.bytes[self.pos], self.peek_at(1), self.peek_at(2)) {
             (b'.', Some(b'.'), Some(b'.')) => (Ellipsis, 3),
+            (b'.', Some(b'.'), Some(b'<')) => (RangeUntil, 3),
             (b'<', Some(b'='), Some(b'>')) => (Spaceship, 3),
             (b'/', Some(b'/'), Some(b'=')) => (SlashSlashEq, 3),
             (b':', Some(b':'), _) => (ColonColon, 2),
@@ -1681,6 +1682,12 @@ mod tests {
 
     #[test]
     fn a_dot_needs_a_digit_to_make_a_float() {
+        // LEX-29: a digit run immediately before `..<` is an integer.
+        assert_eq!(
+            tokens_of("0..<n"),
+            [(Int, "0"), (RangeUntil, "..<"), (Ident, "n")]
+        );
+
         // FLOAT_LITERAL has digits on both sides of its dot; LEX-17 gives `...`.
         assert_eq!(tokens_of("1.max"), [(Int, "1"), (Dot, "."), (Ident, "max")]);
         assert_eq!(

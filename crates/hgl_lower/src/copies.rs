@@ -610,6 +610,15 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::CheckedDelta(inner)
         | ExprKind::Publications(inner) => into.push(inner),
         ExprKind::Binary { left, right, .. }
+        | ExprKind::Range {
+            lower: left,
+            upper: right,
+        }
+        | ExprKind::ListComprehension {
+            sequence: left,
+            entry: right,
+            ..
+        }
         | ExprKind::Index {
             base: left,
             index: right,
