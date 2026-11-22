@@ -1,6 +1,7 @@
 //! The documentation stage. It takes the analysed interfaces and the
 //! lossless syntax trees they retain (SDOC-4 and SDOC-6) and writes a
-//! versioned JSON model. No checking or target stage reads that model.
+//! versioned JSON model of normalized text and structured sections
+//! (SDOC-2, SDOC-3). No checking or target stage reads that model.
 
 mod extract;
 mod model;
