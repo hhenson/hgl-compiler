@@ -284,6 +284,22 @@ fn returning(value: Option<&Expr>) -> bool {
 }
 
 impl Emitter<'_> {
+    /// Locals of an unrolled loop are in scope while its body is written
+    /// and can be taken by a temporal branch (CTRL-7, CTRL-15, EXPR-17).
+    pub(super) fn with_unrolled_bindings<T>(
+        &mut self,
+        names: &[usize],
+        write: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let before = self.control.bound.clone();
+        self.control.bound.extend(names);
+        self.control.unrolling += 1;
+        let result = write(self);
+        self.control.unrolling -= 1;
+        self.control.bound = before;
+        result
+    }
+
     /// Writes `statement` of a graph that is no control flow of this
     /// family's. The names of a loop unrolled while the graph is built
     /// have values in its body.
@@ -295,12 +311,9 @@ impl Emitter<'_> {
         text: &mut String,
     ) {
         if let Stmt::For { names, .. } = statement {
-            let before = self.control.bound.clone();
-            self.control.bound.extend(names);
-            self.control.unrolling += 1;
-            self.statement(scope, statement, depth, text);
-            self.control.unrolling -= 1;
-            self.control.bound = before;
+            self.with_unrolled_bindings(names, |emitter| {
+                emitter.statement(scope, statement, depth, text);
+            });
             return;
         }
         self.statement(scope, statement, depth, text);

@@ -16,7 +16,7 @@ use hgl_diagnostics::Location;
 pub use hgl_lexer::literal::Tenor;
 
 use crate::program::{LocalKind, OperatorRef};
-use crate::types::{Argument as GenericArgument, CallArguments, Type};
+use crate::types::{Argument as GenericArgument, CallArguments, Constant, Type};
 
 /// An application's run statement, typed (RUN-1): "its run statement
 /// is `run call` or `eval call`, where the call is of an entry, written
@@ -920,7 +920,7 @@ pub enum ExprKind {
     },
     /// A list made by iterating once for each entry (EXPR-17).
     ListComprehension {
-        /// Whether the entries are composed as connections.
+        /// Whether the iteration takes place while a graph is built.
         composition: bool,
         /// The iteration variable, scoped to the entry.
         binding: LocalId,
@@ -928,6 +928,9 @@ pub enum ExprKind {
         sequence: Box<Expr>,
         /// The expression evaluated or composed for each entry.
         entry: Box<Expr>,
+        /// The size expected of an ordinary list while a graph range
+        /// still awaits its entry's category.
+        ordinary_size: Option<Constant>,
     },
     /// `[a, b]`: a sequence of values. Its type says what it makes.
     Sequence(Vec<Expr>),

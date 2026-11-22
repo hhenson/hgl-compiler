@@ -1,0 +1,131 @@
+module demo.comprehension_phases
+
+# CTRL-7, EXPR-17: each child of a temporal branch can capture the binding
+# of the pass that builds it.
+fn if_over_list(xs: list<i64, 2>) -> list<i64, 2> =>
+    [for x in xs: if x > 0 { x } else { -x }]
+
+fn if_over_range(add: bool, x: i64) -> list<i64, 2> =>
+    [for i in 2..<4: if add { x + i } else { x - i }]
+
+fn switch_over_list(xs: list<i64, 2>) -> list<i64, 2> =>
+    [for x in xs: {
+        var selected = x
+        switch x {
+            case 1: selected = x + 10
+            default: selected = x - 10
+        }
+        selected
+    }]
+
+fn switch_over_range(add: bool, x: i64) -> list<i64, 2> =>
+    [for i in 2..<4: {
+        var selected = x
+        switch add {
+            case true: selected = x + i
+            default: selected = x - i
+        }
+        selected
+    }]
+
+test if_captures_each_binding {
+    assert eval if_over_list([[-2, 3], [4, -5]]) == [[2, 3], [4, 5]]
+    assert eval if_over_range([true, false], [10, 20]) == [[12, 13], [18, 17]]
+}
+
+test switch_captures_each_binding {
+    assert eval switch_over_list([[1, 3], [4, 1]]) == [[11, -7], [-6, 11]]
+    assert eval switch_over_range([true, false], [10, 20]) == [[12, 13], [18, 17]]
+}
+
+# EXPR-17, FN-1: ordinary entries over a range supply configuration.
+fn scaled(x: i64, const factors: list<i64>) -> i64 {
+    var total = x
+    for factor in factors { total = total * factor }
+    return total
+}
+
+fn scaled_fixed(x: i64, const factors: list<i64, 2>) -> i64 {
+    return x * factors[0] * factors[1]
+}
+
+fn with_ordinary_range(x: i64) -> i64 {
+    let factors = [for i in 2..<4: i]
+    return scaled(x, factors)
+}
+
+fn with_fixed_range(x: i64) -> i64 => scaled_fixed(x, [for i in 2..<4: i])
+fn with_empty_range(x: i64) -> i64 => scaled(x, [for i in 5..<2: i])
+
+test ordinary_ranges_supply_configuration {
+    assert eval scaled([1, 2], factors: [for i in 2..<4: i]) == [6, 12]
+    assert eval with_ordinary_range([1, 2]) == [6, 12]
+    assert eval with_fixed_range([1, 2]) == [6, 12]
+    assert eval with_empty_range([1, 2]) == [1, 2]
+}
+
+# GEN-7 and EXPR-17: the entry's selected candidate decides the category.
+operator entry<T>(tag: T, i: i64) -> i64
+impl const fn entry<T>(tag: T, i: i64) -> i64 => i
+impl fn entry(tag: bool, i: i64) -> i64 {
+    when { return if tag { i } else { i + 1 } }
+}
+
+fn from_generic<T>(x: i64, const tag: T) -> i64 =>
+    scaled(x, [for i in 2..<4: entry(tag, i)])
+fn from_generic_fixed<T>(x: i64, const tag: T) -> i64 =>
+    scaled_fixed(x, [for i in 2..<4: entry(tag, i)])
+
+test instance_entries_settle_as_ordinary {
+    assert eval from_generic([1, 2], "ordinary") == [6, 12]
+}
+
+fn temporal_instance<T, const N: i64>(const tag: T) -> list<i64, N> {
+    let entries = [for i in 0..<N: entry(tag, i)]
+    return entries
+}
+
+test instance_entries_settle_as_connections {
+    assert eval temporal_instance<bool, 2>(true) == [[0, 1]]
+    assert eval temporal_instance<bool, 3>(false) == [[1, 2, 3]]
+}
+
+test a_selected_connection_is_not_configuration {
+    # expect-error(phase, "connection.as_constant")
+    assert eval from_generic_fixed([1, 2], true) == [6, 12]
+}
+
+# EXPR-17: a fixed-list connection gives a connection even with ordinary entries.
+fn constant_entries(values: list<i64, 2>) -> list<i64, 2> =>
+    [for value in values: 3]
+
+test ordinary_entries_over_a_connection {
+    assert eval constant_entries([[1, 2]]) == [[3, 3]]
+}
+
+# expect-error(phase, "connection.as_constant")
+fn list_connection_is_not_configuration(x: i64, values: list<i64, 2>) -> i64 => scaled_fixed(x, [for value in values: 3])
+
+# FN-3 and EXPR-17: an ordinary fixed list is wired as one constant
+# whether its elements are written out or collected over a range.
+fn range_constant() -> list<i64, 2> => [for i in 2..<4: i]
+fn literal_constant() -> list<i64, 2> => [2, 3]
+fn summed(xs: list<i64, 2>) -> i64 => xs[0] + xs[1]
+fn sum_range_constant() -> i64 => summed([for i in 2..<4: i])
+fn sum_literal_constant() -> i64 => summed([2, 3])
+fn spaced_constants() -> list<i64, 3> => [for i in 0..<3: i * 5]
+fn float_constants(x: i64) -> list<f64, 2> => [for i in 0..<2: 1]
+fn float_literals(x: i64) -> list<f64, 2> => [1, 1]
+
+test fixed_list_constants_supply_graph_results {
+    assert eval range_constant() == [[2, 3]]
+    assert eval literal_constant() == [[2, 3]]
+    assert eval spaced_constants() == [[0, 5, 10]]
+    assert eval float_constants([1, 2]) == [[1.0, 1.0]]
+    assert eval float_literals([1, 2]) == [[1.0, 1.0]]
+}
+
+test fixed_list_constants_supply_connections {
+    assert eval sum_range_constant() == [5]
+    assert eval sum_literal_constant() == [5]
+}
