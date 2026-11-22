@@ -31,8 +31,8 @@ use hgl_parser::{SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
 use crate::constant::Constants;
-use crate::program::{Binding, Module, OperatorRef, Program};
-use crate::syntax::tokens;
+use crate::program::{Binding, DependentPack, Module, OperatorRef, Program};
+use crate::syntax::{test_statements, tokens};
 use crate::types::{CallArguments, Detail, GenericParameter, Type, WrittenType};
 
 use self::declarations::{Evidence, Kinds, struct_kinds};
@@ -40,6 +40,7 @@ use self::declarations::{Evidence, Kinds, struct_kinds};
 mod applications;
 mod declarations;
 mod forms;
+mod packs;
 mod scan;
 
 /// Reads the types of every module, filling in [`Module::details`] and
@@ -70,7 +71,9 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         }
         for test in &module.tests {
             reader.enter(module.files[test.file].file);
-            reader.scan(&test.syntax);
+            for statement in test_statements(&test.syntax) {
+                reader.scan(&statement);
+            }
         }
         if let Some(run) = &module.run {
             reader.enter(module.files[run.file].file);
@@ -85,6 +88,7 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
             reader.scan(node);
         }
         let calls = std::mem::take(&mut reader.calls);
+        let dependent_packs = std::mem::take(&mut reader.dependent_packs);
         let mut written = reader.written;
 
         // File order, then source order.
@@ -97,6 +101,7 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         written.sort_by_key(|written| (position[&written.at.file], written.at.span.start));
         let module = &mut program.modules[index];
         module.details = details;
+        module.dependent_packs = dependent_packs;
         module.written = written;
         module.call_arguments = calls;
     }
@@ -241,6 +246,8 @@ struct Reader<'a> {
     read: HashMap<u32, Type>,
     /// Every type read in the module so far.
     written: Vec<WrittenType>,
+    /// Which function and exclusions each dependent pack names (FN-8).
+    dependent_packs: HashMap<Location, DependentPack>,
     /// The generic arguments of every call read in the module so far
     /// (GEN-8).
     calls: Vec<CallArguments>,
@@ -290,6 +297,7 @@ impl<'a> Reader<'a> {
             unsettled_target: false,
             read: HashMap::new(),
             written: Vec::new(),
+            dependent_packs: HashMap::new(),
             calls: Vec::new(),
             everywhere: program
                 .modules
@@ -311,6 +319,7 @@ pub(crate) fn is_type(kind: SyntaxKind) -> bool {
         kind,
         SyntaxKind::ScalarType
             | SyntaxKind::NamedType
+            | SyntaxKind::PackMemberType
             | SyntaxKind::TupleType
             | SyntaxKind::ListType
             | SyntaxKind::SetType

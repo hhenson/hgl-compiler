@@ -1,0 +1,9 @@
+module demo.packdepends_missing_member
+
+# GEN-17: a miss in the reflected pack rejects where that instance is used.
+const absent: str = "absent"
+const fn need_member<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> i64
+    requires Ps[absent] == f64 => 32
+
+const fn scaled(price: f64) -> f64 => price
+const fn rejected() -> i64 => need_member(scaled, 2.0)

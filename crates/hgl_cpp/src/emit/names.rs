@@ -278,6 +278,8 @@ fn candidate_identifier(name: &str, detail: Option<&Detail>, declaration: usize)
 /// in a namespace of its declaration's own under `i_`:
 /// `i_::spread::of_f64`, `c_::i_::candidate_name::of_f64`. `c_` and `i_`
 /// have the form the target's own names have, which no HGL name gives.
+/// Named-test helpers use a namespace for the owning test (TST-1). The
+/// same placement is used for their value, wiring and node definitions.
 pub(super) fn placed(
     program: &Program,
     module: usize,
@@ -286,6 +288,17 @@ pub(super) fn placed(
 ) -> (Option<String>, String) {
     let unit = &program.modules[module];
     let declared = &unit.declarations[declaration];
+    if let Some(test) = declared.test_owner {
+        let namespace = format!("t_::{}", temporary("helpers", test));
+        let name = identifier(&declared.name);
+        return match instance {
+            Some(suffix) => (
+                Some(format!("{namespace}::i_::{name}")),
+                instance_name(suffix),
+            ),
+            None => (Some(namespace), name),
+        };
+    }
     let candidate = matches!(declared.kind, DeclarationKind::Implementation(..));
     let name = if candidate {
         candidate_identifier(&declared.name, unit.details.get(declaration), declaration)

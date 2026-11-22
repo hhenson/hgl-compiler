@@ -31,12 +31,13 @@ use crate::program::{
     Binding, Decision, DeclarationKind, ImportKind, LocalKind, Module, NameUse, PreludeName,
     Program, RUN_CONFIG,
 };
-use crate::syntax::{child, has_token, leads_its_test};
+use crate::syntax::{child, has_token, is_arg_keys_call, leads_its_test, pack_for_names};
 use crate::{INJECTABLES, RESULT_FORMS, codes, error};
 
 /// Resolves the names of every module, filling in [`Module::uses`] and
 /// [`Module::decisions`] and adding to [`Module::prelude_names`].
 pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
+    crate::declare::bind_test_helpers(program, diagnostics);
     for index in 0..program.modules.len() {
         // A module is made from at least one file.
         let Some(first) = program.modules[index].files.first() else {
@@ -51,6 +52,7 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
             file: 0,
             file_id: first.file,
             in_test: false,
+            test_owner: None,
             configures: false,
             frames: Vec::new(),
             hidden: Vec::new(),
@@ -117,6 +119,8 @@ struct Resolver<'a> {
     /// True inside a test or a test helper, where the module's test
     /// scope is visible (TST-1).
     in_test: bool,
+    /// The named test whose private helpers are visible in this declaration or body (TST-1).
+    test_owner: Option<usize>,
     /// True where `inject run_config` has a place, and the configuration
     /// in braces after it is read (RUN-6): an application's statements
     /// before its run statement, and an integration test.
@@ -205,6 +209,7 @@ impl Resolver<'_> {
         self.file = file;
         self.file_id = self.module.files[file].file;
         self.in_test = in_test;
+        self.test_owner = None;
         self.frames.clear();
         self.hidden.clear();
     }
@@ -215,10 +220,12 @@ impl Resolver<'_> {
         let module = self.module;
         for declaration in &module.declarations {
             self.enter(declaration.file, declaration.test_only);
+            self.test_owner = declaration.test_owner;
             self.declaration(&declaration.syntax);
         }
-        for test in &module.tests {
+        for (index, test) in module.tests.iter().enumerate() {
             self.enter(test.file, true);
+            self.test_owner = Some(index);
             self.configures = test.integration;
             self.children(&test.syntax);
             self.configures = false;
@@ -315,6 +322,20 @@ impl Resolver<'_> {
                     LocalKind::Parameter
                 };
                 self.bind(&name, kind);
+            }
+        }
+        // FN-8: a pack's `for f` sees the callable's parameters. This is
+        // separate from reading the pack's type or the parameter defaults.
+        for parameter in &parameters {
+            let clause = child(parameter, SyntaxKind::PackType)
+                .and_then(|pack| child(&pack, SyntaxKind::PackFor));
+            if let Some(clause) = clause
+                && let Some((function, exclusions)) = pack_for_names(&clause)
+            {
+                self.lookup(&function);
+                for exclusion in exclusions {
+                    self.lookup(&exclusion);
+                }
             }
         }
         // The result type, the constraints, the body.
@@ -417,6 +438,8 @@ impl Resolver<'_> {
     fn walk(&mut self, node: &SyntaxNode) {
         match node.kind() {
             SyntaxKind::Block => self.block(node),
+            // A named test's helpers are walked with the module's declarations.
+            SyntaxKind::FnDecl => {}
             SyntaxKind::LocalDecl | SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
                 self.local(node);
             }
@@ -424,6 +447,11 @@ impl Resolver<'_> {
             SyntaxKind::ForStmt => self.for_statement(node),
             SyntaxKind::FnExpr => self.function_expression(node),
             SyntaxKind::ConstraintEach => self.each_constraint(node),
+            SyntaxKind::PackMemberType => {
+                for name in identifiers(node) {
+                    self.lookup(&name);
+                }
+            }
             SyntaxKind::NameExpr
             | SyntaxKind::NamedType
             | SyntaxKind::TypedConstructor
@@ -639,13 +667,17 @@ impl Resolver<'_> {
         // The identifiers directly inside are `each`, the name, `in`.
         let name = identifiers(node).nth(1);
         let mut parts = node.children();
+        let mut kind = LocalKind::GenericParameter;
         // What is iterated is outside the scope of the name.
         if let Some(operand) = parts.next() {
+            if is_arg_keys_call(&operand) {
+                kind = LocalKind::PackKey;
+            }
             self.walk(&operand);
         }
         self.frames.push(Frame::default());
         if let Some(name) = name {
-            self.bind(&name, LocalKind::GenericParameter);
+            self.bind(&name, kind);
         }
         for part in parts {
             self.walk(&part);
@@ -728,9 +760,14 @@ impl Resolver<'_> {
             .iter()
             .find(|import| import.name == name);
         let declaration = self
-            .module
-            .lookup(name)
-            .find(|declaration| self.in_test || !declaration.test_only);
+            .test_helpers(name)
+            .and_then(|bound| bound.first())
+            .map(|&index| &self.module.declarations[index])
+            .or_else(|| {
+                self.module
+                    .lookup(name)
+                    .find(|declaration| self.in_test || !declaration.test_only)
+            });
         // UNIT-12: a local "takes no name bound there by ... a module
         // declaration, a `use` in its file, or the prelude."
         let prelude = self
@@ -794,7 +831,28 @@ impl Resolver<'_> {
         if RESULT_FORMS.contains(&name.text()) && is_callee(node) {
             return None;
         }
+        // GEN-17: in a requirement `arg_keys(Ps)` is a language form.
+        // The argument still uses normal name resolution.
+        if name.text() == "arg_keys"
+            && node.kind() == SyntaxKind::NameExpr
+            && is_callee(node)
+            && node
+                .ancestors()
+                .any(|part| part.kind() == SyntaxKind::RequiresClause)
+        {
+            return None;
+        }
         self.lookup(&name)
+    }
+
+    /// Ordinary declaration identities for a helper name in this test (TST-1, FN-4).
+    fn test_helpers(&self, name: &str) -> Option<&[usize]> {
+        self.module
+            .tests
+            .get(self.test_owner?)?
+            .helpers
+            .get(name)
+            .map(Vec::as_slice)
     }
 
     /// UNIT-10: resolves a name to the one binding in scope for it.
@@ -868,6 +926,16 @@ impl Resolver<'_> {
                 Binding::Declarations {
                     module: target,
                     declarations,
+                },
+            );
+        }
+
+        if let Some(bound) = self.test_helpers(name) {
+            return self.used(
+                token,
+                Binding::Declarations {
+                    module: self.index,
+                    declarations: bound.to_vec(),
                 },
             );
         }

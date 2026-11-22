@@ -182,6 +182,7 @@ fn parts(ty: &Type) -> Vec<&Type> {
         Type::Result { value, error } => vec![value, error],
         Type::Scalar(_)
         | Type::Parameter { .. }
+        | Type::PackMember { .. }
         | Type::Signal
         | Type::Error
         | Type::ErrorContext

@@ -2446,6 +2446,72 @@ fn a_default_that_leaves_itself_out_is_reported() {
     assert_eq!(emitted.blocked("calls").as_deref(), Some(reported));
 }
 
+/// TST-1 and FN-4: value and temporal helpers may share a name inside a
+/// test, and a different test can have its own functions of those names.
+#[test]
+fn named_test_helpers_have_test_local_cpp_names() {
+    let emitted = emit_with(
+        &[(
+            "core_implementation.named_test_helpers.hgl",
+            include_str!("fixtures/core_implementation.named_test_helpers.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let output = &emitted.output;
+    let tests: Vec<_> = output
+        .tests
+        .iter()
+        .map(|test| (test.identity(), test.integration, test.executable))
+        .collect();
+    assert_eq!(
+        tests,
+        [
+            (
+                "core_implementation::first_helpers".to_owned(),
+                false,
+                Some(0)
+            ),
+            (
+                "core_implementation::second_helpers".to_owned(),
+                false,
+                Some(0)
+            ),
+            ("core_implementation::live_helper".to_owned(), true, Some(0)),
+        ]
+    );
+    let unit = &output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/mod-core_implementation.cpp")
+        .unwrap()
+        .text;
+    for owner in [0, 1, 2] {
+        let helper = format!("t_::helpers_0{owner}_");
+        assert!(unit.contains(&format!("namespace {helper}")), "{unit}");
+        assert!(
+            unit.contains(&format!(
+                "::hgl::core_implementation::m_::{helper}::adjust("
+            )),
+            "{unit}"
+        );
+        if owner < 2 {
+            assert!(
+                unit.contains(&format!(
+                    "::hgl::core_implementation::m_::w_::{helper}::adjust("
+                )),
+                "{unit}"
+            );
+            assert!(
+                unit.contains(&format!(
+                    "::hgl::core_implementation::m_::{helper}::i_::keep::of_i64("
+                )),
+                "{unit}"
+            );
+        }
+    }
+}
+
 /// A unit holds every function of its module that is written, and is
 /// linked whole. The test has a separate entry (TST-2) and links every
 /// unit its own calls into, even for callees the test never uses.

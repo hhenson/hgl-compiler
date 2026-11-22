@@ -135,6 +135,7 @@ impl Reader<'_> {
                 self.capability_position(node, &ty);
                 ty
             }
+            SyntaxKind::PackMemberType | SyntaxKind::IndexExpr => self.pack_member(node),
             SyntaxKind::TupleType => Type::Tuple(
                 node.children()
                     .filter(|element| is_type(element.kind()))
@@ -448,7 +449,7 @@ impl Reader<'_> {
         let ty = read.ty()?;
         match ty {
             Type::Scalar(scalar) if kinds.contains(scalar) => return None,
-            Type::Unknown | Type::Parameter { .. } => return None,
+            Type::Unknown | Type::Parameter { .. } | Type::PackMember { .. } => return None,
             _ => {}
         }
         // A lone name: a generic value parameter, or a constant of a

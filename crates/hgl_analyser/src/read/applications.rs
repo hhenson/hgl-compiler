@@ -544,7 +544,7 @@ impl Reader<'_> {
             if kind == SyntaxKind::Hole {
                 // GEN-8: `_` in an `instantiate` keeps a parameter open.
                 arguments.push(Argument::Type(Type::Unknown));
-            } else if !is_type(kind) {
+            } else if !is_type(kind) && !self.indexed_pack(&argument) {
                 // An expression is a value.
                 if matches!(want, Kind::Type | Kind::Pack) {
                     self.argument_kind(&argument, mismatch("a type", "a value"));
@@ -691,7 +691,7 @@ impl Reader<'_> {
 
     /// The type of the generic value parameter declared at `declared`;
     /// `None` when what is declared there is not one.
-    fn value_type(&self, declared: Location) -> Option<&Type> {
+    pub(super) fn value_type(&self, declared: Location) -> Option<&Type> {
         self.generics
             .iter()
             .find(|generic| generic.at == declared)
@@ -725,6 +725,11 @@ impl Reader<'_> {
         node: &SyntaxNode,
         expected: Option<&Type>,
     ) -> Result<Typed, Fault> {
+        self.constant_scope(|scope| crate::constant::typed(node, expected, scope))
+    }
+
+    /// Reads a constant in the declaration's compile-time scope.
+    pub(super) fn constant_scope<T>(&self, read: impl FnOnce(&Scope<'_>) -> T) -> T {
         // A closure: a function written in place, which may use what is
         // in scope around it; here, `self`.
         let binding = |file: FileId, offset: u32| self.everywhere.get(&(file, offset)).copied();
@@ -736,7 +741,7 @@ impl Reader<'_> {
             parameter: &parameter,
             constants: &self.constants,
         };
-        crate::constant::typed(node, expected, &scope)
+        read(&scope)
     }
 
     /// The constant `node` is, read as `read`, held as a value of
