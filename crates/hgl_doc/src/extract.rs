@@ -21,6 +21,7 @@ use crate::model::{
 type Id = (usize, usize);
 
 /// Builds the model in module, part and source order (UNIT-1, SDOC-4).
+/// SDOC-10 restricts the default model to exported declarations.
 pub(crate) fn build<'a>(
     program: &'a Program,
     sources: &SourceMap,
@@ -422,7 +423,8 @@ fn documentation(syntax: &SyntaxNode) -> Option<Documentation> {
 }
 
 /// Splits the prose left by SDOC-3 into a first-paragraph summary, plain
-/// prose, and authored headings. Only the parser's recognized sections
+/// prose, and authored headings. Code fences protect literal text
+/// (SDOC-7). Only the parser's recognized sections
 /// above can carry entries for the declaration.
 fn prose_sections(text: &str, sections: &mut Vec<Section>, summary: Option<&mut String>) {
     let lines: Vec<_> = text.lines().collect();

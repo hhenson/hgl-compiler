@@ -35,7 +35,7 @@ fn document(arguments: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
-/// SDOC-1, SDOC-2 and SDOC-3. The module, functions, operator, struct,
+/// SDOC-1, SDOC-2, SDOC-3 and SDOC-10. The module, functions, operator, struct,
 /// field, enum, member, native type and named test keep their own comments.
 #[test]
 fn declaration_fixture_preserves_interfaces_and_comment_structure() {

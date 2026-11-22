@@ -44,3 +44,32 @@ formatter: planned
 analyser: done
 
 - Documentation is recorded nowhere in the analysed program: two programs that differ in it alone analyse alike
+
+## SDOC-7
+
+parser: done
+
+- Fenced Markdown protects literal headings and keys after normalization
+
+docs: partial
+
+- The JSON model carries Markdown text, preserving fenced blocks
+- Left: present Markdown, formulas, diagrams and authored HTML text on a documentation site (#457)
+
+## SDOC-8
+
+docs: planned
+
+- Documentation site links a name to the declaration it resolves to (#457)
+
+## SDOC-9
+
+runner: planned
+
+- Fenced HGL in Examples runs as a named test (#458)
+
+## SDOC-10
+
+docs: done
+
+- Default output documents the exported interface; private declarations and tests are opt-in
