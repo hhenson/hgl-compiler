@@ -809,10 +809,6 @@ transpiler: planned
 
 ## RED-5
 
-analyser: partial
-
-- A selected value candidate requiring `zero` rejects its omission with `argument.missing` (GEN-6, UNIT-8).
-
 transpiler: planned
 
 - #369 tracks fixed lists and #370 tracks native forms.
