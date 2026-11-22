@@ -1,0 +1,21 @@
+module demo.reflected_eval_inputs
+
+# GEN-17 and TST-5: the reflected type is the type of the replayed input.
+
+const key: str = "item"
+const fn integer(item: i64) -> i64 => item
+const fn pair(item: list<i64, 2>) -> i64 => item[0] + item[1]
+fn reflected<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key] => item
+
+test scalar_cells {
+    assert eval reflected(integer, [2, 3]) == [2, 3]
+}
+
+test fixed_list_cells {
+    assert eval reflected(pair, [[2, 3], [4, 5]]) == [[2, 3], [4, 5]]
+}
+
+test wrong_cell {
+    # expect-error(type, "type.mismatch")
+    assert eval reflected(integer, ["wrong"]) == [3]
+}

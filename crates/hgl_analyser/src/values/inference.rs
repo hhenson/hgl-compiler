@@ -915,6 +915,8 @@ impl<'a> Typer<'a> {
                 };
                 let pattern = patterns[index];
                 let traced = matches!(pattern, Type::Trace { .. });
+                let reflected_trace = matches!(pattern, Type::Trace { cell, .. }
+                    if cell.any_part(&|ty| matches!(ty, Type::PackMember { .. }), &|_| false));
                 let mut resolved_type = |ty| {
                     let ty = pack_types.project(ty, &map).unwrap_or_else(|missing| {
                         self.pack_member_fault(self.at(node), &missing);
@@ -928,9 +930,11 @@ impl<'a> Typer<'a> {
                 let ty = match (written_type, pattern) {
                     (Some(ty), Type::Trace { .. }) => trace_input_type(ty.clone()),
                     (Some(ty), _) => ty.clone(),
-                    // TST-5: form the publication type after a homogeneous
-                    // or heterogeneous pack's input type is substituted.
-                    (None, Type::Trace { cell, .. }) if pack.is_some() && names_parameter(cell) => {
+                    // TST-5 and GEN-17: form the publication type after a
+                    // pack input or a reflected member type is substituted.
+                    (None, Type::Trace { cell, .. })
+                        if reflected_trace || pack.is_some() && names_parameter(cell) =>
+                    {
                         trace_input_type(resolved_type(cell))
                     }
                     (None, _) => resolved_type(pattern),
@@ -968,15 +972,15 @@ impl<'a> Typer<'a> {
                 // `same(repeat(1), repeat(2))`. `null` and `.member`
                 // have no reading of their own. An unwritten type pack
                 // learns each argument's type separately (GEN-8). A
-                // captured eval trace stays a trace even when its cells
-                // give no type (TST-5).
+                // captured or reflected eval input stays a trace while
+                // its cells' type is settled (TST-5).
                 let unfound_type = match slot.type_pack {
                     Some(parameter) => written_pack.is_none_or(|(given, _)| given != parameter),
                     None => mentions(patterns[index], &unfound),
                 };
                 let placeless = *settled
                     && !matches!(slot.ty, Type::Function(_))
-                    && !(traced && pack.is_some())
+                    && !(reflected_trace || traced && pack.is_some())
                     && !takes_its_type(node)
                     && !depends_on_instance
                     && unfound_type;
