@@ -934,7 +934,13 @@ impl<'a> Typer<'a> {
         } else if (!self.graph || over != ValueCategory::Value)
             && let Some(size) = fixed_list_extent(&sequence.ty)
         {
-            Some(size.value.clone())
+            if crate::constant::worked_out(&size.value) {
+                return Some(Constant {
+                    text: size.value.key().unwrap_or_else(|| size.text.clone()),
+                    value: size.value.clone(),
+                });
+            }
+            None
         } else if !self.graph
             && let ExprKind::Sequence(entries) = &sequence.kind
             && matches!(sequence.ty, Type::List { .. })

@@ -40,6 +40,12 @@ const fn triple() -> list<i64, 3> => [10, 20, 30]
 # expect-error(type, "type.mismatch")
 const fn wrong_value_input_size() -> list<i64, 2> => [for item in triple(): item]
 
+# expect-error(type, "type.mismatch")
+const fn to_two<N>(xs: list<i64, N>) -> list<i64, 2> => [for x in xs: x]
+
+# expect-error(type, "type.mismatch")
+const fn one_more<N>(xs: list<i64, N>) -> list<i64, N + 1> => [for x in xs: x]
+
 # expect-error(type, "list.size")
 const fn runtime_extent(count: i64) -> list<i64, 4> => [for index in 0..<count: index]
 
@@ -99,7 +105,17 @@ impl fn triple_items(value: i64) -> list<i64, 3> {
 fn wrong_extent<T>(const value: T) -> list<i64, 2> =>
     [for item in (if appears(value) { triple_items(value) }): item]
 
+fn wrong_inferred_extent<T>(const value: T) -> list<i64, 2> {
+    let selected = [for item in (if appears(value) { triple_items(value) }): item]
+    return selected
+}
+
 test iterable_settles_to_wrong_extent {
     # expect-error(type, "type.mismatch")
     assert eval wrong_extent(value: 10) == [[10, 20]]
+}
+
+test inferred_extent_must_also_fit_the_result {
+    # expect-error(type, "type.mismatch")
+    assert eval wrong_inferred_extent(value: 10) == [[10, 20]]
 }

@@ -396,8 +396,15 @@ fn ranges_and_list_comprehensions_reject_invalid_forms() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("rejection cases: 15 passed, 0 failed"),
+        stdout.contains("rejection cases: 18 passed, 0 failed"),
         "{stdout}"
+    );
+    let checked = hgl(&["check", &file]);
+    let report = text(&checked.stderr);
+    assert_eq!(
+        report.matches("this is `list<i64, N>`").count(),
+        2,
+        "{report}"
     );
 }
 
