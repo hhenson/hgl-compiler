@@ -1,0 +1,62 @@
+module demo.packdepends_tests
+
+use demo.packdepends as packs
+
+test distinct_callbacks_and_shapes {
+    assert packs::call_shape(packs::scaled, 2.0, factor: 3.0) == 11
+    assert packs::call_shape(packs::scaled, 2.0) == 11
+    assert packs::call_shape(packs::other_scale, price: 2.0, factor: 3.0) == 11
+    assert packs::call_shape(packs::scaled, price: 7.0, factor: 6.0) == 11
+}
+
+test omitted_default_is_absent_from_arguments {
+    assert packs::omit_default(packs::scaled, 2.0) == 12
+}
+
+test single_exclusion {
+    assert packs::tagged(packs::labelled, 2.0) == 21
+    assert packs::tagged(packs::scaled, 2.0) == 21
+}
+
+test multiple_and_set_exclusions {
+    assert packs::each_slot(packs::placed, 2.0) == 22
+    assert packs::each_given(packs::placed, 2.0) == 23
+}
+
+test fixed_and_positional_callback_keys {
+    assert packs::need_positions(packs::total, 2.0, 3.0, 4.0) == 24
+}
+
+test member_types_in_a_constraint {
+    let prices: dict<str, f64> = ["a": 2.0]
+    assert packs::membership<str>(packs::scaled, prices, factor: 3.0) == 25
+    assert packs::membership<str>(packs::scaled, price: 2.0, factor: 3.0) == 25
+}
+
+test a_member_is_a_parameter_and_result_type {
+    assert packs::reflect_type(packs::scaled, 4.0) == 4.0
+}
+
+test callback_owned_named_pack {
+    assert packs::call_shape(packs::fields, 2.0, label: "book", count: 5) == 11
+    assert packs::call_operator(packs::fields, 2.0, label: "book", count: 5) == 51
+}
+
+test operator_dependent_arguments {
+    assert packs::call_operator(packs::scaled, 2.0, factor: 3.0) == 51
+    assert packs::call_operator(packs::total, 2.0, 3.0, 4.0) == 51
+}
+
+test configuration_and_callback_names_are_separate {
+    let wanted: set<str> = ["wanted"]
+    let allowed: set<str> = ["allowed"]
+    assert packs::each_wanted{keys: wanted}(packs::found, 2.0, keys: allowed) == 52
+    assert packs::each_wanted{keys: wanted, strict: false}(packs::found, 2.0, keys: allowed) == 53
+    assert packs::each_given{given: ["key"]}(packs::placed, 3, 2.0) == 23
+}
+
+test candidate_conditions_and_temporal_inputs {
+    assert packs::routed(packs::scaled, 2.0) == 54
+    assert packs::routed(packs::scaled, "price") == 55
+    assert eval packs::temporal_use(price: [2.0]) == [56]
+}

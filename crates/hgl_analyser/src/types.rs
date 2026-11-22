@@ -17,6 +17,7 @@
 //! These are plain records. The pass in `read` fills them in; nothing
 //! here checks a rule.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use hgl_diagnostics::Location;
@@ -173,6 +174,16 @@ pub enum Type {
         /// when they are declared in the same place.
         at: Location,
     },
+    /// `Ps[arg]`, resolved to a type pack and a compile-time key (GEN-17).
+    /// Its member type is known when the pack and the key are supplied.
+    PackMember {
+        /// The generic parameter that declares the pack.
+        pack: Location,
+        /// The pack's name, for messages.
+        name: String,
+        /// The key, concrete or bound by a generic parameter or constraint.
+        key: Constant,
+    },
     /// `tuple<i64, str>`
     Tuple(Vec<Type>),
     /// `list<f64>`, `list<f64, 3>` or `list<f64, unbounded>` (TYPE-10).
@@ -253,18 +264,83 @@ pub enum Type {
 pub struct FunctionType {
     /// True for a `const fn` template.
     pub value: bool,
-    /// Input types in declaration order, each with a name if the template requires it.
-    pub parameters: Vec<(Option<String>, Type)>,
+    /// The input slots in declaration order.
+    pub parameters: Vec<FunctionParameter>,
+    /// The generic pack that reflects the inputs left by those fixed positions (GEN-17).
+    pub named_pack: Option<ReflectedPack>,
     /// The output, if the function gives one.
     pub result: Option<Type>,
     /// True when the output designates a reference (FN-16).
     pub reference: bool,
 }
 
+/// An input of a static function (FN-17). A named callback keeps its
+/// declaration's modes, defaults and pack shape for reflection (GEN-17, FN-8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FunctionParameter {
+    /// A fixed input written in a template, or a parameter of an anonymous callback.
+    Fixed {
+        /// Its name when written.
+        name: Option<String>,
+        /// Its type.
+        ty: Type,
+    },
+    /// An input of a selected declaration with the callback's generic arguments in place.
+    Declared(Parameter),
+}
+
+impl FunctionParameter {
+    /// The name when this input has one.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Fixed { name, .. } => name.as_deref(),
+            Self::Declared(parameter) => Some(&parameter.name),
+        }
+    }
+
+    /// The parameter type, or a pack's element type or generic pack name.
+    pub fn ty(&self) -> &Type {
+        match self {
+            Self::Fixed { ty, .. } => ty,
+            Self::Declared(parameter) => &parameter.ty,
+        }
+    }
+
+    /// The declared slot, when the callback is a named declaration.
+    pub fn declared(&self) -> Option<&Parameter> {
+        match self {
+            Self::Declared(parameter) => Some(parameter),
+            Self::Fixed { .. } => None,
+        }
+    }
+
+    /// The type for generic substitution.
+    pub(crate) fn ty_mut(&mut self) -> &mut Type {
+        match self {
+            Self::Fixed { ty, .. } => ty,
+            Self::Declared(parameter) => &mut parameter.ty,
+        }
+    }
+}
+
+/// The named pack written in a function type, `fn(...{Ps})` (GEN-17).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReflectedPack {
+    /// The generic parameter declaring this pack.
+    pub at: Location,
+    /// The pack's name, for messages.
+    pub name: String,
+    /// The fewest and most members this use of the pack can reflect (GEN-10).
+    pub bounds: (u64, Option<u64>),
+}
+
 impl FunctionType {
     /// The parameter types and then the result type, when present.
     pub(crate) fn types(&self) -> impl Iterator<Item = &Type> {
-        self.parameters.iter().map(|(_, ty)| ty).chain(&self.result)
+        self.parameters
+            .iter()
+            .map(FunctionParameter::ty)
+            .chain(&self.result)
     }
 }
 
@@ -304,6 +380,7 @@ impl Type {
             } => constant(maximum) || minimum.as_ref().is_some_and(constant) || part(value),
             Type::Result { value, error } => part(value) || part(error),
             Type::Function(function) => function.types().any(part),
+            Type::PackMember { key, .. } => constant(key),
             Type::Scalar(_)
             | Type::Parameter { .. }
             | Type::Signal
@@ -332,7 +409,10 @@ impl Type {
                 kind: NamedKind::Enum | NamedKind::Native,
                 ..
             } => true,
-            Type::Delta(of) => !matches!(**of, Type::Parameter { .. } | Type::Unknown),
+            Type::Delta(of) => !matches!(
+                **of,
+                Type::Parameter { .. } | Type::PackMember { .. } | Type::Unknown
+            ),
             Type::Nullable(inner) => !matches!(Type::atomic((**inner).clone()), Type::Atomic(_)),
             _ => false,
         };
@@ -392,7 +472,10 @@ impl Type {
                 ..
             } => of,
             Type::Delta(ref inner)
-                if !matches!(**inner, Type::Parameter { .. } | Type::Unknown) =>
+                if !matches!(
+                    **inner,
+                    Type::Parameter { .. } | Type::PackMember { .. } | Type::Unknown
+                ) =>
             {
                 of
             }
@@ -436,6 +519,7 @@ impl Type {
             }
             | Type::Delta(_)
             | Type::Parameter { .. }
+            | Type::PackMember { .. }
             | Type::Signal
             | Type::Endpoint(_)
             | Type::Trace { .. }
@@ -515,6 +599,9 @@ pub enum ConstantValue {
     Member(MemberOf),
     /// A `list<T>`, its elements in order.
     List(Vec<ConstantValue>),
+    /// A resolved `set<str>`, including a set of names for FN-8. The
+    /// tree set gives it one representation regardless of source order.
+    StringSet(BTreeSet<String>),
     /// A `tuple<...>`, its elements in order.
     Tuple(Vec<ConstantValue>),
     /// `unbounded`, the size sentinel of a list (TYPE-10).
@@ -657,6 +744,7 @@ impl fmt::Display for Type {
                 Ok(())
             }
             Type::Parameter { name, .. } => f.write_str(name),
+            Type::PackMember { name, key, .. } => write!(f, "{name}[{key}]"),
             Type::Tuple(elements) => {
                 f.write_str("tuple<")?;
                 comma_separated(f, elements)?;
@@ -691,14 +779,25 @@ impl fmt::Display for Type {
                     f.write_str("const ")?;
                 }
                 f.write_str("fn(")?;
-                for (index, (name, ty)) in function.parameters.iter().enumerate() {
+                for (index, parameter) in function.parameters.iter().enumerate() {
                     if index != 0 {
                         f.write_str(", ")?;
                     }
-                    if let Some(name) = name {
-                        write!(f, "{name}: ")?;
+                    match parameter {
+                        FunctionParameter::Fixed { name, ty } => {
+                            if let Some(name) = name {
+                                write!(f, "{name}: ")?;
+                            }
+                            write!(f, "{ty}")?;
+                        }
+                        FunctionParameter::Declared(parameter) => write!(f, "{parameter}")?,
                     }
-                    write!(f, "{ty}")?;
+                }
+                if let Some(pack) = &function.named_pack {
+                    if !function.parameters.is_empty() {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "...{{{}}}", pack.name)?;
                 }
                 f.write_str(")")?;
                 if let Some(result) = &function.result {

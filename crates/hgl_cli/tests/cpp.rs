@@ -1272,6 +1272,85 @@ fn pack_parameters_run_on_the_sdk() {
     );
 }
 
+fn dependent_pack_program(root: &Path) -> (String, String) {
+    let declarations = write(
+        root,
+        "demo.packdepends.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.packdepends.hgl"),
+    );
+    let tests = write(
+        root,
+        "demo.packdepends_tests.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.packdepends_tests.hgl"),
+    );
+    (declarations, tests)
+}
+
+/// FN-8 and GEN-17: the C++ instance accounts for both the static function
+/// and the supplied argument shape, even where the body reads neither.
+#[test]
+fn dependent_pack_instances_distinguish_callable_and_shape() {
+    let root = scratch("dependent-pack-instances");
+    let (declarations, tests) = dependent_pack_program(&root);
+    let out = root.join("out");
+    let output = hgl_in(
+        &[
+            "emit",
+            &declarations,
+            &tests,
+            "--target",
+            "cpp",
+            "--out",
+            &argument(&out),
+        ],
+        &[],
+        &[],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        text(&output.stdout),
+        text(&output.stderr)
+    );
+    let written = fs::read_to_string(out.join("modules/mod-demo-packdepends.cpp")).unwrap();
+    let instances: Vec<_> = written
+        .lines()
+        .filter(|line| {
+            line.trim_start().starts_with("// call_shape<") && line.contains("the instance")
+        })
+        .collect();
+    assert_eq!(instances.len(), 4, "{instances:?}");
+}
+
+/// FN-8 and GEN-17: bind the callback's arguments, exclusions and keys,
+/// and check constraints using its reflected parameter types.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn dependent_call_packs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("dependent-packs");
+    let (declarations, tests) = dependent_pack_program(&root);
+    let output = hgl_in(
+        &["test", &declarations, &tests, "--target", "cpp"],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-17: named, operator and anonymous targets specialize value and
 /// temporal calls. Captured values and connections reach their bodies
 /// through a node hook, a graph and another static function parameter.

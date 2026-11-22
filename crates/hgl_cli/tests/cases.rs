@@ -347,3 +347,52 @@ fn a_host_option_needs_a_target() {
     assert_eq!(output.status.code(), Some(2));
     assert!(text(&output.stderr).contains("--target"));
 }
+
+/// FN-8, GEN-10 and GEN-17: dependent call packs still enforce the callback's
+/// argument matching, the pack's cardinality and the instance's requirements.
+#[test]
+fn dependent_call_packs_reject_invalid_arguments() {
+    let root = scratch("dependent-pack-rejections");
+    let declarations = write(
+        &root,
+        "demo.packdepends.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.packdepends.hgl"),
+    );
+    let cases = write(
+        &root,
+        "demo.packdepends_rejections.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.packdepends_rejections.hgl"),
+    );
+    let output = hgl(&["test", &declarations, &cases, "--rejections-only"]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 6 passed, 0 failed"),
+        "{stdout}"
+    );
+}
+
+/// GEN-17: a member lookup of a name missing from the bound pack reports
+/// the catalogue code.
+#[test]
+fn a_missing_reflected_pack_member_is_reported() {
+    let root = scratch("dependent-pack-member");
+    let file = write(
+        &root,
+        "demo.packdepends_missing_member.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.packdepends_missing_member.hgl"),
+    );
+    let output = hgl(&["check", &file, "--json"]);
+    let stdout = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{stdout}");
+    assert_eq!(diagnostics[0]["code"], "pack.name", "{stdout}");
+    assert_eq!(diagnostics[0]["category"], "type", "{stdout}");
+}

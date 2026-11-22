@@ -189,6 +189,9 @@ pub struct Module {
     /// What the types of each declaration are: its signature, or its
     /// fields. One for each of `declarations`, in the same order.
     pub details: Vec<Detail>,
+    /// The function and exclusions named by each pack declared with `for` (FN-8),
+    /// indexed by the pack parameter's declaration.
+    pub dependent_packs: HashMap<Location, DependentPack>,
     /// Every type written in the module, with what it means, in file
     /// order and then source order. A type inside another is part of
     /// that one and not listed again.
@@ -671,6 +674,8 @@ pub enum LocalKind {
     /// A generic parameter, or the name an `each ... in` constraint
     /// binds.
     GenericParameter,
+    /// The key bound by `each arg in arg_keys(Ps)` (GEN-17).
+    PackKey,
 }
 
 impl LocalKind {
@@ -693,8 +698,18 @@ impl LocalKind {
             LocalKind::Iteration => "an iteration binding",
             LocalKind::Parameter => "a parameter",
             LocalKind::GenericParameter => "a generic parameter",
+            LocalKind::PackKey => "a pack key",
         }
     }
+}
+
+/// A named pack declared for a function parameter, `...{As for f without key}` (FN-8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependentPack {
+    /// The parameter taking the function that these arguments are for.
+    pub function: Location,
+    /// The generic value parameters that supply exclusions, in written order.
+    pub without: Vec<Location>,
 }
 
 /// What a `name<...>(...)` that reads two ways was decided to be
