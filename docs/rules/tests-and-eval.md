@@ -7,6 +7,7 @@
 parser: done
 
 - An unnamed test context holds functions, structs, enums and named tests only
+- A named test, including an integration test, admits private helpers before its statements
 
 analyser: done
 
