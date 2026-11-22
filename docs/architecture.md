@@ -1522,8 +1522,22 @@ gives it one made of the cpp target and its build driver; without
 
 An integration test is left out of a run (TST-17): it is no case of the
 run, and is not listed. `--integration` asks for them all, and `--test`
-with its name asks for that one. A rejection case an integration test
-owns runs nothing, and is checked as any other is.
+with its name asks for that one. `--integration-only` selects integration
+tests and their rejection cases. It excludes standalone rejection cases
+and cannot be combined with `--integration`.
+
+Repeat `--test-path PATH` to select cases in several files or directories.
+A directory includes its subdirectories. Each path must exist within the
+source roots. The path and name filters combine when both are supplied.
+Declaration- and import-owned cases are independent of the name filter
+and are subject to the path filter. `--rejections-only` checks the
+rejection cases selected by the other filters.
+
+The runner still checks all sources given as roots, including dependencies
+outside the selected paths. A native build's inventory records the file of
+every case. Changing the selection reuses the same workspace build. A path
+selection with no cases reports that no case was selected and prints zero
+counts for rejection and executable cases.
 
 | Outcome of a test | When |
 | --- | --- |
@@ -2052,13 +2066,83 @@ is not used yet.
 | --- | --- |
 | `HGL_HGRAPH_SDK` | hgraph's C++ SDK prefix. Defaults to `../libexec/hgraph-sdk` beside the resolved executable |
 | `HGL_HGRAPH_DEPS` | The SDK's dependency prefix. Defaults to `../libexec/hgraph-deps` beside the resolved executable |
+| `HGL_HGRAPH_DEBUG` | hgraph's libraries built for debugging, which a debug build links: a directory laid out as a release's `libexec`, with the SDK in `hgraph-sdk` and its dependency prefix in `hgraph-deps`. Defaults to `../libexec/hgraph-debug` beside the resolved executable, where the `hgl-debug` package installs them |
 | `CXX` | The compiler, of the platform's family: GCC 15 or later on Linux, Apple clang 21 or later on macOS. Otherwise, on Linux, the first of `g++-17`, `g++-16`, `g++-15`, `g++` on the `PATH` that is GCC 15 or later, and on macOS `clang++`. A compiler is known by the macros it defines (`-dM -E`), not by its name |
 | `HGL_CPP_FLAGS` | Flags added to every compile and link, the runtime library's too: `-O2`, `-g`, the sanitizers |
 | `HGL_NATIVE_CACHE` | Where builds are kept; otherwise `hgl/native` in the user's cache directory |
 | `CMAKE_BUILD_PARALLEL_LEVEL` | How many jobs a build, and the executables run, take at once |
 
+An ordinary build links the optimised libraries: those `HGL_HGRAPH_SDK`
+and `HGL_HGRAPH_DEPS` name, or the release's own. A debug build links
+hgraph's libraries built for debugging where they are given, and the
+optimised ones otherwise (`choose` in `crates/hgl_cli/src/cpp/sdk.rs`):
+those `HGL_HGRAPH_DEBUG` names; else, where neither `HGL_HGRAPH_SDK` nor
+`HGL_HGRAPH_DEPS` is set, those in `../libexec/hgraph-debug` beside the
+resolved executable, where their `hgl-sdk.txt` names the hgraph tag
+`hgl` is built for. Either is taken only whole (`cpp/sdk/package.rs`):
+laid out as above; its SDK's `hgl-sdk.txt` saying `build-type=Debug`;
+the CMake packages a build configures from, hgraph's, fmt's, spdlog's
+and simdjson's, each there with every library it imports there; each of
+those libraries whole (its headers parse, none of its sections runs past
+its end, read with the [`object`](https://crates.io/crates/object)
+crate); and the name a program loads each by, and each name of the four
+packages' libraries it needs, there in either prefix as a library of
+that name, so that a program built against them starts with them alone.
+A library of a form the check knows and does not read, a static archive
+or a universal Mach-O, is not held against the package: the line `hgl`
+prints says so. One of no form known, or too short to tell, is. `HGL_HGRAPH_DEBUG` naming a directory that is not whole
+is an error that says what is wrong; a package beside `hgl` that is not
+is passed over, and the optimised libraries are linked, saying why.
+hgraph's installed headers do not depend on `NDEBUG`, so the debug build
+stands in for the optimised one. The runtime library and the
+description of a program are configured with the libraries' own build
+type, `Debug` for hgraph's debug libraries and `Release` for the
+optimised ones, which picks what a package imports where it imports a
+library of each configuration, so that a program links the build of fmt
+and spdlog hgraph's libraries were built against; the description takes
+none of the build type's flags. A debug build's runtime library is
+compiled with `-O0 -g` alone, whichever libraries it links. A debug build
+says on standard error, before it builds, which it links, and why where
+it links the optimised ones, and its JSON description says it too
+(below).
+
+Every CMake `hgl` runs, for an ordinary build and a debug one, finds
+packages in the SDK and the dependency prefix alone (`CONFINED` in
+`sdk.rs`: no package root, no `PATH` or other environment prefixes, no
+system prefixes or registries, and hgraph's package fetches none it
+misses), so that a program never links two copies of fmt, spdlog or
+simdjson, the prefix's and another's. It runs with none of the
+variables of the environment CMake reads for itself (`CMAKE_READS` in
+`sdk.rs`): the toolchain file `CMAKE_TOOLCHAIN_FILE`, which can name
+prefixes, packages and compilers; the search paths `CMAKE_PREFIX_PATH`,
+`CMAKE_FRAMEWORK_PATH`, `CMAKE_APPBUNDLE_PATH`, `CMAKE_INCLUDE_PATH`,
+`CMAKE_LIBRARY_PATH`, `CMAKE_PROGRAM_PATH`, and `CMAKE_FIND_ROOT_PATH` and
+`CMAKE_MODULE_PATH`, which CMake does not read from the environment
+today; `<Package>_DIR`, `<Package>_ROOT` and `<PACKAGE>_ROOT` of each
+package it finds (hgraph, fmt, spdlog, simdjson, Threads, doctest); the
+generator `CMAKE_GENERATOR` and its `_INSTANCE`, `_PLATFORM` and
+`_TOOLSET`; `CMAKE_BUILD_TYPE`, `CMAKE_CONFIGURATION_TYPES`,
+`CMAKE_CONFIG_TYPE`; the compilers, flags and launchers `CC`, `CXX`,
+`CFLAGS`, `CXXFLAGS`, `LDFLAGS`, `CMAKE_C_COMPILER_LAUNCHER`,
+`CMAKE_CXX_COMPILER_LAUNCHER`, `CMAKE_C_LINKER_LAUNCHER`,
+`CMAKE_CXX_LINKER_LAUNCHER`, `CMAKE_CROSSCOMPILING_EMULATOR`,
+`CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES_EXCLUDE`; macOS's
+`CMAKE_OSX_ARCHITECTURES` and `CMAKE_APPLE_SILICON_PROCESSOR`; what
+`cmake --install` reads, `CMAKE_INSTALL_PREFIX`, `CMAKE_INSTALL_MODE` and
+`DESTDIR`; and `CMAKE_POLICY_VERSION_MINIMUM`. What the build is given of
+these, it is given on the command line. Kept, and under the toolchain's
+hash: `MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`. Kept, and not under it:
+`PATH`, which finds no package, and `CMAKE_BUILD_PARALLEL_LEVEL`, how
+many jobs, which changes nothing made.
+`HGL_HGRAPH_BUILD_TYPE=Debug scripts/provision-hgraph-sdk.sh TAG
+DIR/hgraph-sdk`, with `HGL_HGRAPH_SOURCE` naming a checkout of `TAG` for
+a debugger to read, makes a debug SDK for `HGL_HGRAPH_DEBUG` to name,
+beside `DIR/hgraph-deps`, the prefix it was built against or a link to
+it.
+
 A toolchain is prepared once and kept under the cache in
-`toolchains/<hash>`, the hash of the SDK's and the dependencies' paths
+`toolchains/<hash>`, the hash of which build of hgraph's libraries it
+links and whether it is a debug build's, the SDK's and the dependencies' paths
 and the SDK's own files, the compiler, its family and version and what
 it reads from the environment (`MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`
 on macOS), the linker, the flags and the runtime library's sources,
@@ -2384,8 +2468,12 @@ CMake and Ninja, at fixed versions, with micromamba given a home directory
 of its own, so that nothing outside the prefix and a temporary directory
 is written. The compiler is the caller's: GCC 15 or later on Linux, Apple
 clang 21 or later on macOS (`clang++`, the default there); the script runs
-under macOS's own bash 3.2. `DIR/hgl-sdk.txt` says the tag, its commit,
-`arrow=off`, the compiler and the prefix; an SDK of the tag built
+under macOS's own bash 3.2. `HGL_HGRAPH_BUILD_TYPE=Debug` builds it with
+no optimisation and with debug information, as CMake's `Debug` does
+(169 MB on Linux with GCC 15.2, built in 26 s with 16 jobs).
+`DIR/hgl-sdk.txt` says the tag, its commit,
+`arrow=off`, the compiler and the prefix, and `build-type=Debug` for a
+debug build; an SDK of the tag built
 otherwise is not taken for one. The SDK is 14 MB (54 MB with Arrow), and
 its runtime and wiring libraries need fmt and spdlog alone; it builds in
 28 to 33 s with 12 jobs here (77 s with Arrow). On a macOS machine (Apple
@@ -2495,6 +2583,7 @@ the job the way the design needs is dropped.
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 | `dirs` | `hgl_cli` | the user's cache directory, where the cpp target's builds are kept |
 | `which` | `hgl_cli` | the programs the cpp target builds with, found on the `PATH` |
+| `object` | `hgl_cli` | the headers of a shared library, ELF and Mach-O: that each of hgraph's libraries built for debugging is whole before a debug build links it |
 
 The cpp target's build driver runs programs, not crates: GCC 15 or
 later on Linux or Apple clang 21 or later on macOS, `ninja`, `cmake`
@@ -2541,7 +2630,12 @@ HGL source paths used by the debugger.
 
 The build's version 1 JSON reports the launch as `debugLaunch`. The debugger
 starts its absolute `executable` with its `arguments`, `workingDirectory`
-and `environment` overrides. A client
+and `environment` overrides. Its `hgraph` gives the libraries the build
+links: `libraries` (`debug` or `optimised`, as "The build driver" above
+chooses them), and the absolute `sdk` and `dependencies` prefixes.
+Standard error says the same in a line before the build, `hgl: a debug
+build, with hgraph's debug libraries in DIR, named by HGL_HGRAPH_DEBUG`,
+or for the optimised ones why no debug ones were taken. A client
 creates its own session directory to keep that image for the duration
 of the debug session. The legacy `hgl run --application NAME
 --debug-build DIR ROOT...` spelling creates a fresh session under DIR

@@ -1725,6 +1725,34 @@ fn ranges_and_list_comprehensions_run_on_the_sdk() {
     );
 }
 
+/// GEN-7, GEN-13 and TYPE-10: an inferred list size is an integer
+/// constant in value code, a node handler and graph composition.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn inferred_list_sizes_are_values_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("list-size-values");
+    let file = write(
+        &root,
+        "demo.list_size_values.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.list_size_values.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-19: value, operator and callback calls forward a pack; graph
 /// calls forward the individual connections. Constructors, defaults and
 /// lexical captures retain the concrete shape (FN-8, FN-14, TYPE-5).
@@ -2690,6 +2718,13 @@ fn builds_an_isolated_debug_application_without_running_it() {
     write(&root, "ticks.hgl", TICKS);
     write(&root, "backtest.hgl", BACKTEST);
     let builds = root.join("debug builds");
+    // hgraph's libraries built for debugging where HGL_HGRAPH_DEBUG names
+    // them, and the optimised ones HGL_HGRAPH_SDK names otherwise: the
+    // binary under test has no release beside it.
+    let libraries = match std::env::var_os("HGL_HGRAPH_DEBUG") {
+        Some(_) => "debug",
+        None => "optimised",
+    };
     let prepare = || {
         let report = hgl_in(
             &["run", &argument(&root), "--debug-build", &argument(&builds)],
@@ -2697,10 +2732,21 @@ fn builds_an_isolated_debug_application_without_running_it() {
             &["LD_LIBRARY_PATH"],
         );
         assert!(report.status.success(), "{}", text(&report.stderr));
+        assert!(
+            text(&report.stderr).starts_with(&format!(
+                "hgl: a debug build, with hgraph's {libraries} libraries "
+            )),
+            "{}",
+            text(&report.stderr)
+        );
         serde_json::from_slice::<serde_json::Value>(&report.stdout).unwrap()
     };
     let launch = prepare();
     assert_eq!(launch["version"], 1);
+    assert_eq!(launch["hgraph"]["libraries"], libraries);
+    for prefix in ["sdk", "dependencies"] {
+        assert!(Path::new(launch["hgraph"][prefix].as_str().unwrap()).is_dir());
+    }
     let executable = launch["executable"].as_str().unwrap();
     #[cfg(target_os = "linux")]
     {

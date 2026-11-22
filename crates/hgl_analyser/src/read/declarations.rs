@@ -274,6 +274,7 @@ impl Reader<'_> {
                     },
                     Form::Value => GenericKind::Value(Type::Unknown),
                 },
+                inferred_list_size: false,
             })
             .collect();
         self.evidence = vec![Evidence::default(); self.generics.len()];
@@ -532,6 +533,19 @@ impl Reader<'_> {
             && let Some(evidence) = self.evidence_of(declared)
         {
             evidence.as_value.get_or_insert(used);
+        }
+    }
+
+    /// TYPE-10: a list's size is an integer count. Keep this evidence
+    /// for a read in the body (GEN-7), independent of the written kind.
+    pub(super) fn note_list_size(&mut self, declared: Location) {
+        if self.in_signature
+            && let Some(generic) = self
+                .generics
+                .iter_mut()
+                .find(|generic| generic.at == declared && generic.kind == GenericKind::Plain)
+        {
+            generic.inferred_list_size = true;
         }
     }
 

@@ -58,9 +58,13 @@ impl<'a> BuildRequest<'a> {
         }
     }
 
-    pub(super) fn start(&self) -> Result<BuildStart, ExitCode> {
+    pub(super) fn start(&self, paths: Option<&[PathBuf]>) -> Result<BuildStart, ExitCode> {
         let session = BuildSession::open(self.roots, self.keep, self.debug);
-        let inputs = match ProgramSources::read(self.roots) {
+        let inputs = match paths {
+            Some(paths) => ProgramSources::read_paths(paths),
+            None => ProgramSources::read(self.roots),
+        };
+        let inputs = match inputs {
             Ok(inputs) => inputs,
             Err(status) => {
                 if let Ok(session) = session {
@@ -88,7 +92,7 @@ impl<'a> BuildRequest<'a> {
     }
 
     fn build(&self, interrupt: &Interrupt) -> Result<(BuildSession, BuiltProgram), ExitCode> {
-        let (inputs, session) = match self.start()? {
+        let (inputs, session) = match self.start(None)? {
             BuildStart::Hit(session, built) => {
                 interrupt.finish().map_err(build_error)?;
                 return Ok((session, built));
@@ -319,6 +323,7 @@ fn legacy_debug(
         &session.workspace,
         &app.path,
         sdk::library_path(&description),
+        session.toolchain.hgraph(),
     )
     .map_err(build_error)?;
     let _ = directory.keep();
@@ -399,6 +404,7 @@ pub(crate) fn build(arguments: &BuildArgs) -> ExitCode {
         }
         BuildFormat::Json => match build_description(
             &session.workspace,
+            session.toolchain.hgraph(),
             &built,
             arguments,
             compile_commands.as_deref(),
@@ -424,6 +430,7 @@ fn test_executables(program: &plan::Program) -> BTreeSet<&str> {
 
 fn build_description(
     workspace: &Workspace,
+    hgraph: &sdk::Hgraph,
     built: &BuiltProgram,
     arguments: &BuildArgs,
     compile_commands: Option<&Path>,
@@ -471,8 +478,12 @@ fn build_description(
     if arguments.debug
         && let Some(path) = debug_app
     {
-        let launch =
-            application::debug_launch(workspace, path, sdk::library_path(&built.description))?;
+        let launch = application::debug_launch(
+            workspace,
+            path,
+            sdk::library_path(&built.description),
+            hgraph,
+        )?;
         description["debugLaunch"] = serde_json::json!(launch);
     }
     Ok(description)

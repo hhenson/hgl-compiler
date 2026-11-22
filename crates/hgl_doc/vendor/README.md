@@ -10,9 +10,10 @@ are the registry's SHA-512 values and match the downloaded bytes.
 
 The site uses KaTeX's MathML output, which needs no KaTeX CSS or fonts.
 Mermaid's classic browser bundle handles diagram rendering from a local
-file. Both packages are MIT-licensed. The compiler embeds the bundles and
-the notices and writes them into the generated site. The release archive
-also includes the notices beside its other licenses.
+file. KaTeX and Mermaid are MIT-licensed. The Mermaid bundle also includes
+components under the licenses listed below. The compiler embeds the bundles
+and their notices and writes them into the generated site. The release
+archive includes the notices beside its other licenses.
 
 ## File hashes
 

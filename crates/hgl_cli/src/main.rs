@@ -43,8 +43,9 @@ mod check_json;
 mod cpp;
 mod doc;
 mod replace;
+mod test_paths;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -170,19 +171,28 @@ struct TestArgs {
     roots: Vec<PathBuf>,
 
     /// Run the test with this name only, given as `name` or
-    /// `module.path::name`. May be repeated. A rejection case owned by a
-    /// declaration or an import always runs.
+    /// `module.path::name`. May be repeated. Declaration and import
+    /// rejection cases are independent of this name filter.
     #[arg(long = "test", value_name = "NAME")]
     tests: Vec<String>,
 
-    /// Check the rejection cases and run no test.
+    /// Select cases written in this file or directory, recursively.
+    /// May be repeated. With --test, restrict those names to these paths.
+    #[arg(long = "test-path", value_name = "PATH")]
+    test_paths: Vec<PathBuf>,
+
+    /// Check only the selected rejection cases.
     #[arg(long)]
     rejections_only: bool,
 
     /// Run the integration tests too. Without this an
     /// `integration_test` is left out, unless `--test` names it.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "integration_only")]
     integration: bool,
+
+    /// Run only integration tests and the rejection cases they own.
+    #[arg(long)]
+    integration_only: bool,
 
     /// The target to run the tests on. With none, the tests are listed
     /// and not run.
@@ -528,22 +538,38 @@ fn read_source(path: &Path) -> Result<Vec<u8>, ExitCode> {
 /// directory, so that a run prints the same thing on every machine; the
 /// analyser's result does not depend on the order (UNIT-1).
 fn find_sources(roots: &[PathBuf]) -> Result<Vec<PathBuf>, ExitCode> {
+    discover_sources(roots, |_, _, _| {})
+}
+
+/// Visits every way a file is reached and returns each source once. The
+/// visitor gets the written path, canonical identity and first path used
+/// for that source, so a path selector can match an alternate spelling.
+fn discover_sources(
+    roots: &[PathBuf],
+    mut visit: impl FnMut(&Path, &Path, &Path),
+) -> Result<Vec<PathBuf>, ExitCode> {
     let mut found = Vec::new();
     // A file reached twice, through two roots or a link, is read once.
     // `canonicalize` gives a file's one true path, whatever path led to it.
-    let mut seen = HashSet::new();
+    let mut seen = HashMap::new();
     let mut add = |path: PathBuf, found: &mut Vec<PathBuf>| {
         let identity = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        if seen.insert(identity) {
-            found.push(path);
-        }
+        let index = if let Some(&index) = seen.get(&identity) {
+            index
+        } else {
+            let index = found.len();
+            seen.insert(identity.clone(), index);
+            found.push(path.clone());
+            index
+        };
+        visit(&path, &identity, &found[index]);
     };
     for root in roots {
         if root.is_file() {
             add(root.clone(), &mut found);
             continue;
         }
-        let before = found.len();
+        let mut contains_source = false;
         // `follow_links` enters linked directories; the walker reports a
         // link that leads back into its own path and does not follow it.
         for entry in WalkDir::new(root).follow_links(true).sort_by_file_name() {
@@ -557,26 +583,16 @@ fn find_sources(roots: &[PathBuf]) -> Result<Vec<PathBuf>, ExitCode> {
             let is_source = entry.file_type().is_file()
                 && entry.path().extension().is_some_and(|found| found == "hgl");
             if is_source {
+                contains_source = true;
                 add(entry.into_path(), &mut found);
             }
         }
-        if found.len() == before && !seen_under(root, &found) {
+        if !contains_source {
             eprintln!("hgl: no .hgl file under {}", root.display());
             return Err(ExitCode::from(EXIT_FAILED));
         }
     }
     Ok(found)
-}
-
-/// True when a file already found is under `root`: the root added
-/// nothing because another root had covered it.
-fn seen_under(root: &Path, found: &[PathBuf]) -> bool {
-    let Ok(root) = fs::canonicalize(root) else {
-        return false;
-    };
-    found
-        .iter()
-        .any(|path| fs::canonicalize(path).is_ok_and(|path| path.starts_with(&root)))
 }
 
 /// Prints the diagnostics, in source order, and gives the exit status
@@ -692,7 +708,12 @@ struct ProgramSources {
 
 impl ProgramSources {
     fn read(roots: &[PathBuf]) -> Result<Self, ExitCode> {
-        let files = find_sources(roots)?
+        Self::read_paths(&find_sources(roots)?)
+    }
+
+    /// Reads a source list that has already been discovered and ordered.
+    fn read_paths(paths: &[PathBuf]) -> Result<Self, ExitCode> {
+        let files = paths
             .iter()
             .map(|path| Ok((path.display().to_string(), read_source(path)?)))
             .collect::<Result<_, ExitCode>>()?;
@@ -1146,24 +1167,39 @@ fn prepare_program(
 /// executable cases: 1 not run: no target was given to run a test on
 /// ```
 fn test(arguments: &TestArgs) -> ExitCode {
+    let (paths, source_files) = match test_paths::sources(&arguments.roots, &arguments.test_paths) {
+        Ok(Some(selected)) => (Some(selected.paths), Some(selected.names)),
+        Ok(None) => (None, None),
+        Err(status) => return status,
+    };
     let selection = Selection {
         tests: arguments.tests.clone(),
         rejections_only: arguments.rejections_only,
         integration: arguments.integration,
+        integration_only: arguments.integration_only,
+        source_files,
     };
     if matches!(arguments.target, Some(Target::Cpp)) {
-        return cpp::test(arguments, &selection);
+        return cpp::test(arguments, &selection, paths.as_deref());
     }
+    let parsed = match paths {
+        Some(paths) => ProgramSources::read_paths(&paths)
+            .and_then(|inputs| parse_sources(&inputs, arguments.limits.limits(), None, true)),
+        None => parse_program(&arguments.roots, arguments.limits.limits(), true),
+    };
     let Parsed {
         sources,
         files,
         diagnostics,
         ..
-    } = match parse_program(&arguments.roots, arguments.limits.limits(), true) {
+    } = match parsed {
         Ok(program) => program,
         Err(status) => return status,
     };
     let report = hgl_runner::run(&sources, &files, &diagnostics, &selection, None);
+    if selection.source_files.is_some() && report.cases.is_empty() && !report.prevented() {
+        return print_empty_test_selection(true);
+    }
     print_report(&sources, &report)
 }
 
@@ -1216,11 +1252,21 @@ fn print_report(sources: &SourceMap, report: &Report) -> ExitCode {
     print_outcomes(&outcomes)
 }
 
+/// Reports an empty selection (TST-15). A path selection also gives the
+/// zero counts consumed by callers that run a file or directory.
+fn print_empty_test_selection(path_selected: bool) -> ExitCode {
+    println!("no case was selected: this run shows nothing");
+    if path_selected {
+        println!("rejection cases: 0 passed, 0 failed");
+        println!("executable cases: 0 passed, 0 failed, 0 not run");
+    }
+    ExitCode::SUCCESS
+}
+
 /// Prints current or cached case details and their separate totals (TST-14).
 fn print_outcomes(cases: &[(&str, CaseKind, CaseOutcome)]) -> ExitCode {
     if cases.is_empty() {
-        println!("no case was selected: this run shows nothing");
-        return ExitCode::SUCCESS;
+        return print_empty_test_selection(false);
     }
     let mut rejected = 0;
     let mut rejection_failures = 0;

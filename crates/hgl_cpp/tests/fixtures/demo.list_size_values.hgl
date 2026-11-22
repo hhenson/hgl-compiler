@@ -1,0 +1,62 @@
+module demo.list_size_values
+
+# GEN-7, GEN-13 and TYPE-10: read an inferred extent as a constant.
+const fn size_of<N>(xs: list<i64, N>) -> i64 => N
+const fn n_minus_one<N>(xs: list<i64, N>) -> i64 => N - 1
+const fn last_of<N>(xs: list<i64, N>) -> i64 => xs[N - 1]
+const fn through_a_let<N>(xs: list<i64, N>) -> i64 {
+    let k = N - 1
+    return xs[k]
+}
+
+test alone {
+    let xs: list<i64, 3> = [1, 2, 3]
+    assert size_of(xs) == 3
+}
+
+test in_arithmetic {
+    let xs: list<i64, 3> = [1, 2, 3]
+    let ys: list<i64, 1> = [5]
+    assert n_minus_one(xs) == 2
+    assert n_minus_one(ys) == 0
+}
+
+test in_an_index {
+    let xs: list<i64, 3> = [1, 2, 3]
+    assert last_of(xs) == 3
+}
+
+test via_a_let {
+    let xs: list<i64, 3> = [1, 2, 3]
+    assert through_a_let(xs) == 3
+}
+
+fn handler_last<N>(xs: list<i64, N>) -> i64 {
+    when valid(xs[N - 1]) {
+        return xs[N - 1]
+    }
+}
+
+fn last_in_node(xs: list<i64, 3>) -> i64 => handler_last(xs)
+
+test in_a_handler {
+    assert eval last_in_node([[1, 2, 3], [4, 5, 6]]) == [3, 6]
+}
+
+# EXPR-17: the range gives each pass an index into the input connection.
+fn reversed<N>(xs: list<i64, N>) -> list<i64, N> =>
+    [for i in 0..<N: xs[N - 1 - i]]
+
+fn reverse_three(xs: list<i64, 3>) -> list<i64, 3> => reversed(xs)
+
+test index_by_pass {
+    assert eval reverse_three([[1, 2, 3], [4, 5, 6]]) == [[3, 2, 1], [6, 5, 4]]
+}
+
+const fn add_integer<const k: i64>(x: i64) -> i64 => x + k
+const fn add_duration<const d: duration>(x: duration) -> duration => x + d
+
+test declared_value_types {
+    assert add_integer<4>(3) == 7
+    assert add_duration<4s>(3s) == 7s
+}
