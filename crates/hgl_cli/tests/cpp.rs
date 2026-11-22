@@ -8,6 +8,9 @@
 //! runs them, as the CI job for C++ does. Run with no C++ SDK named,
 //! they say so and have nothing to check.
 
+#[cfg(unix)]
+#[path = "cpp/build_reuse.rs"]
+mod build_reuse;
 mod common;
 
 use std::fs;
@@ -650,6 +653,7 @@ fn a_failed_build_runs_no_older_executable() {
     let output = hgl_in(&arguments, &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(output.status.code(), Some(2), "{stdout}");
+    assert!(!kept.join(".hgl-built.json").exists());
     let rows: Vec<&str> = stdout.lines().collect();
     assert_eq!(rows[0], "not run  executable  demo.calc::sums", "{stdout}");
     assert_eq!(

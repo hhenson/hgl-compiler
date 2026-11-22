@@ -23,18 +23,17 @@
 
 use std::fs;
 use std::io::{self, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use hgl_cpp::{Application, Output, application_stem};
+use hgl_cpp::application_stem;
 
-use super::build::{self, Workspace};
-use super::sdk::{self, Toolchain};
+use super::build::Workspace;
 
-/// What became of an application given to [`run`].
+/// What became of an application given to [`launch`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum RanApplication {
     /// The run ended, as core's CRUN-1 has one: built, started,
@@ -123,72 +122,15 @@ impl StopState {
     }
 }
 
-/// Builds and runs `application`, one of what the target wrote,
-/// `output`, that is not blocked, in the program's workspace (the
-/// directory `keep` names, or the one of its source `roots`), and says
-/// what became of it. `stop` is the host's stop of the run.
-pub(super) fn run(
-    output: &Output,
-    application: &Application,
-    keep: Option<&Path>,
-    roots: &[PathBuf],
-    stop: &Stop,
-) -> RanApplication {
-    match built(output, application, keep, roots, false) {
-        Ok((workspace, libraries)) => launch(&workspace, application, &libraries, stop),
-        Err(reason) => RanApplication::NotRun(reason),
-    }
-}
+/// The variable that names where an executable finds its libraries.
+pub(super) type Libraries = Option<(&'static str, std::ffi::OsString)>;
 
-/// The variable that names where an executable finds its libraries, and
-/// its value, where the platform has one (`sdk::library_path`).
-type Libraries = Option<(&'static str, std::ffi::OsString)>;
-
-/// The workspace with `application`'s executable built in it, held
-/// until the run has ended, and the libraries' path it runs with; or why
-/// it could not be built.
-fn built(
-    output: &Output,
-    application: &Application,
-    keep: Option<&Path>,
-    roots: &[PathBuf],
-    debug: bool,
-) -> Result<(Workspace, Libraries), String> {
-    let mut toolchain = Toolchain::find()?;
-    if debug {
-        toolchain.enable_debug();
-    }
-    let cache = build::cache()?;
-    let jobs = std::env::var(build::JOBS)
-        .ok()
-        .filter(|jobs| !jobs.is_empty());
-    let description = toolchain.prepare(&cache, jobs.as_deref())?;
-    let workspace = Workspace::open(keep, roots, &cache)?;
-    workspace.write(output, &description)?;
-    let built =
-        workspace.build_application(&toolchain.ninja, &application.path, jobs.as_deref())?;
-    // A failed build runs no older executable in this one's place.
-    if built.fresh.first() != Some(&true) {
-        let failure = built.failure.unwrap_or_default();
-        return Err(format!("the build of its executable failed:\n{failure}"));
-    }
-    Ok((workspace, sdk::library_path(&description)))
-}
-
-/// Builds an isolated debug session. Its owner keeps the session directory
-/// until the debugger exits, so later builds cannot replace its symbols.
+/// The launch description consumed by a native debugger.
 pub(super) fn debug_launch(
-    output: &Output,
-    application: &Application,
-    directory: &Path,
-    roots: &[PathBuf],
+    workspace: &Workspace,
+    path: &str,
+    libraries: Libraries,
 ) -> Result<serde_json::Value, String> {
-    fs::create_dir_all(directory).map_err(|e| format!("{}: {e}", directory.display()))?;
-    let session = tempfile::Builder::new()
-        .prefix("session-")
-        .tempdir_in(directory)
-        .map_err(|e| format!("{}: {e}", directory.display()))?;
-    let (workspace, libraries) = built(output, application, Some(session.path()), roots, true)?;
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut environment = serde_json::Map::new();
     if let Some((name, value)) = libraries {
@@ -205,28 +147,27 @@ pub(super) fn debug_launch(
     let results = path_text(&workspace.directory.join("results.txt"))?;
     let data = serde_json::json!({
         "version": 1,
-        "executable": path_text(&workspace.application(&application.path))?,
+        "executable": path_text(&workspace.application(path))?,
         "arguments": [results, "--debug-console"],
         "workingDirectory": path_text(&cwd)?,
         "environment": environment,
     });
-    let _directory = session.keep();
     Ok(data)
 }
 
 /// Runs the executable of `application` built in `workspace`, with
 /// `libraries` where it finds its libraries, passing it what `stop` is
 /// asked, and reads what became of the run from the results it writes.
-fn launch(
+pub(super) fn launch(
     workspace: &Workspace,
-    application: &Application,
+    path: &str,
     libraries: &Libraries,
     stop: &Stop,
 ) -> RanApplication {
     let results = workspace
         .directory
         .join("results")
-        .join(format!("{}.run.txt", application_stem(&application.path)));
+        .join(format!("{}.run.txt", application_stem(path)));
     // What an earlier run recorded is not this run's.
     let cleared = match fs::remove_file(&results) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
@@ -238,7 +179,7 @@ fn launch(
             results.display()
         ));
     }
-    let executable = workspace.application(&application.path);
+    let executable = workspace.application(path);
     let mut command = Command::new(&executable);
     if let Some((variable, value)) = libraries {
         command.env(variable, value);

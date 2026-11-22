@@ -167,6 +167,11 @@ impl Test {
             .find(|(start, _)| *start <= line)
             .map(|(_, at)| *at)
     }
+
+    /// Generated statement lines and their corresponding HGL locations.
+    pub fn statements(&self) -> &[(usize, Location)] {
+        &self.statements
+    }
 }
 
 /// An application as the target wrote it (UNIT-14): one executable,
