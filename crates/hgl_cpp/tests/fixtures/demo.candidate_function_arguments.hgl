@@ -1,0 +1,227 @@
+module demo.candidate_function_arguments
+
+# FN-17, GEN-6: the candidate ties the callback inputs to the list's
+# element type, even when the public operator has unrelated parameters.
+operator vr2<L, R, C>(f: const fn(L, R) -> L, items: C, zero: L? = null) -> L
+impl const fn vr2<V>(f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V =>
+    f(items[0], items[1])
+
+operator vr3<L, R>(f: const fn(L, R) -> L, items: list<R>, zero: L? = null) -> L
+impl const fn vr3<V>(f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V =>
+    f(items[0], items[1])
+
+const fn diff(a: i64, b: i64) -> i64 => a - b
+
+test named_function { assert vr2(diff, [5, 2], zero: null) == 3 }
+test operator_function { assert vr2(add_, [5, 2], zero: null) == 7 }
+test operator_function_with_list_shape { assert vr3(add_, [5, 2], zero: null) == 7 }
+
+# FN-17: the anonymous function gets its kind from the value candidate.
+operator fold2<V>(f: fn(V, V) -> V, items: list<V>) -> V
+impl const fn fold2<V>(f: const fn(V, V) -> V, items: list<V>) -> V => f(items[0], items[1])
+
+test anonymous_value_function {
+    let xs: list<i64> = [4, 5]
+    assert fold2(fn(a, b) => a + b, xs) == 9
+}
+
+# Both arguments can also supply their types in graph composition.
+operator vr_live<L, R, C>(f: fn(L, R) -> L, items: C) -> L
+impl fn vr_live<V>(f: fn(V, V) -> V, items: list<V>) -> V =>
+    f(items[0], items[1])
+
+operator vr_live_list<L, R>(f: fn(L, R) -> L, items: list<R>) -> L
+impl fn vr_live_list<V>(f: fn(V, V) -> V, items: list<V>) -> V =>
+    f(items[0], items[1])
+
+operator live_sum<T>(a: T, b: T) -> T
+impl fn live_sum(a: i64, b: i64) -> i64 {
+    when { return a + b + 10 }
+}
+
+operator fold_live<V>(f: fn(V, V) -> V, items: list<V>) -> V
+impl fn fold_live<V>(f: fn(V, V) -> V, items: list<V>) -> V => f(items[0], items[1])
+
+fn with_operator(items: list<i64>) -> i64 => vr_live(live_sum, items)
+fn with_operator_and_list_shape(items: list<i64>) -> i64 => vr_live_list(live_sum, items)
+fn with_named_function(items: list<i64>) -> i64 => vr_live(diff, items)
+fn with_anonymous(items: list<i64>) -> i64 => fold_live(fn(a, b) => live_sum(a, b), items)
+
+test temporal_candidates {
+    assert eval with_operator(items: [[4, 5]]) == [19]
+    assert eval with_operator_and_list_shape(items: [[4, 5]]) == [19]
+    assert eval with_named_function(items: [[5, 2]]) == [3]
+    assert eval with_anonymous(items: [[5, 8]]) == [23]
+}
+
+# The complete GEN-18 fold fragment and its three calls.
+operator plus<T>(a: T, b: T) -> T properties<i64> { associative }
+impl const fn plus(a: i64, b: i64) -> i64 => a + b
+
+operator fold<V, const associative: bool = associative(f)>(
+    f: fn(V, V) -> V,
+    items: list<V>,
+) -> V
+
+impl const fn fold<V, const associative: bool = associative(f)>(
+    f: const fn(V, V) -> V,
+    items: list<V>,
+) -> V requires associative { return items[0] }
+
+test law_from_the_operator_or_the_caller {
+    let xs: list<i64> = [4, 5]
+    assert fold(plus, xs) == 4
+    assert fold{associative: true}(fn(a, b) => a + b, xs) == 4
+}
+
+test anonymous_function_declares_no_law {
+    let xs: list<i64> = [4, 5]
+    # expect-error(operator, "operator.no_candidate")
+    assert fold(fn(a, b) => a - b, xs) == 4
+}
+
+# GEN-6: resolving one trial must not give its callback to another.
+operator select<L, R, C>(f: const fn(L, R) -> L, items: C) -> L
+impl const fn select(f: const fn(i64, i64) -> i64, items: list<i64>) -> i64 =>
+    f(items[0], items[1])
+impl const fn select(f: const fn(f64, f64) -> f64, items: list<f64>) -> f64 =>
+    f(items[0], items[1])
+
+test item_type_selects_the_callback {
+    let integers: list<i64> = [5, 2]
+    let floats: list<f64> = [3.5, 4.5]
+    let integer_sum = select(add_, integers)
+    let float_sum = select(add_, floats)
+    assert integer_sum == 7
+    assert float_sum == 8.0
+}
+
+# GEN-17: reflection for one callback leaves another callback's types
+# to the candidate that takes the whole call.
+operator with_reflection<L, R, C, ...Ps>(
+    f: const fn(L, R) -> L,
+    items: C,
+    reflected: const fn(...{Ps}) -> i64,
+) -> L
+impl const fn with_reflection<V, ...Ps>(
+    f: const fn(V, V) -> V,
+    items: list<V>,
+    reflected: const fn(...{Ps}) -> i64,
+) -> V => f(items[0], items[1])
+
+test fixed_callback_beside_a_reflected_callback {
+    assert with_reflection(add_, [5, 2], diff) == 7
+}
+
+# GEN-2 and GEN-12: the callback binds V before the literal, including
+# when the call writes the literal's named argument first.
+operator apply<V>(f: const fn(V) -> V, x: V) -> V
+impl const fn apply<V>(f: const fn(V) -> V, x: V) -> V => f(x)
+
+const fn identity_f64(x: f64) -> f64 => x
+
+test callback_type_precedes_later_literals {
+    let positional = apply(identity_f64, 1)
+    let named = apply(x: 2, f: identity_f64)
+    assert positional == 1.0
+    assert named == 2.0
+}
+
+# FN-17: the list decides P, and the callback decides R even when
+# the call has no requested result type.
+operator map3<P, R, C, O>(f: fn(P) -> R, items: C) -> O
+impl const fn map3<P, R>(f: const fn(P) -> R, items: list<P, 3>) -> list<R, 3> =>
+    [f(items[0]), f(items[1]), f(items[2])]
+
+test unrequested_callback_results {
+    let xs: list<i64, 3> = [1, 2, 3]
+    let negatives = map3(neg_, xs)
+    assert negatives == [-1, -2, -3]
+    assert map3(fn(x) => x > 1, xs) == [false, true, true]
+    assert map3(convert<f64>, xs) == [1.0, 2.0, 3.0]
+}
+
+operator compose<P, R, C>(f: fn(P) -> R, x: C) -> R
+impl fn compose<P, R>(f: fn(P) -> R, x: P) -> R => f(x)
+
+fn unrequested_composed_result(x: i64) -> bool {
+    let negative = compose(neg_, x)
+    let positive = compose(fn(n) => n * 10, x)
+    return negative < 0 && positive > 5
+}
+
+fn generic_graph_apply<P, R>(f: fn(P) -> R, x: P) -> R => f(x)
+
+fn unrequested_generic_graph_result(x: i64) -> bool {
+    let value = generic_graph_apply(fn(n) => n * 10, x)
+    return value > 5
+}
+
+test unrequested_graph_callback_results {
+    assert eval unrequested_composed_result(x: [1]) == [true]
+    assert eval unrequested_generic_graph_result(x: [1]) == [true]
+}
+
+# FN-17 and GEN-2: a plain generic function learns its output from the
+# same callback after a later argument gives the callback its input type.
+const fn generic_apply<P, R>(f: const fn(P) -> R, x: P) -> R => f(x)
+const fn identity<T>(x: T) -> T => x
+
+test unrequested_plain_function_results {
+    let negative = generic_apply(neg_, 3)
+    assert negative == -3
+    assert generic_apply(fn(x) => x * 10, 3) == 30
+    assert generic_apply(convert<f64>, 3) == 3.0
+    assert generic_apply(identity, 3) == 3
+}
+
+operator apply_result<P, R, C>(f: const fn(P) -> R, x: C) -> R
+impl const fn apply_result<P, R>(f: const fn(P) -> R, x: P) -> R => f(x)
+
+test a_callback_result_admits_widened_return_literals {
+    let ordinary = generic_apply(fn(x) {
+        if x > 0 { return 2.5 }
+        return 1
+    }, 1)
+    let operator_value = apply_result(fn(x) {
+        if x > 0 { return 1 }
+        return 2.5
+    }, 1)
+    assert ordinary == 2.5
+    assert operator_value == 1.0
+}
+
+# GEN-18: the failed law makes this call have no candidate even when
+# the public signature leaves the callback's generic inputs open.
+operator fold_reduce<L, R, C, const associative: bool = associative(f)>(
+    f: fn(L, R) -> L, items: C,
+) -> L
+impl const fn fold_reduce<V, const associative: bool = associative(f)>(
+    f: const fn(V, V) -> V, items: list<V>,
+) -> V requires associative => items[0]
+
+test no_law_in_an_open_public_template {
+    let xs: list<i64> = [4, 5]
+    # expect-error(operator, "operator.no_candidate")
+    assert fold_reduce(fn(a, b) => a - b, xs) == 4
+}
+
+test no_operator_target_for_the_candidate_inputs {
+    # expect-error(operator, "operator.no_candidate")
+    assert vr2(add_, [true, false], zero: null)
+}
+
+const fn first_string(a: str, b: str) -> str => a
+
+test a_named_function_must_match_the_candidate_inputs {
+    # expect-error(type, "type.mismatch")
+    assert vr2(first_string, [1, 2], zero: null) == 1
+}
+
+fn temporal_sum(a: i64, b: i64) -> i64 {
+    when { return a + b }
+}
+
+# FN-17: the only candidate reads the anonymous function as value code.
+# expect-error(function-kind, "call.role")
+fn an_anonymous_value_function_cannot_compose(items: list<i64>) -> i64 => fold2(fn(a, b) => temporal_sum(a, b), items)

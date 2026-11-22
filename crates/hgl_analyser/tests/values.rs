@@ -4627,6 +4627,53 @@ fn explicit_operator_references_check_resolved_public_option_types() {
     }
 }
 
+/// FN-17 and GEN-6: an omitted operator default leaves the candidate's
+/// list type to resolve both types in the callback template.
+#[test]
+fn operator_arguments_use_the_candidate_function_type_with_an_omitted_default() {
+    let checked = module(
+        r#"operator vr2<L, R, C>(f: const fn(L, R) -> L, items: C, zero: L? = null) -> L
+impl const fn vr2<V>(f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V =>
+    f(items[0], items[1])
+operator vr3<L, R>(f: const fn(L, R) -> L, items: list<R>, zero: L? = null) -> L
+impl const fn vr3<V>(f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V =>
+    f(items[0], items[1])
+const fn diff(a: i64, b: i64) -> i64 => a - b
+test named_function { assert vr2(diff, [5, 2]) == 3 }
+test operator_function { assert vr2(add_, [5, 2]) == 7 }
+test no_zero { assert vr3(add_, [5, 2]) == 7 }
+"#,
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+}
+
+/// GEN-5 and FN-17: a selected callback's body reports its own error.
+/// If the call ties, the diagnostic identifies the written callback.
+#[test]
+fn operator_callback_diagnostics_follow_the_candidate() {
+    let checked = module(
+        r#"operator select<L, R, C>(f: const fn(L, R) -> L, items: C) -> L
+impl const fn select(f: const fn(i64, i64) -> i64, items: list<i64>) -> i64 => f(items[0], items[1])
+impl const fn select(f: const fn(str, str) -> str, items: list<str>) -> str => f(items[0], items[1])
+test bad_body { assert select(fn(a, b) => a - b, ["x", "y"]) == "x" }
+
+operator pick<L, R>(f: const fn(L, R) -> L) -> str
+impl const fn pick(f: const fn(i64, i64) -> i64) -> str => "integer"
+impl const fn pick(f: const fn(f64, f64) -> f64) -> str => "floating point"
+test ambiguous { assert pick(add_) == "integer" }
+"#,
+    );
+    assert_eq!(checked.findings.len(), 2, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+    assert!(
+        checked.findings[0]
+            .message
+            .contains("`-` takes no `str` and `str`")
+    );
+    assert_eq!(checked.findings[1].code, "operator/operator.ambiguous");
+    assert!(checked.findings[1].message.contains("`add_`"));
+}
+
 /// FN-17: a template checks role, written names and plain parameter
 /// modes, and does not take an ordinary runtime value.
 #[test]

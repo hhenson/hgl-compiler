@@ -3,7 +3,7 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File, FileTimes};
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -456,7 +456,15 @@ fn run_and_test_repair_rewritten_workspace_artifacts() {
         let mut broken = fs::read(&path).unwrap();
         broken[0] ^= u8::MAX;
         for (replacement, calls) in [(broken.as_slice(), 3), (b"foreign artifact".as_slice(), 4)] {
-            fs::write(&path, replacement).unwrap();
+            // A process can still have the old executable mapped. Replace
+            // its path without opening that executable for writing.
+            let mut staged = tempfile::NamedTempFile::new_in(path.parent().unwrap()).unwrap();
+            staged.write_all(replacement).unwrap();
+            staged
+                .as_file()
+                .set_permissions(fs::metadata(&path).unwrap().permissions())
+                .unwrap();
+            drop(staged.persist(&path).unwrap());
             reject();
             assert!(invoke().contains(expected));
             assert_eq!(ninja.calls(), calls);
