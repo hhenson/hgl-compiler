@@ -269,7 +269,7 @@ impl Program {
     }
 
     /// Instantiate a body and report any configuration that fails to fit
-    /// the selected candidate (FN-18, GEN-16). Collect new graph reports
+    /// the selected candidate (FN-18, GEN-16). Collect new body reports
     /// separately so the instance walk can point them at its caller (GEN-7).
     pub(crate) fn checked_instance(
         &self,
@@ -278,7 +278,7 @@ impl Program {
         requirements: &[Answer],
         inputs: InstanceInputs<'_>,
         diagnostics: &RefCell<Diagnostics>,
-        graph_diagnostics: &mut Diagnostics,
+        body_diagnostics: &mut Diagnostics,
     ) -> Option<(Signature, Body)> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
@@ -321,13 +321,16 @@ impl Program {
         let pending_forwards = inputs
             .pack_inputs
             .filter(|_| crate::values::has_forwarded_calls(&body));
-        if let Some(pack_inputs) = pending_forwards
-            && let Some(reread) = crate::values::resolve_forwarded_calls(
+        let recheck_endpoints =
+            crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
+        if (recheck_endpoints || pending_forwards.is_some())
+            && let Some(reread) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),
                 (&taken, &map),
-                (&functions, pack_inputs),
-                graph_diagnostics,
+                (&functions, pending_forwards),
+                &project,
+                body_diagnostics,
             )
         {
             body = reread;
@@ -347,7 +350,7 @@ impl Program {
                 (module, declaration),
                 (&taken, &map),
                 &mut body,
-                graph_diagnostics,
+                body_diagnostics,
                 &|expression| self.place(expression, &arguments, &functions),
             );
         } else {

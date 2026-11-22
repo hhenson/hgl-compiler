@@ -39,3 +39,20 @@ test generic_nullable_whole_dictionary_read {
 test generic_nullable_whole_list_read {
     assert eval observe_list(step: [0, 1, 2]) == [false, true, false]
 }
+
+fn collect_recent(reading: i64) -> rolling_window<i64, 3us, 1us> {
+    when { return reading }
+}
+
+# TYPE-11, ERR-14 and GEN-7: a nullable delta still observes arrival
+# and expiry-only cycles after this node is specialized.
+fn nullable_arrival<T>(value: T) -> delta<T>? {
+    when modified(value) { return delta_value(value) }
+}
+
+fn observe_arrival(reading: i64) -> i64? => nullable_arrival(collect_recent(reading))
+
+test generic_nullable_duration_delta {
+    assert eval{length: 6us} observe_arrival(reading: [1, 2, _, _, _, 3]) ==
+        [1, 2, _, _, null, 3]
+}
