@@ -131,6 +131,16 @@ pub(crate) struct Documentation {
     pub(crate) text: String,
     pub(crate) summary: String,
     pub(crate) sections: Vec<Section>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) examples: Vec<Example>,
+}
+
+/// A CommonMark HGL fence and whether it is a test (SDOC-9).
+#[derive(Serialize)]
+pub(crate) struct Example {
+    pub(crate) code: String,
+    pub(crate) position: Option<usize>,
+    pub(crate) runnable: bool,
 }
 
 /// A recognized SDOC heading, authored heading or unheaded prose.

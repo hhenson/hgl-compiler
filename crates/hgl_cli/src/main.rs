@@ -55,7 +55,7 @@ use hgl_analyser::{Detail, ImportKind, ParsedFile, Program};
 use hgl_diagnostics::{Diagnostics, Severity, render};
 use hgl_lexer::{Token, TokenKind, lex, literal};
 use hgl_parser::ast::{self, AstNode};
-use hgl_parser::{Entry, Limits};
+use hgl_parser::{Entry, HasSpan, Limits};
 use hgl_runner::{CaseKind, Problem, Report, Selection};
 use hgl_source::{FileId, SourceMap};
 use replace::Replacement;
@@ -701,16 +701,27 @@ impl ProgramSources {
 }
 
 /// Finds, reads, lexes and parses the source files and the supplied core.
-fn parse_program(roots: &[PathBuf], limits: Limits) -> Result<Parsed, ExitCode> {
-    parse_sources(&ProgramSources::read(roots)?, limits, None)
+fn parse_program(
+    roots: &[PathBuf],
+    limits: Limits,
+    documentation_examples: bool,
+) -> Result<Parsed, ExitCode> {
+    parse_sources(
+        &ProgramSources::read(roots)?,
+        limits,
+        None,
+        documentation_examples,
+    )
 }
 
 /// Parses the snapshot, with supplied core if the sources have no core
-/// module. RUN-2 may substitute the new text of one named file.
+/// module. RUN-2 may substitute the new text of one named file. SDOC-9
+/// examples are parsed only from the explicit inputs and for test analysis.
 fn parse_sources(
     inputs: &ProgramSources,
     limits: Limits,
     replaced: Option<(&str, &str)>,
+    documentation_examples: bool,
 ) -> Result<Parsed, ExitCode> {
     let mut sources = SourceMap::new();
     let mut diagnostics = Diagnostics::new();
@@ -738,7 +749,17 @@ fn parse_sources(
             eprintln!("hgl: {error}");
             ExitCode::from(EXIT_FAILED)
         })?;
-        files.push(parse_file(&sources, file, limits, &mut diagnostics));
+        let mut parsed = parse_file(&sources, file, limits, &mut diagnostics);
+        if documentation_examples {
+            parsed.examples = hgl_parser::documentation::parse_examples(
+                &sources,
+                file,
+                &parsed.root,
+                limits,
+                &mut diagnostics,
+            );
+        }
+        files.push(parsed);
     }
     // A program that brings its own `module core` is checked with that
     // one: this is how core itself is checked.
@@ -761,12 +782,29 @@ fn parse_sources(
             // The limits given are for the program's own source. Core's
             // files are the compiler's, and are read under the default
             // ones whatever the program is held to.
-            files.push(parse_file(
-                &sources,
-                file,
-                Limits::DEFAULT,
-                &mut diagnostics,
-            ));
+            let mut supplied_diagnostics = Diagnostics::new();
+            let mut parsed = parse_file(&sources, file, Limits::DEFAULT, &mut supplied_diagnostics);
+            // TST-14: only explicit source contributes named tests and
+            // their diagnostics. Core's ordinary declarations still check.
+            parsed.compiler_supplied = true;
+            parsed.omit.extend(
+                parsed
+                    .root
+                    .descendants()
+                    .filter_map(ast::TestDecl::cast)
+                    .map(|test| test.syntax().span()),
+            );
+            for diagnostic in supplied_diagnostics.as_slice() {
+                let span = diagnostic.primary.span;
+                if !parsed
+                    .omit
+                    .iter()
+                    .any(|omitted| omitted.start <= span.start && span.end <= omitted.end)
+                {
+                    diagnostics.emit(diagnostic.clone());
+                }
+            }
+            files.push(parsed);
             supplied += 1;
         }
     }
@@ -799,7 +837,7 @@ fn check(arguments: &CheckArgs) -> ExitCode {
         files: parsed,
         mut diagnostics,
         supplied,
-    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
+    } = match parse_program(&arguments.roots, arguments.limits.limits(), true) {
         Ok(program) => program,
         Err(status) => return status,
     };
@@ -879,7 +917,7 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
         files: parsed,
         mut diagnostics,
         ..
-    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
+    } = match parse_program(&arguments.roots, arguments.limits.limits(), false) {
         Ok(program) => program,
         Err(status) => return status,
     };
@@ -932,13 +970,14 @@ fn prepare_program(
     replacements: &cpp::Replacements<'_>,
     running: bool,
     debug: bool,
+    documentation_examples: bool,
 ) -> Result<PreparedProgram, ExitCode> {
     let Parsed {
         mut sources,
         files: mut parsed,
         diagnostics: mut front_end,
         ..
-    } = parse_sources(inputs, limits, None)?;
+    } = parse_sources(inputs, limits, None, documentation_examples)?;
     let mut diagnostics = front_end.clone();
     let mut program = hgl_analyser::analyse(&parsed, &mut diagnostics);
     if diagnostics.has_errors() {
@@ -1000,7 +1039,7 @@ fn prepare_program(
                 files,
                 diagnostics: mut found,
                 ..
-            }) = parse_sources(inputs, limits, Some((&name, &text)))
+            }) = parse_sources(inputs, limits, Some((&name, &text)), documentation_examples)
             else {
                 return false;
             };
@@ -1029,7 +1068,7 @@ fn prepare_program(
             files: read_files,
             diagnostics: read_diagnostics,
             ..
-        } = parse_sources(inputs, limits, Some((&name, &text)))?;
+        } = parse_sources(inputs, limits, Some((&name, &text)), documentation_examples)?;
         let mut found = read_diagnostics.clone();
         program = hgl_analyser::analyse(&read_files, &mut found);
         parsed = read_files;
@@ -1120,7 +1159,7 @@ fn test(arguments: &TestArgs) -> ExitCode {
         files,
         diagnostics,
         ..
-    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
+    } = match parse_program(&arguments.roots, arguments.limits.limits(), true) {
         Ok(program) => program,
         Err(status) => return status,
     };

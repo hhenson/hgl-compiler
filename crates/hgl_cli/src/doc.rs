@@ -44,7 +44,7 @@ enum Format {
 /// Analyses a program, then writes its API documentation when the source is accepted.
 pub(crate) fn run(arguments: &DocArgs) -> ExitCode {
     let limits = arguments.limits.limits();
-    let mut parsed = match parse_program(&arguments.roots, limits) {
+    let mut parsed = match parse_program(&arguments.roots, limits, true) {
         Ok(program) => program,
         Err(status) => return status,
     };
