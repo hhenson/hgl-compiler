@@ -478,6 +478,11 @@ impl<'a> Typer<'a> {
         generics: &[Argument],
         type_packs: &[hir::TypePackArgument],
     ) {
+        if type_packs.iter().any(|pack| pack.forwarded_from.is_some()) {
+            // GEN-17: a function parameter's reflected shape is supplied
+            // by the caller of the enclosing declaration.
+            return;
+        }
         let member_fault = std::cell::RefCell::new(None);
         let Some((condition, held, unvalued)) =
             self.requires_told_with_packs(callee, generics, type_packs, Some(&member_fault))
@@ -603,6 +608,7 @@ impl<'a> Typer<'a> {
                 .map(|pack| hir::TypePackArgument {
                     parameter: pack.parameter,
                     infer_from_arguments: false,
+                    forwarded_from: pack.forwarded_from,
                     keys: pack.keys.clone(),
                     types: pack
                         .types
@@ -617,6 +623,7 @@ impl<'a> Typer<'a> {
             let made = Made {
                 callee,
                 generics: generics.to_vec(),
+                type_packs: type_packs.to_vec(),
                 answers: Vec::new(),
                 required: None,
                 at,
@@ -1692,6 +1699,7 @@ fn result_sets(node: &SyntaxNode, name: &str, sets: &mut Vec<SyntaxNode>) {
 pub(super) struct Made {
     callee: (usize, usize),
     generics: Vec<Argument>,
+    type_packs: Vec<hir::TypePackArgument>,
     /// What answers each requirement the callee states at this call
     /// (`hir::Answer`), with the call's generic arguments in place.
     answers: Vec<hir::Answer>,
@@ -1848,7 +1856,13 @@ pub(super) fn instances_hold(
                 {
                     computing.insert((index, position));
                 }
-                if call.required.is_some() || passes_on(&call.generics, &declared) {
+                if call.required.is_some()
+                    || passes_on(&call.generics, &declared)
+                    || call
+                        .type_packs
+                        .iter()
+                        .any(|pack| pack.forwarded_from.is_some())
+                {
                     passed.entry((index, position)).or_default().push(call);
                 } else {
                     given.push(call);
@@ -1931,7 +1945,7 @@ pub(super) fn instances_hold(
         .into_iter()
         .filter(|made| reaching.contains(&made.callee))
     {
-        let key = instance_key(made.callee, &made.generics, &made.answers);
+        let key = instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
         match root_of.get(&key) {
             Some(&root) => roots[root].1.push(made.at),
             None => {
@@ -1948,6 +1962,7 @@ pub(super) fn instances_hold(
             std::collections::HashSet::from([instance_key(
                 root.callee,
                 &root.generics,
+                &root.type_packs,
                 &root.answers,
             )]);
         let mut waiting: std::collections::VecDeque<Made> =
@@ -2022,10 +2037,19 @@ pub(super) fn instances_hold(
                 .map(|call| Resolved {
                     callee: call.callee,
                     generics: call.generics,
+                    type_packs: call.type_packs,
+                    forwarded: false,
                     answers: call.answers,
                     at: call.at,
                 })
                 .collect();
+            let enclosing_packs = match &program.modules[made.callee.0].details[made.callee.1] {
+                Detail::Callable(signature) => &signature.generics[..],
+                Detail::Struct(read) => &read.generics[..],
+                _ => &[],
+            };
+            let enclosing_packs =
+                super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
             for call in inner {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
@@ -2091,9 +2115,19 @@ pub(super) fn instances_hold(
                         )
                     }
                 };
+                let mut type_packs = call.type_packs.clone();
+                let forwarded = type_packs.iter().any(|pack| pack.forwarded_from.is_some());
+                for pack in &mut type_packs {
+                    for ty in &mut pack.types {
+                        *ty = placed(substitute_within(ty, &map), &declared);
+                    }
+                    enclosing_packs.place_forwarded(pack);
+                }
                 calls.push(Resolved {
                     callee,
                     generics,
+                    type_packs,
+                    forwarded,
                     answers,
                     at: call.at,
                 });
@@ -2210,6 +2244,7 @@ pub(super) fn instances_hold(
                         AtInstance::Selected(chosen, given) => {
                             let (module, declaration, generics) =
                                 (chosen.module, chosen.declaration, chosen.generics.clone());
+                            let type_packs = chosen.type_packs.clone();
                             // What the call is held to once its candidate
                             // is selected (`Typer::called`): a `var`
                             // parameter's place among them (FN-15).
@@ -2242,6 +2277,8 @@ pub(super) fn instances_hold(
                             calls.push(Resolved {
                                 callee: (module, declaration),
                                 generics,
+                                type_packs,
+                                forwarded: false,
                                 answers,
                                 at: call.name,
                             });
@@ -2257,6 +2294,8 @@ pub(super) fn instances_hold(
             for Resolved {
                 callee,
                 generics,
+                type_packs,
+                forwarded,
                 answers,
                 at,
             } in calls
@@ -2268,17 +2307,18 @@ pub(super) fn instances_hold(
                     exhausted = true;
                     break;
                 }
-                let key = instance_key(callee, &generics, &answers);
+                let key = instance_key(callee, &generics, &type_packs, &answers);
                 if key.len() > ARGUMENTS {
                     exhausted = true;
                     break;
                 }
                 // GEN-7: a call of a function or a candidate in a generic
                 // body was judged where the body is declared, under what
-                // it states. A struct applied there is told here.
+                // it states. Struct applications and forwarded parameter
+                // packs are told here, where their arguments are known.
                 let applied = program.modules[callee.0].declarations[callee.1].kind
                     == DeclarationKind::Struct;
-                if applied && required(program, callee).is_some() {
+                if (applied || forwarded) && required(program, callee).is_some() {
                     let (module, declaration) = callee;
                     let unit = &program.modules[module];
                     let (bindings, written, arguments) = &tables[module];
@@ -2297,13 +2337,18 @@ pub(super) fn instances_hold(
                         diagnostics,
                     );
                     for &root in &from {
-                        typer.instance_met((root, at), callee, &generics);
+                        if forwarded {
+                            typer.pack_requires_met(root, callee, &generics, &type_packs);
+                        } else {
+                            typer.instance_met((root, at), callee, &generics);
+                        }
                     }
                 }
                 if reaching.contains(&callee) && seen.insert(key) {
                     waiting.push_back(Made {
                         callee,
                         generics,
+                        type_packs,
                         answers,
                         required: None,
                         at: made.at,
@@ -2322,7 +2367,12 @@ pub(super) fn instances_hold(
 /// arguments and what answers its requirements. A constant argument is
 /// its value however it is written, so `turn<0>` and the `turn<((N + 1)
 /// % 2)>` that comes back to it are one instance.
-fn instance_key(callee: (usize, usize), generics: &[Argument], answers: &[hir::Answer]) -> String {
+fn instance_key(
+    callee: (usize, usize),
+    generics: &[Argument],
+    type_packs: &[hir::TypePackArgument],
+    answers: &[hir::Answer],
+) -> String {
     let generics: Vec<String> = generics
         .iter()
         .map(|argument| match argument {
@@ -2330,7 +2380,17 @@ fn instance_key(callee: (usize, usize), generics: &[Argument], answers: &[hir::A
             Argument::Type(ty) => format!("{:?}", by_value(ty)),
         })
         .collect();
-    format!("{callee:?}{generics:?}{answers:?}")
+    let packs = type_packs
+        .iter()
+        .map(|pack| {
+            (
+                pack.parameter,
+                &pack.keys,
+                pack.types.iter().map(by_value).collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    format!("{callee:?}{generics:?}{packs:?}{answers:?}")
 }
 
 /// `ty` with each constant in it, a size or a constant argument at any
@@ -2404,6 +2464,8 @@ fn by_value(ty: &Type) -> Type {
 struct Resolved {
     callee: (usize, usize),
     generics: Vec<Argument>,
+    type_packs: Vec<hir::TypePackArgument>,
+    forwarded: bool,
     answers: Vec<hir::Answer>,
     at: Location,
 }
@@ -2563,6 +2625,7 @@ fn applied_in(ty: &Type, at: Location, made: &mut Vec<Made>) {
             made.push(Made {
                 callee,
                 generics,
+                type_packs: Vec::new(),
                 answers: Vec::new(),
                 required: None,
                 at,
@@ -2684,7 +2747,7 @@ pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
 /// The call `expression` is, where it is one of a function, an
 /// operator's candidate or a struct it gives generic arguments.
 fn made_at(expression: &Expr, made: &mut Vec<Made>) {
-    let (callee, generics, answers) = match &expression.kind {
+    let (callee, generics, type_packs, answers) = match &expression.kind {
         // A function, or the candidate a call of an operator selected
         // (GEN-5), whose body may pass its parameters on as any does.
         ExprKind::Call {
@@ -2693,6 +2756,7 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
                     module,
                     declaration,
                     generics,
+                    type_packs,
                     requirements,
                     ..
                 }
@@ -2700,6 +2764,7 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
                     module,
                     declaration,
                     generics,
+                    type_packs,
                     requirements,
                     ..
                 },
@@ -2707,6 +2772,7 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
         } => (
             (*module, *declaration),
             generics.clone(),
+            type_packs.clone(),
             requirements.clone(),
         ),
         // GEN-16: an operation the enclosing declaration requires, whose
@@ -2718,6 +2784,7 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
             made.push(Made {
                 callee: (usize::MAX, usize::MAX),
                 generics: Vec::new(),
+                type_packs: Vec::new(),
                 answers: Vec::new(),
                 required: Some(*requirement),
                 at: expression.at,
@@ -2729,9 +2796,12 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
             declaration,
             ..
         } => match &expression.ty {
-            Type::Named { arguments, .. } => {
-                ((*module, *declaration), arguments.clone(), Vec::new())
-            }
+            Type::Named { arguments, .. } => (
+                (*module, *declaration),
+                arguments.clone(),
+                Vec::new(),
+                Vec::new(),
+            ),
             _ => return,
         },
         _ => return,
@@ -2740,6 +2810,7 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
         made.push(Made {
             callee,
             generics,
+            type_packs,
             answers,
             required: None,
             at: expression.at,
@@ -3251,14 +3322,20 @@ fn holds_with_packs(
                     .find(|key| key.name == name)
                     .map(ConstraintKey::value)
             };
-            if let Some(left_key) = key(left) {
+            if within
+                && let Some((view, pack)) = pack_view(right.clone())
+                && view.text() == "arg_keys"
+            {
                 let scope = scope?;
-                if within
-                    && let Some((view, pack)) = pack_view(right.clone())
-                    && view.text() == "arg_keys"
-                {
-                    return Some((scope.pack)(&view, pack.text())?.member(left_key).is_some());
-                }
+                let left_key = key(left)
+                    .cloned()
+                    .or_else(|| option(left).and_then(|name| (of.value_of)(&name)))
+                    .or_else(|| (scope.constant)(left, None))?;
+                return Some(
+                    (scope.pack)(&view, pack.text())?
+                        .member(&left_key)
+                        .is_some(),
+                );
             }
             if has_token(node, SyntaxKind::EqEq) || has_token(node, SyntaxKind::BangEq) {
                 let equal = has_token(node, SyntaxKind::EqEq);
@@ -3437,7 +3514,7 @@ fn each_holds(
 }
 
 /// The view name and pack name in a `types(Ts)` or `arg_keys(Ps)` form.
-fn pack_view(source: SyntaxNode) -> Option<(SyntaxToken, SyntaxToken)> {
+pub(super) fn pack_view(source: SyntaxNode) -> Option<(SyntaxToken, SyntaxToken)> {
     let source = ungrouped(source);
     if source.kind() != SyntaxKind::CallExpr {
         return None;

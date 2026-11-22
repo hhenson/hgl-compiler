@@ -43,6 +43,18 @@ impl<'p> PackTypes<'p> {
         }
     }
 
+    /// Put the enclosing compile-time inputs into a passed-on pack (GEN-17).
+    pub(crate) fn place_forwarded(&self, pack: &mut TypePackArgument) {
+        let Some(source) = pack.forwarded_from else {
+            return;
+        };
+        if let Some((_, given)) = self.bindings.iter().find(|(at, _)| *at == source) {
+            pack.keys.extend(given.keys.iter().cloned());
+            pack.types.extend(given.types.iter().cloned());
+            pack.forwarded_from = given.forwarded_from;
+        }
+    }
+
     /// Specialize a written type, including its GEN-17 member types.
     pub(crate) fn project(
         &self,
@@ -56,6 +68,9 @@ impl<'p> PackTypes<'p> {
                 ConstantValue::Str(_) | ConstantValue::Int(_) => {
                     if let Some(ty) = pack.member(&key.value) {
                         return Some(ty.clone());
+                    }
+                    if pack.forwarded_from.is_some() {
+                        return None;
                     }
                     MemberFault::Missing {
                         pack: name.to_string(),
@@ -384,13 +399,19 @@ impl Typer<'_> {
                     bounds.0 = bounds.0.max(minimum);
                     bounds.1 = bounds.1.into_iter().chain(maximum).min();
                 }
-                self.check_pack_count(
-                    list,
-                    &reflects.name,
-                    bounds,
-                    &vec![callback.at; reflected.len()],
-                );
-                packs.push(TypePackArgument::keyed(slot, reflected));
+                let mut reflected = TypePackArgument::keyed(slot, reflected);
+                if let Type::Function(actual) = &callback.ty {
+                    reflected.forwarded_from = actual.named_pack.as_ref().map(|pack| pack.at);
+                }
+                if reflected.forwarded_from.is_none() {
+                    self.check_pack_count(
+                        list,
+                        &reflects.name,
+                        bounds,
+                        &vec![callback.at; reflected.types.len()],
+                    );
+                }
+                packs.push(reflected);
             }
             values[position] = Some(callback);
         }
@@ -622,8 +643,7 @@ pub(super) fn reflect(template: &FunctionType, callback: &Expr) -> Vec<(PackKey,
         return Vec::new();
     };
     actual
-        .parameters
-        .iter()
+        .ordinary_parameters()
         .skip(template.parameters.len())
         .filter(|input| {
             input
@@ -660,9 +680,13 @@ pub(super) fn bind<'a>(
     let mut ordinary = Vec::new();
     let mut positional = None;
     let mut named = None;
+    let mut position = 0;
     for (index, input) in actual.parameters.iter().enumerate() {
         let name = input.name().ok_or(Fault::Deferred)?;
         let parameter = input.declared();
+        let configuration = parameter.is_some_and(|parameter| parameter.configuration);
+        let in_pack = !configuration && position >= fixed;
+        position += usize::from(!configuration);
         let excluded = without.contains(&name);
         match parameter.and_then(|parameter| parameter.pack) {
             Some(Pack::Positional) => {
@@ -676,7 +700,7 @@ pub(super) fn bind<'a>(
                 }
             }
             None => {
-                if index >= fixed {
+                if in_pack {
                     reflected.push((PackKey::Name(name.to_string()), input.ty().clone()));
                 }
                 if !excluded {
@@ -689,7 +713,7 @@ pub(super) fn bind<'a>(
                         index,
                         name,
                         required,
-                        configuration: parameter.is_some_and(|parameter| parameter.configuration),
+                        configuration,
                         filled: false,
                     });
                 }

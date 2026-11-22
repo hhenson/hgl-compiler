@@ -368,7 +368,29 @@ impl Program {
                 } else {
                     None
                 };
+                let callback = matches!(callee, Callee::Parameter { .. });
                 self.place_target(callee, instance, functions);
+                if callback
+                    && let Some((module, declaration)) = callee.declaration()
+                    && let Detail::Callable(signature) = &self.modules[module].details[declaration]
+                    && signature
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.configuration)
+                {
+                    // FN-18: template slots omit the callback's defaulted
+                    // configuration, which still occupies declaration slots.
+                    let ordinary = signature
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, parameter)| !parameter.configuration);
+                    for argument in arguments.iter_mut() {
+                        argument.parameter = argument
+                            .parameter
+                            .and_then(|index| ordinary.clone().nth(index).map(|(slot, _)| slot));
+                    }
+                }
                 if let Some(configuration) = required {
                     if let Callee::Required {
                         configuration: unresolved,
@@ -484,6 +506,13 @@ impl Program {
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {
             place_callee(callee, instance.types, instance.requirements, functions);
+            if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } =
+                callee
+            {
+                for pack in type_packs {
+                    instance.packs.place_forwarded(pack);
+                }
+            }
         }
     }
 

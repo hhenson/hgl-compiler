@@ -1238,7 +1238,10 @@ pub(super) fn infer(
             find(*at, Argument::Type(actual.clone()), generics, found);
         }
         (Type::Function(pattern), Type::Function(actual)) => {
-            for (pattern, actual) in pattern.parameters.iter().zip(&actual.parameters) {
+            for (pattern, actual) in pattern
+                .ordinary_parameters()
+                .zip(actual.ordinary_parameters())
+            {
                 infer(pattern.ty(), actual.ty(), generics, found);
             }
             if let (Some(pattern), Some(actual)) = (&pattern.result, &actual.result) {

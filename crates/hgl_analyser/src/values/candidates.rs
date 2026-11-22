@@ -1011,14 +1011,20 @@ impl<'a> Typer<'a> {
         let Some(condition) = clause.children().next() else {
             return Admits::Yes;
         };
-        if !type_packs.is_empty()
-            && condition.descendants().any(|node| {
-                matches!(
-                    node.kind(),
-                    SyntaxKind::ConstraintEach | SyntaxKind::PackMemberType
-                )
-            })
-        {
+        let pack_operand = |node: SyntaxNode| match node.kind() {
+            SyntaxKind::ConstraintEach | SyntaxKind::PackMemberType => true,
+            // A bare member in a constraint can also parse as an
+            // index. The read table resolves whether it is a type.
+            SyntaxKind::IndexExpr => self.program.modules[module].written.iter().any(|read| {
+                read.at.file == candidate.at.file
+                    && read.at.span.start == node.span().start
+                    && matches!(read.ty, Type::PackMember { .. })
+            }),
+            SyntaxKind::CallExpr => super::requirements::pack_view(node)
+                .is_some_and(|(view, _)| view.text() == "arg_keys"),
+            _ => false,
+        };
+        if !type_packs.is_empty() && condition.descendants().any(pack_operand) {
             return match self
                 .requires_told_with_packs((module, declaration), generics, type_packs, None)
                 .and_then(|(_, held, _)| held)
