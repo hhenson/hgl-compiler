@@ -3176,6 +3176,94 @@ fn graph_instances_fit_settled_result_payloads() {
     }
 }
 
+/// GEN-7 and ERR-3: a tag test checks the specialized call's result.
+#[test]
+fn value_instances_check_tag_tests_after_candidate_selection() {
+    let checked = module(
+        r#"operator parse<T>(value: T) -> result<i64, error>
+impl const fn parse<T>(value: T) -> result<i64, error> => err(error(message: "generic"))
+impl const fn parse(value: i64) -> i64 => value
+const fn inferred<T>(v: T) -> i64 {
+    let r = parse(v)
+    if is_ok(r) { return r.value }
+    return -1
+}
+const fn written<T>(v: T) -> i64 {
+    let r: result<i64, error> = parse(v)
+    if is_ok(r) { return r.value }
+    return -1
+}
+const fn bad() -> i64 => inferred(3)
+const fn good() -> i64 => written(3)
+const fn other() -> i64 => inferred("s")"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:15:26 type/type.mismatch ERR-3"],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-2 and FN-17: delayed inference reads a callback in its original
+/// scope with the instance's concrete function template.
+#[test]
+fn deferred_function_arguments_acquire_their_template_and_captures() {
+    let checked = module(
+        r#"operator live_helper<T>(value: T) -> i64
+impl const fn live_helper<T>(value: T) -> i64 => 5
+impl fn live_helper(value: i64) -> i64 { when { return value } }
+const fn shift<U>(a: U, f: const fn(U) -> U) -> U => f(a)
+fn deferred_callback<T>(const value: T) -> f64 {
+    let offset = 1.0
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    let copied = shift(chosen, fn(x) => x + offset)
+    return copied
+}
+fn admitted() -> f64 => deferred_callback(3)"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    let Stmt::Declare {
+        value: Some(call), ..
+    } = &instance.statements[2]
+    else {
+        panic!("the copied binding holds the call");
+    };
+    let ExprKind::Call {
+        callee,
+        arguments,
+        lifted: true,
+        ..
+    } = &call.kind
+    else {
+        panic!("the call is lifted over the selected connection");
+    };
+    let Callee::Function { generics, .. } = callee else {
+        panic!("the lifted call targets a function");
+    };
+    assert_eq!(generics[0].to_string(), "f64");
+    let [data, callback, capture] = arguments.as_slice() else {
+        panic!("the call keeps the data, callback and capture: {arguments:?}");
+    };
+    assert_eq!(data.parameter, Some(0));
+    assert_eq!(callback.parameter, Some(1));
+    let ExprKind::StaticCallable(target) = &callback.value.kind else {
+        panic!("the function argument is known");
+    };
+    let Callee::Anonymous(function) = &**target else {
+        panic!("the static argument is the anonymous callback");
+    };
+    assert_eq!(function.template.parameters[0].ty().to_string(), "f64");
+    assert_eq!(
+        function.template.result.as_ref().unwrap().to_string(),
+        "f64"
+    );
+    assert_eq!(capture.parameter, Some(2));
+    assert!(matches!(capture.value.kind, ExprKind::Local(local)
+        if instance.locals[local].name == "offset"));
+}
+
 /// GEN-7 and ERR-4: the constructor reads a required message and keeps
 /// an optional code. Both inputs must fit after instance selection.
 #[test]

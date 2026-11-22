@@ -427,7 +427,7 @@ impl GraphDestinations {
                 ..
             }) => {
                 if self.known(value) {
-                    typer.check_tag_test(*success, value);
+                    typer.check_tag_test(*success, &value.ty, value.at);
                 }
                 return;
             }
