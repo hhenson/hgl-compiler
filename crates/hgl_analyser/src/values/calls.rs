@@ -968,9 +968,9 @@ impl<'a> Typer<'a> {
             && type_packs.iter().all(|pack| !pack.infer_from_arguments)
         {
             if let Some(missing) =
-                pack_types.missing_written(&program.modules[module], declaration, &map)
+                pack_types.written_member_fault(&program.modules[module], declaration, &map)
             {
-                self.missing_pack_member(at, &missing);
+                self.pack_member_fault(at, &missing);
             } else if first_pack.is_none() {
                 self.requires_met(at, (module, declaration), &resolved);
             } else {
@@ -1328,8 +1328,8 @@ impl<'a> Typer<'a> {
         // GEN-10: the same quantified check applies when a graph
         // completes the pack types that source typing could not see.
         if self.diagnostics.len() == before {
-            if let Some(missing) = pack_types.missing_written(owner, *declaration, &map) {
-                self.missing_pack_member(call.at, &missing);
+            if let Some(missing) = pack_types.written_member_fault(owner, *declaration, &map) {
+                self.pack_member_fault(call.at, &missing);
             } else if packs.is_empty() {
                 self.requires_met(call.at, callee, &resolved);
             } else {

@@ -9,7 +9,6 @@ use super::Typer;
 use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::Given;
 use super::function_arguments::CallbackInputs;
-
 use super::inference::{pack_bounds, type_pack};
 use crate::declared::{substitute_with_members, weight};
 use crate::hir::{Callee, Expr, ExprKind, PackKey, TypePackArgument};
@@ -49,33 +48,44 @@ impl<'p> PackTypes<'p> {
         &self,
         ty: &Type,
         map: &[(Location, &GenericArgument)],
-    ) -> Result<Type, MissingMember> {
-        let missing = RefCell::new(None);
+    ) -> Result<Type, MemberFault> {
+        let fault = RefCell::new(None);
         let member = |at, name: &str, key: &Constant| {
             let (_, pack) = self.bindings.iter().find(|(declared, _)| *declared == at)?;
-            if !matches!(key.value, ConstantValue::Str(_) | ConstantValue::Int(_)) {
-                return None;
-            }
-            Some(pack.member(&key.value).cloned().unwrap_or_else(|| {
-                missing.borrow_mut().get_or_insert_with(|| MissingMember {
-                    pack: name.to_string(),
-                    key: key.clone(),
-                });
-                Type::Unknown
-            }))
+            let fault_here = match &key.value {
+                ConstantValue::Str(_) | ConstantValue::Int(_) => {
+                    if let Some(ty) = pack.member(&key.value) {
+                        return Some(ty.clone());
+                    }
+                    MemberFault::Missing {
+                        pack: name.to_string(),
+                        key: key.clone(),
+                    }
+                }
+                ConstantValue::Unknown
+                | ConstantValue::Unevaluated
+                | ConstantValue::Parameter { .. }
+                | ConstantValue::Named { .. }
+                | ConstantValue::Constructed { .. }
+                | ConstantValue::Unary(..)
+                | ConstantValue::Binary(..) => return None,
+                _ => MemberFault::KeyKind { key: key.clone() },
+            };
+            fault.borrow_mut().get_or_insert(fault_here);
+            Some(Type::Unknown)
         };
         let ty = substitute_with_members(ty, map, &member, self.heaviest);
-        missing.into_inner().map_or(Ok(ty), Err)
+        fault.into_inner().map_or(Ok(ty), Err)
     }
 
     /// A known key must exist when a declaration writes its member type.
     /// Requirements evaluate their own member lookups conditionally.
-    pub(super) fn missing_written(
+    pub(super) fn written_member_fault(
         &self,
         unit: &Module,
         declaration: usize,
         map: &[(Location, &GenericArgument)],
-    ) -> Option<MissingMember> {
+    ) -> Option<MemberFault> {
         if self.bindings.is_empty() {
             return None;
         }
@@ -101,13 +111,21 @@ impl<'p> PackTypes<'p> {
     }
 }
 
-/// A lookup of a known key in a known pack failed (GEN-17).
+/// A compile-time pack member lookup failed (GEN-17).
 #[derive(Debug)]
-pub(crate) struct MissingMember {
-    /// The declared name of the pack.
-    pub(super) pack: String,
-    /// The key substituted where the type was read.
-    pub(super) key: Constant,
+pub(crate) enum MemberFault {
+    /// The known pack has no member under this key.
+    Missing {
+        /// The pack's declared name.
+        pack: String,
+        /// The requested key.
+        key: Constant,
+    },
+    /// The constant has neither of the permitted key types.
+    KeyKind {
+        /// The constant given as a key.
+        key: Constant,
+    },
 }
 
 /// The named pack declared for one of this declaration's callbacks (FN-8).
@@ -380,18 +398,20 @@ impl Typer<'_> {
         packs
     }
 
-    /// A known pack has no member under this key (GEN-17).
-    pub(super) fn missing_pack_member(&mut self, at: Location, missing: &MissingMember) {
-        self.diagnostics.emit(error(
-            Category::Type,
-            codes::PACK_NAME,
-            at,
-            format!(
-                "pack `{}` has no member under `{}`",
-                missing.pack, missing.key
+    /// Report a failed lookup after resolving a pack member's key (GEN-17).
+    pub(super) fn pack_member_fault(&mut self, at: Location, fault: &MemberFault) {
+        let (code, message) = match fault {
+            MemberFault::Missing { pack, key } => (
+                codes::PACK_NAME,
+                format!("pack `{pack}` has no member under `{key}`"),
             ),
-            "GEN-17",
-        ));
+            MemberFault::KeyKind { key } => (
+                codes::TYPE_MISMATCH,
+                format!("`{key}` must be a compile-time `str` or `i64` pack key"),
+            ),
+        };
+        self.diagnostics
+            .emit(error(Category::Type, code, at, message, "GEN-17"));
     }
 
     /// Report a failure in the operator's public dependent call shape.

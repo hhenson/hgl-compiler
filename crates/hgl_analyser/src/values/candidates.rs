@@ -717,8 +717,8 @@ impl<'a> Typer<'a> {
                 .map(|generic| generic.at)
                 .zip(&generics)
                 .collect();
-            if let Some(missing) = pack_types.missing_written(unit, declaration, &map) {
-                self.missing_pack_member(at, &missing);
+            if let Some(missing) = pack_types.written_member_fault(unit, declaration, &map) {
+                self.pack_member_fault(at, &missing);
                 return (self.unselected(given, form), Type::Unknown);
             }
         }

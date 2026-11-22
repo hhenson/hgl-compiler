@@ -478,14 +478,14 @@ impl<'a> Typer<'a> {
         generics: &[Argument],
         type_packs: &[hir::TypePackArgument],
     ) {
-        let missing = std::cell::RefCell::new(None);
+        let member_fault = std::cell::RefCell::new(None);
         let Some((condition, held, unvalued)) =
-            self.requires_told_with_packs(callee, generics, type_packs, Some(&missing))
+            self.requires_told_with_packs(callee, generics, type_packs, Some(&member_fault))
         else {
             return;
         };
-        if let Some(missing) = missing.into_inner() {
-            self.missing_pack_member(at, &missing);
+        if let Some(fault) = member_fault.into_inner() {
+            self.pack_member_fault(at, &fault);
             return;
         }
         if self.unmet_reported(at) {
@@ -743,7 +743,7 @@ impl<'a> Typer<'a> {
         (module, declaration): (usize, usize),
         generics: &[Argument],
         type_packs: &[hir::TypePackArgument],
-        missing: Option<&std::cell::RefCell<Option<super::dependent_packs::MissingMember>>>,
+        member_fault: Option<&std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
     ) -> Option<(SyntaxNode, Option<bool>, bool)> {
         let program = self.program;
         let (parameters, condition) = required(program, (module, declaration))?;
@@ -778,7 +778,7 @@ impl<'a> Typer<'a> {
                 callable: &callable,
                 unvalued: &unvalued,
                 type_packs,
-                missing,
+                member_fault,
             },
         );
         Some((condition, held, unvalued.get()))
@@ -2907,8 +2907,8 @@ struct Told<'t> {
     unvalued: &'t std::cell::Cell<bool>,
     /// The types each pack parameter takes at the call (GEN-10).
     type_packs: &'t [hir::TypePackArgument],
-    /// A missing keyed member read while judging this condition.
-    missing: Option<&'t std::cell::RefCell<Option<super::dependent_packs::MissingMember>>>,
+    /// A failed pack member lookup while judging this condition.
+    member_fault: Option<&'t std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
 }
 
 /// Whether `condition`, the `requires` of `declaration` of `module`,
@@ -2986,9 +2986,9 @@ fn requires_holds(
         map.extend(keys.iter().map(|key| (key.at, &key.argument)));
         match pack_types.project(&read.ty, &map) {
             Ok(ty) => told(placed(ty, &own)),
-            Err(missing) => {
-                if let Some(target) = place.missing {
-                    target.borrow_mut().get_or_insert(missing);
+            Err(fault) => {
+                if let Some(target) = place.member_fault {
+                    target.borrow_mut().get_or_insert(fault);
                 }
                 None
             }

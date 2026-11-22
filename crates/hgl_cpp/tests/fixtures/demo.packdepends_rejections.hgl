@@ -67,3 +67,13 @@ test a_pack_member_in_a_local_type_needs_a_key {
     # expect-error(type, "pack.name")
     assert missing_local_type(scaled) == 1
 }
+
+const fn keyed_value<T, ...Ps, const key: T>(
+    f: const fn(...{Ps}) -> f64,
+    given: Ps[key],
+) -> i64 => 1
+
+test a_generic_key_resolves_to_a_string_or_position {
+    # expect-error(type, "type.mismatch")
+    assert keyed_value(scaled, 2.0, key: true) == 1
+}

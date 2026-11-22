@@ -469,8 +469,8 @@ impl<'a> Typer<'a> {
                 .map(|generic| generic.at)
                 .zip(&operator_generics)
                 .collect();
-            if let Some(missing) = packs.missing_written(unit, operator.declaration, &map) {
-                self.missing_pack_member(at, &missing);
+            if let Some(missing) = packs.written_member_fault(unit, operator.declaration, &map) {
+                self.pack_member_fault(at, &missing);
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
             let before = self.diagnostics.len();
@@ -490,7 +490,7 @@ impl<'a> Typer<'a> {
                     Ok(ty) if whole(&ty) => requested = Some(ty),
                     Ok(_) => {}
                     Err(missing) => {
-                        self.missing_pack_member(at, &missing);
+                        self.pack_member_fault(at, &missing);
                         return (self.unselected(given, Form::Named), Type::Unknown);
                     }
                 }

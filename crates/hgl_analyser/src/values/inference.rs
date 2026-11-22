@@ -862,7 +862,7 @@ impl<'a> Typer<'a> {
                 let traced = matches!(pattern, Type::Trace { .. });
                 let mut resolved_type = |ty| {
                     let ty = pack_types.project(ty, &map).unwrap_or_else(|missing| {
-                        self.missing_pack_member(self.at(node), &missing);
+                        self.pack_member_fault(self.at(node), &missing);
                         Type::Unknown
                     });
                     placed(ty, &own)
