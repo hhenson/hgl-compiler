@@ -3,7 +3,7 @@
 //! tuple or a dictionary (TYPE-7, EXPR-7, ERR-6, ERR-12). Part of the
 //! typing pass ([`super`]).
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
@@ -332,8 +332,7 @@ impl<'a> Typer<'a> {
 
     /// `base[index]`: an element of a list or a tuple, or the value a
     /// dictionary has for a key (EXPR-7; ERR-6: "Ordinary/atomic
-    /// dictionary brackets ... are strict point-in-time reads"). Any
-    /// other base is for a later part.
+    /// dictionary brackets ... are strict point-in-time reads").
     pub(super) fn index(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         let mut parts = node.children();
         let (Some(base), Some(index)) = (parts.next(), parts.next()) else {
@@ -369,20 +368,10 @@ impl<'a> Typer<'a> {
         (kind, ty)
     }
 
-    /// EXPR-7: brackets read a list, tuple or dictionary. A set has no
-    /// element at an index, and no indexed place to assign (EXPR-3).
+    /// Reports a bracket base whose known type has no index (EXPR-7).
     pub(super) fn check_index_base(&mut self, ty: &Type, at: Location) {
-        if matches!(ty, Type::Set(_)) {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::TYPE_MISMATCH,
-                at,
-                format!(
-                    "this is `{ty}`, and a set has no element at an index: brackets read a \
-                     list, a tuple, or a dictionary"
-                ),
-                "EXPR-7",
-            ));
+        if let Some(report) = index_base_error(ty, at) {
+            self.diagnostics.emit(report);
         }
     }
 
@@ -441,6 +430,43 @@ impl<'a> Typer<'a> {
         }
         Type::Unknown
     }
+}
+
+/// The outer payload decides whether a bracket read is possible. Its
+/// wrapper can affect how the payload is read (TYPE-9, ERR-12, ERR-15).
+fn index_base_shape(mut ty: &Type) -> &Type {
+    while let Type::Atomic(payload)
+    | Type::Nullable(payload)
+    | Type::Result { value: payload, .. } = ty
+    {
+        ty = payload;
+    }
+    ty
+}
+
+/// An instance must supply the base's outer shape before EXPR-7 can
+/// check it (GEN-7). The element type of a known collection can wait.
+pub(super) fn generic_index_base(ty: &Type) -> bool {
+    matches!(
+        index_base_shape(ty),
+        Type::Parameter { .. } | Type::PackMember { .. }
+    )
+}
+
+/// EXPR-7: brackets read a list, a tuple or a dictionary. A set has no
+/// indexed element to read or assign (EXPR-3).
+pub(super) fn index_base_error(ty: &Type, at: Location) -> Option<Diagnostic> {
+    let shape = index_base_shape(ty);
+    if open(shape) || generic_index_base(shape) || index_collection(shape) {
+        return None;
+    }
+    Some(error(
+        Category::Type,
+        codes::TYPE_MISMATCH,
+        at,
+        format!("this is `{shape}`. Brackets read a list, a tuple, or a dictionary"),
+        "EXPR-7",
+    ))
 }
 
 /// EXPR-7: the collection kinds read by brackets, including through a `T?`.

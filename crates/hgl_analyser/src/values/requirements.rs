@@ -14,6 +14,7 @@ use super::candidates::{AtInstance, Given, Wanted};
 use super::fit::{open, whole};
 use super::forwarded_packs::{visit_anonymous_bodies, walk_nested_calls};
 use super::inference::{fixed, mentions, placed, unsaid};
+use super::members::{generic_index_base, index_base_error};
 use super::operators::{Requested, from_place, has_generic_configuration_default, unreadable};
 use super::{REQUIRING, Typer};
 use crate::declared::{names_parameter, same_type, substitute_within};
@@ -1985,11 +1986,22 @@ pub(super) fn instances_hold(
     let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
     let mut configured = std::collections::HashSet::new();
     let mut endpoint_reads = std::collections::HashSet::new();
+    let mut index_bases: HashMap<(usize, usize), Vec<(Location, Type)>> = HashMap::new();
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
             if let Some(Some(body)) = module.bodies.get(position) {
-                made_in(&body.statements, &mut made);
+                walk_nested_calls(&body.statements, &mut |expression| {
+                    made_at(expression, &mut made);
+                    if let ExprKind::Index { base, .. } = &expression.kind
+                        && generic_index_base(&base.ty)
+                    {
+                        index_bases
+                            .entry((index, position))
+                            .or_default()
+                            .push((base.at, base.ty.clone()));
+                    }
+                });
             }
             for default in module
                 .defaults
@@ -2083,6 +2095,7 @@ pub(super) fn instances_hold(
         .chain(computing)
         .chain(configured.iter().copied())
         .chain(endpoint_reads.iter().copied())
+        .chain(index_bases.keys().copied())
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2216,6 +2229,32 @@ pub(super) fn instances_hold(
                     continue;
                 }
                 reread_calls = made_after_result_recheck(&instance.body, &mut instance_calls);
+            }
+            // A result-type reread has already checked indexes against
+            // the newly read types, including generic bases (GEN-7).
+            if let Some(bases) = index_bases.get(&made.callee)
+                && instance
+                    .as_ref()
+                    .is_none_or(|body| body.result_uses.is_none())
+                && let Detail::Callable(signature) = &unit.details[made.callee.1]
+            {
+                let packs =
+                    super::dependent_packs::PackTypes::new(&signature.generics, &made.type_packs);
+                let mut reports = Diagnostics::new();
+                for (at, ty) in bases {
+                    if let Ok(placed) = packs.project(ty, &map)
+                        && let Some(report) = index_base_error(&placed, *at)
+                        && !body_reports.as_slice().contains(&report)
+                    {
+                        reports.emit(report);
+                    }
+                }
+                super::lifting::report_instance_checks(
+                    &reports,
+                    &from,
+                    diagnostics,
+                    "GEN-7: this bracket read is checked with the instance's base type",
+                );
             }
             if recheck_graph && let Some(instance) = &instance {
                 if instance.result_uses.is_none()
