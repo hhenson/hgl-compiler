@@ -1005,6 +1005,9 @@ pub struct GenericParameter {
     pub at: Location,
     /// What it is declared as.
     pub kind: GenericKind,
+    /// Its signature uses this otherwise untyped parameter as a list's
+    /// whole size. A read in the body is an `i64` constant (GEN-7, TYPE-10).
+    pub inferred_list_size: bool,
 }
 
 /// What a generic parameter is declared as (GEN-13).
@@ -1024,8 +1027,7 @@ pub enum GenericKind {
         maximum: Option<u64>,
     },
     /// `const N: i64`: a value, of the type given. A parameter written
-    /// plain and used as a value, such as a size, is a value too; its
-    /// type is not known here.
+    /// plain and used as a value has no declared type.
     Value(Type),
 }
 

@@ -330,38 +330,46 @@ impl<'a> Typer<'a> {
         else {
             return unread;
         };
-        // GEN-13: a generic parameter that is a value has the type it
-        // is declared with. One that is a type is no expression.
-        let generic = self
+        let Some(generic) = self
             .signature
             .generics
             .iter()
-            .find(|generic| generic.at == *declared);
-        match generic.map(|generic| &generic.kind) {
-            Some(GenericKind::Value(ty)) => Expr {
-                kind: self
-                    .instance
-                    .iter()
-                    .find_map(|(parameter, argument)| {
-                        // GEN-13: a contextual argument reread in an instance
-                        // can use a value the instance has already supplied.
-                        if parameter == declared
-                            && let Argument::Constant(given) = argument
-                        {
-                            self.program.constant(&given.value, ty, at)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_else(|| ExprKind::GenericValue {
-                        name: name.text().to_string(),
-                        at: *declared,
-                    }),
-                ty: ty.clone(),
-                at,
-                category: ValueCategory::Unsettled,
-            },
-            _ => unread,
+            .find(|generic| generic.at == *declared)
+        else {
+            return unread;
+        };
+        let GenericKind::Value(ty) = &generic.kind else {
+            return unread;
+        };
+        // GEN-7, GEN-13 and TYPE-10: a signature's list size is read as
+        // an integer constant. Other value parameters use their declared type.
+        let ty = if generic.inferred_list_size {
+            Type::Scalar(Scalar::I64)
+        } else {
+            ty.clone()
+        };
+        Expr {
+            kind: self
+                .instance
+                .iter()
+                .find_map(|(parameter, argument)| {
+                    // A contextual argument reread in an instance can
+                    // use a value the instance has already supplied.
+                    if parameter == declared
+                        && let Argument::Constant(given) = argument
+                    {
+                        self.program.constant(&given.value, &ty, at)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| ExprKind::GenericValue {
+                    name: name.text().to_string(),
+                    at: *declared,
+                }),
+            ty,
+            at,
+            category: ValueCategory::Unsettled,
         }
     }
 
