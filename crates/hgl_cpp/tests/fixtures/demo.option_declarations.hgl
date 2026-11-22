@@ -47,6 +47,17 @@ test a_candidate_can_take_an_option_that_is_configuration_elsewhere {
     assert eval weight_equal_named(tolerance: [_, 1, 3]) == [_, false, true]
 }
 
+# EXPR-14: the zoned candidate declares `utc` in its parentheses.
+const london: zoned_datetime = @2026-09-03T09:30+01:00[Europe/London]
+const utc: zoned_datetime = @2026-09-03T08:30+00:00[UTC]
+fn zoned_symbol(flag: bool) -> bool => london =={utc: flag} utc
+fn zoned_named(flag: bool) -> bool => eq_(london, utc, utc: flag)
+
+test a_connected_utc_option_is_an_ordinary_input {
+    assert eval zoned_symbol(flag: [_, false, true]) == [_, false, true]
+    assert eval zoned_named(flag: [_, false, true]) == [_, false, true]
+}
+
 struct Holidays { closed: date }
 
 impl const fn business_day(calendar: Holidays, day: date) -> bool =>

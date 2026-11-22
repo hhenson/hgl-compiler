@@ -3548,7 +3548,7 @@ fn option_declarations_run_on_the_sdk() {
         (
             "demo.option_declarations.hgl",
             include_str!("../../hgl_cpp/tests/fixtures/demo.option_declarations.hgl"),
-            "executable cases: 7 passed, 0 failed, 0 not run\n",
+            "executable cases: 8 passed, 0 failed, 0 not run\n",
         ),
         (
             "demo.option_declarations_rejections.hgl",
