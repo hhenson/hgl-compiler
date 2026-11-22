@@ -1338,10 +1338,12 @@ call it names would select one candidate.
 
 `Typer::output_requested` keeps the complete public inference for result
 requirements (GEN-4), dependent generic defaults (GEN-13), and reflected
-pack checks (GEN-17). Its requested result uses written and expected type
-arguments together with inferred or defaulted generic values. An unrelated
-option therefore cannot promote preliminary argument types to an output
+pack checks (GEN-17). When a value call has contextual arguments,
+`argument_output_requested` builds the requested result from written and
+expected type arguments together with inferred or defaulted generic values.
+An unrelated option cannot promote preliminary argument types to an output
 request and change the way candidates read literals (GEN-5, GEN-6).
+Typed value calls and type-based requirements keep their fixed input types.
 
 Inherited configuration defaults have separate call metadata: argument-derived
 types stay open until `Typer::called` completes them from fitted arguments

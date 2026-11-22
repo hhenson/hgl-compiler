@@ -14,7 +14,7 @@ use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
-use super::fit::{open, whole};
+use super::fit::{negated, open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed,
@@ -63,15 +63,47 @@ impl<'a> Typer<'a> {
         &self,
         operator: OperatorRef,
         public: &Signature,
+        found: Vec<Option<Argument>>,
+        supplied: &[Option<&Type>],
+        said: bool,
+    ) -> Requested {
+        self.request_output(operator, public, found, supplied, said, false)
+    }
+
+    /// GEN-5, GEN-6: a candidate can contextualize a literal or anonymous
+    /// function. An option must not turn its preliminary reading, or a
+    /// later argument's reading, into an output constraint first.
+    pub(super) fn argument_output_requested(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        found: Vec<Option<Argument>>,
+        given: &[Given],
+        said: bool,
+    ) -> Requested {
+        let supplied = public_inputs(public, given);
+        let contextual = given.iter().any(|argument| {
+            argument.explicit.is_none()
+                && argument.key.public_parameter(public).is_some()
+                && (argument.by_place || contextual_value(&argument.value))
+        });
+        self.request_output(operator, public, found, &supplied, said, contextual)
+    }
+
+    fn request_output(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
         mut found: Vec<Option<Argument>>,
         supplied: &[Option<&Type>],
         said: bool,
+        contextual: bool,
     ) -> Requested {
         let program = self.program;
         // GEN-5, GEN-6: an option does not turn an argument's
         // preliminary type into a requested result. Public checks below
         // still use every argument; written types and the expected place
-        // alone constrain the type parameters in the output request.
+        // alone constrain output types while candidates contextualize inputs.
         let requested_types = found.clone();
         self.infer_operator_inputs(public, &mut found, supplied);
         let operator_declaration =
@@ -152,7 +184,7 @@ impl<'a> Typer<'a> {
             .zip(&explicit)
             .zip(requested_types)
             .map(|((generic, inferred), requested)| match generic.kind {
-                GenericKind::Plain | GenericKind::Type => {
+                GenericKind::Plain | GenericKind::Type if contextual => {
                     requested.unwrap_or(Argument::Type(Type::Unknown))
                 }
                 _ => inferred.clone(),
@@ -472,14 +504,13 @@ impl<'a> Typer<'a> {
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12), and its defaults: see
         // `Typer::output_requested`.
-        let supplied = public_inputs(public, &given);
         let Requested {
             place: mut requested,
             among,
             generics: operator_generics,
             call_generics,
             unfit,
-        } = self.output_requested(operator, public, found, &supplied, said);
+        } = self.argument_output_requested(operator, public, found, &given, said);
         // GEN-13: a default the call takes is of its parameter's type
         // as the call resolves it: the `2` of
         // `operator choose<T, const fallback: T = 2>` is no `str`. One
@@ -1577,6 +1608,16 @@ impl<'a> Typer<'a> {
     }
 }
 
+/// Value forms whose preliminary reading does not fix their candidate
+/// context. Sequence/tuple/block forms are marked by `Given::by_place`.
+fn contextual_value(value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::Literal(_) => true,
+        ExprKind::StaticCallable(callee) => matches!(callee.as_ref(), Callee::Anonymous(_)),
+        _ => negated(value).is_some_and(contextual_value),
+    }
+}
+
 /// FN-17: the public function template of the parameter the call gives.
 fn public_function<'s>(public: &'s Signature, key: &Key) -> Option<&'s Type> {
     let parameter = &public.parameters[key.public_parameter(public)?];
@@ -1703,7 +1744,7 @@ pub(super) struct Requested {
     pub(super) place: Option<Type>,
     /// The types the operator's own requirement admits for its result.
     pub(super) among: Option<Vec<Type>>,
-    /// The operator's resolved generic arguments, for any configuration defaults.
+    /// Complete public inference, used by reflected pack constraints.
     pub(super) generics: Vec<Argument>,
     /// Arguments for inherited configuration defaults: an argument-derived
     /// type stays open until the candidate fits its source expression.
