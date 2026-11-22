@@ -1760,6 +1760,33 @@ fn inferred_list_sizes_are_values_on_the_sdk() {
     );
 }
 
+/// TYPE-10: an unsized value parameter takes the entries of a fixed list.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn fixed_lists_supply_unsized_value_parameters_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("fixed-list-arguments");
+    let file = write(
+        &root,
+        "demo.fixed_list_arguments.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.fixed_list_arguments.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-19: value, operator and callback calls forward a pack; graph
 /// calls forward the individual connections. Constructors, defaults and
 /// lexical captures retain the concrete shape (FN-8, FN-14, TYPE-5).
