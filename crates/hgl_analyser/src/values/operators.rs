@@ -655,6 +655,7 @@ impl<'a> Typer<'a> {
         let ExprKind::Call {
             callee: Callee::DeferredOperator(deferred),
             arguments,
+            form,
             ..
         } = &call.kind
         else {
@@ -675,6 +676,9 @@ impl<'a> Typer<'a> {
             return None;
         }
         let list = self.node_at(deferred.list)?;
+        if *form != Form::Named {
+            return self.settle_logic(*form, deferred.identity, &list, arguments);
+        }
         let parent = list.parent()?;
         let callable = if deferred.captured {
             Some(arguments_of(&list).into_iter().next()?.1)

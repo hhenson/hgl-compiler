@@ -45,11 +45,12 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hgl_analyser::hir::{
-    Answer, Argument, Body, Callee, Expr, ExprKind, Run, Stmt, TypePackArgument, walk_statements,
+    Answer, Argument, Body, Callee, Expr, ExprKind, Local, Run, Stmt, TypePackArgument,
+    ValueCategory, walk_statements,
 };
 use hgl_analyser::{
-    Argument as GenericArgument, DeclarationKind, Detail, GenericKind, Program, Role, Signature,
-    Type,
+    Argument as GenericArgument, DeclarationKind, Detail, GenericKind, LocalKind, Pack, Program,
+    Role, Signature, Type,
 };
 use hgl_diagnostics::Location;
 
@@ -98,6 +99,60 @@ impl Instance {
         self.slots
             .as_ref()
             .map_or(index, |slots| slots[index].parameter)
+    }
+}
+
+/// Runtime slots for a native value call with a positional pack (FN-8).
+/// A native declaration has no HGL body to specialize.
+pub struct NativePack {
+    /// The concrete runtime parameters in call order.
+    pub signature: Signature,
+    slots: Vec<Slot>,
+}
+
+impl NativePack {
+    /// Expand a native value candidate taking only a positional pack.
+    pub fn of(program: &Program, callee: &Callee, arguments: &[Argument]) -> Option<Self> {
+        let (module, declaration) = callee.declaration()?;
+        let owner = &program.modules[module];
+        if !matches!(
+            owner.declarations[declaration].kind,
+            DeclarationKind::NativeCandidate(Role::Value, _)
+        ) {
+            return None;
+        }
+        let Detail::Callable(signature) = &owner.details[declaration] else {
+            return None;
+        };
+        let [parameter] = signature.parameters.as_slice() else {
+            return None;
+        };
+        if parameter.pack != Some(Pack::Positional) {
+            return None;
+        }
+
+        let captures = Captures::of(program, callee, signature, arguments);
+        let mut signature = signature.clone();
+        let mut body = Body {
+            locals: vec![Local {
+                at: parameter.at,
+                name: parameter.name.clone(),
+                kind: LocalKind::Parameter,
+                ty: parameter.ty.clone(),
+                category: ValueCategory::Value,
+            }],
+            statements: Vec::new(),
+        };
+        let (slots, _) = captures.expand(&mut signature, &mut body);
+        Some(Self {
+            signature,
+            slots: slots?,
+        })
+    }
+
+    /// The concrete slot of the supplied argument.
+    pub fn parameter(&self, argument: &Argument) -> Option<usize> {
+        self.slots.iter().position(|slot| slot.takes(argument))
     }
 }
 
