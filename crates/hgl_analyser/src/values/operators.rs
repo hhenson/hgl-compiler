@@ -1279,7 +1279,13 @@ impl<'a> Typer<'a> {
                 |name| Location::new(self.file, name.span()),
             );
             let key = match (&forwarded, name) {
-                (Some((hir::PackKey::Name(name), _)), _) => Key::Name(name.clone()),
+                (Some((hir::PackKey::Name(name), _)), _) => {
+                    if dependent.is_some() {
+                        Key::Name(name.clone())
+                    } else {
+                        options.name_key(name, false)
+                    }
+                }
                 (Some((hir::PackKey::Position(_), _)), _) => {
                     let slot = public
                         .parameters
@@ -1397,6 +1403,14 @@ impl<'a> Typer<'a> {
                     format!("`{name}` is given twice"),
                     "EXPR-2",
                 ));
+            }
+            if forwarded.is_some()
+                && let Key::Generic(name) = &key
+            {
+                if !duplicate {
+                    self.report_forwarded_generic_value(callee, name, at);
+                }
+                continue;
             }
             arguments.push((key, value, forwarded.map(|(_, value)| value)));
         }
