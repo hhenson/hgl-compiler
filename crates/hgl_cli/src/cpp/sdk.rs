@@ -1091,7 +1091,7 @@ mod tests {
     }
 
     /// The choice with only `set` in the environment, and the release
-    /// unpacked in `bundle`.
+    /// unpacked in `bundle`, resolved as [`super::bundle`] gives it.
     fn chosen_with(
         debug: bool,
         set: &[(&str, &Path)],
@@ -1102,7 +1102,8 @@ mod tests {
                 .find(|(named, _)| *named == name)
                 .map(|(_, value)| OsString::from(value))
         };
-        choose(debug, &variables, bundle)
+        let bundle = bundle.map(|bundle| real(bundle.to_path_buf()));
+        choose(debug, &variables, bundle.as_deref())
     }
 
     #[test]
