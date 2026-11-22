@@ -2552,6 +2552,78 @@ fn graph_instances_complete_named_function_inference() {
     assert_eq!(generics.unwrap(), ["str", "i64", "9"]);
 }
 
+/// FN-8, GEN-8 and GEN-10: late positional and named elements keep
+/// capture order, while the types written for a pack still decide it.
+#[test]
+fn graph_instances_complete_inferred_function_type_packs() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn positional<...Ts>(items: ...Ts) -> i64 => 1\n",
+        "const fn named<...Fields>(items: ...{Fields}) -> i64 => 2\n",
+        "const fn fixed<U, ...Ts>(head: U, items: ...Ts) -> U => head\n",
+        "fn wrapped<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let first = positional(chosen, true)\n",
+        "    let second = named(flag: true, number: chosen)\n",
+        "    let explicit = positional<i64, bool>(chosen, true)\n",
+        "    let fixed_result = fixed(chosen, 5.0)\n",
+        "    let nested = positional((chosen, true))\n",
+        "    return fixed_result\n",
+        "}\n",
+        "fn incompatible<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return positional<f64>(chosen)\n",
+        "}\n",
+        "fn admitted() -> i64 => wrapped(1)\n",
+        "fn rejected() -> i64 => incompatible(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:22:25 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    let mut packed = Vec::new();
+    walk_statements(&instance.statements, &mut |value| {
+        if let ExprKind::Call {
+            callee: Callee::Function { type_packs, .. },
+            arguments,
+            ..
+        } = &value.kind
+            && let [pack] = type_packs.as_slice()
+        {
+            assert!(!pack.infer_from_arguments);
+            let types = pack
+                .types
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            let keys = arguments
+                .iter()
+                .filter_map(|argument| argument.pack.clone())
+                .collect::<Vec<_>>();
+            packed.push((types, keys, value.ty.to_string()));
+        }
+    });
+    assert_eq!(packed.len(), 5);
+    assert_eq!(packed[0].0, ["i64", "bool"]);
+    assert_eq!(packed[1].0, ["bool", "i64"]);
+    assert_eq!(
+        packed[1].1,
+        [
+            hgl_analyser::hir::PackKey::Name("flag".into()),
+            hgl_analyser::hir::PackKey::Name("number".into())
+        ]
+    );
+    assert_eq!(packed[2], packed[0]);
+    assert_eq!(packed[3].0, ["f64"]);
+    assert_eq!(packed[3].2, "i64");
+    assert_eq!(packed[4].0, ["tuple<i64, bool>"]);
+}
+
 /// ERR-2 and GEN-2: inferred result bindings carry the types of both
 /// the success and the error after the generic argument types settle.
 #[test]

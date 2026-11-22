@@ -1220,6 +1220,9 @@ pub struct TypePackArgument {
     pub parameter: usize,
     /// Each type of the pack in binding order, possibly none.
     pub types: Vec<Type>,
+    /// The graph's arguments still have to complete this inferred pack.
+    /// A pack with written types is already fixed (GEN-8).
+    pub infer_from_arguments: bool,
 }
 
 /// What answers a requirement a call's callee states (GEN-16).

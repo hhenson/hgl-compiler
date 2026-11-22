@@ -17,6 +17,7 @@ use super::inference::{
     ExplicitGenerics, Inferred, Places, infer, infer_from_place, mentions, pack_bounds, placed,
     type_pack,
 };
+use super::lifting::fill_type;
 use super::node::RefRead;
 use super::sizes;
 use crate::declared::{names_parameter, substitute_within};
@@ -953,9 +954,16 @@ impl<'a> Typer<'a> {
                 .into_iter()
                 .enumerate()
                 .filter_map(|(parameter, types)| {
+                    let types = types?;
                     Some(hir::TypePackArgument {
                         parameter,
-                        types: types?,
+                        infer_from_arguments: self.graph
+                            && !evaluating
+                            && written_pack
+                                .as_ref()
+                                .is_none_or(|pack| pack.parameter != parameter)
+                            && types.iter().any(|ty| !whole(ty)),
+                        types,
                     })
                 })
                 .collect(),
@@ -1045,15 +1053,20 @@ impl<'a> Typer<'a> {
         let Detail::Callable(signature) = &owner.details[*declaration] else {
             return false;
         };
-        if !type_packs.is_empty() || signature.generics.len() != generics.len() {
+        if signature.generics.len() != generics.len() {
             return false;
         }
         let mut found = Vec::new();
-        for (parameter, argument) in signature.generics.iter().zip(generics.iter()) {
+        for (index, (parameter, argument)) in
+            signature.generics.iter().zip(generics.iter()).enumerate()
+        {
             if matches!(parameter.kind, GenericKind::Pack { .. }) {
-                return false;
-            }
-            if matches!(argument, Argument::Type(Type::Unknown)) {
+                if !type_packs.iter().any(|pack| pack.parameter == index) {
+                    return false;
+                }
+                // A pack's types are separate from its placeholder.
+                found.push(Some(argument.clone()));
+            } else if matches!(argument, Argument::Type(Type::Unknown)) {
                 if parameter.kind != GenericKind::Type {
                     return false;
                 }
@@ -1128,6 +1141,10 @@ impl<'a> Typer<'a> {
         if found.iter().any(Option::is_none) {
             return false;
         }
+        let mut packs = type_packs.clone();
+        if !self.settle_type_packs(signature, arguments, &mut packs, listed) {
+            return false;
+        }
         if let Some((name, defaulted)) = defaults {
             for index in dependent {
                 found[index] = None;
@@ -1167,6 +1184,11 @@ impl<'a> Typer<'a> {
         for argument in arguments {
             let parameter =
                 &signature.parameters[argument.parameter.expect("the call binds each argument")];
+            // Graph destinations fit heterogeneous pack elements using
+            // their own types in capture order (FN-8, GEN-10).
+            if type_pack(parameter, &signature.generics).is_some() {
+                continue;
+            }
             let ty = placed(substitute_within(&parameter.ty, &map), &own);
             if !matches!(ty, Type::Function(_))
                 && !self.lifted_window(&ty, listed, &argument.value, Takes::Parameters)
@@ -1184,15 +1206,57 @@ impl<'a> Typer<'a> {
             self.diagnostics,
         );
         let callee = (*module, *declaration);
-        if self.diagnostics.len() == before {
-            self.requires_met(call.at, callee, &resolved);
+        if packs.is_empty() {
+            if self.diagnostics.len() == before {
+                self.requires_met(call.at, callee, &resolved);
+            }
+            *requirements = self.answers(callee.0, callee.1, &resolved);
         }
-        *requirements = self.answers(callee.0, callee.1, &resolved);
         call.ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
             placed(substitute_within(result, &map), &own)
         });
         *generics = resolved;
+        *type_packs = packs;
         self.finished_call(&call.kind, false);
+        true
+    }
+
+    /// GEN-8, GEN-10 and FN-8: an inferred pack keeps its capture order
+    /// and any types already known. A written pack keeps all its types.
+    fn settle_type_packs(
+        &self,
+        signature: &Signature,
+        arguments: &[hir::Argument],
+        packs: &mut [hir::TypePackArgument],
+        listed: bool,
+    ) -> bool {
+        for pack in packs {
+            if pack.infer_from_arguments {
+                let Some(slot) = signature.parameters.iter().position(|parameter| {
+                    type_pack(parameter, &signature.generics) == Some(pack.parameter)
+                }) else {
+                    return false;
+                };
+                let captured = arguments
+                    .iter()
+                    .filter(|argument| argument.parameter == Some(slot));
+                if captured.clone().count() != pack.types.len() {
+                    return false;
+                }
+                for (ty, argument) in pack.types.iter_mut().zip(captured) {
+                    if !whole(ty) {
+                        fill_type(
+                            ty,
+                            self.inferred_from(listed, &argument.value, Takes::Parameters),
+                        );
+                    }
+                }
+            }
+            if !pack.types.iter().all(whole) {
+                return false;
+            }
+            pack.infer_from_arguments = false;
+        }
         true
     }
 
@@ -1276,10 +1340,13 @@ impl<'a> Typer<'a> {
     }
 }
 
-/// A named function call with a generic type left to instance inference.
+/// A named function call with a fixed generic or a pack still to infer.
 pub(super) fn pending_function_inference(kind: &ExprKind) -> bool {
-    matches!(kind, ExprKind::Call { callee: Callee::Function { generics, .. }, .. }
-        if generics.iter().any(|argument| matches!(argument, Argument::Type(Type::Unknown))))
+    matches!(kind, ExprKind::Call { callee: Callee::Function { generics, type_packs, .. }, .. }
+        if type_packs.iter().any(|pack| pack.infer_from_arguments && !pack.types.iter().all(whole))
+            || generics.iter().enumerate().any(|(index, argument)|
+                matches!(argument, Argument::Type(Type::Unknown))
+                    && !type_packs.iter().any(|pack| pack.parameter == index)))
 }
 
 /// The arguments of an argument list, in order: each with its name,

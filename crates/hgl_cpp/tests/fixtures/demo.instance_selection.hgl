@@ -358,6 +358,20 @@ fn deferred_generic_default<T>(const value: T) -> f64 {
     return copied
 }
 
+# FN-8 and GEN-10: each instance gets the settled types of its captured arguments.
+const fn deferred_pack<...Ts>(items: ...Ts) -> i64 => 1
+const fn deferred_named_pack<...Fields>(items: ...{Fields}) -> i64 => 2
+const fn deferred_fixed_pack<U, ...Ts>(head: U, items: ...Ts) -> U => head
+
+fn deferred_pack_result<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let positional = deferred_pack(chosen, true)
+    let named = deferred_named_pack(flag: true, number: chosen)
+    let explicit = deferred_pack<i64, bool>(chosen, true)
+    let fixed = deferred_fixed_pack(chosen, 5.0)
+    return positional + named + explicit + fixed
+}
+
 # CTRL-15: a deferred selector and its label settle to i64.
 fn selected_case<T>(const value: T) -> i64 {
     let key = if live_helper(value) > 0 { 1 }
@@ -410,6 +424,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval deferred_set_data(value: 3) == [[1]]
     assert eval deferred_captured_output(value: 3) == [1]
     assert eval deferred_generic_default(value: 3) == [1.0]
+    assert eval deferred_pack_result(value: 3) == [5]
     assert eval selected_case(value: 3) == [4]
     assert eval value_phase_choice(value: 3) == [1]
     assert eval value_phase_choice(value: "s") == [-1]

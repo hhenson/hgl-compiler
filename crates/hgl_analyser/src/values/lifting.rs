@@ -765,7 +765,7 @@ fn first_values(locals: &[Local], statements: &[Stmt]) -> Vec<Option<Location>> 
 
 /// EXPR-3 and EXPR-9: each pass fills holes in a type, preserving all
 /// previously known positions, including members typed by an annotation.
-fn fill_type(current: &mut Type, inferred: Type) -> bool {
+pub(super) fn fill_type(current: &mut Type, inferred: Type) -> bool {
     match (current, inferred) {
         (current @ Type::Unknown, inferred) if inferred != Type::Unknown => {
             *current = inferred;

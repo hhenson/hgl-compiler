@@ -377,6 +377,7 @@ impl<'a> Typer<'a> {
             pack = Some(hir::TypePackArgument {
                 parameter: index,
                 types,
+                infer_from_arguments: false,
             });
         }
         Some(ExplicitGenerics {

@@ -2089,6 +2089,7 @@ fn instance<'s>(
             type_packs.push(hir::TypePackArgument {
                 parameter: generic,
                 types,
+                infer_from_arguments: false,
             });
             continue;
         }
