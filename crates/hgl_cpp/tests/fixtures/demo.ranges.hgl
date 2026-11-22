@@ -145,10 +145,10 @@ fn spread_k<const K: i64>(x: i64) -> list<i64, K> {
     return ys
 }
 
-fn spread_two(x: i64, k: i64) -> list<i64, 2> => spread(x, [k, k])
+fn spread_two(x: i64, xs: list<i64, 2>) -> list<i64, 2> => spread(x, xs)
 fn spread_k3(x: i64) -> list<i64, 3> => spread_k<3>(x)
 
 test inferred_generic_extent_in_composition {
-    assert eval spread_two([1], [0]) == [[1, 2]]
+    assert eval spread_two([1], [[0, 0]]) == [[1, 2]]
     assert eval spread_k3([1]) == [[1, 2, 3]]
 }
