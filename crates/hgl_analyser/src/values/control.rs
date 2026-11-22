@@ -886,9 +886,15 @@ impl<'a> Typer<'a> {
         } else {
             None
         };
-        let ty = Type::List {
-            element: Box::new(element.cloned().unwrap_or_else(|| value.ty.clone())),
-            size,
+        let ty = if self.graph && !sequence_reported && size.is_none() && open(&sequence.ty) {
+            // The fixed list's size and the type of the binding can
+            // still depend on instance selection.
+            Type::Unknown
+        } else {
+            Type::List {
+                element: Box::new(element.cloned().unwrap_or_else(|| value.ty.clone())),
+                size,
+            }
         };
         (
             ExprKind::ListComprehension {

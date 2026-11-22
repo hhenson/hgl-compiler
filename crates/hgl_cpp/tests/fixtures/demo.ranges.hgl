@@ -76,10 +76,16 @@ impl fn appears(value: i64) -> bool {
 fn selected_list_extent<T>(const value: T) -> list<i64, 2> =>
     [for item in (if appears(value) { fixed_items(value) }): item + 1]
 
+fn inferred_selected_extent<T>(const value: T) -> list<i64, 2> {
+    let selected = [for item in (if appears(value) { fixed_items(value) }): item + 1]
+    return selected
+}
+
 test generic_iterables_settle_after_selection {
     assert eval selected_range_sum(value: "ordinary") == [10]
     assert eval selected_list(value: 3) == [[4, 5]]
     assert eval selected_list_extent(value: 3) == [[4, 5]]
+    assert eval inferred_selected_extent(value: 3) == [[4, 5]]
 }
 
 const fn generic_squares<const N: i64>() -> list<i64, N> => [for i in 0..<N: i * i]

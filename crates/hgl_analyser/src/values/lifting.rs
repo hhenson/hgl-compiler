@@ -8,7 +8,9 @@ use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 use hgl_parser::{SyntaxKind, SyntaxNode};
 
 use super::calls::pending_function_inference;
-use super::control::{bound_by_loop, iterates, iteration_types, no_else_type, while_connection};
+use super::control::{
+    bound_by_loop, fixed_list_extent, iterates, iteration_types, no_else_type, while_connection,
+};
 use super::expressions::sequence_element;
 use super::fit::{open, whole};
 use super::forms::received_type;
@@ -524,7 +526,7 @@ pub(super) fn record_with(
                             sequence,
                             entry,
                         },
-                    ty: Type::List { element, .. },
+                    ty,
                     ..
                 }) => {
                     settling |= settle_loop_bindings(
@@ -533,8 +535,25 @@ pub(super) fn record_with(
                         sequence,
                         std::slice::from_ref(binding),
                     );
-                    if !whole(element) {
-                        settling |= fill_type(element, entry.ty.clone());
+                    match ty {
+                        Type::Unknown
+                            if category(program, locals, sequence) == ValueCategory::Connection =>
+                        {
+                            if let Some(extent) =
+                                fixed_list_extent(received_type(&sequence.ty, iterates))
+                                && crate::constant::worked_out(&extent.value)
+                            {
+                                *ty = Type::List {
+                                    element: Box::new(entry.ty.clone()),
+                                    size: Some(extent.clone()),
+                                };
+                                settling = true;
+                            }
+                        }
+                        Type::List { element, .. } if !whole(element) => {
+                            settling |= fill_type(element, entry.ty.clone());
+                        }
+                        _ => {}
                     }
                     return;
                 }
