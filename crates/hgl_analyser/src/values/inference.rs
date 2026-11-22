@@ -4,9 +4,8 @@
 //! ([`super`]).
 
 use hgl_diagnostics::{Category, Location, Severity};
-use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::Typer;
 use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
@@ -14,10 +13,12 @@ use super::evals::{holds_trace, publications, trace_input_type, trace_pack_type}
 use super::expressions::{holds_block, takes_its_type};
 use super::fit::{not_null, open, whole};
 use super::forms::Taken;
+use super::{Fact, Typer};
 use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
-use crate::hir::{self, Expr};
+use crate::hir::{self, Expr, ValueCategory};
 use crate::program::Declaration;
+use crate::syntax::ungrouped;
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, GenericKind, GenericParameter, Pack,
     Parameter, Signature, Type,
@@ -377,6 +378,7 @@ impl<'a> Typer<'a> {
             pack = Some(hir::TypePackArgument {
                 parameter: index,
                 types,
+                infer_from_arguments: false,
             });
         }
         Some(ExplicitGenerics {
@@ -569,6 +571,40 @@ impl<'a> Typer<'a> {
         // The generic parameters an argument decided: what the call
         // writes, or its place expects, is not widened (GEN-2).
         let mut by_argument = vec![false; generics.len()];
+        // Written value arguments and static function templates are
+        // checked during the source pass. Preserve the precedence of
+        // argument inference over the result payload fallback, too.
+        let mut source_contexts: Vec<_> = generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, value)| match (&generic.kind, value) {
+                (GenericKind::Value(ty), Some(_)) => Some(ty),
+                _ => None,
+            })
+            .chain(
+                patterns
+                    .iter()
+                    .copied()
+                    .filter(|ty| matches!(ty, Type::Function(_))),
+            )
+            .chain(result_fallback.iter().map(|(result, _)| *result))
+            .collect();
+        if takes == Takes::Fields {
+            // Constructor replay completes type arguments and fits
+            // typed fields. Context-only fields and dependent generic
+            // defaults still need their original source reading.
+            source_contexts.extend(assigned.iter().filter_map(|field| {
+                let slot = field.slot?;
+                needs_argument_place(&field.value).then_some(patterns[slot])
+            }));
+            source_contexts.extend(generics.iter().zip(defaults).filter_map(
+                |(generic, default)| match (&generic.kind, default) {
+                    (GenericKind::Value(ty), Some(_)) => Some(ty),
+                    _ => None,
+                },
+            ));
+        }
+        let mut late = std::collections::HashSet::new();
         for position in order {
             let Assigned {
                 slot, value: node, ..
@@ -619,9 +655,15 @@ impl<'a> Typer<'a> {
             }
             // What the argument's type says: a parameter not yet found,
             // or a wider one for a parameter an argument decided.
-            let mut learn = |this: &Self, actual: &Type, found: &mut Vec<Option<Argument>>| {
+            let listed = slots[index].listed;
+            let mut learn = |this: &Self, value: &Expr, found: &mut Vec<Option<Argument>>| {
+                let unsettled = this.graph
+                    && this.hook.is_none()
+                    && !whole(&value.ty)
+                    && this.category(value) == ValueCategory::Unsettled;
+                let actual = this.inferred_from(listed, value, takes);
                 let actual =
-                    this.inference_input(pattern, actual, generics, found, *result_fallback);
+                    this.inference_input(pattern, &actual, generics, found, *result_fallback);
                 if let Some(generic) = widenable {
                     if let Some(Argument::Type(decided)) = &found[generic]
                         && this.widens(decided, actual)
@@ -632,8 +674,25 @@ impl<'a> Typer<'a> {
                 }
                 let before: Vec<bool> = found.iter().map(Option::is_some).collect();
                 infer(pattern, actual, generics, found);
-                for (generic, was) in before.into_iter().enumerate() {
-                    by_argument[generic] |= !was && found[generic].is_some();
+                for (index, was) in before.into_iter().enumerate() {
+                    if was {
+                        continue;
+                    }
+                    let generic = &generics[index];
+                    if late.contains(&generic.at)
+                        && generic.kind == GenericKind::Type
+                        && !source_contexts.iter().any(|ty| mentions(ty, &[generic.at]))
+                    {
+                        // GEN-2 and GEN-12: the earlier unresolved
+                        // input gets the first opportunity to bind
+                        // this parameter, in written field order or
+                        // declared parameter order.
+                        found[index] = None;
+                    }
+                    if unsettled && found[index].is_none() && mentions(pattern, &[generic.at]) {
+                        late.insert(generic.at);
+                    }
+                    by_argument[index] |= found[index].is_some();
                 }
             };
             // Nothing is expected of the value while its place is not
@@ -654,7 +713,6 @@ impl<'a> Typer<'a> {
             };
             // TST-16: what a trace is where a `const fn` is given it
             // says what the parameter is, as any value's type does.
-            let listed = slots[index].listed;
             let as_given = |value: hir::Expr| {
                 if listed { publications(value) } else { value }
             };
@@ -662,16 +720,14 @@ impl<'a> Typer<'a> {
                 if self.may_reread() {
                     let mark = self.mark();
                     let value = as_given(self.expression(node, Some(read_as)));
-                    let says = self.inferred_from(listed, &value, takes);
-                    learn(self, &says, &mut found);
+                    learn(self, &value, &mut found);
                     self.take_back(mark, false);
                 }
                 continue;
             }
             let reported = self.diagnostics.len();
             let value = as_given(self.expression(node, Some(read_as)));
-            let says = self.inferred_from(listed, &value, takes);
-            learn(self, &says, &mut found);
+            learn(self, &value, &mut found);
             // A value with no whole type while nothing is known of its
             // place, `[1, "x"]`, has not been judged. Neither has one
             // that is read as the type of its place, a sequence or a
@@ -765,6 +821,8 @@ impl<'a> Typer<'a> {
             .filter(|(_, found)| found.is_none())
             .map(|(generic, _)| generic.at)
             .collect();
+        let mut contextual = Vec::new();
+        let mut missing_pack_context = Vec::new();
         let arguments: Vec<hir::Argument> = assigned
             .iter()
             .enumerate()
@@ -794,6 +852,18 @@ impl<'a> Typer<'a> {
                     (None, _) => resolved_type(pattern),
                 };
                 let slot = Slot { ty, ..slots[index] };
+                // EXPR-9 and ERR-2: an empty sequence or a form with no
+                // type of its own needs the slot another argument can
+                // settle in the graph instance (GEN-2).
+                let depends_on_instance = !late.is_empty() && !traced && !whole(&slot.ty) && {
+                    let mut missing = unfound
+                        .iter()
+                        .filter(|at| mentions(pattern, &[**at]))
+                        .peekable();
+                    needs_argument_place(node)
+                        && missing.peek().is_some()
+                        && missing.all(|at| late.contains(at))
+                };
                 // A place whose type names a parameter nothing resolved
                 // is not known, and where the call is settled it never
                 // will be. Its argument is then read as one of which
@@ -812,7 +882,31 @@ impl<'a> Typer<'a> {
                     && !matches!(slot.ty, Type::Function(_))
                     && !(traced && pack.is_some())
                     && !takes_its_type(node)
+                    && !depends_on_instance
                     && unfound_type;
+                let reported = self.diagnostics.len();
+                let facts = depends_on_instance.then(|| {
+                    self.present
+                        .iter()
+                        .filter_map(|fact| match fact {
+                            Fact::Present(local) => {
+                                Some(hir::ArgumentFact::Present(self.locals[*local].at))
+                            }
+                            Fact::Valid(local) => {
+                                Some(hir::ArgumentFact::Valid(self.locals[*local].at))
+                            }
+                            Fact::Success(local) => {
+                                Some(hir::ArgumentFact::Success(self.locals[*local].at))
+                            }
+                            Fact::Failure(local) => {
+                                Some(hir::ArgumentFact::Failure(self.locals[*local].at))
+                            }
+                            // Child reads consume these only in hooks
+                            // (TIME-1); replay is graph composition.
+                            Fact::AllValid(_) | Fact::ChildValid(_) => None,
+                        })
+                        .collect()
+                });
                 let mut argument = match values[position].take() {
                     None if placeless => {
                         let value = self.expression(node, None);
@@ -868,6 +962,22 @@ impl<'a> Typer<'a> {
                     None => self.argument(Some(index), node, Some((&slot, traced)), takes),
                 };
                 argument.pack = pack.as_ref().map(|(_, key)| key.clone());
+                if let Some(parameter) = slot.type_pack
+                    && !whole(&argument.value.ty)
+                    && takes_its_type(node)
+                {
+                    missing_pack_context.push(parameter);
+                }
+                if let Some(facts) = facts
+                    && !whole(&argument.value.ty)
+                    && self.diagnostics.len() == reported
+                {
+                    contextual.push(hir::ContextualArgument {
+                        position,
+                        at: self.at(node),
+                        facts,
+                    });
+                }
                 argument
             })
             .collect();
@@ -906,8 +1016,17 @@ impl<'a> Typer<'a> {
             found,
             unknown,
             defaulted,
+            contextual,
+            missing_pack_context,
         }
     }
+}
+
+/// Whether an argument has no complete type without its expected place.
+fn needs_argument_place(node: &SyntaxNode) -> bool {
+    let node = ungrouped(node.clone());
+    takes_its_type(&node)
+        || node.kind() == SyntaxKind::SequenceExpr && node.children().next().is_none()
 }
 
 /// Explicit arguments to ordinary generics and to the positional type
@@ -997,6 +1116,11 @@ pub(super) struct Inferred {
     /// The generic value parameters that took their defaults, by their
     /// positions among the generic parameters.
     pub(super) defaulted: Vec<usize>,
+    /// The context-dependent arguments still waiting on graph types.
+    pub(super) contextual: Vec<hir::ContextualArgument>,
+    /// Generic packs with an element that has no type of its own
+    /// (GEN-8, ERR-2), even when an instance selects other argument types.
+    pub(super) missing_pack_context: Vec<usize>,
 }
 
 /// The positions of a call's arguments in the order their places are

@@ -12,6 +12,7 @@ hgl_source.workspace = true
 hgl_diagnostics.workspace = true
 hgl_lexer.workspace = true
 rowan.workspace = true
+pulldown-cmark.workspace = true
 
 [lints]
 workspace = true

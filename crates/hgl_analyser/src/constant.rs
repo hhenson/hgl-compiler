@@ -161,7 +161,8 @@ impl Typed {
         self.ty.as_ref()
     }
 
-    fn of(value: ConstantValue, ty: Option<Type>) -> Typed {
+    /// A constant that already has the type of its declaring place.
+    pub(crate) fn of(value: ConstantValue, ty: Option<Type>) -> Typed {
         Typed {
             value,
             ty,

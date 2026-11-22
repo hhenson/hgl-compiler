@@ -19,6 +19,7 @@ hgl_diagnostics.workspace = true
 hgl_lexer.workspace = true
 hgl_parser.workspace = true
 hgl_analyser.workspace = true
+hgl_doc.workspace = true
 hgl_runner.workspace = true
 hgl_cpp.workspace = true
 clap.workspace = true

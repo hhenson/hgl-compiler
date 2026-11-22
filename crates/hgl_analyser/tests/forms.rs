@@ -330,6 +330,8 @@ fn a_type_pack_cannot_infer_from_untyped_arguments() {
         "const fn null_named() -> i64 => named(x: null)\n",
         "const fn explicit() -> i64 => positional<i64?, list<i64>, result<i64, error>>(null, [], ok(1))\n",
         "const fn typed(item: i64?) -> i64 => named(x: item)\n",
+        "fn graph_null() -> i64 { return positional(null) }\n",
+        "fn graph_result<T>(const item: T) -> i64 { return positional(ok(item)) }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -338,6 +340,8 @@ fn a_type_pack_cannot_infer_from_untyped_arguments() {
             "m.hgl:5:43 type/sequence.context_type EXPR-9",
             "m.hgl:6:33 type/generic.unresolved GEN-8",
             "m.hgl:7:33 type/generic.unresolved GEN-8",
+            "m.hgl:10:33 type/generic.unresolved GEN-8",
+            "m.hgl:11:51 type/generic.unresolved GEN-8",
         ],
         "{}",
         checked.report

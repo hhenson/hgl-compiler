@@ -10,7 +10,7 @@ parser: done
 
 ## SDOC-2
 
-docs: unscheduled
+docs: done
 
 - Documentation text: delimiters, indentation, line breaks
 
@@ -21,15 +21,17 @@ analyser: partial
 - A key of an `Args:` or a `Type Args:` section, a name and a `:` four spaces in once SDOC-2's common indentation is removed, names a parameter or a generic parameter of what the comment documents; a declaration with none has none to name (`doc.unknown_key`)
 - Left: `Requires:` and `Properties:` keys, which the chapter does not say how to write; `Args:` of a struct, whose fields are its construction's arguments
 
-docs: unscheduled
+docs: partial
 
-- Section headings and their contents
+- Recognized headings, prose and Args/Type Args entries in the JSON model
+- Fenced Markdown preserves literal text in headings and entries
+- Left: key spelling of Requires, Properties and a struct’s Args
 
 ## SDOC-4
 
-docs: unscheduled
+docs: done
 
-- Interface text kept with its identity, signature and part
+- JSON interfaces, candidates and members carry their own canonical identity, signatures and source parts
 
 ## SDOC-5
 
@@ -42,3 +44,32 @@ formatter: planned
 analyser: done
 
 - Documentation is recorded nowhere in the analysed program: two programs that differ in it alone analyse alike
+
+## SDOC-7
+
+parser: done
+
+- Fenced Markdown protects literal headings and keys after normalization
+
+docs: partial
+
+- The JSON model carries Markdown text, preserving fenced blocks
+- Left: present Markdown, formulas, diagrams and authored HTML text on a documentation site (#457)
+
+## SDOC-8
+
+docs: planned
+
+- Documentation site links a name to the declaration it resolves to (#457)
+
+## SDOC-9
+
+runner: planned
+
+- Fenced HGL in Examples runs as a named test (#458)
+
+## SDOC-10
+
+docs: done
+
+- Default output documents the exported interface; private declarations and tests are opt-in

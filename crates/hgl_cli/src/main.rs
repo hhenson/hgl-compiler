@@ -7,12 +7,13 @@
 //! hgl tokens <file>     source text --[lex]--> tokens, printed one per line
 //! hgl tree <file>       tokens --[parse]--> syntax tree, printed as an outline
 //! hgl check <roots>     syntax trees --[analyse]--> program; its errors reported
+//! hgl doc <roots>       program --[document]--> JSON API model
 //! hgl test <roots>      the program's cases, each checked; the outcome of each
 //! hgl emit <roots>      program --[transpile]--> files for a target, written
 //! hgl run <roots>       an application of the program, run on a target
 //! ```
 //!
-//! `tokens` and `tree` read one file. `check`, `test`, `emit` and `run`
+//! `tokens` and `tree` read one file. `check`, `doc`, `test`, `emit` and `run`
 //! read a program: every `.hgl` file under the source roots they are
 //! given. `test --target` also runs the program's tests on that target.
 //!
@@ -39,6 +40,7 @@
 
 mod check_json;
 mod cpp;
+mod doc;
 mod replace;
 
 use std::collections::HashSet;
@@ -85,6 +87,8 @@ enum Command {
     Tree(TreeArgs),
     /// Check a program: every `.hgl` file under the source roots.
     Check(CheckArgs),
+    /// Write the API documentation of a checked program.
+    Doc(doc::DocArgs),
     /// Run the cases of a program: its tests and its `# expect-error`
     /// rejection cases.
     Test(TestArgs),
@@ -346,6 +350,10 @@ fn main() -> ExitCode {
         Command::Check(arguments) => {
             let stack = analysis_stack(arguments.limits.limits());
             on_stack_of(stack, move || check(&arguments))
+        }
+        Command::Doc(arguments) => {
+            let stack = analysis_stack(arguments.limits.limits());
+            on_stack_of(stack, move || doc::run(&arguments))
         }
         Command::Test(arguments) => {
             let stack = analysis_stack(arguments.limits.limits());

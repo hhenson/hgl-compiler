@@ -277,6 +277,7 @@ impl Emitter<'_> {
                         condition,
                         then,
                         otherwise,
+                        ..
                     },
                 ..
             }) => {
@@ -293,6 +294,7 @@ impl Emitter<'_> {
                             condition,
                             then,
                             otherwise: next,
+                            ..
                         },
                     ..
                 }) = otherwise

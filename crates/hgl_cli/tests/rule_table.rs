@@ -37,7 +37,7 @@ const STAGES: [(&str, &[&str]); 10] = [
     ("runner", &["hgl_runner"]),
     ("driver", &["hgl_cli"]),
     ("diagnostics", &["hgl_diagnostics"]),
-    ("docs", &[]),
+    ("docs", &["hgl_doc"]),
 ];
 
 /// The states an entry may have.

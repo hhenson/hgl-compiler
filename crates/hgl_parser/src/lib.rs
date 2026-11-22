@@ -50,6 +50,7 @@
 //! analyser rejects the default (FN-8).
 
 pub mod ast;
+pub mod documentation;
 mod event;
 mod grammar;
 mod input;

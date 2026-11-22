@@ -1,0 +1,86 @@
+module demo.instance_result_context
+
+# GEN-5, GEN-7 and ERR-12: an instance can select a nullable result
+# where its generic body selected a candidate that gives a whole value.
+operator find<T>(value: T) -> i64
+impl const fn find<T>(value: T) -> i64 => 5
+impl const fn find(value: i64) -> i64? {
+    if value < 0 { return null }
+    return value
+}
+
+const fn keep<T>(value: T) -> i64? => find(value)
+const fn find_is_null<T>(value: T) -> bool => find(value) == null
+
+fn keep_node<T>(value: T) -> i64? {
+    when { return find(value) }
+}
+fn keep_graph<T>(value: T) -> i64? => find(value)
+
+test nullable_value_places {
+    assert keep(2) == 2
+    assert keep(-1) == null
+    assert keep("generic") == 5
+    assert !find_is_null(2)
+    assert find_is_null(-1)
+}
+
+test nullable_temporal_places {
+    assert eval keep_node(value: [2, -1]) == [2, null]
+    assert eval keep_graph(value: [2, -1]) == [2, null]
+}
+
+# ERR-15: nullable destinations and null comparisons turn a selected
+# candidate's failure into null. A place that requires i64 raises it.
+operator checked<T>(value: T) -> i64
+impl const fn checked<T>(value: T) -> i64 => 5
+impl const fn checked(value: i64) -> result<i64, error> {
+    if value < 0 { return err(error(message: "invalid input", code: "convert.invalid")) }
+    return ok(value)
+}
+
+const fn keep_checked<T>(value: T) -> i64? => checked(value)
+const fn checked_is_null<T>(value: T) -> bool => checked(value) == null
+const fn require_checked<T>(value: T) -> i64 => checked(value)
+
+fn checked_node<T>(value: T) -> i64? {
+    when { return checked(value) }
+}
+fn checked_graph<T>(value: T) -> i64? {
+    return checked(value)
+}
+
+test result_value_places {
+    assert keep_checked(2) == 2
+    assert keep_checked(-1) == null
+    assert !checked_is_null(2)
+    assert checked_is_null(-1)
+    assert raises("convert.invalid") { require_checked(-1) }
+}
+
+test result_temporal_places {
+    assert eval checked_node(value: [2, -1]) == [2, null]
+    assert eval checked_graph(value: [2, -1]) == [2, null]
+}
+
+# GEN-5, GEN-7 and ERR-15: a selected whole value also meets the
+# nullable place when the admitting candidate has a result type.
+operator parse<T>(value: T) -> result<i64, error>
+impl const fn parse<T>(value: T) -> result<i64, error> => err(error(message: "generic"))
+impl const fn parse(value: i64) -> i64 => value
+
+const fn opt<T>(value: T) -> i64? => parse(value)
+fn opt_node<T>(value: T) -> i64? {
+    when { return parse(value) }
+}
+fn opt_graph<T>(value: T) -> i64? => parse(value)
+
+test whole_value_in_nullable_place {
+    assert opt(3) == 3
+    assert opt("generic") == null
+}
+
+test whole_temporal_values_in_nullable_places {
+    assert eval opt_node(value: [3, 4]) == [3, 4]
+    assert eval opt_graph(value: [3, 4]) == [3, 4]
+}
