@@ -335,10 +335,19 @@ pub struct ReflectedPack {
 }
 
 impl FunctionType {
-    /// The parameter types and then the result type, when present.
+    /// The slots a function type can give; its callback's configuration
+    /// instead takes defaults (FN-18).
+    pub(crate) fn ordinary_parameters(&self) -> impl Iterator<Item = &FunctionParameter> {
+        self.parameters.iter().filter(|input| {
+            input
+                .declared()
+                .is_none_or(|parameter| !parameter.configuration)
+        })
+    }
+
+    /// The ordinary parameter types and then the result type, when present.
     pub(crate) fn types(&self) -> impl Iterator<Item = &Type> {
-        self.parameters
-            .iter()
+        self.ordinary_parameters()
             .map(FunctionParameter::ty)
             .chain(&self.result)
     }

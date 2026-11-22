@@ -141,63 +141,6 @@ fn is_forwarded_call(value: &Expr) -> bool {
     )
 }
 
-/// Reread a scope that forwards a parameter pack (FN-19).
-///
-/// The concrete calls are checked in their surrounding flow, including
-/// definite assignment of written arguments and the destination that
-/// receives the call's result.
-pub(crate) fn resolve_forwarded_calls(
-    program: &crate::Program,
-    (module, declaration): (usize, usize),
-    (signature, map): (
-        &crate::Signature,
-        &[(hgl_diagnostics::Location, &crate::Argument)],
-    ),
-    (functions, inputs): (&[(usize, Callee)], &[crate::hir::PackInput]),
-    diagnostics: &mut hgl_diagnostics::Diagnostics,
-) -> Option<crate::hir::Body> {
-    use crate::program::Phase;
-
-    let owner = &program.modules[module];
-    let declared = &owner.declarations[declaration];
-    let (bindings, written, calls) = super::tables(owner);
-    let selecting = std::cell::RefCell::new(Vec::new());
-    let reading = crate::Signature {
-        generics: match &owner.details[declaration] {
-            crate::Detail::Callable(declared) => {
-                super::candidates::in_instance(declared, map).generics
-            }
-            _ => Vec::new(),
-        },
-        ..signature.clone()
-    };
-    let mut typer = Typer::new(
-        program,
-        owner,
-        declared,
-        &reading,
-        super::Tables {
-            bindings: &bindings,
-            written: &written,
-            calls: &calls,
-            selecting: &selecting,
-        },
-        diagnostics,
-    );
-    typer.instance = map
-        .iter()
-        .map(|(at, argument)| (*at, (*argument).clone()))
-        .collect();
-    typer.pack_inputs = Some(inputs.to_vec());
-    typer.pack_functions = functions.to_vec();
-    match owner.phases[declaration] {
-        Some(Phase::Graph) => typer.graph().0,
-        Some(Phase::Node) if crate::phases::is_source(declared) => typer.source(),
-        Some(Phase::Node) => typer.node(),
-        _ => typer.body(),
-    }
-}
-
 /// One concrete specialization reached by a call with a forwarding path.
 #[derive(Debug, Clone, PartialEq)]
 struct ForwardingInstance {
