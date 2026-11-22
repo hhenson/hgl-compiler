@@ -59,9 +59,13 @@ impl<'a> Typer<'a> {
             && !matches!(base.kind, ExprKind::Unread)
             && not_null(Some(&base.ty)).is_some_and(|ty| match ty {
                 Type::Unknown => true,
-                // ERR-15 cannot take the success until the result
-                // settles. Explicit payloads still use ERR-3 here.
-                Type::Result { .. } if !matches!(name.text(), "value" | "error") => !whole(ty),
+                // ERR-3: a lexical guard proves a variant only when the
+                // result settles to an ordinary value.
+                Type::Result { .. } if matches!(name.text(), "value" | "error") => {
+                    variant_proven && self.category(&base) == ValueCategory::Unsettled
+                }
+                // ERR-15 cannot take an implicit success until its type settles.
+                Type::Result { .. } => !whole(ty),
                 _ => false,
             })
         {

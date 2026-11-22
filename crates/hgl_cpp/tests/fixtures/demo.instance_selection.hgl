@@ -626,7 +626,19 @@ fn deferred_result_member<T>(const value: T) -> str {
     return outcome.text
 }
 
+# ERR-3 and GEN-7: the result is known before its category is selected.
+operator known_result<T>(input: T) -> result<i64, error>
+impl const fn known_result<T>(input: T) -> result<i64, error> => ok(9)
+impl fn known_result(input: i64) -> result<i64, error> { when { return ok(input) } }
+
+fn deferred_result_category<T>(const input: T) -> i64 {
+    let outcome = known_result(input)
+    if is_ok(outcome) { return outcome.value }
+    return 0
+}
+
 test deferred_result_variants {
+    assert eval deferred_result_category(input: "s") == [9]
     assert eval deferred_result_member(value: "s") == ["projected"]
     assert eval deferred_result_projection(value: "s", passed: true) == [7]
     assert eval deferred_result_projection(value: "s", passed: false) == [8]

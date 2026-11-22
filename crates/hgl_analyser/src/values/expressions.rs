@@ -537,8 +537,13 @@ impl<'a> Typer<'a> {
             // A deferred projection retains this lexical fact and checks
             // that its read settled to an ordinary result binding.
             immutable(local)
-                && (matches!(ty, Type::Result { .. }) && binding.category == ValueCategory::Value
-                    || matches!(ty, Type::Unknown) && self.deferred_presence(local))
+                && match ty {
+                    Type::Result { .. } => {
+                        binding.category == ValueCategory::Value || self.deferred_presence(local)
+                    }
+                    Type::Unknown => self.deferred_presence(local),
+                    _ => false,
+                }
         };
         null_tests(
             condition,

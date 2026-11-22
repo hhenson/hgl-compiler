@@ -2536,6 +2536,66 @@ fn graph_instances_recheck_deferred_result_projections() {
     ));
 }
 
+/// ERR-3, GEN-7: the lexical fact survives while only the result's
+/// category is unsettled. A temporal tag test still supplies no fact.
+#[test]
+fn graph_instances_recheck_tag_facts_when_only_the_category_settles() {
+    let checked = module(concat!(
+        "operator probe<T>(input: T) -> result<i64, error>\n",
+        "impl const fn probe<T>(input: T) -> result<i64, error> => ok(7)\n",
+        "impl fn probe(input: i64) -> result<i64, error> { when { return ok(input) } }\n",
+        "fn guarded<T>(const input: T) -> i64 {\n",
+        "    let outcome = probe(input)\n",
+        "    if is_ok(outcome) { return outcome.value }\n",
+        "    return 0\n",
+        "}\n",
+        "fn tagged<T>(const input: T) -> bool => is_ok(probe(input))\n",
+        "fn ordinary() -> i64 => guarded(\"s\")\n",
+        "fn temporal() -> i64 => guarded(1)\n",
+        "fn tag_only() -> bool => tagged(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:12:25 type/result.required_variant ERR-3"],
+        "{}",
+        checked.report
+    );
+
+    let guarded = body(&checked, "guarded");
+    let mut deferred = false;
+    walk_statements(&guarded.statements, &mut |value| {
+        if let ExprKind::DeferredMember {
+            base,
+            variant_proven: true,
+            ..
+        } = &value.kind
+        {
+            assert_eq!(base.ty.to_string(), "result<i64, error>");
+            assert_eq!(base.category, ValueCategory::Unsettled);
+            deferred = true;
+        }
+    });
+    assert!(deferred, "the source projection records the guard");
+
+    let ordinary = instance_called_by(&checked, body(&checked, "ordinary"));
+    let mut settled = false;
+    walk_statements(&ordinary.statements, &mut |value| {
+        if let ExprKind::Payload {
+            success: true,
+            result,
+        } = &value.kind
+        {
+            assert_eq!(value.ty.to_string(), "i64");
+            assert_eq!(result.category, ValueCategory::Value);
+            settled = true;
+        }
+    });
+    assert!(
+        settled,
+        "the ordinary instance projects the guarded payload"
+    );
+}
+
 /// ERR-12 and ERR-3: a terminating null branch refines the same binding
 /// before its tag is tested in the ordinary specialization (GEN-7).
 #[test]
