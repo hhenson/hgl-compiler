@@ -2452,3 +2452,21 @@ Hand-written where no tool fits:
 and lint with the same release. Dependabot proposes the next Rust release,
 crate updates and workflow action updates weekly
 (`.github/dependabot.yml`). No minimum supported Rust version is declared.
+
+### Native application debug launch
+
+`hgl run --application NAME --debug-build DIR ROOT...` builds the selected
+application with symbols and no optimization in its generated units. Each
+launch has its own subdirectory under DIR. The caller owns its lifetime.
+
+On success stdout is one JSON object with `version: 1`, absolute `executable`,
+`arguments` (an array), `workingDirectory`, and `environment` (overrides to
+inherit alongside the caller's environment). Start that exact command in
+the debugger. Its console mirrors the results protocol. After the run
+returns it prints the recorded publications. The debugger owns process termination and may close stdin.
+Ordinary application runs keep their host stop pipe. HGL statements use the
+existing C++ `#line` mappings with absolute application and module paths.
+After each mapped statement, generated code uses its own C++ file and line.
+Bundled core uses display names such as `<core>/core/core.hgl`.
+With `--arg` or `--config`, breakpoints use the original file and line. A
+configuration inserted by the driver has only a generated C++ location.

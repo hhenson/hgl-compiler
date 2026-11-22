@@ -266,6 +266,10 @@ impl Emitter<'_> {
             None => entry,
         };
         let line = run_line(declared).unwrap_or_else(|| self.line_of(run.at));
+        let line = self
+            .position
+            .and_then(|source| source(run.at, line))
+            .map_or(line, |(_, original_line)| original_line);
         let word = if run.real_time { "run" } else { "eval" };
         self.piece.text = format!(
             "// The run statement of application {}, line {line}: `{word}` (UNIT-14, RUN-1, RUN-3).\n\
