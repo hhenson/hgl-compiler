@@ -99,6 +99,13 @@ fn example_diagnostics_point_into_the_comment() {
             "const fn late",
             "a test helper must precede the test's statements",
         ),
+        // UNIT-13: A constant cannot depend on itself through a generic argument.
+        (
+            "example_constant_cycle",
+            "const fn identity<const N: i64>() -> i64 => N\n    const value: i64 = identity<value>()",
+            "const value",
+            "constant.cycle",
+        ),
     ] {
         let source = format!(
             "module demo\n\nconst fn taken() -> i64 => 0\n\n/** Example.\n\nExamples:\n    ~~~hgl\n    {example}\n    ~~~\n*/\nconst fn target() -> bool => true\n"
