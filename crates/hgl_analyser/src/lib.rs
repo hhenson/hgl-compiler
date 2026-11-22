@@ -569,17 +569,25 @@ pub mod codes {
         /// function argument awaits a ruling (FN-17, issue #362).
         pub const FUNCTION_REFERENCE_UNREAD: &str = "function.reference_unread";
 
+        /// A configuration parameter has a mode FN-18 forbids.
+        pub const PARAMETER_CONFIGURATION: &str = "parameter.configuration";
+
+        /// A candidate does not declare one of its operator's configuration parameters (GEN-6).
+        pub const IMPL_CONFIGURATION: &str = "impl.configuration";
+
         /// A `yield` in an anonymous body or a value function (SOURCE-1,
         /// FN-1, FN-2). The catalogue's `node.in_value_function` row
         /// does not list `yield`.
         pub const YIELD_OUTSIDE_SOURCE: &str = "yield.outside_source";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 5] = [
+        pub const ALL: [&str; 7] = [
             READING_LIMIT,
             LOOP_CARRIED,
             FUNCTION_VALUE,
             FUNCTION_REFERENCE_UNREAD,
+            PARAMETER_CONFIGURATION,
+            IMPL_CONFIGURATION,
             YIELD_OUTSIDE_SOURCE,
         ];
     }

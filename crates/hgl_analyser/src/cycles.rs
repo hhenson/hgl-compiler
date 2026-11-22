@@ -259,7 +259,11 @@ fn parts_of(program: &Program, index: usize, parts: &mut Vec<(Part, Vec<Part>)>)
             Some(Detail::Struct(read)) => {
                 // A struct's field defaults are one part, which reads
                 // its parents' too (TYPE-4).
-                let written: Vec<&Expr> = defaults.iter().flatten().collect();
+                let written: Vec<&Expr> = defaults
+                    .iter()
+                    .flatten()
+                    .map(|default| &default.value)
+                    .collect();
                 let mut reads = gather(&written);
                 for parent in &read.parents {
                     if let Type::Named {
@@ -276,7 +280,10 @@ fn parts_of(program: &Program, index: usize, parts: &mut Vec<(Part, Vec<Part>)>)
             _ => {
                 for (parameter, default) in defaults.iter().enumerate() {
                     if let Some(default) = default {
-                        parts.push((Part::Default(declared, parameter), gather(&[default])));
+                        parts.push((
+                            Part::Default(declared, parameter),
+                            gather(&[&default.value]),
+                        ));
                     }
                 }
             }

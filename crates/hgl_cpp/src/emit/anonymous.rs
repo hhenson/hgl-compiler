@@ -72,6 +72,7 @@ pub(super) fn anonymous_signature(function: &AnonymousFunction) -> Signature {
         .take(inputs + function.captures.len())
         .enumerate()
         .map(|(index, local)| Parameter {
+            configuration: false,
             name: local.name.clone(),
             at: local.at,
             constant: !function.template.value

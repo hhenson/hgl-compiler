@@ -18,7 +18,7 @@ use hgl_source::FileId;
 use crate::constant::is_least_magnitude;
 use crate::program::{DeclarationKind, Program, Role};
 use crate::syntax::{child, tokens};
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 /// Checks every declaration of the program.
 pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
@@ -32,6 +32,7 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
             ) {
                 packs(node, file, diagnostics);
             }
+            configuration_parameters(node, file, diagnostics);
             if let DeclarationKind::NativeImplementation(role)
             | DeclarationKind::NativeCandidateImplementation(role) = declaration.kind
             {
@@ -58,6 +59,36 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                 module.files[statement.file].file,
                 diagnostics,
             );
+        }
+    }
+}
+
+/// FN-18 permits ordinary and `const` configuration parameters.
+fn configuration_parameters(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) {
+    let Some(list) = child(declaration, SyntaxKind::ConfigParamList) else {
+        return;
+    };
+    for parameter in list.children() {
+        let forbidden = tokens(&parameter).find_map(|token| {
+            let form = match token.kind() {
+                SyntaxKind::KwRef => "`ref`",
+                SyntaxKind::KwVar => "`var`",
+                SyntaxKind::Ellipsis => "a pack",
+                _ => return None,
+            };
+            Some((token.span(), form))
+        });
+        if let Some((span, form)) = forbidden.or_else(|| {
+            child(&parameter, SyntaxKind::FunctionType)
+                .map(|ty| (ty.span(), "a parameter that takes a function"))
+        }) {
+            diagnostics.emit(local_error(
+                Category::FunctionKind,
+                codes::local::PARAMETER_CONFIGURATION,
+                Location::new(file, span),
+                format!("a configuration parameter cannot be {form}"),
+                "FN-18",
+            ));
         }
     }
 }

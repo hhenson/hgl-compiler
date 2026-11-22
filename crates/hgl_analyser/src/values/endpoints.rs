@@ -126,6 +126,7 @@ impl<'a> Typer<'a> {
         list: &SyntaxNode,
     ) -> (ExprKind, Type) {
         let at = Location::new(self.file, name.span());
+        self.reject_configuration(name, list);
         let arguments = endpoint_arguments(list);
         // How many it takes: a selector may stand with none, and with
         // as many inputs as it names (TIME-3: "`modified(a, b)`
