@@ -14,6 +14,7 @@
 //! | `values[i]`, a child named in a hook (TIME-1, END-8) | `::hglrt::child(view, i)`: an endpoint whether or not it is valid, given to `valid`, `modified`, `delta_value`, `last_modified`, `all_valid` |
 //! | `values[i]` read where it is checked when it runs (ERR-14) | `::hglrt::checked_whole(child)`, or `checked_whole_result` where its place takes a `result` |
 //! | `pair[0]`, a child of a connection of a graph (TIME-9) | `::hglrt::element_port(port, 0)` |
+//! | An ordinary fixed list wired as a constant (FN-3) | `::hglrt::constant<T, S>` publishes the positions in one cycle |
 //! | A cell of a trace of one (TST-5) | `::hglrt::testing::Cell<T>`, of a `Whole<T>` or of a delta |
 //!
 //! A part is read and published through its own form (TYPE-9): a scalar,
@@ -249,7 +250,9 @@ impl Emitter<'_> {
             )
         };
         let begin = std::mem::take(&mut scope.before).join("\n");
-        let entry = self.connection(scope, entry, element);
+        let entry = self.with_unrolled_bindings(&[binding], |emitter| {
+            emitter.comprehension_entry_port(scope, entry, element)
+        });
         let before_entry = std::mem::replace(&mut scope.before, saved).join("\n");
         scope.conditional -= 1;
         scope.acted = true;
@@ -257,6 +260,29 @@ impl Emitter<'_> {
         format!(
             "[&]() -> ::hgraph::Port<{schema}> {{\n{begin}\n::std::vector<::hgraph::WiringPortRef> {children};\n{children}.reserve({count});\n{header}\n{before_entry}\n{children}.push_back(({entry}).erased());\n}}\n{check}return {{&{WIRING}, ::hgraph::WiringPortRef::structural_source(::hgraph::schema_descriptor<{schema}>::ts_meta(), ::std::move({children}))}};\n}}()"
         )
+    }
+
+    /// Compose a list entry in its pass, including the statements of a
+    /// block whose tail gives the entry's connection (CTRL-10, EXPR-17).
+    fn comprehension_entry_port(
+        &mut self,
+        scope: &mut Scope,
+        mut entry: &Expr,
+        element: &Type,
+    ) -> String {
+        let mut body = String::new();
+        while let ExprKind::Block {
+            statements,
+            value: Some(tail),
+        } = &entry.kind
+        {
+            self.statements(scope, statements, 0, &mut body);
+            entry = tail;
+        }
+        if !body.is_empty() {
+            scope.before.push(body);
+        }
+        self.connection(scope, entry, element)
     }
 
     /// The endpoint of `child`, a child of a temporal input that is a
@@ -344,6 +370,20 @@ impl Family for Lists {
                 Some(format!("::hgraph::TSL<{child}, {size}>"))
             }
         }
+    }
+
+    // FN-3: a fixed list wired as a constant publishes its whole value
+    // once, through the list's own temporal shape (TIME-7).
+    fn constant(&self, emitter: &mut Emitter<'_>, ty: &Type, value: &str) -> Option<String> {
+        let Shape::Fixed(..) = shape(ty)? else {
+            return None;
+        };
+        let schema = self.schema(emitter, ty)?;
+        let written = super::types::cpp_type(emitter.program, ty)?;
+        Some(format!(
+            "::{}::constant<{written}, {schema}>({WIRING}, {value})",
+            runtime::NAMESPACE
+        ))
     }
 
     // TIME-1: "A read of a struct, a tuple or a fixed list whole ...
@@ -537,6 +577,7 @@ impl Family for Lists {
             binding,
             sequence,
             entry,
+            ..
         } = &value.kind
         {
             return Some(emitter.list_comprehension_port(
