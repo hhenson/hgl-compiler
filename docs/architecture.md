@@ -2053,6 +2053,8 @@ tests were built. On a matching stamp with the needed artifacts,
 `hgl run` and `hgl test` use the existing executables directly. A
 rebuild clears the previous stamp before checking and leaves it
 absent if the build fails or is interrupted.
+An ordinary build or run checks rejection owners as source. When a
+test build omitted those owners, its stamp covers test commands.
 
 The driver writes each generated file and `build.ninja` where its
 contents change. Ninja compiles each module unit with the precompiled
@@ -2471,7 +2473,8 @@ crate updates and workflow action updates weekly
 `hgl build --debug --application NAME --out DIR --format json ROOT...`
 builds native symbols with HGL source mappings and reports the selected
 application's launch. With an implicit workspace, the debug build uses
-`debug-programs/<hash>` under the cache.
+`debug-programs/<hash>` under the cache. Its stamp includes the absolute
+HGL source paths used by the debugger.
 
 The debugger starts the reported absolute `executable` with its
 `arguments`, `workingDirectory`, and `environment` overrides. A client

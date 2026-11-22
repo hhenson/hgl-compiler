@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{self, ErrorKind, Read as _};
 use std::path::{Component, Path};
 
+use hgl_runner::CaseKind;
 use serde::{Deserialize, Serialize};
 
 use super::build::{Workspace, application_target, test_target_stem, write_if_changed};
@@ -53,6 +54,10 @@ impl Stamp {
         if stamp.version != VERSION
             || stamp.key != key
             || (tests && stamp.program.tests.is_none())
+            // The test runner omits rejection owners (TST-13). An ordinary
+            // build or run checks the whole source under TST-14.
+            || (!tests
+                && stamp.program.tests.iter().flatten().any(|case| case.kind == CaseKind::Rejection))
             || !stamp.artifacts.iter().all(|artifact| {
                 Artifact::length(&workspace.directory, &artifact.path) == Some(artifact.bytes)
             })
@@ -154,6 +159,9 @@ pub(super) fn key(
     add(&(sources.files.len() as u64).to_le_bytes());
     for (name, bytes) in &sources.files {
         add(name.as_bytes());
+        if debug {
+            add(debug_source_path(name).as_bytes());
+        }
         add(bytes);
     }
     for (name, text) in hgl_analyser::CORE_FILES {
@@ -171,6 +179,14 @@ pub(super) fn key(
         }
     }
     Ok(hash.finalize().to_hex().to_string())
+}
+
+/// The source name written into the generated debug line mappings.
+pub(super) fn debug_source_path(name: &str) -> String {
+    if name.starts_with('<') {
+        return name.to_string();
+    }
+    std::path::absolute(name).map_or_else(|_| name.to_string(), |path| path.display().to_string())
 }
 
 fn compiler() -> Result<blake3::Hash, String> {

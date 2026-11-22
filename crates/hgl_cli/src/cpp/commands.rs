@@ -14,6 +14,7 @@ use hgl_source::SourceMap;
 use super::application::{self, RanApplication};
 use super::build::Workspace;
 use super::plan::{self, Action};
+use super::stamp::debug_source_path;
 use super::{BuildSession, BuiltProgram, Replacements, sdk};
 use crate::{
     BuildArgs, BuildFormat, EXIT_FAILED, EXIT_REJECTED, LimitArgs, ProgramSources, RunArgs, count,
@@ -140,9 +141,8 @@ impl BuildRequest<'_> {
                 }
                 _ => line,
             };
-            let path = if self.debug && !name.starts_with('<') {
-                std::path::absolute(name)
-                    .map_or_else(|_| name.to_string(), |p| p.display().to_string())
+            let path = if self.debug {
+                debug_source_path(name)
             } else {
                 name.to_string()
             };

@@ -318,35 +318,92 @@ fn build_debug_reports_the_application_launch() {
         return;
     }
     let root = scratch("build-debug");
+    for directory in ["first", "second"] {
+        write(&root, &format!("{directory}/src/ticks.hgl"), TICKS);
+        write(&root, &format!("{directory}/src/backtest.hgl"), BACKTEST);
+    }
+    let ninja = NinjaTrace::new(&root);
+    let workspace = argument(&ninja.workspace);
+    for directory in ["first", "second"] {
+        let current = root.join(directory);
+        let result = success(
+            ninja
+                .hgl(&[
+                    "build",
+                    "src",
+                    "--debug",
+                    "--out",
+                    &workspace,
+                    "--format",
+                    "json",
+                    "--application",
+                    "demo.ticks.backtest",
+                ])
+                .current_dir(&current)
+                .output()
+                .unwrap(),
+        );
+        let launch: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(launch["version"], 1);
+        assert_eq!(launch["workspace"], workspace);
+        assert_eq!(launch["reused"], false, "{launch}");
+        let executable = launch["executable"].as_str().unwrap();
+        assert!(Path::new(executable).starts_with(&ninja.workspace));
+        assert!(Path::new(executable).is_file());
+        assert_eq!(launch["arguments"][1], "--debug-console");
+        assert!(!Path::new(launch["arguments"][0].as_str().unwrap()).exists());
+        let unit = fs::read_to_string(ninja.workspace.join("modules/mod-demo-ticks-backtest.cpp"))
+            .unwrap();
+        let original = current.join("src/backtest.hgl");
+        assert!(unit.contains(&format!("{original:?}")), "{unit}");
+        #[cfg(target_os = "linux")]
+        super::check_backtest_line_table(executable);
+    }
+    assert_eq!(ninja.calls(), 2);
+}
+
+/// A test build omits rejection owners (TST-13). An ordinary command
+/// checks them as source even if the test artifacts are stamped (TST-14).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ordinary_commands_check_the_sources_omitted_from_test_builds() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("build-with-rejections");
     write(&root, "src/ticks.hgl", TICKS);
     write(&root, "src/backtest.hgl", BACKTEST);
+    write(
+        &root,
+        "src/rejected.hgl",
+        concat!(
+            "module demo.rejected\n\n",
+            "# expect-error(type, \"type.mismatch\")\n",
+            "const fn wrong() -> i64 => true\n",
+        ),
+    );
     let ninja = NinjaTrace::new(&root);
     let sources = argument(&root.join("src"));
     let workspace = argument(&ninja.workspace);
-    let result = success(
-        ninja
-            .hgl(&[
-                "build",
-                &sources,
-                "--debug",
-                "--out",
-                &workspace,
-                "--format",
-                "json",
-                "--application",
-                "demo.ticks.backtest",
-            ])
-            .output()
-            .unwrap(),
-    );
-    let launch: Value = serde_json::from_str(&result).unwrap();
-    assert_eq!(launch["version"], 1);
-    assert_eq!(launch["workspace"], workspace);
-    let executable = launch["executable"].as_str().unwrap();
-    assert!(Path::new(executable).starts_with(&ninja.workspace));
-    assert!(Path::new(executable).is_file());
-    assert_eq!(launch["arguments"][1], "--debug-console");
-    assert!(!Path::new(launch["arguments"][0].as_str().unwrap()).exists());
-    #[cfg(target_os = "linux")]
-    super::check_backtest_line_table(executable);
+    let build_tests = || {
+        success(
+            ninja
+                .hgl(&["build", &sources, "--out", &workspace, "--tests"])
+                .output()
+                .unwrap(),
+        );
+        assert!(ninja.workspace.join(".hgl-built.json").is_file());
+    };
+    for ordinary in [
+        ["run", &sources, "--keep", &workspace],
+        ["build", &sources, "--out", &workspace],
+    ] {
+        build_tests();
+        let output = ninja.hgl(&ordinary).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout));
+        assert!(text(&output.stderr).contains("type.mismatch"));
+        assert!(!ninja.workspace.join(".hgl-built.json").exists());
+        assert!(!ninja.workspace.join("results").exists());
+    }
+    assert_eq!(ninja.calls(), 2);
 }
