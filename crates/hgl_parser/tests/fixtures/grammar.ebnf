@@ -85,7 +85,7 @@ constraint_expression = constraint_or ;
 constraint_or = constraint_and, { "||", constraint_and } ;
 constraint_and = constraint_term, { "&&", constraint_term } ;
 constraint_term = "!", constraint_term | "(", constraint_expression, ")" | constraint_relation | constraint_call | IDENTIFIER | ( "each" | "any" ), IDENTIFIER, "in", constraint_operand, "{", constraint_expression, "}" ;
-constraint_relation = constraint_operand, ( "==" | "in" | "is" ), constraint_operand ;
+constraint_relation = constraint_operand, ( "==" | "!=" | "in" | "is" ), constraint_operand ;
 constraint_operand = type | additive_expr | constraint_set | type_category ;
 type_category = "struct" | "enum" ;
 constraint_set = "{", constraint_operand, { ",", constraint_operand }, [ "," ], "}" ;

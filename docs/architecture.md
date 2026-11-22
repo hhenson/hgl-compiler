@@ -1410,11 +1410,10 @@ source and its conformance cases there is none. Core declares the public
 endpoint functions. The analyser recognises endpoint forms such as the
 `valid` and `modified` selectors and `scheduled()` in a node (TIME-9).
 A call to core's `is_active` follows ordinary name and argument binding.
-`types(Ts)` and
-`schemas(pack)` are forms of the language too (GEN-9, GEN-10), which no
-pass reads yet: neither name is reported. A program given with no module
-`core` has no prelude and is no whole program: its unbound names are
-listed in the analysed program and not reported.
+The resolver leaves the language forms `types(Ts)` and `schemas(pack)` to
+their own checks (GEN-9, GEN-10). Value checking rejects a borrowed schema
+view in an ordinary value context. A program without `core` has no prelude.
+Its unbound names are listed in the analysed program.
 
 ### Leaving declarations out
 
@@ -1770,7 +1769,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | `eval target(value: [1, _, 3])` (TST-5 to TST-8, CEVAL-1) | `::hglrt::testing::evaluate<T>` of an entry that wires core's `replay` instance of each trace written to its input, the target's wiring function, and core's `record` of the result under `"run.output"`; `run target(...)` in real time; for a result whose delta is no T, a node of the entry's own, `held_00_`, which keeps the result read whole at each publication (`::hglrt::testing::hold`, none where the read fails), so that a cell written whole is compared with it (TST-5); a target with no result `::hglrt::testing::run`. A value function's is its lifted node, given the replays as its inputs and each default the call leaves out as configuration: a struct `lifted_0F_O_` (the file and the offset of the call) of the test's namespace, ahead of the test |
 | `eval{start: s, length: l} call` (RUN-6, CRUN-2) | The run given `::hglrt::testing::Bounds{.start = s, .length = l}`, each field the configuration names (`lifecycle`); the configuration and then the call's arguments held first, in the order written, where more than one may fail (EXPR-2, EXPR-13). In an integration test that injects `run_config`, a field the eval does not name is the injected one's, `.end = run_config.end()` |
 | `inject run_config{length: 3s}` in an integration test (TST-17, RUN-6) | `const ::hglrt::RunConfig run_config = ::hglrt::RunConfig{::hglrt::RunConfig::Fields{.length = ...}};`: `hgl test` supplies nothing, and the defaults stand. `run_config.start` is `(run_config).start()`, a `std::optional` |
-| `let seen = eval target(...)` | `const auto seen = ...;`, the recording, read where a trace is |
+| `let seen = eval target(...)` | `const auto seen = ...;`, the recording. An eval given `seen` replays its recorded absolute timestamps and deltas (CEVAL-2, CEVAL-4) |
 | Application `demo.app` (UNIT-14) | In its module's unit, `::hglrt::application::Output application_()`, which runs its run statement once; `applications/app-demo-app.cpp`, an entry unit whose `main` is the library's host of that run, `::hglrt::application::main` (`apps`, `assemble`) |
 | Its `inject run_config{...}`, `inject global_state` and `put`s before its run statement (UNIT-14, RUN-6) | The function's first statements, in the order written: `const ::hglrt::RunConfig run_config = ...;` of the braces, which `hgl run` has written what starts it gives over, and a store of its own, `::hglrt::application::Store store_`, which the run gives its graph before the entry is wired |
 | `eval call`, `run call` (RUN-1, RUN-3) | `::hglrt::application::run<T>(store_, entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"`, as an eval's does; `run` of an entry with no result. The call's arguments are an eval's, held in the order written where that shows (EXPR-2); `bounds_` is each field of `run_config`, or `Bounds{}` where the application injects none. `eval` is a simulation, `run` in real time |
@@ -2421,6 +2420,7 @@ the job the way the design needs is dropped.
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |
+| KaTeX and Mermaid | `hgl_doc` | Vendored browser renderers for offline formulas and diagrams |
 | `tempfile` | `hgl_cli` | a file of a build written beside the one it replaces and renamed onto it, so that nothing reads half of it |
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 | `dirs` | `hgl_cli` | the user's cache directory, where the cpp target's builds are kept |

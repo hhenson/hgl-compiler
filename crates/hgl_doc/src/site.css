@@ -75,3 +75,28 @@ th { background: var(--panel); }
 th[scope="row"] code { white-space: nowrap; }
 td p { margin: 0 0 .5rem; }
 td p:last-child { margin-bottom: 0; }
+
+#declaration-search { max-width: 36rem; }
+#declaration-search label { display: block; }
+#declaration-query {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--rule);
+  border-radius: .2rem;
+  padding: .5rem .65rem;
+  color: var(--ink);
+  background: var(--panel);
+  font: inherit;
+}
+#declaration-query:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: .15rem;
+}
+#search-results:empty, #declaration-search [role="status"]:empty { margin: 0; }
+
+.formula-block, .diagram {
+  max-width: 100%;
+  overflow: auto;
+  margin: .75rem 0;
+}
+.diagram svg { display: block; max-width: 100%; height: auto; }

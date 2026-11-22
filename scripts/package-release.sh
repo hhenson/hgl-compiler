@@ -159,6 +159,9 @@ cargo build --locked --release --package hgl_cli --target "$target" \
 cp -- "$cargo_target/$target/release/hgl" "$bundle/bin/hgl"
 cp -- LICENSE "$bundle/licenses/hgl-compiler.txt"
 cp -- spec/hgl_core/LICENSE "$bundle/licenses/hgl-core.txt"
+cp -- crates/hgl_doc/vendor/katex/LICENSE "$bundle/licenses/katex.txt"
+cp -- crates/hgl_doc/vendor/mermaid/LICENSE "$bundle/licenses/mermaid.txt"
+cp -- crates/hgl_doc/vendor/mermaid/THIRD-PARTY-NOTICES.txt "$bundle/licenses/mermaid-third-party.txt"
 python3 scripts/release-bundle.py licenses --target "$target" "$bundle/licenses"
 audit=(--forbid "$root" --forbid "$work" --forbid "$HOME" --forbid "$cargo_target")
 if [[ -n $native_cache ]]; then

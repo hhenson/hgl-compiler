@@ -34,8 +34,18 @@ impl<'a> Typer<'a> {
     /// of the construct around it, which may read it again
     /// ([`Typer::begin_construct`]): so it is counted while it is read.
     pub(super) fn expression(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> Expr {
+        self.expression_in_flow(node, expected, true)
+    }
+
+    /// Read an expression whose control-flow context may discard its result.
+    pub(super) fn expression_in_flow(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        used: bool,
+    ) -> Expr {
         self.expressing += 1;
-        let value = self.expression_read(node, expected);
+        let value = self.expression_read(node, expected, used);
         self.expressing -= 1;
         match expected {
             Some(expected) => self.endpoint_read_form(value, expected),
@@ -44,7 +54,7 @@ impl<'a> Typer<'a> {
     }
 
     /// [`Typer::expression`], counted.
-    fn expression_read(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> Expr {
+    fn expression_read(&mut self, node: &SyntaxNode, expected: Option<&Type>, used: bool) -> Expr {
         // TIME-9: a place that expects an endpoint is given one, and no
         // value: the argument of an `endpoint<T>` parameter.
         if let Some(Type::Endpoint(_)) = expected {
@@ -92,7 +102,7 @@ impl<'a> Typer<'a> {
             SyntaxKind::ListComprehension => self.list_comprehension(node, expected),
             SyntaxKind::UnaryExpr => self.unary(node, expected),
             SyntaxKind::BinaryExpr => self.binary(node, expected),
-            SyntaxKind::CallExpr => self.call(node, expected),
+            SyntaxKind::CallExpr => self.call(node, expected, used),
             SyntaxKind::TypedConstructor => self.typed_constructor(node, expected),
             SyntaxKind::DeltaConstructor => self.delta_constructor(node),
             SyntaxKind::UndecidedConstructor => {

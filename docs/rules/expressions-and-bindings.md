@@ -168,18 +168,19 @@ transpiler: done
 
 ## EXPR-14
 
-analyser: done
+analyser: partial
 
 - In a graph an entry of a symbol's configuration given to a value candidate, which the graph lifts, is given no connection (`connection.as_constant`); a temporal candidate's parameter takes one, and so does a call by name (FN-6)
 - An instance checks a brace entry again if its category was unsettled at declaration (GEN-7).
 - In a value function and a hook the entry is a value of the invocation
+- Applying the selected declaration's parameter kind to both call spellings is planned in #553.
 
 transpiler: partial
 
 - Holds scalar options such as numeric tolerances and zoned comparison's `utc` as
   lifted-call configuration. Value and hook calls evaluate the same arguments at
   invocation.
-- Left: Explicit temporal configuration parameters await #363.
+- Using a connected parenthesized option as a lifted input in either spelling is planned in #553.
 
 ## EXPR-15
 

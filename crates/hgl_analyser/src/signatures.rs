@@ -399,6 +399,7 @@ fn constant_failures(program: &Program, diagnostics: &mut Diagnostics) {
                 file,
                 binding: &binding,
                 parameter: &|_| None,
+                arguments: &[],
                 constants: &constants,
             };
             if !crate::constant::fails_to_evaluate(&scope, (index, position)) {
@@ -452,6 +453,7 @@ fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
                 file,
                 binding: &binding,
                 parameter: &|_| None,
+                arguments: &[],
                 constants: &constants,
             };
             // What is wrong with the constant `node` as a value of `ty`,

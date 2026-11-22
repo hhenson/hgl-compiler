@@ -61,7 +61,7 @@ use crate::codes;
 use crate::hir::{BinaryOperator, CalendarDate, ClockTime, Temporal, Tenor, UnaryOperator, Value};
 use crate::program::{Binding, DeclarationKind, LocalKind, Program};
 use crate::syntax::{name_token, tokens};
-use crate::types::{ConstantValue, Detail, EnumOf, MemberOf, NamedKind, Scalar, Type};
+use crate::types::{Argument, ConstantValue, Detail, EnumOf, MemberOf, NamedKind, Scalar, Type};
 
 // ---- What a reading is given ----
 
@@ -81,6 +81,8 @@ pub(crate) struct Scope<'s> {
     /// of the declaration the constant is written in. `None` where it is
     /// not known.
     pub(crate) parameter: &'s dyn Fn(Location) -> Option<Type>,
+    /// The arguments already given to the generic parameters of this declaration.
+    pub(crate) arguments: &'s [(Location, &'s Argument)],
     /// The constants of modules followed so far.
     pub(crate) constants: &'s Constants,
 }
@@ -162,6 +164,11 @@ impl Typed {
     /// Its type, where that is known.
     pub(crate) fn ty(&self) -> Option<&Type> {
         self.ty.as_ref()
+    }
+
+    /// True for a known evaluation failure (ERR-9).
+    pub(crate) fn evaluation_failed(&self) -> bool {
+        self.failed
     }
 
     /// A constant that already has the type of its declaring place.
@@ -769,13 +776,22 @@ pub(crate) fn named(name: &SyntaxToken, scope: &Scope) -> Result<Typed, Fault> {
         Binding::Local {
             at,
             kind: LocalKind::GenericParameter | LocalKind::PackKey,
-        } => Ok(Typed::of(
-            ConstantValue::Parameter {
+        } => {
+            let given = scope.arguments.iter().find_map(|(parameter, argument)| {
+                if parameter == at
+                    && let Argument::Constant(given) = argument
+                {
+                    Some(given.value.clone())
+                } else {
+                    None
+                }
+            });
+            let value = given.unwrap_or_else(|| ConstantValue::Parameter {
                 name: name.text().to_string(),
                 at: *at,
-            },
-            (scope.parameter)(*at),
-        )),
+            });
+            Ok(Typed::of(value, (scope.parameter)(*at)))
+        }
         Binding::Local { .. } => Err(Fault::NotConstant),
         // "a constant (UNIT-13)".
         Binding::Declarations {
@@ -927,6 +943,7 @@ fn constant_expression(
         file,
         binding: scope.binding,
         parameter: &|_| None,
+        arguments: &[],
         constants: scope.constants,
     };
     let Some(expression) = &expression else {
@@ -996,6 +1013,7 @@ pub(crate) fn written_type<'s>(
                         file,
                         binding: &binding,
                         parameter: &|_| None,
+                        arguments: &[],
                         constants,
                     };
                     let value = read(&size, Some(&Type::Scalar(Scalar::I64)), &scope)
@@ -1656,8 +1674,15 @@ fn joined(
         ) if exact(&left.value) && exact(&right.value) && exact(&value) => Open::Integer,
         _ => Open::No,
     };
+    // For a short-circuiting operator with an unresolved left value,
+    // failure on the right is conditional until the left value is known.
+    let evaluates_right = match operator {
+        BinaryOperator::And => matches!(left.value, ConstantValue::Bool(true)),
+        BinaryOperator::Or => matches!(left.value, ConstantValue::Bool(false)),
+        _ => true,
+    };
     let failed = left.failed
-        || right.failed
+        || (evaluates_right && right.failed)
         || (matches!(value, ConstantValue::Unevaluated)
             && fails(operator, &left.value, &right.value));
     Ok(Typed {

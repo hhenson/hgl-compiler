@@ -168,7 +168,7 @@ impl<'a> Typer<'a> {
             SyntaxKind::Block => self.block(node, expected, used),
             SyntaxKind::IfExpr => self.conditional(node, expected, used),
             _ => {
-                let value = self.expression(node, expected);
+                let value = self.expression_in_flow(node, expected, used);
                 let ty = value.ty.clone();
                 (value, Outcome::Value(ty))
             }
