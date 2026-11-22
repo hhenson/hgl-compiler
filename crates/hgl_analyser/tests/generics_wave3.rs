@@ -3015,6 +3015,7 @@ enum Side { buy, sell }
 struct Pair<U> {
     first: U?
     extra: result<U, str>
+    inline: result<U, str>
 }
 fn through<T>(const input: T) -> Side {
     let chosen = if predicate(input) { Side.buy }
@@ -3022,7 +3023,7 @@ fn through<T>(const input: T) -> Side {
     let pair = Pair(first: chosen, extra: ok({
         let copy = supplied
         copy
-    }))
+    }), inline: ok(.sell))
     return pair.first
 }
 fn ordinary() -> Side => through("s")"#,
@@ -3047,6 +3048,14 @@ fn ordinary() -> Side => through("s")"#,
         panic!("the extra field is a success");
     };
     assert_eq!(payload.ty.to_string(), "Side");
+    let ExprKind::Tagged {
+        success: true,
+        payload: inline,
+    } = &arguments[2].value.kind
+    else {
+        panic!("the inline field is a success");
+    };
+    assert_eq!(inline.ty.to_string(), "Side");
     let ExprKind::Block {
         statements,
         value: Some(tail),
