@@ -106,7 +106,7 @@ fn write_site(directory: &Path, files: Vec<hgl_doc::SiteFile>) -> io::Result<()>
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(destination, file.text)?;
+        fs::write(destination, file.contents)?;
     }
     Ok(())
 }
