@@ -870,15 +870,19 @@ impl Resolver<'_> {
         } else {
             None
         };
-        if predicate.is_some()
-            && node.ancestors().any(|parent| {
-                matches!(
-                    parent.kind(),
-                    SyntaxKind::RequiresClause | SyntaxKind::GenericParam
-                )
-            })
-        {
-            return None;
+        if predicate.is_some() {
+            if node
+                .ancestors()
+                .any(|parent| parent.kind() == SyntaxKind::RequiresClause)
+            {
+                return self.lookup_or_form(&name, true);
+            }
+            if node
+                .ancestors()
+                .any(|parent| parent.kind() == SyntaxKind::GenericParam)
+            {
+                return None;
+            }
         }
         self.lookup(&name)
     }
@@ -895,6 +899,12 @@ impl Resolver<'_> {
 
     /// UNIT-10: resolves a name to the one binding in scope for it.
     fn lookup(&mut self, token: &SyntaxToken) -> Option<Binding> {
+        self.lookup_or_form(token, false)
+    }
+
+    /// A contextual law form is used only after ordinary bindings have
+    /// had their turn (GEN-16, GEN-18).
+    fn lookup_or_form(&mut self, token: &SyntaxToken, fallback_form: bool) -> Option<Binding> {
         let name = token.text();
         let at = self.at(token);
 
@@ -1074,6 +1084,10 @@ impl Resolver<'_> {
         // No declaration binds one, the prelude's included, so its name
         // is not one the prelude is waited on for.
         if EndpointOperation::language_form(name).is_some() {
+            return None;
+        }
+
+        if fallback_form {
             return None;
         }
 

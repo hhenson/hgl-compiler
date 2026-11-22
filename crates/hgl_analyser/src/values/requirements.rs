@@ -586,6 +586,49 @@ impl<'a> Typer<'a> {
         self.diagnostics.emit(report);
     }
 
+    /// GEN-10, ERR-9: an existential known to be false rejects the call
+    /// before its missing binding is reported as an unresolved result.
+    pub(super) fn pack_requires_rejects(
+        &mut self,
+        at: Location,
+        callee: (usize, usize),
+        generics: &[Option<Argument>],
+        type_packs: &[hir::TypePackArgument],
+    ) -> bool {
+        if type_packs.is_empty()
+            || type_packs
+                .iter()
+                .any(|pack| pack.forwarded_from.is_some() || pack.infer_from_arguments)
+        {
+            return false;
+        }
+        let Some((_, condition)) = required(self.program, callee) else {
+            return false;
+        };
+        let mut conjuncts = Vec::new();
+        super::quantifiers::positive(&condition, &mut conjuncts);
+        if !conjuncts
+            .iter()
+            .any(|node| node.kind() == SyntaxKind::ConstraintAny)
+        {
+            return false;
+        }
+        let generics: Vec<_> = generics
+            .iter()
+            .map(|argument| argument.clone().unwrap_or(Argument::Type(Type::Unknown)))
+            .collect();
+        let Some((condition, Some(false), _)) =
+            self.requires_told_with_packs(callee, &generics, type_packs, None)
+        else {
+            return false;
+        };
+        if !self.unmet_reported(at) {
+            self.diagnostics
+                .emit(unmet(self.program, callee, at, &condition));
+        }
+        true
+    }
+
     /// Each member of `combination`, by the generic parameter it is of:
     /// `` `T` = `str` ``.
     fn members_named(&self, combination: &[(Location, Argument)]) -> Vec<String> {
@@ -811,17 +854,14 @@ impl<'a> Typer<'a> {
         let Detail::Callable(signature) = &self.program.modules[callee.0].details[callee.1] else {
             return false;
         };
-        let laws = crate::laws::verdicts(
-            &|law, expression| self.law_value(law, expression),
-            signature,
-            &condition,
-            &|parameter| {
+        let laws = crate::laws::verdicts(&condition, &|node| {
+            self.law_call(callee, signature, node, &|parameter| {
                 arguments
                     .iter()
                     .find(|argument| argument.parameter == Some(parameter))
                     .map(|argument| &argument.value)
-            },
-        );
+            })
+        });
         if laws.is_empty() {
             return false;
         }
@@ -3108,7 +3148,12 @@ fn compared(left: &ConstantValue, right: &ConstantValue, of: &Condition) -> Opti
 /// it is not told for a constant in either that is not worked out:
 /// `FBox<C>` beside `FBox<2.0>`, `C` computed by a call.
 fn typed_alike(left: &Type, right: &Type, of: &Condition) -> Option<bool> {
-    let told = same_type(left, right);
+    // ERR-9's unknown type agrees with any type for recovery. That
+    // agreement cannot prove a requirement; a known mismatch still can.
+    let told = match same_type(left, right) {
+        Some(true) if !whole(left) || !whole(right) => None,
+        answer => answer,
+    };
     let unworked_in = |ty: &Type| ty.any_part(&|_| false, &|constant| unworked(&constant.value));
     if told.is_none() && (unworked_in(left) || unworked_in(right)) {
         of.unvalued.set(true);
@@ -3218,15 +3263,25 @@ fn requires_holds(
             .find(|written| written.at.file == file && written.at.span.start == start)?;
         let mut map = map.clone();
         map.extend(keys.iter().map(|key| (key.at, &key.argument)));
+        // GEN-10: a known outer shape can rule out a quantified entry
+        // without resolving every nested generic. same_type keeps a
+        // possible match unknown; this check never contributes a binding.
+        let projected = |ty| {
+            if keys.is_empty() {
+                told(placed(ty, &own))
+            } else {
+                Some(ty)
+            }
+        };
         if !matches!(read.ty, Type::PackMember { .. })
             && !read
                 .ty
                 .any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
         {
-            return told(placed(substitute_within(&read.ty, &map), &own));
+            return projected(substitute_within(&read.ty, &map));
         }
         match pack_types.project(&read.ty, &map) {
-            Ok(ty) => told(placed(ty, &own)),
+            Ok(ty) => projected(ty),
             Err(fault) => {
                 if let Some(target) = place.member_fault {
                     target.borrow_mut().get_or_insert(fault);

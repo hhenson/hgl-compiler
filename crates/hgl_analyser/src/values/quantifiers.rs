@@ -105,7 +105,8 @@ pub(super) fn bind(
     }
 }
 
-fn positive(node: &SyntaxNode, conjuncts: &mut Vec<SyntaxNode>) {
+/// GEN-3: only positive conjuncts may contribute an inferred binding.
+pub(super) fn positive(node: &SyntaxNode, conjuncts: &mut Vec<SyntaxNode>) {
     match node.kind() {
         SyntaxKind::ConstraintParen => {
             if let Some(inside) = node.children().next() {
@@ -181,9 +182,12 @@ fn equality(
         return false;
     }
     let mut trial = found.to_vec();
-    if !names_parameter(&left) {
+    // GEN-3: an unresolved const generic inside a type is not known
+    // data either, even though names_parameter only finds type parameters.
+    let known = |ty: &Type| !names_parameter(ty) && !super::inference::mentions(ty, &unresolved);
+    if known(&left) {
         infer(&right, &left, generics, &mut trial);
-    } else if !names_parameter(&right) {
+    } else if known(&right) {
         infer(&left, &right, generics, &mut trial);
     } else {
         return false;
