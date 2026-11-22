@@ -615,7 +615,19 @@ fn deferred_result_is_present<T>(const value: T, const passed: bool) -> bool {
     return (null) != chosen
 }
 
+# ERR-15: a member takes a result's inferred success type.
+struct ResultText { text: str }
+
+const fn boxed_text<U>(value: U) -> result<U, error> => ok(value)
+
+fn deferred_result_member<T>(const value: T) -> str {
+    let chosen = if live_helper(value) > 0 { ResultText(text: "projected") }
+    let outcome = boxed_text(chosen)
+    return outcome.text
+}
+
 test deferred_result_variants {
+    assert eval deferred_result_member(value: "s") == ["projected"]
     assert eval deferred_result_projection(value: "s", passed: true) == [7]
     assert eval deferred_result_projection(value: "s", passed: false) == [8]
     assert eval deferred_result_is_null(value: "s", passed: true) == [false]

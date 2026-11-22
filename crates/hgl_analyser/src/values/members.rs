@@ -56,8 +56,14 @@ impl<'a> Typer<'a> {
         let at = Location::new(self.file, name.span());
         let variant_proven = self.payload_proven(&base, name.text());
         if self.graph
-            && matches!(not_null(Some(&base.ty)), Some(Type::Unknown))
             && !matches!(base.kind, ExprKind::Unread)
+            && not_null(Some(&base.ty)).is_some_and(|ty| match ty {
+                Type::Unknown => true,
+                // ERR-15 cannot take the success until the result
+                // settles. Explicit payloads still use ERR-3 here.
+                Type::Result { .. } if !matches!(name.text(), "value" | "error") => !whole(ty),
+                _ => false,
+            })
         {
             return (
                 ExprKind::DeferredMember {

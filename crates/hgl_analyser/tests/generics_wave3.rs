@@ -987,6 +987,38 @@ fn graph_instances_propagate_settled_atomic_wrappers() {
     assert_eq!(value.ty, instance.locals[2].ty);
 }
 
+/// ERR-15 and EXPR-7: a result can take its struct type from a
+/// deferred call. The member keeps the implicit success read.
+#[test]
+fn graph_instances_read_members_of_settled_results() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "struct Item { text: str }\n",
+        "const fn boxed<U>(value: U) -> result<U, error> => ok(value)\n",
+        "fn wrapper<T>(const input: T) -> str {\n",
+        "    let chosen = if predicate(input) { Item(text: \"text\") }\n",
+        "    let outcome = boxed(chosen)\n",
+        "    return outcome.text\n",
+        "}\n",
+        "fn admitted() -> str => wrapper(1)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("the graph returns the projected field");
+    };
+    let ExprKind::Field { base, .. } = &value.kind else {
+        panic!("the projection survives settlement: {:?}", value.kind);
+    };
+    assert!(matches!(&base.kind, ExprKind::Raised { .. }));
+    assert_eq!(value.ty.to_string(), "str");
+}
+
 /// TYPE-9 and EXPR-7: a field uses its atomic base's settled type.
 /// Lists remain atomic and scalar fields normalize to their own type.
 #[test]
