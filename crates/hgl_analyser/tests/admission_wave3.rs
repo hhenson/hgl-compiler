@@ -170,6 +170,44 @@ fn scheduled_takes_no_generic_argument() {
     );
 }
 
+/// UNIT-10 and TIME-9: the wake selector keeps its meaning when a
+/// declaration or a local binds the same name.
+#[test]
+fn scheduled_calls_keep_their_meaning_under_a_binding() {
+    let declared = module(concat!(
+        "const fn scheduled() -> bool => true\n",
+        "fn untimed(value: i64) -> i64 {\n",
+        "    when scheduled() { return value }\n",
+        "}\n",
+        "const fn typed() -> bool => scheduled<i64>()\n",
+        "fn lifecycle() -> bool {\n",
+        "    inject scheduler\n",
+        "    start { let due = scheduled() }\n",
+        "    when scheduled() { return true }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        declared.summary(),
+        [
+            "m.hgl:4:10 injectable/inject.no_scheduler TIME-9",
+            "m.hgl:6:29 phase/scheduled.outside_node FN-9",
+            "m.hgl:6:29 type/generic.argument_count GEN-8",
+            "m.hgl:9:23 phase/scheduled.lifecycle TIME-9",
+        ]
+    );
+
+    let parameter = module(concat!(
+        "const fn read(scheduled: bool) -> bool => scheduled\n",
+        "fn untimed(scheduled: bool) -> bool {\n",
+        "    when { return scheduled() }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        parameter.summary(),
+        ["m.hgl:4:19 injectable/inject.no_scheduler TIME-9"]
+    );
+}
+
 /// FN-14: "An anonymous function's scope is the scope around it plus its
 /// parameters". TIME-9: "A call gives an `endpoint<T>` parameter a
 /// temporal input of the enclosing node by its name, a child of one ...
