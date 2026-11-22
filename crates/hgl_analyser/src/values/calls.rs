@@ -494,6 +494,7 @@ impl<'a> Typer<'a> {
             callee: Callee::Unread,
             arguments,
             form: Form::Named,
+            braced: Vec::new(),
             lifted: false,
         };
         (kind, Type::Unknown)
@@ -742,6 +743,7 @@ impl<'a> Typer<'a> {
                 callee,
                 arguments,
                 form: Form::Named,
+                braced: Vec::new(),
                 lifted: false,
             };
             self.finished_call(&kind, evaluating);
@@ -963,6 +965,7 @@ impl<'a> Typer<'a> {
             callee,
             arguments,
             form: Form::Named,
+            braced: Vec::new(),
             lifted: false,
         };
         self.finished_call(&kind, evaluating);

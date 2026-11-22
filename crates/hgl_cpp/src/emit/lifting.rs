@@ -567,6 +567,7 @@ impl Emitter<'_> {
                 callee: callee.clone(),
                 arguments: synthetic,
                 form: *form,
+                braced: Vec::new(),
                 lifted: false,
             },
             ty: value.ty.clone(),

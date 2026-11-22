@@ -166,6 +166,7 @@ transpiler: done
 analyser: done
 
 - In a graph an entry of a symbol's configuration given to a value candidate, which the graph lifts, is given no connection (`connection.as_constant`); a temporal candidate's parameter takes one, and so does a call by name (FN-6)
+- An instance checks a brace entry again if its category was unsettled at declaration (GEN-7).
 - In a value function and a hook the entry is a value of the invocation
 
 transpiler: partial

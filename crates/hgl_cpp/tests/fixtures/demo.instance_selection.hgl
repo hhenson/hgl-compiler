@@ -236,6 +236,14 @@ fn deferred_configured_comparison<T>(const value: T) -> bool {
     return x =={rel: 0.0, abs: 0.1} 2.55
 }
 
+# EXPR-14: the specialized scalar option is evaluated while wiring.
+operator tolerance<T>(value: T) -> f64
+impl const fn tolerance<T>(value: T) -> f64 => 0.1
+impl fn tolerance(value: i64) -> f64 { when { return 0.2 } }
+
+fn ordinary_tolerance<T>(const value: T, a: f64, b: f64) -> bool =>
+    a =={abs: tolerance(value)} b
+
 # GEN-8: a named generic option can forward an instance constant.
 fn deferred_configured_division<T, const Policy: ZeroPolicy = .ieee>(const value: T) -> f64 {
     let x = if live_helper(value) > 0 { 2.5 }
@@ -323,6 +331,7 @@ fn selected_case<T>(const value: T) -> i64 {
 
 test an_instance_settles_its_graph_conditions {
     assert eval deferred_configured_comparison(value: 3) == [true]
+    assert eval ordinary_tolerance(value: "s", a: [2.5, 2.5], b: [2.55, 2.7]) == [true, false]
     assert eval deferred_configured_division(value: 3) == [1.25]
     assert eval deferred_named_add(value: 3) == [2]
     assert eval deferred_named_option(value: 3) == [6.5]

@@ -1433,6 +1433,7 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            braced: Vec::new(),
             lifted: false,
         };
         (kind, result.unwrap_or(Type::Unknown))

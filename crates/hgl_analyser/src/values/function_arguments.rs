@@ -428,6 +428,7 @@ impl Typer<'_> {
                 },
                 arguments,
                 form: Form::Named,
+                braced: Vec::new(),
                 lifted: false,
             },
             template.result.clone().unwrap_or(Type::Unknown),

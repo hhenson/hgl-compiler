@@ -689,6 +689,9 @@ pub enum ExprKind {
         arguments: Vec<Argument>,
         /// How the call is written.
         form: Form,
+        /// Values explicitly supplied in braces (EXPR-10), by source
+        /// location, for the instance's wiring-time check (EXPR-14).
+        braced: Vec<Location>,
         /// True where the call is lifted (FN-6: "A selected value
         /// helper, a `const fn` or a value candidate of an operator,
         /// with temporal arguments in composition is lifted"): it is

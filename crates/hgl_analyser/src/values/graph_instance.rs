@@ -23,14 +23,14 @@ use crate::hir::{
     self, BinaryOperator, Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut,
     Stmt, UnaryOperator, Value, ValueCategory,
 };
-use crate::program::{Program, Role};
+use crate::program::{OperatorRef, Program, Role};
 use crate::types::{Argument, Detail, Signature, Type};
 
 /// Source checks awaiting concrete types and categories in a graph instance.
 pub(crate) struct GraphDestinations {
     expressions: HashSet<Location>,
     captures: HashSet<Location>,
-    store_arguments: HashSet<Location>,
+    unsettled_arguments: HashSet<Location>,
     tuple_indices: HashSet<Location>,
     replay_source: bool,
 }
@@ -41,7 +41,7 @@ impl GraphDestinations {
         let mut expressions = HashSet::new();
         let mut replay_source = false;
         let mut captures = HashSet::new();
-        let mut store_arguments = HashSet::new();
+        let mut unsettled_arguments = HashSet::new();
         let mut tuple_indices = HashSet::new();
         hir::walk_statements(&body.statements, &mut |value| {
             if !whole(&value.ty) {
@@ -61,7 +61,7 @@ impl GraphDestinations {
                 captures.insert(call.at);
             }
             if let ExprKind::Call { arguments, .. } = &value.kind {
-                store_arguments.extend(
+                unsettled_arguments.extend(
                     arguments
                         .iter()
                         .map(|argument| &argument.value)
@@ -82,7 +82,7 @@ impl GraphDestinations {
         Self {
             expressions,
             captures,
-            store_arguments,
+            unsettled_arguments,
             tuple_indices,
             replay_source,
         }
@@ -160,18 +160,19 @@ impl GraphDestinations {
             });
             record(program, body, true);
         }
-        if !self.captures.is_empty() || !self.store_arguments.is_empty() {
+        if !self.captures.is_empty() || !self.unsettled_arguments.is_empty() {
             hir::walk_statements(&body.statements, &mut |value| match &value.kind {
                 ExprKind::Capture(call) if self.captures.contains(&call.at) => {
                     typer.check_capture_phase(call, call.category, None);
                 }
-                kind @ ExprKind::Call { .. } if !self.store_arguments.is_empty() => {
+                kind @ ExprKind::Call { .. } if !self.unsettled_arguments.is_empty() => {
                     // FN-9: use the graph's injected locals and typed
                     // aliases to recognize the same store as source typing.
                     typer.store_call(kind, |_, value| {
-                        self.store_arguments.contains(&value.at)
+                        self.unsettled_arguments.contains(&value.at)
                             && value.category == ValueCategory::Connection
                     });
+                    self.check_configuration(&mut typer, kind);
                 }
                 _ => {}
             });
@@ -181,6 +182,56 @@ impl GraphDestinations {
             &body.statements,
             owner.graph_return_checks[declaration].as_ref(),
         );
+    }
+
+    /// EXPR-14: only an actual brace entry whose category was unknown
+    /// at source can require another check against the selected parameter.
+    fn check_configuration(&self, typer: &mut Typer<'_>, kind: &ExprKind) {
+        let ExprKind::Call {
+            callee:
+                Callee::Candidate {
+                    operator,
+                    module,
+                    declaration,
+                    ..
+                },
+            arguments,
+            form,
+            braced,
+            ..
+        } = kind
+        else {
+            return;
+        };
+        if braced.is_empty() {
+            return;
+        }
+        let Some(Detail::Callable(signature)) =
+            typer.program.modules[*module].details.get(*declaration)
+        else {
+            return;
+        };
+        let operator = OperatorRef {
+            module: operator.0,
+            declaration: operator.1,
+        };
+        for argument in arguments {
+            let value = &argument.value;
+            if self.unsettled_arguments.contains(&value.at)
+                && braced.contains(&value.at)
+                && let Some(parameter) = argument
+                    .parameter
+                    .and_then(|slot| signature.parameters.get(slot))
+            {
+                typer.configuration_input(
+                    (operator, *form),
+                    (*module, *declaration),
+                    parameter,
+                    value,
+                    value.category,
+                );
+            }
+        }
     }
 
     fn fit_destination(&self, typer: &mut Typer<'_>, node: NodeMut<'_>) {

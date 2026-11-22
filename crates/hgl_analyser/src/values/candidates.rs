@@ -567,6 +567,7 @@ impl<'a> Typer<'a> {
                 callee: Callee::Unread,
                 arguments,
                 form,
+                braced: Vec::new(),
                 lifted: false,
             };
             return (kind, Type::Unknown);
@@ -597,24 +598,7 @@ impl<'a> Typer<'a> {
                 ));
             }
         }
-        // EXPR-14: a symbol's configuration, `{abs: tolerance}`, given
-        // to a value candidate in a graph binds where the graph is
-        // built. The entries given by name to a symbol are its
-        // configuration (EXPR-10); its operands are given in position.
-        let lifted = self.graph
-            && matches!(
-                program.modules[module].declarations[declaration]
-                    .kind
-                    .candidate(),
-                Some((Role::Value, _))
-            );
-        let operator_name = match form {
-            Form::Named => program.modules[operator.module].declarations[operator.declaration]
-                .name
-                .as_str(),
-            Form::Binary(operator) => operator.symbol(),
-            Form::Unary(operator) => operator.symbol(),
-        };
+        let mut braced = Vec::new();
         // GEN-7: when an instance has to select again, keep the input
         // expressions before the provisional candidate fits them. In
         // particular, an implicit result read here must not decide the
@@ -634,7 +618,7 @@ impl<'a> Typer<'a> {
                 let index = bound.parameter()?;
                 let parameter = &signature.parameters[index];
                 let place = format!("the parameter `{}`", parameter.name);
-                let braced = given.key.braced();
+                let from_braces = given.key.braced();
                 let pack = match bound {
                     Place::Pack(_, position) => Some(match &given.key {
                         Key::Position(_) => hir::PackKey::Position(position),
@@ -661,10 +645,15 @@ impl<'a> Typer<'a> {
                 } else {
                     self.fit(input, ty, &place)
                 };
-                // A `const` parameter given a connection is reported as
-                // one where the call is read (FN-3).
-                if lifted && !parameter.constant && braced {
-                    self.configuration_input(operator_name, &parameter.name, &value);
+                if from_braces {
+                    braced.push(value.at);
+                    self.configuration_input(
+                        (operator, form),
+                        (module, declaration),
+                        parameter,
+                        &value,
+                        self.category(&value),
+                    );
                 }
                 Some(hir::Argument {
                     parameter: Some(index),
@@ -686,6 +675,7 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            braced,
             lifted: false,
         };
         self.finished_call(&kind, false);
@@ -693,6 +683,12 @@ impl<'a> Typer<'a> {
             if self.graph {
                 self.constants_of(&kind);
             }
+            let braced = selecting
+                .arguments
+                .iter()
+                .filter(|given| given.key.braced())
+                .map(|given| given.value.at)
+                .collect();
             let arguments = selecting
                 .arguments
                 .iter()
@@ -727,6 +723,7 @@ impl<'a> Typer<'a> {
                 },
                 form,
                 arguments,
+                braced,
                 lifted: false,
             }
         } else {
