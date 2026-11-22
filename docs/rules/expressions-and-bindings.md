@@ -169,7 +169,7 @@ transpiler: done
 
 analyser: done
 
-- In a graph an entry of a symbol's configuration given to a value candidate, which the graph lifts, is given no connection (`connection.as_constant`); a temporal candidate's parameter takes one, and so does a call by name (FN-6)
+- Scalar symbol configuration, such as core's numeric tolerances (NUM-11), rejects a connection (`connection.as_constant`). A temporal candidate can take a connection. Core's date and tenor operators also take a connected `calendar` through the same parameter in the symbolic and named forms (TEN-5, EXPR-10, FN-6).
 - An instance checks a brace entry again if its category was unsettled at declaration (GEN-7).
 - In a value function and a hook the entry is a value of the invocation
 

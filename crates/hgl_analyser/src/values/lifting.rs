@@ -20,7 +20,7 @@ use crate::hir::{
     Value, ValueCategory, walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::{DeclarationKind, OperatorRef, Program, Role};
-use crate::types::{Argument, Detail, Parameter, Type};
+use crate::types::{Argument, Detail, Parameter, Scalar, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -84,10 +84,9 @@ impl<'a> Typer<'a> {
     /// construction in temporal composition ... Configuration must not
     /// silently introduce a temporal input: time-varying temporal
     /// configuration requires a signature explicitly admitting that
-    /// input." A value candidate's parameter is a scalar one: a
-    /// connection there would be an input the configuration brought
-    /// in. A temporal candidate's parameter admits one, and a call by
-    /// name, `eq_(a, b, abs: tolerance)`, gives it explicitly (FN-6).
+    /// input." A temporal candidate's parameter admits one. Core also
+    /// specifies a live calendar input for date and tenor arithmetic
+    /// (TEN-5), even when the selected candidate is a value helper.
     /// TIME-2: "Composition describes a typed graph without reading
     /// live payloads." So the entry is given what is known where the
     /// graph is built (`connection.as_constant`).
@@ -108,6 +107,28 @@ impl<'a> Typer<'a> {
                     .candidate(),
                 Some((Role::Value, _))
             )
+        {
+            return;
+        }
+        let candidate = &self.program.modules[module];
+        let public = &self.program.modules[operator.module];
+        // TEN-5: a date is worked out again when its calendar changes.
+        // The same core option is an input in either spelling (EXPR-10, FN-6).
+        if parameter.name == "calendar"
+            && public.path == Program::CORE
+            && candidate.path == Program::CORE
+            && matches!(
+                public.declarations[operator.declaration].name.as_str(),
+                "add_" | "sub_"
+            )
+            && let Detail::Callable(signature) = &candidate.details[declaration]
+            && signature
+                .parameters
+                .iter()
+                .filter(|parameter| !parameter.configuration)
+                .take(2)
+                .map(|parameter| &parameter.ty)
+                .eq([&Type::Scalar(Scalar::Date), &Type::Scalar(Scalar::Tenor)])
         {
             return;
         }

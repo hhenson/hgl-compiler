@@ -117,6 +117,45 @@ test symbol_configuration {
     assert order == 3
 }
 
+struct Holidays { closed: date }
+
+impl const fn business_day(calendar: Holidays, day: date) -> bool =>
+    day != calendar.closed && business_day(Weekdays(), day)
+
+fn cal(closed: date) -> Holidays {
+    when { return Holidays(closed: closed) }
+}
+
+# TEN-5, EXPR-10, EXPR-14 and FN-6: the calendar is the only input.
+# Changing it updates the result of either spelling of the call.
+fn settles(const trade: date, closed: date) -> date =>
+    trade +{calendar: cal(closed)} 2B
+
+fn settles_named(const trade: date, closed: date) -> date =>
+    add_(trade, 2B, calendar: cal(closed))
+
+fn trades(const settlement: date, closed: date) -> date =>
+    settlement -{calendar: cal(closed)} 2B
+
+fn trades_named(const settlement: date, closed: date) -> date =>
+    sub_(settlement, 2B, calendar: cal(closed))
+
+test connected_calendar_for_addition {
+    assert eval settles(trade: @2026-01-02, closed: []) == []
+    assert eval settles(trade: @2026-01-02, closed: [@2026-01-07, @2026-01-05]) ==
+        [@2026-01-06, @2026-01-07]
+    assert eval settles_named(trade: @2026-01-02, closed: [@2026-01-07, @2026-01-05]) ==
+        [@2026-01-06, @2026-01-07]
+}
+
+test connected_calendar_for_subtraction {
+    assert eval trades(settlement: @2026-01-08, closed: []) == []
+    assert eval trades(settlement: @2026-01-08, closed: [@2026-01-07, @2026-01-05]) ==
+        [@2026-01-05, @2026-01-06]
+    assert eval trades_named(settlement: @2026-01-08, closed: [@2026-01-07, @2026-01-05]) ==
+        [@2026-01-05, @2026-01-06]
+}
+
 # GEN-16, UNIT-8: specializing the outer omitted default selects a
 # candidate whose own inherited default supplies its value.
 operator inner_default<T>{value: T = 41}() -> T
