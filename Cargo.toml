@@ -7,7 +7,7 @@ members = ["crates/*"]
 
 # Values each crate inherits with `field.workspace = true`.
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 # No `rust-version` (minimum supported Rust): the project follows the
 # current stable release, pinned in rust-toolchain.toml.
