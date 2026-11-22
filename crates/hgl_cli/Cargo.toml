@@ -31,5 +31,8 @@ tempfile.workspace = true
 dirs.workspace = true
 which.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.32", features = ["process", "signal"] }
+
 [lints]
 workspace = true

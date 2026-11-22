@@ -101,6 +101,15 @@ enum Command {
     /// Run an application of a program on a target, and print its
     /// output.
     Run(RunArgs),
+    /// Internal process entry that takes a parent-death signal before exec.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    NativeBuildChild {
+        parent: u32,
+        program: PathBuf,
+        #[arg(last = true)]
+        arguments: Vec<std::ffi::OsString>,
+    },
 }
 
 /// Arguments of `hgl tokens`.
@@ -183,7 +192,7 @@ struct TestArgs {
     /// Build the program in this directory, which keeps what the target
     /// wrote. With none, it is built in a directory under the cache
     /// for its source roots, which is kept for the next run.
-    #[arg(long, value_name = "DIR", requires = "target")]
+    #[arg(long, visible_alias = "out", value_name = "DIR", requires = "target")]
     keep: Option<PathBuf>,
 
     #[command(flatten)]
@@ -226,7 +235,7 @@ struct BuildArgs {
     tests: bool,
 
     /// The build workspace, or the program's workspace under the cache.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, visible_alias = "keep", value_name = "DIR")]
     out: Option<PathBuf>,
 
     /// Build with native debug symbols and the original HGL source paths.
@@ -301,7 +310,7 @@ struct RunArgs {
     /// Build the application in this directory, which keeps what the
     /// target wrote. With none, it is built in a directory under the
     /// cache for its source roots, which is kept for the next run.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, visible_alias = "out", value_name = "DIR")]
     keep: Option<PathBuf>,
 
     #[command(flatten)]
@@ -429,6 +438,12 @@ fn main() -> ExitCode {
                 Target::Cpp => cpp::run(&arguments),
             })
         }
+        #[cfg(target_os = "linux")]
+        Command::NativeBuildChild {
+            parent,
+            program,
+            arguments,
+        } => cpp::native_build_child(parent, &program, &arguments),
     }
 }
 

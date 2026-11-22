@@ -27,13 +27,15 @@ use hgl_runner::{CaseSelection, Selection};
 use hgl_source::SourceMap;
 
 use super::{LimitArgs, ProgramSources, TestArgs};
-use build::{Workspace, write_if_changed};
+use build::{Interrupt, Workspace, write_if_changed};
 use plan::{Action, NativeTest, TestCase};
 use results::{Said, read_results};
 
 use sdk::{Description, Toolchain};
 use stamp::Stamp;
 
+#[cfg(target_os = "linux")]
+pub(super) use build::native_build_child;
 pub(super) use commands::{build, run};
 pub(super) use plan::CaseOutcome;
 pub(super) use stamp::Replacements;
@@ -54,6 +56,7 @@ pub(super) fn write(files: &[hgl_cpp::File], directory: &Path) -> Result<(), Str
 /// The locked workspace and its selected native toolchain.
 pub(super) struct BuildSession {
     workspace: Workspace,
+    previous: Option<Stamp>,
     toolchain: Toolchain,
     toolchain_key: String,
     cache: PathBuf,
@@ -76,6 +79,7 @@ impl BuildSession {
     ) -> Result<Self, String> {
         let cache = build::cache()?;
         let workspace = Workspace::open(keep, roots, &cache, debug)?;
+        let previous = Stamp::read(&workspace);
         let mut toolchain = match Toolchain::find() {
             Ok(toolchain) => toolchain,
             Err(reason) => {
@@ -92,6 +96,7 @@ impl BuildSession {
             .filter(|jobs| !jobs.is_empty());
         Ok(Self {
             workspace,
+            previous,
             toolchain,
             toolchain_key,
             cache,
@@ -120,11 +125,17 @@ impl BuildSession {
         key
     }
 
-    pub(super) fn reused(&self, key: &str, tests: bool) -> Option<BuiltProgram> {
-        let stamp = Stamp::open(&self.workspace, key, tests)?;
+    fn reused(&mut self, key: &str, tests: bool) -> Option<BuiltProgram> {
+        if !self
+            .previous
+            .as_ref()?
+            .reusable(&self.workspace, key, tests)
+        {
+            return None;
+        }
         let description = self.toolchain.prepared(&self.cache, &self.toolchain_key)?;
         Some(BuiltProgram {
-            program: stamp.program,
+            program: self.previous.take()?.program,
             description,
             reused: true,
         })
@@ -141,9 +152,10 @@ impl BuildSession {
         key: &str,
         output: &Output,
         program: &plan::Program,
+        interrupt: &Interrupt,
     ) -> Result<Description, String> {
+        interrupt.check()?;
         let ninja = self.toolchain.ninja()?;
-        let interrupt = build::Interrupt::watch();
         let description =
             self.toolchain
                 .prepare(&self.cache, &self.toolchain_key, self.jobs.as_deref())?;
@@ -154,52 +166,39 @@ impl BuildSession {
             output,
             program.tests.is_some(),
             self.jobs.as_deref(),
+            self.previous.as_ref(),
         );
         interrupt.check()?;
         let artifacts = artifacts?;
         if self.toolchain.key() != self.toolchain_key {
             return Err("the C++ toolchain changed during the build".to_string());
         }
+        let stamp = Stamp::describe(&self.workspace, key, artifacts, program)?;
         interrupt.finish()?;
-        Stamp::save(&self.workspace, key, artifacts, program)?;
+        Stamp::save(&self.workspace, &stamp)?;
         Ok(description)
     }
 }
 
 /// Builds the executable cases on a miss and runs the selected cases.
 pub(super) fn test(arguments: &TestArgs, selection: &Selection) -> ExitCode {
-    let session = BuildSession::open(&arguments.roots, arguments.keep.as_deref(), false);
-    let inputs = match ProgramSources::read(&arguments.roots) {
-        Ok(inputs) => inputs,
-        Err(status) => {
-            if let Ok(session) = session {
-                let _ = session.begin();
-            }
-            return status;
-        }
+    let interrupt = match Interrupt::watch(None) {
+        Ok(interrupt) => interrupt,
+        Err(reason) => return commands::build_error(reason),
     };
-    let session = session.and_then(|session| {
-        let key = session.key(
-            &inputs,
-            arguments.limits,
-            &Replacements {
-                application: None,
-                arguments: &[],
-                configuration: &[],
-            },
-        )?;
-        Ok((session, key))
-    });
-    if let Ok((session, key)) = &session
-        && let Some(built) = session.reused(key, true)
-        && let Some(cases) = &built.program.tests
-    {
-        return show_tests(cases, selection, Ok((session, &built.description)));
-    }
-    let session = session.and_then(|(session, key)| {
-        session.begin()?;
-        Ok((session, key))
-    });
+    let (inputs, session) = match commands::BuildRequest::tests(arguments).start() {
+        Ok(commands::BuildStart::Hit(session, built)) => {
+            let cases = built.program.tests.as_deref().unwrap_or_default();
+            let ready = interrupt.finish();
+            let run = ready
+                .as_ref()
+                .map(|()| (&session, &built.description))
+                .map_err(String::as_str);
+            return show_tests(cases, selection, run);
+        }
+        Ok(commands::BuildStart::Miss(inputs, session)) => (inputs, session),
+        Err(status) => return status,
+    };
     let super::Parsed {
         sources,
         files,
@@ -230,13 +229,14 @@ pub(super) fn test(arguments: &TestArgs, selection: &Selection) -> ExitCode {
             && !chosen.is_empty()
             && !selection.rejections_only
             && let Ok((session, _)) = &session
+            && interrupt.check().is_ok()
         {
             let _ = write(&output.files, &session.workspace.directory);
         }
         return print_cases(&chosen, Err("the target gave it no outcome"));
     }
     match session {
-        Ok((session, key)) => match session.finish_build(&key, &output, &program) {
+        Ok((session, key)) => match session.finish_build(&key, &output, &program, &interrupt) {
             Ok(description) => print_cases(&chosen, Ok((&session, &description))),
             Err(reason) => print_cases(&chosen, Err(&reason)),
         },

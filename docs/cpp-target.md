@@ -84,6 +84,18 @@ C++ does not check what Rust would. Three rules stand in for it.
 
 ## Building and turnaround
 
+A warm build, test or run starts the selected C++ compiler once with
+`-dM -E` to confirm its family and version. It then uses the prepared
+toolchain and verifies the stamped artifacts by content. The HGL front end
+and Ninja are skipped when that check succeeds.
+
+Reuse assumes that the SDK and dependency prefixes are fixed installations.
+The key includes the prefixes and hashes the SDK version file and its runtime
+and wiring libraries. Use a fresh native cache and workspace after updating
+headers or dependencies in place or when checking the output of a different
+linker version. An existing verified executable can run without Ninja or the
+linker.
+
 Measured at `-O0` with GCC 15 on the SDK built without Arrow and
 `libhglrt` on hgraph's front end for generated code (in brackets: on the
 SDK with Arrow and `graph_wiring.h`, as before):

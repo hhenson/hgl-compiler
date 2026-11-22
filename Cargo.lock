@@ -341,6 +341,7 @@ dependencies = [
  "hgl_parser",
  "hgl_runner",
  "hgl_source",
+ "nix",
  "serde",
  "serde_json",
  "tempfile",

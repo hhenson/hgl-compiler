@@ -2034,9 +2034,12 @@ each library on the way; it is run with no variable, as
 conda-forge's libc++ in place of the system's.
 
 A program's workspace is `programs/<hash>` under the cache, keyed by its
-source roots, or the directory named by `--out` for `hgl build` and
-`--keep` for `hgl run` and `hgl test`. The driver holds the workspace
-lock through the build and until its last executable ends.
+source roots, or the directory named by `--out` or `--keep`. Both flags
+work on `hgl build`, `hgl run` and `hgl test`. The driver holds the workspace
+lock through the build and until its last executable ends. The program's
+Ninja process inherits the lock so that the next command waits if `hgl`
+dies. On Linux Ninja also gets a termination signal when `hgl` dies.
+On macOS an already started Ninja build can finish under the inherited lock.
 
 `hgl build ROOT...` checks the program, writes the generated files
 and builds its units and application executables. `--tests` builds a
@@ -2045,14 +2048,14 @@ workspace and artifacts. `--format json` reports a versioned object
 with `workspace`, `target`, `units`, `applications`, `tests` and
 `reused`.
 
-After Ninja succeeds, the driver records a stamp and the artifact
-inventory. The key includes the source contents, core, the compiler
-version and executable contents, the prepared toolchain and flags,
-and any application replacements. The inventory records whether the
-tests were built. On a matching stamp with the needed artifacts,
-`hgl run` and `hgl test` use the existing executables directly. A
-rebuild clears the previous stamp before checking and leaves it
-absent if the build fails or is interrupted.
+After Ninja succeeds, the driver records a stamp with the BLAKE3 digest of
+each built object and executable. The key includes the source contents,
+core, the HGL compiler version and executable contents, the prepared
+toolchain and flags, and any application replacements. The inventory
+records whether the tests were built. `hgl run` and `hgl test` reuse the
+build when its key matches and its artifacts pass content verification.
+A rebuild clears the previous stamp and removes unverified build outputs
+before Ninja starts. A failed or interrupted build leaves no stamp.
 An ordinary build or run checks rejection owners as source. When a
 test build omitted those owners, its stamp covers test commands.
 
@@ -2425,6 +2428,7 @@ the job the way the design needs is dropped.
 | `blake3` | `hgl_cli` | content fingerprints for native build reuse |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
 | `ctrlc` | `hgl_cli` | waiting for an interrupted native build to finish, or passing a stop request to an application |
+| `nix` | `hgl_cli` on Linux | delivers a termination signal to Ninja if the build driver dies |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |
@@ -2476,12 +2480,13 @@ application's launch. With an implicit workspace, the debug build uses
 `debug-programs/<hash>` under the cache. Its stamp includes the absolute
 HGL source paths used by the debugger.
 
-The debugger starts the reported absolute `executable` with its
-`arguments`, `workingDirectory`, and `environment` overrides. A client
+The build's version 1 JSON reports the launch as `debugLaunch`. The debugger
+starts its absolute `executable` with its `arguments`, `workingDirectory`
+and `environment` overrides. A client
 creates its own session directory to keep that image for the duration
 of the debug session. The legacy `hgl run --application NAME
 --debug-build DIR ROOT...` spelling creates a fresh session under DIR
-and reports the same launch fields with `version: 1`. The debugger's
+and reports the launch fields at the top level with `version: 1`. The debugger's
 console mirrors the results protocol. After the run
 returns it prints the recorded publications. The debugger owns process termination and may close stdin.
 Ordinary application runs keep their host stop pipe. HGL statements use the

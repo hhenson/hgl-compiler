@@ -12,16 +12,17 @@ use hgl_runner::Selection;
 use hgl_source::SourceMap;
 
 use super::application::{self, RanApplication};
-use super::build::Workspace;
+use super::build::{Interrupt, Workspace};
 use super::plan::{self, Action};
 use super::stamp::debug_source_path;
 use super::{BuildSession, BuiltProgram, Replacements, sdk};
 use crate::{
-    BuildArgs, BuildFormat, EXIT_FAILED, EXIT_REJECTED, LimitArgs, ProgramSources, RunArgs, count,
+    BuildArgs, BuildFormat, EXIT_FAILED, EXIT_REJECTED, LimitArgs, ProgramSources, RunArgs,
+    TestArgs, count,
 };
 
-/// Inputs the build, run and debugger commands give to the same builder.
-struct BuildRequest<'a> {
+/// Inputs the build, run, test and debugger commands give to the same builder.
+pub(super) struct BuildRequest<'a> {
     roots: &'a [PathBuf],
     keep: Option<&'a Path>,
     debug: bool,
@@ -31,8 +32,31 @@ struct BuildRequest<'a> {
     replacements: Replacements<'a>,
 }
 
-impl BuildRequest<'_> {
-    fn build(&self) -> Result<(BuildSession, BuiltProgram), ExitCode> {
+/// Whether to reuse a stamped build or prepare its sources. A toolchain
+/// failure is retained on a miss so source diagnostics can take precedence.
+pub(super) enum BuildStart {
+    Hit(BuildSession, BuiltProgram),
+    Miss(ProgramSources, Result<(BuildSession, String), String>),
+}
+
+impl<'a> BuildRequest<'a> {
+    pub(super) fn tests(arguments: &'a TestArgs) -> Self {
+        Self {
+            roots: &arguments.roots,
+            keep: arguments.keep.as_deref(),
+            debug: false,
+            tests: true,
+            running: false,
+            limits: arguments.limits,
+            replacements: Replacements {
+                application: None,
+                arguments: &[],
+                configuration: &[],
+            },
+        }
+    }
+
+    pub(super) fn start(&self) -> Result<BuildStart, ExitCode> {
         let session = BuildSession::open(self.roots, self.keep, self.debug);
         let inputs = match ProgramSources::read(self.roots) {
             Ok(inputs) => inputs,
@@ -48,13 +72,24 @@ impl BuildRequest<'_> {
             Ok((session, key))
         });
         let session = match session {
-            Ok((session, key)) => {
+            Ok((mut session, key)) => {
                 if let Some(built) = session.reused(&key, self.tests) {
-                    return Ok((session, built));
+                    return Ok(BuildStart::Hit(session, built));
                 }
                 session.begin().map(|()| (session, key))
             }
             Err(reason) => Err(reason),
+        };
+        Ok(BuildStart::Miss(inputs, session))
+    }
+
+    fn build(&self, interrupt: &Interrupt) -> Result<(BuildSession, BuiltProgram), ExitCode> {
+        let (inputs, session) = match self.start()? {
+            BuildStart::Hit(session, built) => {
+                interrupt.finish().map_err(build_error)?;
+                return Ok((session, built));
+            }
+            BuildStart::Miss(inputs, session) => (inputs, session),
         };
         let (output, program, chosen) = self.prepare(&inputs)?;
         if (self.running || self.debug)
@@ -64,7 +99,7 @@ impl BuildRequest<'_> {
         }
         let (session, key) = session.map_err(|reason| self.failed(chosen.as_deref(), reason))?;
         let description = session
-            .finish_build(&key, &output, &program)
+            .finish_build(&key, &output, &program, interrupt)
             .map_err(|reason| self.failed(chosen.as_deref(), reason))?;
         Ok((
             session,
@@ -162,7 +197,7 @@ impl BuildRequest<'_> {
     }
 }
 
-fn build_error(reason: String) -> ExitCode {
+pub(super) fn build_error(reason: String) -> ExitCode {
     eprintln!("hgl: {reason}");
     ExitCode::from(EXIT_FAILED)
 }
@@ -223,9 +258,11 @@ pub(crate) fn run(arguments: &RunArgs) -> ExitCode {
         };
     }
     let stop = application::Stop::new();
-    let asked = stop.clone();
-    let _ = ctrlc::set_handler(move || asked.ask());
-    let (build, built) = match request.build() {
+    let interrupt = match Interrupt::watch(Some(stop.clone())) {
+        Ok(interrupt) => interrupt,
+        Err(reason) => return build_error(reason),
+    };
+    let (build, built) = match request.build(&interrupt) {
         Ok(built) => built,
         Err(status) => return status,
     };
@@ -251,6 +288,7 @@ fn legacy_debug(
     request: &BuildRequest<'_>,
     directory: &Path,
 ) -> Result<serde_json::Value, ExitCode> {
+    let interrupt = Interrupt::watch(None).map_err(build_error)?;
     let inputs = ProgramSources::read(request.roots)?;
     let (output, program, chosen) = request.prepare(&inputs)?;
     let chosen =
@@ -264,7 +302,7 @@ fn legacy_debug(
         .map_err(build_error)?;
     session.begin().map_err(build_error)?;
     let description = session
-        .finish_build(&key, &output, &program)
+        .finish_build(&key, &output, &program, &interrupt)
         .map_err(build_error)?;
     let launch = application::debug_launch(
         &session.workspace,
@@ -273,7 +311,9 @@ fn legacy_debug(
     )
     .map_err(build_error)?;
     let _ = directory.keep();
-    Ok(launch)
+    let mut legacy = serde_json::json!(launch);
+    legacy["version"] = serde_json::json!(1);
+    Ok(legacy)
 }
 
 fn debug_session(directory: &Path) -> Result<tempfile::TempDir, String> {
@@ -299,7 +339,11 @@ pub(crate) fn build(arguments: &BuildArgs) -> ExitCode {
             configuration: &arguments.config,
         },
     };
-    let (session, built) = match request.build() {
+    let interrupt = match Interrupt::watch(None) {
+        Ok(interrupt) => interrupt,
+        Err(reason) => return build_error(reason),
+    };
+    let (session, built) = match request.build(&interrupt) {
         Ok(built) => built,
         Err(status) => return status,
     };
@@ -400,11 +444,7 @@ fn build_description(
     {
         let launch =
             application::debug_launch(workspace, path, sdk::library_path(&built.description))?;
-        if let (Some(description), serde_json::Value::Object(launch)) =
-            (description.as_object_mut(), launch)
-        {
-            description.extend(launch);
-        }
+        description["debugLaunch"] = serde_json::json!(launch);
     }
     Ok(description)
 }

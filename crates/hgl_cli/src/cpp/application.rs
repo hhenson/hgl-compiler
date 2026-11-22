@@ -125,12 +125,22 @@ impl StopState {
 /// The variable that names where an executable finds its libraries.
 pub(super) type Libraries = Option<(&'static str, std::ffi::OsString)>;
 
+/// Executable and arguments to pass to the debugger.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DebugLaunch {
+    executable: String,
+    arguments: [String; 2],
+    working_directory: String,
+    environment: serde_json::Map<String, serde_json::Value>,
+}
+
 /// The launch description consumed by a native debugger.
 pub(super) fn debug_launch(
     workspace: &Workspace,
     path: &str,
     libraries: Libraries,
-) -> Result<serde_json::Value, String> {
+) -> Result<DebugLaunch, String> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut environment = serde_json::Map::new();
     if let Some((name, value)) = libraries {
@@ -145,14 +155,12 @@ pub(super) fn debug_launch(
             .ok_or_else(|| format!("debug launch path is not UTF-8: {}", path.display()))
     };
     let results = path_text(&workspace.directory.join("results.txt"))?;
-    let data = serde_json::json!({
-        "version": 1,
-        "executable": path_text(&workspace.application(path))?,
-        "arguments": [results, "--debug-console"],
-        "workingDirectory": path_text(&cwd)?,
-        "environment": environment,
-    });
-    Ok(data)
+    Ok(DebugLaunch {
+        executable: path_text(&workspace.application(path))?,
+        arguments: [results, "--debug-console".to_string()],
+        working_directory: path_text(&cwd)?,
+        environment,
+    })
 }
 
 /// Runs the executable of `application` built in `workspace`, with

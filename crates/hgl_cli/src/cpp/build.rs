@@ -24,13 +24,17 @@ use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use hgl_cpp::{Executable, Output, application_stem};
 
-use super::sdk::{Description, last_lines};
+use super::{
+    application::Stop,
+    sdk::{Description, last_lines},
+    stamp::Stamp,
+};
 
 /// The file a workspace's lock is taken on.
 const LOCK: &str = ".hgl-lock";
@@ -44,19 +48,24 @@ const FINISHED: u8 = 2;
 pub(super) struct Interrupt(Arc<AtomicU8>);
 
 impl Interrupt {
-    pub(super) fn watch() -> Self {
+    /// The command's one handler routes a stop to its build until it can
+    /// publish a stamp, and to the application after that point.
+    pub(super) fn watch(stop: Option<Stop>) -> Result<Self, String> {
         let state = Arc::new(AtomicU8::new(BUILDING));
         let signal = Arc::clone(&state);
-        // An application run already has its own handler. It queues a
-        // request for its host to stop while the build completes.
-        let _ = ctrlc::set_handler(move || {
+        ctrlc::set_handler(move || {
             if signal.compare_exchange(BUILDING, INTERRUPTED, Ordering::SeqCst, Ordering::SeqCst)
                 == Err(FINISHED)
             {
-                std::process::exit(130);
+                if let Some(stop) = &stop {
+                    stop.ask();
+                } else {
+                    std::process::exit(130);
+                }
             }
-        });
-        Self(state)
+        })
+        .map_err(|error| format!("the interrupt handler could not be started: {error}"))?;
+        Ok(Self(state))
     }
 
     pub(super) fn check(&self) -> Result<(), String> {
@@ -73,12 +82,6 @@ impl Interrupt {
             .compare_exchange(BUILDING, FINISHED, Ordering::SeqCst, Ordering::SeqCst)
             .map(|_| ())
             .map_err(|_| "the build was interrupted".to_string())
-    }
-}
-
-impl Drop for Interrupt {
-    fn drop(&mut self) {
-        self.0.store(FINISHED, Ordering::SeqCst);
     }
 }
 
@@ -251,6 +254,7 @@ impl Workspace {
         output: &Output,
         tests: bool,
         jobs: Option<&str>,
+        previous: Option<&Stamp>,
     ) -> Result<Vec<String>, String> {
         let mut targets: Vec<_> = output
             .units
@@ -267,25 +271,27 @@ impl Workspace {
         if tests {
             targets.extend(output.executables.iter().map(test_target));
         }
-        if !targets.is_empty() {
-            self.build_targets(ninja, &targets, jobs)?;
-        }
+        let mut artifacts = targets.clone();
         if tests {
-            targets.extend(
+            artifacts.extend(
                 output
                     .executables
                     .iter()
                     .map(|executable| object(&executable.source)),
             );
         }
-        targets.extend(
+        artifacts.extend(
             output
                 .applications
                 .iter()
                 .filter_map(|application| application.source.as_deref())
                 .map(object),
         );
-        Ok(targets)
+        if !targets.is_empty() {
+            Stamp::remove_unverified(previous, self, &artifacts)?;
+            self.build_targets(ninja, &targets, jobs)?;
+        }
+        Ok(artifacts)
     }
 
     /// Runs Ninja for every requested artifact. A failed build is never stamped.
@@ -295,7 +301,7 @@ impl Workspace {
         targets: &[String],
         jobs: Option<&str>,
     ) -> Result<(), String> {
-        let mut command = Command::new(ninja);
+        let mut command = native_command(ninja, &self._lock)?;
         command.arg("-C").arg(&self.directory).arg("-k").arg("0");
         if let Some(jobs) = jobs {
             command.arg("-j").arg(jobs);
@@ -322,6 +328,55 @@ impl Workspace {
         };
         Err(format!("the build of its executable failed:\n{failure}"))
     }
+}
+
+/// A build process inherits the open workspace lock on its unused stdin.
+/// If hgl dies, the next build waits while the native process exits.
+fn native_command(program: &Path, lock: &fs::File) -> Result<Command, String> {
+    #[cfg(target_os = "linux")]
+    let mut command = {
+        let hgl = std::env::current_exe().map_err(|error| format!("cannot find hgl: {error}"))?;
+        let mut command = Command::new(hgl);
+        command
+            .arg("native-build-child")
+            .arg(std::process::id().to_string())
+            .arg(program)
+            .arg("--");
+        command
+    };
+    #[cfg(not(target_os = "linux"))]
+    let mut command = Command::new(program);
+    let inherited = lock
+        .try_clone()
+        .map_err(|error| format!("cannot share the build lock: {error}"))?;
+    command.stdin(Stdio::from(inherited));
+    Ok(command)
+}
+
+/// Sets a parent-death signal before replacing this helper with Ninja.
+#[cfg(target_os = "linux")]
+pub(crate) fn native_build_child(
+    parent: u32,
+    program: &Path,
+    arguments: &[std::ffi::OsString],
+) -> std::process::ExitCode {
+    use nix::{
+        sys::{prctl, signal::Signal},
+        unistd::getppid,
+    };
+    use std::os::unix::process::CommandExt as _;
+
+    if let Err(error) = prctl::set_pdeathsig(Signal::SIGTERM) {
+        eprintln!("hgl: cannot set the build's parent-death signal: {error}");
+        return std::process::ExitCode::FAILURE;
+    }
+    // The original parent may have died before the signal was installed.
+    if u32::try_from(getppid().as_raw()) != Ok(parent) {
+        return std::process::ExitCode::FAILURE;
+    }
+    let error = Command::new(program).args(arguments).exec();
+    eprintln!("hgl: `{}` could not be started: {error}", program.display());
+    std::process::ExitCode::FAILURE
 }
 
 /// The `build.ninja` of `output`, built with `description`.

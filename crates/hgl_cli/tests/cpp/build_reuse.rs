@@ -12,6 +12,13 @@ use serde_json::Value;
 
 use super::{BACKTEST, CALC, TICKS, argument, scratch, sdk_named, text, write};
 
+const SOURCE: &str = "module demo.stamped\n\
+    export fn pulse(const value: i64) -> i64 { yield 1s: value }\n\
+    test sums { assert 2 + 3 == 5 }\n";
+const APP: &str = "application demo.app\n\
+    use demo.stamped::{pulse}\n\
+    eval pulse(value: 51)\n";
+
 struct NinjaTrace {
     native: PathBuf,
     path: OsString,
@@ -28,7 +35,13 @@ impl NinjaTrace {
             "bin/ninja",
             r#"#!/bin/sh
 if [ "$1" = -C ] && [ "$2" = "$HGL_TEST_BUILD_WORKSPACE" ]; then
+    if [ -n "$HGL_TEST_BUILD_TERM" ]; then
+        trap 'touch "$HGL_TEST_BUILD_TERM"; exit 130' TERM
+    fi
     printf '%s\n' build >>"$HGL_TEST_BUILD_TRACE"
+    if [ -n "$HGL_TEST_BUILD_TERM" ]; then
+        while [ ! -f "$HGL_TEST_BUILD_TERM.release" ]; do sleep 0.02; done
+    fi
     if [ -n "$HGL_TEST_BUILD_DELAY" ]; then sleep "$HGL_TEST_BUILD_DELAY"; fi
 fi
 exec "$HGL_TEST_REAL_NINJA" "$@"
@@ -78,6 +91,86 @@ fn success(output: Output) -> String {
         text(&output.stderr)
     );
     text(&output.stdout).to_string()
+}
+
+fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
+    let start = Instant::now();
+    while !condition() && start.elapsed() < Duration::from_secs(30) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    condition()
+}
+
+/// Rebuilding in a workspace with a CLI that does not update the stamp
+/// must not vouch for the new native artifacts, even when sizes match.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn run_and_test_repair_rewritten_workspace_artifacts() {
+    if !sdk_named() {
+        return;
+    }
+    for command in ["run", "test"] {
+        let root = scratch(&format!("build-repair-{command}"));
+        let source = write(&root, "src/stamped.hgl", SOURCE);
+        let app = write(&root, "src/app.hgl", APP);
+        let ninja = NinjaTrace::new(&root);
+        let workspace = argument(&ninja.workspace);
+        let sources = argument(&root.join("src"));
+        let args = [command, &sources, "--target", "cpp", "--out", &workspace];
+        let (changed, original, replacement, executable, expected) = if command == "test" {
+            (
+                &source,
+                SOURCE,
+                SOURCE.replace("== 5", "== 6"),
+                "bin/test-demo-stamped",
+                "passed   executable  demo.stamped::sums\n",
+            )
+        } else {
+            (
+                &app,
+                APP,
+                APP.replace("51", "52"),
+                "run/app-demo-app",
+                "Z  51\n",
+            )
+        };
+        let invoke = || success(ninja.hgl(&args).output().unwrap());
+        assert!(invoke().contains(expected));
+        let stamp = ninja.workspace.join(".hgl-built.json");
+        let old_stamp = fs::read(&stamp).unwrap();
+        let executable = format!("{executable}{}", std::env::consts::EXE_SUFFIX);
+
+        // Model an older driver writing the same generated paths and
+        // invoking Ninja without replacing this command's stamp.
+        fs::write(changed, replacement).unwrap();
+        success(
+            ninja
+                .hgl(&["emit", &sources, "--out", &workspace])
+                .output()
+                .unwrap(),
+        );
+        success(
+            Command::new(&ninja.native)
+                .args(["-C", &workspace, &executable])
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(fs::read(&stamp).unwrap(), old_stamp);
+        fs::write(changed, original).unwrap();
+        assert!(invoke().contains(expected));
+        assert_eq!(ninja.calls(), 2);
+
+        let path = ninja.workspace.join(executable);
+        let mut broken = fs::read(&path).unwrap();
+        broken[0] ^= u8::MAX;
+        for (replacement, calls) in [(broken.as_slice(), 3), (b"foreign artifact".as_slice(), 4)] {
+            fs::write(&path, replacement).unwrap();
+            assert!(invoke().contains(expected));
+            assert_eq!(ninja.calls(), calls);
+        }
+        assert!(invoke().contains(expected));
+        assert_eq!(ninja.calls(), 4);
+    }
 }
 
 /// A default build has no test executable. A test fills that coverage,
@@ -309,6 +402,85 @@ fn an_interrupted_build_leaves_no_stamp() {
     assert_eq!(ninja.calls(), 3);
 }
 
+/// Stopping hgl alone during a run's build must prevent publication
+/// and keep the application from starting.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_run_interrupted_during_the_build_leaves_no_stamp() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("build-run-stop");
+    write(&root, "src/stamped.hgl", SOURCE);
+    let app = write(&root, "src/app.hgl", APP);
+    let ninja = NinjaTrace::new(&root);
+    let arguments = [
+        "run",
+        &argument(&root.join("src")),
+        "--out",
+        &argument(&ninja.workspace),
+    ];
+    assert!(success(ninja.hgl(&arguments).output().unwrap()).contains("Z  51\n"));
+    let stamp = ninja.workspace.join(".hgl-built.json");
+    assert!(stamp.is_file());
+    fs::write(app, APP.replace("51", "52")).unwrap();
+    let run = ninja
+        .hgl(&arguments)
+        .env("HGL_TEST_BUILD_DELAY", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert!(wait_until(|| ninja.calls() == 2));
+    assert!(
+        Command::new("kill")
+            .args(["-INT", &run.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let stopped = run.wait_with_output().unwrap();
+    assert_eq!(stopped.status.code(), Some(2));
+    assert!(text(&stopped.stderr).contains("build was interrupted"));
+    assert!(stopped.stdout.is_empty());
+    assert!(!stamp.exists());
+    assert!(success(ninja.hgl(&arguments).output().unwrap()).contains("Z  52\n"));
+    assert!(stamp.is_file());
+}
+
+/// On Linux the native builder receives a termination signal even when
+/// hgl is killed without running its interrupt handler.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ninja_stops_when_hgl_is_killed() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("build-parent-killed");
+    let source = write(&root, "calc.hgl", CALC);
+    let ninja = NinjaTrace::new(&root);
+    let arguments = ["build", &source, "--keep", &argument(&ninja.workspace)];
+    let stopped = root.join("ninja-stopped");
+    let mut build = ninja
+        .hgl(&arguments)
+        .env("HGL_TEST_BUILD_TERM", &stopped)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let started = wait_until(|| ninja.calls() == 1);
+    build.kill().unwrap();
+    build.wait().unwrap();
+    let signalled = started && wait_until(|| stopped.is_file());
+    // Release the wrapper on a failure too, so it cannot outlive the test.
+    fs::write(stopped.with_extension("release"), "").unwrap();
+    assert!(signalled);
+    assert!(!ninja.workspace.join(".hgl-built.json").exists());
+    success(ninja.hgl(&arguments).output().unwrap());
+    assert_eq!(ninja.calls(), 2);
+}
+
 /// The new debug command builds the requested workspace and reports an
 /// executable with HGL line mappings for its debugger (RUN-1).
 #[test]
@@ -347,6 +519,8 @@ fn build_debug_reports_the_application_launch() {
         assert_eq!(launch["version"], 1);
         assert_eq!(launch["workspace"], workspace);
         assert_eq!(launch["reused"], false, "{launch}");
+        let launch = &launch["debugLaunch"];
+        assert!(launch.get("version").is_none());
         let executable = launch["executable"].as_str().unwrap();
         assert!(Path::new(executable).starts_with(&ninja.workspace));
         assert!(Path::new(executable).is_file());
