@@ -1787,8 +1787,8 @@ impl<'a> Typer<'a> {
             })
             .collect();
         // GEN-7: select with the instance's inputs and the actual output
-        // request. The provisional candidate's result checked the generic
-        // body; it was never an output requested by the call.
+        // request. The provisional candidate supplied the type used to
+        // check the generic body.
         let place = selecting
             .place
             .as_ref()
@@ -2308,6 +2308,7 @@ pub(crate) fn select_in_instance(
             .iter()
             .map(|argument| crate::instance::placed(argument, &map))
             .collect();
+        let before = typer.diagnostics.len();
         let (kind, ty) = typer.called(
             call.operator,
             *chosen,
@@ -2322,7 +2323,9 @@ pub(crate) fn select_in_instance(
             category: expression.category,
         };
         let selected = typer.fit_selected_result(call, selected, |ty| substitute_within(ty, &map));
-        result_changed |= call.result.is_some() && expression.ty != selected.ty;
+        result_changed |= call.result.is_some()
+            && expression.ty != selected.ty
+            && typer.diagnostics.len() == before;
         *expression = selected;
         after(expression);
         if let Some(test) = call.tag_test

@@ -2161,6 +2161,7 @@ pub(super) fn instances_hold(
             let unit = &program.modules[made.callee.0];
             let graph = unit.phases.get(made.callee.1) == Some(&Some(Phase::Graph));
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
+            let recheck_results = selecting.iter().any(|call| call.result.is_some());
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
@@ -2185,7 +2186,7 @@ pub(super) fn instances_hold(
                     diagnostics,
                     &mut body_reports,
                 )
-            } else if recheck_graph || recheck_endpoints {
+            } else if recheck_graph || recheck_endpoints || recheck_results {
                 program.checked_instance(
                     made.callee,
                     &made.generics,
@@ -2197,12 +2198,35 @@ pub(super) fn instances_hold(
             } else {
                 None
             };
-            if recheck_graph && let Some((_, body)) = instance {
-                if let Some(Some(source)) = program.modules[made.callee.0].bodies.get(made.callee.1)
-                {
-                    made_after_inference(source, &body, &mut instance_calls);
+            let mut reread_calls = HashSet::new();
+            if let Some(instance) = &instance
+                && let Some(reports) = &instance.result_use_reports
+            {
+                report_instance_result_uses(
+                    program,
+                    (made.callee, &made.generics),
+                    reports,
+                    &from,
+                    diagnostics,
+                );
+                if reports.has_errors() {
+                    continue;
                 }
-                super::lifting::check_instance_constants(program, &body, &from, diagnostics);
+                reread_calls = made_after_result_recheck(&instance.body, &mut instance_calls);
+            }
+            if recheck_graph && let Some(instance) = &instance {
+                if instance.result_use_reports.is_none()
+                    && let Some(Some(source)) =
+                        program.modules[made.callee.0].bodies.get(made.callee.1)
+                {
+                    made_after_inference(source, &instance.body, &mut instance_calls);
+                }
+                super::lifting::check_instance_constants(
+                    program,
+                    &instance.body,
+                    &from,
+                    diagnostics,
+                );
                 super::lifting::report_instance_checks(
                     &body_reports,
                     &from,
@@ -2242,7 +2266,7 @@ pub(super) fn instances_hold(
             };
             let enclosing_packs =
                 super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
-            for call in inner {
+            for call in inner.iter().filter(|call| !reread_calls.contains(&call.at)) {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
                 // (GEN-16); any other has the instance's arguments and
@@ -2368,9 +2392,10 @@ pub(super) fn instances_hold(
                     .iter()
                     .enumerate()
                     .filter(|(index, call)| {
-                        !selecting[index + 1..]
-                            .iter()
-                            .any(|later| later.at == call.at)
+                        !reread_calls.contains(&call.at)
+                            && !selecting[index + 1..]
+                                .iter()
+                                .any(|later| later.at == call.at)
                     })
                     .map(|(_, call)| call);
                 for call in standing {
@@ -2889,6 +2914,64 @@ fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Loca
 /// The calls of generic declarations `statements` make, at any depth.
 fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
     hir::walk_statements(statements, &mut |expression| made_at(expression, made));
+}
+
+/// GEN-7: a failure in a selected result's use keeps the body location
+/// and the ordinary diagnostic code, and names the concrete instance.
+pub(super) fn report_instance_result_uses(
+    program: &Program,
+    ((module, declaration), generics): ((usize, usize), &[Argument]),
+    reports: &Diagnostics,
+    callers: &[Location],
+    diagnostics: &mut Diagnostics,
+) {
+    if reports.is_empty() {
+        return;
+    }
+    let name = &program.modules[module].declarations[declaration].name;
+    let arguments = generics.iter().map(Argument::to_string).collect::<Vec<_>>();
+    let instance = format!("GEN-7: in `{name}<{}>`", arguments.join(", "));
+    for report in reports.as_slice() {
+        let mut report = report.clone().with_note(&instance);
+        for &caller in callers {
+            report = report.with_related(caller, "this call makes the instance");
+        }
+        if !diagnostics.as_slice().contains(&report) {
+            diagnostics.emit(report);
+        }
+    }
+}
+
+/// Use the concrete calls found by the result reread instead of following
+/// their edges in the original body (GEN-7).
+fn made_after_result_recheck(body: &hir::Body, made: &mut Vec<Made>) -> HashSet<Location> {
+    let mut reread = HashSet::new();
+    hir::walk_statements(&body.statements, &mut |expression| {
+        let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    generics,
+                    type_packs,
+                    ..
+                }
+                | Callee::Candidate {
+                    generics,
+                    type_packs,
+                    ..
+                },
+            ..
+        } = &expression.kind
+        else {
+            return;
+        };
+        if generics.iter().all(resolved_default_argument)
+            && type_packs.iter().all(|pack| pack.forwarded_from.is_none())
+        {
+            reread.insert(expression.at);
+            made_at(expression, made);
+        }
+    });
+    reread
 }
 
 /// Follow calls that graph settlement has made concrete through the same

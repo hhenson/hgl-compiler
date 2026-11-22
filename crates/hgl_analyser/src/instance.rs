@@ -32,7 +32,7 @@
 //! types (GEN-7: "Each instance then selects its own candidate";
 //! [`crate::values::Selecting`]).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use hgl_diagnostics::{Diagnostics, Location};
 
@@ -72,12 +72,24 @@ struct InstanceArguments<'a> {
     pack_inputs: &'a [PackInput],
     requirements: &'a [Answer],
     diagnostics: &'a RefCell<Diagnostics>,
+    result_type_changed: Cell<bool>,
 }
 
 impl InstanceArguments<'_> {
     fn project(&self, ty: &Type) -> Type {
         self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
     }
+}
+
+/// A specialized callable, with any reports from rechecking the uses
+/// of an operator result whose type changed (GEN-7).
+pub(crate) struct CheckedInstance {
+    /// The concrete signature used to read the body.
+    pub(crate) signature: Signature,
+    /// The body with its concrete types and callees.
+    pub(crate) body: Body,
+    /// Reports from a reread caused by a different result type, if any.
+    pub(crate) result_use_reports: Option<Diagnostics>,
 }
 
 impl Program {
@@ -174,6 +186,7 @@ impl Program {
             pack_inputs: &[],
             requirements: &requirements,
             diagnostics: &reports,
+            result_type_changed: Cell::new(false),
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
@@ -283,6 +296,7 @@ impl Program {
             &RefCell::new(Diagnostics::new()),
             &mut Diagnostics::new(),
         )
+        .map(|instance| (instance.signature, instance.body))
     }
 
     /// Instantiate a body and report any configuration that fails to fit
@@ -296,7 +310,7 @@ impl Program {
         inputs: InstanceInputs<'_>,
         diagnostics: &RefCell<Diagnostics>,
         body_diagnostics: &mut Diagnostics,
-    ) -> Option<(Signature, Body)> {
+    ) -> Option<CheckedInstance> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
             return None;
@@ -338,6 +352,7 @@ impl Program {
             pack_inputs: pending_forwards.unwrap_or_default(),
             requirements,
             diagnostics,
+            result_type_changed: Cell::new(false),
         };
         let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
         let recheck_endpoints =
@@ -358,8 +373,30 @@ impl Program {
             && (!declared.selecting[declaration].is_empty()
                 || !requirements.is_empty()
                 || pending_forwards.is_some());
-        let destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
+        let mut destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
+        let mut result_use_reports = None;
+        let before = diagnostics.borrow().len();
         self.place_body(&mut body, &arguments, &functions);
+        if arguments.result_type_changed.get() {
+            // GEN-7: the original body used the admitting candidate's
+            // result. Read its uses with the selected type in place,
+            // including inferred locals and the calls that consume them.
+            let mut reports = Diagnostics::new();
+            if let Some(reread) = crate::values::reread_instance_body(
+                self,
+                (module, declaration),
+                (&taken, &map),
+                (&functions, pending_forwards),
+                &project,
+                &mut reports,
+            ) {
+                diagnostics.borrow_mut().truncate(before);
+                body = reread;
+                destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
+                self.place_body(&mut body, &arguments, &functions);
+            }
+            result_use_reports = Some(reports);
+        }
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
         // could not say of an operation it requires or a pack it forwards.
@@ -375,7 +412,11 @@ impl Program {
         } else {
             crate::values::record(self, &mut body, graph);
         }
-        Some((taken, body))
+        Some(CheckedInstance {
+            signature: taken,
+            body,
+            result_use_reports,
+        })
     }
 
     /// Specialize one lexical body using its own local table. A call
@@ -394,13 +435,15 @@ impl Program {
         walk_statements_mut(&mut body.statements, &mut |expression| {
             self.place(expression, instance, functions);
         });
-        crate::values::select_in_instance(
+        if crate::values::select_in_instance(
             self,
             instance.declaration,
             instance.generics,
             body,
             &|call| call.walk_mut(&mut |inner| self.place(inner, instance, functions)),
-        );
+        ) {
+            instance.result_type_changed.set(true);
+        }
     }
 
     /// Puts the instance's arguments in place in an expression's type,

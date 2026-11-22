@@ -158,9 +158,35 @@ fn an_instance_rejects_an_index_into_its_selected_set() {
     ));
     assert!(checked.rejected, "{}", checked.report);
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
-    assert_eq!(checked.findings[0].code, "type/type.mismatch");
-    assert_eq!(checked.findings[0].rule, "EXPR-7");
+    assert_eq!(checked.summary(), ["m.hgl:5:39 type/type.mismatch EXPR-7"]);
     assert!(checked.report.contains("first<bool>"), "{}", checked.report);
+}
+
+/// GEN-7: a changed result can make a new instance of its consumer.
+/// Checking the original consumer's instance does not check that call.
+#[test]
+fn an_instance_checks_the_consumer_of_its_selected_result() {
+    let checked = module(concat!(
+        "operator items<T, C>(value: T) -> C\n",
+        "impl const fn items<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+        "impl const fn items(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
+        "operator marker<T, C>(value: T) -> C\n",
+        "impl const fn marker<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+        "impl const fn marker(value: list<i64, 3>) -> set<i64> => [3]\n",
+        "const fn first<T>(value: T) -> i64 => marker(value)[0]\n",
+        "const fn outer<T>(value: T) -> i64 {\n",
+        "    let values = items(value)\n",
+        "    return first(values)\n",
+        "}\n",
+        "const fn concrete() -> i64 => outer(5)\n",
+    ));
+    assert!(checked.rejected, "{}", checked.report);
+    assert_eq!(checked.summary(), ["m.hgl:8:39 type/type.mismatch EXPR-7"]);
+    assert!(
+        checked.report.contains("first<list<i64, 3>>"),
+        "{}",
+        checked.report
+    );
 }
 
 /// GEN-2: a call resolves each generic parameter of its callee, and

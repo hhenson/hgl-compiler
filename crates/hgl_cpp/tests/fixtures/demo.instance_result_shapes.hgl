@@ -6,6 +6,14 @@ operator items_of<T, C>(value: T) -> C
 impl const fn items_of<T>(value: T) -> list<i64, 2> => [1, 2]
 impl const fn items_of(value: i64) -> list<i64, 3> => [value, value + 1, value + 2]
 
+operator live_items<T, C>(value: T) -> C
+impl fn live_items<T>(value: T) -> list<i64, 2> {
+    when { return [1, 2] }
+}
+impl fn live_items(value: i64) -> list<i64, 3> {
+    when { return [value, value + 1, value + 2] }
+}
+
 operator extent_of<C>(items: C) -> i64
 impl const fn extent_of(items: list<i64, 2>) -> i64 => 2
 impl const fn extent_of(items: list<i64, 3>) -> i64 => 3
@@ -28,9 +36,12 @@ const fn scaled<T>(value: T) -> i64 {
     return total
 }
 fn first_in_node<T>(value: T) -> i64 {
-    when { return items_of(value)[0] }
+    when {
+        let items = items_of(value)
+        return items[0]
+    }
 }
-fn first_in_graph<T>(value: T) -> i64 => items_of(value)[0]
+fn first_in_graph<T>(value: T) -> i64 => live_items(value)[0]
 fn scaled_in_graph<T>(value: T) -> i64 {
     let values = [for item in items_of(value): item * 10]
     return extent_of(values) + values[0]
